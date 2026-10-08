@@ -201,9 +201,10 @@ which performs no I/O and is compiled into a thin package per language. Each
 package will use that language's own database driver for the connection and
 will expose two modules: `subscribe` for live and durable consumption, and
 `sink` for writing to targets. Every change will keep its `mz_timestamp`.
-Durable consumption will store its checkpoint in the target, fenced by an epoch,
-and will read one storage collection (a table, materialized view, or source)
-plus an optional projection, filter, and envelope. The Rust package comes first,
+Durable consumption, which powers sinks, will store its checkpoint in the target,
+fenced by an epoch, and will read one table, source, or materialized view
+directly with `SUBSCRIBE <object>`, the same objects `CREATE SINK` accepts. Live
+streams that never resume will accept any query. The Rust package comes first,
 with Python and Node to follow, and the first sink will be turbopuffer, written
 in Rust. The spec, conformance vectors, and an end-to-end
 suite will live in this repository and run in the nightlies.
@@ -300,23 +301,30 @@ sequenceDiagram
 
 ### Subscription scope
 
-A durable subscription, one that checkpoints and resumes, will read one storage
-collection (a table, materialized view, or source) plus an optional projection,
-filter, and envelope. The filter must not call `mz_now()`. Plain views, indexes
-as targets, and temporal filters will be rejected. Arbitrary SQL will be accepted
-only for live streams that never resume.
+The SDK will separate two uses of `SUBSCRIBE`:
 
-Resuming a general query rehydrates its whole dataflow and needs history on
-every input of the query. A plain view is inlined, so resuming it costs the
-same, and a temporal filter needs the snapshot on every resume. Durable
-subscriptions (#38468) accept exactly this narrower surface, so starting with it
-makes the later move a transport change, not an API break. Widening later is
-compatible, and narrowing is not. Structured input also lets the SDK build the
-statement and place `ENVELOPE` before `WITH` without parsing user SQL.
+- A live subscribe, for a UI, a cache warmer, or an agent watching results,
+  never resumes. It will accept any query.
+- A sink, or any durable subscription that checkpoints and resumes, will read
+  one table, source, or materialized view directly, as `SUBSCRIBE <object>` with
+  an optional envelope. It accepts no query, projection, or filter. These are the
+  objects `CREATE SINK` accepts (`plan_create_sink` in
+  `src/sql/src/plan/statement/ddl.rs`), so sinks built on the SDK follow the same
+  rule as Kafka sinks.
 
-Projections and filters still read the snapshot on resume (see "Snapshot
-elision"). The docs will recommend the plain collection form for large
-collections, and the SDK will log the resume cost at startup.
+A sink that needs a projection, a filter, or a join will read a materialized view
+that computes it. Resuming a query rehydrates its whole dataflow and needs
+history on every input of the query, and a plain view is inlined, so resuming it
+costs the same. Only the plain object form skips the snapshot on resume (see
+"Snapshot elision"), so with this rule a sink's resume never reads the snapshot.
+Reading an object backed by a storage shard also leaves room for server-side
+optimizations aimed at that case.
+
+Durable subscriptions (#38468) accept one storage collection with an optional
+projection and filter, a wider surface than this. Starting narrow keeps the later
+move a transport change, because widening later is compatible and narrowing is
+not. Building the statement from an object and an envelope also lets the SDK
+place `ENVELOPE` before `WITH` without parsing user SQL.
 
 The SDK will refuse an indexed object at startup. It will check whether the
 subscribed object has an index on the subscribing cluster and fail with an error
@@ -345,7 +353,8 @@ arrive as chunks marked partial, with the token on the closing chunk. Chunks
 bound client memory only. A snapshot or catch-up larger than `max_result_size`
 fails on the server before the first chunk arrives (see "Buffering limits"), and
 the SDK will report it as `ResultTooLarge` with the remedies: subscribe to a
-narrower projection, or have an administrator raise `max_result_size`. Server-side
+smaller materialized view, for example one with fewer columns, or have an
+administrator raise `max_result_size`. Server-side
 chunking would remove the limit (see "Materialize-side workstream"). The sink
 module's generations (see "Sink module") give atomic snapshot visibility to
 targets that need it.
@@ -390,8 +399,8 @@ when the list is reordered.
 
 The checkpoint will also record a fingerprint of the subscription: the object's
 name, catalog id, and storage shard (from `mz_internal.mz_storage_shards`, joined
-through `mz_internal.mz_object_global_ids`), and
-the projection, filter, envelope, and output column types. A resume compares it
+through `mz_internal.mz_object_global_ids`), and the envelope and output column
+types. A resume compares it
 with the object the name resolves to now, and "Object identity" decides what
 each difference means. The shard matters because blue/green deploys use
 `ALTER SCHEMA ... SWAP`, which moves names and leaves ids unchanged. After a swap
@@ -954,8 +963,9 @@ program.
    delivered. Durable subscriptions do not change this, because a snapshot is one
    timestamp.
 4. Durable subscriptions (#38468).
-5. Snapshot elision for a projection and filter without a temporal predicate,
-   which #38468 also needs.
+5. Snapshot elision for a projection and filter without a temporal predicate.
+   #38468 needs it, and it would let sinks accept a projection and filter later
+   without a snapshot read on every resume.
 6. Non-poisoning subscribe errors (database-issues#5182).
 7. Docs that cross-link the durable-subscriptions pattern from every client page
    now, and lead with the SDK once it ships.
@@ -1029,7 +1039,7 @@ right, and this design keeps it. The parts that change:
 | Strawman | This design | Why |
 | --- | --- | --- |
 | `update()` commits and fetches | `commit()` inside the transaction, `next()` outside | A target transaction must not wait on Materialize |
-| `queries` as SQL strings, split at `ENVELOPE` | Object, projection, filter, envelope as structured input | Resume cost, durable subscription compatibility, no string splicing |
+| `queries` as SQL strings, split at `ENVELOPE` | One table, source, or materialized view plus an envelope, as `CREATE SINK` takes | Resume never reads the snapshot, durable subscription compatibility, no string splicing |
 | One cursor per query | One `AS OF` for all members, release at the minimum frontier | Independent cursors produce torn cuts |
 | Rows stamped with the batch frontier | Every change keeps its `mz_timestamp` | Batches span timestamps |
 | Retractions come first | Order by timestamp, net per key within a timestamp | Not true by default |
