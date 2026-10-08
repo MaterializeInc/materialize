@@ -85,11 +85,13 @@ prefix checks. Adapter candidates remain substantially slower than replica
 candidates, although both use the same machinery and their delta sizes differ.
 CI138291 verifies exact candidate reuse and its boundary coverage. Duplicate final
 application is eliminated for single-batch publications, but workload stalls remain.
-The measured next cost is losing durable appends and conflict catch-up. Skip batch
-construction only when Persist's cached upper proves the append already lost.
-Keep the same fencing catch-up, refreshed conflict classification and real CAS
-otherwise. Verify hit rate, retry cost and foreground/renewal progress together
-in the existing workloads, without inferring liveness from cheaper candidates.
+CI138301 verifies that cached-upper rejection avoids most already-losing appends,
+but catch-up remains costly and the adapter still loses its incarnation after a
+301s renewal drought. Heartbeat attempts must renew the existing incarnation
+without preparing or acknowledging the full advancing aggregate. Both adapter and
+replica owners retain committed grants, pending acquisition barriers, advancement
+opportunities and their existing retry gates. Verify renewal and foreground progress
+together in the existing workloads, without inferring liveness from cheaper work.
 Both native promotion jobs in CI138229 verify graceful deployment fencing.
 Private prewarming's separate catalog and inline bootstrap are unchanged.
 The frontier INSERT's year-3000 read wait is separate.

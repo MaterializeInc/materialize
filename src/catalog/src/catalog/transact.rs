@@ -355,6 +355,10 @@ pub enum Op {
     CreateClientIncarnation {
         replica_id: Option<ReplicaId>,
     },
+    /// Renews an existing incarnation without changing its committed requirements.
+    RenewClientIncarnation {
+        incarnation: u64,
+    },
     /// Replaces a client's aggregate requirements and renews its heartbeat atomically.
     PublishClientReadRequirements {
         incarnation: u64,
@@ -427,6 +431,7 @@ impl Op {
             | Self::DropClusterReplicaRealization { .. }
             | Self::CheckClusterDeclarations { .. }
             | Self::CreateClientIncarnation { .. }
+            | Self::RenewClientIncarnation { .. }
             | Self::PublishClientReadRequirements { .. }
             | Self::ReclaimClientIncarnation { .. }
             | Self::SetReadProtection { .. }
@@ -1575,6 +1580,11 @@ impl Catalog {
                     ));
                 }
                 created_client_incarnations.push(tx.create_client_incarnation(replica_id)?);
+            }
+            Op::RenewClientIncarnation { incarnation } => {
+                tx.renew_client_incarnation(incarnation)?;
+                debug!(target: "mz_adapter::frontend_read_then_write",
+                    incarnation, "catalog client renewal staged");
             }
             Op::PublishClientReadRequirements {
                 incarnation,

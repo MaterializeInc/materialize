@@ -65,6 +65,11 @@ await can make an earlier refresh stale. A structural change invalidates prepara
 before retry. Sampled compaction and reclamation proposals instead retain their
 prefix check so their owners resample, rather than replaying them after catch-up.
 
+Incarnation renewal retains committed requirements without preparing an advancing
+aggregate. It does not acknowledge pending grants or clear their acquisition
+barrier. Successful renewal updates renewal age, not the advancement cadence.
+New or stronger protection still needs its own successful grant publication.
+
 Ordinary CREATE MATERIALIZED VIEW admits its automatic birth in the content
 transaction, joining logical-input and selected-import permission. The definition,
 timestamp, selected plan and protection commit together. A metadata conflict

@@ -5035,14 +5035,14 @@ impl Coordinator {
                     // internal responses cannot exclude waiting client commands.
                     biased;
 
-                    // Polling the pinned timer is cancel-safe. Renewal and requirement
-                    // publication share one transaction before checking abandoned clients.
+                    // Polling the pinned timer is cancel-safe. Renewal retains the
+                    // committed grants without waiting for aggregate advancement.
                     _ = client_heartbeat_timer.as_mut() => {
                         let mut conflict = false;
                         if self.query_client.as_ref().is_some_and(|client| {
                             client.last_publication().elapsed() >= client_heartbeat_delay
                         }) && let Err(error) = trace_maintenance(
-                            "heartbeat_publish_client", self.publish_client_read_protection()
+                            "heartbeat_publish_client", self.renew_client_read_protection()
                         ).await {
                             conflict |= read_protection::is_read_protection_conflict(&error);
                             warn!(%error, "unable to publish query client protection");

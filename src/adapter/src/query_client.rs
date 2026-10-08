@@ -109,6 +109,8 @@ pub(crate) struct QueryClient {
     txns_shard: ShardId,
     collection_reader: OnceCell<CollectionReader>,
     pub(crate) connections: Arc<QueryReplicaConnections>,
+    // Renewal age, including both heartbeat-only and aggregate publications.
+    // This does not track the advancement cadence or pending grant coverage.
     last_publication: Mutex<Instant>,
     pending_peeks: Arc<Mutex<BTreeMap<Uuid, watch::Sender<Option<PeekResponse>>>>>,
 }
@@ -2052,52 +2054,80 @@ mod tests {
         ));
         let mut holds = holds;
         holds.downgrade(Timestamp::from(120));
-        // An advancing aggregate and an idle renewal both bump the heartbeat in
-        // the same catalog transaction as the requirements.
-        for elapsed in [
-            std::time::Duration::from_secs(1),
-            read_protection::client_protection_heartbeat_interval(),
-        ] {
-            let requirements = client
+        let requirements = client
+            .protection
+            .prepare_publication_if_needed(std::time::Duration::from_secs(1))
+            .expect("advancement is due");
+        assert_eq!(requirements, BTreeMap::from([(id, Timestamp::from(120))]));
+        let heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::RenewClientIncarnation { incarnation }],
+            )
+            .await
+            .expect("renewal does not require pending advancement");
+        client.published();
+        assert_eq!(
+            catalog.state().client_incarnations()[&incarnation].heartbeat,
+            heartbeat + 1
+        );
+        assert_eq!(
+            catalog.state().client_read_requirements()[&(incarnation, id)],
+            Timestamp::from(50)
+        );
+        assert_eq!(
+            client.protection.granted_frontier(id),
+            Some(Timestamp::from(50))
+        );
+        // Renewal must not clear the pending advancement's acquisition barrier.
+        assert!(
+            client
                 .protection
-                .prepare_publication_if_needed(elapsed)
-                .expect("advancement or renewal is due");
-            assert_eq!(requirements, BTreeMap::from([(id, Timestamp::from(120))]));
-            let heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
-            let ts = catalog.current_upper().await;
-            catalog
-                .transact(
-                    None,
-                    ts,
-                    None,
-                    vec![Op::PublishClientReadRequirements {
-                        incarnation,
-                        requirements,
-                    }],
+                .try_acquire(
+                    &bundle,
+                    &BTreeMap::from([(id, Timestamp::from(100))]),
+                    &BTreeMap::new(),
                 )
-                .await
-                .expect("can publish aggregate and heartbeat");
-            client.protection.finish_publication(true);
-            client.published();
-            assert_eq!(
-                catalog.state().client_incarnations()[&incarnation].heartbeat,
-                heartbeat + 1
-            );
-            assert_eq!(
-                client.protection.granted_frontier(id),
-                Some(Timestamp::from(120))
-            );
-            assert_eq!(
-                catalog.state().client_read_requirements()[&(incarnation, id)],
-                Timestamp::from(120)
-            );
-            assert_eq!(
-                client
-                    .protection
-                    .prepare_publication_if_needed(client.last_publication().elapsed()),
-                None
-            );
-        }
+                .expect("renewed client remains open")
+                .is_none()
+        );
+        let ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                ts,
+                None,
+                vec![Op::PublishClientReadRequirements {
+                    incarnation,
+                    requirements,
+                }],
+            )
+            .await
+            .expect("can publish aggregate and heartbeat");
+        client.protection.finish_publication(true);
+        client.published();
+        assert_eq!(
+            catalog.state().client_incarnations()[&incarnation].heartbeat,
+            heartbeat + 2
+        );
+        assert_eq!(
+            client.protection.granted_frontier(id),
+            Some(Timestamp::from(120))
+        );
+        assert_eq!(
+            catalog.state().client_read_requirements()[&(incarnation, id)],
+            Timestamp::from(120)
+        );
+        assert_eq!(
+            client
+                .protection
+                .prepare_publication_if_needed(client.last_publication().elapsed()),
+            None
+        );
         writer
             .compare_and_append(
                 Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),

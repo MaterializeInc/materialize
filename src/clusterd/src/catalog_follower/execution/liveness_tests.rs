@@ -393,11 +393,27 @@ async fn exercise_liveness() {
         .await;
 
     let heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
+    let advancement_due = driver.publication_clock.as_ref().unwrap().due;
     driver
         .publish(&mut catalog, &mut effects, cluster, &build, true, None)
         .await
         .unwrap();
     assert!(catalog.state().client_incarnations()[&incarnation].heartbeat > heartbeat);
+    assert_eq!(
+        catalog.state().client_read_requirements()[&requirement],
+        Timestamp::new(15_000)
+    );
+    assert_eq!(
+        driver.publication_clock.as_ref().unwrap().due,
+        advancement_due
+    );
+    // Renewal retains the released token's committed protection. The normal
+    // advancement opportunity remains responsible for publishing its release.
+    driver.publication_clock.as_mut().unwrap().due = Instant::now();
+    driver
+        .publish(&mut catalog, &mut effects, cluster, &build, true, None)
+        .await
+        .unwrap();
     assert!(
         !catalog
             .state()

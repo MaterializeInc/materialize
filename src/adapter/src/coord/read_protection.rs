@@ -422,7 +422,9 @@ impl Coordinator {
     ) -> Result<Vec<u64>, AdapterError> {
         assert!(matches!(
             &op,
-            Op::CreateClientIncarnation { .. } | Op::PublishClientReadRequirements { .. }
+            Op::CreateClientIncarnation { .. }
+                | Op::RenewClientIncarnation { .. }
+                | Op::PublishClientReadRequirements { .. }
         ));
         if self.client_protection_catalog.is_none() {
             if once {
@@ -857,6 +859,28 @@ impl Coordinator {
             .ok_or_else(|| {
                 AdapterError::internal("query read protection", "published scope was not acquired")
             })
+    }
+
+    /// Renews existing grants without preparing or acknowledging aggregate changes.
+    pub(super) async fn renew_client_read_protection(&mut self) -> Result<(), AdapterError> {
+        let Some(client) = self.query_client.clone() else {
+            return Ok(());
+        };
+        let incarnation = client.protection.incarnation();
+        let result = self
+            .transact_client_protection_inner(Op::RenewClientIncarnation { incarnation }, true)
+            .await;
+        if !self
+            .client_read_catalog()
+            .state()
+            .client_incarnations()
+            .contains_key(&incarnation)
+        {
+            client.protection.mark_closed();
+        }
+        result?;
+        client.published();
+        Ok(())
     }
 
     /// Attempts one publication of the client aggregate and heartbeat.

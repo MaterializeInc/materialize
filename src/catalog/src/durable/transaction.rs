@@ -3139,6 +3139,27 @@ impl<'a> Transaction<'a> {
         incarnation: u64,
         requirements: BTreeMap<GlobalId, mz_repr::Timestamp>,
     ) -> Result<u64, CatalogError> {
+        let heartbeat = self.renew_client_incarnation(incarnation)?;
+        let mut updates: BTreeMap<_, _> = self
+            .client_requirement_keys(incarnation)
+            .into_iter()
+            .map(|key| (key, None))
+            .collect();
+        updates.extend(requirements.into_iter().map(|(id, frontier)| {
+            (
+                ClientReadRequirementKey { incarnation, id },
+                Some(ClientReadRequirementValue { frontier }),
+            )
+        }));
+        updates.retain(|key, value| self.client_read_requirements.get(key) != value.as_ref());
+        self.client_read_requirements
+            .set_many(updates, self.op_id)?;
+        Ok(heartbeat)
+    }
+
+    /// Renews an open incarnation owned by this deployment, retaining every grant.
+    /// Renewal does not acknowledge pending acquisitions, advancements or releases.
+    pub fn renew_client_incarnation(&mut self, incarnation: u64) -> Result<u64, CatalogError> {
         let key = ClientIncarnationKey { id: incarnation };
         let previous = self
             .client_incarnations
@@ -3161,20 +3182,6 @@ impl<'a> Transaction<'a> {
                 "client incarnation {incarnation} heartbeat exhausted"
             ))
         })?;
-        let mut updates: BTreeMap<_, _> = self
-            .client_requirement_keys(incarnation)
-            .into_iter()
-            .map(|key| (key, None))
-            .collect();
-        updates.extend(requirements.into_iter().map(|(id, frontier)| {
-            (
-                ClientReadRequirementKey { incarnation, id },
-                Some(ClientReadRequirementValue { frontier }),
-            )
-        }));
-        updates.retain(|key, value| self.client_read_requirements.get(key) != value.as_ref());
-        self.client_read_requirements
-            .set_many(updates, self.op_id)?;
         self.client_incarnations.set(
             key,
             Some(ClientIncarnationValue {

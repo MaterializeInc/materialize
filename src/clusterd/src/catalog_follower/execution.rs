@@ -1184,11 +1184,36 @@ impl ReplicaEnactment {
             self.ensure_live(catalog)?;
             self.publication_needs_refresh = false;
         }
+        if self.renewal_due() {
+            // Renew the committed protection independently of advancement work.
+            // Use attempt start as in commit_grants: peers can observe the
+            // heartbeat before acknowledgement. Leave advancement clocks due.
+            let started = Instant::now();
+            match self
+                .transact(
+                    catalog,
+                    effects,
+                    cluster,
+                    build,
+                    vec![Op::RenewClientIncarnation { incarnation }],
+                )
+                .await
+            {
+                Ok(()) => {
+                    self.published_at = started;
+                    return Ok(PublicationOutcome::Deferred);
+                }
+                Err(error) if is_catalog_conflict(&error) => {
+                    self.defer_publication(true);
+                    return Err(error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
         // Maintenance only advances or releases committed grants. Coalescing it
         // retains protection until publication. Acquisitions commit independently
         // before use, and renewal must not wait for the advancement interval.
-        let publish_requirements =
-            self.renewal_due() || self.publication_clock.as_ref().expect("configured").due();
+        let publish_requirements = self.publication_clock.as_ref().expect("configured").due();
         if publish_requirements
             && let Some(requirements) = self
                 .protection

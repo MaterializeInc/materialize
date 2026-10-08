@@ -728,6 +728,12 @@ async fn deployment_cannot_publish_another_deployments_protection() {
             DurableCatalogError::InvalidReadProtection(_)
         ))
     ));
+    assert!(matches!(
+        txn.renew_client_incarnation(old),
+        Err(CatalogError::Durable(
+            DurableCatalogError::InvalidReadProtection(_)
+        ))
+    ));
     let own = txn.create_client_incarnation(None).unwrap();
     txn.publish_client_read_requirements(own, BTreeMap::from([(id, 30.into())]))
         .unwrap();
@@ -834,13 +840,28 @@ async fn client_publication_reopen_and_reclamation() {
         20
     );
 
+    // Explicit renewal preserves every grant and identity, changing only the heartbeat.
+    let mut expected = snapshot;
+    expected
+        .client_incarnations
+        .get_mut(
+            &objects::ClientIncarnationKey::from_proto(ClientIncarnationKey { id: a }).unwrap(),
+        )
+        .unwrap()
+        .heartbeat += 1;
     let mut txn = state.transaction().await.unwrap();
-    assert!(!txn.reclaim_client_incarnation(a, 1).unwrap());
+    assert_eq!(txn.renew_client_incarnation(a).unwrap(), 3);
+    commit(txn).await;
+    assert_eq!(state.snapshot().await.unwrap(), expected);
+
+    let mut txn = state.transaction().await.unwrap();
+    assert!(!txn.reclaim_client_incarnation(a, 2).unwrap());
     txn.set_collection_compaction_bound(id, Some(21.into()))
         .unwrap();
     reject(txn, "readable at 20").await;
     let mut txn = state.transaction().await.unwrap();
-    assert!(txn.reclaim_client_incarnation(a, 2).unwrap());
+    assert!(txn.reclaim_client_incarnation(a, 3).unwrap());
+    assert!(txn.renew_client_incarnation(a).is_err());
     assert!(
         txn.publish_client_read_requirements(a, BTreeMap::new())
             .is_err()
@@ -861,7 +882,9 @@ async fn client_publication_reopen_and_reclamation() {
         .unwrap();
     let _ = state.sync_to_current_updates().await.unwrap();
     let mut txn = state.transaction().await.unwrap();
-    assert!(!txn.reclaim_client_incarnation(a, 2).unwrap());
+    assert!(!txn.reclaim_client_incarnation(a, 3).unwrap());
+    assert!(txn.renew_client_incarnation(a).is_err());
+    assert!(txn.renew_client_incarnation(u64::MAX).is_err());
     assert!(
         txn.publish_client_read_requirements(a, BTreeMap::from([(id, 30.into())]))
             .is_err()

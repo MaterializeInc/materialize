@@ -326,6 +326,7 @@ impl Coordinator {
         assert!(ops.iter().all(|op| matches!(
             op,
             Op::CreateClientIncarnation { .. }
+                | Op::RenewClientIncarnation { .. }
                 | Op::PublishClientReadRequirements { .. }
                 | Op::ReclaimClientIncarnation { .. }
                 | Op::SetReadProtection { .. }
@@ -744,6 +745,7 @@ impl Coordinator {
             matches!(
                 op,
                 catalog::Op::CreateClientIncarnation { .. }
+                    | catalog::Op::RenewClientIncarnation { .. }
                     | catalog::Op::PublishClientReadRequirements { .. }
                     | catalog::Op::ReclaimClientIncarnation { .. }
             )
@@ -1453,7 +1455,9 @@ impl Coordinator {
             && ops.iter().all(|op| {
                 matches!(
                     op,
-                    Op::CreateClientIncarnation { .. } | Op::PublishClientReadRequirements { .. }
+                    Op::CreateClientIncarnation { .. }
+                        | Op::RenewClientIncarnation { .. }
+                        | Op::PublishClientReadRequirements { .. }
                 )
             });
         let mut prepared = Box::pin(self.begin_catalog_transaction(conn_id, ops)).await?;
@@ -2443,6 +2447,7 @@ impl Coordinator {
                 | Op::SetReadProtection { .. }
                 | Op::SetWrittenPlan { .. }
                 | Op::CreateClientIncarnation { .. }
+                | Op::RenewClientIncarnation { .. }
                 | Op::PublishClientReadRequirements { .. }
                 | Op::ReclaimClientIncarnation { .. }
                 | Op::Comment { .. }
