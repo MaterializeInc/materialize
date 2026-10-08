@@ -30,13 +30,13 @@ async fn test_expected_spans() {
         ("create_view_finish", "CREATE VIEW V AS SELECT 1"),
         ("create_index_finish", "CREATE DEFAULT INDEX i ON v"),
         ("implement_subscribe", "SUBSCRIBE (SELECT 1)"),
-        ("try_frontend_peek_inner", "SELECT 1"),
+        ("try_peek_inner", "SELECT 1"),
     ];
 
     let server = test_util::TestHarness::default()
         .with_enable_tracing(true)
         .with_capture(storage.clone())
-        // `try_frontend_peek_inner` is a debug-level span.
+        // `try_peek_inner` is a debug-level span.
         .with_system_parameter_default("opentelemetry_filter".to_string(), "debug".to_string())
         .start()
         .await;
@@ -66,7 +66,7 @@ async fn test_expected_spans() {
                 .all_spans()
                 .filter_map(|span| (span.metadata().name() == *name).then(|| span.stats()))
                 .collect::<Vec<_>>();
-            // `try_frontend_peek_inner` runs for every statement that the frontend peek sequencing
+            // `try_peek_inner` runs for every statement that the frontend peek sequencing
             // takes over, so it can have several instances.
             assert!(!stats.is_empty(), "{name}: no span");
             for stat in stats {

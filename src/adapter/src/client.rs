@@ -825,7 +825,7 @@ impl SessionClient {
         cancel_future: impl Future<Output = ()> + Send + Clone,
     ) -> Result<ExecuteResponse, AdapterError> {
         // Unroll SQL `EXECUTE <prepared> (...)` so the inner statement
-        // flows through `try_frontend_peek` /
+        // flows through `try_peek` /
         // `try_frontend_read_then_write` below, rather than being
         // re-dispatched via `Command::Execute` from the coordinator's
         // `Plan::Execute` handler. Without this, a prepared statement
@@ -841,7 +841,7 @@ impl SessionClient {
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
         let peek_result = self
-            .try_frontend_peek(&portal_name, logging, cancel_future.clone())
+            .try_peek(&portal_name, logging, cancel_future.clone())
             .await?;
         if let Some(resp) = peek_result {
             debug!("frontend peek succeeded");
@@ -877,7 +877,7 @@ impl SessionClient {
     /// If the named portal binds a SQL `EXECUTE <prepared>`, resolve the
     /// prepared statement, install a fresh portal for the inner statement
     /// (carrying the EXECUTE's actual parameter values), and return that
-    /// portal's name so the caller can run `try_frontend_peek` /
+    /// portal's name so the caller can run `try_peek` /
     /// `try_frontend_read_then_write` against it.
     ///
     /// Only ever unrolls one level: the parser rejects
@@ -896,7 +896,7 @@ impl SessionClient {
             let session = self.session.as_ref().expect("SessionClient invariant");
             let portal = match session.get_portal_unverified(&portal_name) {
                 Some(p) => p,
-                // No portal: let `try_frontend_peek` /
+                // No portal: let `try_peek` /
                 // `try_frontend_read_then_write` surface the
                 // standard "missing portal" error.
                 None => return Ok(portal_name),
@@ -1355,8 +1355,8 @@ impl SessionClient {
                 | Command::ExecuteCopyTo { .. }
                 | Command::ExecuteSideEffectingFunc { .. }
                 | Command::LookupConnection { .. }
-                | Command::RegisterFrontendPeek { .. }
-                | Command::UnregisterFrontendPeek { .. }
+                | Command::RegisterPeek { .. }
+                | Command::UnregisterPeek { .. }
                 | Command::ExplainTimestamp { .. }
                 | Command::FrontendStatementLogging(..)
                 | Command::InjectAuditEvents { .. }
@@ -1441,7 +1441,7 @@ impl SessionClient {
     /// Returns `Ok(Some(response))` if we handled the peek, or `Ok(None)` if the statement is
     /// not one that the frontend peek sequencing handles, in which case the Coordinator sequences
     /// it. If it returns an error, it should be returned to the user.
-    pub(crate) async fn try_frontend_peek(
+    pub(crate) async fn try_peek(
         &mut self,
         portal_name: &str,
         logging: &mut ExecutionLogging,
@@ -1449,7 +1449,7 @@ impl SessionClient {
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let session = self.session.as_mut().expect("SessionClient invariant");
         self.peek_client
-            .try_frontend_peek(portal_name, session, logging, connection_closed)
+            .try_peek(portal_name, session, logging, connection_closed)
             .await
     }
 

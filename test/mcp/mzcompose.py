@@ -1066,7 +1066,7 @@ def workflow_restrict_to_user_objects_startup_append_bypass(c: Composition) -> N
             f"got: {outcome!r}"
         )
 
-    with c.test_case("frontend_peek_path_not_vulnerable"):
+    with c.test_case("select_not_vulnerable"):
         # SELECT uses the frontend peek path, which runs the RBAC check before
         # awaiting the startup appends. Pins that SELECT is not a bypass vector.
         outcome = run(fresh_cursor(), "SELECT * FROM mz_internal.mz_sessions")

@@ -561,7 +561,7 @@ impl Coordinator {
                             });
                     let _ = tx.send(conn);
                 }
-                Command::RegisterFrontendPeek {
+                Command::RegisterPeek {
                     uuid,
                     conn_id,
                     cluster_id,
@@ -570,7 +570,7 @@ impl Coordinator {
                     watch_set,
                     tx,
                 } => {
-                    self.handle_register_frontend_peek(
+                    self.handle_register_peek(
                         uuid,
                         conn_id,
                         cluster_id,
@@ -580,8 +580,8 @@ impl Coordinator {
                         tx,
                     );
                 }
-                Command::UnregisterFrontendPeek { uuid, reason, tx } => {
-                    self.handle_unregister_frontend_peek(uuid, reason, tx);
+                Command::UnregisterPeek { uuid, reason, tx } => {
+                    self.handle_unregister_peek(uuid, reason, tx);
                 }
                 Command::ExplainTimestamp {
                     conn_id,
@@ -2218,7 +2218,7 @@ impl Coordinator {
 
     /// Handle registration of a frontend peek, for statement logging and query cancellation
     /// handling.
-    fn handle_register_frontend_peek(
+    fn handle_register_peek(
         &mut self,
         uuid: Uuid,
         conn_id: ConnectionId,
@@ -2262,9 +2262,9 @@ impl Coordinator {
         let _ = tx.send(Ok(()));
     }
 
-    /// Handles [`Command::UnregisterFrontendPeek`]; see its documentation for
+    /// Handles [`Command::UnregisterPeek`]; see its documentation for
     /// the end-of-execution ownership contract.
-    fn handle_unregister_frontend_peek(
+    fn handle_unregister_peek(
         &mut self,
         uuid: Uuid,
         reason: StatementEndedExecutionReason,
