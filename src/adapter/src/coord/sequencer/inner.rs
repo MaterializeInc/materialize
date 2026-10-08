@@ -4254,6 +4254,7 @@ impl Coordinator {
         };
         match ps {
             crate::coord::PlanStatement::Statement { stmt, params } => {
+                crate::coord::trace_create_mv_phase(ctx.session(), Some(&stmt), "ddl_lock_dequeue");
                 self.handle_execute_inner(stmt, params, ctx).await;
             }
             crate::coord::PlanStatement::Plan {

@@ -152,6 +152,14 @@ impl Coordinator {
         let mut client = self.background_peek_client(&catalog);
         let otel_ctx = OpenTelemetryContext::obtain();
         let internal_cmd_tx = self.internal_cmd_tx.clone();
+        let timing_stmt = match &continuation {
+            ExecuteCatalogContinuation::Portal { portal_name, .. } => ctx
+                .session()
+                .get_portal_unverified(portal_name)
+                .and_then(|portal| portal.stmt.clone()),
+            ExecuteCatalogContinuation::Statement { stmt, .. } => Some(Arc::clone(stmt)),
+        };
+        super::trace_create_mv_phase(ctx.session(), timing_stmt.as_deref(), "catalog_read_start");
         let handle = task::spawn(|| "execute_catalog_read", async move {
             // Keep the seed alive: PeekClient's cache holds only a weak reference.
             let _catalog = catalog;
@@ -162,6 +170,11 @@ impl Coordinator {
             handle.abort_on_drop(),
             true,
             move |mut ctx, (catalog, timestamp)| {
+                super::trace_create_mv_phase(
+                    ctx.session(),
+                    timing_stmt.as_deref(),
+                    "catalog_ready_send",
+                );
                 ctx.set_query_catalog(catalog, timestamp);
                 let _ = internal_cmd_tx.send(Message::ExecuteCatalogReady {
                     ctx,

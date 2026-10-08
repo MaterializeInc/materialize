@@ -27,6 +27,7 @@
 # replica per cycle. Shorten its cadence so episodes land within this test's
 # retry budget.
 $ postgres-execute connection=mz_system
+ALTER SYSTEM SET log_filter = 'info,mz_adapter::coord::hydration_history=debug';
 ALTER SYSTEM SET hydration_history_collection_interval = '1s';
 # Pin retention too: CI randomizes it, and a short period would prune the
 # episodes asserted below before the assertions run.
@@ -695,9 +696,8 @@ mv_wmr_stuck hydrated_test_4 false
 # An in-progress replica episode must not block recording an earlier,
 # disconnected completed episode. A gate that waits for every live export to
 # hydrate is lossy, not just late: once the in-progress episode completes it is
-# the latest, and the earlier episode is never recorded. Retention is still 0s
-# here, so the history stays empty while the fixture is arranged and the
-# assertion below sees exactly the episodes created now.
+# the latest, and the earlier episode is never recorded. Retention is 0s while
+# this fixture is arranged. Collection remains active with sweep-scoped cutoffs.
 
 > CREATE CLUSTER episodes REPLICAS (episodes_r1 (SIZE 'scale=1,workers=1'))
 > SET cluster = episodes
@@ -867,3 +867,6 @@ snk_schema2 false
   JOIN mz_internal.mz_hydration_statuses h ON (h.object_id = s.id)
 snk_schema1 true
 snk_schema2 false
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET log_filter;

@@ -260,6 +260,8 @@ impl Coordinator {
             .deferred_lock
             .take()
         {
+            tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                %conn_id, "DDL lock released");
             // If there are waiting deferred statements, process one.
             if !self.serialized_ddl.is_empty() {
                 let _ = self.internal_cmd_tx.send(Message::DeferredStatementReady);

@@ -1675,6 +1675,21 @@ pub struct ExecuteContextExtra {
     statement_uuid: Option<StatementLoggingId>,
 }
 
+// Temporary phase timing for the unexplained CREATE MV statement delay. Session
+// identity joins preparation and execution even before statement logging begins.
+pub(crate) fn trace_create_mv_phase(
+    session: &Session,
+    stmt: Option<&Statement<Raw>>,
+    phase: &'static str,
+) {
+    if let Some(Statement::CreateMaterializedView(mv)) = stmt {
+        tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+            session_id = %session.uuid(), conn_id = %session.conn_id(),
+            transaction_id = ?session.transaction().inner().map(|txn| txn.id),
+            name = ?mv.name, phase, "CREATE MV statement phase");
+    }
+}
+
 impl ExecuteContextExtra {
     pub(crate) fn new(statement_uuid: Option<StatementLoggingId>) -> Self {
         Self { statement_uuid }

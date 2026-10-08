@@ -88,14 +88,9 @@ Private prewarming's separate catalog and inline bootstrap are unchanged.
 The frontier INSERT's year-3000 read wait is separate.
 The source-table EXPLAIN timeout remains unlocalized between certification and
 grant acquisition. Keep its protection and deadline unchanged.
-CI138222 SLT1 stalls at the scheduled-MV read in `materialized_views.slt:1310`.
-Static review found that an MV output can compact toward its future refresh upper
-before asynchronous timeline acquisition. New MV outputs now use the existing
-atomic creator-protection path alongside indexes, without an extra content commit.
-Verify the extended creation boundary test and unchanged SLT through CI. This
-closes the identified admission gap, not the unproven attribution of that stall.
-CI138232's boundary test stopped at the REFRESH feature gate. The fixture now
-enables that feature at startup. No assertions changed.
+MV outputs use atomic creator protection alongside indexes, without an extra
+content commit. The creation boundary is verified. This closes the identified
+output-admission gap, not the unproven attribution of scheduled-MV stalls.
 CREATE/ALTER ROLE prepare redacted password verifiers once per logical operation,
 not per candidate. IDs, validation and audit effects remain candidate-owned.
 This removes repeated hashing, but aggregate candidate timings do not isolate
@@ -132,6 +127,14 @@ progress, not grace or closure checks. Keep the registered-peek DROP stall
 separate until its blocking await is identified. Earlier SLT timeout observations
 remain in the PR, not additional investigation campaigns.
 
+Alongside renewal, locate the CREATE MV end-to-end wait in the existing parallel
+workload. One successful content commit and 0.722s of identified admission within
+a 292.390s statement leave roughly 290.746s before admission unpartitioned.
+Temporary phase events join preparation, catalog waits, DDL ownership and MV
+stages by session and transaction identity in the existing workload. Use them to
+identify that wait and its owner before choosing a repair. Commit-count reduction
+does not close this latency gap.
+
 Keep the approved Persist-arbitrated OCC contract: subscribe-certified targets,
 freshness and future-time checks, refolding at every changed target, actual txns
 upper on conflict, and catalog completion before acknowledgement. Catalog-only
@@ -145,9 +148,12 @@ Remove temporary probes after the repair is verified. Heavy builds and runtime
 verification remain CI-owned, using the existing failing workflows and deadlines.
 
 Preserve the independent DROP-metric retirement observation and the unchanged
-paused-index advancement assertion. Keep history across deployments. Earlier
-hydration sampling and catalog restore/readiness costs remain observations in
-the PR, not additional investigation campaigns.
+paused-index advancement assertion. Keep history across deployments. The history
+episode setup can pass while the expected row remains absent at the deadline.
+Temporary fixture-enabled cutoff/outcome logs distinguish a missed visit from a
+fresh-cutoff no-op. Keep the assertion and deadline, and remove those logs once
+answered. Earlier sampling and catalog restore costs remain PR observations,
+not additional investigation campaigns.
 
 Native ownership, read protection, external-sink safeguards and compatible-version
 warm handover remain required. The outage, targeted DDL and bounded-throughput

@@ -1266,6 +1266,15 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         nested: bool,
     ) {
+        let timing_stmt = ctx
+            .session()
+            .get_portal_unverified(&portal_name)
+            .and_then(|portal| portal.stmt.clone());
+        super::trace_create_mv_phase(
+            ctx.session(),
+            timing_stmt.as_deref(),
+            "catalog_ready_dispatch",
+        );
         let catalog = Arc::clone(ctx.query_catalog().expect("certified before verification"));
         if let Err(err) = Self::verify_portal(&catalog, ctx.session_mut(), &portal_name) {
             // The context carries either the outer statement's logging obligation
@@ -1362,6 +1371,7 @@ impl Coordinator {
         mut ctx: ExecuteContext,
     ) {
         ctx.query_replan = Some(Arc::new((Arc::clone(&stmt), params.clone())));
+        super::trace_create_mv_phase(ctx.session(), Some(&stmt), "certified_preplanning");
         let query_catalog = Arc::clone(ctx.query_catalog().expect("certified before preplanning"));
         // DDL relies on the live revision when taking the serialization guard.
         // MV REFRESH input discovery also consults live controller/catalog state,
@@ -1632,6 +1642,10 @@ impl Coordinator {
         // because that function will release the held lock from active_conns.
         if Self::must_serialize_ddl(&stmt, &ctx) {
             if let Ok(guard) = self.serialized_ddl.try_lock_owned() {
+                tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                    session_id = %ctx.session().uuid(), conn_id = %ctx.session().conn_id(),
+                    transaction_id = ?ctx.session().transaction().inner().map(|txn| txn.id),
+                    statement_kind = ?StatementKind::from(&*stmt), "DDL lock acquired");
                 let prev = self
                     .active_conns
                     .get_mut(ctx.session().conn_id())
@@ -1668,6 +1682,7 @@ impl Coordinator {
                     )));
                     return;
                 }
+                super::trace_create_mv_phase(ctx.session(), Some(&stmt), "ddl_lock_enqueue");
                 self.serialized_ddl.push_back(DeferredPlanStatement {
                     ctx,
                     ps: PlanStatement::Statement { stmt, params },
@@ -1678,12 +1693,14 @@ impl Coordinator {
 
         let catalog = query_catalog.for_session(ctx.session());
         let original_stmt = Arc::clone(&stmt);
+        super::trace_create_mv_phase(ctx.session(), Some(&original_stmt), "resolve_start");
         // `resolved_ids` should be derivable from `stmt`. If `stmt` is transformed to remove/add
         // IDs, then `resolved_ids` should be updated to also remove/add those IDs.
         let (stmt, mut resolved_ids) = match mz_sql::names::resolve(&catalog, (*stmt).clone()) {
             Ok(resolved) => resolved,
             Err(e) => return ctx.retire(Err(e.into())),
         };
+        super::trace_create_mv_phase(ctx.session(), Some(&original_stmt), "resolve_complete");
         // N.B. The catalog can change during purification so we must validate that the dependencies still exist after
         // purification.  This should be done back on the main thread.
         // We do the validation:
@@ -1859,13 +1876,16 @@ impl Coordinator {
         };
 
         let catalog = query_catalog.for_session(ctx.session());
-        match mz_sql::plan::plan(
+        super::trace_create_mv_phase(ctx.session(), Some(&original_stmt), "plan_start");
+        let planned = mz_sql::plan::plan(
             Some(ctx.session().pcx()),
             &catalog,
             stmt,
             &params,
             &resolved_ids,
-        ) {
+        );
+        super::trace_create_mv_phase(ctx.session(), Some(&original_stmt), "plan_complete");
+        match planned {
             Ok((plan, sql_impl_ids)) => {
                 self.sequence_plan(ctx, plan, resolved_ids, sql_impl_ids)
                     .await

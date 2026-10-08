@@ -105,7 +105,18 @@ impl Staged for CreateMaterializedViewStage {
         coord: &mut Coordinator,
         ctx: &mut ExecuteContext,
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
-        match self {
+        let phase = match &self {
+            Self::Optimize(_) => "optimize",
+            Self::Finish(_) => "finish",
+            Self::Commit(_) => "commit",
+            Self::Explain(_) => "explain",
+        };
+        let started = std::time::Instant::now();
+        tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+            session_id = %ctx.session().uuid(), conn_id = %ctx.session().conn_id(),
+            transaction_id = ?ctx.session().transaction().inner().map(|txn| txn.id),
+            phase, "CREATE MV stage started");
+        let result = match self {
             CreateMaterializedViewStage::Optimize(stage) => {
                 coord.create_materialized_view_optimize(stage).await
             }
@@ -120,10 +131,20 @@ impl Staged for CreateMaterializedViewStage {
                     .create_materialized_view_explain(ctx.session(), stage)
                     .await
             }
-        }
+        };
+        tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+            session_id = %ctx.session().uuid(), conn_id = %ctx.session().conn_id(),
+            transaction_id = ?ctx.session().transaction().inner().map(|txn| txn.id),
+            phase, elapsed = ?started.elapsed(), error = ?result.as_ref().err(),
+            "CREATE MV stage returned");
+        result
     }
 
     fn message(self, ctx: ExecuteContext, span: Span) -> Message {
+        tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+            session_id = %ctx.session().uuid(), conn_id = %ctx.session().conn_id(),
+            transaction_id = ?ctx.session().transaction().inner().map(|txn| txn.id),
+            "CREATE MV stage ready send");
         Message::CreateMaterializedViewStageReady {
             ctx,
             span,

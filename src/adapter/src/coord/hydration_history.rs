@@ -49,7 +49,7 @@ use mz_ore::task;
 use mz_repr::CatalogItemId;
 use mz_sql::plan::{MutationKind, Params, Plan, ReadThenWritePlan};
 use sha2::{Digest, Sha256};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::catalog::Catalog;
 use crate::command::ExecuteResponse;
@@ -721,6 +721,13 @@ impl Sweep {
         kind: MutationKind,
         sql: &str,
     ) -> Option<usize> {
+        debug!(
+            %step, %cluster_id, %replica_id,
+            sweep_time = %self.wall_time,
+            object_cutoff = %self.object_cutoff,
+            replica_cutoff = %self.replica_cutoff,
+            "hydration history step started"
+        );
         let mutation = async {
             let plan = plan_mutation(&self.catalog, history_id, kind, sql)?;
             let mut session = Session::dummy();
@@ -757,6 +764,10 @@ impl Sweep {
                     .inc_by(u64::cast_from(rows));
                 let outcome = if rows == 0 { "noop" } else { "success" };
                 self.observe_mutation(step, outcome);
+                debug!(
+                    %step, %cluster_id, %replica_id, rows, outcome,
+                    "hydration history step complete"
+                );
                 Some(rows)
             }
             Ok(Err(error)) => {
@@ -774,9 +785,8 @@ impl Sweep {
                 }
                 None
             }
-            // A trailing replica can repeatedly certify a target only after the
-            // oracle has advanced past it. Each refused write raises the target,
-            // and the conflict loop can continue until this timeout fires.
+            // Introspection progress and repeated Persist conflicts can both
+            // keep a collection pending until its deadline.
             Err(_) if step.ends_with("collection") => {
                 self.observe_mutation(step, "timeout");
                 warn!(

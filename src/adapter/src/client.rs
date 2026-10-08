@@ -749,7 +749,9 @@ impl SessionClient {
         sql: String,
         param_types: Vec<Option<SqlScalarType>>,
     ) -> Result<(), AdapterError> {
+        crate::coord::trace_create_mv_phase(self.session(), stmt.as_ref(), "prepare_start");
         let (catalog, _) = self.peek_client.fresh_catalog_snapshot("prepare").await?;
+        crate::coord::trace_create_mv_phase(self.session(), stmt.as_ref(), "prepare_catalog_ready");
 
         // Note: This failpoint is used to simulate a request outliving the external connection
         // that made it.
@@ -764,6 +766,7 @@ impl SessionClient {
         };
 
         let desc = Coordinator::describe(&catalog, self.session(), stmt.clone(), param_types)?;
+        crate::coord::trace_create_mv_phase(self.session(), stmt.as_ref(), "prepare_described");
         let now = self.now();
         let state_revision = StateRevision {
             catalog_revision: catalog.transient_revision(),
@@ -782,10 +785,13 @@ impl SessionClient {
         stmt: Statement<Raw>,
         sql: String,
     ) -> Result<(), AdapterError> {
+        crate::coord::trace_create_mv_phase(self.session(), Some(&stmt), "declare_start");
         let (catalog, _) = self.peek_client.fresh_catalog_snapshot("declare").await?;
+        crate::coord::trace_create_mv_phase(self.session(), Some(&stmt), "declare_catalog_ready");
         let param_types = vec![];
         let desc =
             Coordinator::describe(&catalog, self.session(), Some(stmt.clone()), param_types)?;
+        crate::coord::trace_create_mv_phase(self.session(), Some(&stmt), "declare_described");
         let params = vec![];
         let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let now = self.now();
@@ -820,6 +826,15 @@ impl SessionClient {
         outer_ctx_extra: Option<ExecuteContextGuard>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
+        let timing_stmt = self
+            .session()
+            .get_portal_unverified(&portal_name)
+            .and_then(|portal| portal.stmt.clone());
+        crate::coord::trace_create_mv_phase(
+            self.session(),
+            timing_stmt.as_deref(),
+            "execute_start",
+        );
         let cancel_future = cancel_future.map(|_| ()).shared();
         let new_statement = outer_ctx_extra.is_none();
 
@@ -840,6 +855,11 @@ impl SessionClient {
         .await;
 
         logging.retire(&result);
+        crate::coord::trace_create_mv_phase(
+            self.session(),
+            timing_stmt.as_deref(),
+            "execute_return",
+        );
 
         result.map(|response| (response, execute_started))
     }
@@ -855,6 +875,10 @@ impl SessionClient {
         execute_started: Instant,
         new_statement: bool,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let timing_stmt = self
+            .session()
+            .get_portal_unverified(&portal_name)
+            .and_then(|portal| portal.stmt.clone());
         // All execution paths share this admission boundary. Only a new outer
         // statement discards an earlier cancellation. Replanning, fallback, and
         // cursor execution inside FETCH must retain an in-flight request.
@@ -872,6 +896,11 @@ impl SessionClient {
                 }),
         )
         .await?;
+        crate::coord::trace_create_mv_phase(
+            self.session(),
+            timing_stmt.as_deref(),
+            "cancel_watch_registered",
+        );
         let cancel_future = async move {
             tokio::select! {
                 _ = cancel_future => (),
@@ -911,6 +940,11 @@ impl SessionClient {
                 execute_started,
             )
             .await?;
+        crate::coord::trace_create_mv_phase(
+            self.session(),
+            timing_stmt.as_deref(),
+            "frontend_peek_return",
+        );
         if let Some(resp) = peek_result {
             debug!("frontend peek succeeded");
             return Ok(resp);
@@ -930,6 +964,11 @@ impl SessionClient {
         // No frontend path took the statement over, so the coordinator retires
         // whatever entry we hold, or begins its own if we hold none.
         let outer_ctx_extra = logging.release();
+        crate::coord::trace_create_mv_phase(
+            self.session(),
+            timing_stmt.as_deref(),
+            "coordinator_send",
+        );
         self.send_with_cancel(
             |tx, session| Command::Execute {
                 portal_name,

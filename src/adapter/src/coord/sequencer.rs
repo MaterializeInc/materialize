@@ -380,6 +380,11 @@ impl Coordinator {
                     // in `must_serialize_ddl()`.
                     if ctx.session().transaction().is_ddl() {
                         if let Ok(guard) = self.serialized_ddl.try_lock_owned() {
+                            let transaction_id = ctx.session().transaction().inner().map(|t| t.id);
+                            tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                                session_id = %ctx.session().uuid(),
+                                conn_id = %ctx.session().conn_id(), ?transaction_id,
+                                "DDL lock acquired for transaction end");
                             let prev = self
                                 .active_conns
                                 .get_mut(ctx.session().conn_id())
