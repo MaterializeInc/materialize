@@ -132,7 +132,8 @@ steps:
             - --qps-clusters=20
             - --qps-envd-cpus=64
             - --max-scale=64
-            - --qps-concurrencies=256,512
+            - --qps-concurrencies=512
+            - --qps-numa-diagnostic
             - --qps-duration=120
             - --qps-warmup=10
             - --system-parameter-default=enable_prepared_query_reuse=true

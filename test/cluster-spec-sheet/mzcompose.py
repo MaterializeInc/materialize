@@ -2050,9 +2050,10 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
 
     VERSION = "3.0.0"
 
-    def __init__(self, options: QpsSweep) -> None:
+    def __init__(self, options: QpsSweep, numa_diagnostic: bool = False) -> None:
         super().__init__(1, None)
         self.options = options
+        self.numa_diagnostic = numa_diagnostic
         self.warnings: list[str] = []
 
     def name(self) -> str:
@@ -2087,7 +2088,20 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             runner.run_query("SET cluster = 'c'")
             for protocol in self.options.protocols:
                 for concurrency in self.options.concurrencies:
-                    self.measure(runner, size, concurrency, protocol)
+                    if self.numa_diagnostic:
+                        self.measure(
+                            runner, size, concurrency, protocol, "affinity_baseline"
+                        )
+                        print(
+                            "--- NUMA DIAGNOSTIC: awaiting externally applied single-domain affinity for 45 seconds",
+                            flush=True,
+                        )
+                        time.sleep(45)
+                        self.measure(
+                            runner, size, concurrency, protocol, "affinity_requested"
+                        )
+                    else:
+                        self.measure(runner, size, concurrency, protocol)
         finally:
             runner.run_query("SET cluster = 'c'")
             runner.run_query("DROP VIEW IF EXISTS qps_gen_view CASCADE")
@@ -2095,9 +2109,16 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
                 runner.run_query(f"DROP CLUSTER IF EXISTS qps_{i} CASCADE")
 
     def measure(
-        self, runner: ScenarioRunner, size: str, concurrency: int, protocol: str
+        self,
+        runner: ScenarioRunner,
+        size: str,
+        concurrency: int,
+        protocol: str,
+        diagnostic_phase: str | None = None,
     ) -> None:
         name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters"
+        if diagnostic_phase is not None:
+            name += f"_{diagnostic_phase}"
         print(
             f"--- {name}: envd={runner.envd_cpus} CPUs, {self.options.duration}s measured + {self.options.warmup}s warmup"
         )
@@ -2153,6 +2174,9 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             query=config["query"],
             expected_rows=config["expected_rows"],
         )
+        if diagnostic_phase is not None:
+            # The external observer must independently verify actual affinity.
+            result["diagnostic_phase"] = diagnostic_phase
         logs_dir = os.path.join("test", "cluster-spec-sheet", "qps-logs")
         os.makedirs(logs_dir, exist_ok=True)
         with open(os.path.join(logs_dir, f"{runner.envd_cpus}_{name}.json"), "w") as f:
@@ -4094,6 +4118,11 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         help="Optional environmentd CPU sizes for focused QPS runs",
     )
     parser.add_argument(
+        "--qps-numa-diagnostic",
+        action="store_true",
+        help="Temporary same-host diagnostic: repeat each point after a 45-second window for an external observer to apply CPU affinity",
+    )
+    parser.add_argument(
         "--qps-protocols",
         type=lambda s: s.split(","),
         default=["prepared"],
@@ -4613,7 +4642,8 @@ SCENARIOS: list[ScenarioSpec] = [
                     a.qps_duration,
                     a.qps_warmup,
                     a.qps_query_timeout,
-                )
+                ),
+                numa_diagnostic=a.qps_numa_diagnostic,
             ),
             cpu_scales=a.qps_envd_cpus,
         ),
