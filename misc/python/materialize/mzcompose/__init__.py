@@ -177,10 +177,10 @@ def get_minimal_system_parameters(
 
     if version >= MzVersion.parse_mz("v26.45.0-dev"):
         # Exercise the source persist sink's grouping of a snapshotting export's
-        # updates while it defaults off in production. One timestamp interval
-        # past the floor keeps the ceiling ahead of the data. A Postgres
-        # source's snapshot and first CDC rows become visible about this much
-        # later, which the PgCdc feature benchmarks measure.
+        # updates ahead of release to production. At least one default_timestamp_interval
+        # (1s by default). A Postgres source's snapshot and first CDC
+        # rows become visible about this much later, which the PgCdc feature
+        # benchmarks measure.
         config["storage_persist_sink_description_lookahead"] = "2s"
 
     if sanitizer_enabled():
