@@ -870,7 +870,7 @@ impl PeekClient {
             self.optimize_mir_read_then_write(catalog, session, &plan, cluster_id)?;
 
         // Acquire the OCC semaphore permit *before* acquiring read holds in
-        // `frontend_determine_timestamp`. Under contention, waiters will
+        // `determine_timestamp`. Under contention, waiters will
         // otherwise sit on read holds on the RTW's read dependencies for the
         // entire time they are queued, pinning compaction on those
         // collections. Waiting on the permit first keeps queued operations
@@ -931,7 +931,7 @@ impl PeekClient {
 
         let bundle = global_mir_plan.id_bundle(cluster_id);
         let (determination, read_holds) = self
-            .frontend_determine_timestamp(
+            .determine_timestamp(
                 session,
                 &bundle,
                 &QueryWhen::FreshestTableWrite,
