@@ -112,7 +112,7 @@ impl PeekClient {
             }
         }
 
-        let catalog = self.catalog_snapshot("try_frontend_peek").await;
+        let catalog = self.catalog_snapshot("try_peek").await;
 
         // Extract things from the portal. A failed verification does not begin
         // an entry, mirroring the coordinator: the portal is what statement
