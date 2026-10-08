@@ -123,8 +123,14 @@ class ResourceWatch:
         self.sleep = sleep
         self.failures = 0
 
-    def window(self, resume_from: str | None) -> Window:
-        """Changes after `resume_from`, preceded by a `Relist` if it is None."""
+    def window(
+        self, resume_from: str | None, until: Callable[[Item], bool] | None = None
+    ) -> Window:
+        """Changes after `resume_from`, preceded by a `Relist` if it is None.
+
+        The window ends early, right after the first item for which `until`
+        returns True, and resumes after that item.
+        """
         items: list[Item] = []
         rv = resume_from if self.failures < RELIST_AFTER_FAILURES else None
         try:
@@ -138,7 +144,11 @@ class ResourceWatch:
                 body = json.loads(response.data)
                 rv = body["metadata"]["resourceVersion"]
                 assert rv is not None
-                items.append(Relist(body.get("items") or [], rv))
+                relist = Relist(body.get("items") or [], rv)
+                items.append(relist)
+                if until is not None and until(relist):
+                    self.failures = 0
+                    return Window(items, rv)
             # `timeout_seconds` also stops `Watch.stream` from retrying on its
             # own, which would resume a 410 from the same resourceVersion.
             stream = watch.Watch(return_type="object").stream(
@@ -157,7 +167,12 @@ class ResourceWatch:
                 obj = event["raw_object"]
                 rv = resource_version(obj) or rv
                 if event["type"] != "BOOKMARK":
-                    items.append(Change(event["type"], obj))
+                    change = Change(event["type"], obj)
+                    items.append(change)
+                    if until is not None and until(change):
+                        # Runs the stream's cleanup, which closes the response.
+                        stream.close()
+                        break
         except ApiException as e:
             if e.status == 410:
                 return Window(items, None, f"410 {e.reason}")
