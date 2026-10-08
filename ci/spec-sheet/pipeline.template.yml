@@ -130,7 +130,7 @@ steps:
             - --cleanup
             - --target=cloud-staging
             - --qps-clusters=20
-            - --qps-envd-cpus=32,64
+            - --qps-envd-cpus=64
             - --max-scale=64
             - --qps-concurrencies=256,512
             - --qps-duration=120
