@@ -11,6 +11,9 @@
 
 import sys
 
-from materialize.antithesis.drivers.configure import main
+from materialize.antithesis.drivers import configure, kafka_sources, postgres_sources
 
-sys.exit(main())
+status = configure.main()
+postgres_sources.setup_main()
+kafka_sources.setup_main()
+sys.exit(status)
