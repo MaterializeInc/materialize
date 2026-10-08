@@ -27,6 +27,7 @@ from functools import partial
 from textwrap import dedent
 from typing import Any, LiteralString, TextIO
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import pandas as pd
 import psycopg
@@ -4683,16 +4684,24 @@ def analyze_envd_results_file(file: str) -> None:
         sub_q = sub[sub["qps"].notna() & (sub["qps"] > 0)]
         if sub_q.empty:
             raise UIError(f"No QPS data found for {title} in {file}")
-        plot(
-            plot_dir,
-            sub_q,
-            "qps",
-            f"{title} (QPS)",
-            f"{slug}_qps",
-            "QPS",
-            "Normalized QPS",
-            x="envd_cpus",
+        sweep = (
+            sub_q[sub_q["concurrency"].notna()]
+            if "concurrency" in sub_q
+            else pd.DataFrame()
         )
+        if not sweep.empty:
+            plot_qps_sweep(plot_dir, sweep, title, slug)
+        else:
+            plot(
+                plot_dir,
+                sub_q,
+                "qps",
+                f"{title} (QPS)",
+                f"{slug}_qps",
+                "QPS",
+                "Normalized QPS",
+                x="envd_cpus",
+            )
 
 
 def analyze_envd_objects_scalability_results_file(file: str) -> None:
@@ -4857,6 +4866,53 @@ def upload_file(
             )
     else:
         print(f"Saving plots to {file_paths}")
+
+
+def plot_qps_sweep(plot_dir: str, data: pd.DataFrame, title: str, slug: str) -> None:
+    """Plot QPS and latency against concurrency, with one series per CPU allocation."""
+    for protocol, protocol_df in data.groupby("protocol"):
+        for metric, label in [
+            ("qps", "Queries / second"),
+            ("mean_latency_ms", "Mean latency (ms)"),
+            ("p99_latency_ms", "p99 latency (ms)"),
+            ("max_latency_ms", "Maximum latency (ms)"),
+        ]:
+            if metric not in protocol_df or protocol_df[metric].isna().all():
+                continue
+            with mpl.rc_context(rc=mpl.rcParamsDefault):
+                fig, ax = plt.subplots(figsize=(10, 6))
+            for cpus, points in protocol_df.groupby("envd_cpus"):
+                points = points.sort_values("concurrency")
+                ax.plot(
+                    points["concurrency"],
+                    points[metric],
+                    "o-",
+                    label=f"{cpus} CPUs",
+                )
+                single = points[points["concurrency"] == 1]
+                if metric == "qps" and not single.empty:
+                    ax.plot(
+                        points["concurrency"],
+                        points["concurrency"]
+                        * 1000
+                        / single["mean_latency_ms"].iloc[0],
+                        ":",
+                        color=ax.lines[-1].get_color(),
+                        alpha=0.5,
+                        label=f"{cpus} CPUs ideal C / L1",
+                    )
+            ax.set_xscale("log", base=2)
+            ax.set_yscale("log")
+            ax.set_xlabel("Concurrent clients")
+            ax.set_ylabel(label)
+            ax.set_title(f"{title}: {protocol}")
+            ax.grid(True, which="both", color="#dddddd", linewidth=0.5)
+            ax.legend()
+            fig.tight_layout()
+            plot_path = os.path.join(plot_dir, f"{slug}_{protocol}_{metric}.png")
+            fig.savefig(plot_path, dpi=160, facecolor="white")
+            plt.close(fig)
+            upload_file([plot_path], f"{title}: {protocol} {label}")
 
 
 def plot(

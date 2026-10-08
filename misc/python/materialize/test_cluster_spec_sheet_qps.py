@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import csv
 import importlib.util
 import json
 import sys
@@ -266,3 +267,69 @@ def test_pgbench_measurement_records_max_latency(monkeypatch, tmp_path):
     assert "max_latency_ms" in module.ENVD_FIELDNAMES
     artifact = next((tmp_path / "test/cluster-spec-sheet/qps-logs").glob("*.json"))
     assert json.loads(artifact.read_text())["max_latency_ms"] == 30
+
+
+@pytest.mark.parametrize("protocol", ["prepared", "simple"])
+def test_concurrency_plots(monkeypatch, tmp_path, protocol):
+    monkeypatch.chdir(tmp_path)
+    from materialize.mzcompose import loader
+
+    monkeypatch.setattr(loader, "composition_path", tmp_path)
+    module = composition_module()
+    uploaded = []
+    monkeypatch.setattr(
+        module, "upload_file", lambda paths, title: uploaded.extend(paths)
+    )
+    path = tmp_path / "sweep.envd.csv"
+    with path.open("w") as f:
+        writer = csv.DictWriter(f, fieldnames=module.ENVD_FIELDNAMES)
+        writer.writeheader()
+        for cpus in [1, 2]:
+            for concurrency in [1, 8]:
+                writer.writerow(
+                    dict(
+                        scenario="qps_envd_strong_scaling",
+                        category="peek_qps",
+                        mode="strong",
+                        envd_cpus=cpus,
+                        concurrency=concurrency,
+                        protocol=protocol,
+                        qps=100 * concurrency,
+                        mean_latency_ms=10,
+                        p99_latency_ms=12,
+                        max_latency_ms=18,
+                    )
+                )
+    module.analyze_envd_results_file(str(path))
+    plots = list((tmp_path / "test/cluster-spec-sheet/plots/sweep").glob("*.png"))
+    assert len(plots) == 4
+    assert any(p.name.endswith("_max_latency_ms.png") for p in plots)
+    assert all(p.stat().st_size > 0 for p in plots)
+    assert all(f"_{protocol}_" in p.name for p in plots)
+    assert set(uploaded) == {str(p.relative_to(tmp_path)) for p in plots}
+
+
+def test_historical_results_keep_cpu_axis_plots(monkeypatch, tmp_path):
+    from materialize.mzcompose import loader
+
+    monkeypatch.setattr(loader, "composition_path", tmp_path)
+    module = composition_module()
+    plotted = []
+    monkeypatch.setattr(module, "plot", lambda *args, **kwargs: plotted.append(kwargs))
+    path = tmp_path / "historical.envd.csv"
+    with path.open("w") as f:
+        writer = csv.DictWriter(
+            f, fieldnames=["scenario", "category", "mode", "envd_cpus", "qps"]
+        )
+        writer.writeheader()
+        writer.writerow(
+            dict(
+                scenario="qps_envd_strong_scaling",
+                category="peek_qps",
+                mode="strong",
+                envd_cpus=1,
+                qps=100,
+            )
+        )
+    module.analyze_envd_results_file(str(path))
+    assert plotted == [{"x": "envd_cpus"}]
