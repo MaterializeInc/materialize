@@ -378,8 +378,8 @@ export const ClusterUtilizationGraphInner = ({
 };
 
 export const UtilizationGraph = (props: UtilizationGraphProps) => {
-  // `ParentSize` collapses to 0px tall without a fixed-height parent, and this
-  // graph sets its own height, so only the width is measured.
+  // Measure only the width. visx's `ParentSize` would collapse to 0px tall
+  // here, since this graph sets its own height instead of filling a parent.
   const { parentRef, width } = useParentSize({ debounceTime: 10 });
   return (
     <Box ref={parentRef} className="graph-container" width="100%" minWidth={0}>
