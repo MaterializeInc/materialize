@@ -27,6 +27,7 @@ use mz_repr::{RelationDesc, Row};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::Params;
+use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::{CopyRelation, CopyStatement, SubscribeStatement};
 use mz_storage_types::sources::Timeline;
@@ -962,6 +963,10 @@ fn count_statement(session: &Session, stmt: Option<&Statement<Raw>>) {
             .metrics()
             .subscribe_outputs(&[session_type, metrics::subscribe_output_label_value(output)])
             .inc();
+    }
+    let application_name = ApplicationNameHint::from_str(session.application_name());
+    if let Some(labels) = metrics::as_of_query_label_values(session_type, application_name, stmt) {
+        session.metrics().as_of_queries(&labels).inc();
     }
 }
 
