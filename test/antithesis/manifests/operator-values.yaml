@@ -31,7 +31,9 @@ operator:
   clusters:
     swap_enabled: false
     # No cpu_limit or memory_limit: either becomes a pod request, and every
-    # replica exists twice during a rollout. Worker counts stay at or below 4
+    # replica exists twice during a rollout. The `clusterd-memory`
+    # LimitRange in 20-environment.yaml caps clusterd memory without a
+    # matching request. Worker counts stay at or below 4
     # because the whole system shares one simulated core.
     # Helm merges maps with the chart defaults, so the default sizes are
     # removed explicitly.
@@ -90,7 +92,7 @@ environmentd:
       cpu: 50m
       memory: 512Mi
     limits:
-      memory: 3Gi
+      memory: 2Gi
 
 balancerd:
   enabled: false

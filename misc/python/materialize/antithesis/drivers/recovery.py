@@ -395,9 +395,8 @@ def record_terminations(
             ),
         }
         log(f"termination {cls}: {details}")
-        always_or_unreachable(
-            cls != "oom", "Materialize pods are never OOM-killed", details
-        )
+        # OOM kills are asserted by `resource_kills`, which can tell a
+        # container's own limit from node-wide memory exhaustion.
         # Whether a panic is a bug is decided in the process, by the panic
         # hook (some panics are designed, such as a fetch after losing a
         # persist lease). An exit code cannot tell the two apart, so this side
