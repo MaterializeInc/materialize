@@ -173,7 +173,7 @@ export function buildLagHistoryQuery(
         }
 
         if (lookback.limit) {
-          cteQuery = cteQuery.limit(sql.raw(`${lookback.limit}`));
+          cteQuery = cteQuery.limit(sql.lit(lookback.limit));
         }
       } else if (groupByCluster) {
         cteQuery = cteQuery.orderBy([
