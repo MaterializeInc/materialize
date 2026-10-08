@@ -288,6 +288,16 @@ pub const ENABLE_MCP_DEVELOPER_QUERY_TOOL: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether the MCP endpoints serve the 2026-07-28 protocol alongside
+/// 2025-11-25. When off, every request is served as today, including one that
+/// asks for 2026-07-28, so modern clients keep falling back to `initialize`.
+pub const ENABLE_MCP_PROTOCOL_2026_07_28: Config<bool> = Config::new(
+    "enable_mcp_protocol_2026_07_28",
+    false,
+    "Whether the MCP endpoints serve the 2026-07-28 protocol revision alongside 2025-11-25. When false, requests are served on the 2025-11-25 protocol only.",
+    ParameterScope::Environment,
+);
+
 /// Whether the external metrics endpoint on environmentd is enabled.
 pub const ENABLE_PUBLIC_METRICS_ENDPOINT: Config<bool> = Config::new(
     "enable_public_metrics_endpoint",
@@ -584,6 +594,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL)
         .add(&ENABLE_MCP_DEVELOPER)
         .add(&ENABLE_MCP_DEVELOPER_QUERY_TOOL)
+        .add(&ENABLE_MCP_PROTOCOL_2026_07_28)
         .add(&ENABLE_PUBLIC_METRICS_ENDPOINT)
         .add(&MCP_MAX_RESPONSE_SIZE)
         .add(&MCP_REQUEST_TIMEOUT)
