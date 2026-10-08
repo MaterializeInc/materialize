@@ -39,6 +39,14 @@ mcp-agent
 ----
 202 Accepted
 
+# An unknown method with params gets MethodNotFound, not a 422. Clients probe
+# for server/discover this way.
+mcp-agent
+{"jsonrpc":"2.0","id":3,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":3,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
+
 # =============================================================================
 # get_data_products - no data products configured
 # =============================================================================

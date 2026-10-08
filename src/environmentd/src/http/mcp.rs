@@ -30,8 +30,10 @@ use std::sync::Arc;
 use anyhow::anyhow;
 use axum::Extension;
 use axum::Json;
+use axum::body::Bytes;
+use axum::extract::rejection::{JsonRejection, MissingJsonContentType};
 use axum::response::IntoResponse;
-use http::{HeaderMap, HeaderValue, StatusCode};
+use http::{HeaderMap, HeaderValue, StatusCode, header};
 use mz_adapter_types::dyncfgs::{
     ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL,
     ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL, MCP_MAX_RESPONSE_SIZE,
@@ -134,9 +136,9 @@ enum McpMethod {
     ToolsList(#[allow(dead_code)] Option<serde_json::Value>),
     #[serde(rename = "tools/call")]
     ToolsCall(#[serde(deserialize_with = "deserialize_tools_call")] ToolsCallParams),
-    /// Keepalive, and the post-initialize acknowledgement. Both are named so
-    /// their `params` deserialize; `#[serde(other)]` must be a unit variant, so
-    /// anything falling through to `Unknown` with `params` still fails the body.
+    /// Keepalive, and the post-initialize acknowledgement. Named so their
+    /// `params` deserialize and they keep their own metric label. Other methods
+    /// with `params` reach `Unknown` through [`as_unknown_method`].
     #[serde(rename = "ping")]
     Ping(#[allow(dead_code)] Option<serde_json::Value>),
     #[serde(rename = "notifications/initialized")]
@@ -448,12 +450,16 @@ pub async fn handle_mcp_agent(
     Extension(allowed_origins): Extension<Arc<Vec<HeaderValue>>>,
     Extension(metrics): Extension<McpMetrics>,
     client: AuthedClient,
-    Json(body): Json<McpRequest>,
+    body: Bytes,
 ) -> axum::response::Response {
     if let Some(resp) = validate_origin(&headers, &allowed_origins) {
         return resp;
     }
-    handle_mcp_request(client, body, McpEndpointType::Agent, metrics)
+    let request = match parse_mcp_request(&headers, &body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    handle_mcp_request(client, request, McpEndpointType::Agent, metrics)
         .await
         .into_response()
 }
@@ -464,14 +470,75 @@ pub async fn handle_mcp_developer(
     Extension(allowed_origins): Extension<Arc<Vec<HeaderValue>>>,
     Extension(metrics): Extension<McpMetrics>,
     client: AuthedClient,
-    Json(body): Json<McpRequest>,
+    body: Bytes,
 ) -> axum::response::Response {
     if let Some(resp) = validate_origin(&headers, &allowed_origins) {
         return resp;
     }
-    handle_mcp_request(client, body, McpEndpointType::Developer, metrics)
+    let request = match parse_mcp_request(&headers, &body) {
+        Ok(request) => request,
+        Err(response) => return response,
+    };
+    handle_mcp_request(client, request, McpEndpointType::Developer, metrics)
         .await
         .into_response()
+}
+
+/// Parses a request body the way axum's `Json` extractor does, so every
+/// rejection keeps its status and text. The one exception: an unknown method
+/// that carries `params` becomes `McpMethod::Unknown` instead of a 422 (see
+/// [`as_unknown_method`]). The body arrives through `Bytes`, so the route's
+/// `DefaultBodyLimit` still applies.
+fn parse_mcp_request(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<McpRequest, axum::response::Response> {
+    if !is_json_content_type(headers) {
+        return Err(MissingJsonContentType::default().into_response());
+    }
+    match Json::<McpRequest>::from_bytes(body) {
+        Ok(Json(request)) => Ok(request),
+        Err(JsonRejection::JsonDataError(rejection)) => {
+            as_unknown_method(body).ok_or_else(|| rejection.into_response())
+        }
+        Err(rejection) => Err(rejection.into_response()),
+    }
+}
+
+/// The `Content-Type` check axum's `Json` extractor runs before parsing.
+fn is_json_content_type(headers: &HeaderMap) -> bool {
+    let Some(mime) = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<mime::Mime>().ok())
+    else {
+        return false;
+    };
+    mime.type_() == "application"
+        && (mime.subtype() == "json" || mime.suffix().is_some_and(|name| name == "json"))
+}
+
+/// The request `body` would produce if `McpMethod::Unknown` accepted `params`,
+/// or `None` when its method is one we know, whose parse error must stand.
+///
+/// `#[serde(other)]` only matches a unit variant, so an unknown method with
+/// `params` fails the whole body. Every 2026-07-28 client sends `params`.
+fn as_unknown_method(body: &[u8]) -> Option<McpRequest> {
+    #[derive(Deserialize)]
+    struct Envelope {
+        jsonrpc: String,
+        id: Option<serde_json::Value>,
+        method: String,
+    }
+    let envelope: Envelope = serde_json::from_slice(body).ok()?;
+    // Without `params`, a known method either parses to its own variant or
+    // fails on its missing params. Only an unknown one parses to `Unknown`.
+    let method: McpMethod = serde_json::from_value(json!({ "method": envelope.method })).ok()?;
+    matches!(method, McpMethod::Unknown).then(|| McpRequest {
+        jsonrpc: envelope.jsonrpc,
+        id: envelope.id,
+        method,
+    })
 }
 
 /// Validates the Origin header against the CORS allowlist to prevent DNS
@@ -2336,6 +2403,57 @@ mod tests {
                 matches!(req.method, McpMethod::ToolsList(_)),
                 "expected ToolsList for {body}"
             );
+        }
+    }
+
+    fn json_headers() -> HeaderMap {
+        HeaderMap::from_iter([(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        )])
+    }
+
+    #[mz_ore::test]
+    fn test_parse_mcp_request_unknown_method_with_params() {
+        let req = parse_mcp_request(
+            &json_headers(),
+            br#"{"jsonrpc":"2.0","id":7,"method":"server/discover","params":{"_meta":{}}}"#,
+        )
+        .expect("unknown method with params must parse");
+        assert!(matches!(req.method, McpMethod::Unknown));
+        assert_eq!(req.id, Some(json!(7)));
+
+        let req = parse_mcp_request(
+            &json_headers(),
+            br#"{"jsonrpc":"2.0","method":"notifications/other","params":{}}"#,
+        )
+        .expect("unknown notification with params must parse");
+        assert!(matches!(req.method, McpMethod::Unknown));
+        assert_eq!(req.id, None);
+    }
+
+    #[mz_ore::test]
+    fn test_parse_mcp_request_keeps_other_rejections() {
+        for (headers, body, want) in [
+            (
+                json_headers(),
+                &br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"nonexistent_tool","arguments":{}}}"#[..],
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                json_headers(),
+                br#"{"id":1,"method":"server/discover","params":{}}"#,
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (json_headers(), b"{not json", StatusCode::BAD_REQUEST),
+            (
+                HeaderMap::new(),
+                br#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            ),
+        ] {
+            let resp = parse_mcp_request(&headers, body).expect_err("must be rejected");
+            assert_eq!(resp.status(), want, "for {}", String::from_utf8_lossy(body));
         }
     }
 
