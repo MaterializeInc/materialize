@@ -100,6 +100,7 @@ members = [
     "src/segment",
     "src/server-core",
     "src/service",
+    "src/source-schema-change",
     "src/sql",
     "src/sql-anonymize",
     "src/sql-lexer",
@@ -230,6 +231,7 @@ default-members = [
     "src/segment",
     "src/server-core",
     "src/service",
+    "src/source-schema-change",
     "src/sql",
     "src/sql-anonymize",
     "src/sql-lexer",
@@ -384,6 +386,8 @@ httparse = "1.8.0"
 humantime = "2.4.0"
 hyper = { version = "1.11.1", features = ["http1", "server"] }
 hyper-openssl = { version = "0.10.2", features = ["client-legacy", "tokio"] }
+# Backs the LaunchDarkly HTTPS transport, see `mz_dyncfg_launchdarkly::https_transport`.
+hyper-rustls = { version = "0.27", default-features = false, features = ["aws-lc-rs", "native-tokio", "http1", "http2", "tls12"] }
 hyper-tls = "0.6.0"
 hyper-util = "0.1.20"
 iceberg = "0.10.1"
@@ -402,8 +406,12 @@ junit-report = "0.9.1"
 k8s-controller = "0.13.0"
 k8s-openapi = { version = "0.27.0", features = ["schemars", "v1_34"] }
 kube = { version = "3.1.0", default-features = false, features = ["aws-lc-rs", "client", "derive", "runtime", "rustls-tls"] }
-launchdarkly-server-sdk = { version = "3.3.0", default-features = false, features = ["hyper-rustls-native-roots", "crypto-aws-lc-rs"] }
-launchdarkly-sdk-transport = "0.1.4"
+# Only the `hyper` feature on both LaunchDarkly crates. `hyper-rustls-native-roots`
+# would enable the transport crate's `hyper-rustls` dependency, which it
+# hardcodes to the `ring` provider.
+# `mz_dyncfg_launchdarkly::https_transport` injects an aws-lc-rs connector.
+launchdarkly-server-sdk = { version = "3.3.0", default-features = false, features = ["hyper", "crypto-aws-lc-rs"] }
+launchdarkly-sdk-transport = { version = "0.1.4", default-features = false, features = ["hyper"] }
 lgalloc = "0.6.0"
 libc = "0.2.186"
 lru = "0.18.5"

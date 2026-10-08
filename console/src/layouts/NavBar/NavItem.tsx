@@ -21,6 +21,7 @@ import { isCurrentOrganizationBlockedAtom } from "~/store/organization";
 import { MaterializeTheme } from "~/theme";
 
 import { NAV_HOVER_STYLES } from "../constants";
+import { AccountOnlyNavContext } from "./AccountOnlyNavContext";
 import { NavItemType } from "./NavMenu";
 import { isSubroute } from "./utils";
 
@@ -128,10 +129,13 @@ export const HideIfEnvironmentDisabled = ({
 }) => {
   const [currentEnvironment] = useAtom(currentEnvironmentState);
   const isOrganizationBlocked = useAtomValue(isCurrentOrganizationBlockedAtom);
+  const accountOnly = React.useContext(AccountOnlyNavContext);
 
   if (
     !forceShow &&
-    (!isEnvironmentReady(currentEnvironment) || isOrganizationBlocked)
+    (accountOnly ||
+      !isEnvironmentReady(currentEnvironment) ||
+      isOrganizationBlocked)
   ) {
     return null;
   }

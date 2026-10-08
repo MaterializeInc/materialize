@@ -108,9 +108,10 @@ pub const ENABLE_COLUMNAR_ACCUMULABLE_DIFF: Config<bool> = Config::new(
 );
 
 /// Allow chunk bodies to spill to the process buffer pool under memory
-/// pressure. Sets compute's leg of the process-wide chunk spill gate, which
-/// the arrange batchers read when [`ENABLE_COLUMN_PAGED_BATCHER`] is `true`.
-/// With the gate clear every chunk stays resident regardless of budget.
+/// pressure. Sets the compute chunk spill gate
+/// (`mz_timely_util::columnar::chunk::ComputeSpill`), which every compute
+/// chunk batcher reads. With the gate clear every compute chunk stays
+/// resident regardless of budget.
 ///
 /// This flag (or the storage-side `enable_upsert_paged_spill`, or
 /// [`ENABLE_CORRECTION_V2_SPILL`]) also gates installation of the process

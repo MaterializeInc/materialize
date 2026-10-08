@@ -10,11 +10,11 @@
 use std::time::Duration;
 
 use mz_adapter_types::dyncfgs::PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT;
+use mz_cluster_client::params::GrpcClientParameters;
 use mz_compute_client::protocol::command::ComputeParameters;
 use mz_orchestrator::scheduling_config::{ServiceSchedulingConfig, ServiceTopologySpreadConfig};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_service::params::GrpcClientParameters;
 use mz_sql::session::vars::SystemVars;
 use mz_storage_types::parameters::{
     PgSourceSnapshotConfig, StorageMaxInflightBytesConfig, StorageParameters,

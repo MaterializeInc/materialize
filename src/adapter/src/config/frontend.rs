@@ -9,7 +9,9 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -49,6 +51,9 @@ pub struct SystemParameterFrontend {
     build_info: &'static BuildInfo,
     /// Frontend metrics.
     metrics: Metrics,
+    /// The config-sync file as of the last [`SystemParameterFrontend::pull`], or
+    /// `None` before the first one. Never populated for the LaunchDarkly client.
+    config_file: Mutex<Option<CachedConfigFile>>,
 }
 
 #[derive(Derivative)]
@@ -69,6 +74,57 @@ pub enum SystemParameterFrontendClient {
 
 impl SystemParameterFrontendClient {}
 
+/// The parsed contents of the config-sync file, a JSON object whose keys are
+/// parameter names.
+#[derive(Debug, Default, PartialEq)]
+struct ConfigFile {
+    /// Environment-wide values, keyed by the parameter's external name.
+    environment: BTreeMap<String, JsonValue>,
+}
+
+impl ConfigFile {
+    /// Parses the config-sync file's contents, or `None` if the document is not a
+    /// JSON object.
+    ///
+    /// `None` is "no information about any parameter", which callers must keep
+    /// distinct from a valid but empty document.
+    fn parse(contents: &str) -> Option<Self> {
+        match serde_json::from_str(contents) {
+            Ok(environment) => Some(Self { environment }),
+            Err(e) => {
+                warn!("could not parse system parameter sync file: {e}");
+                None
+            }
+        }
+    }
+}
+
+/// The most recent read of the config-sync file and its parse.
+#[derive(Debug)]
+struct CachedConfigFile {
+    /// The contents the cache was built from, or `None` if that read failed.
+    /// The next read is compared against it, so the file is re-parsed, and its
+    /// warnings logged, only when it changes.
+    contents: Option<String>,
+    /// The parse of `contents`, or `None` if the read failed or the document was
+    /// not a JSON object.
+    current: Option<Arc<ConfigFile>>,
+}
+
+/// Renders a JSON value as the raw parameter string the backend parses.
+///
+/// `null` yields `None`, meaning the file expresses no opinion for this
+/// parameter, so its current value stands.
+fn json_param_value(value: &JsonValue) -> Option<String> {
+    match value {
+        JsonValue::String(v) => Some(v.clone()),
+        JsonValue::Number(v) => Some(v.to_string()),
+        JsonValue::Bool(v) => Some(v.to_string()),
+        JsonValue::Object(_) | JsonValue::Array(_) => Some(value.to_string()),
+        JsonValue::Null => None,
+    }
+}
+
 impl SystemParameterFrontend {
     /// Create a new [SystemParameterFrontend] initialize.
     ///
@@ -83,6 +139,7 @@ impl SystemParameterFrontend {
                 env_id: sync_config.env_id.clone(),
                 build_info: sync_config.build_info,
                 metrics: sync_config.metrics.clone(),
+                config_file: Mutex::new(None),
             }),
             SystemParameterSyncClientConfig::LaunchDarkly {
                 sdk_key,
@@ -101,6 +158,7 @@ impl SystemParameterFrontend {
                 build_info: sync_config.build_info,
                 metrics: sync_config.metrics.clone(),
                 key_map: sync_config.key_map.clone(),
+                config_file: Mutex::new(None),
             }),
         }
     }
@@ -109,6 +167,15 @@ impl SystemParameterFrontend {
     /// [SystemParameterFrontend] and return `true` iff at least one parameter
     /// value was modified.
     pub fn pull(&self, params: &mut SynchronizedParameters) -> bool {
+        // Read the file once per tick rather than once per parameter, so a
+        // rewrite landing mid-loop cannot be observed as a torn read.
+        let file = match &self.client {
+            SystemParameterFrontendClient::File { path } => {
+                self.refresh_config_file(path, fs::read_to_string(path))
+            }
+            SystemParameterFrontendClient::LaunchDarkly { .. } => None,
+        };
+
         let mut changed = false;
         for param_name in params.synchronized().into_iter() {
             let flag_name = self
@@ -130,25 +197,13 @@ impl SystemParameterFrontend {
                         ld::FlagValue::Json(v) => v.to_string(),
                     }
                 }
-                SystemParameterFrontendClient::File { ref path } => {
-                    let file_contents = fs::read_to_string(path)
-                        .inspect_err(|e| warn!("Could not open system paraemter sync file {}", e))
-                        .unwrap_or_default();
-                    let values: BTreeMap<String, JsonValue> = serde_json::from_str(&file_contents)
-                        .inspect_err(|e| warn!("Could not open system paraemter sync file {:?}", e))
-                        .unwrap_or_default();
-                    values
-                        .get(flag_name)
-                        .and_then(|o| match o {
-                            serde_json::Value::String(v) => Some(v.to_string()),
-                            serde_json::Value::Number(v) => Some(v.to_string()),
-                            serde_json::Value::Bool(v) => Some(v.to_string()),
-                            serde_json::Value::Object(_) => Some(o.to_string()),
-                            serde_json::Value::Array(_) => Some(o.to_string()),
-                            serde_json::Value::Null => None,
-                        })
-                        .unwrap_or_else(|| params.get(param_name))
-                }
+                // A parameter the file does not mention, and every parameter when
+                // the file could not be read or parsed, keeps its current value.
+                SystemParameterFrontendClient::File { .. } => file
+                    .as_ref()
+                    .and_then(|file| file.environment.get(flag_name))
+                    .and_then(json_param_value)
+                    .unwrap_or_else(|| params.get(param_name)),
             };
 
             let old = params.get(param_name);
@@ -164,6 +219,67 @@ impl SystemParameterFrontend {
         }
 
         changed
+    }
+
+    /// Refreshes the cached config-sync file from `read`, the outcome of reading
+    /// it at `path`, and returns its parse.
+    ///
+    /// Unchanged contents return the cached parse without re-parsing, so a bad
+    /// file is warned about once per change rather than on every tick.
+    fn refresh_config_file(
+        &self,
+        path: &Path,
+        read: io::Result<String>,
+    ) -> Option<Arc<ConfigFile>> {
+        let mut cache = self
+            .config_file
+            .lock()
+            .expect("config file cache lock poisoned");
+
+        if let Some(cached) = &*cache {
+            if cached.contents.as_deref() == read.as_deref().ok() {
+                return cached.current.clone();
+            }
+        }
+
+        let contents = match read {
+            Ok(contents) => Some(contents),
+            Err(e) => {
+                warn!(
+                    "could not read system parameter sync file {}: {e}",
+                    path.display()
+                );
+                None
+            }
+        };
+        let current = contents
+            .as_deref()
+            .and_then(ConfigFile::parse)
+            .map(Arc::new);
+        *cache = Some(CachedConfigFile {
+            contents,
+            current: current.clone(),
+        });
+
+        current
+    }
+
+    /// Whether the frontend knows the desired state of the scoped parameters.
+    ///
+    /// `false` when the most recent read of the config-sync file failed or did
+    /// not parse. The scoped reconcile prunes every override absent from the
+    /// desired state, so callers must skip it while this is `false`. Always
+    /// `true` for LaunchDarkly.
+    pub fn has_scoped_desired_state(&self) -> bool {
+        match &self.client {
+            SystemParameterFrontendClient::LaunchDarkly { .. } => true,
+            SystemParameterFrontendClient::File { .. } => self
+                .config_file
+                .lock()
+                .expect("config file cache lock poisoned")
+                .as_ref()
+                .is_some_and(|cached| cached.current.is_some()),
+        }
     }
 
     /// Evaluates the replica-local scoped parameters for each given replica and
@@ -423,10 +539,7 @@ fn ld_config(
     // `NO_PROXY` env vars and routes through a configured proxy. No exposure
     // today (our cloud pods set no proxy vars, self-managed never builds an LD
     // client), but worth knowing if proxy vars ever appear on a pod.
-    let transport = launchdarkly_sdk_transport::HyperTransport::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .read_timeout(read_timeout)
-        .build_https()
+    let transport = mz_dyncfg_launchdarkly::https_transport(Duration::from_secs(10), read_timeout)
         .expect("failed to create HTTPS transport");
 
     let cse_transport = MetricsTransport {
@@ -657,7 +770,6 @@ fn ld_ctx(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use futures::StreamExt;
@@ -669,6 +781,164 @@ mod tests {
 
     fn env_id() -> EnvironmentId {
         EnvironmentId::for_tests()
+    }
+
+    /// A file-backed frontend reading `path`.
+    fn file_frontend_at(path: &Path) -> SystemParameterFrontend {
+        SystemParameterFrontend {
+            client: SystemParameterFrontendClient::File { path: path.into() },
+            key_map: BTreeMap::new(),
+            env_id: env_id(),
+            build_info: &DUMMY_BUILD_INFO,
+            metrics: Metrics::register_into(&MetricsRegistry::new()),
+            config_file: Mutex::new(None),
+        }
+    }
+
+    /// A file-backed frontend for tests that drive it from contents they pass
+    /// in, so its path is never read.
+    fn file_frontend() -> SystemParameterFrontend {
+        file_frontend_at(Path::new(CONFIG_PATH))
+    }
+
+    /// The path a [`file_frontend`] reports in its warnings. Never opened.
+    const CONFIG_PATH: &str = "/nonexistent/system-params.json";
+
+    /// Parses a document the test knows to be a JSON object.
+    fn parse(contents: &str) -> ConfigFile {
+        ConfigFile::parse(contents).expect("document is a JSON object")
+    }
+
+    #[mz_ore::test]
+    fn test_parse_flat_file_is_environment_wide() {
+        let file = parse(
+            r#"{
+                "max_connections": 1000,
+                "allowed_cluster_replica_sizes": "'25cc', '50cc'",
+                "enable_lgalloc": false
+            }"#,
+        );
+
+        assert_eq!(
+            file.environment.keys().collect::<Vec<_>>(),
+            vec![
+                "allowed_cluster_replica_sizes",
+                "enable_lgalloc",
+                "max_connections"
+            ]
+        );
+
+        // Every JSON scalar renders to the raw string the backend parses.
+        assert_eq!(
+            json_param_value(&file.environment["max_connections"]).as_deref(),
+            Some("1000")
+        );
+        assert_eq!(
+            json_param_value(&file.environment["enable_lgalloc"]).as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            json_param_value(&file.environment["allowed_cluster_replica_sizes"]).as_deref(),
+            Some("'25cc', '50cc'")
+        );
+        // An explicit `null` expresses no opinion, leaving the value alone.
+        let null = parse(r#"{"max_connections": null}"#);
+        assert_eq!(json_param_value(&null.environment["max_connections"]), None);
+    }
+
+    /// A document that is not a JSON object carries no information, which is
+    /// distinct from an empty document.
+    #[mz_ore::test]
+    fn test_parse_rejects_non_object_document() {
+        assert_eq!(ConfigFile::parse("[]"), None);
+        assert_eq!(ConfigFile::parse("not json"), None);
+        assert_eq!(ConfigFile::parse("{}"), Some(ConfigFile::default()));
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_config_file_cached_until_it_changes() {
+        let frontend = file_frontend();
+        let read = |contents: &str| {
+            frontend
+                .refresh_config_file(Path::new(CONFIG_PATH), Ok(contents.to_string()))
+                .expect("document is a JSON object")
+        };
+
+        let first = read(r#"{"max_connections": 1000}"#);
+        let again = read(r#"{"max_connections": 1000}"#);
+        assert!(Arc::ptr_eq(&first, &again), "unchanged file was re-parsed");
+
+        let changed = read(r#"{"max_connections": 2000}"#);
+        assert!(
+            !Arc::ptr_eq(&first, &changed),
+            "changed file was not parsed"
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_unreadable_file_has_no_scoped_desired_state() {
+        let frontend = file_frontend();
+        let refresh = |read: io::Result<String>| {
+            frontend.refresh_config_file(Path::new(CONFIG_PATH), read);
+        };
+
+        refresh(Ok(r#"{"max_connections": 1000}"#.to_string()));
+        assert!(frontend.has_scoped_desired_state());
+
+        for failure in [
+            Err(io::Error::from(io::ErrorKind::NotFound)),
+            Ok("}not json{".to_string()),
+            Ok("[]".to_string()),
+        ] {
+            refresh(failure);
+            assert!(!frontend.has_scoped_desired_state());
+
+            refresh(Ok(r#"{"max_connections": 1000}"#.to_string()));
+            assert!(frontend.has_scoped_desired_state());
+        }
+
+        // An empty document is a complete desired state of "no overrides".
+        refresh(Ok("{}".to_string()));
+        assert!(frontend.has_scoped_desired_state());
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_pull_from_file() {
+        let path = std::env::temp_dir().join(format!(
+            "mz-adapter-test-pull-from-file-{}.json",
+            std::process::id()
+        ));
+        let frontend = file_frontend_at(&path);
+        let mut params = SynchronizedParameters::default();
+        let max_connections = params.get("max_connections");
+        assert_ne!(max_connections, "1000");
+
+        fs::write(
+            &path,
+            r#"{"max_connections": 1000, "enable_lgalloc": false, "max_tables": null}"#,
+        )
+        .expect("can write the test file");
+        assert!(frontend.pull(&mut params));
+        assert_eq!(params.get("max_connections"), "1000");
+        assert_eq!(params.get("enable_lgalloc"), "off");
+        assert_eq!(
+            params.get("max_tables"),
+            SynchronizedParameters::default().get("max_tables"),
+            "null changed the value"
+        );
+
+        // Unparseable or missing, the file leaves every current value alone.
+        fs::write(&path, "}not json{").expect("can write the test file");
+        assert!(!frontend.pull(&mut params));
+        assert!(!frontend.has_scoped_desired_state());
+        fs::remove_file(&path).expect("can remove the test file");
+        assert!(!frontend.pull(&mut params));
+        assert!(!frontend.has_scoped_desired_state());
+        assert_eq!(params.get("max_connections"), "1000");
+        assert_eq!(params.get("enable_lgalloc"), "off");
     }
 
     #[mz_ore::test]

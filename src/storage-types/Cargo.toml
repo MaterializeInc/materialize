@@ -52,7 +52,6 @@ mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
-mz-service = { path = "../service" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-server-util = { path = "../sql-server-util" }

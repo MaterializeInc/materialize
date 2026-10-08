@@ -420,13 +420,12 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
 /// The spill mechanism depends on the stash flavor
 /// ([`ENABLE_UPSERT_CHUNKED_STASH`]):
 ///
-/// * Chunked: sets storage's leg of the process-wide chunk spill gate
-///   (`mz_timely_util::columnar::chunk`). The gate is the OR of a compute
-///   leg (`enable_column_paged_batcher_spill`) and this storage leg: chunks
-///   spill while either is set, so this flag cannot veto spilling that the
-///   compute flag has enabled. Spilled chunks draw on the one shared pool
-///   budget, and the gate is consulted at every chunk commit, so flips
-///   apply to running dataflows.
+/// * Chunked: sets the storage chunk spill gate
+///   (`mz_timely_util::columnar::chunk::StorageSpill`), which only upsert's
+///   chunks read, independently of compute's
+///   `enable_column_paged_batcher_spill`. Spilled chunks draw on the one
+///   shared pool budget, and the gate is consulted at every chunk commit, so
+///   flips apply to running dataflows.
 /// * Paged: gates the storage-owned column pager the stash and feedback
 ///   arrangement route their chains through, independently of compute's
 ///   `enable_column_paged_batcher_spill`. Captured at operator

@@ -205,7 +205,7 @@ the external store in the same change, or its dashboards will show no data.
 
 The Alertmanager rules the stack ships evaluate against the bundled Thanos, so
 retiring it moves alerting to the external platform. Rebuild the alerts there from
-the metrics and thresholds in [Alerting](/observability/self-managed/alerting/).
+the metrics and thresholds in [Alerting](/observability/self-managed/alerting/#thresholds).
 
 ## How to control which metrics the store receives
 

@@ -4640,11 +4640,9 @@ dependencies = [
  "headers",
  "http 1.5.0",
  "hyper",
- "hyper-rustls",
  "hyper-util",
  "pin-project-lite",
  "tokio",
- "tokio-rustls",
  "tower-service",
 ]
 
@@ -5484,7 +5482,6 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-http-proxy",
- "hyper-rustls",
  "hyper-timeout",
  "hyper-util",
  "log",
@@ -6179,6 +6176,7 @@ dependencies = [
  "mz-controller",
  "mz-controller-types",
  "mz-dyncfg",
+ "mz-dyncfg-launchdarkly",
  "mz-expr",
  "mz-kafka-util",
  "mz-license-keys",
@@ -6198,7 +6196,6 @@ dependencies = [
  "mz-rocksdb-types",
  "mz-secrets",
  "mz-segment",
- "mz-service",
  "mz-sql",
  "mz-sql-parser",
  "mz-sql-server-util",
@@ -7091,11 +7088,13 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "humantime",
+ "hyper-rustls",
  "launchdarkly-sdk-transport",
  "launchdarkly-server-sdk",
  "mz-build-info",
  "mz-dyncfg",
  "mz-ore",
+ "rustls",
  "tokio",
  "tracing",
 ]
@@ -7603,6 +7602,7 @@ dependencies = [
  "mz-ore",
  "mz-proto",
  "mz-repr",
+ "mz-source-schema-change",
  "mz-ssh-util",
  "proptest",
  "proptest-derive",
@@ -7957,6 +7957,7 @@ dependencies = [
  "prost",
  "prost-build",
  "rand 0.10.3",
+ "regex",
  "semver",
  "serde",
  "serde_json",
@@ -8150,11 +8151,11 @@ dependencies = [
  "mz-ore",
  "mz-proto",
  "mz-repr",
+ "mz-source-schema-change",
  "mz-ssh-util",
  "mz-tls-util",
  "openssh",
  "openssl",
- "postgres-protocol",
  "postgres_array",
  "proptest",
  "proptest-derive",
@@ -8466,6 +8467,16 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "turmoil",
+]
+
+[[package]]
+name = "mz-source-schema-change"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "postgres-protocol",
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -8968,7 +8979,6 @@ dependencies = [
  "mz-repr",
  "mz-rocksdb-types",
  "mz-secrets",
- "mz-service",
  "mz-sql-parser",
  "mz-sql-server-util",
  "mz-ssh-util",

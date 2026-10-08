@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mysql_async::prelude::Queryable;
-use mz_mysql_util::{MySqlError, SchemaRequest, schema_info};
+use mz_mysql_util::{MySqlError, SchemaChange, SchemaRequest, schema_info};
 
 use super::{DefiniteError, MySqlTableName, SourceOutputInfo};
 
@@ -70,15 +70,19 @@ where
                                     .determine_compatibility(&desc, output.binlog_full_metadata)
                                 {
                                     Ok(()) => None,
-                                    Err(err) => Some((
-                                        output,
-                                        DefiniteError::IncompatibleSchema(err.to_string()),
-                                    )),
+                                    Err(err) => {
+                                        Some((output, DefiniteError::IncompatibleSchema(err)))
+                                    }
                                 }
                             }
-                            Err(err) => {
-                                Some((output, DefiniteError::IncompatibleSchema(err.to_string())))
-                            }
+                            Err(err) => Some((
+                                output,
+                                DefiniteError::IncompatibleSchema(
+                                    output.desc.build_schema_change_error(
+                                        SchemaChange::DescriptionFailed(err.to_string()),
+                                    ),
+                                ),
+                            )),
                         }
                     }
                 })

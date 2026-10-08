@@ -26,7 +26,7 @@ use differential_dataflow::{AsCollection, Collection, VecCollection};
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ChunkChunker};
+use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ChunkChunker, ComputeSpill};
 use mz_timely_util::columnar::columnar_consolidate_exchange;
 use mz_timely_util::operator::consolidate_pact;
 use timely::ContainerBuilder;
@@ -325,8 +325,8 @@ where
         columnar_consolidate_exchange::<Row, T, Diff>,
     );
     let consolidated = consolidate_pact::<
-        ChunkChunker<Row, T, Diff>,
-        AccountedChunkBatcher<Row, T, Diff>,
+        ChunkChunker<Row, T, Diff, ComputeSpill>,
+        AccountedChunkBatcher<Row, T, Diff, ComputeSpill>,
         _,
         _,
     >(collection.inner, exchange, name);

@@ -265,6 +265,10 @@ profiles, and retention, see
 the backends it can forward to, see [How logs and metrics are
 stored](/observability/self-managed/storage/).
 
+Starting with v15.0.0 of the Materialize Terraform Modules, the `monitoring`
+module also configures where alerts go. Until you configure a receiver, no one
+is notified. See [Alerting](/observability/self-managed/alerting/).
+
 ## See also
 
 - [Materialize Operator
