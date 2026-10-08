@@ -175,6 +175,14 @@ pub(super) fn apply_teleport_registration(
     };
 
     let labels = service.metadata.labels.get_or_insert_with(BTreeMap::new);
+    // NOTE: `materialize.cloud/app` does double duty. It identifies the Service, and
+    // it is the only label the agent's discovery matcher selects on, so writing it
+    // only when `--teleport-endpoint` is set is what keeps discovery inert on a
+    // cluster where the matcher is deployed but the flag is not. Moving it to
+    // `ManagedResource::default_labels` would make it unconditional and register
+    // every environmentd Service under a name the agent invents, with no rewrite
+    // header. Change `teleport_discovery_kube_apps` in the cloud repo's
+    // `infra/cluster/environment.py` to select on a dedicated gate label first.
     labels.insert(
         "materialize.cloud/app".to_string(),
         mz.environmentd_app_name(),
