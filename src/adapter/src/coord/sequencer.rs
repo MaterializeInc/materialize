@@ -368,7 +368,7 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 // `SessionClient::execute_attempts` unrolls SQL `EXECUTE`, and `try_peek` and
-                // `try_frontend_read_then_write` take over every statement that plans to one of the
+                // `try_read_then_write` take over every statement that plans to one of the
                 // others.
                 // TODO(SQL-760): Drop the manual soft panic once internal errors soft-panic
                 // centrally.
