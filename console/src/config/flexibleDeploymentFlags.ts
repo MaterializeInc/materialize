@@ -12,7 +12,11 @@
  * is too big, we default all flags to true and specify the ones we want
  * to disable.
  */
-export const disabledFlexibleDeploymentFlags: Record<string, boolean> = {};
+export const disabledFlexibleDeploymentFlags: Record<string, boolean> = {
+  // Self-managed has no preview toggle, so a true flag would ship the
+  // redesign to everyone.
+  "cluster-details-redesign": false,
+};
 
 export const flexibleDeploymentFlags = new Proxy(
   {},
