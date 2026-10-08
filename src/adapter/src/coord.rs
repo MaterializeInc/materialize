@@ -151,6 +151,7 @@ use mz_sql::plan::{
     self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, HirRelationExpr,
     NetworkPolicyRule, Params, QueryWhen,
 };
+use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{MAX_CREDIT_CONSUMPTION_RATE, SystemVars, Var};
 use mz_sql_parser::ast::ExplainStage;
