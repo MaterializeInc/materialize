@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/internal/metrics.rs
-revision: 988f05416f
+revision: a6733d9b05
 ---
 
 # persist-client::internal::metrics

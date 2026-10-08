@@ -1,6 +1,6 @@
 ---
 source: src/compute-client/src/protocol/command.rs
-revision: c69fde3d50
+revision: 134006ec86
 ---
 
 # mz-compute-client::protocol::command

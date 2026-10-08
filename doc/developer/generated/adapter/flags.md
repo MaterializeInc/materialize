@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/flags.rs
-revision: 1d07b38a9c
+revision: 134006ec86
 ---
 
 # adapter::flags

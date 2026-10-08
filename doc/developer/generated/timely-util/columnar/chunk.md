@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/columnar/chunk.rs
-revision: 24a45d84c0
+revision: 730a0321c4
 ---
 
 # timely-util::columnar::chunk

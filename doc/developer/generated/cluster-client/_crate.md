@@ -1,6 +1,6 @@
 ---
 source: src/cluster-client/src/lib.rs
-revision: bbb56d46f3
+revision: 134006ec86
 ---
 
 # mz_cluster_client
@@ -12,6 +12,7 @@ Public API shared by both compute and storage cluster clients.
 - `client` -- Types for commands sent to clusters, including Timely configuration and replica location.
 - `instances` -- `StorageInstanceId`, the identifier for a storage instance (re-exported by `mz-storage-types`).
 - `metrics` -- Prometheus metrics shared by compute and storage controllers.
+- `params` -- Shared parameter types.
 
 ## Key types
 
