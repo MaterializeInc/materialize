@@ -1446,10 +1446,44 @@ impl Coordinator {
         ops: Vec<Op>,
         retry_inline: bool,
     ) -> Result<CommittedCatalogTransaction, AdapterError> {
+        // Client demand can be validated against a fresh prefix. Sampled bounds
+        // and reclamations instead need the owner to observe a conflict and resample.
+        let refresh_client_protection = !retry_inline
+            && !ops.is_empty()
+            && ops.iter().all(|op| {
+                matches!(
+                    op,
+                    Op::CreateClientIncarnation { .. } | Op::PublishClientReadRequirements { .. }
+                )
+            });
         let mut prepared = Box::pin(self.begin_catalog_transaction(conn_id, ops)).await?;
         // Non-staged owners retain their inline scheduling contract.
         while !Box::pin(self.resume_catalog_preparation(conn_id, &mut prepared)).await? {
             tokio::time::sleep(self.read_protection_conflict_delay()).await;
+        }
+        if refresh_client_protection {
+            // Allocate the oracle timestamp before catch-up. That await can let
+            // peers invalidate an otherwise freshly synchronized prefix.
+            if let Err(error) = self.refresh_catalog(None).await {
+                if matches!(&error, AdapterError::Catalog(error) if matches!(
+                    &error.kind,
+                    mz_catalog::memory::error::ErrorKind::Durable(
+                        mz_catalog::durable::DurableCatalogError::Fence(_)
+                    )
+                )) {
+                    // Catch-up must preserve transaction-open's terminal fence
+                    // policy rather than leave cached grants usable.
+                    Err::<(), _>(error)
+                        .unwrap_or_terminate("refreshing catalog for read protection");
+                    unreachable!("unwrap_or_terminate does not return on Err");
+                }
+                return Err(error);
+            }
+            if self.catalog().transient_revision() != prepared.revision {
+                // Metadata owners resample after yielding. Do not expose the
+                // non-retryable prepared-DDL invalidation to grant requesters.
+                return Err(AdapterError::DDLTransactionRace);
+            }
         }
         Box::pin(self.commit_prepared_catalog_transaction(conn_id, &mut prepared, retry_inline))
             .await

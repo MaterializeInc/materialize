@@ -60,6 +60,11 @@ replan releases its DDL guard and wakes queued statements before reacquiring it.
 Queued continuations must reject terminated connections even after their cancel
 watches have been removed.
 
+Single-attempt client-protection writes catch up after oracle allocation, whose
+await can make an earlier refresh stale. A structural change invalidates preparation and yields
+before retry. Sampled compaction and reclamation proposals instead retain their
+prefix check so their owners resample, rather than replaying them after catch-up.
+
 Ordinary CREATE MATERIALIZED VIEW admits its automatic birth in the content
 transaction, joining logical-input and selected-import permission. The definition,
 timestamp, selected plan and protection commit together. A metadata conflict

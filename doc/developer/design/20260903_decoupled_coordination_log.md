@@ -77,14 +77,14 @@ MV acquisition continuation is used only by the fixed-birth path, not ordinary
 automatic admission or a template for more intermediate stages.
 CREATE INDEX also retains its written selection and notices through a staged
 catalog commit, rebuilding creator protection per attempt. Verify its dispatcher
-yield independently of renewal success. Most measured bounded renewal failures
-reject a projection refreshed before backoff rather than at the next attempt.
-Serving protection attempts now catch up at their start, preserving terminal
-writer-fence handling. CI138222 exposed a non-graceful deployment-fence exit at
-that refresh. The existing termination policy fixes it, verified by both native
-promotion jobs in CI138229. Verify renewal progress independently of fewer CREATE
-MV publications. Private prewarming's separate catalog and inline bootstrap are
-unchanged.
+yield independently of renewal success. CI138222 has 93 successful renewals,
+then 569 failed attempts before closure despite continued coordinator dispatch.
+A measured oracle allocation took 2.1s after refresh. Client-protection attempts
+now catch up after allocation, immediately before commit, retaining terminal
+fencing and yielding on structural invalidation. Sampled bounds and reclamations
+keep their original prefix checks. Verify stale-open and CAS losses separately.
+Both native promotion jobs in CI138229 verify graceful deployment fencing.
+Private prewarming's separate catalog and inline bootstrap are unchanged.
 The frontier INSERT's year-3000 read wait is separate.
 The source-table EXPLAIN timeout remains unlocalized between certification and
 grant acquisition. Keep its protection and deadline unchanged.
@@ -94,6 +94,8 @@ before asynchronous timeline acquisition. New MV outputs now use the existing
 atomic creator-protection path alongside indexes, without an extra content commit.
 Verify the extended creation boundary test and unchanged SLT through CI. This
 closes the identified admission gap, not the unproven attribution of that stall.
+CI138232's boundary test stopped at the REFRESH feature gate. The fixture now
+enables that feature at startup. No assertions changed.
 CREATE/ALTER ROLE prepare redacted password verifiers once per logical operation,
 not per candidate. IDs, validation and audit effects remain candidate-owned.
 This removes repeated hashing, but aggregate candidate timings do not isolate
