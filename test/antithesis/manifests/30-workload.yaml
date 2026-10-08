@@ -108,6 +108,31 @@ subjects:
   name: workload
   namespace: materialize
 ---
+# The resource kill check reads every pod, node conditions, and the eviction
+# and OOM events, which the kubelet records in whatever namespace the
+# involved object lives in (`default` for the node).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: materialize-workload-resource-kills
+rules:
+- apiGroups: [""]
+  resources: [pods, nodes, events]
+  verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: materialize-workload-resource-kills
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: materialize-workload-resource-kills
+subjects:
+- kind: ServiceAccount
+  name: workload
+  namespace: materialize
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
