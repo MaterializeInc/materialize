@@ -149,6 +149,36 @@ def test_repeated_failures_relist() -> None:
     assert watch.failures == 0
 
 
+def test_until_ends_the_window_after_the_matching_change() -> None:
+    api = FakeApi()
+    api.watches.append(
+        [
+            event("MODIFIED", obj("21", "Applying")),
+            event("MODIFIED", obj("22", "Promoting")),
+            event("MODIFIED", obj("23", "Applied")),
+        ]
+    )
+    window = make(api, []).window(
+        "20",
+        until=lambda item: isinstance(item, Change)
+        and item.obj["status"] == "Promoting",
+    )
+    assert window.items == [
+        Change("MODIFIED", obj("21", "Applying")),
+        Change("MODIFIED", obj("22", "Promoting")),
+    ]
+    assert window.resource_version == "22", "resumes after the matching change"
+    assert window.error is None
+
+
+def test_until_can_end_the_window_at_the_relist() -> None:
+    api = FakeApi({"metadata": {"resourceVersion": "10"}, "items": [obj("9")]})
+    window = make(api, []).window(None, until=lambda item: isinstance(item, Relist))
+    assert window.items == [Relist([obj("9")], "10")]
+    assert window.resource_version == "10"
+    assert len(api.calls) == 1, "no watch opened"
+
+
 def test_changes_are_adjacent() -> None:
     chain = ObjectChain()
     chain, step = chain.advance(Relist([obj("9", "Applying")], "10"))
