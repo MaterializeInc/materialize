@@ -121,18 +121,23 @@ def timeline_choice(db: sqlite3.Connection, name: str, choices: Sequence[Any]) -
     return json.loads(row[0])
 
 
-def ensure_retain_history(host: str, endpoints: Endpoints | None = None) -> None:
-    """Enable `RETAIN HISTORY` once per timeline. Failures are retried by the next caller."""
+def ensure_retain_history(host: str, endpoints: Endpoints | None = None) -> bool:
+    """Enable `RETAIN HISTORY` once per timeline. Returns whether it is enabled.
+
+    Failures are retried by the next caller.
+    """
     marker = (endpoints or Endpoints.from_env()).state_dir / "sources-retain-history"
     if marker.exists():
-        return
+        return True
     try:
         with sql.connection(host, internal=True, connect_timeout=10) as conn:
             conn.execute("ALTER SYSTEM SET enable_logical_compaction_window = true")
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("on")
+        return True
     except (psycopg.Error, OSError) as e:
         log("sources", f"enabling RETAIN HISTORY failed: {e}")
+        return False
 
 
 def ensure_cluster(conn: psycopg.Connection, db: sqlite3.Connection) -> None:
