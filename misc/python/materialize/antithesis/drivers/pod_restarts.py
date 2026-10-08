@@ -37,7 +37,12 @@ from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
 
 from materialize.antithesis import quiet
-from materialize.antithesis.drivers import lifecycle, postgres_sources, recovery
+from materialize.antithesis.drivers import (
+    lifecycle,
+    postgres_sources,
+    recovery,
+    schema_evolution,
+)
 from materialize.antithesis.drivers.rollouts import (
     GRACE_MENU,
     K8S_TIMEOUT_SECONDS,
@@ -61,6 +66,7 @@ TRIGGERS = (
     "lifecycle_pending",
     "lifecycle_ddl",
     "postgres_terminal",
+    "schema_evo_alter",
     "rollout_applying",
     "rollout_promoting",
 )
@@ -209,6 +215,16 @@ def trigger_met(trigger: str, endpoints: Endpoints, snap: Snapshot | None) -> bo
             )
             > 0
         )
+    if trigger == "schema_evo_alter":
+        conn = peek_db(schema_evolution.STATE_DB, endpoints)
+        if conn is None:
+            return False
+        try:
+            return schema_evolution.alter_recent(conn, lifecycle.pid_alive)
+        except sqlite3.Error:
+            return False
+        finally:
+            conn.close()
     if snap is None:
         return False
     if trigger == "rollout_applying":
@@ -346,6 +362,11 @@ def note_trigger(trigger: str, details: dict[str, Any]) -> None:
     elif trigger == "postgres_terminal":
         reachable(
             "Pod restart driver deleted a pod while a Postgres export was terminal",
+            details,
+        )
+    elif trigger == "schema_evo_alter":
+        reachable(
+            "Pod restart driver deleted a pod while ALTER TABLE ADD COLUMN was in flight or had just returned",
             details,
         )
     elif trigger == "rollout_applying":

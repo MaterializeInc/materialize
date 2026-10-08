@@ -91,6 +91,11 @@ class CatalogRace(enum.Enum):
 # prefix (`unknown cluster replica size`) are deliberately not matched.
 CATALOG_RACE_TEMPLATES: list[tuple[re.Pattern[str], CatalogRace]] = [
     (re.compile(r"^unknown catalog item '\?'"), CatalogRace.MISSING),
+    # The by-id twin of `unknown catalog item`: a statement that names an item
+    # as `[<id> AS <name> ...]` after the item was dropped. `PlanError::InvalidId`
+    # from `NameResolver::resolve_item_name_id` when the catalog has no item
+    # with that id.
+    (re.compile(r"^invalid id \?$"), CatalogRace.MISSING),
     (
         re.compile(r"^unknown (cluster|cluster replica|schema|database|role) '\?'"),
         CatalogRace.MISSING,
