@@ -1273,6 +1273,8 @@ impl Catalog {
 
             let mut op_updates: Vec<_> = tx.get_and_commit_op_updates();
             if !op_updates.is_empty() {
+                let started = Instant::now();
+                let update_count = op_updates.len();
                 // Clone the cache so each apply_updates call has access to cached expressions.
                 // The cache uses `remove` semantics, so we need a fresh clone for each call.
                 let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
@@ -1280,6 +1282,9 @@ impl Catalog {
                     .to_mut()
                     .apply_updates(op_updates.clone(), &mut local_expr_cache)
                     .await;
+                debug!(target: "mz_adapter::frontend_read_then_write",
+                    phase = "candidate_preliminary_apply", update_count,
+                    elapsed = ?started.elapsed(), "catalog candidate section complete");
             }
             updates.append(&mut op_updates);
         }
@@ -1389,7 +1394,11 @@ impl Catalog {
                     &live_collection_ids,
                 )?;
                 if let Some(c) = storage_collections {
+                    let started = Instant::now();
                     c.acknowledge_finalized_shards(tx);
+                    debug!(target: "mz_adapter::frontend_read_then_write",
+                        phase = "candidate_storage_acknowledgement", elapsed = ?started.elapsed(),
+                        "catalog candidate section complete");
                 }
             }
             TransactInnerMode::DryRun => {
@@ -1412,6 +1421,7 @@ impl Catalog {
 
         // Admission failures must return before entering the fatal commit path.
         // Batch extraction repeats this check for other durable callers.
+        let validation_started = Instant::now();
         super::retention::admit_index_bounds(tx, &preliminary_state, &admitted_plans)?;
         if admit_automatic_materialized_views(
             tx,
@@ -1480,6 +1490,9 @@ impl Catalog {
         super::retention::constrain_plan_inputs(tx, &state, &preliminary_state, &admitted_plans)?;
         tx.validate_read_protection()?;
         tx.validate_prewarming_writes()?;
+        debug!(target: "mz_adapter::frontend_read_then_write",
+            phase = "candidate_validation", elapsed = ?validation_started.elapsed(),
+            "catalog candidate section complete");
 
         // Storage preparation can retract permission staged by an earlier op
         // when it deletes metadata. Derive implications from the consolidated
@@ -1491,6 +1504,8 @@ impl Catalog {
             .iter()
             .any(|update| Self::update_affects_planning(&state, update));
         if !updates.is_empty() {
+            let started = Instant::now();
+            let update_count = updates.len();
             let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
             let (op_builtin_table_updates, op_catalog_updates) = state
                 .to_mut()
@@ -1501,6 +1516,9 @@ impl Catalog {
                 .resolve_builtin_table_updates(op_builtin_table_updates);
             builtin_table_updates.extend(op_builtin_table_updates);
             parsed_catalog_updates.extend(op_catalog_updates);
+            debug!(target: "mz_adapter::frontend_read_then_write",
+                phase = "candidate_final_apply", update_count, elapsed = ?started.elapsed(),
+                "catalog candidate section complete");
         }
 
         match state {
@@ -1567,9 +1585,17 @@ impl Catalog {
                 incarnation,
                 requirements,
             } => {
+                let started = Instant::now();
+                let requested_count = requirements.len();
                 let requirements =
                     state.expand_client_read_requirements(incarnation, requirements)?;
+                let expansion_elapsed = started.elapsed();
+                let expanded_count = requirements.len();
+                let started = Instant::now();
                 tx.publish_client_read_requirements(incarnation, requirements)?;
+                debug!(target: "mz_adapter::frontend_read_then_write",
+                    incarnation, requested_count, expanded_count, ?expansion_elapsed,
+                    staging_elapsed = ?started.elapsed(), "catalog client protection staged");
             }
             Op::ReclaimClientIncarnation {
                 incarnation,

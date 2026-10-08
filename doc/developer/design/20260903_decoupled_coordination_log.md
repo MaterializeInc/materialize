@@ -77,12 +77,14 @@ MV acquisition continuation is used only by the fixed-birth path, not ordinary
 automatic admission or a template for more intermediate stages.
 CREATE INDEX also retains its written selection and notices through a staged
 catalog commit, rebuilding creator protection per attempt. Verify its dispatcher
-yield independently of renewal success. CI138222 has 93 successful renewals,
-then 569 failed attempts before closure despite continued coordinator dispatch.
-A measured oracle allocation took 2.1s after refresh. Client-protection attempts
-now catch up after allocation, immediately before commit, retaining terminal
-fencing and yielding on structural invalidation. Sampled bounds and reclamations
-keep their original prefix checks. Verify stale-open and CAS losses separately.
+yield independently of renewal success. Client-protection attempts catch up after
+allocation, immediately before commit, retaining terminal fencing and yielding on
+structural invalidation. Stale opens and CAS losses still occur despite that
+refresh and continued dispatch. Sampled bounds and reclamations keep their original
+prefix checks. Adapter candidates remain substantially slower than replica
+candidates, although both use the same machinery. Temporary section timings
+separate aggregate expansion/staging, catalog-state application, storage
+acknowledgement and validation. Locate the cost before choosing a repair.
 Both native promotion jobs in CI138229 verify graceful deployment fencing.
 Private prewarming's separate catalog and inline bootstrap are unchanged.
 The frontier INSERT's year-3000 read wait is separate.
@@ -119,10 +121,9 @@ revision guard as commit. Common admission still owns the bound, and actual
 execution still checks readability. Keep that slice closed rather than expanding
 its proof. The remaining one-second EXPLAIN timeout is a separate failure.
 
-The shared adapter client also loses protection after renewal repeatedly fails
-for longer than the unchanged-heartbeat grace. Earlier query timeouts precede
-that loss. No intervening successful renewal or premature reclamation is shown,
-although the reclaiming peer and exact commit are unlogged. Fix publication
+The shared adapter client can lose protection after renewal repeatedly fails
+for longer than the unchanged-heartbeat grace. Distinguish timer-success gaps
+from heartbeat droughts: foreground grants also renew protection. Fix publication
 progress, not grace or closure checks. Keep the registered-peek DROP stall
 separate until its blocking await is identified. Earlier SLT timeout observations
 remain in the PR, not additional investigation campaigns.
