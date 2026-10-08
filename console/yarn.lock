@@ -4661,28 +4661,28 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tanstack/db-ivm@npm:0.1.22":
-  version: 0.1.22
-  resolution: "@tanstack/db-ivm@npm:0.1.22"
+"@tanstack/db-ivm@npm:0.1.25":
+  version: 0.1.25
+  resolution: "@tanstack/db-ivm@npm:0.1.25"
   dependencies:
     fractional-indexing: "npm:^3.2.0"
     sorted-btree: "npm:^1.8.1"
   peerDependencies:
     typescript: ">=4.7"
-  checksum: 10c0/ae434c5e8a6d0fe83addd0f149db8409c0b9cbd0eb292b32fc823b6a2b43a56a69ebae4ad6839bba6952c142907499a14cd9f10f8f0f7d9774821d3808becbae
+  checksum: 10c0/6f4f6be7f6e2326f38aa0590673f6b37105f931d5457dd283d71e2406e753ed8c20a5e87c568e2d68b98a7da82e5c687cbdb3549b80cb4a63590b6ea316c22bc
   languageName: node
   linkType: hard
 
-"@tanstack/db@npm:0.9.2":
-  version: 0.9.2
-  resolution: "@tanstack/db@npm:0.9.2"
+"@tanstack/db@npm:0.11.3":
+  version: 0.11.3
+  resolution: "@tanstack/db@npm:0.11.3"
   dependencies:
     "@standard-schema/spec": "npm:^1.1.0"
-    "@tanstack/db-ivm": "npm:0.1.22"
+    "@tanstack/db-ivm": "npm:0.1.25"
     "@tanstack/pacer-lite": "npm:^0.2.1"
   peerDependencies:
     typescript: ">=4.7"
-  checksum: 10c0/fe603c626292898734a0f39dd5b070e622bc95bbfa8256caf84cd19a554f53b34ca96a3e6eb27fb2b91d601db2fc5a99a31377928c2985899997a1df77768105
+  checksum: 10c0/13af87f86b7531a23e1495b0aded92e9d36f0a02e616dff8435362f11ec6d1b5070ee2b8eb9e76127965a56ea0c7357fa4953dcc65da4aac75e4bc195863bcf5
   languageName: node
   linkType: hard
 
@@ -4743,15 +4743,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tanstack/react-db@npm:0.4.1":
-  version: 0.4.1
-  resolution: "@tanstack/react-db@npm:0.4.1"
+"@tanstack/react-db@npm:0.5.3":
+  version: 0.5.3
+  resolution: "@tanstack/react-db@npm:0.5.3"
   dependencies:
-    "@tanstack/db": "npm:0.9.2"
-    use-sync-external-store: "npm:^1.6.0"
+    "@tanstack/db": "npm:0.11.3"
   peerDependencies:
-    react: ">=16.8.0"
-  checksum: 10c0/67d845fa31dadf931ea4e531502386d67da71df4f4f10cdce298da25a0ba7a1fb373464a557b8805dd28bfdde44a1b8802323d4f44c6bc3df775cac96e7185b9
+    react: ">=18.0.0"
+  checksum: 10c0/9ace00cfc7da65abbb6cbdae7898e87752cda779d80fe8d6e0b9159697253e72983905bfbc3eb61db9f99b06ecc0656ce5184665859e314ff0f37c575218e531
   languageName: node
   linkType: hard
 
@@ -11803,9 +11802,9 @@ __metadata:
     "@stripe/react-stripe-js": "npm:^5.6.1"
     "@stripe/stripe-js": "npm:^9.17.0"
     "@svgr/babel-plugin-transform-svg-component": "npm:^8.0.0"
-    "@tanstack/db": "npm:0.9.2"
+    "@tanstack/db": "npm:0.11.3"
     "@tanstack/eslint-plugin-query": "npm:^5.104.0"
-    "@tanstack/react-db": "npm:0.4.1"
+    "@tanstack/react-db": "npm:0.5.3"
     "@tanstack/react-query": "npm:^5.104.1"
     "@tanstack/react-query-devtools": "npm:^5.104.1"
     "@tanstack/react-table": "npm:^8.21.3"
@@ -15893,15 +15892,6 @@ __metadata:
   peerDependencies:
     react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
   checksum: 10c0/6bae7cb778ce611131ec830c4e469fbc2872acefc25d2e4cf1c28b8628690689770742a9f2f0642c95134f9c77041fee60f0352f81ca43f96643b0ed01774726
-  languageName: node
-  linkType: hard
-
-"use-sync-external-store@npm:^1.6.0":
-  version: 1.6.0
-  resolution: "use-sync-external-store@npm:1.6.0"
-  peerDependencies:
-    react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
-  checksum: 10c0/35e1179f872a53227bdf8a827f7911da4c37c0f4091c29b76b1e32473d1670ebe7bcd880b808b7549ba9a5605c233350f800ffab963ee4a4ee346ee983b6019b
   languageName: node
   linkType: hard
 
