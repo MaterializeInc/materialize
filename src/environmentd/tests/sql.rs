@@ -1700,22 +1700,30 @@ lower:
     // Catalog publications can advance the oracle before the table keepalive
     // completes. Preserve the ready output assertion without assuming those
     // independent writes complete together.
+    let started = Instant::now();
+    let mut observations = Vec::new();
     Retry::default()
         .max_duration(Duration::from_secs(30))
         .retry(|_| {
+            let request_started = started.elapsed();
             let row = client
                 .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
                 .unwrap();
-            let explain: String = row.get(0);
-            let explain = timestamp_re.replace_all(&explain, "<TIMESTAMP>");
+            let received_at = started.elapsed();
+            let raw_explain: String = row.get(0);
+            let explain = timestamp_re.replace_all(&raw_explain, "<TIMESTAMP>");
             let explain = storage_inputs_re.replace_all(&explain, "");
             if explain == expect {
                 Ok(())
             } else {
+                observations.push(format!(
+                    "attempt {} ({request_started:?}..{received_at:?}):\n{raw_explain}",
+                    observations.len() + 1
+                ));
                 Err(format!("{explain}\n\nexpected:\n{expect}"))
             }
         })
-        .unwrap();
+        .unwrap_or_else(|error| panic!("{error}\nEXPLAIN attempts:\n{}", observations.join("\n")));
 }
 
 // Test `EXPLAIN TIMESTAMP AS JSON`
