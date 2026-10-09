@@ -25,6 +25,7 @@ use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use mz_alloc_default as _;
 use mz_ore::cast::CastFrom;
 use mz_timely_util::columnar::Column;
+use mz_timely_util::columnar::align_buffer::{AlignBuffer, Origin};
 use std::hint::black_box;
 
 /// Update shape: a byte payload plus a time and a diff, matching the correction buffer's
@@ -66,7 +67,7 @@ fn bench_borrow(c: &mut Criterion) {
     let typed: Column<Update> = Column::Typed(container(COUNT));
     let mut words = Vec::new();
     encode(&container(COUNT), &mut words);
-    let align: Column<Update> = Column::Align(words);
+    let align: Column<Update> = Column::Align(AlignBuffer::from_words(Origin::Decode, words));
     assert_eq!(align.borrow().len(), COUNT);
 
     let mut group = c.benchmark_group("column_borrow");
