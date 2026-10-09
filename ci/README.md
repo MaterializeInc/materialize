@@ -171,6 +171,34 @@ recent macOS versions.
 The agent runs as the default MacStadium `administrator` user, since there isn't
 an easy way to isolate builds on macOS.
 
+### DNS resolvers
+
+The agents use public resolvers rather than MacStadium's, because MacStadium's
+resolvers intermittently failed to resolve `github.com`. That broke checkout with
+`fatal: unable to access 'https://github.com/MaterializeInc/materialize.git/':
+Could not resolve host: github.com` (exit status 128), which retries do not ride
+out because an outage outlasts the three attempts. Google is primary and
+Cloudflare is the fallback:
+
+```shell
+% networksetup -getdnsservers Ethernet
+8.8.8.8
+8.8.4.4
+1.1.1.1
+1.0.0.1
+```
+
+To set it, or to restore it after a network reset:
+
+```shell
+% sudo networksetup -setdnsservers Ethernet 8.8.8.8 8.8.4.4 1.1.1.1 1.0.0.1
+% sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder
+```
+
+On macOS `/etc/resolv.conf` is generated, so edit DNS with `networksetup`, not
+by writing that file. The previous setting on `mac-2` was
+`207.254.72.253 207.254.72.254 8.8.8.8` (changed 2026-10-09).
+
 ## Agent security
 
 Unlike builds on a CI platform where hardware is provided, like Travis CI or
