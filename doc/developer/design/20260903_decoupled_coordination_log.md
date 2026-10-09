@@ -106,15 +106,17 @@ Failed background advancement/bounds publication returns at the existing stagger
 publication cadence without deferring independent heartbeat renewal. Dependency
 cleanup stays at publication completion, not per token. The temporary CPU capture
 is removed. Renewal and stalled aggregate advancement remain separate outcomes.
-The latest measured MV timeout is before admission: dequeue loses the available
-guard during asynchronous catalog certification and requeues behind other DDL.
-Verify the bounded handoff repair, retaining the existing guard through freshness
-and resuming below transaction setup. Preserve cancellation, revision checks and
-transaction-end ownership without promising FIFO. Selected holders also retry
-heavily. Three creator-commit await probes distinguish allocation, dry-run admission
-and timeline-grant preparation before choosing any further cost repair. Acquisition,
-DDL retry policy, replica timing and safety checks stay unchanged. Keep stalled
-advancement open even if SQL passes.
+Dequeued DDL retains its guard through freshness and resumes below transaction
+setup. Boundary coverage and captured handoffs confirm this, including repeated
+certification. Remaining MV waits include other holders' retries and post-planning
+revision invalidation. Do not expand the scheduler or promise FIFO.
+Creator dry-run admission and catalog catch-up are the measured expensive waits.
+Trace storage-lock acquisition, recent-upper fetching, listen fetching and update
+application before choosing their repair. An enclosing await does not establish
+CPU versus I/O or scheduling cost. Preserve eager freshness, cancellation, revision
+checks, transaction-end ownership and definitive writes. Acquisition, DDL retry
+policy, replica timing and safety checks stay unchanged. Keep stalled advancement
+open even if SQL passes.
 No broader scheduling or protocol change is approved.
 Both native promotion jobs in CI138229 verify graceful deployment fencing.
 Private prewarming's separate catalog and inline bootstrap are unchanged.

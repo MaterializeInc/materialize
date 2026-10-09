@@ -800,7 +800,11 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     /// Returns fencing or bootstrap-bound runtime recovery errors.
     #[mz_ore::instrument]
     pub(crate) async fn sync_to_current_upper(&mut self) -> Result<(), DurableCatalogError> {
+        let started = Instant::now();
         let upper = self.current_upper().await;
+        debug!(target: "mz_adapter::frontend_read_then_write",
+            elapsed = ?started.elapsed(), upper = %upper,
+            "catalog sync upper fetched");
         self.sync(upper).await
     }
 
@@ -844,13 +848,21 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
         let mut updates: BTreeMap<_, Vec<_>> = BTreeMap::new();
         let updates_applied_before = self.updates_applied;
+        let from_upper = self.upper;
+        let mut fetches = 0_u64;
+        let mut fetch_elapsed = Duration::ZERO;
+        let mut apply_elapsed = Duration::ZERO;
 
         // Reset the amortized consolidation tracker so it picks up the
         // current snapshot size as its baseline.
         self.size_at_last_consolidation = None;
 
         while self.upper < target_upper {
+            let started = Instant::now();
             let listen_events = self.listen.fetch_next().await;
+            fetch_elapsed += started.elapsed();
+            fetches += 1;
+            let started = Instant::now();
             for listen_event in listen_events {
                 match listen_event {
                     ListenEvent::Progress(upper) => {
@@ -896,15 +908,26 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                     }
                 }
             }
+            apply_elapsed += started.elapsed();
         }
         assert_eq!(updates, BTreeMap::new(), "all updates should be applied");
+        let started = Instant::now();
         // Only consolidate when there are actual updates.
         if self.updates_applied != updates_applied_before {
             self.consolidate();
         }
         // Compare the effective final prefix, not individual retractions or
         // intermediate values. Consuming fences first preserves their precedence.
-        self.validate_runtime()
+        let result = self.validate_runtime();
+        apply_elapsed += started.elapsed();
+        if fetches > 0 {
+            debug!(target: "mz_adapter::frontend_read_then_write",
+                %from_upper, %target_upper, to_upper = %self.upper, fetches,
+                updates_applied = self.updates_applied - updates_applied_before,
+                ?fetch_elapsed, ?apply_elapsed, success = result.is_ok(),
+                "catalog sync work returned");
+        }
+        result
     }
 
     /// Apply a batch of updates and then consolidate the snapshot. This is the

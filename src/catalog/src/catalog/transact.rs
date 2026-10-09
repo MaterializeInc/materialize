@@ -1045,7 +1045,10 @@ impl Catalog {
         let mut builtin_table_updates = vec![];
         let mut catalog_updates = vec![];
         let mut audit_events = vec![];
+        let storage_started = Instant::now();
         let mut storage = self.storage().await;
+        debug!(target: "mz_adapter::frontend_read_then_write",
+            elapsed = ?storage_started.elapsed(), "catalog dry-run storage acquired");
         let mut tx = if let Some(snapshot) = prev_snapshot {
             // Restore transaction from saved snapshot so it starts in sync
             // with the accumulated CatalogState from previous dry runs.
@@ -1055,7 +1058,12 @@ impl Catalog {
         } else {
             // A peer may publish between planning and this first dry run. The
             // caller must refresh and revalidate, just as for a commit CAS loss.
-            let tx = match storage.transaction().await {
+            let open_started = Instant::now();
+            let result = storage.transaction().await;
+            debug!(target: "mz_adapter::frontend_read_then_write",
+                elapsed = ?open_started.elapsed(), success = result.is_ok(),
+                "catalog dry-run transaction open returned");
+            let tx = match result {
                 Err(
                     error @ DurableError::Durable(DurableCatalogError::CatalogOutOfSync { .. }),
                 ) => {
