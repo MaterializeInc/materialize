@@ -1365,13 +1365,15 @@ mod tests {
             assert!(matches!(poll!(&mut check), Poll::Pending));
             let success = matches!(response, Some(Ok(true)));
             match response {
-                Some(response) => tx.send(BTreeMap::from([(id, response)])).unwrap(),
+                Some(response) => tx
+                    .send(BTreeMap::from([(id, response)]))
+                    .expect("classification still holds the receiver"),
                 None => drop(tx),
             }
             let result = check.await;
             if success {
                 assert_eq!(
-                    result.unwrap(),
+                    result.expect("hydration reply succeeds"),
                     ClusterCaughtUpStatus::CaughtUp {
                         ignored_compute_collections: BTreeSet::new(),
                     }
@@ -1411,7 +1413,7 @@ mod tests {
             )
             .now_or_never()
             .expect("ignored collections must not wait for hydration")
-            .unwrap();
+            .expect("ignored collections need no hydration evidence");
             let expected = if problematic.is_empty() {
                 ClusterCaughtUpStatus::CaughtUp {
                     ignored_compute_collections: BTreeSet::from([id]),
