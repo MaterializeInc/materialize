@@ -21,13 +21,29 @@ Finish M2 before starting M3's adapterd/controllerd split, SQL adapter lifecycle
 and process inventory. That extension retains independent-client isolation and
 requires multiple serving adapters, but does not expand M2 acceptance.
 
-The next end-to-end outcome is same-version native prewarming and warm
-promotion: a second deployment uses its own catalog-described replicas and
-durable read-only/output-write authority, warms while the first serves, then
-retains that execution through externally authorized promotion. Catalog
-membership must not imply output-write authority. Preserve read protection,
-catalog fencing and external-sink safety. No borrowed deployment identity or
-controller-to-native cold bridge.
+Read protection belongs to deployment-qualified adapter and replica realizations,
+not expiring client registrations. Implement explicit execution replacement and
+retirement on DROP, scale-down, deployment retirement and cancelled prewarming.
+Silence retains protection, potentially indefinitely. A successor supersedes its
+own realization's execution, not other catalog writers. Stale executions cannot
+restore retired grants or overwrite their successor's protection. Remove obsolete
+renewal/reclamation machinery, rather than tuning or rescheduling heartbeats.
+M2 needs one deployment-owned adapter realization, not M3's full adapter lifecycle.
+
+Kafka uses ordinary single-replica placement within the active deployment, not
+oldest-client election or heartbeat expiry. Restart recovers on the selected
+replica. Check current catalog authority on each producer open/reopen and retain
+Kafka fencing, committed-progress recovery and sink-version checks. A delayed old
+open may cause a transient producer restart. Do not add a lease or wait for old
+process death to prevent that. Prewarming must not open producers or block the
+active deployment's selection.
+
+Preserve native prewarming and compatible-version warm handover: a second
+deployment warms on its own catalog-described replicas while the first serves,
+then retains that execution and protection through externally authorized promotion.
+Retirement revokes only the old deployment's authority and protection. Catalog
+membership does not grant output-write authority. No borrowed deployment identity
+or controller-to-native cold bridge.
 
 Use the existing concurrent-writer protocols for compatible Persist outputs,
 including late writes from retired deployments. Correctness must hold
@@ -42,12 +58,6 @@ maintenance upgrades must honor that policy. After durable retirement, formats
 may advance without waiting for zombies to die. Reject admission incompatible
 with already-written state. Solve the initialization race through Persist
 compatibility, not pre-publication initialization and orphan cleanup.
-
-Use that outcome to establish the deployment model, then complete
-catalog/Persist writer coexistence and handover between compatible versions.
-Same-version success is an intermediate proof, not completion of M2. Do not
-design a same-version-only shortcut that needs another ownership model for
-version overlap.
 
 M2 requires stable ReplicaIds for shared declarations and replicas deliberately
 carried over across deployments, including their public IDs. Runtime identity
@@ -85,10 +95,12 @@ Close the known serving-compatibility gaps at their owning boundaries:
   hydration, cleanup and autonomous-metric observations at their native owners,
   without recreating controller state for parity or inventing missing values.
 
-The outage, targeted DDL and bounded-throughput proofs are closed. Keep their
-assertions and regular CI coverage, not another acceptance campaign. Fix
-concrete integration failures alongside the work above, but do not make
-unrelated fixture cleanup a prerequisite for progressing the deployment model.
+The outage, targeted DDL and bounded-throughput proofs are closed except where
+the protection-lifetime contract changes. Replace expiry-dependent expectations
+with explicit replacement/retirement and durable-hold coverage in existing fixtures.
+Keep regular CI coverage, not another acceptance campaign. Removing renewal does
+not establish SQL or frontier-advancement progress. Fix concrete integration
+failures, but do not make unrelated fixture cleanup a prerequisite for this work.
 Batch corrections to shared fixture setup instead of rediscovering the same
 prerequisite per test.
 
@@ -102,8 +114,9 @@ the affected work. Routine implementation decisions need no renewed approval.
 Existing-environment conversion, pre-feature binary compatibility and arbitrary
 concurrent serving adapters remain outside M2. M3 owns independent adapters and
 process management. Add durable records only for required information that
-cannot be derived. Production test-only APIs need approval. Do not tune grace
-periods or leases, weaken required safety checks, or invent scheduling
+cannot be derived. Production test-only APIs need approval. Persist reader leases
+remain separate from catalog protection lifetime. Do not tune them, statement
+deadlines or publication cadence, weaken safety checks, or invent scheduling
 guarantees to turn an unexplained failure green.
 
 Follow repository instructions and skills. Use regular draft-PR CI as the

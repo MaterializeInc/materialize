@@ -51,18 +51,21 @@ durable catalog lifecycle.
 
 ## Deployment coexistence and native prewarming
 
-Each deployment's replica set and read-only/output-write authority are durable
-catalog state. Both active and prewarming deployments use native
-catalog-following replicas throughout their lifetime. The pending deployment
-hydrates its own replicas while the active deployment serves. Promotion changes
+Each deployment's adapter and replica realizations and read-only/output-write
+authority are durable catalog state. Identity is scoped by deployment, not binary
+version. Active and prewarming deployments use native catalog-following replicas
+throughout their lifetime. The pending deployment hydrates its own replicas while
+the active deployment serves. Promotion changes
 durable authority without switching execution models or discarding the state
 warmed for takeover. An outside signal from the upgrade orchestrator authorizes
 promotion. Neither joining the catalog nor observing hydration grants that
 authority.
 
-User objects, clusters, declared configuration and explicit replica declarations
-live once in the shared catalog. There is no private durable SQL catalog per
-deployment. Written plans retain their [build ownership](#written-plans).
+User objects, clusters, declared configuration and explicit adapter and replica
+declarations live once in the shared catalog. There is no private durable SQL
+catalog per deployment. M2 needs one deployment-owned adapter realization. Named
+adapter declarations, SQL management and multiple serving adapters belong to M3.
+Written plans retain their [build ownership](#written-plans).
 
 `ReplicaId` identifies a logical replica, not a deployment-local process. Shared
 declarations and deliberate carryover preserve that ID across deployments,
@@ -104,10 +107,12 @@ Persist writers to stop or for every output to complete a handover.
 Catalog fencing, read protection and external-sink transaction/version checks
 remain required.
 
-Protection accounts for all live deployments. Promotion preserves the warmed
-deployment's requirements. Retirement or abandonment releases only that
-deployment's resources under the existing protection rules, not another's holds
-or shared user objects.
+Protection accounts for all admitted deployments. Promotion preserves the warmed
+deployment's requirements. Durable retirement revokes the retiring deployment's
+catalog authority and releases its query and execution protection without waiting
+for physical process death. Shared declarations, maintained requirements and other
+deployments' protection remain intact. Physical cleanup may follow asynchronously.
+Cancelling an abandoned prewarm uses explicit deployment retirement, not expiry.
 
 ### Version compatibility
 
@@ -192,7 +197,7 @@ A maintained object's retention policy constrains authorized compaction of its
 retained state and the logical inputs needed to reconstruct that history,
 independently of adapter, query-client, or replica lifetimes. This includes
 indexes with no replicas. Client and execution holds impose additional
-constraints. Reclaiming an incarnation does not remove the object's retention
+constraints. Retiring a realization does not remove the object's retention
 requirement.
 
 An index's object-owned requirement applies its retention policy to durable
@@ -222,12 +227,12 @@ bypass other valid read protection. Permission cannot be reused for a different
 collection lifetime or an unrelated use of a shared shard.
 
 Coordination belongs at the boundary that authorizes compaction, admits read
-requirements, and reclaims client protection, not at the act of applying
+requirements, and retires client protection, not at the act of applying
 already-committed permission. Proposing bounds need not require a leader either,
 provided catalog transactions validate proposals against authoritative requirements.
 A publisher proposes bounds only from a state in which it has applied every
 committed change up to its transaction's base, and recovery restores maintained
-state before publication or reclamation resumes.
+state before publication or retirement resumes.
 
 ### Logical recovery dependencies
 
@@ -271,8 +276,8 @@ multi-client accounting.
 Readability is enforced where a read happens. A cluster refuses a read below a
 collection's since rather than serving it, and persist does the same for shard
 reads. Query-local dataflows keep their imports readable through the cluster's
-own accounting until they are removed. Reclaiming a client's protection therefore
-needs no fence propagated to compute: a reclaimed client's late read is either
+own accounting until they are removed. Retiring a client's protection therefore
+needs no fence propagated to compute: a retired client's late read is either
 served correctly or refused, and it cannot acquire new protection.
 
 Recovery must establish actual readability and restore valid read requirements
@@ -282,24 +287,35 @@ have equivalent history.
 
 ### Client read protection
 
-Client protection is scoped to a client incarnation and the collections and
-frontiers it requires. A client's read protection remains valid across restarts
-or replacement of the components enforcing compaction. Durable client requirements
-participate in compaction accounting alongside maintained requirements. A durable
-requirement on an index protects the index's inputs at that frontier, since
-arrangements do not survive compute restart and must be reconstructible.
+Query and execution protection belongs to a deployment-qualified adapter or
+replica realization and the collections and frontiers it requires. It does not
+expire through silence or missed heartbeats. A dead but still-declared owner may
+retain history indefinitely until replacement or removal. Process supervision
+owns recovery, not a generic catalog-client liveness registry.
+
+A realization has one current execution. Restart replaces that execution, not the
+logical declaration. Replacement retires obsolete transient requirements while
+securing the protection its successor needs. Superseded executions cannot publish
+protection or release successor grants. They stop rather than register themselves
+again. This is local to the realization, not a fence on cooperating catalog writers.
+
+DROP, scale-down and deployment retirement release the affected realizations'
+protection. Removing a shared declaration removes all its realizations. Authority
+revocation and protection release are coordinated at the catalog transaction
+boundary, so stale publications cannot restore retired protection. Retirement may
+fail the old execution's queries. It does not require draining or transparent
+session failover.
+
+Protection survives replacement of the components enforcing compaction. Durable
+client requirements participate alongside maintained requirements. A requirement
+on an index protects its inputs at that frontier, since arrangements do not
+survive compute restart and must be reconstructible.
 
 Clients may aggregate query and transaction needs locally under established
 protection. Ordinary query execution must not require a durable write for each
-hold change. Establishing protection and reclaiming it must be coordinated with
+hold change. Establishing protection and retiring it must be coordinated with
 compaction so that neither a new requirement nor a stale client can rely on
 discarded history.
-
-Abandoned client protection must be reclaimable without releasing other clients'
-requirements. Maintained requirements belong to maintained objects, not their
-creating clients. Query execution and transient dataflows remain ephemeral and
-require their own readiness and execution protection. This does not introduce
-transparent session or query failover.
 
 ### Admission
 
@@ -362,6 +378,21 @@ physical compaction lags. Existing sinks retain pending output through alteratio
 and recovery. Their requirements advance with durable output progress, not merely
 with input compaction permission.
 
+### Kafka placement and recovery
+
+Kafka sinks run on one selected replica in the active deployment. Restart recovers
+on that replica. Moving to another replica follows catalog membership changes,
+not missed heartbeats or client-incarnation age. Prewarming replicas must not
+compete for output ownership or block the active deployment's selection.
+
+Producer opening and reopening check current catalog authority for the deployment,
+realization and execution. Admission is a point-in-time check, not a timed lease.
+Kafka's per-sink transactional identity, producer fencing, committed-progress
+recovery and sink-version checks preserve output correctness. An already-approved
+old attempt may fence its replacement after a pause, causing a transient restart,
+but cannot obtain fresh admission after retirement. No guarantee of
+interruption-free takeover or wait for old process death is required.
+
 ### Index creation and reconstruction
 
 The index-creation catalog transaction commits the selected plan, an admitted
@@ -405,11 +436,11 @@ For M2, adapters perform finalization and envd creates replica processes. M3 mov
 process management to controllerd and establishes ownership of remaining shared
 duties. DDL and table appends are request-scoped and stay with adapters.
 
-A replica's execution reads and live-index retention windows use incarnation-scoped
-client protection. A slow or hydrating replica keeps the input history it needs
-until its protection is released or reclaimed. These requirements are additional
-to maintained recovery requirements and object-owned retention, which do not
-expire with the replica.
+A replica's execution reads and live-index retention windows use its
+[realization-owned protection](#client-read-protection). A slow, hydrating or
+stopped replica retains that history until release, replacement or removal.
+These requirements are additional to maintained recovery requirements and
+object-owned retention, which do not end with the replica.
 
 ### Adapters and process management (M3)
 
@@ -489,11 +520,12 @@ commit. Active and prewarming generations participate under their own
 identities without fencing one another by joining. Promotion revokes the
 retired generation's catalog-write authority without invalidating the warmed
 generation's protection. Persist compare-and-append is the commit authority:
-metadata-only writes such as protection and heartbeats retry on contention,
+metadata-only writes such as protection and compaction retry on contention,
 while DDL refreshes and revalidates and reports a planning conflict when
 structural changes invalidated it rather than merging. Each writer follows the
 durable stream it commits to. Cooperating writers do not fence one another with
-per-process epochs.
+environment-wide process epochs. Supersession of a realization's own execution
+follows [client read protection](#client-read-protection).
 
 Conflict recovery applies committed diffs incrementally. Catch-up and transaction
 repreparation scale with changes and affected dependencies, rather than rebuilding
@@ -501,8 +533,7 @@ or decoding the whole catalog on each retry. Retry against refreshed, validated
 state, including recomputing compaction proposals when their inputs change.
 
 Stagger periodic publications across participants, including at startup. Conflicts
-use bounded, randomized backoff that accounts for renewal deadlines without
-extending protection validity. Retry delays and repeated attempts must not
+use bounded, randomized backoff. Retry delays and repeated attempts must not
 monopolize the coordinator: pending operations leave it available for other
 requests, cancellation and maintenance. Scheduling and task placement remain
 implementation choices. New protection still commits before use, delayed
@@ -610,7 +641,9 @@ straight to replicas. Compute is the first working slice within this milestone,
 storage follows on the same path, and neither is complete without the other.
 
 Demonstrate: stop the adapter while maintained dataflows, sources, sinks, and
-compaction continue, explicitly allowing table- and webhook-fed work to pause.
+compaction work continue, explicitly allowing table- and webhook-fed work to pause.
+Compaction respects the stopped adapter's durable holds until replacement or
+explicit retirement. Silence must not release them.
 Restart a replica during the outage and show that it reconstructs and
 progresses without the adapter, rather than relying on a surviving sibling's
 progress. Then restart the adapter and resume queries. Include a multi-replica
@@ -618,7 +651,10 @@ cluster with one replica still hydrating, same-batch dependencies, and
 concurrent or delayed application of committed permission. One adapter and one
 query client suffice for this outage demonstration. Verify policy-based
 retention independently of live client or replica grants, including their
-reclamation and subsequent reconstruction.
+explicit retirement and subsequent reconstruction. Verify same-deployment
+replacement and deployment retirement without heartbeat expiry, preserving other
+owners' protection and safe Kafka recovery. Adapt existing coverage at these
+boundaries rather than adding a separate acceptance campaign.
 
 Native deployment handover is also part of this milestone. Prewarm a second
 deployment on its catalog-owned replicas and show that externally authorized
@@ -645,8 +681,8 @@ extra adapters.
 
 Retain the independent-client proof: one client advances or loses protection while
 another retains an older timestamp, the compaction enforcer recovers, and an
-expired client returns safely. Together, these milestones complete the
-fresh-environment decoupling outcome, subject to the correctness and performance
+explicitly retired execution returns safely. Together, these milestones complete
+the fresh-environment decoupling outcome, subject to the correctness and performance
 acceptance criteria above.
 
 ## Appendix: catalog freshness and execution ordering
@@ -657,7 +693,7 @@ application. This includes configuration, not just object definitions.
 
 ### Catalog writes
 
-All catalog writers, including protection, heartbeat and compaction publishers,
+All catalog writers, including protection and compaction publishers,
 share the `EpochMilliseconds` oracle's allocation, completion and
 future-timestamp discipline. Retries and rebasing must preserve it before the
 write becomes durable. A commit at C is acknowledged only after oracle
@@ -668,9 +704,9 @@ Replicas write independently, not through the adapter or table-write worker.
 
 Inherited oracle/catalog progress and its necessary monotonic advancement retain
 log-and-proceed behavior. A future timestamp already inherited from that state
-must not block bootstrap or heartbeats. Genuinely new future jumps remain subject
-to precommit protection, including when advancing an empty catalog upper. This
-does not add clock synchronization or new clock-recovery guarantees.
+must not block bootstrap or catalog progress. Genuinely new future jumps remain
+subject to precommit protection, including when advancing an empty catalog upper.
+This does not add clock synchronization or new clock-recovery guarantees.
 
 Clock fixtures may explicitly enable a fixture-owned shared mock clock for
 catalog/oracle allocation and checks, supporting clock changes and restarts.
