@@ -376,8 +376,7 @@ mz_catalog.mz_recent_storage_usage:
 
 Source mz_internal.mz_storage_usage_by_shard
   project=(#1..=#3)
-  filter=((#1{shard_id}) IS NOT NULL AND (mz_now() <= #4) AND (mz_now() < step_mz_timestamp(#4)))
-  map=(timestamp_tz_to_mz_timestamp((#3{collection_timestamp} + 06:00:00)))
+  filter=((#1{shard_id}) IS NOT NULL AND (mz_now() < step_mz_timestamp(timestamp_tz_to_mz_timestamp((#3{collection_timestamp} + 06:00:00)))))
 Source mz_internal.mz_storage_shards
 
 Target cluster: mz_catalog_server
@@ -1869,8 +1868,7 @@ mz_internal.mz_recent_sql_text:
 
 Source mz_internal.mz_sql_text
   project=(#1..=#3)
-  filter=((mz_now() <= #4) AND (mz_now() < step_mz_timestamp(#4)))
-  map=(timestamp_tz_to_mz_timestamp((#0{prepared_day} + 4 days)))
+  filter=((mz_now() < step_mz_timestamp(timestamp_tz_to_mz_timestamp((#0{prepared_day} + 4 days)))))
 
 Target cluster: mz_catalog_server
 
