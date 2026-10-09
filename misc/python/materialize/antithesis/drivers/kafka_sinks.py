@@ -69,8 +69,8 @@ from confluent_kafka.cimpl import (
 )
 from kubernetes import client  # type: ignore
 
+from materialize.antithesis import ddl_hold, sql, state
 from materialize.antithesis import sink_oracle as oracle
-from materialize.antithesis import sql, state
 from materialize.antithesis.drivers import configure
 from materialize.antithesis.drivers.sources_common import (
     LAZY_SETUP_BUDGET_S,
@@ -411,7 +411,7 @@ def _rotate_if_full(db: sqlite3.Connection, g: Gen) -> None:
     row = db.execute(
         "SELECT attempted FROM attempts WHERE gen = ?", (g.gen,)
     ).fetchone()
-    if row is None or int(row[0]) < GEN_MAX_OPS:
+    if row is None or int(row[0]) < GEN_MAX_OPS or ddl_hold.active():
         return
     with db:
         cur = db.execute(
