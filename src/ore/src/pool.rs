@@ -434,7 +434,9 @@ pub struct Pool(Arc<PoolInner>);
 /// while waiting on chunk state. Scans only ever `try_lock` a chunk they
 /// pop, with one exception: a demotion re-locks its victim with a blocking
 /// `lock` to commit after the unlocked write. That wait holds no other
-/// lock, so `enforce_compressed_cap` must never run while its caller holds
+/// chunk or queue lock. From budget enforcement it holds the `enforcing`
+/// single-flight mutex, which is only ever `try_lock`ed, so no thread waits
+/// on it. Hence `enforce_compressed_cap` must never run while its caller holds
 /// any chunk's state lock: two such callers demoting each other's chunks
 /// would deadlock on the re-lock. The admitting read's victim steal is the
 /// one place a chunk's state lock is held while probing another chunk's,
@@ -1199,6 +1201,12 @@ impl Pool {
         };
         self.0.spill_process(&meta, SpillKind::Evict);
         self.0.spill.in_flight.fetch_sub(1, Ordering::Relaxed);
+        // The spill loop's trim, without its pacing, so tests observe
+        // deterministic post-commit states. While the full hint is set, a
+        // pass would probe the store for nothing.
+        if !self.0.full_hint.load(Ordering::Relaxed) {
+            self.0.enforce_compressed_cap(Pass::Background);
+        }
         true
     }
 
@@ -1259,6 +1267,9 @@ impl Pool {
         let prev = self.0.rss_target_bytes.swap(new, Ordering::Relaxed);
         if new < prev {
             self.0.enforce_compressed_cap(Pass::Inline);
+            // An inline file-mode pass stops at the backstop threshold, and
+            // the spill threads demote the rest.
+            self.0.spill.cv.notify_all();
         }
     }
 
@@ -1518,6 +1529,11 @@ impl PoolInner {
                     // the resident set rather than accumulating every chunk
                     // ever evicted.
                     false
+                } else if state.residency == Residency::WriteInFlight {
+                    // Already handed off, by this pass or an earlier one,
+                    // and charged then. Charging it again would end the pass
+                    // before it reaches the overage it saw.
+                    true
                 } else if state.touched {
                     state.touched = false;
                     true
@@ -1528,9 +1544,12 @@ impl PoolInner {
                     true
                 } else {
                     self.evict_locked(&meta, &mut state);
-                    *quota = quota.saturating_sub(u64::cast_from(meta.len_bytes()));
-                    inline = true;
-                    state.residency != Residency::Evicted
+                    let evicted = state.residency == Residency::Evicted;
+                    if evicted {
+                        *quota = quota.saturating_sub(u64::cast_from(meta.len_bytes()));
+                        inline = true;
+                    }
+                    !evicted
                 }
             };
             if requeue {
@@ -1789,17 +1808,11 @@ impl PoolInner {
                 state.residency = Residency::Evicted;
             }
         };
-        drop(state);
-        // Counted a fresh resident extent: the tier may need trimming. Kept
-        // here (rather than relying on the spill loop alone) so the
-        // threadless test hooks observe deterministic post-commit states.
-        // While the full hint is set, `spill_trim` owns the paced retry, and
-        // a pass here would probe the store once per spill job. The commit's
-        // enqueue already cleared the hint if the store can place this
-        // extent.
-        if !self.full_hint.load(Ordering::Relaxed) {
-            self.enforce_compressed_cap(Pass::Background);
-        }
+        // The fresh resident extent may put the tier over its cap. The spill
+        // loop trims once per iteration, so a spill thread alternates one
+        // eviction with one demotion. A trim here as well would demote twice
+        // per eviction, with `in_flight` still counting this job, which
+        // pushes evictions inline onto the threads that trip the budget.
     }
 
     /// Releases `state`'s slot — slot returned to the region free list,
@@ -2418,7 +2431,10 @@ impl PoolInner {
                         (refused, stopped) = (true, true);
                         break;
                     }
-                    Demotion::WriteFailed => break,
+                    Demotion::WriteFailed => {
+                        (refused, stopped) = (true, true);
+                        break;
+                    }
                 }
                 continue;
             }
@@ -2513,6 +2529,9 @@ impl PoolInner {
         );
         #[cfg(test)]
         DEMOTION_PROBES.with(|probes| probes.set(probes.get() + 1));
+        // NOTE: the allocation runs under the chunk lock and can punch holes
+        // or `fallocate`, so this lock can be held across those syscalls. The
+        // lock order permits it, since the store's locks are leaves.
         let file_slot = match store.can_alloc(class).then(|| store.alloc(class)) {
             Some(Ok(file_slot)) => file_slot,
             Some(Err(_)) | None => {
@@ -4420,6 +4439,34 @@ mod tests {
         }
         let len = pool.queue_len();
         assert!(len <= 32, "queue holds {len} entries for zero live chunks");
+    }
+
+    #[mz_ore::test]
+    fn budget_pass_charges_each_hand_off_once() {
+        let pool = test_pool(usize::MAX);
+        pool.enable_spill_without_threads();
+        let handles: Vec<_> = (0..16)
+            .map(|seed| insert(&pool, &mut payload(SMALL, 500 + seed)))
+            .collect();
+        // The first sweep hands off the 12 untouched chunks and spends the
+        // 4 touched chunks' second chance. The second sweep revisits the
+        // handed-off entries before it reaches the touched ones, and
+        // charging those again would exhaust the quota first.
+        for handle in &handles[12..] {
+            let _ = read(handle);
+        }
+        pool.set_budget(0);
+        for handle in &handles {
+            assert_eq!(
+                handle.residency(),
+                Residency::WriteInFlight,
+                "the pass hands off the whole overage it saw",
+            );
+        }
+        while pool.spill_step() {}
+        for (i, handle) in handles.iter().enumerate() {
+            assert_eq!(read(handle), payload(SMALL, 500 + u64::cast_from(i)));
+        }
     }
 
     #[mz_ore::test]
