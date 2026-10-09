@@ -776,6 +776,16 @@ async fn handle_mcp_request(
         "MCP request received"
     );
 
+    // No `id` means no reply, which the transport answers 202. SDK clients take
+    // any other status as a response to parse and close on the empty body.
+    if is_notification {
+        debug!(method = %request.method, "Received notification (no response will be sent)");
+        record_request(McpCallStatus::Ok);
+        return StatusCode::ACCEPTED.into_response();
+    }
+
+    // The transport leaves header rules for notification POSTs undefined, so
+    // only requests are checked.
     if protocol.mirrors_body_in_headers() {
         if let Err(err) = mcp_headers.check_against(&request.method) {
             record_request(McpCallStatus::Error(err.error_type()));
@@ -783,14 +793,6 @@ async fn handle_mcp_request(
             let response = McpResponse::error(id, err.into());
             return (StatusCode::BAD_REQUEST, Json(response)).into_response();
         }
-    }
-
-    // No `id` means no reply, which the transport answers 202. SDK clients take
-    // any other status as a response to parse and close on the empty body.
-    if is_notification {
-        debug!(method = %request.method, "Received notification (no response will be sent)");
-        record_request(McpCallStatus::Ok);
-        return StatusCode::ACCEPTED.into_response();
     }
 
     let request_id = request.id.clone().unwrap_or(serde_json::Value::Null);

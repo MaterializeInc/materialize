@@ -66,13 +66,13 @@ Mcp-Name: query
 400 Bad Request
 {"jsonrpc":"2.0","id":6,"error":{"code":-32020,"message":"Header mismatch: Mcp-Name header value 'query' does not match body value 'query_system_catalog'","data":{"error_type":"HeaderMismatch"}}}
 
-# Notifications are checked too. With no id, the error carries a null id.
+# The transport leaves header rules for notifications undefined, so a
+# notification without Mcp-Method is still accepted.
 mcp-developer
 MCP-Protocol-Version: 2026-07-28
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 ----
-400 Bad Request
-{"jsonrpc":"2.0","id":null,"error":{"code":-32020,"message":"Header mismatch: missing Mcp-Method header","data":{"error_type":"HeaderMismatch"}}}
+202 Accepted
 
 # A notification with a matching Mcp-Method is still answered 202.
 mcp-developer
