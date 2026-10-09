@@ -470,7 +470,16 @@ impl Coordinator {
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
         let session_catalog = self.catalog().for_session(session);
         let expr_humanizer = {
-            let full_name = self.catalog().resolve_full_name(&name, None);
+            // The plan's validity doesn't cover the schema the view would be
+            // created in, so a concurrent `DROP SCHEMA` can have removed it
+            // during the off-thread optimization.
+            let full_name = self
+                .catalog()
+                .try_resolve_full_name(&name, None)
+                .ok_or_else(|| AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "schema",
+                    dependency_id: name.qualifiers.schema_spec.to_string(),
+                })?;
             let transient_items = btreemap! {
                 id => TransientItem::new(
                     Some(full_name.into_parts()),

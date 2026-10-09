@@ -952,7 +952,13 @@ impl Coordinator {
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
         let session_catalog = self.catalog().for_session(session);
         let expr_humanizer = {
-            let full_name = self.catalog().resolve_full_name(&name, None);
+            let full_name = self
+                .catalog()
+                .try_resolve_full_name(&name, None)
+                .ok_or_else(|| AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "schema",
+                    dependency_id: name.qualifiers.schema_spec.to_string(),
+                })?;
             let transient_items = btreemap! {
                 global_id => TransientItem::new(
                     Some(full_name.into_parts()),
