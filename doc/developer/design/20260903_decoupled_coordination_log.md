@@ -103,10 +103,13 @@ Keep durable renewal, aggregate advancement and end-to-end SQL progress separate
 Credit publications only after commit. The plain view's exact queue residence
 remains unmeasured.
 Failed background advancement/bounds publication returns at the existing staggered
-publication cadence without deferring independent heartbeat renewal. Verify this
-bounded timer correction in the existing workloads. Acquisition, DDL retries,
-replica timing and safety checks remain unchanged. Keep stalled advancement open
-even if SQL starts passing. No broader scheduling or protocol change is approved.
+publication cadence without deferring independent heartbeat renewal. Renewal still
+fails despite heartbeat dispatch: catch-up and transaction-open work occupy long
+heartbeat turns that never reach a candidate. Attribute that cost with bounded CPU
+samples through the existing profiler in the same parallel workload, then remove
+the temporary capture. Acquisition, DDL retries, replica timing and safety checks
+remain unchanged. Keep stalled advancement open even if SQL starts passing.
+No broader scheduling or protocol change is approved.
 Both native promotion jobs in CI138229 verify graceful deployment fencing.
 Private prewarming's separate catalog and inline bootstrap are unchanged.
 The frontier INSERT's year-3000 read wait is separate.

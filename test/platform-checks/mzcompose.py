@@ -15,7 +15,11 @@ contexts.
 
 import argparse
 import os
+import threading
+import time
 from enum import Enum
+
+import requests
 
 from materialize import buildkite
 from materialize.checks.all_checks import *  # noqa: F403
@@ -50,6 +54,29 @@ from materialize.mzcompose.services.testdrive import Testdrive as TestdriveServi
 from materialize.util import all_subclasses
 
 TESTDRIVE_DEFAULT_TIMEOUT = os.environ.get("PLATFORM_CHECKS_TD_TIMEOUT", "300s")
+
+
+def capture_catalog_cpu(c: Composition, stop: threading.Event) -> None:
+    # Sample the observed late-run catch-up slowdown without changing the workload.
+    # Diagnostic failures must not replace the scenario's outcome.
+    for sample, delay in enumerate((600, 300, 300), start=1):
+        if stop.wait(delay):
+            return
+        try:
+            port = c.port("materialized", 6878)
+            print(f"Catalog CPU capture {sample} starts at {time.time()}", flush=True)
+            response = requests.post(
+                f"http://localhost:{port}/prof/cpu",
+                json={"seconds": 30, "hz": 99, "merge_threads": False},
+                timeout=(5, 60),
+            )
+            response.raise_for_status()
+            path = c.path / f"catalog-cpu-{sample}.pb.gz"
+            path.write_bytes(response.content)
+            buildkite.upload_artifact(path)
+            print(f"Catalog CPU capture {sample} ends at {time.time()}", flush=True)
+        except Exception as error:
+            print(f"Catalog CPU capture {sample} failed: {error}", flush=True)
 
 
 def create_mzs(
@@ -342,7 +369,22 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     additional_system_parameter_defaults=additional_system_parameter_defaults,
                     default_replication_factor=args.default_replication_factor,
                 )
-                scenario.run()
+                stop_capture = threading.Event()
+                if (
+                    buildkite.is_in_buildkite()
+                    and execution_mode is ExecutionMode.PARALLEL
+                    and scenario_class.__name__ == "NoRestartNoUpgrade"
+                ):
+                    threading.Thread(
+                        target=capture_catalog_cpu,
+                        args=(c, stop_capture),
+                        daemon=True,
+                    ).start()
+                try:
+                    scenario.run()
+                finally:
+                    # Do not extend a completed scenario to wait for a profile.
+                    stop_capture.set()
             elif execution_mode is ExecutionMode.ONEATATIME:
                 for check in checks:
                     print(
