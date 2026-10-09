@@ -83,6 +83,7 @@ steps:
               limit: 2
 
   - id: cluster-spec-sheet-cluster
+    skip: "Focused pgbench spike"
     label: "Cluster spec sheet: Cluster (against Production)"
     timeout_in_minutes: 3600
     depends_on: devel-docker-tags
@@ -97,6 +98,7 @@ steps:
       queue: linux-aarch64-small
 
   - id: cluster-spec-sheet-source-ingestion
+    skip: "Focused pgbench spike"
     label: "Cluster spec sheet: Source Ingestion (against Production)"
     timeout_in_minutes: 3600
     depends_on: devel-docker-tags
@@ -129,13 +131,13 @@ steps:
           args:
             - --cleanup
             - --target=cloud-staging
-            - --qps-clusters=20
-            - --qps-envd-cpus=64
-            - --max-scale=64
-            - --qps-concurrencies=512
-            - --qps-numa-diagnostic
-            - --qps-duration=120
-            - --qps-warmup=10
+            - --qps-clusters=32
+            - --qps-envd-cpus=32
+            - --max-scale=32
+            - --qps-concurrencies=1,64,256,512
+            - --qps-pgbench-comparison
+            - --qps-duration=20
+            - --qps-warmup=5
             - --system-parameter-default=enable_prepared_query_reuse=true
             - --system-parameter-default=enable_prepared_query_templates=true
             - --system-parameter-default=enable_frontend_transaction_completion=true
@@ -143,3 +145,5 @@ steps:
             - qps_envd_strong_scaling
     agents:
       queue: linux-aarch64-medium
+    env:
+      CI_ALLOW_LOCAL_BUILD: "1"

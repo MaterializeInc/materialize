@@ -63,6 +63,28 @@ class QpsSweep:
             "statement_logging_sample_rate": "0",
         }
         return {
+            "cluster_names": [
+                "c" if i == 0 else f"qps_{i}" for i in range(self.clusters)
+            ],
+            "libpq_envs": [
+                {
+                    env: common[key]
+                    for key, env in {
+                        "host": "PGHOST",
+                        "port": "PGPORT",
+                        "user": "PGUSER",
+                        "password": "PGPASSWORD",
+                        "dbname": "PGDATABASE",
+                        "sslmode": "PGSSLMODE",
+                        "connect_timeout": "PGCONNECT_TIMEOUT",
+                        "application_name": "PGAPPNAME",
+                    }.items()
+                }
+                | {
+                    "PGOPTIONS": f"-c cluster={'c' if i == 0 else f'qps_{i}'} -c statement_logging_sample_rate=0 -c statement_timeout={int(self.query_timeout * 1000)}"
+                }
+                for i in range(self.clusters)
+            ],
             "dsns": [
                 " ".join(
                     f"{k}={quote(v)}"

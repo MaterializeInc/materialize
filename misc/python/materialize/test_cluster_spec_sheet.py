@@ -21,6 +21,75 @@ from materialize.cluster_spec_sheet import (
 )
 
 
+def pgbench_module():
+    spec = importlib.util.spec_from_file_location(
+        "pgbench_spike", MZ_ROOT / "test/pgbench/run.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_pgbench_allocation():
+    module = pgbench_module()
+    assert module.allocation(1, 32) == [1]
+    assert module.allocation(8, 3) == [3, 3, 2]
+    assert module.allocation(512, 32) == [16] * 32
+
+
+def test_pgbench_common_window_and_pooled_percentiles(tmp_path):
+    module = pgbench_module()
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.write_text("0 1 100 0 1 0\n0 2 100 0 3 0\n0 3 100 0 5 0\n0 4 100 0 7 0\n")
+    b.write_text("0 1 10000 0 2 0\n0 2 10000 0 4 0\n0 3 10000 0 6 0\n0 4 10000 0 8 0\n")
+    result = module.merge_logs([a, b], 2, 1, 3)
+    assert result["queries"] == 3
+    assert result["qps"] == 1
+    assert result["mean_latency_ms"] == pytest.approx(3.4)
+    assert result["p99_latency_ms"] == 10
+    with pytest.raises(ValueError, match="common full"):
+        module.merge_logs([a, b], 2, 1, 20)
+    with pytest.raises(ValueError, match="every client"):
+        module.merge_logs([a, b], 3, 1, 3)
+
+
+def test_pgbench_failures_are_not_successful_samples(tmp_path):
+    module = pgbench_module()
+    path = tmp_path / "failed"
+    path.write_text("0 1 failed 0 1 0\n")
+    with pytest.raises(ValueError, match="failed"):
+        list(module.records(path))
+    with pytest.raises(ValueError, match="zero failed"):
+        module.summary("number of failed transactions: 1 (1%)")
+
+
+def test_pgbench_libpq_options():
+    flags = [
+        "-host",
+        "host",
+        "-port",
+        "6875",
+        "-username",
+        "user",
+        "-password",
+        "quote'and\\slash",
+        "-database",
+        "materialize",
+        "-params",
+        "sslmode=require",
+    ]
+    config = QpsSweep([1], ["prepared"], clusters=2).config(flags, 1, "prepared")
+    envs = config["libpq_envs"]
+    assert envs[0]["PGPASSWORD"] == "quote'and\\slash"
+    assert envs[0]["PGDATABASE"] == "materialize"
+    assert envs[0]["PGHOST"] == "host"
+    first_options, second_options = envs[0]["PGOPTIONS"], envs[1]["PGOPTIONS"]
+    assert "-c cluster=c " in first_options
+    assert "-c cluster=qps_1 " in second_options
+    assert "statement_logging_sample_rate=0" in first_options
+
+
 def test_sweep_defaults():
     sweep = QpsSweep(QPS_CONCURRENCIES, ["prepared"])
     assert sum(sweep.duration + sweep.warmup for _ in sweep.concurrencies) * 6 == 1500
