@@ -128,6 +128,12 @@ after long downtime can hit the same limit when the frontier advances in one
 step. The failure is deterministic, so a retry repeats it, and nothing the client
 does with chunks can avoid it.
 
+Both limits apply per subscribe, and nothing bounds their sum
+(`src/adapter/src/coord/message_handler.rs`, the backlog check per active
+subscribe). Every sink holds its own subscribe, so many sinks on one environment
+multiply the worst case: each can hold up to `max_result_size` while it takes a
+snapshot, and up to `subscribe_max_buffered_bytes` if its client falls behind.
+
 ### Errors
 
 | Condition | SQLSTATE | Message |
@@ -473,7 +479,7 @@ The checkpoint fingerprint lets the SDK tell three kinds of change apart:
 | --- | --- | --- | --- |
 | Different output columns | the view's definition changed | stop with `SchemaMismatch` | stop |
 | Same columns, same storage shard, new catalog id | `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` | re-run the retention-margin check, then resume | same |
-| Same columns, new storage shard | `ALTER SCHEMA ... SWAP` in a blue/green deploy | stop | re-snapshot from the new object, into a new namespace for targets without transactions |
+| Same columns, new storage shard | `ALTER SCHEMA ... SWAP` in a blue/green deploy | stop | re-snapshot from the new object, into a new incarnation (a new namespace in turbopuffer) for targets without transactions |
 | The name resolves to nothing | the object was dropped while the sink was offline | stop with `ObjectDropped` | stop |
 
 The SDK will look the name up in the catalog before each `SUBSCRIBE`, and it will
@@ -678,12 +684,18 @@ The first sink will keep turbopuffer namespaces equal to views. It answers the
 search-index use case and will run against our internal context graph, which
 has no Kafka, so the existing Kafka-based sink does not fit there. The sink will
 write only to namespaces it creates, so every document carries `mz_timestamp`.
+A turbopuffer namespace is a set of documents that are written and searched
+together, roughly a table.
 
-The October sink will be written in Rust on the Rust package and will call
-turbopuffer's HTTP API directly. Its transforms will be Rust functions that call
-an embedding provider over HTTP, so the existing sink's Python transforms are not
-reused. The tombstone, condition, and checkpoint rules below do not depend on
-the language, so a Python version can follow the same design.
+The first version of the sink will be written in Rust on the Rust package and
+will call turbopuffer's HTTP API directly. The tombstone, condition, and
+checkpoint rules below do not depend on the language, so a Python version can
+follow the same design.
+
+The sink will read the upsert envelope keyed by the document id. The server
+emits a delete for a key only when no row has that key, so the sink needs no
+multiplicity count, and a key with several rows arrives as `key_violation`,
+which goes to `reject`.
 
 turbopuffer's documentation states that one write request to one namespace is
 applied atomically and is durable on return, and that there are no transactions
@@ -778,20 +790,31 @@ document. turbopuffer creates a namespace on its first write, so a stale write
 after that recreates an unused namespace. Retired incarnations therefore stay on
 the list, and every later cleanup removes their namespaces again if they exist.
 
-Embedding cost will follow the existing sink's transform model: a transform
-declares the columns it reads, and runs only for rows where those columns
-changed. The sink will store a hash of each transform's source
+turbopuffer can compute embeddings itself. Its native embedding takes an `embed`
+option on a string attribute, names one of the models turbopuffer hosts, bills
+per token, and recomputes the vector on every write of that attribute. The sink
+will use native embedding by default, so neither the sink nor Materialize runs
+embedding code or holds model credentials. The cost follows writes of the text
+attribute, so the sink will leave the text out of a write when it has not
+changed, through the patch path below. A sink that needs a model turbopuffer does
+not host can use a transform instead: Rust code that calls the embedding
+provider and supplies the vector.
+
+Either way, embedding cost follows the existing sink's transform model: an
+embedding declares the columns it reads, and is computed only for rows where
+those columns changed. The sink will store a hash of each embedding's source
 columns on the document. For each netted change it will first make a patch of
-the attributes without vectors, conditional on the stored `mz_timestamp` being
-older, every stored source hash being equal to the new one, and the document not
-being a tombstone. The patch keeps the stored vectors, which are then known to
-match the source columns. If the patch count shows it was not applied, because a
-source column changed, the document is missing or a tombstone, or a newer
-version exists, the sink will compute the document's vectors and make the
-conditional upsert. Comparing with the stored hash, not with the previous change
-in the stream, stays correct when netting drops intermediate changes and after a
-replay. Tombstones skip transforms. A replay re-runs transforms for the replayed rows,
-which costs embedding calls but does not affect correctness.
+the other attributes, leaving out vectors and the text that native embedding
+reads, conditional on the stored `mz_timestamp` being older, every stored source
+hash being equal to the new one, and the document not being a tombstone. The
+patch keeps the stored vectors, which are then known to match the source
+columns. If the patch count shows it was not applied, because a source column
+changed, the document is missing or a tombstone, or a newer version exists, the
+sink will make the conditional upsert with the text for native embedding, or with
+vectors from a transform. Comparing with the stored hash, not with the previous
+change in the stream, stays correct when netting drops intermediate changes and
+after a replay. Tombstones skip embedding. A replay re-embeds the replayed rows,
+which costs embedding but does not affect correctness.
 
 ### Durable subscriptions
 
@@ -1045,11 +1068,17 @@ convergence test, a passing fencing test, and every typed error reproduced in
 the end-to-end suite.
 
 November and December: the Python and Node packages if they did not land in
-October, durable subscriptions as they land, and a Redis or Postgres reference
-sink chosen by demand.
+October, durable subscriptions as they land, and a Postgres reference sink. The
+turbopuffer sink exercises only the path for targets without transactions, so
+Postgres is the sink that proves the transactional path: data and checkpoint in
+one transaction, the expected-frontier check, and re-snapshot in place. MySQL
+follows by demand.
 
 GA requires dedicated SQLSTATEs released, the client docs rewritten on the SDK,
-and every published language passing the same vectors and end-to-end suite.
+every published language passing the same vectors and end-to-end suite, the
+Postgres sink passing the convergence and lost-response tests, and an answer to
+snapshot size: either server-side chunking, or a documented per-sink size limit
+with sizing guidance for environments that run many sinks.
 
 ## Future work
 
@@ -1188,11 +1217,14 @@ October work, because the doc picks a safe default for each.
    carry `RETAIN HISTORY` onto staged views and replacement materialized views?
    For a replacement, does a running subscribe end at the switch, and does the
    new catalog id's readable frontier cover a checkpoint taken before it?
-4. turbopuffer tombstones. Tombstones are kept forever by default and carry a
-   placeholder vector in namespaces with vectors. Owner: DevEx, with the first
-   turbopuffer users, during the sink build. Is the storage cost and the
-   placeholder vector acceptable, and what grace period should the docs
-   recommend for sinks that opt into the sweep?
+4. turbopuffer tombstones and native embedding. Tombstones are kept forever by
+   default and carry a placeholder vector in namespaces with vectors. Owner:
+   DevEx, with the first turbopuffer users, during the sink build. Is the storage
+   cost and the placeholder vector acceptable, and what grace period should the
+   docs recommend for sinks that opt into the sweep? turbopuffer's docs do not
+   say how native embedding treats a patch that leaves the text attribute out, or
+   a document without text, such as a tombstone, so the sink build has to test
+   both first.
 5. turbopuffer visibility. The sink documents convergence after each batch.
    Owner: DevEx, with the first search users. Do readers need a consistent view
    while a batch is written? That would need versioned documents and a
