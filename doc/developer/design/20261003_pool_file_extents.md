@@ -419,7 +419,7 @@ It is a candidate in the measurement plan, behind the same synchronous contract 
 ## Phase 0 results
 
 Phase 0 ran on an `r8gd.4xlarge` scratch instance (kernel 7.0.0-1006-aws) with its 885 GiB instance-store NVMe formatted ext4 with default options.
-The probe and fio scripts are in `misc/scratch/pool-file-extents-phase0/`, and the summarized fio output is in `results-r8gd.4xlarge-ext4.md` there.
+The probe and fio scripts are attached to CPU-289, and [Phase 0 fio results](#phase-0-fio-results) lists the per-configuration fio output.
 All runs used 30 s per configuration over a preallocated 64 GiB file, so they measure overwrites of allocated blocks.
 
 ### Filesystem support
@@ -463,10 +463,10 @@ Consequences for the design, pending a second device class:
 
 ## Pool measurements
 
-The `pool_extents` harness ran in file mode on the same instance type and filesystem. The script is `pool-matrix.sh` and the table is `results-pool-extents-r8gd.4xlarge.md`, both in `misc/scratch/pool-file-extents-phase0/`.
+The `pool_extents` harness ran in file mode on the same instance type and filesystem, and [`pool_extents` results](#pool_extents-results) lists the per-run numbers.
 Each run inserted 32 GiB of 2 MiB chunks into a 4 GiB budget, with bodies that compress to about half and 30% of chunks dying 4096 inserts after their own.
 The bodies are synthetic, so the ratios below say nothing about real lz4 ratios.
-Before the measurement, an `O_DIRECT` readback probe (`dio-verify.py` there) ran 1.9 million punch, write and read cycles on the device without a mismatch.
+Before the measurement, an `O_DIRECT` readback probe ran 1.9 million punch, write and read cycles on the device without a mismatch.
 No swap-mode baseline ran, because the instance has no swap configured.
 
 * **Device ceiling:** demotion ran at 0.82 to 0.88 GiB/s in every configuration, which is the phase 0 write ceiling.
@@ -487,7 +487,7 @@ No swap-mode baseline ran, because the instance has no swap configured.
 ## environmentd measurements
 
 A local `bin/environmentd --release` on the same instance type compared the file store with swap on a workload whose state a swap-less replica otherwise cannot keep.
-The scripts are in `misc/scratch/pool-file-extents-envd/`, and `results-envd-r8gd.4xlarge.md` there holds the per-run numbers.
+The scripts are attached to CPU-289, and [environmentd results](#environmentd-results) lists the per-run numbers.
 The workload parks TPC-H `lineitem` behind a temporal filter that makes every row valid a day from now, so the rows sit in a buffer that cannot drain.
 An index parks them in the arrange site's chunk batcher, with temporal bucketing on, and a materialized view parks them in the MV sink's correction buffer.
 Each run creates a fresh 8-worker replica under a cgroup `MemoryMax` equal to the size's memory limit, with lgalloc off and `compute_dataflow_max_inflight_bytes_cc` at 512 MiB in every arm.
@@ -559,7 +559,7 @@ Environments, in order: a local NVMe machine, the emulator, self-managed, and st
 * **Phase 0: filesystem support and device envelope.**
   Before any pool code exists, a probe records `O_TMPFILE`, `O_DIRECT` alignment, `fallocate`, and hole-punch support per filesystem, and an fio matrix records the device's envelope for each I/O candidate at the pool's extent sizes (384 KiB for lz4 extents, 2 MiB for identity extents).
   The fio matrix covers demotion writes at 1, 2, and 4 threads, synchronous cold reads at 1, 16, and 64 threads, and 2 writers mixed with 16 readers, each for synchronous `O_DIRECT`, `io_uring` at queue depths 4 and 16, and buffered I/O.
-  The machine is an `r8gd.4xlarge` scratch instance (`misc/scratch/pool-file-extents.json`) with its instance-store NVMe formatted ext4 and mounted at `/scratch`.
+  The machine is an `r8gd.4xlarge` scratch instance with its instance-store NVMe formatted ext4 and mounted at `/scratch`.
   The envelope bounds what the pool-level measurements below can reach and shows whether `io_uring` has headroom to win at all.
 * **I/O interface.**
   Candidates: synchronous `O_DIRECT` `pread` and `pwrite` (default), `io_uring` submission on spill threads with reads still synchronous to the caller, and buffered I/O with `sync_file_range` and `POSIX_FADV_DONTNEED`.
@@ -588,3 +588,132 @@ Environments, in order: a local NVMe machine, the emulator, self-managed, and st
 * **Capacity headroom.**
   Fill the store to capacity and confirm that `ENOSPC` appears only on the `fallocate` growth path, never on `pwrite`, and that the latch never trips.
   If it trips, raise the headroom.
+
+## Appendix: measurement results
+
+The tables below hold the per-run numbers behind the phase 0, pool, and environmentd sections.
+Every run used an `r8gd.4xlarge` scratch instance on kernel 7.0.0-1006-aws, with the instance-store NVMe formatted ext4 and mounted at `/scratch`.
+The scripts that produced them are attached to CPU-289.
+
+### Phase 0 fio results
+
+Each configuration ran for 30 s over a preallocated 64 GiB file.
+Run names encode the engine (`psync` or `uring`), the I/O mode, the block size, the job count, and the `io_uring` queue depth.
+The mixed runs used 384 KiB blocks, with 2 writer jobs and 16 reader jobs at once, and their rows give the range over jobs.
+
+| Run | Op | GiB/s | IOPS | p50 µs | p99 µs | CPU % |
+|---|---|---|---|---|---|---|
+| `mixed-io_uring/writers`, 2 jobs | write | 0.42 per job | 1154 per job | 13828 | 13828 | 1.3 to 1.4 |
+| `mixed-io_uring/readers`, 16 jobs | read | 0.11 per job | 303 to 305 per job | 3228 to 3260 | 4178 to 4293 | 0.4 to 0.6 |
+| `mixed-psync/writers`, 2 jobs | write | 0.42 per job | 1154 per job | 864 | 881 | 1.8 |
+| `mixed-psync/readers`, 16 jobs | read | 0.11 per job | 303 to 304 per job | 3260 | 4293 to 4424 | 0.4 to 0.6 |
+| `r-psync-direct-bs2m-j1` | read | 1.78 | 911 | 1073 | 2179 | 4.7 |
+| `r-psync-direct-bs2m-j16` | read | 1.78 | 911 | 17433 | 18743 | 0.3 |
+| `r-psync-direct-bs2m-j64` | read | 1.78 | 909 | 68682 | 105382 | 0.1 |
+| `r-psync-direct-bs384k-j1` | read | 0.99 | 2700 | 375 | 416 | 3.1 |
+| `r-psync-direct-bs384k-j16` | read | 1.78 | 4858 | 3293 | 3523 | 0.5 |
+| `r-psync-direct-bs384k-j64` | read | 1.78 | 4857 | 13173 | 13828 | 0.2 |
+| `r-uring-direct-bs2m-j1` | read | 1.78 | 911 | 1057 | 2179 | 1.0 |
+| `r-uring-direct-bs2m-j16` | read | 1.78 | 911 | 14746 | 30278 | 0.4 |
+| `r-uring-direct-bs2m-j64` | read | 1.78 | 910 | 68682 | 130548 | 0.1 |
+| `r-uring-direct-bs384k-j1` | read | 0.99 | 2699 | 367 | 403 | 3.2 |
+| `r-uring-direct-bs384k-j16` | read | 1.78 | 4858 | 3293 | 3523 | 0.5 |
+| `r-uring-direct-bs384k-j64` | read | 1.78 | 4857 | 13173 | 13697 | 0.2 |
+| `w-psync-buffered-bs2m-j1` | write | 0.85 | 433 | 224 | 297 | 11.1 |
+| `w-psync-buffered-bs2m-j2` | write | 0.85 | 433 | 179 | 264 | 4.6 |
+| `w-psync-buffered-bs2m-j4` | write | 0.85 | 433 | 177 | 257 | 2.2 |
+| `w-psync-buffered-bs384k-j1` | write | 0.85 | 2309 | 36 | 45 | 10.3 |
+| `w-psync-buffered-bs384k-j2` | write | 0.85 | 2309 | 38 | 46 | 5.6 |
+| `w-psync-buffered-bs384k-j4` | write | 0.85 | 2309 | 38 | 46 | 3.1 |
+| `w-psync-direct-bs2m-j1` | write | 0.85 | 433 | 2310 | 2310 | 0.9 |
+| `w-psync-direct-bs2m-j2` | write | 0.85 | 433 | 4620 | 4620 | 1.2 |
+| `w-psync-direct-bs2m-j4` | write | 0.85 | 433 | 9241 | 9241 | 0.3 |
+| `w-psync-direct-bs384k-j1` | write | 0.85 | 2309 | 432 | 432 | 2.8 |
+| `w-psync-direct-bs384k-j2` | write | 0.85 | 2309 | 864 | 864 | 1.4 |
+| `w-psync-direct-bs384k-j4` | write | 0.85 | 2309 | 1729 | 1729 | 0.7 |
+| `w-uring-direct-bs2m-j1-qd16` | write | 0.85 | 433 | 34865 | 35914 | 1.7 |
+| `w-uring-direct-bs2m-j1-qd4` | write | 0.85 | 433 | 9241 | 9241 | 1.5 |
+| `w-uring-direct-bs2m-j2-qd16` | write | 0.85 | 432 | 69730 | 73925 | 0.9 |
+| `w-uring-direct-bs2m-j2-qd4` | write | 0.85 | 433 | 18481 | 18481 | 0.9 |
+| `w-uring-direct-bs2m-j4-qd16` | write | 0.85 | 432 | 139461 | 141558 | 0.4 |
+| `w-uring-direct-bs2m-j4-qd4` | write | 0.85 | 432 | 36962 | 49545 | 0.5 |
+| `w-uring-direct-bs384k-j1-qd16` | write | 0.85 | 2308 | 6914 | 6914 | 2.2 |
+| `w-uring-direct-bs384k-j1-qd4` | write | 0.85 | 2309 | 1729 | 1729 | 3.0 |
+| `w-uring-direct-bs384k-j2-qd16` | write | 0.85 | 2308 | 13828 | 13828 | 1.3 |
+| `w-uring-direct-bs384k-j2-qd4` | write | 0.85 | 2308 | 3457 | 3457 | 1.6 |
+| `w-uring-direct-bs384k-j4-qd16` | write | 0.85 | 2307 | 27394 | 34341 | 0.6 |
+| `w-uring-direct-bs384k-j4-qd4` | write | 0.85 | 2308 | 6914 | 6914 | 0.8 |
+
+### `pool_extents` results
+
+The runs used an earlier revision of the `pool_extents` harness (`src/ore/examples/pool_extents.rs`) than the committed one.
+Every run inserts 16384 chunks of 2 MiB, 32 GiB in total, into a 4096 MiB budget with 4 spill threads.
+Bodies are half a repeating pattern and half random, which gives a stored-to-body ratio of 0.504, and 30% of chunks die 4096 inserts after their own insert.
+A churn phase of 8192 replacements follows, then a read phase with 16 readers of 2000 reads each, and rows list only the arguments that differ from that base.
+The demotion rate divides the bytes written to the store by the wall time of fill, drain, churn and the second drain, as the committed harness does.
+
+| Run | Arguments | Tier cap MiB | VmHWM MiB | Demotion GiB/s | Elision rate | Inline share | Spill at max, fill | Read p50 / p99 ms | Reads/s |
+|---|---|---|---|---|---|---|---|---|---|
+| base | `--rss-target-mib 8192` | 3584 | 7018 | 0.82 | 0.325 | 0.000 | 0.74 | 8.29 / 8.96 | 3198 |
+| rss-0.1 | `--rss-target-mib 4506` | 0 | 4174 | 0.88 | 0.000 | 0.142 | 0.07 | 8.86 / 8.95 | 2322 |
+| rss-0.25 | `--rss-target-mib 5120` | 512 | 4818 | 0.88 | 0.030 | 0.054 | 0.89 | 8.85 / 8.96 | 2414 |
+| rss-0.5 | `--rss-target-mib 6144` | 1536 | 6199 | 0.87 | 0.076 | 0.031 | 0.86 | 8.82 / 8.96 | 2629 |
+| readers-1 | base, `--readers 1 --reads 20000` | 3584 | 6667 | 0.84 | 0.322 | 0.000 | 0.71 | 0.67 / 0.77 | 1892 |
+| readers-64 | base, `--readers 64 --reads 1000` | 3584 | 6975 | 0.84 | 0.325 | 0.000 | 0.70 | 14.27 / 90.42 | 3039 |
+| spill-1 | base, `--spill-threads 1` | 3584 | 6893 | 0.82 | 0.325 | 0.000 | 0.68 | 8.31 / 8.97 | 3174 |
+| spill-2 | base, `--spill-threads 2` | 3584 | 6961 | 0.84 | 0.325 | 0.000 | 0.69 | 8.32 / 8.96 | 3171 |
+| spill-8 | base, `--spill-threads 8` | 3584 | 7012 | 0.84 | 0.325 | 0.000 | 0.71 | 8.33 / 8.97 | 3168 |
+| identity-0.2 | base, `--identity-fraction 0.2` | 3584 | 8467 | 0.85 | 0.326 | 0.000 | 0.76 | 9.42 / 12.65 | 2547 |
+| capacity-8g | base, `--file-capacity-mib 8192` | 3584 | 9458 | 0.57 | 0.433 | 0.000 | 0.48 | 0.42 / 8.95 | 4306 |
+
+How to read the columns:
+* **Elision rate** is `extent_demotions_elided / (extent_demotions_elided + extent_pageouts)`.
+* **Inline share** is `extent_file_writes_inline / extent_file_writes`.
+* **Spill at max** is the share of 1 ms samples during fill with `spill_in_flight` at `SPILL_IN_FLIGHT_MAX` (64).
+* **Read latencies** are closed-loop `read_into` service times and include resident hits.
+
+Results that held in every run:
+* **No errors:** there were no write errors.
+* **Store full only in capacity-8g:** `extent_file_full` was nonzero only in that run.
+* **Repeat reads:** they were 66% of file reads, 52% at 1 reader and 82% at 64. The harness reads random live chunks with plain reads, which never admit.
+* **Allocated space:** after the churn phase it exceeded live slot bytes by 0.9 to 1.7 GiB. Nothing was punched, because the volume never ran short.
+
+### environmentd results
+
+These runs used `bin/environmentd --release` at commit 85cb1dc125 on a host with 123 GiB of usable RAM and 16 vCPUs.
+The pool ran with lz4 on, `column_paged_batcher_budget_fraction` at 0.01 and `column_paged_batcher_pool_rss_target_fraction` at 0.02 of physical RAM, a slot budget of about 1.2 GiB and an RSS target of about 2.5 GiB.
+Ingesting TPC-H took 4 minutes at scale factor 10 and 30 minutes at 100.
+Every arm ran with `enable_compute_temporal_bucketing` on, `compute_dataflow_max_inflight_bytes_cc` at 512 MiB, and lgalloc off, each on a fresh 8-worker replica under a systemd scope with `MemoryMax` set to the size's memory limit.
+
+`ind` parks every row in the arrange site's chunk batcher, and `mv` parks every row in the MV sink's correction buffer.
+Arm suffixes name the backing and the memory limit in GiB: `nospill` turns spilling off, `noback` spills with the file store and swap off, `file` uses the file store with swap off, and `swap` uses a swapfile on the same NVMe (64 GiB at scale factor 10, 200 GiB at 100) with the file store off.
+The settled columns are sampled 180 s after hydration, and pool metrics are scraped after that sample.
+Swapped-out and swapped-in GiB are host-wide `pswpout` and `pswpin` deltas over the run, recorded only for the scale factor 100 runs.
+Only one replica ran at a time, but environmentd and the idle source cluster share the host.
+
+| Run | Outcome | Wall s | Max VmRSS MiB | memory.peak MiB | Settled VmRSS MiB | Settled memory.current MiB | Settled swap MiB | Extent bytes resident | Extent bytes on file | File writes | File reads | Pageouts | Swapped out GiB | Swapped in GiB |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| f10-ind-nospill32 | hydrated | 28.9 | 16086 | 16247 | 13439 | 13391 | 0 | 0 | 0 | 0 | 0 | 0 |  |  |
+| f10-ind-noback8 | exited | 29.9 | 8137 |  |  |  |  | 5267177472 | 0 | 0 | 0 | 0 |  |  |
+| f10-ind-file8 | hydrated | 30.6 | 5164 | 5258 | 3038 | 2967 | 0 | 1159315456 | 4112646144 | 7262 | 3774 | 7262 |  |  |
+| f10-ind-swap8 | hydrated | 31.1 | 5209 | 8192 | 2915 | 5810 | 2965 | 1160183808 | 0 | 0 | 0 | 6788 |  |  |
+| f10-ind-noback4 | exited | 5.4 | 4014 |  |  |  |  | 0 | 0 | 0 | 0 | 0 |  |  |
+| f10-ind-file4 | exited | 7.2 | 3981 |  |  |  |  | 0 | 0 | 0 | 0 | 0 |  |  |
+| f10-ind-swap4 | hydrated | 38.5 | 4148 | 4096 | 1997 | 1940 | 4135 | 1160118272 | 0 | 0 | 0 | 6928 |  |  |
+| f10-mv-nospill32 | hydrated | 32.4 | 10567 | 10562 | 8117 | 8058 | 0 | 0 | 0 | 0 | 0 | 0 |  |  |
+| f10-mv-noback8 | hydrated | 34.5 | 7952 | 8018 | 5687 | 5626 | 0 | 5581357056 | 0 | 0 | 0 | 0 |  |  |
+| f10-mv-file8 | hydrated | 39.0 | 5075 | 5069 | 2741 | 2671 | 0 | 1160249344 | 4426301440 | 10004 | 7168 | 10004 |  |  |
+| f10-mv-swap8 | hydrated | 38.5 | 4872 | 8030 | 2683 | 5678 | 3056 | 1159725056 | 0 | 0 | 0 | 9324 |  |  |
+| f10-mv-noback4 | exited | 7.9 | 4072 |  |  |  |  | 0 | 0 | 0 | 0 | 0 |  |  |
+| f10-mv-file4 | exited | 5.5 | 3956 |  |  |  |  |  |  |  |  |  |  |  |
+| f10-mv-swap4 | hydrated | 48.7 | 4157 | 4096 | 2020 | 1963 | 3844 | 1159266304 | 0 | 0 | 0 | 8542 |  |  |
+| f100-ind-noback8 | exited | 59.8 | 8122 |  |  |  |  | 2220539904 | 0 | 0 | 0 | 0 | 0.0 | 0.0 |
+| f100-ind-file8 | hydrated | 837.6 | 6366 | 8192 | 3871 | 5678 | 0 | 1158250496 | 60862758912 | 268119 | 219026 | 268111 | 0.0 | 0.0 |
+| f100-ind-swap8 | hydrated | 760.9 | 5990 | 8192 | 3576 | 5811 | 44496 | 1159331840 | 0 | 0 | 0 | 266217 | 237.7 | 138.7 |
+| f100-mv-noback8 | exited | 45.4 | 8189 |  |  |  |  | 4391469056 | 0 | 0 | 0 | 0 | 0.0 | 0.0 |
+| f100-mv-file8 | hydrated | 823.2 | 5246 | 8192 | 2720 | 5731 | 0 | 1159200768 | 65081933824 | 277451 | 236029 | 277435 | 0.0 | 0.0 |
+| f100-mv-swap8 | hydrated | 815.3 | 5007 | 8192 | 2619 | 5763 | 44501 | 1160118272 | 0 | 0 | 0 | 274401 | 287.2 | 175.1 |
+
+Every exited run reached a VmRSS within 4% of its memory limit before the process disappeared, which matches a cgroup OOM kill, but the journal was not checked. `memory.peak` reads 0 once the cgroup is gone, so it is blank for exited runs. For exited runs the measurement script scrapes metrics about 30 s after the exit, through the dead process's socket path. The process orchestrator relaunches a replica 5 s after it exits, so these metrics most likely describe the relaunched process partway through its own hydration, and blank cells are scrapes that returned nothing.
+
+A cgroup's `memory.current` counts page cache, which here is mostly persist's local blob files. That is why the swap arms' and the scale factor 100 file arms' `memory.peak` reach or approach the limit while their VmRSS stays well below it. None of them was OOM-killed.
