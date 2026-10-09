@@ -17,9 +17,11 @@ from materialize.antithesis.drivers import (
     kafka_sinks,
     kafka_sources,
     postgres_sources,
+    rollouts,
 )
 
 status = configure.main()
+rollouts.seed_serving_version()
 postgres_sources.setup_main()
 kafka_sources.setup_main()
 kafka_sinks.setup_main()

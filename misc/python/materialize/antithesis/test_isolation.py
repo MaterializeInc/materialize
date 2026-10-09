@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from materialize.antithesis.isolation import (
+    CONTROLLER_CRITICAL_SINCE,
     AclModel,
     CrPoint,
     Key,
@@ -97,6 +98,26 @@ def test_foreign_handles() -> None:
     ]
     assert foreign_handles(s, 3) == []
     assert foreign_handles({}, 0) == []
+
+
+def test_foreign_handles_skips_txns_controller_reader() -> None:
+    reader = {"debug": {"hostname": "mz-environmentd-2-0 26.45.1"}}
+    txns = {
+        "critical_readers": {
+            CONTROLLER_CRITICAL_SINCE: {
+                "debug": {**reader["debug"], "purpose": "commit txns"}
+            }
+        }
+    }
+    assert foreign_handles(txns, 1) == []
+    other = {
+        "critical_readers": {
+            CONTROLLER_CRITICAL_SINCE: {
+                "debug": {**reader["debug"], "purpose": "storage controller"}
+            }
+        }
+    }
+    assert [f["id"] for f in foreign_handles(other, 1)] == [CONTROLLER_CRITICAL_SINCE]
 
 
 def test_data_version_exceeds() -> None:

@@ -61,6 +61,10 @@ def version_tuple(text: str | None) -> tuple[int, int, int] | None:
     return (int(match["major"]), int(match["minor"]), int(match["patch"]))
 
 
+# `PersistClient::CONTROLLER_CRITICAL_SINCE`.
+CONTROLLER_CRITICAL_SINCE = "c00000000-1111-2222-3333-444444444444"
+
+
 @dataclass(frozen=True)
 class CrPoint:
     """The parts of one Materialize CR read that bound promotion."""
@@ -89,12 +93,21 @@ def foreign_handles(state: dict[str, Any], ceiling: int) -> list[dict[str, Any]]
     only through a successful `compare_and_append`, and a critical reader only
     by registering a critical since handle, so either from a never-promoted
     generation is a write by a read-only process. Leased readers are left out:
-    a read-only process registers them by design.
+    a read-only process registers them by design, as is the controller's
+    critical reader on the txns shard: `StorageCollections::new` opens a
+    `TxnsHandle` in read-only mode too, which re-registers that reader and
+    stamps its hostname, then drops the handle without moving its since.
     """
     found = []
     for kind in ("writers", "critical_readers"):
         for handle_id, handle in (state.get(kind) or {}).items():
             debug = handle.get("debug") or {}
+            if (
+                kind == "critical_readers"
+                and handle_id == CONTROLLER_CRITICAL_SINCE
+                and debug.get("purpose") == "commit txns"
+            ):
+                continue
             hostname = str(debug.get("hostname") or "")
             generation = hostname_generation(hostname)
             if generation is not None and generation > ceiling:

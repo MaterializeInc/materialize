@@ -72,8 +72,8 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     unreachable,
 )
 
+from materialize.antithesis import ddl_hold, sql, state
 from materialize.antithesis import serializability as sz
-from materialize.antithesis import sql, state
 from materialize.antithesis.drivers import configure
 from materialize.antithesis.environment import Environment
 from materialize.antithesis.rng import rng
@@ -577,7 +577,10 @@ def _epoch_for_op(db: sqlite3.Connection, host: str, force_rotate: bool) -> int 
         row = db.execute(
             "SELECT count(*) FROM ops WHERE epoch = ?", (epoch,)
         ).fetchone()
-        if int(row[0]) < EPOCH_MAX_OPS:
+        ops = int(row[0])
+        # Rotation is discretionary DDL; an epoch may grow to twice its size
+        # while a hold lasts.
+        if ops < EPOCH_MAX_OPS or (ops < 2 * EPOCH_MAX_OPS and ddl_hold.active()):
             return epoch
     return rotate_generation(db, epoch, "", _create_epoch(host), _drop_epoch(host))
 
