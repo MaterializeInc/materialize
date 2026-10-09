@@ -70,7 +70,7 @@ global FIFO ordering. Transaction-end plans retain their own acquisition and cle
 
 Single-attempt client-protection writes catch up after oracle allocation, whose
 await can make an earlier refresh stale. A structural change invalidates preparation and yields
-before retry. Sampled compaction and reclamation proposals instead retain their
+before retry. Sampled compaction proposals instead retain their
 prefix check so their owners resample, rather than replaying them after catch-up.
 
 Creator admission also catches up after allocation and before preparing its grant.
@@ -84,10 +84,20 @@ completion adopts the exact committed map and issues the new timeline tokens
 before another publication can release them. Explicit reconstruction windows
 remain fixed rather than becoming another automatic birth.
 
-Incarnation renewal retains committed requirements without preparing an advancing
-aggregate. It does not acknowledge pending grants or clear their acquisition
-barrier. Successful renewal updates renewal age, not the advancement cadence.
-New or stronger protection still needs its own successful grant publication.
+Adapter protection belongs to one execution per deployment and does not expire
+through silence. Startup captures the expected predecessor once, retaining that
+expectation across registration retries. Bootstrap and serving share that execution.
+A confirmed supersession or deployment fence terminates the adapter, rather than
+registering again or continuing to serve with a closed client. An object DROP or
+ordinary acquisition rejection is not evidence of supersession.
+
+Replacement transfers committed grants into a separate recovery guard, not ordinary
+read holds. Retain that guard through reconstruction and acquisition of successor
+timeline windows, then release obsolete transient grants through changed-aggregate
+publication. New or stronger protection still needs its own committed grant, and
+pending publication barriers remain binding. Idle clients do not renew unchanged
+aggregates. Publication cadence, staggering and conflict backoff govern advancement,
+not protection lifetime.
 
 Ordinary CREATE MATERIALIZED VIEW admits its automatic birth in the content
 transaction, joining logical-input and selected-import permission. The definition,

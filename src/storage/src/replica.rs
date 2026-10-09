@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::client::{StorageCommand, StorageResponse};
@@ -24,7 +23,7 @@ use timely::progress::Antichain;
 /// acknowledgements do not imply that an execution has finished reading.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ReplicaStorageResponse {
-    /// Revalidate current definition, eligibility, and input protection before
+    /// Revalidate current definition, eligibility, and execution/output authority before
     /// this attempt opens a transactional Kafka producer.
     KafkaPreOpen {
         /// Unique, one-use request identity.
@@ -178,15 +177,15 @@ pub enum ReplicaCommand {
         execution: u64,
         /// Sink being opened.
         id: GlobalId,
-        /// Maximum age since request start, or denial.
-        max_age: Option<Duration>,
+        /// Whether this attempt may open the producer.
+        allowed: bool,
     },
 }
 
 struct PendingPreOpen {
     execution: u64,
     id: GlobalId,
-    reply: tokio::sync::oneshot::Sender<Option<Duration>>,
+    reply: tokio::sync::oneshot::Sender<bool>,
 }
 
 struct PendingRequest(
@@ -209,29 +208,21 @@ pub(crate) struct KafkaPreOpen {
 }
 
 /// Consumed inside the blocking closure, immediately before the external call.
-/// The clock starts before requesting admission so queues never extend its age.
-/// This bounds the open decision, not the external call's duration. Kafka's
-/// transactional fencing still governs a call that is already in flight.
+/// Local retirement revokes approval. A delayed open can still fence a replacement
+/// if retirement has not reached this process, causing a transient restart.
 pub(crate) struct KafkaOpenApproval {
-    started: Instant,
-    max_age: Duration,
     current: Arc<AtomicBool>,
 }
 
 impl KafkaOpenApproval {
     pub fn check(self) -> anyhow::Result<()> {
         anyhow::ensure!(self.current.load(Ordering::SeqCst), "Kafka attempt retired");
-        anyhow::ensure!(
-            self.started.elapsed() < self.max_age,
-            "Kafka admission expired"
-        );
         Ok(())
     }
 }
 
 impl KafkaPreOpen {
     pub async fn request(self) -> anyhow::Result<KafkaOpenApproval> {
-        let started = Instant::now();
         anyhow::ensure!(self.current.load(Ordering::SeqCst), "Kafka attempt retired");
         let request = uuid::Uuid::new_v4();
         let (reply, response) = tokio::sync::oneshot::channel();
@@ -252,12 +243,8 @@ impl KafkaPreOpen {
                 id: self.id,
             },
         );
-        let max_age = response
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Kafka admission denied"))?;
+        anyhow::ensure!(response.await?, "Kafka admission denied");
         Ok(KafkaOpenApproval {
-            started,
-            max_age,
             current: self.current,
         })
     }
@@ -326,7 +313,7 @@ impl Executions {
         request: uuid::Uuid,
         execution: u64,
         id: GlobalId,
-        max_age: Option<Duration>,
+        allowed: bool,
     ) {
         let mut pending = self.preopens.borrow_mut();
         if pending
@@ -334,8 +321,8 @@ impl Executions {
             .is_some_and(|p| p.execution == execution && p.id == id)
         {
             let pending = pending.remove(&request).expect("checked request");
-            let max_age = max_age.filter(|_| self.current.get(&id) == Some(&execution));
-            let _ = pending.reply.send(max_age);
+            let allowed = allowed && self.current.get(&id) == Some(&execution);
+            let _ = pending.reply.send(allowed);
         }
     }
 

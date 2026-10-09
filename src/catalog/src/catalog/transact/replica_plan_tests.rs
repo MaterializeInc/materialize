@@ -980,6 +980,7 @@ async fn exercise_dry_run_contention() {
         None,
         vec![Op::CreateClientIncarnation {
             replica_id: Some(replica),
+            expected: None,
         }],
     )
     .await

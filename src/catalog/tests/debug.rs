@@ -373,19 +373,19 @@ async fn test_debug(state_builder: TestCatalogStateBuilder) {
 
 // These integration tests exercise the public mutation boundary with real persist CAS.
 // Concurrent tasks cover preservation of unrelated keys, but do not deterministically
-// pause between a CAS snapshot and append to force a heartbeat-refresh race.
+// pause between a CAS snapshot and append to force a client-publication race.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
 async fn test_persist_debug_live_mutations() {
-    for heartbeat in [false, true] {
+    for registered in [false, true] {
         for protected in [false, true] {
-            test_debug_live_mutations(heartbeat, protected).await;
+            test_debug_live_mutations(registered, protected).await;
         }
     }
 }
 
-async fn test_debug_live_mutations(heartbeat: bool, protected: bool) {
-    tracing::info!(heartbeat, protected, "testing debug mutation safety");
+async fn test_debug_live_mutations(registered: bool, protected: bool) {
+    tracing::info!(registered, protected, "testing debug mutation safety");
     let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
         .with_default_deploy_generation();
     let mut state = builder
@@ -408,13 +408,10 @@ async fn test_debug_live_mutations(heartbeat: bool, protected: bool) {
         txn.set_config("catalog_read_protection_enabled".into(), Some(1))
             .unwrap();
     }
-    if heartbeat {
+    if registered {
         let id = txn.create_client_incarnation(None).unwrap();
-        assert_eq!(
-            txn.publish_client_read_requirements(id, Default::default())
-                .unwrap(),
-            1
-        );
+        txn.publish_client_read_requirements(id, Default::default())
+            .unwrap();
     }
     // The open timestamp is not the publication timestamp. Publish at wall-clock
     // time so the advisory check observes genuinely recent durable activity.
@@ -457,8 +454,8 @@ async fn test_debug_live_mutations(heartbeat: bool, protected: bool) {
         let message = err.to_string();
         assert!(message.contains("--force"), "{message}");
         assert!(
-            message.contains(if heartbeat {
-                "heartbeat"
+            message.contains(if registered {
+                "client incarnation"
             } else {
                 "catalog publication"
             }),
@@ -576,7 +573,7 @@ async fn test_debug_live_mutations(heartbeat: bool, protected: bool) {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
-async fn test_persist_debug_unreclaimed_heartbeat_requires_force() {
+async fn test_persist_debug_registered_execution_requires_force() {
     let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
         .with_default_deploy_generation();
     let mut state = builder
@@ -609,14 +606,14 @@ async fn test_persist_debug_unreclaimed_heartbeat_requires_force() {
         key: "offline-edit".into(),
     };
     let value = proto::ConfigValue { value: 42 };
-    // A catalog timestamp is not a heartbeat lease expiry. Even this stopped
-    // writer remains ambiguous to an administrator until reclamation or force.
+    // Silence does not retire an execution. Even this stopped writer requires
+    // explicit retirement or force before an administrator can mutate its catalog.
     let refusal = debug
         .edit::<ConfigCollection>(key.clone(), value.clone(), false)
         .await
         .unwrap_err()
         .to_string();
-    assert!(refusal.contains("registered heartbeat"), "{refusal}");
+    assert!(refusal.contains("client incarnation"), "{refusal}");
     assert!(refusal.contains("--force"), "{refusal}");
     assert_none!(
         debug

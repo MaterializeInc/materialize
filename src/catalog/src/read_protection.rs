@@ -12,45 +12,12 @@
 pub mod publication;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
 
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_types::read_holds::{ChangeTx, ReadHold};
 use timely::progress::Antichain;
 use timely::progress::frontier::MutableAntichain;
-
-// Test fixtures may compress the timing, but every process sharing their catalog
-// must use the same value from startup. Managed process replicas inherit it from
-// environmentd. Never shorten grace while participants with longer renewal
-// intervals can remain live. This is not a production tuning setting.
-// Deriving grace from heartbeat preserves the writer's renewal safety margin.
-static CLIENT_PROTECTION_TIMING: LazyLock<(Duration, Duration)> = LazyLock::new(|| {
-    let heartbeat_ms = match std::env::var("MZ_TEST_CLIENT_PROTECTION_HEARTBEAT_MS") {
-        Ok(value) => value
-            .parse::<u64>()
-            .expect("test heartbeat must be milliseconds"),
-        Err(std::env::VarError::NotPresent) => 60_000,
-        Err(error) => panic!("invalid test heartbeat: {error}"),
-    };
-    assert!(heartbeat_ms > 0, "test heartbeat must be positive");
-    let grace_ms = heartbeat_ms.checked_mul(5).expect("test grace overflow");
-    (
-        Duration::from_millis(heartbeat_ms),
-        Duration::from_millis(grace_ms),
-    )
-});
-
-/// Renewal interval when no requirements need publication. Defaults to 60 seconds.
-/// Isolated fixtures may override it with `MZ_TEST_CLIENT_PROTECTION_HEARTBEAT_MS`.
-pub fn client_protection_heartbeat_interval() -> Duration {
-    CLIENT_PROTECTION_TIMING.0
-}
-
-/// Local unchanged-heartbeat grace before closure. Defaults to 300 seconds.
-pub fn client_protection_unchanged_grace() -> Duration {
-    CLIENT_PROTECTION_TIMING.1
-}
 
 /// New read holds cannot be acquired because this client has been closed.
 #[derive(Debug, thiserror::Error)]
@@ -65,6 +32,14 @@ pub struct ClientReadProtection {
     state: Arc<Mutex<State>>,
 }
 
+/// Retains transferred history until successor reconstruction establishes its
+/// own requirements. These flat holds cannot be merged with ordinary index holds,
+/// whose accounting also expands through logical dependencies.
+#[derive(Clone, Debug)]
+pub struct RecoveryReadHolds {
+    _holds: Vec<ReadHold>,
+}
+
 #[derive(Debug, Default)]
 struct State {
     committed: BTreeMap<GlobalId, Timestamp>,
@@ -77,15 +52,23 @@ struct State {
 }
 
 impl State {
+    fn update_direct(
+        active: &mut BTreeMap<GlobalId, MutableAntichain<Timestamp>>,
+        id: GlobalId,
+        changes: &[(Timestamp, i64)],
+    ) {
+        let frontier = active.entry(id).or_default();
+        frontier.update_iter(changes.iter().copied());
+        if frontier.frontier().is_empty() {
+            active.remove(&id);
+        }
+    }
+
     fn update(&mut self, id: GlobalId, changes: &[(Timestamp, i64)]) {
         for id in
             std::iter::once(id).chain(self.dependencies.get(&id).into_iter().flatten().copied())
         {
-            let active = self.active.entry(id).or_default();
-            active.update_iter(changes.iter().copied());
-            if active.frontier().is_empty() {
-                self.active.remove(&id);
-            }
+            Self::update_direct(&mut self.active, id, changes);
         }
     }
 
@@ -120,6 +103,42 @@ impl ClientReadProtection {
             incarnation,
             state: Arc::new(Mutex::new(State::default())),
         }
+    }
+
+    /// Adopt requirements transferred by a committed execution replacement.
+    ///
+    /// The returned holds retain that history until successor reconstruction has
+    /// acquired its own protection. They are not query-admission tokens: index
+    /// acquisition must still register and validate its logical inputs.
+    pub fn from_committed(
+        incarnation: u64,
+        requirements: BTreeMap<GlobalId, Timestamp>,
+    ) -> (Self, RecoveryReadHolds) {
+        let protection = Self::new(incarnation);
+        let local = Arc::clone(&protection.state);
+        // The transferred map already includes independent logical-leaf grants.
+        // Expanding these callbacks through subsequently registered dependencies
+        // would subtract leaf counts that these recovery holds never installed.
+        let change_tx: ChangeTx = Arc::new(move |id, mut changes| {
+            let mut state = local.lock().expect("read protection mutex poisoned");
+            State::update_direct(&mut state.active, id, &changes.drain().collect::<Vec<_>>());
+            Ok(())
+        });
+        let holds = {
+            let mut state = protection
+                .state
+                .lock()
+                .expect("read protection mutex poisoned");
+            state.committed = requirements.clone();
+            requirements
+                .into_iter()
+                .map(|(id, time)| {
+                    State::update_direct(&mut state.active, id, &[(time, 1)]);
+                    ReadHold::new(id, Antichain::from_elem(time), Arc::clone(&change_tx))
+                })
+                .collect()
+        };
+        (protection, RecoveryReadHolds { _holds: holds })
     }
 
     /// Return the durable client incarnation whose grants back these tokens.
@@ -310,18 +329,14 @@ impl ClientReadProtection {
         requirements
     }
 
-    /// Prepare changed aggregate requirements, or an idle heartbeat renewal.
-    /// Called on the coalesced publication cadence. An unchanged aggregate needs
-    /// no write until renewal is due. The snapshot installs the same acquisition
-    /// barrier as an explicit grant expansion.
-    pub fn prepare_publication_if_needed(
-        &self,
-        elapsed: Duration,
-    ) -> Option<BTreeMap<GlobalId, Timestamp>> {
+    /// Prepare changed aggregate requirements at the coalesced publication cadence.
+    /// Unchanged protection needs no write. The snapshot installs the same
+    /// acquisition barrier as an explicit grant expansion.
+    pub fn prepare_publication_if_needed(&self) -> Option<BTreeMap<GlobalId, Timestamp>> {
         let mut state = self.state.lock().expect("read protection mutex poisoned");
         assert!(state.pending.is_none(), "publication already pending");
         let requirements = state.aggregate(BTreeMap::new());
-        if requirements == state.committed && elapsed < client_protection_heartbeat_interval() {
+        if requirements == state.committed {
             return None;
         }
         state.pending = Some(requirements.clone());
@@ -368,35 +383,40 @@ impl ClientReadProtection {
     }
 }
 
-/// Process-local unchanged-heartbeat observations. Restarting this observer
-/// starts a full grace window, regardless of the persisted heartbeat value.
-#[derive(Debug, Default)]
-pub struct ClientProtectionReclaimer {
-    observations: BTreeMap<u64, (u64, Instant)>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl ClientProtectionReclaimer {
-    /// Observe a complete snapshot of open incarnations and their heartbeats.
-    /// Each ID appears once. Returned candidates must be closed by a durable CAS
-    /// against the returned heartbeat, not by trusting this observation alone.
-    pub fn observe(
-        &mut self,
-        clients: impl IntoIterator<Item = (u64, u64)>,
-        now: Instant,
-    ) -> Vec<(u64, u64)> {
-        let mut present = BTreeSet::new();
-        let mut candidates = Vec::new();
-        for (id, heartbeat) in clients {
-            present.insert(id);
-            let observation = self.observations.entry(id).or_insert((heartbeat, now));
-            if observation.0 != heartbeat {
-                *observation = (heartbeat, now);
-            }
-            if now.saturating_duration_since(observation.1) >= client_protection_unchanged_grace() {
-                candidates.push((id, heartbeat));
-            }
-        }
-        self.observations.retain(|id, _| present.contains(id));
-        candidates
+    #[mz_ore::test]
+    fn reconstruction_holds_preserve_and_release_transferred_grants() {
+        let index = GlobalId::User(1);
+        let leaf = GlobalId::User(2);
+        let inherited = BTreeMap::from([(index, 10.into()), (leaf, 10.into())]);
+        let (protection, recovery) = ClientReadProtection::from_committed(2, inherited.clone());
+        assert_eq!(protection.prepare_publication(BTreeMap::new()), inherited);
+        protection.finish_publication(true);
+
+        let successor = protection
+            .try_acquire(
+                &BTreeSet::new(),
+                &BTreeSet::from([index]),
+                &BTreeMap::from([(index, 20.into())]),
+                &BTreeMap::from([(index, BTreeSet::from([leaf]))]),
+            )
+            .expect("successor is open")
+            .expect("transferred grants cover the reconstructed index");
+        let recovery_clone = recovery.clone();
+        drop(recovery);
+        assert_eq!(protection.prepare_publication(BTreeMap::new()), inherited,);
+        protection.finish_publication(true);
+        drop(recovery_clone);
+        assert_eq!(
+            protection.prepare_publication(BTreeMap::new()),
+            BTreeMap::from([(index, 20.into()), (leaf, 20.into())]),
+        );
+        protection.finish_publication(true);
+        drop(successor);
+        assert!(protection.prepare_publication(BTreeMap::new()).is_empty());
+        protection.finish_publication(true);
     }
 }

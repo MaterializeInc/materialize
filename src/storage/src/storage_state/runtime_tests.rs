@@ -79,7 +79,6 @@ fn native_kafka_pre_open_is_attempt_scoped_and_one_use() {
             .unwrap();
         commands.send(Storage(1, run.clone())).unwrap();
         until(&mut worker, &mut responses, |r| input(r, 1, false));
-        let budget = Some(Duration::from_secs(60));
 
         // A denial consumes the response. A duplicate approval cannot reverse it.
         let (request, future) = pre_open_request(&mut worker, &mut responses, id, 1);
@@ -88,7 +87,7 @@ fn native_kafka_pre_open_is_attempt_scoped_and_one_use() {
                 request,
                 execution: 1,
                 id,
-                max_age: None,
+                allowed: false,
             })
             .unwrap();
         commands
@@ -96,27 +95,10 @@ fn native_kafka_pre_open_is_attempt_scoped_and_one_use() {
                 request,
                 execution: 1,
                 id,
-                max_age: budget,
+                allowed: true,
             })
             .unwrap();
         assert!(resolve_pre_open(&mut worker, future).is_err());
-
-        // Age is checked at external-call time, not while delivering the reply.
-        let (request, future) = pre_open_request(&mut worker, &mut responses, id, 1);
-        commands
-            .send(KafkaPreOpenReply {
-                request,
-                execution: 1,
-                id,
-                max_age: Some(Duration::ZERO),
-            })
-            .unwrap();
-        assert!(
-            resolve_pre_open(&mut worker, future)
-                .unwrap()
-                .check()
-                .is_err()
-        );
 
         let (old_request, old_future) = pre_open_request(&mut worker, &mut responses, id, 1);
         commands.send(Storage(2, run)).unwrap();
@@ -129,7 +111,7 @@ fn native_kafka_pre_open_is_attempt_scoped_and_one_use() {
                 request: old_request,
                 execution: 1,
                 id,
-                max_age: budget,
+                allowed: true,
             })
             .unwrap();
         // Even the right request UUID cannot authorize the wrong execution.
@@ -138,7 +120,7 @@ fn native_kafka_pre_open_is_attempt_scoped_and_one_use() {
                 request,
                 execution: 1,
                 id,
-                max_age: budget,
+                allowed: true,
             })
             .unwrap();
         // An ordered marker proves both stale replies have reached the worker.
@@ -162,7 +144,7 @@ fn native_kafka_pre_open_is_attempt_scoped_and_one_use() {
                 request,
                 execution: 2,
                 id,
-                max_age: budget,
+                allowed: true,
             })
             .unwrap();
         resolve_pre_open(&mut worker, future)
@@ -177,7 +159,7 @@ fn native_kafka_pre_open_is_attempt_scoped_and_one_use() {
                 request,
                 execution: 2,
                 id,
-                max_age: budget,
+                allowed: true,
             })
             .unwrap();
         let approval = resolve_pre_open(&mut worker, future).unwrap();
@@ -193,7 +175,7 @@ fn native_kafka_pre_open_is_attempt_scoped_and_one_use() {
                 request,
                 execution: 2,
                 id,
-                max_age: budget,
+                allowed: true,
             })
             .unwrap();
         until(&mut worker, &mut responses, |r| input(r, 2, true));

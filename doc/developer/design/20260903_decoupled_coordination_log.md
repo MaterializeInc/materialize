@@ -17,18 +17,24 @@ archival tags. Preserve designer commits and useful implementation boundaries
 when folding our remaining fixups. Detailed verification belongs in the
 [PR status](https://github.com/MaterializeInc/materialize/pull/38696).
 
-Implement [realization-owned protection](20260903_decoupled_coordination.md#client-read-protection)
+Finish [realization-owned protection](20260903_decoupled_coordination.md#client-read-protection)
 and [Kafka placement](20260903_decoupled_coordination.md#kafka-placement-and-recovery).
-Replace timed client reclamation with explicit execution succession, realization
-removal and deployment retirement. A silent owner retains its holds. Superseded
-executions cannot publish protection again. Preserve the warmed deployment's holds at
-promotion, with one deployment-owned adapter realization sufficient for M2.
-Remove heartbeat-based Kafka election and approval expiry, retaining current
-authority checks and Kafka's fencing/progress/version protocol. Adapt existing
-expiry-dependent fixtures to the changed contract, not a new acceptance campaign.
-Retire obsolete renewal/reclaimer code, tests and corresponding adapter-guide
-advice with the implementation. The archived five-minute takeover decision is not
-current steering.
+Execution replacement transfers committed grants into opaque recovery holds until
+the successor establishes its own protection. DROP/scale-down retire only affected
+realizations. Promotion retires older deployments' protection in its authority CAS,
+preserving warmed executions. Kafka uses deployment-local placement and fresh,
+untimed producer admission. Keep the existing retention, restart and outage fixtures
+tied to explicit lifecycle actions, including silence retaining protection.
+
+Cancelled prewarming still needs an orchestrator entrypoint and durable exclusion
+from readmission. The pending question is whether to add an internal retirement
+endpoint on the serving deployment. Removing a member without preventing its rejoin
+is insufficient. Do not add a process registry or timed cleanup.
+
+Regenerate the unreleased catalog serialization fixture with its canonical generator
+and remove the temporary artifact-generation hook once the fixture is checked in.
+Keep earlier branch-built catalog conversion outside scope. Verify the combined
+lifecycle path in the existing workflows before claiming the slice complete.
 
 Continue the parallel-workload repairs. Repeated catalog conflicts amplify
 client read-protection publication and ordinary DDL into long coordinator-owned

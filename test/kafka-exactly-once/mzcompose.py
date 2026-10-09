@@ -13,7 +13,6 @@ duplicates, even after restarting Materialize.
 """
 
 import json
-import time
 
 import requests
 from psycopg import sql
@@ -93,30 +92,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
 
     before = snapshot()
-    predecessors = {
-        incarnation
-        for incarnation, value in before["client_incarnations"].items()
-        if value["replica_id"] is not None
-    }
     evidence("before-restart", before)
     c.kill("materialized")
     c.up("materialized")
-    if predecessors:
-        # All managed replica processes were killed with this container. Native
-        # Kafka admission still respects their ordinary abandonment grace.
-        deadline = time.monotonic() + 420
-        next_report = 0.0
-        while True:
-            current = snapshot()
-            remaining = predecessors.intersection(current["client_incarnations"])
-            if time.monotonic() >= next_report or not remaining:
-                evidence("awaiting-native-takeover", current)
-                next_report = time.monotonic() + 30
-            if not remaining:
-                break
-            if time.monotonic() >= deadline:
-                raise AssertionError(f"Native predecessors not reclaimed: {remaining}")
-            time.sleep(1)
     c.run_testdrive_files(
         f"--seed={args.seed}",
         "--no-reset",

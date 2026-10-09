@@ -10,7 +10,6 @@
 //! Publishes durable recovery requirements and compaction permission together.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -98,35 +97,6 @@ pub(super) fn is_read_protection_conflict(error: &AdapterError) -> bool {
         ))
 }
 
-/// Both timers publish the same client's protection. Neither may consume the
-/// other's backoff, or attempts slower than the delay can alternate forever
-/// ahead of queued messages in the coordinator's biased select.
-pub(super) fn defer_protection_retry(
-    retry: Pin<&mut tokio::time::Sleep>,
-    mut sibling: Pin<&mut tokio::time::Sleep>,
-    delay: Duration,
-) {
-    let deadline = tokio::time::Instant::now() + delay;
-    retry.reset(deadline);
-    let sibling_deadline = sibling.deadline();
-    sibling.as_mut().reset(sibling_deadline.max(deadline));
-}
-
-/// Clip to the next renewal threshold, but never spin on an expired deadline.
-/// Delaying an attempt does not extend the incarnation's protection validity.
-fn limit_conflict_delay(delay: Duration, age: Duration) -> Duration {
-    let heartbeat = mz_catalog::read_protection::client_protection_heartbeat_interval();
-    let safety = mz_catalog::read_protection::client_protection_unchanged_grace() - heartbeat;
-    let remaining = if age < heartbeat {
-        heartbeat - age
-    } else if age < safety {
-        safety - age
-    } else {
-        delay
-    };
-    delay.min(remaining)
-}
-
 pub(super) enum AdmissionTimelineSource<'a> {
     /// An explicitly selected window, including reconstruction of existing indexes.
     Catalog(&'a CatalogState),
@@ -188,7 +158,6 @@ impl AdmissionTimelinePublication {
         } else {
             self.client.protection.finish_publication(true);
         }
-        self.client.published();
         // Adopt every grant synchronously. Another publication aggregates active
         // tokens and could otherwise release an acknowledged but unused grant.
         self.client
@@ -314,14 +283,7 @@ impl Coordinator {
     }
 
     pub(super) fn read_protection_conflict_delay(&self) -> Duration {
-        let delay = mz_catalog::retry::sample_duration(
-            Duration::from_millis(10),
-            Duration::from_millis(100),
-        );
-        match &self.query_client {
-            Some(client) => limit_conflict_delay(delay, client.last_publication().elapsed()),
-            None => delay,
-        }
+        mz_catalog::retry::sample_duration(Duration::from_millis(10), Duration::from_millis(100))
     }
 
     /// Prepares client protection for index and MV outputs. Creation supplies an
@@ -475,7 +437,7 @@ impl Coordinator {
         self.transact_client_protection_inner(op, false).await
     }
 
-    async fn sync_client_protection_catalog(&mut self) -> Result<(), AdapterError> {
+    pub(super) async fn sync_client_protection_catalog(&mut self) -> Result<(), AdapterError> {
         let catalog = self
             .client_protection_catalog
             .as_mut()
@@ -487,15 +449,44 @@ impl Coordinator {
                     mz_catalog::durable::DurableCatalogError::Fence(_)
                 )
             ) {
-                // A cached incarnation is not evidence that this writer can
-                // still renew protection or issue protected grants.
-                if let Some(client) = &self.query_client {
-                    client.protection.mark_closed();
-                }
+                mz_ore::halt!("adapter deployment was fenced: {error}");
             }
             return Err(error.into());
         }
+        self.validate_query_client_execution();
         Ok(())
+    }
+
+    /// Only the live protection catalog can establish execution retirement.
+    /// A SQL prewarming snapshot may predate this execution's registration.
+    pub(super) fn validate_query_client_execution(&self) {
+        if let Some(client) = &self.query_client {
+            self.validate_client_execution(client);
+        }
+    }
+
+    fn validate_client_execution(&self, client: &QueryClient) {
+        if !self
+            .client_read_catalog()
+            .state()
+            .client_incarnations()
+            .contains_key(&client.protection.incarnation())
+        {
+            mz_ore::halt!("adapter execution was superseded or retired");
+        }
+    }
+
+    /// Capture once before entering the registration transaction's retry loop.
+    pub(super) fn adapter_execution_predecessor(catalog: &Catalog) -> Option<u64> {
+        let state = catalog.state();
+        state
+            .client_incarnations()
+            .iter()
+            .find_map(|(&id, execution)| {
+                (execution.deployment_generation == state.deployment_generation()
+                    && execution.replica_id.is_none())
+                .then_some(id)
+            })
     }
 
     /// Timer owners request one attempt and rebuild the aggregate after yielding.
@@ -507,9 +498,7 @@ impl Coordinator {
     ) -> Result<Vec<u64>, AdapterError> {
         assert!(matches!(
             &op,
-            Op::CreateClientIncarnation { .. }
-                | Op::RenewClientIncarnation { .. }
-                | Op::PublishClientReadRequirements { .. }
+            Op::CreateClientIncarnation { .. } | Op::PublishClientReadRequirements { .. }
         ));
         if self.client_protection_catalog.is_none() {
             if once {
@@ -557,8 +546,9 @@ impl Coordinator {
 
     /// Builds a client for an existing incarnation without activating runtime routing.
     pub(super) async fn build_query_client(
-        &self,
+        &mut self,
         incarnation: u64,
+        requirements: BTreeMap<GlobalId, Timestamp>,
     ) -> Result<Arc<QueryClient>, AdapterError> {
         use crate::peek_client::CoordinatorClient;
         use crate::query_client::connections::{
@@ -578,8 +568,15 @@ impl Coordinator {
             },
         ));
         connections.sync_catalog(self.catalog());
+        let (protection, recovery) =
+            crate::query_client::read_protection::ClientReadProtection::from_committed(
+                incarnation,
+                requirements,
+            );
+        assert!(self.recovery_read_holds.is_none());
+        self.recovery_read_holds = Some(recovery);
         Ok(Arc::new(QueryClient::new(
-            incarnation,
+            protection,
             CoordinatorClient::Background {
                 tx: self.internal_cmd_tx.clone(),
                 metrics: self.metrics.clone(),
@@ -602,26 +599,34 @@ impl Coordinator {
         }
         let client = match prepared {
             Some(client) => {
-                // Bootstrap may outlive an incarnation's reclamation grace.
-                // Renew through the catalog before exposing its cached grants.
-                let requirements = client.protection.prepare_publication(BTreeMap::new());
-                let result = self
-                    .transact_client_protection(Op::PublishClientReadRequirements {
-                        incarnation: client.protection.incarnation(),
-                        requirements,
-                    })
-                    .await;
-                client.protection.finish_publication(result.is_ok());
-                result?;
-                client.published();
+                // Serving adopts the bootstrap execution, never replaces it.
+                if self.client_protection_catalog.is_some() {
+                    self.sync_client_protection_catalog().await?;
+                } else {
+                    self.refresh_catalog(None).await?;
+                }
+                self.validate_client_execution(&client);
                 client
             }
             None => {
+                let expected = Self::adapter_execution_predecessor(self.client_read_catalog());
                 let incarnation = self
-                    .transact_client_protection(Op::CreateClientIncarnation { replica_id: None })
+                    .transact_client_protection(Op::CreateClientIncarnation {
+                        replica_id: None,
+                        expected,
+                    })
                     .await?
                     .into_element();
-                self.build_query_client(incarnation).await?
+                let requirements = self
+                    .client_read_catalog()
+                    .state()
+                    .client_read_requirements()
+                    .iter()
+                    .filter_map(|(&(owner, id), &frontier)| {
+                        (owner == incarnation).then_some((id, frontier))
+                    })
+                    .collect();
+                self.build_query_client(incarnation, requirements).await?
             }
         };
         self.query_client = Some(client);
@@ -776,6 +781,24 @@ impl Coordinator {
                 state.pending_read_holds.extend(&ids);
             }
         }
+        // Bootstrap has reconstructed its plans before activating this client.
+        // Volatile logs have no durable reconstruction window and may remain
+        // pending on a zero-replica cluster. Completed collections need no window.
+        // All finite durable windows must be acquired first.
+        if first_error.is_none()
+            && self.global_timelines.values().all(|state| {
+                state.pending_read_holds.iter().all(|id| {
+                    !self
+                        .client_read_catalog()
+                        .state()
+                        .collection_compaction_bounds()
+                        .get(&id)
+                        .is_some_and(|bound| !bound.is_empty())
+                })
+            })
+        {
+            self.recovery_read_holds.take();
+        }
         match first_error {
             Some(error) => Err(error),
             None => Ok(()),
@@ -806,7 +829,7 @@ impl Coordinator {
 
     /// Protects actual bootstrap plan imports without activating runtime routing.
     /// Keep the returned holds through selection commit, and publish the client's
-    /// aggregate in that commit to reject an incarnation reclaimed in the meantime.
+    /// aggregate in that commit to reject an execution superseded in the meantime.
     /// A requested timestamp must still be validated against the returned holds.
     pub(super) async fn acquire_bootstrap_read_protection(
         &mut self,
@@ -838,11 +861,7 @@ impl Coordinator {
             .client_incarnations()
             .contains_key(&incarnation)
         {
-            client.protection.mark_closed();
-            return Err(AdapterError::internal(
-                "query read protection",
-                "incarnation is closed",
-            ));
+            mz_ore::halt!("adapter execution was superseded or retired");
         }
         let mut prepared = client
             .prepare_read(publication.catalog(self), &bundle, timestamp)
@@ -888,11 +907,7 @@ impl Coordinator {
             .client_incarnations()
             .contains_key(&incarnation)
         {
-            client.protection.mark_closed();
-            return Err(AdapterError::internal(
-                "query read protection",
-                "incarnation is closed",
-            ));
+            mz_ore::halt!("adapter execution was superseded or retired");
         }
         if let Some(holds) = client
             .protection
@@ -932,10 +947,9 @@ impl Coordinator {
             .client_incarnations()
             .contains_key(&incarnation)
         {
-            client.protection.mark_closed();
+            mz_ore::halt!("adapter execution was superseded or retired");
         }
         result?;
-        client.published();
         client
             .protection
             .try_acquire(
@@ -949,37 +963,12 @@ impl Coordinator {
             })
     }
 
-    /// Renews existing grants without preparing or acknowledging aggregate changes.
-    pub(super) async fn renew_client_read_protection(&mut self) -> Result<(), AdapterError> {
-        let Some(client) = self.query_client.clone() else {
-            return Ok(());
-        };
-        let incarnation = client.protection.incarnation();
-        let result = self
-            .transact_client_protection_inner(Op::RenewClientIncarnation { incarnation }, true)
-            .await;
-        if !self
-            .client_read_catalog()
-            .state()
-            .client_incarnations()
-            .contains_key(&incarnation)
-        {
-            client.protection.mark_closed();
-        }
-        result?;
-        client.published();
-        Ok(())
-    }
-
-    /// Attempts one publication of the client aggregate and heartbeat.
+    /// Attempts one publication of the changed client aggregate.
     pub(super) async fn publish_client_read_protection(&mut self) -> Result<(), AdapterError> {
         let Some(client) = self.query_client.clone() else {
             return Ok(());
         };
-        let Some(requirements) = client
-            .protection
-            .prepare_publication_if_needed(client.last_publication().elapsed())
-        else {
+        let Some(requirements) = client.protection.prepare_publication_if_needed() else {
             return Ok(());
         };
         let incarnation = client.protection.incarnation();
@@ -1001,41 +990,9 @@ impl Coordinator {
             .client_incarnations()
             .contains_key(&incarnation)
         {
-            client.protection.mark_closed();
+            mz_ore::halt!("adapter execution was superseded or retired");
         }
         result?;
-        client.published();
-        Ok(())
-    }
-
-    pub(super) async fn reclaim_client_read_protection(&mut self) -> Result<(), AdapterError> {
-        if self.controller.read_only() || !self.pending_compute_installations.is_empty() {
-            return Ok(());
-        }
-        let active: Vec<_> = self
-            .catalog()
-            .state()
-            .client_incarnations()
-            .iter()
-            .map(|(&id, value)| (id, value.heartbeat))
-            .collect();
-        let expired = self
-            .client_protection_reclaimer
-            .observe(active, Instant::now());
-        if !expired.is_empty() {
-            self.catalog_transact_once(
-                expired
-                    .into_iter()
-                    .map(
-                        |(incarnation, expected_heartbeat)| Op::ReclaimClientIncarnation {
-                            incarnation,
-                            expected_heartbeat,
-                        },
-                    )
-                    .collect(),
-            )
-            .await?;
-        }
         Ok(())
     }
 
@@ -1251,49 +1208,6 @@ mod tests {
             .await
             .expect("closing the reply must cancel the wait");
         assert!(incoming.try_recv().is_err(), "canceled retry was enqueued");
-    }
-
-    #[mz_ore::test(tokio::test)]
-    async fn overlapping_protection_retries_leave_queued_work_ready() {
-        for heartbeat_first in [false, true] {
-            let due = tokio::time::Instant::now() - Duration::from_secs(1);
-            let heartbeat = tokio::time::sleep_until(due);
-            let publication = tokio::time::sleep_until(due);
-            tokio::pin!(heartbeat, publication);
-            // An attempt outlived both timers. Exercise either owner returning a
-            // conflict before polling the same maintenance-first select ordering.
-            let (retry, sibling) = if heartbeat_first {
-                (heartbeat.as_mut(), publication.as_mut())
-            } else {
-                (publication.as_mut(), heartbeat.as_mut())
-            };
-            defer_protection_retry(retry, sibling, Duration::from_secs(60));
-            tokio::select! {
-                biased;
-                _ = heartbeat.as_mut() => panic!("heartbeat bypassed backoff"),
-                _ = publication.as_mut() => panic!("publication bypassed backoff"),
-                _ = std::future::ready(()) => (),
-            }
-        }
-    }
-
-    #[mz_ore::test]
-    fn conflict_delay_respects_renewal_headroom_without_expired_deadline_spin() {
-        let heartbeat = mz_catalog::read_protection::client_protection_heartbeat_interval();
-        let safety = mz_catalog::read_protection::client_protection_unchanged_grace() - heartbeat;
-        let delay = Duration::from_millis(100).min(heartbeat / 2);
-        let epsilon = Duration::from_nanos(1);
-        for (age, expected) in [
-            (Duration::ZERO, delay),
-            (heartbeat - epsilon, epsilon),
-            (heartbeat, delay),
-            (heartbeat + epsilon, delay),
-            (safety - epsilon, epsilon),
-            (safety, delay),
-            (safety + epsilon, delay),
-        ] {
-            assert_eq!(limit_conflict_delay(delay, age), expected, "age={age:?}");
-        }
     }
 
     fn publication_candidates(

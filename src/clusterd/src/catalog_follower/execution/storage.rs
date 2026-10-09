@@ -350,7 +350,6 @@ impl ReplicaEnactment {
                     })
                     .collect(),
             };
-            self.ensure_recent_protection()?;
             let io = self.io.storage.as_mut().expect("storage endpoint");
             if let Some(old) = self.storage_state.ingestions.get(&id) {
                 self.storage_state.starting.remove(&old.execution);

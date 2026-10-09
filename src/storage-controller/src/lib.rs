@@ -3374,7 +3374,7 @@ where
     }
 
     /// Source placement follows the committed definition and current membership.
-    /// Sink writer eligibility is incarnation-based and is not inferred here.
+    /// Sink execution and output authority are checked by the replica.
     fn source_replicas(&self, id: GlobalId) -> BTreeSet<ReplicaId> {
         let Some(collection) = self.collections.get(&id) else {
             return BTreeSet::new();

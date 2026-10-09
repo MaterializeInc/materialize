@@ -11,7 +11,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use mz_cluster::client::{ClusterClient, ClusterSpec, TimelyContainer};
 use mz_cluster_client::client::TimelyConfig;
@@ -138,27 +137,25 @@ impl ReplicaStorage {
         sequence
     }
 
-    /// Replies once to an attempt-scoped Kafka pre-open request. `None` denies.
-    /// The follower must recheck definition, eligibility and input protection.
-    /// `max_age` must not exceed unchanged protection grace minus heartbeat margin
-    /// and any age already consumed by the protection proof. It is measured from
-    /// the worker's request start, including response and blocking-pool delays.
+    /// Replies once to an attempt-scoped Kafka pre-open request. `false` denies.
+    /// The follower must freshly check definition, eligibility, execution and output
+    /// authority. Durable input protection belongs to the admitted execution.
     pub fn reply_kafka_pre_open(
         &mut self,
         request: uuid::Uuid,
         execution: u64,
         id: GlobalId,
-        max_age: Option<Duration>,
+        allowed: bool,
     ) {
-        let max_age = max_age.filter(|_| {
-            self.current.get(&id) == Some(&execution) && !self.restarts.contains(&execution)
-        });
+        let allowed = allowed
+            && self.current.get(&id) == Some(&execution)
+            && !self.restarts.contains(&execution);
         self.commands
             .send(ReplicaCommand::KafkaPreOpenReply {
                 request,
                 execution,
                 id,
-                max_age,
+                allowed,
             })
             .expect("replica storage ingress lost");
         self.worker.unpark();

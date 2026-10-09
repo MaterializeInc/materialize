@@ -420,7 +420,7 @@ impl TransactionalProducer {
         let timeout = timeout_config.socket_timeout;
         if let Some(pre_open) = pre_open {
             // Secrets and producer setup may block arbitrarily. Ask only after
-            // they finish, and include blocking-pool queue time in approval age.
+            // they finish, then check local retirement immediately before opening.
             let approval = pre_open.request().await?;
             let p = producer.producer.clone();
             task::spawn_blocking(

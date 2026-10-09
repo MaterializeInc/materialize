@@ -326,9 +326,7 @@ impl Coordinator {
         assert!(ops.iter().all(|op| matches!(
             op,
             Op::CreateClientIncarnation { .. }
-                | Op::RenewClientIncarnation { .. }
                 | Op::PublishClientReadRequirements { .. }
-                | Op::ReclaimClientIncarnation { .. }
                 | Op::SetReadProtection { .. }
         )));
         let start = Instant::now();
@@ -685,20 +683,29 @@ impl Coordinator {
         &mut self,
         upper: Option<mz_repr::Timestamp>,
     ) -> Result<(), AdapterError> {
-        let (builtin, updates) = trace_catalog_await!(
+        let result = trace_catalog_await!(
             "catalog_refresh_sync",
             match upper {
                 Some(upper) => self.catalog_mut().sync_updates_through(upper).await,
                 None => self.catalog_mut().sync_to_current_updates().await,
             }
-        )?;
+        );
+        let (builtin, updates) = match result {
+            Err(mz_catalog::durable::CatalogError::Durable(
+                mz_catalog::durable::DurableCatalogError::Fence(error),
+            )) => mz_ore::halt!("adapter deployment was fenced: {error}"),
+            result => result?,
+        };
+        if self.client_protection_catalog.is_none() {
+            self.validate_query_client_execution();
+        }
         let builtin = self
             .catalog()
             .state()
             .resolve_builtin_table_updates(builtin);
         // Metadata-only catch-up has no table writes to order. Waiting for an
         // empty group commit can let peer publications win every catalog retry,
-        // starving this coordinator's heartbeat when table writes are delayed.
+        // delaying protection acquisition when table writes are delayed.
         let notify = (!builtin.is_empty()).then(|| self.builtin_table_update().execute(builtin));
         match trace_catalog_await!(
             "catalog_refresh_implications",
@@ -745,9 +752,7 @@ impl Coordinator {
             matches!(
                 op,
                 catalog::Op::CreateClientIncarnation { .. }
-                    | catalog::Op::RenewClientIncarnation { .. }
                     | catalog::Op::PublishClientReadRequirements { .. }
-                    | catalog::Op::ReclaimClientIncarnation { .. }
             )
         });
         loop {
@@ -1217,15 +1222,6 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         mut ops: Vec<catalog::Op>,
     ) -> Result<CatalogTransactionState, AdapterError> {
-        // A failed CAS can reveal a creation that cannot install yet. Check
-        // on every attempt, after foreign implications as well as initially.
-        if !self.pending_compute_installations.is_empty()
-            && ops
-                .iter()
-                .any(|op| matches!(op, Op::ReclaimClientIncarnation { .. }))
-        {
-            return Err(AdapterError::DDLTransactionRace);
-        }
         let internal_metadata = conn_id.is_none()
             && self.controller.replica_owned_compute()
             && ops.iter().all(catalog::Op::is_deployment_metadata);
@@ -1369,18 +1365,7 @@ impl Coordinator {
             if client.protection.incarnation() != incarnation {
                 return Err(AdapterError::CatalogSnapshotChanged);
             }
-            if !self
-                .catalog()
-                .state()
-                .client_incarnations()
-                .contains_key(&incarnation)
-            {
-                client.protection.mark_closed();
-                return Err(AdapterError::internal(
-                    "catalog preparation",
-                    "client read protection incarnation is closed",
-                ));
-            }
+            self.validate_query_client_execution();
         }
         Ok(())
     }
@@ -1449,15 +1434,13 @@ impl Coordinator {
         retry_inline: bool,
     ) -> Result<CommittedCatalogTransaction, AdapterError> {
         // Client demand can be validated against a fresh prefix. Sampled bounds
-        // and reclamations instead need the owner to observe a conflict and resample.
+        // instead need the owner to observe a conflict and resample.
         let refresh_client_protection = !retry_inline
             && !ops.is_empty()
             && ops.iter().all(|op| {
                 matches!(
                     op,
-                    Op::CreateClientIncarnation { .. }
-                        | Op::RenewClientIncarnation { .. }
-                        | Op::PublishClientReadRequirements { .. }
+                    Op::CreateClientIncarnation { .. } | Op::PublishClientReadRequirements { .. }
                 )
             });
         let mut prepared = Box::pin(self.begin_catalog_transaction(conn_id, ops)).await?;
@@ -1511,18 +1494,7 @@ impl Coordinator {
             if client.protection.incarnation() != incarnation {
                 return Err(AdapterError::CatalogSnapshotChanged);
             }
-            if !self
-                .catalog()
-                .state()
-                .client_incarnations()
-                .contains_key(&incarnation)
-            {
-                client.protection.mark_closed();
-                return Err(AdapterError::internal(
-                    "prepared catalog transaction",
-                    "client read protection incarnation is closed",
-                ));
-            }
+            self.validate_query_client_execution();
         }
         Ok(())
     }
@@ -1739,22 +1711,7 @@ impl Coordinator {
                         // revalidates preparation and refreshes its oracle window.
                         break Err(error);
                     }
-                    if let Some(client) = &self.query_client
-                        && !self
-                            .catalog()
-                            .state()
-                            .client_incarnations()
-                            .contains_key(&client.protection.incarnation())
-                    {
-                        // Held tokens cannot outlive durable reclamation. A
-                        // further peer change is caught by transaction-open/CAS
-                        // validation before these prepared operations commit.
-                        client.protection.mark_closed();
-                        break Err(AdapterError::internal(
-                            "prepared catalog transaction",
-                            "client read protection incarnation is closed",
-                        ));
-                    }
+                    self.validate_query_client_execution();
                     if !retry_inline {
                         // The failed write is definitive and catch-up is complete.
                         // Return before allocating another candidate timestamp so
@@ -2483,10 +2440,8 @@ impl Coordinator {
                 | Op::SetReadProtection { .. }
                 | Op::SetWrittenPlan { .. }
                 | Op::CreateClientIncarnation { .. }
-                | Op::RenewClientIncarnation { .. }
                 | Op::PublishClientReadRequirements { .. }
                 | Op::PublishCreatorReadRequirements { .. }
-                | Op::ReclaimClientIncarnation { .. }
                 | Op::Comment { .. }
                 | Op::CheckClusterState { .. }
                 | Op::CheckClusterDeclarations { .. }

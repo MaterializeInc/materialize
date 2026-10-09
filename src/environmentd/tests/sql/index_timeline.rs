@@ -91,14 +91,8 @@ async fn creation_protects_timelines_before_installation() {
                         .any(|client| client.id == grant.incarnation && client.replica_id.is_none())
             })
             .expect("SQL creation must durably protect the index before installation");
-        let creator = snapshot
-            .client_incarnations
-            .iter()
-            .map(|(key, value)| ClientIncarnation::from_key_value(key.clone(), value.clone()))
-            .find(|client| client.id == grant.incarnation)
-            .unwrap();
-        let creator_id = creator.id;
-        let initial_heartbeat = creator.heartbeat;
+        let creator_id = grant.incarnation;
+        let initial_frontier = grant.frontier;
         let collections = [index, item_id("timeline_mv"), item_id("timeline_refresh")];
         for id in collections {
             let birth = updates
@@ -131,8 +125,7 @@ async fn creation_protects_timelines_before_installation() {
             }
         }
 
-        // Drive timeline advancement with a blind write rather than waiting for
-        // an unchanged client's periodic heartbeat.
+        // Drive timeline advancement without acquiring any query protection.
         batch_execute(&client, sql!("INSERT INTO timeline_input VALUES (1)"))
             .await
             .unwrap();
@@ -172,15 +165,16 @@ async fn creation_protects_timelines_before_installation() {
                 }),
                 "the creator must also protect the index's logical input"
             );
-            let creator = current
-                .client_incarnations
-                .into_iter()
-                .map(|(key, value)| ClientIncarnation::from_key_value(key, value))
-                .find(|client| client.id == creator_id)
-                .expect("the creator must remain live");
-            // Observe acknowledged client activity, including heartbeat-only
-            // renewal, rather than assuming a sleep caused publication.
-            if creator.heartbeat > initial_heartbeat {
+            assert!(
+                current
+                    .client_incarnations
+                    .into_iter()
+                    .map(|(key, value)| ClientIncarnation::from_key_value(key, value))
+                    .any(|client| client.id == creator_id),
+                "the creator must remain live"
+            );
+            // Wait for durable advancement, not merely catalog activity.
+            if grant.frontier > initial_frontier {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;

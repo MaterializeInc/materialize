@@ -19,10 +19,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_catalog::catalog::{Catalog, Op};
 use mz_catalog::memory::objects::CatalogItem;
 use mz_catalog::read_protection::publication::publication_candidates;
-use mz_catalog::read_protection::{
-    ClientProtectionReclaimer, ClientReadProtection, client_protection_heartbeat_interval,
-    client_protection_unchanged_grace,
-};
+use mz_catalog::read_protection::{ClientReadProtection, RecoveryReadHolds};
 use mz_compute::server::ReplicaCompute;
 use mz_compute_client::as_of_selection::{self, CapturedLiveInput};
 use mz_compute_client::protocol::command::{ComputeCommand, InstanceConfig};
@@ -84,21 +81,6 @@ pub(super) enum PublicationOutcome {
 
 pub(super) fn conflict_delay() -> Duration {
     mz_catalog::retry::sample_duration(Duration::from_millis(10), Duration::from_millis(100))
-}
-
-/// Never clamp to an expired deadline. Past the installation safety threshold,
-/// new use remains forbidden, but an open incarnation can still renew.
-fn limit_conflict_delay(delay: Duration, age: Duration) -> Duration {
-    let heartbeat = client_protection_heartbeat_interval();
-    let safety = client_protection_unchanged_grace() - heartbeat;
-    let remaining = if age < heartbeat {
-        heartbeat - age
-    } else if age < safety {
-        safety - age
-    } else {
-        delay
-    };
-    delay.min(remaining)
 }
 
 fn is_catalog_conflict(error: &anyhow::Error) -> bool {
@@ -289,18 +271,15 @@ pub(super) struct ReplicaEnactment {
     cluster: ClusterId,
     replica: ReplicaId,
     protection: ClientReadProtection,
+    recovery_holds: Option<RecoveryReadHolds>,
     local: LocalReadProtection,
     installed: BTreeMap<GlobalId, Installed>,
     pending_grants: BTreeMap<GlobalId, ReadHold>,
     pending_imports: BTreeMap<(GlobalId, uuid::Uuid), BTreeMap<GlobalId, ReadHold>>,
     storage_state: storage::StorageState,
-    reclaimer: ClientProtectionReclaimer,
-    // Renewal counts from before commit, advancement cadence from completion.
-    published_at: Instant,
     publication_clock: Option<PublicationClock>,
     // Notifications can wake the follower, but cannot bypass this write gate.
     publication_retry_after: Option<Instant>,
-    publication_retry_requirements: bool,
     publication_needs_refresh: bool,
     publication_seconds: mz_ore::metrics::Histogram,
 }
@@ -310,7 +289,7 @@ impl ReplicaEnactment {
         endpoint: ReplicaCompute,
         config: InstanceConfig,
         incarnation: u64,
-        publication_started: Instant,
+        requirements: BTreeMap<GlobalId, Timestamp>,
         cluster: ClusterId,
         replica: ReplicaId,
         registry: &MetricsRegistry,
@@ -335,21 +314,21 @@ impl ReplicaEnactment {
             catalog_catchup: Arc::new(tokio::sync::Notify::new()),
         };
         io.send(ComputeCommand::CreateInstance(Box::new(config)));
+        let (protection, recovery_holds) =
+            ClientReadProtection::from_committed(incarnation, requirements);
         let mut result = Self {
             io,
             cluster,
             replica,
-            protection: ClientReadProtection::new(incarnation),
+            protection,
+            recovery_holds: Some(recovery_holds),
             local: LocalReadProtection::default(),
             installed: BTreeMap::new(),
             pending_grants: BTreeMap::new(),
             pending_imports: BTreeMap::new(),
             storage_state: storage::StorageState::default(),
-            reclaimer: ClientProtectionReclaimer::default(),
-            published_at: publication_started,
             publication_clock: None,
             publication_retry_after: None,
-            publication_retry_requirements: false,
             publication_needs_refresh: false,
             publication_seconds: registry.register(mz_ore::metric! {
                 name: "mz_catalog_follower_publication_seconds",
@@ -404,7 +383,6 @@ impl ReplicaEnactment {
         requested: &BTreeMap<GlobalId, Timestamp>,
     ) -> anyhow::Result<BTreeMap<GlobalId, ReadHold>> {
         self.ensure_live(catalog)?;
-        self.ensure_recent_protection()?;
         let dependencies = compute
             .iter()
             .map(|id| {
@@ -445,7 +423,7 @@ impl ReplicaEnactment {
             {
                 Ok(()) => break,
                 Err(error) if is_catalog_conflict(&error) => {
-                    let delay = limit_conflict_delay(conflict_delay(), self.published_at.elapsed());
+                    let delay = conflict_delay();
                     self.io.wait(tokio::time::sleep(delay)).await;
                     // Metadata contention must not restart schema/plan preparation
                     // on every follower tick. Absorb the committed prefix before
@@ -461,7 +439,6 @@ impl ReplicaEnactment {
                 Err(error) => return Err(error),
             }
         }
-        self.ensure_recent_protection()?;
         self.protection
             .try_acquire(storage, compute, requested, &dependencies)?
             .context("acknowledged replica protection was not acquired")
@@ -522,7 +499,7 @@ impl ReplicaEnactment {
             .selected
             .values()
             .filter(|(id, revision, _)| {
-                // Renewal can refresh the catalog after the plan-byte fetch.
+                // Acquisition can refresh the catalog after the plan-byte fetch.
                 // Only a still-selected revision is installation authority.
                 !self.installed.contains_key(id)
                     && catalog.state().written_plan(*id, build) == Some(*revision)
@@ -629,10 +606,7 @@ impl ReplicaEnactment {
             .io
             .wait(storage_metadata::uppers(persist, &metadata.metadata))
             .await?;
-        // All remaining selection and command emission is synchronous. A slow
-        // observation must not resume installation using possibly reclaimed grants.
-        // Worker-side Persist checks still cover the asynchronous reader-open gap.
-        self.ensure_recent_protection()?;
+        // Worker-side Persist checks cover the asynchronous reader-open gap.
         let protected = storage
             .iter()
             .map(|id| (*id, grants[id].since().clone()))
@@ -865,9 +839,10 @@ impl ReplicaEnactment {
             .state()
             .client_incarnations()
             .get(&self.protection.incarnation())
-            .context("replica incarnation was reclaimed")?;
+            .context("replica execution was superseded or retired")?;
         ensure!(
-            participant.replica_id == Some(self.replica),
+            participant.replica_id == Some(self.replica)
+                && participant.deployment_generation == catalog.state().deployment_generation(),
             "replica incarnation identity mismatch"
         );
         ensure!(
@@ -879,19 +854,6 @@ impl ReplicaEnactment {
         Ok(())
     }
 
-    fn ensure_recent_protection(&self) -> anyhow::Result<()> {
-        ensure!(
-            self.published_at.elapsed()
-                < client_protection_unchanged_grace() - client_protection_heartbeat_interval(),
-            "replica protection requires renewal before installation"
-        );
-        Ok(())
-    }
-
-    pub fn renewal_due(&self) -> bool {
-        self.published_at.elapsed() >= client_protection_heartbeat_interval()
-    }
-
     pub fn configure_publication(&mut self, interval: Duration) {
         self.publication_clock
             .get_or_insert_with(|| PublicationClock::new(interval))
@@ -899,8 +861,7 @@ impl ReplicaEnactment {
     }
 
     /// Pending metadata/installations cannot make an overdue bounds clock spin.
-    /// Other elapsed deadlines get a short nonzero poll, including errors that
-    /// prevented renewal without producing a catalog-conflict gate.
+    /// Other elapsed deadlines get a short nonzero poll.
     pub fn wake_delay(
         &self,
         poll: Duration,
@@ -914,11 +875,6 @@ impl ReplicaEnactment {
             self.publication_clock
                 .as_ref()
                 .map(|clock| clock.due.max(gate)),
-            Some(if self.publication_retry_requirements {
-                (self.published_at + client_protection_heartbeat_interval()).max(gate)
-            } else {
-                self.published_at + client_protection_heartbeat_interval()
-            }),
             self.publication_retry_after.filter(|due| *due > now),
         ]
         .into_iter()
@@ -931,10 +887,9 @@ impl ReplicaEnactment {
         .fold(poll, Duration::min)
     }
 
-    fn defer_publication(&mut self, requirements: bool) {
-        let delay = limit_conflict_delay(conflict_delay(), self.published_at.elapsed());
+    fn defer_publication(&mut self) {
+        let delay = conflict_delay();
         self.publication_retry_after = Some(Instant::now() + delay);
-        self.publication_retry_requirements = requirements;
         self.publication_needs_refresh = true;
     }
 
@@ -946,10 +901,6 @@ impl ReplicaEnactment {
         build: &str,
         requirements: BTreeMap<GlobalId, Timestamp>,
     ) -> anyhow::Result<()> {
-        // A peer can observe the heartbeat before our acknowledgement arrives.
-        // Its reclamation window therefore starts no earlier than this instant,
-        // not the instant at which this await returns.
-        let started = Instant::now();
         let incarnation = self.protection.incarnation();
         let result = self
             .transact(
@@ -965,7 +916,6 @@ impl ReplicaEnactment {
             .await;
         self.protection.finish_publication(result.is_ok());
         result?;
-        self.published_at = started;
         self.configure_publication(
             catalog
                 .system_config()
@@ -1147,9 +1097,10 @@ impl ReplicaEnactment {
         }
     }
 
-    /// Renew protection and, when installation is complete, reclaim abandoned
-    /// incarnations. Bounds are proposed only when metadata is supplied, allowing
-    /// their configured cadence to differ from heartbeat and reclamation cadence.
+    /// Publish changed protection aggregates and, after installation, bounds.
+    /// Bounds are proposed only when metadata is supplied.
+    /// `pending` must cover all compute and storage installation work at this
+    /// catalog revision, including storage reader-start acknowledgements.
     pub async fn publish(
         &mut self,
         catalog: &mut Catalog,
@@ -1159,6 +1110,7 @@ impl ReplicaEnactment {
         pending: bool,
         metadata: Option<&storage_metadata::Resolution>,
     ) -> anyhow::Result<PublicationOutcome> {
+        self.ensure_live(catalog)?;
         let _timer = self.publication_seconds.start_timer();
         self.configure_publication(
             catalog
@@ -1168,15 +1120,10 @@ impl ReplicaEnactment {
         let gated = self
             .publication_retry_after
             .is_some_and(|due| Instant::now() < due);
-        // A bounds/reclamation conflict must not defer an already-due heartbeat.
-        // A heartbeat conflict does defer renewal, avoiding an expired-deadline spin.
-        if gated && (self.publication_retry_requirements || !self.renewal_due()) {
+        if gated {
             return Ok(PublicationOutcome::Deferred);
         }
-        if !gated {
-            self.publication_retry_after = None;
-        }
-        let incarnation = self.protection.incarnation();
+        self.publication_retry_after = None;
         let refreshed = self.publication_needs_refresh;
         if refreshed {
             let (_, updates) = self.io.wait(catalog.sync_to_current_updates()).await?;
@@ -1184,40 +1131,17 @@ impl ReplicaEnactment {
             self.ensure_live(catalog)?;
             self.publication_needs_refresh = false;
         }
-        if self.renewal_due() {
-            // Renew the committed protection independently of advancement work.
-            // Use attempt start as in commit_grants: peers can observe the
-            // heartbeat before acknowledgement. Leave advancement clocks due.
-            let started = Instant::now();
-            match self
-                .transact(
-                    catalog,
-                    effects,
-                    cluster,
-                    build,
-                    vec![Op::RenewClientIncarnation { incarnation }],
-                )
-                .await
-            {
-                Ok(()) => {
-                    self.published_at = started;
-                    return Ok(PublicationOutcome::Deferred);
-                }
-                Err(error) if is_catalog_conflict(&error) => {
-                    self.defer_publication(true);
-                    return Err(error);
-                }
-                Err(error) => return Err(error),
-            }
+        // Acquisitions commit independently before use. Maintenance coalesces
+        // advances and releases while retaining committed protection until publication.
+        if !pending && !refreshed {
+            // Compute owns source/window holds and has ordered import creation
+            // before compaction. Storage owns input holds through reader completion.
+            // Neither needs the predecessor's transient grants after installation.
+            self.recovery_holds.take();
         }
-        // Maintenance only advances or releases committed grants. Coalescing it
-        // retains protection until publication. Acquisitions commit independently
-        // before use, and renewal must not wait for the advancement interval.
         let publish_requirements = self.publication_clock.as_ref().expect("configured").due();
         if publish_requirements
-            && let Some(requirements) = self
-                .protection
-                .prepare_publication_if_needed(self.published_at.elapsed())
+            && let Some(requirements) = self.protection.prepare_publication_if_needed()
         {
             match self
                 .commit_grants(catalog, effects, cluster, build, requirements)
@@ -1225,7 +1149,7 @@ impl ReplicaEnactment {
             {
                 Ok(()) => (),
                 Err(error) if is_catalog_conflict(&error) => {
-                    self.defer_publication(true);
+                    self.defer_publication();
                     return Err(error);
                 }
                 Err(error) => return Err(error),
@@ -1237,8 +1161,8 @@ impl ReplicaEnactment {
                 .completed();
         }
         // A pending install may still need a committed prefix's earlier history.
-        // Heartbeats and acquisitions continue, but bounds and reclamation wait.
-        if pending || refreshed || gated {
+        // Aggregate publication and acquisitions continue, but bounds wait.
+        if pending || refreshed {
             return Ok(PublicationOutcome::Deferred);
         }
         let mut ops = Vec::new();
@@ -1338,30 +1262,11 @@ impl ReplicaEnactment {
                 });
             }
         }
-        let expired = self.reclaimer.observe(
-            catalog
-                .state()
-                .client_incarnations()
-                .iter()
-                .map(|(id, value)| (*id, value.heartbeat)),
-            Instant::now(),
-        );
-        ops.extend(
-            expired
-                .into_iter()
-                .filter(|(id, _)| *id != incarnation)
-                .map(
-                    |(incarnation, expected_heartbeat)| Op::ReclaimClientIncarnation {
-                        incarnation,
-                        expected_heartbeat,
-                    },
-                ),
-        );
         if !ops.is_empty() {
             match self.transact(catalog, effects, cluster, build, ops).await {
                 Ok(()) => (),
                 Err(error) if is_catalog_conflict(&error) => {
-                    self.defer_publication(false);
+                    self.defer_publication();
                     return Err(error);
                 }
                 Err(error) => return Err(error),

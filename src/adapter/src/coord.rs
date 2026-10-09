@@ -2237,7 +2237,8 @@ pub struct Coordinator {
     read_protection_pending: BTreeSet<GlobalId>,
     query_client: Option<Arc<crate::query_client::QueryClient>>,
     client_protection_catalog: Option<Catalog>,
-    client_protection_reclaimer: crate::query_client::read_protection::ClientProtectionReclaimer,
+    // Flattened predecessor grants stay separate from ordinary timeline tokens.
+    recovery_read_holds: Option<crate::query_client::read_protection::RecoveryReadHolds>,
     query_persist_location: mz_persist_types::PersistLocation,
     query_orchestrator: Arc<dyn mz_orchestrator::NamespacedOrchestrator>,
     query_deploy_generation: u64,
@@ -2931,9 +2932,13 @@ impl Coordinator {
         // Keep construction separate from activation. Bootstrap read policies
         // still use their initialization holds until the late client handoff.
         let bootstrap_client = if write_plans {
+            let expected = Self::adapter_execution_predecessor(self.catalog());
             let incarnations = self
                 .bootstrap_catalog_transact(
-                    vec![crate::catalog::Op::CreateClientIncarnation { replica_id: None }],
+                    vec![crate::catalog::Op::CreateClientIncarnation {
+                        replica_id: None,
+                        expected,
+                    }],
                     &mut builtin_table_updates,
                 )
                 .await?;
@@ -2942,7 +2947,16 @@ impl Coordinator {
                 .into_iter()
                 .next()
                 .expect("created bootstrap client");
-            Some(self.build_query_client(incarnation).await?)
+            let requirements = self
+                .catalog()
+                .state()
+                .client_read_requirements()
+                .iter()
+                .filter_map(|(&(owner, id), &frontier)| {
+                    (owner == incarnation).then_some((id, frontier))
+                })
+                .collect();
+            Some(self.build_query_client(incarnation, requirements).await?)
         } else {
             None
         };
@@ -2965,8 +2979,7 @@ impl Coordinator {
                 })
                 .collect();
             if !indexes.is_empty() {
-                // Reconstruction can outlive the previous adapter's lease. Own
-                // the serving window throughout bootstrap, including plan reuse.
+                // Own the serving window throughout bootstrap, including plan reuse.
                 let state = self.catalog().state().clone();
                 let publication = self
                     .prepare_admission_timeline_publication(
@@ -3138,10 +3151,9 @@ impl Coordinator {
                     .client_incarnations()
                     .contains_key(&client.protection.incarnation())
                 {
-                    client.protection.mark_closed();
+                    mz_ore::halt!("adapter execution was superseded or retired");
                 }
                 result?;
-                client.published();
             }
         }
         drop(plan_holds);
@@ -4753,10 +4765,7 @@ impl Coordinator {
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
         let Some(client) = client else { return Ok(()) };
-        let Some(requirements) = client
-            .protection
-            .prepare_publication_if_needed(client.last_publication().elapsed())
-        else {
+        let Some(requirements) = client.protection.prepare_publication_if_needed() else {
             return Ok(());
         };
         let result = self
@@ -4775,10 +4784,9 @@ impl Coordinator {
             .client_incarnations()
             .contains_key(&client.protection.incarnation())
         {
-            client.protection.mark_closed();
+            mz_ore::halt!("adapter execution was superseded or retired");
         }
         result?;
-        client.published();
         Ok(())
     }
 
@@ -4993,10 +5001,6 @@ impl Coordinator {
                 CATALOG_SUBSCRIPTION_INTERVAL,
             ));
             tokio::pin!(subscription_timer);
-            let client_heartbeat_delay =
-                crate::query_client::read_protection::client_protection_heartbeat_interval();
-            let client_heartbeat_timer = tokio::time::sleep(client_heartbeat_delay);
-            tokio::pin!(client_heartbeat_timer);
             // Match storage frontier introspection's maintenance cadence. This
             // is independent of permission publication and installation waits.
             let frontier_timer = tokio::time::sleep(Duration::from_secs(1));
@@ -5040,39 +5044,11 @@ impl Coordinator {
                     // internal responses cannot exclude waiting client commands.
                     biased;
 
-                    // Polling the pinned timer is cancel-safe. Renewal retains the
-                    // committed grants without waiting for aggregate advancement.
-                    _ = client_heartbeat_timer.as_mut() => {
-                        let mut conflict = false;
-                        if self.query_client.as_ref().is_some_and(|client| {
-                            client.last_publication().elapsed() >= client_heartbeat_delay
-                        }) && let Err(error) = trace_maintenance(
-                            "heartbeat_publish_client", self.renew_client_read_protection()
-                        ).await {
-                            conflict |= read_protection::is_read_protection_conflict(&error);
-                            warn!(%error, "unable to publish query client protection");
-                        }
-                        if let Err(error) = trace_maintenance(
-                            "heartbeat_reclaim", self.reclaim_client_read_protection()
-                        ).await {
-                            conflict |= read_protection::is_read_protection_conflict(&error);
-                            warn!(%error, "unable to reclaim query client protection");
-                        }
-                        if conflict {
-                            read_protection::defer_protection_retry(
-                                client_heartbeat_timer.as_mut(),
-                                publication_timer.as_mut(),
-                                self.read_protection_conflict_delay(),
-                            );
-                        } else {
-                            client_heartbeat_timer.set(tokio::time::sleep(client_heartbeat_delay));
-                        }
-                    }
-
                     // Polling a pinned Sleep is cancellation-safe. Following committed permission
                     // does not depend on the savepoint's publication setting.
                     _ = subscription_timer.as_mut(),
                         if self.compaction_bound_subscriber.is_some()
+                            || self.query_client.is_some()
                             || self.controller.replica_owned_compute()
                             || !self.pending_compute_installations.is_empty() => {
                         if self.controller.replica_owned_compute() {
@@ -5085,6 +5061,17 @@ impl Coordinator {
                                 "subscription_reconcile", self.reconcile_declared_replicas()
                             ).await {
                                 warn!(%error, "unable to realize declared replicas");
+                            }
+                        }
+                        if self.client_protection_catalog.is_some() {
+                            if let Err(error) = self.sync_client_protection_catalog().await {
+                                warn!(%error, "unable to follow adapter execution state");
+                            }
+                        } else if !self.controller.replica_owned_compute()
+                            && self.query_client.is_some()
+                        {
+                            if let Err(error) = self.refresh_catalog(None).await {
+                                warn!(%error, "unable to follow adapter execution state");
                             }
                         }
                         trace_maintenance(
@@ -5120,8 +5107,7 @@ impl Coordinator {
                         // Only definitive outcomes reach here. Rebuild proposals on
                         // the next turn, retaining committed protection meanwhile.
                         // Conflicts retain the publication cadence rather than
-                        // accelerating costly advancement attempts. Do not defer
-                        // the independent heartbeat timer with advancement work.
+                        // accelerating costly advancement attempts.
                         let delay = mz_catalog::retry::periodic_delay(publication_delay);
                         publication_timer.set(tokio::time::sleep(delay));
                     }
@@ -6550,7 +6536,7 @@ pub fn serve(
                     read_protection_pending: BTreeSet::new(),
                     query_client: None,
                     client_protection_catalog,
-                    client_protection_reclaimer: Default::default(),
+                    recovery_read_holds: None,
                     query_persist_location,
                     query_orchestrator,
                     query_deploy_generation,

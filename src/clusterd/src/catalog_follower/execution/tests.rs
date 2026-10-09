@@ -145,7 +145,10 @@ async fn written_index_survives_writer_and_query_disconnect() {
             None,
             ts,
             None,
-            vec![Op::CreateClientIncarnation { replica_id: None }],
+            vec![Op::CreateClientIncarnation {
+                replica_id: None,
+                expected: None,
+            }],
         )
         .await
         .unwrap()

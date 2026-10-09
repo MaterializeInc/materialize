@@ -874,22 +874,6 @@ impl CatalogState {
             .filter_map(move |((generation, id), _)| (Some(*generation) == active).then_some(*id))
     }
 
-    /// The oldest unreclaimed replica incarnation in the shared cluster roster.
-    /// A deployment transition alone does not retire another producer's membership.
-    pub fn oldest_replica_incarnation(&self, cluster_id: ClusterId) -> Option<u64> {
-        self.client_incarnations
-            .iter()
-            .filter(|(_, client)| {
-                client.replica_id.is_some_and(|id| {
-                    self.replica_membership
-                        .get(&(client.deployment_generation, id))
-                        .is_some_and(|cluster| *cluster == cluster_id)
-                })
-            })
-            .map(|(id, _)| *id)
-            .min()
-    }
-
     /// The managed realization owned by this deployment, if initialized.
     pub fn cluster_runtime(
         &self,
@@ -3109,7 +3093,7 @@ impl CatalogState {
         self.active_deployment_generation
     }
 
-    /// Returns durable incarnation heartbeats and immutable deployment/replica identities.
+    /// Returns current execution nonces and their deployment/replica identities.
     pub fn client_incarnations(
         &self,
     ) -> &imbl::OrdMap<u64, crate::durable::objects::ClientIncarnationValue> {
@@ -3493,26 +3477,6 @@ mod tests {
                         StateDiff::Addition,
                         1,
                     ),
-                    update(
-                        StateUpdateKind::ClientIncarnation(crate::durable::ClientIncarnation {
-                            id: 70,
-                            heartbeat: 1,
-                            deployment_generation: 7,
-                            replica_id: Some(ReplicaId::User(1)),
-                        }),
-                        StateDiff::Addition,
-                        1,
-                    ),
-                    update(
-                        StateUpdateKind::ClientIncarnation(crate::durable::ClientIncarnation {
-                            id: 80,
-                            heartbeat: 1,
-                            deployment_generation: 8,
-                            replica_id: Some(ReplicaId::User(1)),
-                        }),
-                        StateDiff::Addition,
-                        1,
-                    ),
                 ],
                 &mut LocalExpressionCache::Closed,
             )
@@ -3552,7 +3516,6 @@ mod tests {
             state.active_replica_ids().collect::<Vec<_>>(),
             [ReplicaId::User(1)]
         );
-        assert_eq!(state.oldest_replica_incarnation(cluster_id), Some(70));
 
         let (_, implications) = state
             .apply_updates(
@@ -3588,8 +3551,6 @@ mod tests {
             state.active_replica_ids().collect::<Vec<_>>(),
             [ReplicaId::User(1)]
         );
-        // Promotion changes output authority, not shared producer membership.
-        assert_eq!(state.oldest_replica_incarnation(cluster_id), Some(70));
         let (_, implications) = state
             .apply_updates(
                 vec![update(
@@ -3601,7 +3562,6 @@ mod tests {
             )
             .await;
         assert!(implications.is_empty());
-        assert_eq!(state.oldest_replica_incarnation(cluster_id), Some(80));
         assert_eq!(
             state
                 .resolve_materialized_view_replica(cluster_id, "r1")
@@ -3860,11 +3820,10 @@ mod tests {
 
         let id = GlobalId::User(2);
         let other = GlobalId::User(4);
-        let incarnation = |id, heartbeat| {
+        let incarnation = |id, deployment_generation| {
             StateUpdateKind::ClientIncarnation(ClientIncarnation {
                 id,
-                heartbeat,
-                deployment_generation: 0,
+                deployment_generation,
                 replica_id: None,
             })
         };
@@ -3882,7 +3841,7 @@ mod tests {
                 vec![],
                 vec![
                     incarnation(1, 0),
-                    incarnation(2, 0),
+                    incarnation(2, 1),
                     requirement(1, id, 10),
                     requirement(2, id, 10),
                     requirement(2, other, 30),
@@ -3890,13 +3849,13 @@ mod tests {
                 Some(10),
             ),
             (
-                vec![incarnation(1, 0), requirement(1, id, 10)],
-                vec![incarnation(1, 1), requirement(1, id, 20)],
+                vec![requirement(1, id, 10)],
+                vec![requirement(1, id, 20)],
                 Some(10),
             ),
             (
                 vec![
-                    incarnation(2, 0),
+                    incarnation(2, 1),
                     requirement(2, id, 10),
                     requirement(2, other, 30),
                 ],
@@ -3904,7 +3863,7 @@ mod tests {
                 Some(20),
             ),
             (
-                vec![incarnation(1, 1), requirement(1, id, 20)],
+                vec![incarnation(1, 0), requirement(1, id, 20)],
                 vec![],
                 None,
             ),
@@ -3963,8 +3922,7 @@ mod tests {
             &imbl::OrdMap::from_iter([1u64, 2u64].map(|id| (
                 id,
                 crate::durable::objects::ClientIncarnationValue {
-                    heartbeat: 0,
-                    deployment_generation: 0,
+                    deployment_generation: id - 1,
                     replica_id: None
                 }
             )))
@@ -3972,7 +3930,10 @@ mod tests {
         let dump = serde_json::to_value(&snapshot).expect("can serialize catalog state");
         assert_eq!(
             dump["client_incarnations"],
-            serde_json::json!({"1": {"heartbeat": 0, "deployment_generation": 0, "replica_id": null}, "2": {"heartbeat": 0, "deployment_generation": 0, "replica_id": null}})
+            serde_json::json!({
+                "1": {"deployment_generation": 0, "replica_id": null},
+                "2": {"deployment_generation": 1, "replica_id": null}
+            })
         );
         assert_eq!(
             dump["client_read_requirements"],

@@ -749,11 +749,8 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
               ENVELOPE DEBEZIUM
             """),
     )
-    # A same-generation restart can leave the predecessor eligible for Kafka
-    # until the five-minute incarnation grace elapses.
     c.testdrive(
         service="testdrive_no_reset",
-        args=["--default-timeout=420s"],
         input=dedent("""
             $ kafka-verify-topic sink=materialize.public.kafka_sink
             """),
@@ -805,10 +802,9 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
             14
             """),
     )
-    # New sink execution contributes its starting/running rows after takeover.
+    # New sink execution contributes its starting/running rows after restart.
     c.testdrive(
         service="testdrive_no_reset",
-        args=["--default-timeout=420s"],
         input=dedent("""
             > SELECT COUNT(*) FROM mz_internal.mz_sink_status_history
             7
@@ -1384,8 +1380,6 @@ def workflow_catalog_read_protection(c: Composition) -> None:
                 "persist_inline_writes_single_max_bytes": "0",
                 "persist_compaction_heuristic_min_inputs": "2",
             },
-            # environmentd and its native children share the fixture's 5s/25s timing.
-            environment_extra=["MZ_TEST_CLIENT_PROTECTION_HEARTBEAT_MS=5000"],
         ),
         Testdrive(
             name="testdrive_no_reset",
@@ -1508,7 +1502,7 @@ def workflow_catalog_read_protection(c: Composition) -> None:
         assert len(initial_since) == 1
         assert initial_since[0] >= physical_since[0] > 0
         indexed_read_before_advancement("initial")
-        pre_crash_incarnations = set(catalog_snapshot()["client_incarnations"])
+        pre_crash_incarnations = catalog_snapshot()["client_incarnations"]
         assert pre_crash_incarnations, "crash proof requires live client incarnations"
         print(f"Pre-crash client incarnations: {sorted(pre_crash_incarnations)}")
         c.kill("materialized")
@@ -1518,17 +1512,30 @@ def workflow_catalog_read_protection(c: Composition) -> None:
         assert time.monotonic() - advancement_paused_at < 300
         query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s'")
         advancement_deadline = time.monotonic() + 120
-        # Paused publication retains the killed clients' grants. Their actual
-        # reclamation, not elapsed sleep time, releases that protection.
-        while surviving := pre_crash_incarnations.intersection(
-            catalog_snapshot()["client_incarnations"]
-        ):
+        # Restart replaces the exact prior executions and transfers their grants.
+        # Publication can then release requirements the successors no longer need.
+        while True:
+            snapshot = catalog_snapshot()
+            clients = snapshot["client_incarnations"]
+            surviving = pre_crash_incarnations.keys() & clients.keys()
+            if not surviving:
+                assert not any(
+                    str(grant[0]) in pre_crash_incarnations
+                    for grant in snapshot["client_read_requirements"]
+                ), snapshot
+                if all(
+                    list(clients.values()).count(owner) == 1
+                    for owner in pre_crash_incarnations.values()
+                ):
+                    break
             if time.monotonic() >= advancement_deadline:
-                raise UIError(f"Pre-crash incarnations were not reclaimed: {surviving}")
+                raise UIError(
+                    f"Pre-crash executions were not replaced: {pre_crash_incarnations}, current: {clients}"
+                )
             time.sleep(0.5)
         remaining = advancement_deadline - time.monotonic()
         if remaining <= 0:
-            raise UIError("Incarnation reclamation exhausted the advancement deadline")
+            raise UIError("Execution replacement exhausted the advancement deadline")
         td(
             f"""
             > SELECT (v->>'frontier')::numeric > {initial_since[0]}
@@ -1559,9 +1566,7 @@ def workflow_catalog_read_protection(c: Composition) -> None:
             assert index_permission() == {"elements": [cap]}
             assert time.monotonic() - capped_start < 300
         query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s'")
-        # Bound publication cannot release a crashed incarnation's valid grants.
-        # Observe the authority at release and allow the five-minute reclamation
-        # grace plus its sampling/publication intervals, without changing them.
+        # Observe committed protection as the current executions publish progress.
         snapshot = catalog_snapshot()
         print(
             json.dumps(
@@ -1680,8 +1685,6 @@ def workflow_catalog_read_protection(c: Composition) -> None:
         ) -> None:
             # INSPECT is not composable SQL. Native testdrive Retry waits for each
             # publication advance, then we inspect without acquiring input read holds.
-            # A crashed client's grant can pin even the control clock. Allow the
-            # five-minute reclamation grace plus publication and compaction time.
             deadline = time.monotonic() + timeout
             while True:
                 control_bound = record(bound_kind, ids["protected_control"])["frontier"]
@@ -1899,8 +1902,6 @@ def workflow_catalog_read_protection(c: Composition) -> None:
             > UPDATE protected_control SET a = 2;
             > ALTER TABLE protected_catalog_probe RENAME TO protected_catalog_probe_renamed;
         """)
-        # The restarted adapter cannot release its predecessor's valid grants.
-        # Include ordinary reclamation grace, as in index-permission release.
         await_state(
             "control physically compacted past first refresh",
             verify_pending,
@@ -3585,7 +3586,6 @@ def workflow_temporary_item_cleanup(c: Composition) -> None:
                 additional_system_parameter_defaults={
                     "enable_catalog_read_protection": str(protected).lower(),
                 },
-                environment_extra=["MZ_TEST_CLIENT_PROTECTION_HEARTBEAT_MS=5000"],
             )
         ):
             _temporary_item_cleanup(c, protected)
@@ -3796,6 +3796,13 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
             == [(0,)]
         ), "same-generation open enqueued a foreign shard for finalization"
 
+        retiring_incarnations = query(
+            """SELECT data->'key'->>'id' FROM mz_internal.mz_catalog_raw
+               WHERE data->>'kind' = 'ClientIncarnation'""",
+            system=True,
+        )
+        assert retiring_incarnations, "promotion requires prior executions"
+        retiring_ids = ", ".join(f"'{int(row[0])}'" for row in retiring_incarnations)
         c.kill("materialized")
         with c.override(
             Materialized(
@@ -3805,7 +3812,6 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
                 additional_system_parameter_defaults={
                     "enable_catalog_read_protection": "true"
                 },
-                environment_extra=["MZ_TEST_CLIENT_PROTECTION_HEARTBEAT_MS=5000"],
             )
         ):
             c.up("materialized")
@@ -3814,6 +3820,16 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
             c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, timeout=120)
         forget_cached_conns()
         wait_for(temp_item_counts, [(0, 0)], "SQL invisibility after promotion")
+        wait_for(
+            f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
+                WHERE (data->>'kind' = 'ClientIncarnation'
+                       AND data->'key'->>'id' IN ({retiring_ids}))
+                   OR (data->>'kind' = 'ClientReadRequirement'
+                       AND data->'key'->>'incarnation' IN ({retiring_ids}))""",
+            [(0,)],
+            "old-deployment executions and grants to retire at promotion",
+            system=True,
+        )
 
     # mz_tables and mz_views are projections. Only mz_catalog_raw shows whether
     # the durable rows themselves are gone, so a reclamation that merely stopped
@@ -3835,8 +3851,8 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
         (0,)
     ], f"the temp table's comment survived the restart: {comments}"
 
-    # Mapping removal and WAL enqueue are atomic, but protected storage must
-    # wait for predecessor client grants even after promotion removes the Item.
+    # Promotion retires old-deployment protection. Mapping removal and WAL
+    # enqueue are atomic, while physical cleanup may follow asynchronously.
     storage_cleanup = f"""SELECT
         (SELECT count(*) FROM mz_internal.mz_catalog_raw
          WHERE data->>'kind' = 'StorageCollectionMetadata'
@@ -3848,7 +3864,7 @@ def _temporary_item_cleanup(c: Composition, protected: bool) -> None:
         wait_for(
             storage_cleanup,
             [(0, 1)],
-            "temporary storage retirement after predecessor protection expires",
+            "temporary storage retirement after deployment promotion",
             system=True,
         )
     else:

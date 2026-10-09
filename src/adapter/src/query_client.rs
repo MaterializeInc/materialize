@@ -11,7 +11,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
 use futures::future::{BoxFuture, FutureExt};
@@ -109,9 +108,6 @@ pub(crate) struct QueryClient {
     txns_shard: ShardId,
     collection_reader: OnceCell<CollectionReader>,
     pub(crate) connections: Arc<QueryReplicaConnections>,
-    // Renewal age, including both heartbeat-only and aggregate publications.
-    // This does not track the advancement cadence or pending grant coverage.
-    last_publication: Mutex<Instant>,
     pending_peeks: Arc<Mutex<BTreeMap<Uuid, watch::Sender<Option<PeekResponse>>>>>,
 }
 
@@ -134,7 +130,7 @@ impl Drop for QueryPeekRegistration {
 
 impl QueryClient {
     pub(crate) fn new(
-        incarnation: u64,
+        protection: ClientReadProtection,
         coordinator: CoordinatorClient,
         persist: PersistClient,
         persist_location: PersistLocation,
@@ -143,29 +139,14 @@ impl QueryClient {
     ) -> Self {
         Self {
             coordinator,
-            protection: ClientReadProtection::new(incarnation),
+            protection,
             persist,
             persist_location,
             txns_shard,
             collection_reader: OnceCell::new(),
             connections,
-            last_publication: Mutex::new(Instant::now()),
             pending_peeks: Arc::new(Mutex::new(BTreeMap::new())),
         }
-    }
-
-    pub(crate) fn last_publication(&self) -> Instant {
-        *self
-            .last_publication
-            .lock()
-            .expect("query publication mutex poisoned")
-    }
-
-    pub(crate) fn published(&self) {
-        *self
-            .last_publication
-            .lock()
-            .expect("query publication mutex poisoned") = Instant::now();
     }
 
     pub(crate) fn replica_clients(
@@ -1615,7 +1596,10 @@ mod tests {
                     None,
                     ts,
                     None,
-                    vec![Op::CreateClientIncarnation { replica_id: None }],
+                    vec![Op::CreateClientIncarnation {
+                        replica_id: None,
+                        expected: Some(incarnation),
+                    }],
                 )
                 .await
                 .expect("live writer creates incarnation")
@@ -1625,7 +1609,7 @@ mod tests {
         };
         let (tx, mut commands) = tokio::sync::mpsc::unbounded_channel();
         let client = QueryClient::new(
-            incarnation,
+            ClientReadProtection::new(incarnation),
             CoordinatorClient::Background {
                 tx,
                 metrics: Metrics::register_into(&MetricsRegistry::new()),
@@ -1807,15 +1791,14 @@ mod tests {
             drop(holds);
 
             let ts = catalog.current_upper().await;
-            let expected_heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
             catalog
                 .transact(
                     None,
                     ts,
                     None,
-                    vec![Op::ReclaimClientIncarnation {
-                        incarnation,
-                        expected_heartbeat,
+                    vec![Op::CreateClientIncarnation {
+                        replica_id: None,
+                        expected: Some(incarnation),
                     }],
                 )
                 .await
@@ -2056,25 +2039,9 @@ mod tests {
         holds.downgrade(Timestamp::from(120));
         let requirements = client
             .protection
-            .prepare_publication_if_needed(std::time::Duration::from_secs(1))
+            .prepare_publication_if_needed()
             .expect("advancement is due");
         assert_eq!(requirements, BTreeMap::from([(id, Timestamp::from(120))]));
-        let heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
-        let ts = catalog.current_upper().await;
-        catalog
-            .transact(
-                None,
-                ts,
-                None,
-                vec![Op::RenewClientIncarnation { incarnation }],
-            )
-            .await
-            .expect("renewal does not require pending advancement");
-        client.published();
-        assert_eq!(
-            catalog.state().client_incarnations()[&incarnation].heartbeat,
-            heartbeat + 1
-        );
         assert_eq!(
             catalog.state().client_read_requirements()[&(incarnation, id)],
             Timestamp::from(50)
@@ -2083,7 +2050,7 @@ mod tests {
             client.protection.granted_frontier(id),
             Some(Timestamp::from(50))
         );
-        // Renewal must not clear the pending advancement's acquisition barrier.
+        // Pending advancement must retain its acquisition barrier.
         assert!(
             client
                 .protection
@@ -2092,7 +2059,7 @@ mod tests {
                     &BTreeMap::from([(id, Timestamp::from(100))]),
                     &BTreeMap::new(),
                 )
-                .expect("renewed client remains open")
+                .expect("client remains open")
                 .is_none()
         );
         let ts = catalog.current_upper().await;
@@ -2107,13 +2074,8 @@ mod tests {
                 }],
             )
             .await
-            .expect("can publish aggregate and heartbeat");
+            .expect("can publish aggregate");
         client.protection.finish_publication(true);
-        client.published();
-        assert_eq!(
-            catalog.state().client_incarnations()[&incarnation].heartbeat,
-            heartbeat + 2
-        );
         assert_eq!(
             client.protection.granted_frontier(id),
             Some(Timestamp::from(120))
@@ -2122,12 +2084,7 @@ mod tests {
             catalog.state().client_read_requirements()[&(incarnation, id)],
             Timestamp::from(120)
         );
-        assert_eq!(
-            client
-                .protection
-                .prepare_publication_if_needed(client.last_publication().elapsed()),
-            None
-        );
+        assert_eq!(client.protection.prepare_publication_if_needed(), None);
         writer
             .compare_and_append(
                 Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),

@@ -10,12 +10,9 @@
 //! Adapter bundle API for catalog-backed client read protection.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
 
 use mz_catalog::read_protection;
-pub(crate) use mz_catalog::read_protection::{
-    ClientProtectionReclaimer, ClientReadProtectionClosed, client_protection_heartbeat_interval,
-};
+pub(crate) use mz_catalog::read_protection::{ClientReadProtectionClosed, RecoveryReadHolds};
 use mz_repr::{GlobalId, Timestamp};
 
 use crate::coord::id_bundle::CollectionIdBundle;
@@ -28,10 +25,20 @@ pub(crate) struct ClientReadProtection {
 }
 
 impl ClientReadProtection {
+    #[cfg(test)]
     pub(crate) fn new(incarnation: u64) -> Self {
         Self {
             inner: read_protection::ClientReadProtection::new(incarnation),
         }
+    }
+
+    pub(crate) fn from_committed(
+        incarnation: u64,
+        requirements: BTreeMap<GlobalId, Timestamp>,
+    ) -> (Self, RecoveryReadHolds) {
+        let (inner, recovery) =
+            read_protection::ClientReadProtection::from_committed(incarnation, requirements);
+        (Self { inner }, recovery)
     }
 
     pub(crate) fn incarnation(&self) -> u64 {
@@ -103,11 +110,8 @@ impl ClientReadProtection {
         self.inner.prepare_grant_publication(extra)
     }
 
-    pub(crate) fn prepare_publication_if_needed(
-        &self,
-        elapsed: Duration,
-    ) -> Option<BTreeMap<GlobalId, Timestamp>> {
-        self.inner.prepare_publication_if_needed(elapsed)
+    pub(crate) fn prepare_publication_if_needed(&self) -> Option<BTreeMap<GlobalId, Timestamp>> {
+        self.inner.prepare_publication_if_needed()
     }
 
     pub(crate) fn finish_publication(&self, committed: bool) {
@@ -118,6 +122,7 @@ impl ClientReadProtection {
         self.inner.finish_grant_publication(requirements)
     }
 
+    #[cfg(test)]
     pub(crate) fn mark_closed(&self) {
         self.inner.mark_closed()
     }
@@ -126,7 +131,6 @@ impl ClientReadProtection {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use std::time::Instant;
 
     use mz_compute_types::ComputeInstanceId;
     use timely::progress::Antichain;
@@ -165,6 +169,25 @@ mod tests {
     fn publish(client: &ClientReadProtection, extra: BTreeMap<GlobalId, Timestamp>) {
         client.prepare_publication(extra);
         client.finish_publication(true);
+    }
+
+    #[mz_ore::test]
+    fn recovery_grants_cover_bootstrap_until_successor_windows_are_acquired() {
+        let inherited = requirements(&[(1, 10), (2, 10), (3, 5)]);
+        let (client, recovery) = ClientReadProtection::from_committed(2, inherited.clone());
+        assert_eq!(client.prepare_publication_if_needed(), None);
+        let mut window = acquire(&client, 10);
+        window.downgrade(Timestamp::from(30));
+        assert_eq!(client.prepare_publication(BTreeMap::new()), inherited);
+        client.finish_publication(true);
+        drop(recovery);
+        assert_eq!(
+            client.prepare_publication_if_needed(),
+            Some(requirements(&[(1, 30), (2, 30)]))
+        );
+        client.finish_publication(true);
+        drop(window);
+        assert!(client.active_frontiers().is_empty());
     }
 
     #[mz_ore::test]
@@ -217,21 +240,20 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn coalesced_advancement_and_idle_renewal_preserve_live_tokens() {
+    fn coalesced_advancement_preserves_live_tokens() {
         let client = ClientReadProtection::new(1);
-        let cadence = Duration::from_secs(1);
         publish(&client, requirements(&[(1, 10), (2, 10)]));
         let mut window = acquire(&client, 10);
         let old_query = window.clone();
         window.downgrade(Timestamp::from(20));
         window.downgrade(Timestamp::from(30));
         // Local changes alone are not dirtiness: a live reader still needs 10.
-        assert_eq!(client.prepare_publication_if_needed(cadence), None);
+        assert_eq!(client.prepare_publication_if_needed(), None);
         assert!(!client.publication_pending());
         drop(old_query);
         let advanced = requirements(&[(1, 30), (2, 30)]);
         assert_eq!(
-            client.prepare_publication_if_needed(cadence),
+            client.prepare_publication_if_needed(),
             Some(advanced.clone())
         );
         assert!(client.publication_pending());
@@ -265,9 +287,9 @@ mod tests {
         drop(concurrent);
         assert_eq!(client.granted_frontier(GlobalId::User(1)), Some(10.into()));
         assert_eq!(
-            client.prepare_publication_if_needed(cadence),
+            client.prepare_publication_if_needed(),
             Some(advanced.clone()),
-            "failed publication must be retried without waiting for heartbeat"
+            "failed publication must remain eligible for retry"
         );
         // Changes during the commit remain eligible for the next cadence.
         window.downgrade(Timestamp::from(40));
@@ -275,34 +297,21 @@ mod tests {
         assert_eq!(client.granted_frontier(GlobalId::User(1)), Some(30.into()));
         let current = requirements(&[(1, 40), (2, 40)]);
         assert_eq!(
-            client.prepare_publication_if_needed(cadence),
+            client.prepare_publication_if_needed(),
             Some(current.clone())
         );
         client.finish_publication(true);
-        assert_eq!(
-            client.prepare_publication_if_needed(client_protection_heartbeat_interval() - cadence),
-            None
-        );
-        assert_eq!(
-            client.prepare_publication_if_needed(client_protection_heartbeat_interval()),
-            Some(current)
-        );
-        client.finish_publication(true);
+        assert_eq!(client.prepare_publication_if_needed(), None);
         drop(window);
         assert_eq!(
-            client.prepare_publication_if_needed(cadence),
+            client.prepare_publication_if_needed(),
             Some(BTreeMap::new())
         );
         for id in bundle().iter() {
             assert_eq!(client.reusable_frontier(id, None), None);
         }
         client.finish_publication(true);
-        assert_eq!(client.prepare_publication_if_needed(cadence), None);
-        assert_eq!(
-            client.prepare_publication_if_needed(client_protection_heartbeat_interval()),
-            Some(BTreeMap::new())
-        );
-        client.finish_publication(true);
+        assert_eq!(client.prepare_publication_if_needed(), None);
     }
 
     #[mz_ore::test]
@@ -340,7 +349,7 @@ mod tests {
         assert_eq!(client.granted_frontier(GlobalId::User(2)), Some(10.into()));
         assert_eq!(client.granted_frontier(GlobalId::User(3)), Some(10.into()));
         assert_eq!(
-            client.prepare_publication_if_needed(Duration::from_secs(1)),
+            client.prepare_publication_if_needed(),
             Some(requirements(&[(1, 30), (2, 30), (4, 40)])),
             "creator publication must not acknowledge unrelated advancement or release"
         );
@@ -754,22 +763,5 @@ mod tests {
         drop(client);
         drop(clone.clone());
         drop(clone);
-    }
-
-    #[mz_ore::test]
-    fn reclaimer_renewal_absence_restart_and_isolation() {
-        let start = Instant::now();
-        let at = |seconds| start + Duration::from_secs(seconds);
-        let mut reclaimer = ClientProtectionReclaimer::default();
-        assert!(reclaimer.observe([(1, 8), (2, 9)], start).is_empty());
-        assert!(reclaimer.observe([(1, 8), (2, 10)], at(299)).is_empty());
-        assert_eq!(reclaimer.observe([(1, 8), (2, 10)], at(300)), vec![(1, 8)]);
-        assert!(reclaimer.observe([(2, 10)], at(301)).is_empty());
-        assert_eq!(reclaimer.observe([(1, 8), (2, 10)], at(599)), vec![(2, 10)]);
-        assert_eq!(reclaimer.observe([(1, 8), (2, 11)], at(899)), vec![(1, 8)]);
-        let mut restarted = ClientProtectionReclaimer::default();
-        assert!(restarted.observe([(1, 8)], at(899)).is_empty());
-        assert!(restarted.observe([(1, 8)], at(1198)).is_empty());
-        assert_eq!(restarted.observe([(1, 8)], at(1199)), vec![(1, 8)]);
     }
 }

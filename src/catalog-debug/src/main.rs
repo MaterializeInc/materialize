@@ -146,7 +146,7 @@ enum Action {
     },
     /// Edits a single item in a collection in the catalog.
     /// Uses cooperative compare-and-set without an exclusive open or automatic promotion.
-    /// Refuses with a reason if client heartbeats or recent publication indicate a live environment.
+    /// Refuses with a reason if execution protection or recent publication prevents safe editing.
     Edit {
         /// The name of the catalog collection to edit.
         collection: String,
@@ -163,7 +163,7 @@ enum Action {
     },
     /// Deletes a single item in a collection in the catalog
     /// Uses cooperative compare-and-set without an exclusive open or automatic promotion.
-    /// Refuses with a reason if client heartbeats or recent publication indicate a live environment.
+    /// Refuses with a reason if execution protection or recent publication prevents safe editing.
     Delete {
         /// The name of the catalog collection to edit.
         collection: String,

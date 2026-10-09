@@ -544,7 +544,6 @@ impl CatalogState {
                     &mut self.client_incarnations,
                     &incarnation.id,
                     crate::durable::objects::ClientIncarnationValue {
-                        heartbeat: incarnation.heartbeat,
                         deployment_generation: incarnation.deployment_generation,
                         replica_id: incarnation.replica_id,
                     },

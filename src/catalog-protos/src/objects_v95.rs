@@ -2447,8 +2447,8 @@ pub struct ClientIncarnationKey {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+#[serde(deny_unknown_fields)]
 pub struct ClientIncarnationValue {
-    pub heartbeat: u64,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub deployment_generation: u64,
     #[serde(default)]

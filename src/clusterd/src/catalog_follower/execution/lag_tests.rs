@@ -358,7 +358,10 @@ async fn create_reader(catalog: &mut Catalog) -> u64 {
                     None,
                     ts,
                     None,
-                    vec![Op::CreateClientIncarnation { replica_id: None }],
+                    vec![Op::CreateClientIncarnation {
+                        replica_id: None,
+                        expected: None,
+                    }],
                 )
                 .await
             {

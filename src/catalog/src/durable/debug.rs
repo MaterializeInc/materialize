@@ -451,10 +451,9 @@ impl Trace {
     pub(crate) fn live_mutation_reason(&self, now: Timestamp, upper: Timestamp) -> Option<String> {
         const RECENT_MILLIS: u64 = 5 * 60 * 1_000;
         let cutoff = u64::from(now).saturating_sub(RECENT_MILLIS);
-        // Heartbeats are counters, not wall-clock leases. Their catalog timestamps
-        // need not track wall time. An unreclaimed incarnation is conservatively
-        // live until explicitly overridden, even after a crashed writer stops.
-        if let Some(((key, value), ts, _)) = self
+        // A declared execution retains protection even after a crashed writer
+        // stops. Elapsed time cannot authorize a manual edit of its history.
+        if let Some(((key, _), ts, _)) = self
             .client_incarnations
             .values
             .iter()
@@ -462,8 +461,8 @@ impl Trace {
             .max_by_key(|(_, ts, _)| *ts)
         {
             return Some(format!(
-                "client incarnation {} has registered heartbeat {} (catalog timestamp {ts})",
-                key.id, value.heartbeat
+                "client incarnation {} retains protection (catalog timestamp {ts})",
+                key.id
             ));
         }
         let publication = u64::from(upper).checked_sub(1)?;
@@ -585,8 +584,8 @@ impl DebugCatalogState {
     /// Manually update value of `key` in collection `T` to `value`.
     ///
     /// Uses cooperative compare-and-set without an exclusive open or automatic promotion.
-    /// Unless `force` is set, refuses with a reason when client heartbeats or recent
-    /// publication indicate a live environment at the CAS snapshot boundary.
+    /// Unless `force` is set, refuses with a reason when execution protection or
+    /// recent publication prevents safe editing at the CAS snapshot boundary.
     /// `force` overrides only advisory liveness safety, not fencing or promotion.
     /// Live writers apply foreign changes or halt and rebuild if they cannot.
     pub async fn edit<T: Collection>(
@@ -643,13 +642,11 @@ mod tests {
                 .is_some()
         );
 
-        // A heartbeat counter is not a wall-clock lease. An unreclaimed client
-        // remains conservative evidence of activity even at an old timestamp.
+        // Silence cannot retire execution protection, even at an old timestamp.
         trace.client_incarnations.values.push((
             (
                 proto::ClientIncarnationKey { id: 1 },
                 proto::ClientIncarnationValue {
-                    heartbeat: u64::MAX,
                     deployment_generation: 0,
                     replica_id: None,
                 },
@@ -662,6 +659,6 @@ mod tests {
         let reason = trace
             .live_mutation_reason(now, Timestamp::new(700_001))
             .expect("registered client should prevent an unforced mutation");
-        assert!(reason.contains("heartbeat"), "{reason}");
+        assert!(reason.contains("retains protection"), "{reason}");
     }
 }

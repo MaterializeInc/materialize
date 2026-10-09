@@ -19,7 +19,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use super::objects::serialization::ProtoType;
-use super::objects::state_update::StateUpdateKindJson;
+use super::objects::state_update::{StateUpdateKind, StateUpdateKindJson};
 use super::{CatalogError, DurableCatalogError};
 
 // Admission precedes migrations. Decode only the fields this policy needs, not
@@ -87,6 +87,45 @@ pub(super) fn ephemeral_owners<'a>(
         }
     }
     Ok(owners)
+}
+
+/// Retracts protection owned by deployments fenced by this promotion. Derive the
+/// rows from the same consolidated snapshot as the fence and commit them together.
+/// The promoted deployment's warmed executions and grants remain untouched.
+pub(super) fn retired_protection<'a>(
+    snapshot: impl Iterator<Item = &'a StateUpdateKindJson> + Clone,
+    generation: u64,
+) -> Result<Vec<StateUpdateKind>, CatalogError> {
+    let decode = |row: &StateUpdateKindJson| {
+        StateUpdateKind::try_from(row).map_err(|error| {
+            CatalogError::from(DurableCatalogError::NotWritable(format!(
+                "cannot retire deployment protection: {error}"
+            )))
+        })
+    };
+    let mut retired = BTreeSet::new();
+    let mut rows = Vec::new();
+    for row in snapshot
+        .clone()
+        .filter(|row| row.kind() == "ClientIncarnation")
+    {
+        let row = decode(row)?;
+        if let StateUpdateKind::ClientIncarnation(client, value) = &row
+            && value.deployment_generation < generation
+        {
+            retired.insert(client.id);
+            rows.push(row);
+        }
+    }
+    for row in snapshot.filter(|row| row.kind() == "ClientReadRequirement") {
+        let row = decode(row)?;
+        if let StateUpdateKind::ClientReadRequirement(requirement, _) = &row
+            && retired.contains(&requirement.incarnation)
+        {
+            rows.push(row);
+        }
+    }
+    Ok(rows)
 }
 
 /// Validates a consolidated catalog snapshot. Explicit unmanaged replica

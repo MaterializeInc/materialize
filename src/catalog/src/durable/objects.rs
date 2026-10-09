@@ -1469,14 +1469,14 @@ impl DurableType for MaintainedReadRequirement {
     }
 }
 
-/// A client identity renewed only by publishing its complete read requirements.
+/// The current execution of a deployment-qualified realization. Its protection
+/// survives silence and is retired only by replacement or explicit removal.
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct ClientIncarnation {
     pub id: u64,
-    pub heartbeat: u64,
     /// Immutable deployment that owns this client's protection publications.
     pub deployment_generation: u64,
-    /// Immutable participant identity, not write ownership or fencing authority.
+    /// The replica realization, or this deployment's adapter singleton.
     pub replica_id: Option<ReplicaId>,
 }
 
@@ -1487,7 +1487,6 @@ pub struct ClientIncarnationKey {
 
 #[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq, serde::Serialize)]
 pub struct ClientIncarnationValue {
-    pub heartbeat: u64,
     pub deployment_generation: u64,
     pub replica_id: Option<ReplicaId>,
 }
@@ -1499,7 +1498,6 @@ impl DurableType for ClientIncarnation {
         (
             ClientIncarnationKey { id: self.id },
             ClientIncarnationValue {
-                heartbeat: self.heartbeat,
                 deployment_generation: self.deployment_generation,
                 replica_id: self.replica_id,
             },
@@ -1508,7 +1506,6 @@ impl DurableType for ClientIncarnation {
     fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
         Self {
             id: key.id,
-            heartbeat: value.heartbeat,
             deployment_generation: value.deployment_generation,
             replica_id: value.replica_id,
         }

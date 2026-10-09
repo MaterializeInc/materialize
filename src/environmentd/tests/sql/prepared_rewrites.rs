@@ -14,7 +14,10 @@ use std::time::Duration;
 
 use mz_adapter::test_util::observe_prepared_rewrites;
 use mz_catalog::durable::objects::{ClientIncarnation, DurableType, MaintainedReadRequirement};
-use mz_catalog::durable::{CatalogError, DurableCatalogError, persist_backed_catalog_join_active};
+use mz_catalog::durable::{
+    CatalogError, DurableCatalogError, persist_backed_catalog_join_active,
+    persist_backed_catalog_state,
+};
 use mz_catalog::expr_cache::ExpressionCacheHandle;
 use mz_environmentd::test_util::TestHarness;
 use mz_postgres_util::{PostgresError, batch_execute, query_one, sql};
@@ -23,15 +26,14 @@ use tokio_postgres::error::SqlState;
 
 #[derive(Clone, Copy)]
 enum Conflict {
-    Heartbeat,
+    Metadata,
     Cancellation,
     Structural,
-    Reclamation,
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn metadata_conflict_preserves_prepared_mv_rewrite() {
-    run(Conflict::Heartbeat).await;
+    run(Conflict::Metadata).await;
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
@@ -44,11 +46,6 @@ async fn structural_conflict_rejects_prepared_mv_rewrite() {
     run(Conflict::Structural).await;
 }
 
-#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-async fn reclaimed_client_rejects_prepared_mv_rewrite() {
-    run(Conflict::Reclamation).await;
-}
-
 async fn run(conflict: Conflict) {
     tokio::time::timeout(Duration::from_secs(180), run_inner(conflict))
         .await
@@ -57,7 +54,7 @@ async fn run(conflict: Conflict) {
 
 async fn run_inner(conflict: Conflict) {
     // Pin maintained requirements from birth, including in native followers.
-    // Heartbeats and inline grant acquisition keep their normal behavior.
+    // Inline grant acquisition keeps its normal behavior.
     let server = TestHarness::default()
         .with_system_parameter_default(
             "catalog_read_protection_publish_interval".into(),
@@ -123,8 +120,28 @@ async fn run_inner(conflict: Conflict) {
     .await
     .unwrap();
 
-    // Create the peer before installing the hook so the metadata case races
-    // only a heartbeat publication.
+    // Metadata conflicts use a private realization, never the serving adapter
+    // or an installed replica's execution. Structural writes need the active handle.
+    if !matches!(conflict, Conflict::Structural) {
+        let generation = peer.get_deployment_generation().await.unwrap() + 1;
+        peer = persist_backed_catalog_state(
+            persist.clone(),
+            server.environment_id.organization_id(),
+            mz_environmentd::BUILD_INFO.semver_version(),
+            Some(generation),
+            Arc::new(mz_catalog::durable::Metrics::new(
+                &mz_ore::metrics::MetricsRegistry::new(),
+            )),
+            Some(server.catalog_timestamp_oracle().await),
+        )
+        .await
+        .unwrap()
+        .join_prewarming(&mz_environmentd::BUILD_INFO.semver_version().to_string())
+        .await
+        .unwrap();
+    }
+
+    // Establish private membership before installing the preparation hook.
     let (input, index, mv, selection, shard, peer_incarnation) = loop {
         peer.sync_to_current_updates().await.unwrap();
         let mut txn = match peer.transaction().await {
@@ -138,7 +155,23 @@ async fn run_inner(conflict: Conflict) {
         let mv = item("rewrite_mv").global_id;
         let selection = txn.get_written_plans().find(|plan| plan.id == mv).unwrap();
         let shard = txn.get_expression_cache_shard().unwrap();
-        let incarnation = txn.create_client_incarnation(None).unwrap();
+        let incarnation = if matches!(conflict, Conflict::Structural) {
+            None
+        } else {
+            let replica = txn.get_cluster_replicas().next().unwrap();
+            txn.insert_cluster_replica_with_id(
+                replica.cluster_id,
+                replica.replica_id,
+                &replica.name,
+                replica.config,
+                replica.owner_id,
+            )
+            .unwrap();
+            Some(
+                txn.create_client_incarnation(Some(replica.replica_id))
+                    .unwrap(),
+            )
+        };
         let ts = txn.upper();
         let _ = txn.get_and_commit_op_updates();
         match txn.commit(ts).await {
@@ -247,13 +280,14 @@ async fn run_inner(conflict: Conflict) {
         let incarnation = prepared
             .incarnation
             .expect("actual query client incarnation");
-        let heartbeat = snapshot
-            .client_incarnations
-            .into_iter()
-            .map(|(key, value)| ClientIncarnation::from_key_value(key, value))
-            .find(|client| client.id == incarnation)
-            .expect("prepared client must still be live")
-            .heartbeat;
+        assert!(
+            snapshot
+                .client_incarnations
+                .into_iter()
+                .map(|(key, value)| ClientIncarnation::from_key_value(key, value))
+                .any(|client| client.id == incarnation),
+            "prepared client must still be live"
+        );
         assert!(
             prepared
                 .active_holds
@@ -269,9 +303,12 @@ async fn run_inner(conflict: Conflict) {
             "unrelated holds must not mask preparation protection at {required}: {prepared:?}"
         );
         match conflict {
-            Conflict::Heartbeat | Conflict::Cancellation => {
-                txn.publish_client_read_requirements(peer_incarnation, BTreeMap::new())
-                    .unwrap();
+            Conflict::Metadata | Conflict::Cancellation => {
+                txn.publish_client_read_requirements(
+                    peer_incarnation.unwrap(),
+                    BTreeMap::from([(input, required)]),
+                )
+                .unwrap();
             }
             Conflict::Structural => {
                 let mut database = txn
@@ -280,14 +317,6 @@ async fn run_inner(conflict: Conflict) {
                     .unwrap();
                 database.name = "rewrite_renamed".into();
                 txn.update_database(database.id, database).unwrap();
-            }
-            Conflict::Reclamation => {
-                // Exercise the reclaimer's exact conditional record change,
-                // not its expiry timer or a fabricated coordinator error.
-                assert!(
-                    txn.reclaim_client_incarnation(incarnation, heartbeat)
-                        .unwrap()
-                );
             }
         }
         let ts = txn.upper();
@@ -304,6 +333,7 @@ async fn run_inner(conflict: Conflict) {
     release_tx.send(()).expect("release prepared commit");
     let result = if matches!(conflict, Conflict::Cancellation) {
         let mut cancel_queued = false;
+        let mut peer_protects_input = true;
         loop {
             tokio::select! {
                 prepared = prepared_rx.recv() => {
@@ -337,9 +367,16 @@ async fn run_inner(conflict: Conflict) {
                     Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
                         ..
                     })) => continue,
-                    Err(error) => panic!("peer heartbeat snapshot: {error}"),
+                    Err(error) => panic!("peer grant snapshot: {error}"),
                 };
-                txn.publish_client_read_requirements(peer_incarnation, BTreeMap::new())
+                // Toggle protection only after preparation has acquired its own
+                // hold. The retained MV requirement makes reacquisition safe.
+                let grants = if peer_protects_input {
+                    BTreeMap::new()
+                } else {
+                    BTreeMap::from([(input, required)])
+                };
+                txn.publish_client_read_requirements(peer_incarnation.unwrap(), grants)
                     .unwrap();
                 let ts = txn.upper();
                 let _ = txn.get_and_commit_op_updates();
@@ -348,9 +385,10 @@ async fn run_inner(conflict: Conflict) {
                     Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
                         ..
                     })) => continue,
-                    Err(error) => panic!("peer heartbeat commit: {error}"),
+                    Err(error) => panic!("peer grant commit: {error}"),
                 }
             }
+            peer_protects_input = !peer_protects_input;
             release_tx.send(()).expect("release prepared retry");
         }
     } else {
@@ -367,7 +405,7 @@ async fn run_inner(conflict: Conflict) {
     );
 
     match conflict {
-        Conflict::Heartbeat => result.unwrap(),
+        Conflict::Metadata => result.unwrap(),
         Conflict::Cancellation => match result.unwrap_err() {
             PostgresError::Postgres(error) => {
                 assert_eq!(error.code(), Some(&SqlState::QUERY_CANCELED));
@@ -380,21 +418,8 @@ async fn run_inner(conflict: Conflict) {
             }
             error => panic!("expected DDL transaction race: {error}"),
         },
-        Conflict::Reclamation => match result.unwrap_err() {
-            PostgresError::Postgres(error) => {
-                let message = error
-                    .as_db_error()
-                    .expect("SQL protection rejection")
-                    .message();
-                assert!(
-                    message.contains("protection") && message.contains("closed"),
-                    "{error}"
-                );
-            }
-            error => panic!("expected closed client rejection: {error}"),
-        },
     }
-    // Read the outcome through the peer even if reclamation closed SQL's client.
+    // Read the committed outcome directly through the peer.
     loop {
         peer.sync_to_current_updates().await.unwrap();
         let txn = match peer.transaction().await {
@@ -405,7 +430,7 @@ async fn run_inner(conflict: Conflict) {
         let actual = txn.get_written_plan(mv, &selection.build_version).unwrap();
         let index_exists = txn.get_items().any(|item| item.global_id == index);
         match conflict {
-            Conflict::Heartbeat => {
+            Conflict::Metadata => {
                 assert!(!index_exists);
                 // Identity, not callback count, proves that the preparation
                 // made before the peer commit was the one durably selected.
@@ -420,18 +445,10 @@ async fn run_inner(conflict: Conflict) {
                     );
                 }
             }
-            Conflict::Cancellation | Conflict::Structural | Conflict::Reclamation => {
+            Conflict::Cancellation | Conflict::Structural => {
                 assert!(index_exists);
                 assert_eq!(actual, selection.revision);
-                if matches!(conflict, Conflict::Reclamation) {
-                    assert!(
-                        !txn.current_snapshot()
-                            .client_incarnations
-                            .into_iter()
-                            .map(|(key, value)| ClientIncarnation::from_key_value(key, value))
-                            .any(|client| Some(client.id) == prepared.incarnation)
-                    );
-                } else if matches!(conflict, Conflict::Structural) {
+                if matches!(conflict, Conflict::Structural) {
                     assert!(
                         txn.get_databases()
                             .any(|database| database.name == "rewrite_renamed")
@@ -450,7 +467,7 @@ async fn run_inner(conflict: Conflict) {
         "prepared rewrite durable outcome checked after {:?}",
         commit_started.elapsed()
     );
-    if matches!(conflict, Conflict::Heartbeat) {
+    if matches!(conflict, Conflict::Metadata) {
         let total: i64 = query_one(&client, sql!("SELECT total FROM rewrite_mv"), &[])
             .await
             .unwrap()

@@ -15,7 +15,6 @@ use std::time::{Duration, Instant};
 
 use mz_catalog::catalog::{Catalog, Op};
 use mz_catalog::durable::TestCatalogStateBuilder;
-use mz_catalog::read_protection::client_protection_unchanged_grace;
 use mz_cluster_client::client::TimelyConfig;
 use mz_compute::server::{ComputeInstanceContext, ComputeRuntimeRole};
 use mz_compute_client::protocol::command::ComputeCommand;
@@ -31,7 +30,7 @@ use uuid::Uuid;
 use super::tests::{Fixture, assert_rows, in_child};
 use super::{
     PublicationClock, PublicationOutcome, ReplicaEffects, ReplicaEnactment, absorb_updates,
-    limit_conflict_delay, storage_metadata,
+    storage_metadata,
 };
 
 #[mz_ore::test]
@@ -52,23 +51,15 @@ fn publication_scheduling() {
     clock.configure(changed);
     assert!(clock.due >= before && clock.due <= Instant::now() + changed);
 
-    let heartbeat = super::client_protection_heartbeat_interval();
-    let safety = client_protection_unchanged_grace() - heartbeat;
-    let delay = Duration::from_millis(100);
-    let headroom = Duration::from_nanos(1);
-    assert_eq!(limit_conflict_delay(delay, heartbeat - headroom), headroom);
-    assert_eq!(limit_conflict_delay(delay, safety - headroom), headroom);
-    for age in [heartbeat, safety, client_protection_unchanged_grace()] {
-        let limited = limit_conflict_delay(delay, age);
-        assert!(!limited.is_zero() && limited <= delay);
-    }
+    let delay = super::conflict_delay();
+    assert!(delay >= Duration::from_millis(10) && delay <= Duration::from_millis(100));
 }
 
 #[mz_ore::test(tokio::test)]
-async fn stale_protection_blocks_install_until_renewed() {
+async fn protection_publication_installation_and_supersession() {
     if !in_child(
         "MZ_CLUSTERD_PROTECTION_LIVENESS_TEST_CHILD",
-        "catalog_follower::execution::liveness_tests::stale_protection_blocks_install_until_renewed",
+        "catalog_follower::execution::liveness_tests::protection_publication_installation_and_supersession",
         Duration::from_secs(120),
     )
     .await
@@ -115,7 +106,6 @@ async fn exercise_liveness() {
         &build,
         opened.initial_updates,
     );
-    let publication_started = Instant::now();
     let ts = catalog.current_upper().await;
     let created = catalog
         .transact(
@@ -124,6 +114,34 @@ async fn exercise_liveness() {
             None,
             vec![Op::CreateClientIncarnation {
                 replica_id: Some(replica),
+                expected: None,
+            }],
+        )
+        .await
+        .unwrap();
+    let predecessor = created.created_client_incarnations[0];
+    let ts = catalog.current_upper().await;
+    catalog
+        .transact(
+            None,
+            ts,
+            None,
+            vec![Op::PublishClientReadRequirements {
+                incarnation: predecessor,
+                requirements: BTreeMap::from([(fixture.source, Timestamp::new(17_000))]),
+            }],
+        )
+        .await
+        .unwrap();
+    let ts = catalog.current_upper().await;
+    let created = catalog
+        .transact(
+            None,
+            ts,
+            None,
+            vec![Op::CreateClientIncarnation {
+                replica_id: Some(replica),
+                expected: Some(predecessor),
             }],
         )
         .await
@@ -136,6 +154,12 @@ async fn exercise_liveness() {
         &build,
         created.catalog_updates,
     );
+    let requirements = catalog
+        .state()
+        .client_read_requirements()
+        .iter()
+        .filter_map(|((owner, id), frontier)| (*owner == incarnation).then_some((*id, *frontier)))
+        .collect();
 
     let registry = MetricsRegistry::new();
     let mut server = mz_compute::server::serve(
@@ -172,13 +196,13 @@ async fn exercise_liveness() {
         endpoint,
         instance,
         incarnation,
-        publication_started,
+        requirements,
         cluster,
         replica,
         &registry,
         None,
     );
-    // Outer polling honors both sub-second phases and renewal, even when bounds
+    // Outer polling honors sub-second phases, even when bounds
     // are blocked on installation. An elapsed bounds clock alone cannot spin.
     driver.configure_publication(Duration::from_secs(3600));
     let mut bounds = PublicationClock::new(Duration::from_secs(3600));
@@ -189,10 +213,8 @@ async fn exercise_liveness() {
     driver.publication_clock.as_mut().unwrap().due = now + Duration::from_secs(3600);
     assert!(driver.wake_delay(Duration::from_secs(10), &bounds, true) <= Duration::from_millis(40));
     bounds.due = now;
-    driver.published_at = now - super::client_protection_heartbeat_interval();
     let delay = driver.wake_delay(Duration::from_secs(10), &bounds, false);
-    assert!(!delay.is_zero() && delay <= Duration::from_millis(10));
-    driver.published_at = publication_started;
+    assert_eq!(delay, Duration::from_secs(10));
     driver.configure(mz_catalog::compute_config::replica_compute_config(
         &catalog,
         cluster,
@@ -284,15 +306,10 @@ async fn exercise_liveness() {
             .catalog_read_protection_publish_interval(),
     );
     driver.publication_clock.as_mut().unwrap().due = deferred;
-    let heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
     driver
         .publish(&mut catalog, &mut effects, cluster, &build, true, None)
         .await
         .unwrap();
-    assert_eq!(
-        catalog.state().client_incarnations()[&incarnation].heartbeat,
-        heartbeat
-    );
     assert_eq!(
         catalog.state().client_read_requirements()[&requirement],
         Timestamp::new(15_000)
@@ -345,24 +362,6 @@ async fn exercise_liveness() {
         Timestamp::new(15_000)
     );
 
-    // Only the local publication clock is aged. Catalog grants, read holds,
-    // Persist frontiers, and worker responses all follow their normal APIs.
-    driver.published_at = Instant::now() - client_protection_unchanged_grace();
-    let error = driver
-        .install(
-            &mut catalog,
-            &mut effects,
-            cluster,
-            &build,
-            &fixture.store,
-            &fixture.persist,
-            &metadata,
-        )
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("requires renewal"), "{error:#}");
-    assert_eq!(driver.pending_installations(&effects), pending);
-
     let mut query = factory();
     query
         .send(ComputeCommand::HelloQuery {
@@ -374,52 +373,8 @@ async fn exercise_liveness() {
         driver.io.wait(query.recv()).await.unwrap(),
         Some(ComputeResponse::QueryReady)
     ));
-    // The query endpoint must not advertise an index for the refused plan.
-    driver
-        .io
-        .wait(async {
-            let result = timeout(Duration::from_millis(200), async {
-                loop {
-                    let response = query.recv().await.unwrap().expect("query connection");
-                    assert!(
-                        !matches!(response, ComputeResponse::Frontiers(id, _) if id == fixture.index),
-                        "stale installation exposed the index: {response:?}"
-                    );
-                }
-            })
-            .await;
-            assert!(result.is_err());
-        })
-        .await;
-
-    let heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
-    let advancement_due = driver.publication_clock.as_ref().unwrap().due;
-    driver
-        .publish(&mut catalog, &mut effects, cluster, &build, true, None)
-        .await
-        .unwrap();
-    assert!(catalog.state().client_incarnations()[&incarnation].heartbeat > heartbeat);
-    assert_eq!(
-        catalog.state().client_read_requirements()[&requirement],
-        Timestamp::new(15_000)
-    );
-    assert_eq!(
-        driver.publication_clock.as_ref().unwrap().due,
-        advancement_due
-    );
-    // Renewal retains the released token's committed protection. The normal
-    // advancement opportunity remains responsible for publishing its release.
-    driver.publication_clock.as_mut().unwrap().due = Instant::now();
-    driver
-        .publish(&mut catalog, &mut effects, cluster, &build, true, None)
-        .await
-        .unwrap();
-    assert!(
-        !catalog
-            .state()
-            .client_read_requirements()
-            .contains_key(&requirement)
-    );
+    // Pending installation retains inherited history even after local tokens drop.
+    assert!(driver.recovery_holds.is_some());
     // A peer advances metadata after the follower's snapshot. Admission must
     // absorb that prefix and retry its grant, without another outer install tick.
     fixture.writer.sync_to_current_updates().await.unwrap();
@@ -430,27 +385,23 @@ async fn exercise_liveness() {
             None,
             ts,
             None,
-            vec![Op::CreateClientIncarnation { replica_id: None }],
+            vec![Op::CreateClientIncarnation {
+                replica_id: None,
+                expected: None,
+            }],
         )
         .await
         .unwrap()
         .created_client_incarnations[0];
     // Maintenance yields on its first definitive conflict. Repeated entrypoints
     // and catch-up notifications cannot turn that into an inline write loop.
-    driver.published_at = Instant::now() - super::client_protection_heartbeat_interval();
-    let published_at = driver.published_at;
-    let heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
+    driver.publication_clock.as_mut().unwrap().due = Instant::now();
     assert!(super::is_catalog_conflict(
         &driver
             .publish(&mut catalog, &mut effects, cluster, &build, true, None)
             .await
             .unwrap_err(),
     ));
-    assert_eq!(driver.published_at, published_at);
-    assert_eq!(
-        catalog.state().client_incarnations()[&incarnation].heartbeat,
-        heartbeat
-    );
     assert!(driver.publication_needs_refresh);
     let retry_after = driver.publication_retry_after.unwrap();
     // Hold the gate far ahead while exercising callers, independent of host speed.
@@ -472,7 +423,6 @@ async fn exercise_liveness() {
                 .unwrap(),
             PublicationOutcome::Deferred,
         );
-        assert_eq!(driver.published_at, published_at);
     }
     driver.publication_retry_after = Some(retry_after);
     driver
@@ -485,7 +435,11 @@ async fn exercise_liveness() {
         .publish(&mut catalog, &mut effects, cluster, &build, true, None)
         .await
         .unwrap();
-    assert!(driver.published_at > published_at);
+    assert_eq!(
+        catalog.state().client_read_requirements()[&requirement],
+        Timestamp::new(17_000),
+    );
+    assert!(driver.recovery_holds.is_some());
     assert!(catalog.state().client_incarnations().contains_key(&peer));
 
     // Another peer commit leaves acquisition itself responsible for fresh grants.
@@ -538,7 +492,7 @@ async fn exercise_liveness() {
         }
     })
     .await
-    .expect("renewed installation must hydrate through real worker progress");
+    .expect("installation must hydrate through real worker progress");
     driver
         .io
         .wait(assert_rows(
@@ -589,7 +543,6 @@ async fn exercise_liveness() {
             .unwrap_err(),
     ));
     assert!(driver.publication_needs_refresh);
-    assert!(!driver.publication_retry_requirements);
     let ts = fixture.writer.current_upper().await;
     fixture
         .writer
@@ -606,10 +559,7 @@ async fn exercise_liveness() {
         .unwrap();
     let retry_after = driver.publication_retry_after.unwrap();
     driver.publication_retry_after = Some(Instant::now() + Duration::from_secs(3600));
-    driver.published_at = Instant::now() - super::client_protection_heartbeat_interval();
-    let heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
-    // A bounds conflict does not gate urgent renewal. Refreshing also invalidates
-    // this invocation's metadata rather than acknowledging a bounds opportunity.
+    // A bounds conflict gates writes even when catch-up notifications wake us.
     assert_eq!(
         driver
             .publish(
@@ -624,7 +574,6 @@ async fn exercise_liveness() {
             .unwrap(),
         PublicationOutcome::Deferred,
     );
-    assert!(catalog.state().client_incarnations()[&incarnation].heartbeat > heartbeat);
     driver.publication_retry_after = Some(retry_after);
     driver
         .io
@@ -644,46 +593,51 @@ async fn exercise_liveness() {
             )
             .await
             .unwrap(),
+        PublicationOutcome::Deferred,
+    );
+    assert_eq!(
+        driver
+            .publish(
+                &mut catalog,
+                &mut effects,
+                cluster,
+                &build,
+                false,
+                Some(&metadata)
+            )
+            .await
+            .unwrap(),
         PublicationOutcome::Completed,
     );
+    assert!(driver.recovery_holds.is_none());
     assert_eq!(
         catalog.state().collection_compaction_bounds()[&fixture.source],
         old_bound
     );
 
-    // Durable reclamation, unlike mere local staleness, cannot be repaired by
-    // renewing the same incarnation. The heartbeat CAS is the catalog boundary.
-    let expected_heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
+    // A successor makes this execution terminal, including maintenance calls
+    // with no changed aggregate to publish.
     driver
         .transact(
             &mut catalog,
             &mut effects,
             cluster,
             &build,
-            vec![Op::ReclaimClientIncarnation {
-                incarnation,
-                expected_heartbeat,
+            vec![Op::CreateClientIncarnation {
+                replica_id: Some(replica),
+                expected: Some(incarnation),
             }],
         )
         .await
         .unwrap();
-    assert!(
-        !catalog
-            .state()
-            .client_incarnations()
-            .contains_key(&incarnation)
-    );
-    driver.published_at = Instant::now() - client_protection_unchanged_grace();
-    let stale = driver.published_at;
     let error = driver
         .publish(&mut catalog, &mut effects, cluster, &build, true, None)
         .await
         .unwrap_err();
     assert!(
-        format!("{error:#}").contains(&format!("client incarnation {incarnation} is closed")),
+        error.to_string().contains("superseded or retired"),
         "{error:#}"
     );
-    assert_eq!(driver.published_at, stale);
     let error = driver
         .install(
             &mut catalog,
@@ -697,7 +651,7 @@ async fn exercise_liveness() {
         .await
         .unwrap_err();
     assert!(
-        error.to_string().contains("incarnation was reclaimed"),
+        error.to_string().contains("superseded or retired"),
         "{error:#}"
     );
     std::process::exit(0);

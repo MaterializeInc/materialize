@@ -1941,7 +1941,10 @@ async fn test_multi_subscriber_catalog() {
             None,
             commit_ts,
             None,
-            vec![Op::CreateClientIncarnation { replica_id: None }],
+            vec![Op::CreateClientIncarnation {
+                replica_id: None,
+                expected: None,
+            }],
         )
         .await
         .expect("publish peer client metadata");

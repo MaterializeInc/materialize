@@ -10,9 +10,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::Context;
 use mz_catalog::catalog::Catalog;
 use mz_catalog::memory::objects::CatalogItem;
-use mz_catalog::read_protection::{
-    client_protection_heartbeat_interval, client_protection_unchanged_grace,
-};
 use mz_controller_types::ClusterId;
 use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::client::{RunSinkCommand, StorageCommand};
@@ -50,10 +47,7 @@ impl ReplicaEnactment {
         let refreshed: anyhow::Result<()> = async {
             let (_, updates) = self.io.wait(catalog.sync_to_current_updates()).await?;
             super::super::super::absorb_updates(effects, catalog, cluster, build, updates);
-            self.ensure_live(catalog)?;
-            self.publish(catalog, effects, cluster, build, true, None)
-                .await?;
-            self.ensure_recent_protection()
+            self.ensure_live(catalog)
         }
         .await;
         self.apply_storage_progress();
@@ -69,26 +63,23 @@ impl ReplicaEnactment {
                         && sink.execution == execution
                         && desired.get(&id) == Some(&sink.definition)
                 });
-            let max_age = allowed
-                .then(|| {
-                    (client_protection_unchanged_grace() - client_protection_heartbeat_interval())
-                        .checked_sub(self.published_at.elapsed())
-                })
-                .flatten();
             self.io
                 .storage
                 .as_mut()
                 .expect("storage endpoint")
                 .endpoint
-                .reply_kafka_pre_open(request, execution, id, max_age);
+                .reply_kafka_pre_open(request, execution, id, allowed);
         }
         refreshed
     }
 
     fn kafka_eligible(&self, catalog: &Catalog, cluster: ClusterId) -> bool {
-        // Membership comes from the committed catalog. The immutable tag is not
-        // a fence, and a heartbeat age alone does not reclaim an incarnation.
-        catalog.state().oldest_replica_incarnation(cluster) == Some(self.protection.incarnation())
+        catalog
+            .get_cluster(cluster)
+            .replicas()
+            .map(|r| r.replica_id)
+            .min()
+            == Some(self.replica)
     }
 
     pub(super) fn desired_sinks(
@@ -242,7 +233,6 @@ impl ReplicaEnactment {
                 continue;
             }
             self.ensure_live(catalog)?;
-            self.ensure_recent_protection()?;
             let as_of = Antichain::from_elem(frontier);
             let with_snapshot = definition.with_snapshot && !PartialOrder::less_than(&as_of, upper);
             let description = StorageSinkDesc {

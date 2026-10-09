@@ -136,6 +136,9 @@ pub struct Transaction<'a> {
     written_plans: TableTransaction<WrittenPlanKey, WrittenPlanValue>,
     client_read_requirements:
         TableTransaction<ClientReadRequirementKey, ClientReadRequirementValue>,
+    // Grant rekeying during execution replacement preserves retained-history
+    // validation, including grants on indexes that have since been dropped.
+    client_requirement_predecessors: BTreeMap<u64, u64>,
     unfinalized_shards: TableTransaction<UnfinalizedShardKey, ()>,
     txn_wal_shard: TableTransaction<(), TxnWalShardValue>,
     // Don't make this a table transaction so that it's not read into the
@@ -373,6 +376,7 @@ impl<'a> Transaction<'a> {
             client_incarnations: TableTransaction::new(client_incarnations)?,
             written_plans: TableTransaction::new(written_plans)?,
             client_read_requirements: TableTransaction::new(client_read_requirements)?,
+            client_requirement_predecessors: BTreeMap::new(),
             unfinalized_shards: TableTransaction::new(unfinalized_shards)?,
             // Uniqueness violations for this value occur at the key rather than
             // the value (the key is the unit struct `()` so this is a singleton
@@ -1649,8 +1653,10 @@ impl<'a> Transaction<'a> {
         // TODO(benesch): this doesn't seem right. Cascade deletions should
         // be entirely the domain of the higher catalog layer, not the
         // storage layer.
-        self.cluster_replicas
+        let replicas = self
+            .cluster_replicas
             .delete(|_k, v| clusters.contains(&v.cluster_id), self.op_id);
+        self.retire_replica_protection(&replicas.into_iter().map(|(key, _)| key).collect());
         self.introspection_sources
             .delete(|k, _v| clusters.contains(&k.cluster_id), self.op_id);
 
@@ -1664,21 +1670,10 @@ impl<'a> Transaction<'a> {
     /// Runtime is linear with respect to the total number of cluster replicas in the catalog.
     /// DO NOT call this function in a loop, use [`Self::remove_cluster_replicas`] instead.
     pub fn remove_cluster_replica(&mut self, id: ReplicaId) -> Result<(), CatalogError> {
-        let deleted = self
-            .cluster_replicas
-            .delete_by_key(
-                ClusterReplicaKey {
-                    id,
-                    deployment_generation: self.deployment_generation,
-                },
-                self.op_id,
-            )
-            .is_some();
-        if deleted {
-            Ok(())
-        } else {
-            Err(SqlCatalogError::UnknownClusterReplica(id.to_string()).into())
-        }
+        self.remove_cluster_replicas(&BTreeSet::from([ClusterReplicaKey {
+            id,
+            deployment_generation: self.deployment_generation,
+        }]))
     }
 
     /// Removes the explicitly qualified cluster realizations from the transaction.
@@ -1698,6 +1693,11 @@ impl<'a> Transaction<'a> {
         let to_remove = replicas.iter().map(|key| (key.clone(), None)).collect();
         let mut prev = self.cluster_replicas.set_many(to_remove, self.op_id)?;
 
+        let removed = prev
+            .iter()
+            .filter_map(|(key, value)| value.as_ref().map(|_| key.clone()))
+            .collect();
+        self.retire_replica_protection(&removed);
         prev.retain(|_k, v| v.is_none());
         if !prev.is_empty() {
             let err = prev.keys().map(|k| k.id.to_string()).join(", ");
@@ -1705,6 +1705,31 @@ impl<'a> Transaction<'a> {
         }
 
         Ok(())
+    }
+
+    /// Membership removal revokes publication authority and releases protection in
+    /// the same commit. Replica IDs shared by other deployments remain independent.
+    fn retire_replica_protection(&mut self, replicas: &BTreeSet<ClusterReplicaKey>) {
+        if replicas.is_empty() {
+            return;
+        }
+        let retired = self.client_incarnations.delete(
+            |_, client| {
+                client.replica_id.is_some_and(|id| {
+                    replicas.contains(&ClusterReplicaKey {
+                        id,
+                        deployment_generation: client.deployment_generation,
+                    })
+                })
+            },
+            self.op_id,
+        );
+        let requirements = retired
+            .into_iter()
+            .flat_map(|(key, _)| self.client_requirement_keys(key.id))
+            .collect::<BTreeSet<_>>();
+        self.client_read_requirements
+            .delete_by_keys(requirements, self.op_id);
     }
 
     /// Removes item `id` from the transaction.
@@ -2914,6 +2939,7 @@ impl<'a> Transaction<'a> {
             client_incarnations,
             written_plans,
             client_read_requirements,
+            client_requirement_predecessors: _,
             unfinalized_shards,
             // Not representable as a `StateUpdate`.
             id_allocator: _,
@@ -3087,9 +3113,16 @@ impl<'a> Transaction<'a> {
         self.upper
     }
 
-    /// Allocates a fresh client identity. Durably committed identities are never
-    /// reused, including after reclamation. The identity is usable only after durable commit.
+    /// Registers a realization with no current execution. The identity and its
+    /// protection become usable only after durable commit.
     pub fn create_client_incarnation(
+        &mut self,
+        replica_id: Option<ReplicaId>,
+    ) -> Result<u64, CatalogError> {
+        self.replace_client_incarnation(replica_id, None)
+    }
+
+    fn allocate_client_incarnation(
         &mut self,
         replica_id: Option<ReplicaId>,
     ) -> Result<u64, CatalogError> {
@@ -3120,7 +3153,6 @@ impl<'a> Transaction<'a> {
         self.client_incarnations.insert(
             ClientIncarnationKey { id },
             ClientIncarnationValue {
-                heartbeat: 0,
                 deployment_generation: self.deployment_generation,
                 replica_id,
             },
@@ -3129,8 +3161,63 @@ impl<'a> Transaction<'a> {
         Ok(id)
     }
 
-    /// Replaces this incarnation's complete protection and renews its heartbeat.
-    /// Returns the incremented heartbeat, even when the requirements are unchanged.
+    /// Replaces this realization's execution, retaining its committed protection.
+    ///
+    /// The caller captures `expected` once and retains it across transaction
+    /// retries. A mismatch is terminal for that startup attempt. The successor
+    /// must adopt the transferred requirements before publishing its own aggregate.
+    /// The returned identity becomes usable only after this transaction commits.
+    pub fn replace_client_incarnation(
+        &mut self,
+        replica_id: Option<ReplicaId>,
+        expected: Option<u64>,
+    ) -> Result<u64, CatalogError> {
+        let mut current = BTreeSet::new();
+        self.client_incarnations.for_values(|key, value| {
+            if value.deployment_generation == self.deployment_generation
+                && value.replica_id == replica_id
+            {
+                current.insert(key.id);
+            }
+        });
+        if current != expected.into_iter().collect() {
+            return Err(DurableCatalogError::InvalidReadProtection(format!(
+                "realization execution changed: expected {expected:?}, found {current:?}"
+            ))
+            .into());
+        }
+        let successor = self.allocate_client_incarnation(replica_id)?;
+        if let Some(predecessor) = expected {
+            let requirements = self.client_requirement_keys(predecessor);
+            let mut updates = BTreeMap::new();
+            for key in requirements {
+                if let Some(value) = self.client_read_requirements.get(&key).cloned() {
+                    updates.insert(
+                        ClientReadRequirementKey {
+                            incarnation: successor,
+                            id: key.id,
+                        },
+                        Some(value),
+                    );
+                    updates.insert(key, None);
+                }
+            }
+            self.client_read_requirements
+                .set_many(updates, self.op_id)?;
+            self.client_incarnations
+                .delete_by_key(ClientIncarnationKey { id: predecessor }, self.op_id);
+            let original = self
+                .client_requirement_predecessors
+                .get(&predecessor)
+                .copied()
+                .unwrap_or(predecessor);
+            self.client_requirement_predecessors
+                .insert(successor, original);
+        }
+        Ok(successor)
+    }
+
+    /// Replaces this execution's complete protection.
     /// Protection is usable only after durable commit. The adapter must include independent
     /// storage-leaf requirements covering the logical inputs of index targets.
     /// A closed incarnation cannot publish, even an empty requirement map.
@@ -3138,8 +3225,8 @@ impl<'a> Transaction<'a> {
         &mut self,
         incarnation: u64,
         requirements: BTreeMap<GlobalId, mz_repr::Timestamp>,
-    ) -> Result<u64, CatalogError> {
-        let heartbeat = self.renew_client_incarnation(incarnation)?;
+    ) -> Result<(), CatalogError> {
+        self.ensure_client_incarnation(incarnation)?;
         let mut updates: BTreeMap<_, _> = self
             .client_requirement_keys(incarnation)
             .into_iter()
@@ -3154,22 +3241,16 @@ impl<'a> Transaction<'a> {
         updates.retain(|key, value| self.client_read_requirements.get(key) != value.as_ref());
         self.client_read_requirements
             .set_many(updates, self.op_id)?;
-        Ok(heartbeat)
+        Ok(())
     }
 
-    /// Renews an open incarnation owned by this deployment, retaining every grant.
-    /// Renewal does not acknowledge pending acquisitions, advancements or releases.
-    pub fn renew_client_incarnation(&mut self, incarnation: u64) -> Result<u64, CatalogError> {
+    fn ensure_client_incarnation(&self, incarnation: u64) -> Result<(), CatalogError> {
         let key = ClientIncarnationKey { id: incarnation };
-        let previous = self
-            .client_incarnations
-            .get(&key)
-            .ok_or_else(|| {
-                DurableCatalogError::InvalidReadProtection(format!(
-                    "client incarnation {incarnation} is closed or missing"
-                ))
-            })?
-            .clone();
+        let previous = self.client_incarnations.get(&key).ok_or_else(|| {
+            DurableCatalogError::InvalidReadProtection(format!(
+                "client incarnation {incarnation} is closed or missing"
+            ))
+        })?;
         if previous.deployment_generation != self.deployment_generation {
             return Err(DurableCatalogError::InvalidReadProtection(format!(
                 "client incarnation {incarnation} belongs to deployment {}, not {}",
@@ -3177,43 +3258,21 @@ impl<'a> Transaction<'a> {
             ))
             .into());
         }
-        let heartbeat = previous.heartbeat.checked_add(1).ok_or_else(|| {
-            DurableCatalogError::InvalidReadProtection(format!(
-                "client incarnation {incarnation} heartbeat exhausted"
-            ))
-        })?;
-        self.client_incarnations.set(
-            key,
-            Some(ClientIncarnationValue {
-                heartbeat,
-                ..previous
-            }),
-            self.op_id,
-        )?;
-        Ok(heartbeat)
-    }
-
-    /// Permanently closes an incarnation only if its heartbeat still matches.
-    /// The caller observes expiry with its own monotonic clock. This compare and
-    /// the requirement deletions take effect together at transaction commit.
-    pub fn reclaim_client_incarnation(
-        &mut self,
-        incarnation: u64,
-        expected_heartbeat: u64,
-    ) -> Result<bool, CatalogError> {
-        let key = ClientIncarnationKey { id: incarnation };
-        if !self
-            .client_incarnations
-            .get(&key)
-            .is_some_and(|value| value.heartbeat == expected_heartbeat)
+        if let Some(id) = previous.replica_id
+            && self
+                .cluster_replicas
+                .get(&ClusterReplicaKey {
+                    id,
+                    deployment_generation: self.deployment_generation,
+                })
+                .is_none()
         {
-            return Ok(false);
+            return Err(DurableCatalogError::InvalidReadProtection(format!(
+                "client incarnation {incarnation} belongs to removed replica {id}"
+            ))
+            .into());
         }
-        let requirements = self.client_requirement_keys(incarnation);
-        self.client_read_requirements
-            .delete_by_keys(requirements, self.op_id);
-        self.client_incarnations.set(key, None, self.op_id)?;
-        Ok(true)
+        Ok(())
     }
 
     fn client_requirement_keys(&self, incarnation: u64) -> BTreeSet<ClientReadRequirementKey> {
@@ -3619,7 +3678,14 @@ impl<'a> Transaction<'a> {
             let new_grant = self
                 .client_read_requirements
                 .initial
-                .get(&key)
+                .get(&ClientReadRequirementKey {
+                    incarnation: self
+                        .client_requirement_predecessors
+                        .get(&key.incarnation)
+                        .copied()
+                        .unwrap_or(key.incarnation),
+                    id: key.id,
+                })
                 .is_none_or(|initial| requirement.frontier < initial.frontier);
             let storage_initially = self
                 .storage_collection_metadata
@@ -3722,6 +3788,7 @@ impl<'a> Transaction<'a> {
             client_incarnations,
             written_plans,
             client_read_requirements,
+            client_requirement_predecessors: _,
             unfinalized_shards,
             txn_wal_shard,
             audit_log_updates,
@@ -5192,6 +5259,9 @@ where
             .collect()
     }
 }
+
+#[cfg(test)]
+mod lifecycle_tests;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]

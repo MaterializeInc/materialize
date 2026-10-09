@@ -1099,14 +1099,14 @@ impl<'w> Worker<'w> {
                     request,
                     execution,
                     id,
-                    max_age,
+                    allowed,
                 },
             ) => {
                 self.storage_state
                     .executions
                     .as_mut()
                     .expect("native runtime")
-                    .kafka_pre_open_reply(request, execution, id, max_age);
+                    .kafka_pre_open_reply(request, execution, id, allowed);
             }
             InternalStorageCommand::KafkaPreOpen {
                 request,

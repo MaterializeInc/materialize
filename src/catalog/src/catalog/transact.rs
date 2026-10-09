@@ -351,15 +351,13 @@ pub enum Op {
         requirements: Vec<MaintainedReadRequirement>,
         bounds: Vec<CollectionCompactionBound>,
     },
-    /// Allocates a fresh query-client incarnation. Returned only after commit.
+    /// Replaces a realization's expected execution, transferring its protection.
+    /// The startup attempt must retain its expectation across catalog retries.
     CreateClientIncarnation {
         replica_id: Option<ReplicaId>,
+        expected: Option<u64>,
     },
-    /// Renews an existing incarnation without changing its committed requirements.
-    RenewClientIncarnation {
-        incarnation: u64,
-    },
-    /// Replaces a client's aggregate requirements and renews its heartbeat atomically.
+    /// Replaces an execution's aggregate requirements atomically.
     PublishClientReadRequirements {
         incarnation: u64,
         requirements: BTreeMap<GlobalId, mz_repr::Timestamp>,
@@ -371,11 +369,6 @@ pub enum Op {
         incarnation: u64,
         requirements: BTreeMap<GlobalId, mz_repr::Timestamp>,
         minimums: BTreeMap<GlobalId, mz_repr::Timestamp>,
-    },
-    /// Closes an unchanged incarnation after the caller's observation window.
-    ReclaimClientIncarnation {
-        incarnation: u64,
-        expected_heartbeat: u64,
     },
     /// Injects audit events into the catalog.
     ///
@@ -439,10 +432,8 @@ impl Op {
             | Self::DropClusterReplicaRealization { .. }
             | Self::CheckClusterDeclarations { .. }
             | Self::CreateClientIncarnation { .. }
-            | Self::RenewClientIncarnation { .. }
             | Self::PublishClientReadRequirements { .. }
             | Self::PublishCreatorReadRequirements { .. }
-            | Self::ReclaimClientIncarnation { .. }
             | Self::SetReadProtection { .. }
             | Self::SetWrittenPlan { .. } => true,
             Self::UpdateScopedSystemParameters {
@@ -1376,7 +1367,7 @@ impl Catalog {
         }
 
         // The last client release can retire metadata after its SQL object is gone.
-        // Visit changed requirement targets, not every collection on each heartbeat.
+        // Visit changed requirement targets, not every collection on each publication.
         for update in &updates {
             if let StateUpdateKind::ClientReadRequirement(requirement) = &update.kind
                 && update.diff == StateDiff::Retraction
@@ -1663,19 +1654,18 @@ impl Catalog {
                     imports,
                 )?;
             }
-            Op::CreateClientIncarnation { replica_id } => {
+            Op::CreateClientIncarnation {
+                replica_id,
+                expected,
+            } => {
                 if !state.catalog_read_protection_enabled() {
                     return Err(CatalogError::internal(
                         "create query client",
                         "catalog read protection is not enabled",
                     ));
                 }
-                created_client_incarnations.push(tx.create_client_incarnation(replica_id)?);
-            }
-            Op::RenewClientIncarnation { incarnation } => {
-                tx.renew_client_incarnation(incarnation)?;
-                debug!(target: "mz_adapter::frontend_read_then_write",
-                    incarnation, "catalog client renewal staged");
+                created_client_incarnations
+                    .push(tx.replace_client_incarnation(replica_id, expected)?);
             }
             Op::PublishClientReadRequirements {
                 incarnation,
@@ -1692,12 +1682,6 @@ impl Catalog {
                 debug!(target: "mz_adapter::frontend_read_then_write",
                     incarnation, requested_count, expanded_count, ?expansion_elapsed,
                     staging_elapsed = ?started.elapsed(), "catalog client protection staged");
-            }
-            Op::ReclaimClientIncarnation {
-                incarnation,
-                expected_heartbeat,
-            } => {
-                tx.reclaim_client_incarnation(incarnation, expected_heartbeat)?;
             }
             Op::CheckClusterState {
                 cluster_id,
@@ -5224,7 +5208,10 @@ mod tests {
                 None,
                 ts,
                 None,
-                vec![Op::CreateClientIncarnation { replica_id: None }],
+                vec![Op::CreateClientIncarnation {
+                    replica_id: None,
+                    expected: None,
+                }],
             )
             .await
             .expect("client incarnation")
@@ -5242,10 +5229,9 @@ mod tests {
             )
             .await
             .expect("client protection");
-        let heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
         let planning_position = catalog.planning_position();
         let ts = catalog.current_upper().await;
-        let renewed = catalog
+        let unchanged = catalog
             .transact(
                 None,
                 ts,
@@ -5256,15 +5242,11 @@ mod tests {
                 }],
             )
             .await
-            .expect("unchanged protection still renews the client");
-        assert_eq!(
-            catalog.state().client_incarnations()[&incarnation].heartbeat,
-            heartbeat + 1
-        );
+            .expect("unchanged protection is a no-op");
         assert_eq!(catalog.state().client_read_frontier(global_id), Some(birth));
         assert_eq!(catalog.planning_position(), planning_position);
-        assert!(renewed.builtin_table_updates.is_empty());
-        assert!(renewed.catalog_updates.is_empty());
+        assert!(unchanged.builtin_table_updates.is_empty());
+        assert!(unchanged.catalog_updates.is_empty());
         let mut batched_follower =
             Catalog::open_debug_read_only_catalog(persist.clone(), organization, &bootstrap)
                 .await
@@ -5577,6 +5559,12 @@ mod tests {
             schema_spec: schema.id.clone(),
         };
         let prefix = format!("{}.{}", database.name, schema.name.schema);
+        let replica = catalog
+            .clusters()
+            .flat_map(|cluster| cluster.replicas())
+            .next()
+            .expect("bootstrap replica")
+            .replica_id;
         let ts = catalog.current_upper().await;
         let clients = catalog
             .transact(
@@ -5584,8 +5572,14 @@ mod tests {
                 ts,
                 None,
                 vec![
-                    Op::CreateClientIncarnation { replica_id: None },
-                    Op::CreateClientIncarnation { replica_id: None },
+                    Op::CreateClientIncarnation {
+                        replica_id: None,
+                        expected: None,
+                    },
+                    Op::CreateClientIncarnation {
+                        replica_id: Some(replica),
+                        expected: None,
+                    },
                 ],
             )
             .await
@@ -5853,20 +5847,19 @@ mod tests {
             Some(input_birth)
         );
 
-        let heartbeat = catalog.state().client_incarnations()[&incarnation].heartbeat;
         let ts = catalog.current_upper().await;
         catalog
             .transact(
                 None,
                 ts,
                 None,
-                vec![Op::ReclaimClientIncarnation {
-                    incarnation,
-                    expected_heartbeat: heartbeat,
+                vec![Op::CreateClientIncarnation {
+                    replica_id: None,
+                    expected: Some(incarnation),
                 }],
             )
             .await
-            .expect("reclaim protection client");
+            .expect("replace protection owner");
         let ts = catalog.current_upper().await;
         assert!(
             catalog

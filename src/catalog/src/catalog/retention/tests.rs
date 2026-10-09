@@ -454,7 +454,7 @@ async fn index_plan_selection_atomically_protects_actual_imports() {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
-async fn closing_client_incarnation_preserves_index_object_retention() {
+async fn replacing_client_preserves_index_object_retention() {
     let mut f = Fixture::new().await;
     let input = f.source("input").await;
     let row = SourceData(Ok(Row::pack_slice(&[Datum::Int64(42)])));
@@ -473,7 +473,10 @@ async fn closing_client_incarnation_preserves_index_object_retention() {
             None,
             ts,
             None,
-            vec![Op::CreateClientIncarnation { replica_id: None }],
+            vec![Op::CreateClientIncarnation {
+                replica_id: None,
+                expected: None,
+            }],
         )
         .await
         .expect("create client")
@@ -485,13 +488,33 @@ async fn closing_client_incarnation_preserves_index_object_retention() {
     .await;
     f.propose_bounds(&[input], 80_000, 80_000).await;
 
-    let heartbeat = f.catalog.state().client_incarnations()[&incarnation].heartbeat;
-    f.transact(vec![Op::ReclaimClientIncarnation {
-        incarnation,
-        expected_heartbeat: heartbeat,
+    let ts = f.catalog.current_upper().await;
+    let successor = f
+        .catalog
+        .transact(
+            None,
+            ts,
+            None,
+            vec![Op::CreateClientIncarnation {
+                replica_id: None,
+                expected: Some(incarnation),
+            }],
+        )
+        .await
+        .expect("replace client")
+        .created_client_incarnations[0];
+    assert!(
+        !f.catalog
+            .state()
+            .client_incarnations()
+            .contains_key(&incarnation)
+    );
+    f.transact(vec![Op::PublishClientReadRequirements {
+        incarnation: successor,
+        requirements: BTreeMap::new(),
     }])
     .await;
-    assert!(f.catalog.state().client_incarnations().is_empty());
+    assert!(f.catalog.state().client_read_requirements().is_empty());
     f.propose_bounds(&[input], 100_000, 90_000).await;
 
     // No leased reader or query token exists while committed permission is

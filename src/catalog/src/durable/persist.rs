@@ -1555,6 +1555,14 @@ impl UnopenedPersistCatalogState {
             // Recollect on every CAS attempt. Only the successful attempt's
             // snapshot grants cleanup authority, not subsequent publications.
             let owners = if protection_enabled && promoting {
+                fence_updates.extend(
+                    super::promotion::retired_protection(
+                        self.snapshot.iter().map(|(kind, _, _)| kind),
+                        admitted_generation,
+                    )?
+                    .into_iter()
+                    .map(|row| (row, Diff::MINUS_ONE)),
+                );
                 Some(super::promotion::ephemeral_owners(
                     self.snapshot.iter().map(|(kind, _, _)| kind),
                 )?)

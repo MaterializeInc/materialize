@@ -1585,10 +1585,7 @@ def workflow_sink_failure(c: Composition) -> None:
             Clusterd(name="clusterd1", workers=4, options=options)
         ):
             c.up("clusterd1")
-            # Kafka takeover may wait for the predecessor's incarnation grace.
-            c.run_testdrive_files(
-                "--default-timeout=420s", "sink-failure/03-verify-data.td"
-            )
+            c.run_testdrive_files("sink-failure/03-verify-data.td")
 
 
 def workflow_test_bootstrap_vars(c: Composition) -> None:
@@ -5666,13 +5663,17 @@ def workflow_test_refresh_mv_warmup(
                 """))
 
 
-def catalog_client_incarnations(c: Composition) -> dict[str, dict]:
+def catalog_protection_snapshot(c: Composition) -> dict:
     response = requests.get(
         f"http://localhost:{c.port('materialized', 6878)}/api/catalog/dump",
         timeout=10,
     )
     response.raise_for_status()
-    return response.json()["client_incarnations"]
+    return response.json()
+
+
+def catalog_client_incarnations(c: Composition) -> dict[str, dict]:
+    return catalog_protection_snapshot(c)["client_incarnations"]
 
 
 def cluster_replica_incarnation(c: Composition, cluster: str) -> str:
@@ -5695,17 +5696,31 @@ def cluster_replica_incarnation(c: Composition, cluster: str) -> str:
     return matches[0]
 
 
-def wait_for_client_reclamation(c: Composition, incarnations: Collection[str]) -> None:
-    # Replica absence is not reclamation. Closing the durable incarnation also
-    # removes its grants atomically. Allow the fixture's 25s grace plus convergence
-    # before starting the separate, short advancement measurement.
-    deadline = time.monotonic() + 60
+def wait_for_client_retirement(
+    c: Composition,
+    incarnations: Collection[str],
+    successors: Collection[dict] = (),
+    timeout: float = 60,
+) -> None:
+    # Observe explicit removal before the separate, short advancement measurement.
+    # Retiring the exact execution also removes its grants atomically.
+    deadline = time.monotonic() + timeout
     while True:
-        clients = catalog_client_incarnations(c)
+        snapshot = catalog_protection_snapshot(c)
+        clients = snapshot["client_incarnations"]
         remaining = {key: clients[key] for key in incarnations if key in clients}
+        grants = [
+            grant
+            for grant in snapshot["client_read_requirements"]
+            if str(grant[0]) in incarnations
+        ]
         if not remaining:
-            return
-        assert time.monotonic() < deadline, f"clients not reclaimed: {remaining}"
+            assert not grants, f"retired executions still own grants: {grants}"
+            if all(list(clients.values()).count(owner) == 1 for owner in successors):
+                return
+        assert (
+            time.monotonic() < deadline
+        ), f"executions not retired/replaced: {remaining}, expected {successors}, got {clients}"
         time.sleep(0.5)
 
 
@@ -6226,12 +6241,9 @@ def workflow_test_github_8734(c: Composition) -> None:
                 "enable_refresh_every_mvs": "true",
             },
             support_external_clusterd=True,
-            environment_extra=["MZ_TEST_CLIENT_PROTECTION_HEARTBEAT_MS=5000"],
         ),
         Testdrive(no_reset=True),
     ):
-        # Managed replicas inherit the same 5s heartbeat / 25s grace from startup,
-        # including after the environmentd restart below.
         c.down(destroy_volumes=True)
         c.up("materialized", Service("testdrive", idle=True))
 
@@ -6249,7 +6261,7 @@ def workflow_test_github_8734(c: Composition) -> None:
             """)
         incarnation = cluster_replica_incarnation(c, "test")
         c.sql("ALTER CLUSTER test SET (REPLICATION FACTOR 0)")
-        wait_for_client_reclamation(c, [incarnation])
+        wait_for_client_retirement(c, [incarnation])
 
         try:
             check_read_frontiers_not_stuck(c, ["t"])
@@ -6260,13 +6272,13 @@ def workflow_test_github_8734(c: Composition) -> None:
         # Restart envd, then verify that the table's frontier still advances.
         protection_evidence("before-restart")
         # All clients in this isolated fixture run in the container being killed.
-        # Their retained grants must retire before measuring post-restart progress.
+        # Restart must replace their executions before measuring progress.
         retiring_clients = catalog_client_incarnations(c)
         c.kill("materialized")
         c.up("materialized")
 
         c.sql("SELECT * FROM mv")
-        wait_for_client_reclamation(c, retiring_clients)
+        wait_for_client_retirement(c, retiring_clients, retiring_clients.values())
 
         try:
             check_read_frontiers_not_stuck(c, ["t"])
@@ -7809,7 +7821,6 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
     periodically advancing, instead of blocking compaction of the index inputs.
     """
 
-    # Managed replicas share the fixture's 5s heartbeat / 25s grace from startup.
     with c.override(
         Materialized(
             propagate_crashes=False,
@@ -7819,7 +7830,6 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
                 "unsafe_enable_unorchestrated_cluster_replicas": "true",
             },
             support_external_clusterd=True,
-            environment_extra=["MZ_TEST_CLIENT_PROTECTION_HEARTBEAT_MS=5000"],
         )
     ):
         c.down(destroy_volumes=True)
@@ -7878,7 +7888,7 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
         incarnation = cluster_replica_incarnation(c, "test")
         c.sql("ALTER CLUSTER test SET (REPLICATION FACTOR 0)")
         wait_for_replica_count(0)
-        wait_for_client_reclamation(c, [incarnation])
+        wait_for_client_retirement(c, [incarnation])
 
         # Without replicas there are no observed index frontiers. The committed
         # bounds govern protection and reconstruction while execution is paused.
@@ -8711,8 +8721,6 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
         assert match is not None, collection_state
         return f"s{match.group(1)}"
 
-    # All processes in this isolated fixture share compressed protection timing.
-    # Keep the production ratio and the existing DROP convergence deadline.
     with c.override(
         Materialized(
             propagate_crashes=False,
@@ -8722,7 +8730,6 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
                 "unsafe_enable_unorchestrated_cluster_replicas": "true",
             },
             support_external_clusterd=True,
-            environment_extra=["MZ_TEST_CLIENT_PROTECTION_HEARTBEAT_MS=5000"],
         )
     ):
         c.down(destroy_volumes=True)
@@ -8735,6 +8742,7 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
             CREATE MATERIALIZED VIEW plain_mv IN CLUSTER stalled AS SELECT * FROM t;
             CREATE REPLACEMENT MATERIALIZED VIEW rp1 FOR mv
                 IN CLUSTER stalled AS SELECT * FROM t;
+            SELECT * FROM mv;
             """)
 
         [(mv_id,)] = c.sql_query(
@@ -8747,20 +8755,23 @@ def workflow_test_replacement_mv_drop_after_restart(c: Composition) -> None:
             "SELECT id FROM mz_materialized_views WHERE name = 'rp1'"
         )
 
+        incarnation = cluster_replica_incarnation(c, "stalled")
         c.sql("""
             ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp1;
             CREATE REPLACEMENT MATERIALIZED VIEW rp2 FOR mv
                 IN CLUSTER stalled AS SELECT * FROM t;
             ALTER CLUSTER stalled SET (REPLICATION FACTOR 0);
             """)
+        wait_for_client_retirement(c, [incarnation])
         [(rp2_id,)] = c.sql_query(
             "SELECT id FROM mz_materialized_views WHERE name = 'rp2'"
         )
 
         # Reconstruct storage ownership without restarting compute dataflows.
-        # Predecessor coordinator grants still require normal reclamation.
+        predecessors = catalog_client_incarnations(c)
         c.kill("materialized")
         c.up("materialized")
+        wait_for_client_retirement(c, predecessors, predecessors.values())
 
         collection_states = storage_collection_states()
         mv_state = collection_states[mv_id]
@@ -9389,11 +9400,12 @@ def workflow_test_controller_oracle_stall(
 def workflow_adapter_loss(c: Composition) -> None:
     """Source-fed execution and history compaction survive loss of SQL ingress.
 
-    Table/webhook-fed work may pause. Queries and those dataflows must catch up
-    after restart. All outage observations use Kafka or read-only Persist CLI,
-    never another adapter. Compute and storage replicas must remain alive.
+    Table/webhook-fed work may pause. The stopped adapter's holds retain history
+    until replacement. Queries and those dataflows must catch up after restart.
+    All outage observations use Kafka or read-only Persist CLI, never another
+    adapter. Compute and storage replicas must remain alive.
     """
-    timeout = 420  # Includes the abandoned query client's reclamation grace.
+    timeout = 420
     adapter = Materialized(
         deploy_generation=1,
         external_metadata_store=True,
@@ -9781,6 +9793,50 @@ def workflow_adapter_loss(c: Composition) -> None:
                     f"Curated observers did not initialize: {metric_baselines}"
                 )
             time.sleep(0.25)
+
+        # Keep the warmup reads open across SIGKILL. The transaction's time domain
+        # covers both input and MV, so silence must retain both histories.
+        hold_conn = c.sql_connection(
+            service=adapter.name, startup_params={"statement_timeout": f"{timeout}s"}
+        )
+        hold_conn.execute("SET cluster = compute_cluster")
+        hold_conn.execute("BEGIN")
+        assert hold_conn.execute("SELECT * FROM al_source_mv").fetchall() == [(0,)]
+        assert hold_conn.execute("SELECT * FROM al_input").fetchall() == [("0",)]
+        held_row = hold_conn.execute("SELECT mz_now()::text").fetchone()
+        assert held_row is not None
+        held_ts = int(held_row[0])
+        outage_ids = dict(
+            c.sql_query(
+                """SELECT o.name, g.global_id FROM mz_objects o
+                   JOIN mz_internal.mz_object_global_ids g ON g.id = o.id
+                   WHERE o.name IN ('al_input', 'al_source_mv')""",
+                service=adapter.name,
+            )
+        )
+        outage_json_ids = {
+            name: {"User": int(gid[1:])} for name, gid in outage_ids.items()
+        }
+        snapshot = catalog_protection_snapshot(c)
+        predecessors = snapshot["client_incarnations"]
+        adapter_ids = {
+            key for key, owner in predecessors.items() if owner["replica_id"] is None
+        }
+        assert len(adapter_ids) == 1, predecessors
+        adapter_grants = [
+            (gid, frontier)
+            for owner, gid, frontier in snapshot["client_read_requirements"]
+            if str(owner) in adapter_ids
+        ]
+        for name in shards:
+            assert any(
+                gid == outage_json_ids[name] and frontier <= held_ts
+                for gid, frontier in adapter_grants
+            ), (name, adapter_grants)
+            bound = snapshot["collection_compaction_bounds"][outage_ids[name]][
+                "elements"
+            ]
+            assert bound and bound[0] <= held_ts, (name, bound, held_ts)
         c.kill(adapter.name)
         try:
             absent()
@@ -9789,77 +9845,47 @@ def workflow_adapter_loss(c: Composition) -> None:
             history_threshold = history_before["upper"][0] - 1
             before = {name: inspect(shard) for name, shard in shards.items()}
             assert all(state["upper"] for state in before.values()), before
-            thresholds = {name: state["upper"][0] - 1 for name, state in before.items()}
+            # Post-replacement compaction must pass the retained transaction too,
+            # not merely an older cutoff that silence still permits compacting.
+            thresholds = {
+                name: max(state["upper"][0] - 1, held_ts)
+                for name, state in before.items()
+            }
             expected = {0}
             deadline = time.monotonic() + timeout
             n = 0
-            input_count = 1
-            compaction_wave_size = None
-            compaction_waves_remaining = 4
             while True:
                 absent()
-                first = n + 1
-                produce(first, input_count)
-                n += input_count
-                expected.update(value * 10 for value in range(first, n + 1))
+                n += 1
+                produce(n)
+                expected.add(n * 10)
                 actual = consume("source", len(expected))
                 after = {name: inspect(shard) for name, shard in shards.items()}
                 absent()
-                physical_progress = {
-                    name: compacted_past(after[name], thresholds[name])
-                    for name in shards
-                }
-                progressed = all(physical_progress.values())
-                if (
-                    actual == expected
-                    and progressed
-                    and all(
-                        observers_advanced(replica, metric_baselines[replica])
-                        for replica in running_replicas
+                for name, state in after.items():
+                    assert state["since"] and state["since"][0] <= held_ts, (
+                        name,
+                        held_ts,
+                        state,
                     )
+                if actual == expected and all(
+                    observers_advanced(replica, metric_baselines[replica])
+                    for replica in running_replicas
                 ):
                     print(f"Adapter absent: Kafka MV/sink rows={sorted(actual)}")
-                    print(f"Compacted past outage timestamps: {thresholds}")
+                    print(
+                        f"Silent adapter retains input and MV history at {held_ts}: {after}"
+                    )
                     break
                 if time.monotonic() >= deadline:
                     raise AssertionError(
                         f"Outage acceptance incomplete: Kafka_complete={actual == expected}, "
-                        f"physical_progress={physical_progress}, "
                         f"expected={expected}, Kafka={actual}, "
                         f"compactions before={before}, after={after}"
                     )
-                input_count = 1
-                if (
-                    not progressed
-                    and actual == expected
-                    and compaction_waves_remaining
-                    and all(
-                        state["since"] and state["since"][0] > thresholds[name]
-                        for name, state in after.items()
-                    )
-                ):
-                    # Advancing permission does not schedule a rewrite of old
-                    # batches. Supply bounded ordinary input after permission
-                    # advances, without tying every record to two CLI inspections.
-                    # Complete each wave through Kafka before starting the next.
-                    if compaction_wave_size is None:
-                        compaction_wave_size = max(
-                            1,
-                            max(
-                                sum(batch["len"] for batch in state["batches"])
-                                for state in after.values()
-                            ),
-                        )
-                        print(
-                            "Providing ordinary compaction work: "
-                            f"up to {compaction_waves_remaining} waves of "
-                            f"{compaction_wave_size} records"
-                        )
-                    input_count = compaction_wave_size
-                    compaction_waves_remaining -= 1
 
             successive_observer_progress(running_replicas)
-            # Reconstruct after actual history compaction, with no SQL ingress.
+            # Reconstruct with no SQL ingress while the adapter's holds persist.
             # Stop the surviving compute sibling before producing a fresh value:
             # its shared Persist upper cannot stand in for restarted-replica work.
             c.kill("clusterd3")
@@ -9895,8 +9921,7 @@ def workflow_adapter_loss(c: Composition) -> None:
 
             successive_observer_progress({"clusterd3"})
             # This replica is the only source and sink executor in cluster1.
-            # A new incarnation may wait for the abandoned Kafka writer's grace,
-            # but must then reconstruct both sides without SQL ingress.
+            # Its replacement must reconstruct both sides without SQL ingress.
             c.kill("clusterd1")
             running_replicas.remove("clusterd1")
             absent()
@@ -9936,11 +9961,65 @@ def workflow_adapter_loss(c: Composition) -> None:
             else:
                 assert not response.ok, "stopped adapter accepted webhook input"
             absent()
+            for shard in shards.values():
+                held_state = inspect(shard)
+                assert (
+                    held_state["since"] and held_state["since"][0] <= held_ts
+                ), held_state
         finally:
             # Restore ingress even on failure, without turning failed outage
             # observations into passing post-restart observations.
             c.up(*replicas)
             c.up(adapter.name)
+            hold_conn.close()
+
+        wait_for_client_retirement(
+            c, predecessors, predecessors.values(), timeout=timeout
+        )
+        # Only replacement releases the stopped adapter's transient holds. Keep
+        # the outage cutoffs and physical-compaction deadline for both shards.
+        deadline = time.monotonic() + timeout
+        compaction_wave_size = None
+        compaction_waves_remaining = 4
+        input_count = 1
+        while True:
+            first = n + 1
+            produce(first, input_count)
+            n += input_count
+            expected.update(value * 10 for value in range(first, n + 1))
+            actual = consume("source", len(expected))
+            after = {name: inspect(shard) for name, shard in shards.items()}
+            physical_progress = {
+                name: compacted_past(after[name], thresholds[name]) for name in shards
+            }
+            if actual == expected and all(physical_progress.values()):
+                break
+            assert time.monotonic() < deadline, (
+                f"History did not compact after adapter replacement: {physical_progress}, "
+                f"{held_ts=}, {after}, {expected=}, Kafka={actual}"
+            )
+            input_count = 1
+            if (
+                actual == expected
+                and not all(physical_progress.values())
+                and compaction_waves_remaining
+                and all(
+                    state["since"] and state["since"][0] > thresholds[name]
+                    for name, state in after.items()
+                )
+            ):
+                # Permission alone does not rewrite batches. Supply bounded
+                # ordinary input, completing each wave through Kafka first.
+                if compaction_wave_size is None:
+                    compaction_wave_size = max(
+                        1,
+                        max(
+                            sum(batch["len"] for batch in state["batches"])
+                            for state in after.values()
+                        ),
+                    )
+                input_count = compaction_wave_size
+                compaction_waves_remaining -= 1
 
         # No executor has ever existed for this index. Observe its retention
         # window across advancing permissions, without an arrangement or reader
@@ -10002,7 +10081,7 @@ def workflow_adapter_loss(c: Composition) -> None:
             # A fresh index can lack its own published since. Its logical-input
             # retention still constrains the input's committed permission.
             index_since = bounds.get(index_id, {}).get("elements")
-            # Include *all* outstanding grants, even unreclaimed incarnations.
+            # Include all outstanding grants, including silent executions.
             # Startup replica holds may need ordinary progress before this can
             # pass. The input's own 1s policy cannot account for this history.
             if (
@@ -10075,7 +10154,7 @@ def workflow_adapter_loss(c: Composition) -> None:
             return counts
 
         # Only now introduce a reader. Keep its logical-input hold through
-        # hydration, without a manual reclaim or an artificial grace period.
+        # hydration and the indexed read.
         historical_query = sql.SQL(
             "SELECT text FROM al_history_input ORDER BY text AS OF {}"
         ).format(sql.Literal(historical_ts))

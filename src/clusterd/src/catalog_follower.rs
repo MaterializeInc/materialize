@@ -312,10 +312,23 @@ pub(crate) async fn run(
     let mut effects = ReplicaEffects::default();
     absorb_updates(&mut effects, &catalog, config.cluster_id, &build, initial);
     if owner.compute.is_some() {
-        let (incarnation, publication_started) = loop {
+        let mut expected = None;
+        let incarnation = loop {
             let (_, updates) = catalog.sync_to_current_updates().await?;
             absorb_updates(&mut effects, &catalog, config.cluster_id, &build, updates);
-            let started = std::time::Instant::now();
+            // Capture absence as well as identity. A conflicting startup cannot
+            // refresh its expectation and supersede the execution that won.
+            let predecessor = *expected.get_or_insert_with(|| {
+                catalog
+                    .state()
+                    .client_incarnations()
+                    .iter()
+                    .find_map(|(id, client)| {
+                        (client.deployment_generation == config.deploy_generation
+                            && client.replica_id == Some(config.replica_id))
+                        .then_some(*id)
+                    })
+            });
             let ts = catalog.current_upper().await;
             match catalog
                 .transact(
@@ -324,6 +337,7 @@ pub(crate) async fn run(
                     None,
                     vec![Op::CreateClientIncarnation {
                         replica_id: Some(config.replica_id),
+                        expected: predecessor,
                     }],
                 )
                 .await
@@ -336,13 +350,10 @@ pub(crate) async fn run(
                         &build,
                         result.catalog_updates,
                     );
-                    break (
-                        *result
-                            .created_client_incarnations
-                            .first()
-                            .context("created replica incarnation")?,
-                        started,
-                    );
+                    break *result
+                        .created_client_incarnations
+                        .first()
+                        .context("created replica incarnation")?;
                 }
                 Err(mz_catalog::catalog::CatalogError::Catalog(error))
                     if matches!(
@@ -375,7 +386,14 @@ pub(crate) async fn run(
             owner.compute.take().expect("native compute endpoint"),
             instance,
             incarnation,
-            publication_started,
+            catalog
+                .state()
+                .client_read_requirements()
+                .iter()
+                .filter_map(|((owner, id), frontier)| {
+                    (*owner == incarnation).then_some((*id, *frontier))
+                })
+                .collect(),
             config.cluster_id,
             config.replica_id,
             &registry,
@@ -408,22 +426,6 @@ pub(crate) async fn run(
             publication_clock.configure(interval);
             execution.configure_publication(interval);
             execution.ensure_live(&catalog)?;
-            if execution.renewal_due() {
-                if let Err(error) = execution
-                    .publish(
-                        &mut catalog,
-                        &mut effects,
-                        config.cluster_id,
-                        &build,
-                        true,
-                        None,
-                    )
-                    .await
-                {
-                    failures["publication"].inc();
-                    tracing::warn!(%error, "replica heartbeat pending");
-                }
-            }
             execution.apply_progress(&catalog);
             execution.apply_storage_progress();
             if let Err(error) = execution
@@ -535,27 +537,6 @@ pub(crate) async fn run(
                 pending_metadata = !metadata.pending.is_empty();
                 let mut pending = !effects.pending.is_empty() || pending_metadata;
                 if let Some(execution) = &mut *execution {
-                    if execution.renewal_due() {
-                        if let Err(error) = execution
-                            .publish(
-                                &mut catalog,
-                                &mut effects,
-                                config.cluster_id,
-                                &build,
-                                true,
-                                None,
-                            )
-                            .await
-                        {
-                            failures["publication"].inc();
-                            tracing::warn!(%error, "replica heartbeat pending");
-                        }
-                    }
-                    // Renewal can consume peer DDL. Resolve schemas and selected
-                    // producers again rather than combine metadata from two prefixes.
-                    if catalog.transient_revision() != metadata_revision {
-                        continue;
-                    }
                     match execution
                         .install_sources(
                             &mut catalog,
@@ -608,7 +589,12 @@ pub(crate) async fn run(
                         tracing::warn!(cluster = %config.cluster_id, replica = %config.replica_id,
                             %error, "execution installation pending");
                     }
+                    // Acquisition can absorb DDL after storage inventory was checked.
+                    // Keep inherited protection until every lane has installed against
+                    // the same catalog revision, including newly desired storage work.
+                    pending |= catalog.transient_revision() != metadata_revision;
                     pending |= execution.pending_installations(&effects) > 0;
+                    execution.ensure_live(&catalog)?;
                     bounds_ready = !pending;
                     execution.apply_progress(&catalog);
                     execution.apply_catalog(
@@ -689,7 +675,7 @@ pub(crate) async fn run(
                 failures["observation"].inc();
                 pending_metadata = true;
                 if let Some(execution) = &mut *execution {
-                    // Missing metadata cannot prevent renewal of existing protection.
+                    // Missing metadata need not block publication of changed aggregates.
                     if let Err(error) = execution
                         .publish(
                             &mut catalog,
@@ -702,7 +688,7 @@ pub(crate) async fn run(
                         .await
                     {
                         failures["publication"].inc();
-                        tracing::warn!(%error, "replica heartbeat pending");
+                        tracing::warn!(%error, "replica protection publication pending");
                     }
                 }
                 let error = format!("{error:#}");
@@ -719,6 +705,7 @@ pub(crate) async fn run(
         }
         match &mut *execution {
             Some(execution) => {
+                execution.ensure_live(&catalog)?;
                 let delay = execution.wake_delay(delay, &publication_clock, bounds_ready);
                 execution.io.idle(delay).await;
             }

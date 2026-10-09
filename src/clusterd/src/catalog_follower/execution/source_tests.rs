@@ -120,7 +120,10 @@ async fn catalog_counter_ingests_after_writer_and_query_drop() {
             None,
             ts,
             None,
-            vec![Op::CreateClientIncarnation { replica_id: None }],
+            vec![Op::CreateClientIncarnation {
+                replica_id: None,
+                expected: None,
+            }],
         )
         .await
         .unwrap()
