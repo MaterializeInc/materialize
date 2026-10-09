@@ -836,15 +836,17 @@ impl Coordinator {
             .await?;
 
         if ctx.session().vars().emit_timestamp_notice() {
-            let explanation = self.explain_timestamp(
+            // Skipped on error, like `PeekClient::add_timestamp_notice` does.
+            if let Ok(explanation) = self.explain_timestamp(
                 ctx.session().conn_id(),
                 ctx.session().pcx().wall_time,
                 cluster_id,
                 &id_bundle,
                 determination,
-            );
-            ctx.session()
-                .add_notice(AdapterNotice::QueryTimestamp { explanation });
+            ) {
+                ctx.session()
+                    .add_notice(AdapterNotice::QueryTimestamp { explanation });
+            }
         }
 
         let resp = match plan.copy_to {

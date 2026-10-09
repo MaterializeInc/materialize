@@ -1446,17 +1446,13 @@ impl PeekClient {
 
                 // Add timestamp notice if emit_timestamp_notice is enabled
                 if let Some(determination) = determination_for_notice {
-                    let explanation = self
-                        .call_coordinator(|tx| Command::ExplainTimestamp {
-                            conn_id: session.conn_id().clone(),
-                            session_wall_time: session.pcx().wall_time,
-                            cluster_id: target_cluster_id,
-                            id_bundle: input_id_bundle.clone(),
-                            determination,
-                            tx,
-                        })
-                        .await?;
-                    session.add_notice(AdapterNotice::QueryTimestamp { explanation });
+                    self.add_timestamp_notice(
+                        session,
+                        target_cluster_id,
+                        input_id_bundle.clone(),
+                        determination,
+                    )
+                    .await?;
                 }
 
                 Ok(Some(match copy_to {

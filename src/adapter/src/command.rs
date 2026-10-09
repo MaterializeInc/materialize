@@ -383,7 +383,8 @@ pub enum Command {
         tx: oneshot::Sender<()>,
     },
 
-    /// Generate a timestamp explanation.
+    /// Generate a timestamp explanation, or fail with `ConcurrentDependencyDrop`
+    /// if a collection in `id_bundle` no longer exists.
     /// This is used when `emit_timestamp_notice` is enabled.
     ExplainTimestamp {
         conn_id: ConnectionId,
@@ -391,7 +392,7 @@ pub enum Command {
         cluster_id: ClusterId,
         id_bundle: CollectionIdBundle,
         determination: TimestampDetermination,
-        tx: oneshot::Sender<TimestampExplanation>,
+        tx: oneshot::Sender<Result<TimestampExplanation, AdapterError>>,
     },
 
     /// Statement logging event from frontend peek sequencing.
