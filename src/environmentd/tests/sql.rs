@@ -4312,3 +4312,73 @@ fn test_grant_all_on_view_suppresses_non_applicable_notice() {
         );
     }
 }
+
+/// Parks `explain` at `failpoint`, runs `drop` on `ddl_client`, and resumes `explain`, returning
+/// its outcome. `failpoint` must run on a blocking thread.
+///
+/// Failpoints are process-global, so callers rely on running in their own process, as nextest runs
+/// them.
+#[allow(clippy::disallowed_methods)]
+async fn explain_with_concurrent_drop(
+    server: &test_util::TestServer,
+    ddl_client: &tokio_postgres::Client,
+    failpoint: &'static str,
+    explain: &'static str,
+    drop: &str,
+) -> Result<Vec<tokio_postgres::Row>, tokio_postgres::Error> {
+    let explainer = server.connect().await.unwrap();
+
+    let parked = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    fail::cfg_callback(failpoint, {
+        let parked = Arc::clone(&parked);
+        let resume = Arc::clone(&resume);
+        move || {
+            parked.wait();
+            resume.wait();
+        }
+    })
+    .unwrap();
+
+    let explain = task::spawn(|| "explainer", async move {
+        explainer.query(explain, &[]).await
+    });
+    task::spawn_blocking(|| "wait_parked", move || parked.wait()).await;
+
+    ddl_client.batch_execute(drop).await.unwrap();
+
+    // Disarm before handing the EXPLAIN back, so that no later statement parks.
+    fail::remove(failpoint);
+    task::spawn_blocking(|| "resume", move || resume.wait()).await;
+
+    explain.await
+}
+
+// An EXPLAIN CREATE INDEX whose indexed relation is dropped while the index is optimized fails
+// with a "was dropped" error, instead of aborting environmentd.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_explain_create_index_after_concurrent_relation_drop() {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    for stmt in ["CREATE TABLE t (a int)", "CREATE VIEW v AS SELECT a FROM t"] {
+        ddl_client.batch_execute(stmt).await.unwrap();
+    }
+
+    let err = explain_with_concurrent_drop(
+        &server,
+        &ddl_client,
+        "create_index_optimize",
+        "EXPLAIN CREATE INDEX i ON v (a)",
+        "DROP VIEW v",
+    )
+    .await
+    .expect_err("EXPLAIN must fail on the dropped view")
+    .unwrap_db_error();
+    assert_contains!(err.message(), "was dropped");
+    ddl_client
+        .batch_execute("SELECT 1")
+        .await
+        .expect("environmentd is still up");
+}

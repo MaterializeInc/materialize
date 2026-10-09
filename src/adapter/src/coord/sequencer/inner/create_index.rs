@@ -350,6 +350,9 @@ impl Coordinator {
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize create index",
             move || {
+                // Test-only synchronization point: parks the optimization, so a
+                // test can drop a dependency before the next stage.
+                fail::fail_point!("create_index_optimize");
                 span.in_scope(|| {
                     let mut pipeline = || -> Result<(
                     optimize::index::GlobalMirPlan,
