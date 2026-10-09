@@ -15,18 +15,20 @@ The process orchestrator used by the emulator and local development applies the 
 So `clusterd` can tell at startup whether it has a scratch filesystem, and that answer never changes.
 
 This document designs the file backend under that constraint.
-The file backend is meant for deployments where the pool is the scratch volume's sole consumer, and it sizes its capacity from the volume's free space as if it were.
+The file backend assumes the pool is the scratch volume's sole consumer, and it sizes its capacity from the volume's free space at open.
 In the cloud each replica pod gets its own scratch filesystem, shared with no other replica, and RocksDB-backed upsert is being replaced by the pool and is not recommended alongside compute workloads.
-Under the compiled defaults the pool is not alone on the volume: `enable_lgalloc` defaults to on (`src/compute-types/src/dyncfgs.rs`), and lgalloc then keeps its files in the scratch directory, while the pager's file backend uses the scratch directory whenever one is set (`apply_worker_config` in `src/compute/src/compute_state.rs`).
+lgalloc keeps its files in the scratch directory when enabled. `enable_lgalloc` defaults to on in code (`src/compute-types/src/dyncfgs.rs`), but deployments run with it off except the emulator, so enabling the flag in the emulator also requires turning lgalloc off.
+The column pager's file backend also writes to the scratch directory (`apply_worker_config` in `src/compute/src/compute_state.rs`), and the parent design removes it (see Rollout).
 The process orchestrator additionally puts every replica's scratch directory on one shared filesystem.
-Sole ownership of the volume is therefore a precondition for enabling the flag, so a deployment that enables it must also disable lgalloc and keep the column pager off the file backend.
 CI enables the flag with lgalloc disabled by mzcompose, on volumes that are large relative to test data.
 The first deployments are the emulator and self-managed installations configured that way, followed by FS-backed instances in staging.
 The swap backend's behavior stays the same, and the rest of the pool (slots, budget, residency states, eviction policy, copy-out reads) is reused unchanged.
 
 ## Success criteria
 
-* On a pod with a scratch directory and no swap, pool RSS stays at or below `max(rss target, budget + warm cap)` regardless of state size, while the bytes held in files grow.
+* On a pod with a scratch directory and no swap, pool RSS stays at or below `rss target + compressed cap` regardless of state size, while the bytes held in files grow, and returns to the RSS target once the spill threads catch up.
+  The compressed cap is `rss target - budget - insert slack - warm cap`, and the inline backstop engages only above twice the cap (see Where I/O runs), so the compressed tier can sit between its cap and twice its cap while the device lags evictions.
+  The bound does not hold while the store is full or has writes disabled, since the tier then stays in RAM, counted by `extent_file_full`.
   Measured by the existing pool gauges plus new `extent_file_bytes` and `extent_file_allocated_bytes` gauges, under the upsert-v2 hydration workload used for the parent design's staging measurement.
 * Steady-state chunk turnover performs no filesystem metadata operations.
   The open file count stays equal to the number of extent classes, and `openat`, `unlink`, and `ftruncate` counts stay at zero after warm-up (checked with `strace -c` on a running `clusterd`).
@@ -112,7 +114,8 @@ This is the code-level form of the provisioning invariant.
 
 `apply_worker_config` in `src/compute/src/compute_state.rs` resolves the backend from the scratch directory and a flag, see Configuration.
 `build_pool` in `pool_config` creates the store's directory and opens the pool, and it is the one place that falls back to `Swap`.
-If the directory cannot be created or `FileStore::open` fails (unsupported filesystem, permissions, failed alignment probe), the pool runs on `Swap` with one warning and reports the backend it actually chose in a metric.
+If the directory cannot be created or `FileStore::open` fails (an unsupported or memory-backed filesystem, permissions, or a probe that fails even with buffered I/O), the pool runs on `Swap` with one warning, reports the backend it actually chose in a metric, and sets a fallback metric.
+A probe that fails with `EINVAL` under `O_DIRECT` does not fall back to swap, it reopens the files buffered (see Alignment).
 On a swapless pod that fallback is today's compression-only behavior, so a failure degrades to the status quo rather than to an outage.
 
 ### Extent homes
@@ -174,8 +177,9 @@ The file store is a small userspace extent allocator over a fixed set of files.
 * **Files.**
   One file per extent class, using the arena's existing class ladder (`extent_classes`, page-multiple sizes from one page to the first class that fits `max_stored_len` of the largest chunk class), which the pool passes to `FileStore::open`.
   Each file is opened `O_RDWR | O_DIRECT | O_CLOEXEC | O_TMPFILE` in the scratch directory, so it has no name and the kernel frees its blocks when the process exits, including on crash.
-  Where `O_TMPFILE` fails with `EOPNOTSUPP` or `EISDIR`, the store creates a uniquely named file and unlinks it immediately, which has the same lifetime property after a one-syscall window.
+  Where `O_TMPFILE` fails with `EOPNOTSUPP` or `EISDIR`, the store creates a file named after the process id, the clock, and a counter, and unlinks it immediately, which has the same lifetime property after a one-syscall window.
   This matters because an ephemeral volume survives a container restart within a pod, so named files from a crashed predecessor would otherwise occupy the scratch disk.
+  A restarted container can reuse the pid, so the clock keeps a left-over name from colliding, and a collision retries with a new name.
 * **Slots.**
   A file slot is `(class, index)` at byte offset `index * class_size`.
   Allocation reuses `region::SlotAllocator` (free lists plus high-water mark) behind one mutex per class, the structure that already serves arena slots.
@@ -184,6 +188,7 @@ The file store is a small userspace extent allocator over a fixed set of files.
 * **Growth.**
   A slot handed out from the cold side or the high-water mark has no blocks yet, so the store `fallocate`s exactly that slot's range before returning it.
   Preallocation turns `ENOSPC` into an allocation failure before any data is in flight, and slot reuse from the warm side performs no filesystem call at all.
+  A failed `fallocate` can leave part of the range allocated, so the store punches the slot's range before returning it cold. If that punch fails too, the slot goes warm and stays charged.
   On ext4 and XFS the first write to a preallocated range still converts an unwritten extent, a one-time metadata update per block that slot reuse never repeats.
 * **Capacity.**
   The store charges each allocated slot at its class size against its capacity, and an allocation that would exceed capacity fails.
@@ -276,9 +281,10 @@ The design keeps the pool's public API infallible and handles each error where i
 * **Store full** (capacity reached, or `ENOSPC` from `fallocate` or `pwrite`): demotion stops and the extent stays in the arena.
   An `ENOSPC` lowers the store's capacity to its allocated bytes at that moment, for the rest of the process, since the headroom was evidently too small for this filesystem.
   A `pwrite` can hit `ENOSPC` despite the preallocation on a filesystem that allocates on overwrite, so the store punches that slot and takes it back cold, and writes stay enabled.
+  If that punch fails, the slot's blocks are in an unknown state, so the store leaves it on no free list and keeps it charged.
   Freed slots keep their blocks, so the store keeps serving demotions from them under the lowered capacity.
   RAM then grows past the RSS target, counted by `extent_file_full`, which matches the parent design's current answer to scratch exhaustion (RSS grows and the memory limiter is the backstop).
-* **Write error** (`EIO` or any errno from `pwrite` other than `ENOSPC`): the extent returns to `Arena`, a counter increments, and the store disables further writes for the process's lifetime with one warning.
+* **Write error** (`EIO` or any errno other than `ENOSPC` from `pwrite` or a growing `fallocate`): the extent returns to `Arena`, a counter increments, and the store disables further writes for the process's lifetime with one warning.
   A device that failed a write is not trusted with more data, and existing file extents remain readable.
 * **Read error** (`EIO`, short read, or crc mismatch): the process panics with the class, offset, and expected and observed checksums.
   There is no correct value to return, the state is recreatable from persist, and a restart rebuilds it.
@@ -292,13 +298,19 @@ A pass over a write-disabled store stops at its first entry and sets the hint, s
 
 ### Where I/O runs
 
-Demotion writes run on spill threads, in the existing `enforce_compressed_cap` call at the top of `spill_worker`'s loop.
+Demotion writes run on spill threads, in the existing `enforce_compressed_cap` call at the top of `spill_worker`'s loop, once per iteration.
 Workers run demotion inline only when no spill threads exist or the tier exceeds twice its capacity, as today.
 For file mode, an inline pass stops once the tier falls back to twice its capacity rather than to its capacity, leaving the rest to the spill threads.
 This bounds a worker's write work to whatever exceeds the backstop threshold rather than the whole overage.
 
+A spill thread's pass demotes one extent while evictions are queued, and at most `BACKGROUND_DEMOTION_BYTES` (16 MiB) otherwise, so a busy spill thread alternates one eviction with one demotion.
+Demotions are device writes, and on a device slower than the rate at which evictions fill the tier, an unbounded pass never brings the tier back to its cap.
+The eviction queue then stays full, and every eviction runs inline on the threads that trip the budget.
+16 MiB is about 35 ms of writes at the 475 MB/s an 8 vCPU (`c8gd.2xlarge`) instance-store NVMe sustained.
+The limit is also why the tier can rest above its cap while the device lags, as the success criteria state.
+
 Per the parent design's cost model, a ~2 MiB chunk compresses to ~0.36 MiB on the measured arrangement data.
-On the phase-0 machine (see Phase 0 results) one 384 KiB `O_DIRECT` write took 0.43 ms and one 384 KiB read took 0.37 ms on an idle device.
+On the phase-0 machine (see Phase 0 results) one 384 KiB `O_DIRECT` write took 0.43 ms and one 384 KiB read took 0.38 ms on an idle device.
 A single synchronous writer already reached the device's write ceiling there, so synchronous `O_DIRECT` `pwrite` on spill threads and `pread` on readers is the default.
 Whether `io_uring` submission does better on other devices is decided by the measurement plan rather than by argument.
 
@@ -308,7 +320,7 @@ The four rungs keep their meaning, with the bottom rung replaced.
 
 1. **Slots**, bounded by the budget.
 2. **Warm free slots**, bounded by `min(budget / 8, 1 GiB)`.
-3. **Compressed-resident extents** in the arena, bounded by `max(0, rss target - budget - warm cap)`.
+3. **Compressed-resident extents** in the arena, bounded by the compressed cap, `max(0, rss target - budget - insert slack - warm cap)`, once the spill threads catch up, and by twice the cap while the device lags.
 4. **Extent files**, bounded by the store's capacity.
    Overflow stays in rung 3 and grows RSS, counted.
 
@@ -323,14 +335,16 @@ New `PoolStats` fields, exported in `src/timely-util/src/pool_config/metrics.rs`
 * `extent_file_write_bytes_identity` and `extent_file_write_bytes_compressed`: the bytes those writes transferred, split by codec for the compression-floor measurement.
   Every write counter counts the same writes, including those whose chunk was freed before the demotion committed, so the bytes and counts divide into each other.
 * `extent_file_reads` and `extent_file_read_bytes`: cold reads and their bytes.
-* `extent_file_read_latency`: fixed log2 buckets from 16 µs to 65.536 ms as atomic counters in `PoolStats`, exported as a Prometheus histogram, since a cumulative sum gives only the mean.
+* `extent_file_read_latency`: fixed log2 buckets with upper bounds from 32 µs to 65.536 ms plus an open last bucket, as atomic counters in `PoolStats`, since a cumulative sum gives only the mean.
+  The registry has no computed histogram, so each bucket is exported as a computed gauge with an `le` label, cumulative like a Prometheus histogram's buckets but without `_sum` and `_count`.
 * `extent_file_repeat_reads`: file reads of extents already read since demotion, from one bit per extent, which decides whether probe paths should admit.
-* `extent_file_full`: demotion passes that left an extent in RAM because the store was full or had writes disabled.
-* `extent_file_write_errors`: write failures, after which writes are disabled.
+* `extent_file_full`: demotion passes that left an extent in RAM because the store was full or had writes disabled, including the pass whose write disabled them.
+* `extent_file_write_errors`: write and `fallocate` failures, after which writes are disabled.
 * `extent_file_holes_punched_bytes`: space returned to the filesystem.
 * `extent_demotions_elided`: extents freed while still in the arena, in both modes, the extent-level counterpart of `writes_elided`.
 
-The metric help strings that currently say "swap-backed" become backend-neutral, and a `mz_column_pool_backend` info gauge labels the chosen backend and I/O mode (`swap`, `file_direct`, `file_buffered`).
+Metric help strings are backend-neutral, and a `mz_column_pool_backend` info gauge labels the chosen backend and I/O mode (`swap`, `file_direct`, `file_buffered`).
+`mz_column_pool_backend_fallback` reads 1 when the pool was asked for a file backend and runs on swap, which the backend gauge alone does not distinguish from a configured swap backend.
 
 ### Configuration
 
@@ -361,14 +375,23 @@ Capacity has no dyncfg, since the pool owns the volume.
    Residency is unchanged.
 5. **Admit:** a probe's admitting read decodes into a slot under the lock, and the chunk becomes `BackedResident` with its extent still on file.
    Evicting it again is a page release with no write.
-6. **Free:** the file slot returns to its class's free list with no filesystem call, and holes are punched later only if free space in the class accumulates.
+6. **Free:** the file slot returns to its class's free list with no filesystem call, and its blocks stay allocated until an allocation of another class needs the space and punches them.
 
 ## Testing and measurement
 
 * **Pool unit tests, both backends.**
   The existing pool tests that do not depend on swap observation run against both backends through a helper that builds a pool over a temporary directory.
   The pageout-observation tests stay swap-only.
-* **File-mode unit tests:** round trip through a file; demotion under tier pressure; a free during `Demoting` leaves no leaked arena or file slot; a free before demotion elides the write; admission from a file extent; a corrupted file extent panics on read; a store-full pass stops without losing accounting and resumes after frees; a write error disables writes and keeps the extent readable; the capacity override; on-demand hole punching lets a full store serve an allocation of another class; the `O_TMPFILE` fallback path.
+* **File-mode unit tests** cover:
+  * a round trip through a file, and demotion under tier pressure,
+  * a free during `Demoting` leaving no leaked arena or file slot, and a free before demotion eliding the write,
+  * admission from a file extent, and a corrupted file extent panicking on read,
+  * a store-full pass stopping without losing accounting and resuming after frees,
+  * a write error disabling writes and keeping the extent readable,
+  * the capacity override, and on-demand hole punching letting a full store serve an allocation of another class,
+  * failed punches and `fallocate` calls keeping their blocks counted, and concurrent allocations racing for punched room,
+  * the `O_TMPFILE` fallback path.
+
   File tests are ignored under Miri, which cannot run the file system calls, as `pool_config`'s test already is for `mmap`.
 * **Accounting invariant:** the invariant documented on `note_extent_resident` is extended to cover `extent_file_bytes`, and the concurrent stress test checks it against the surviving chunks once its threads stop.
 * **Harnesses:** the `pool_extents` example in `src/ore/examples/` drives a pool directly with `--backend swap|file`, and reports per-phase RSS and CPU, demotion and read rates, the read-latency histogram, and file space.
@@ -448,9 +471,9 @@ ext4's default 5% root reservation already showed up in `f_bavail`, 886 GB avail
 | 2 MiB read, 1 thread | 1.78 GiB/s, p50 1.1 ms, p99 2.2 ms | same | not measured |
 | 2 writers and 16 readers | writes 0.85 GiB/s total, reads 1.78 GiB/s total, read p50 3.3 ms | same throughput, write latency 14 ms | not measured |
 
-Every configuration hit the same two ceilings, 0.85 GiB/s of writes and 1.78 GiB/s of reads, independent of engine, block size, and thread count, and reads and writes ran at their ceilings concurrently.
+Writes reached 0.85 GiB/s in every configuration, and reads reached 1.78 GiB/s in every configuration except a single 384 KiB reader at 0.99 GiB/s, independent of engine, and reads and writes ran at their ceilings concurrently.
 Above the ceiling, added concurrency or queue depth only added queueing latency.
-On this device `io_uring` therefore has no throughput to win: one synchronous writer saturates writes, and two to four synchronous readers saturate reads.
+On this device `io_uring` therefore has no throughput to win: one synchronous writer saturates writes, and 16 synchronous readers, the smallest multi-reader count measured, saturate reads.
 Buffered writes reached the same throughput as `O_DIRECT` but spent 10.3% CPU per writer against 2.8%, the cost of copying through the page cache.
 
 Consequences for the design, pending a second device class:
@@ -469,18 +492,19 @@ The bodies are synthetic, so the ratios below say nothing about real lz4 ratios.
 Before the measurement, an `O_DIRECT` readback probe ran 1.9 million punch, write and read cycles on the device without a mismatch.
 No swap-mode baseline ran, because the instance has no swap configured.
 
-* **Device ceiling:** demotion ran at 0.82 to 0.88 GiB/s in every configuration, which is the phase 0 write ceiling.
-  The writes are bound by the device, not by the threads. One, two, four and eight spill threads gave the same rate, and `spill_in_flight` sat at its maximum of 64 for 70 to 90% of the fill whenever the tier cap was nonzero.
+* **Device ceiling:** demotion ran at 0.82 to 0.88 GiB/s in every configuration except capacity-8g, where the store filled and the rate fell to 0.57 GiB/s. That range is the phase 0 write ceiling.
+  The writes are bound by the device, not by the threads. One, two, four and eight spill threads gave the same rate, and `spill_in_flight` sat at its maximum of 64 for 68 to 89% of the fill whenever the tier cap was nonzero and the store had room, and for 48% in capacity-8g.
   A dedicated demotion thread would not help on this device.
 * **RSS target:** VmHWM tracked the target. It reached 4174, 4818, 6199 and 7018 MiB for targets of 4506, 5120, 6144 and 8192 MiB, which gave tier caps of 0, 512, 1536 and 3584 MiB.
   The elision rate fell from 0.325 at a 3584 MiB tier to 0.076, 0.030 and 0 as the tier shrank.
   The share of demotion writes that ran inline rose from 0 to 3.1, 5.4 and 14.2%.
   With a tier below a few hundred MiB, worker threads pay for demotion I/O.
-* **Cold reads:** with about 1 MiB extents, reads at 16 and 64 readers saturated the device's read ceiling. p50 was 8.3 ms at 16 readers, and at 64 readers p50 was 14 ms and p99 90 ms. A single reader saw p50 0.67 ms.
-* **Compression floor:** with 20% of chunks inserted under the identity codec, identity extents made up 34% of device write bytes. Reads per second fell from 3198 to 2547, and VmHWM rose to 8467 MiB, which is 275 MiB above the target.
+* **Cold reads:** with about 1 MiB extents, p50 was 8.3 ms at 16 readers, and at 64 readers p50 was 14 ms and p99 90 ms. A single reader saw p50 0.67 ms.
+  The harness's reads mix resident hits with file reads, so these are service times, not device latencies.
+* **Compression floor:** with 20% of chunks inserted under the identity codec, identity extents made up 34% of device write bytes, by the run's `extent_file_write_bytes_identity` counter, which the appendix does not tabulate. Reads per second fell from 3198 to 2547, and VmHWM rose to 8467 MiB, which is 275 MiB above the target.
 * **Capacity:** with the store capped at 8 GiB, demotion stopped at the cap with no write errors. The tier stayed in RAM as designed, and VmHWM reached 9458 MiB against the 8192 MiB target.
   Real `ENOSPC` on the device was not exercised. That needs a filesystem small enough to fill.
-* **Stranded space:** after churn, allocated file space exceeded live slot bytes by 0.9 to 1.7 GiB, well under the 17 GiB headroom, and no hole punching fired.
+* **Stranded space:** after churn, allocated file space exceeded live slot bytes by 0.9 to 1.7 GiB, well under the headroom of about 16.5 GiB, 2% of the 886 GB available, and no hole punching fired.
 * **Repeat reads:** these made up 52 to 82% of file reads. The harness reads random live chunks without admission, so this measures the harness's access pattern, not a workload's.
   The admission decision needs a real probe workload.
 
@@ -513,16 +537,17 @@ The file arms run with swap off, and the swap arms use a swapfile on the same NV
 Cells give hydration time, peak VmRSS, and VmRSS 180 s after hydration.
 
 * **File mode keeps the parked state at swap's footprint and speed.**
-  At 8 GiB the file and swap arms hydrate within 10% of each other at both scale factors and settle at about the same RSS, under half the unspilled footprint at scale factor 10.
+  At 8 GiB the file and swap arms hydrate within 11% of each other at both scale factors and settle at about the same RSS, under half the unspilled footprint at scale factor 10.
   The largest gap is the scale factor 100 index, where file mode took 838 s against swap's 761 s.
   Without a backing store the index arms die, and the scale factor 10 view survives only 0.2 GiB under its limit.
 * **Swap moves several times the data.**
-  At scale factor 100 the swap arms wrote 238 and 287 GiB to swap and read back 139 and 175 GiB, by host-wide counters, while the file arms ended with 61 and 65 GB on file after 268k and 277k extent writes and 219k and 236k extent reads.
-  The pool's pageouts were within 1% of the file arms' demotions, so the extra traffic comes from the kernel's own reclaim and refaults, which the pool does not control.
+  At scale factor 100 the swap arms wrote 238 and 287 GiB to swap and read back 139 and 175 GiB, by host-wide counters, while the file arms ended with 57 and 61 GiB on file after 268k and 277k extent writes and 219k and 236k extent reads.
+  The pool's pageouts were within 1.2% of the file arms' demotions, so the extra traffic comes from the kernel's own reclaim and refaults, which the pool does not control.
   Averaged over hydration, neither backing came near the device's ceilings, so device bandwidth does not bound this workload.
 * **File mode holds more on the device than swap.**
   At scale factor 100 the file store held 57 to 61 GiB against 43.5 GiB of swap for the same parked rows, and at scale factor 10 about 1 GiB more.
-  The difference has not been broken down. Class rounding of file slots is one candidate, and `extent_file_allocated_bytes` with live slot bytes can separate it.
+  The difference has not been broken down. Class rounding of file slots is one candidate.
+  `extent_file_bytes` and `extent_file_allocated_bytes` both count whole class sizes, so separating rounding needs the stored bytes of live extents, which no gauge exports.
 * **Scale factor 100 hydration is slow in both modes.**
   It takes 21 to 27 times as long as scale factor 10 for 10 times the data.
   No unspilled reference fits on this host, so the split between spilling and the dataflow itself is unknown and needs a CPU profile.
@@ -530,9 +555,9 @@ Cells give hydration time, peak VmRSS, and VmRSS 180 s after hydration.
   The pool's budget and RSS target derive from physical RAM, not the replica's limit, so on this host the pool alone claims about 2.5 GiB before non-pool memory, and only swap can also evict non-pool memory.
   Sizing the pool from the replica's limit is a prerequisite for small replicas in file mode.
 * **Persist read-ahead is unbounded without lgalloc.**
-  Without the 512 MiB in-flight cap, an earlier series OOM-killed every no-backing and file arm at 4 and 8 GiB within 4 s, because fetched parts do not enter the pool, and only swap absorbed the burst.
+  In a separate series without the 512 MiB in-flight cap, whose per-run numbers are not tabulated here, every no-backing and file arm at 4 and 8 GiB was killed within 4 s, because fetched parts do not enter the pool, and only swap absorbed the burst.
 * **The pool is not the binding constraint when nothing parks.**
-  An earlier unparked index hydration on a 16 GiB replica peaked at 13.7 GiB in file mode against 14.6 GiB without a backing store, because arrangement building and merging, which do not allocate through the pool, dominate the peak.
+  A separate unparked index hydration on a 16 GiB replica, not tabulated here, peaked at 13.7 GiB in file mode against 14.6 GiB without a backing store, because arrangement building and merging, which do not allocate through the pool, dominate the peak.
 
 ## Decisions
 
@@ -556,8 +581,8 @@ Cells give hydration time, peak VmRSS, and VmRSS 180 s after hydration.
 Each unknown has a workload, a metric, and a decision rule.
 Environments, in order: a local NVMe machine, the emulator, self-managed, and staging FS-backed instances once available.
 
-* **Phase 0: filesystem support and device envelope.**
-  Before any pool code exists, a probe records `O_TMPFILE`, `O_DIRECT` alignment, `fallocate`, and hole-punch support per filesystem, and an fio matrix records the device's envelope for each I/O candidate at the pool's extent sizes (384 KiB for lz4 extents, 2 MiB for identity extents).
+* **Phase 0: filesystem support and device envelope.** Done, see Phase 0 results.
+  A probe records `O_TMPFILE`, `O_DIRECT` alignment, `fallocate`, and hole-punch support per filesystem, and an fio matrix records the device's envelope for each I/O candidate at the pool's extent sizes (384 KiB for lz4 extents, 2 MiB for identity extents).
   The fio matrix covers demotion writes at 1, 2, and 4 threads, synchronous cold reads at 1, 16, and 64 threads, and 2 writers mixed with 16 readers, each for synchronous `O_DIRECT`, `io_uring` at queue depths 4 and 16, and buffered I/O.
   The machine is an `r8gd.4xlarge` scratch instance with its instance-store NVMe formatted ext4 and mounted at `/scratch`.
   The envelope bounds what the pool-level measurements below can reach and shows whether `io_uring` has headroom to win at all.
@@ -567,9 +592,8 @@ Environments, in order: a local NVMe machine, the emulator, self-managed, and st
   Metrics: merge throughput, worker system time, cold-read latency p50 and p99, spill-thread CPU per GiB written, device utilization, and cgroup `file` and `file_dirty`.
   Rule: keep synchronous `O_DIRECT` unless `io_uring` materially improves throughput or p99 read latency at equal or lower CPU in at least two environments, with the threshold fixed after the first local run.
   Buffered I/O is used only where the open-time probe rejects `O_DIRECT`, never chosen on performance.
-* **Emulator filesystem support.**
-  Record whether `O_DIRECT` and `O_TMPFILE` succeed on the emulator's scratch directory, both on the container overlay and on a bind mount.
-  The result picks the emulator's I/O mode and whether its scratch directory needs a dedicated mount.
+* **Emulator filesystem support.** Answered for kernel 7.0 in Filesystem support: both succeed on the container overlay and on a bind mount.
+  Older host kernels remain unmeasured, and the open-time probe picks the I/O mode there.
 * **RSS target.**
   Run hydration and steady-state merging at target fractions 0.1, 0.25, and 0.5.
   Compare the demotion elision rate `extent_demotions_elided / (extent_demotions_elided + extent_pageouts)`, file reads per second, and RSS.
@@ -586,8 +610,8 @@ Environments, in order: a local NVMe machine, the emulator, self-managed, and st
   After a hydration followed by steady state, compare `extent_file_allocated_bytes` with `extent_file_bytes`.
   Stranded space below the headroom confirms that on-demand punching rarely fires.
 * **Capacity headroom.**
-  Fill the store to capacity and confirm that `ENOSPC` appears only on the `fallocate` growth path, never on `pwrite`, and that the latch never trips.
-  If it trips, raise the headroom.
+  Fill the store to capacity and confirm that `ENOSPC` appears only on the `fallocate` growth path, never on `pwrite`, and that `ENOSPC` never lowers the capacity.
+  If it does, raise the headroom.
 
 ## Appendix: measurement results
 
