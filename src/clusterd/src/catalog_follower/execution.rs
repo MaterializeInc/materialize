@@ -835,6 +835,14 @@ impl ReplicaEnactment {
     }
 
     pub fn ensure_live(&self, catalog: &Catalog) -> anyhow::Result<()> {
+        // Membership removal also retires the execution atomically. Preserve its
+        // intentional-stop classification rather than reporting supersession.
+        ensure!(
+            catalog
+                .try_get_cluster_replica(self.cluster, self.replica)
+                .is_some(),
+            super::ReplicaRemoved
+        );
         let participant = catalog
             .state()
             .client_incarnations()
@@ -844,12 +852,6 @@ impl ReplicaEnactment {
             participant.replica_id == Some(self.replica)
                 && participant.deployment_generation == catalog.state().deployment_generation(),
             "replica incarnation identity mismatch"
-        );
-        ensure!(
-            catalog
-                .try_get_cluster_replica(self.cluster, self.replica)
-                .is_some(),
-            super::ReplicaRemoved
         );
         Ok(())
     }

@@ -654,5 +654,23 @@ async fn exercise_liveness() {
         error.to_string().contains("superseded or retired"),
         "{error:#}"
     );
+    driver
+        .transact(
+            &mut catalog,
+            &mut effects,
+            cluster,
+            &build,
+            vec![Op::DropClusterReplicaRealization {
+                cluster_id: cluster,
+                replica_id: replica,
+            }],
+        )
+        .await
+        .unwrap();
+    let error = driver
+        .publish(&mut catalog, &mut effects, cluster, &build, true, None)
+        .await
+        .unwrap_err();
+    assert!(error.is::<super::super::ReplicaRemoved>(), "{error:#}");
     std::process::exit(0);
 }
