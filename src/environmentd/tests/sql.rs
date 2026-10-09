@@ -1864,6 +1864,98 @@ fn test_insert_concurrent_alter_table() {
         .unwrap();
 }
 
+// A SELECT whose `emit_timestamp_notice` notice is explained after an index it read was dropped
+// returns its rows without the notice, instead of aborting environmentd.
+//
+// The SELECT parks at the `timestamp_notice_before_dispatch` failpoint, after it has read through
+// the index and before the coordinator looks up the index's frontiers for the notice. The failpoint
+// is process-global, so the test relies on running in its own process, as nextest runs it.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_timestamp_notice_after_concurrent_index_drop() {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    for stmt in [
+        "CREATE TABLE t (a int)",
+        "INSERT INTO t VALUES (1)",
+        "CREATE DEFAULT INDEX t_idx ON t",
+    ] {
+        ddl_client.batch_execute(stmt).await.unwrap();
+    }
+
+    let notices = Arc::new(Mutex::new(Vec::new()));
+    let reader = server
+        .connect()
+        .notice_callback({
+            let notices = Arc::clone(&notices);
+            move |notice| {
+                notices
+                    .lock()
+                    .expect("not poisoned")
+                    .push(notice.message().to_string())
+            }
+        })
+        .await
+        .unwrap();
+    reader
+        .batch_execute("SET emit_timestamp_notice = true")
+        .await
+        .unwrap();
+    let has_timestamp_notice = || {
+        notices
+            .lock()
+            .expect("not poisoned")
+            .iter()
+            .any(|n| n.contains("EXPLAIN TIMESTAMP"))
+    };
+
+    reader.query("SELECT * FROM t", &[]).await.unwrap();
+    assert!(has_timestamp_notice(), "no timestamp notice without a drop");
+    notices.lock().expect("not poisoned").clear();
+
+    // Arm only once setup is done, so it's the SELECT below that parks.
+    let parked = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    fail::cfg_callback("timestamp_notice_before_dispatch", {
+        let parked = Arc::clone(&parked);
+        let resume = Arc::clone(&resume);
+        move || {
+            // This runs on a worker of the runtime that also has to run the `DROP INDEX` below.
+            // `block_in_place` hands this worker's queue to another thread before parking.
+            tokio::task::block_in_place(|| {
+                parked.wait();
+                resume.wait();
+            });
+        }
+    })
+    .unwrap();
+
+    let select = task::spawn(|| "reader_select", async move {
+        reader.query("SELECT * FROM t", &[]).await
+    });
+    task::spawn_blocking(|| "wait_parked", move || parked.wait()).await;
+
+    ddl_client.batch_execute("DROP INDEX t_idx").await.unwrap();
+
+    // Disarm before handing the SELECT back, so that no later statement parks.
+    fail::remove("timestamp_notice_before_dispatch");
+    task::spawn_blocking(|| "resume", move || resume.wait()).await;
+
+    let rows = select
+        .await
+        .expect("SELECT succeeds despite the dropped index");
+    assert_eq!(rows.len(), 1);
+    assert!(
+        !has_timestamp_notice(),
+        "timestamp notice despite the dropped index"
+    );
+    ddl_client
+        .batch_execute("SELECT 1")
+        .await
+        .expect("environmentd is still up");
+}
+
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_read_then_write_serializability() {
