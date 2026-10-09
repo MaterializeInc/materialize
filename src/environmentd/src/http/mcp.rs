@@ -530,14 +530,14 @@ struct McpResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<McpResult>,
+    result: Option<McpResultBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<McpError>,
 }
 
 impl McpResponse {
     /// A successful JSON-RPC response carrying `result`.
-    fn success(id: serde_json::Value, result: McpResult) -> Self {
+    fn success(id: serde_json::Value, result: McpResultBody) -> Self {
         Self {
             jsonrpc: JSONRPC_VERSION.to_string(),
             id: Some(id),
@@ -564,6 +564,45 @@ enum McpResult {
     Initialize(InitializeResult),
     ToolsList(ToolsListResult),
     ToolContent(ToolContentResult),
+}
+
+impl McpResult {
+    fn into_body(self, protocol: ProtocolVersion, endpoint_type: McpEndpointType) -> McpResultBody {
+        let common = protocol.is_modern().then(|| CommonResultFields {
+            result_type: "complete",
+            meta: ResultMeta {
+                server_info: server_info(endpoint_type),
+            },
+        });
+        McpResultBody {
+            result: self,
+            common,
+        }
+    }
+}
+
+/// A result as sent. `common` is `None` on 2025-11-25, whose results carry
+/// neither field.
+#[derive(Debug, Serialize)]
+struct McpResultBody {
+    #[serde(flatten)]
+    result: McpResult,
+    #[serde(flatten)]
+    common: Option<CommonResultFields>,
+}
+
+#[derive(Debug, Serialize)]
+struct CommonResultFields {
+    #[serde(rename = "resultType")]
+    result_type: &'static str,
+    #[serde(rename = "_meta")]
+    meta: ResultMeta,
+}
+
+#[derive(Debug, Serialize)]
+struct ResultMeta {
+    #[serde(rename = "io.modelcontextprotocol/serverInfo")]
+    server_info: ServerInfo,
 }
 
 #[derive(Debug, Serialize)]
@@ -1103,7 +1142,9 @@ async fn handle_mcp_request_inner(
     let status_label = call_status(&result);
 
     let response = match result {
-        Ok(result_value) => McpResponse::success(request_id, result_value),
+        Ok(result_value) => {
+            McpResponse::success(request_id, result_value.into_body(protocol, endpoint_type))
+        }
         Err(e) => {
             // Log non-trivial errors
             if !matches!(
@@ -1265,6 +1306,13 @@ fn endpoint_instructions(
     }
 }
 
+fn server_info(endpoint_type: McpEndpointType) -> ServerInfo {
+    ServerInfo {
+        name: format!("materialize-mcp-{}", endpoint_type),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    }
+}
+
 fn handle_initialize(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
@@ -1273,10 +1321,7 @@ fn handle_initialize(
     Ok(McpResult::Initialize(InitializeResult {
         protocol_version: MCP_PROTOCOL_VERSION.to_string(),
         capabilities: Capabilities { tools: json!({}) },
-        server_info: ServerInfo {
-            name: format!("materialize-mcp-{}", endpoint_type),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-        },
+        server_info: server_info(endpoint_type),
         instructions: endpoint_instructions(
             endpoint_type,
             query_tool_enabled,
@@ -2147,7 +2192,8 @@ mod tests {
             McpResult::ToolContent(ToolContentResult {
                 content: vec![],
                 is_error: false,
-            }),
+            })
+            .into_body(ProtocolVersion::V2025_11_25, McpEndpointType::Developer),
         );
         assert_eq!(ok.jsonrpc, JSONRPC_VERSION);
         assert!(ok.result.is_some());
