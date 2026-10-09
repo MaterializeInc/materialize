@@ -4436,3 +4436,62 @@ async fn test_explain_create_materialized_view_after_concurrent_schema_drop() {
         .await
         .expect("environmentd is still up");
 }
+
+/// Creates table `t` with index `t_idx` in the active cluster and view `v` over `t`, so that a
+/// dataflow reading `v` in that cluster imports `t_idx`, which the statement doesn't name.
+#[allow(clippy::disallowed_methods)]
+async fn setup_indexed_table_and_view(client: &tokio_postgres::Client) {
+    for stmt in [
+        "CREATE TABLE t (a int)",
+        "CREATE INDEX t_idx ON t (a)",
+        "CREATE VIEW v AS SELECT a + 1 AS b FROM t",
+    ] {
+        client.batch_execute(stmt).await.unwrap();
+    }
+}
+
+// An EXPLAIN CREATE INDEX whose plan reads an existing index that is dropped while the new index is
+// optimized fails with a "was dropped" error.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_explain_create_index_after_concurrent_imported_index_drop() {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    setup_indexed_table_and_view(&ddl_client).await;
+
+    let err = explain_with_concurrent_drop(
+        &server,
+        &ddl_client,
+        "create_index_optimize",
+        "EXPLAIN CREATE INDEX i ON v (b)",
+        "DROP INDEX t_idx",
+    )
+    .await
+    .expect_err("EXPLAIN must fail on the dropped index")
+    .unwrap_db_error();
+    assert_contains!(err.message(), "was dropped");
+}
+
+// An EXPLAIN CREATE MATERIALIZED VIEW whose plan reads an existing index that is dropped while the
+// materialized view is optimized fails with a "was dropped" error.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_explain_create_materialized_view_after_concurrent_imported_index_drop() {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    setup_indexed_table_and_view(&ddl_client).await;
+
+    let err = explain_with_concurrent_drop(
+        &server,
+        &ddl_client,
+        "create_materialized_view_optimize",
+        "EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT b FROM v",
+        "DROP INDEX t_idx",
+    )
+    .await
+    .expect_err("EXPLAIN must fail on the dropped index")
+    .unwrap_db_error();
+    assert_contains!(err.message(), "was dropped");
+}
