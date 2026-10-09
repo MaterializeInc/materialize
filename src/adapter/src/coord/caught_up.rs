@@ -506,6 +506,7 @@ impl Coordinator {
             tx,
         } = request;
 
+        fail::fail_point!("0dt_caught_up_read");
         let replica_frontier_item_id = self
             .catalog()
             .resolve_builtin_storage_collection(&MZ_CLUSTER_REPLICA_FRONTIERS);
