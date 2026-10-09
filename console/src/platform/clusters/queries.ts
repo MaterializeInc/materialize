@@ -25,6 +25,7 @@ import {
 import {
   formatFullyQualifiedObjectName,
   isSystemCluster,
+  isSystemId,
 } from "~/api/materialize";
 import {
   alterCluster,
@@ -92,12 +93,18 @@ import {
   fetchReplicaUtilizationHistory,
   ReplicaUtilizationHistoryParameters,
 } from "~/api/materialize/cluster/replicaUtilizationHistory";
-import { fetchLagHistory } from "~/api/materialize/freshness/lagHistory";
+import {
+  calculateBucketSizeFromLookback,
+  fetchLatestLag,
+  fetchObjectLagHistory,
+  LATEST_READING_INTERVAL_MS,
+} from "~/api/materialize/freshness/lagHistory";
 import { assertNoMoreThanOneRow } from "~/api/materialize/MoreThanOneRowError";
 import { fetchOwners } from "~/api/materialize/owners";
 import { useSubscribe } from "~/api/materialize/useSubscribe";
 import { DataPoint, GraphLineSeries } from "~/components/FreshnessGraph/types";
 import { roleQueryKeys } from "~/platform/roles/queries";
+import { useAllObjects } from "~/store/allObjects";
 import { useEnvironmentGate } from "~/store/environments";
 import { notNullOrUndefined, sumPostgresIntervalMs } from "~/util";
 import { sortLagInfo } from "~/utils/freshness";
@@ -111,7 +118,8 @@ type ReplicaUtilizationHistoryFilters = {
 
 type ClusterFreshnessParams = {
   lookbackMs: number;
-  clusterId: string;
+  /** The objects to report on, already filtered by the caller. */
+  objects: FreshnessObject[];
 };
 
 export const clusterQueryKeys = {
@@ -192,10 +200,27 @@ export const clusterQueryKeys = {
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("replicaOfflineEvents", params),
     ] as const,
-  clusterFreshness: (params: ClusterFreshnessParams) =>
+  // Sorted so these keys track set membership, not the order the objects
+  // arrived in.
+  clusterFreshnessSeries: (params: {
+    lookbackMs: number;
+    objectIds: string[];
+  }) =>
     [
       ...clusterQueryKeys.all(),
-      buildQueryKeyPart("clusterFreshness", params),
+      buildQueryKeyPart("clusterFreshnessSeries", {
+        lookbackMs: params.lookbackMs,
+        objectIds: [...params.objectIds].sort().join(","),
+      }),
+    ] as const,
+  // No lookback: the newest reading is the newest reading whatever range is
+  // being graphed, so changing the range must not refetch it.
+  clusterFreshnessLatest: (params: { objectIds: string[] }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("clusterFreshnessLatest", {
+        objectIds: [...params.objectIds].sort().join(","),
+      }),
     ] as const,
   replicaUtilization: () =>
     [
@@ -970,111 +995,280 @@ export function useReplicaUtilizationHistory(
 
 export const LINE_MAX_COUNT = 10;
 
+// Separators for the key below. Control characters, which an identifier
+// cannot contain, and a marker because a name can be null and null has to stay
+// distinguishable from the empty string.
+const FIELD_SEP = "\u0000";
+const RECORD_SEP = "\u0001";
+const NULL_MARKER = "\u0002";
+
+const encode = (value: string | null) => value ?? NULL_MARKER;
+const decode = (value: string) => (value === NULL_MARKER ? null : value);
+
+/**
+ * The objects on a cluster that the freshness views report on, from the
+ * `useAllObjects` subscribe rather than a query.
+ *
+ * Subsources and progress collections are excluded to match the rest of the
+ * Console, which hides them: each source carries a progress collection and
+ * often several subsources, so including them would multiply the line count
+ * without adding anything a reader recognises.
+ */
+export function useFreshnessObjects(clusterId: string): FreshnessObject[] {
+  const { data: allObjects } = useAllObjects();
+
+  // Keyed on content rather than on `allObjects`'s identity. That subscribe
+  // emits a new array for any change anywhere in the environment, so keying on
+  // it would hand this cluster a new `objects` array because some other
+  // cluster changed, rebuilding the whole stats and rows chain behind it.
+  //
+  // Only the fields read downstream are in the key. A rename has to invalidate
+  // it; a column nothing reads must not.
+  const objectsKey = allObjects
+    .filter(
+      (object) =>
+        object.clusterId === clusterId &&
+        (isSystemCluster(clusterId) || !isSystemId(object.id)) &&
+        object.sourceType !== "subsource" &&
+        object.sourceType !== "progress",
+    )
+    .map((object) =>
+      [
+        object.id,
+        encode(object.name),
+        encode(object.schemaName),
+        encode(object.databaseName),
+        object.objectType,
+      ].join(FIELD_SEP),
+    )
+    .join(RECORD_SEP);
+
+  // Rebuilt from the key, so the dependency is the whole truth: nothing else
+  // is read in here.
+  return useMemo(() => {
+    if (objectsKey === "") return [];
+
+    return objectsKey.split(RECORD_SEP).map((record) => {
+      const [objectId, objectName, schemaName, databaseName, objectType] =
+        record.split(FIELD_SEP);
+      return {
+        objectId,
+        objectName: decode(objectName),
+        schemaName: decode(schemaName),
+        databaseName: decode(databaseName),
+        objectType,
+      };
+    });
+  }, [objectsKey]);
+}
+
+/** An object's identity, invariant across the window. */
+export interface FreshnessObject {
+  objectId: string;
+  objectName: string | null;
+  schemaName: string | null;
+  databaseName: string | null;
+  objectType: string;
+}
+
+type LagReading = Awaited<
+  ReturnType<typeof fetchObjectLagHistory>
+>["rows"][number];
+type LatestReading = Awaited<ReturnType<typeof fetchLatestLag>>["rows"][number];
+
+export interface LagQueryRows {
+  /** One binned point per object per bin, each the worst reading in its span. */
+  readings: LagReading[];
+  /** One row per object, its most recent reading. */
+  latest: LatestReading[];
+}
+
+/**
+ * Shapes lag readings for the freshness graph, naming each object from the
+ * caller's list.
+ *
+ * Separate from the query so names are not cached with the readings: the query
+ * key tracks which objects were asked for, not what they are called, so a
+ * rename would otherwise survive in the cache until the set changed.
+ */
+export function buildFreshnessData(
+  { readings: rows, latest }: LagQueryRows,
+  objects: FreshnessObject[],
+) {
+  const objectsById = new Map(
+    objects.map((object) => [object.objectId, object]),
+  );
+
+  // Null where the newest reading reports the object as unreadable, which is
+  // not the same as the object having no reading at all.
+  const latestByObjectId = new Map<string, number | null>(
+    latest.map((row) => [
+      row.objectId,
+      row.lag === null ? null : sumPostgresIntervalMs(row.lag),
+    ]),
+  );
+
+  const currentData = flatGroup(rows, (d) => d.objectId)
+    // The last row per object is the most current: the query sorts by bucket.
+    .map(([, rowsByObjectId]) => rowsByObjectId.at(-1))
+    .filter(notNullOrUndefined)
+    .sort(sortLagInfo)
+    .slice(0, LINE_MAX_COUNT)
+    .map((row) => {
+      const object = objectsById.get(row.objectId);
+      return {
+        ...row,
+        objectName: object?.objectName ?? null,
+        schemaName: object?.schemaName ?? null,
+        databaseName: object?.databaseName ?? null,
+      };
+    });
+
+  const dataByBucketStart = group(rows, (d) => d.bucketStart.getTime());
+
+  const historicalData = [...dataByBucketStart.entries()].map(
+    ([timestamp, rowsByBucketStart]) => {
+      const dataPoint: DataPoint = { timestamp, lag: {} };
+
+      rowsByBucketStart.forEach((row) => {
+        const object = objectsById.get(row.objectId);
+        const names = {
+          schemaName: object?.schemaName ?? null,
+          objectName: object?.objectName ?? null,
+        };
+        dataPoint.lag[row.objectId] =
+          row.lag !== null
+            ? {
+                queryable: true,
+                totalMs: sumPostgresIntervalMs(row.lag),
+                interval: row.lag,
+                ...names,
+              }
+            : { queryable: false, ...names };
+      });
+
+      return dataPoint;
+    },
+  );
+
+  // TODO: Cap this the way `currentData` is capped by LINE_MAX_COUNT. One
+  // line per object is unbounded, and dragging a threshold over these lines
+  // re-renders every path on each pointer move.
+  const lines = new Map<string, GraphLineSeries>();
+  historicalData.forEach((point) => {
+    Object.entries(point.lag).forEach(([objectId, lagInfo]) => {
+      lines.set(objectId, {
+        key: objectId,
+        label: formatFullyQualifiedObjectName({
+          schemaName: lagInfo.schemaName ?? "",
+          name: lagInfo.objectName ?? "",
+        }),
+        yAccessor: (d: DataPoint) => {
+          const dataPointLag = d.lag[objectId];
+          if (dataPointLag) {
+            // `null` breaks the line rather than drawing a point. A reading
+            // that could not be taken has no height, and drawing it at zero
+            // put the worst state at the bottom of the plot, which reads as
+            // the healthiest line on the chart.
+            return dataPointLag.queryable ? dataPointLag.totalMs : null;
+          }
+          return null;
+        },
+      });
+    });
+  });
+
+  return {
+    historicalData,
+    currentData,
+    objectsById,
+    latestByObjectId,
+    lines: Array.from(lines.values()),
+    startTime: historicalData.at(0)?.timestamp ?? 0,
+    endTime: historicalData.at(-1)?.timestamp ?? 0,
+  };
+}
+
+/**
+ * Lag readings for a known set of objects, shaped for the freshness graph.
+ *
+ * The caller supplies the objects rather than naming a cluster, because the
+ * `useAllObjects` subscribe already holds every name, schema, database and
+ * type. Resolving those in SQL cost three joins and three full scans per
+ * request; here they are a map lookup.
+ */
 export function useClusterFreshness({
   lookbackMs,
-  clusterId,
+  objects,
 }: ClusterFreshnessParams) {
-  return useSuspenseQuery({
-    queryKey: clusterQueryKeys.clusterFreshness({
+  const objectIds = objects.map((object) => object.objectId);
+
+  // The binned series and the latest readings go in separate requests because
+  // they go stale at different rates. A bin cannot change faster than its own
+  // width, which at a 24 hour range is 24 minutes, so refetching the series on
+  // the one minute clock would re-read the whole window to change at most one
+  // point.
+  const binSizeMs = calculateBucketSizeFromLookback(lookbackMs);
+
+  // NOTE: `useQuery`, not `useSuspenseQuery`. A suspending query stops the
+  // component before the next hook runs, so each request would wait for the
+  // one above it, including a caller's own queries after this hook.
+  const series = useQuery({
+    queryKey: clusterQueryKeys.clusterFreshnessSeries({
       lookbackMs,
-      clusterId,
+      objectIds,
     }),
-    queryFn: async ({ queryKey, signal }) => {
-      const { rows } = await fetchLagHistory({
-        params: {
-          lookback: {
-            type: "historical",
-            lookbackMs,
-          },
-          clusterId,
-          includeSystemObjects: isSystemCluster(clusterId),
-        },
+    queryFn: async ({ queryKey, signal }): Promise<LagReading[]> => {
+      if (objectIds.length === 0) return [];
+
+      const { rows } = await fetchObjectLagHistory({
+        objectIds,
+        lookbackMs,
         requestOptions: { signal },
         queryKey,
       });
-
-      const dataByObjectId = flatGroup(rows, (d) => d.objectId);
-
-      const currentData = dataByObjectId
-        .map(([_, rowsByObjectId]) => {
-          // We can assume the last row is the most current because the data is sorted
-          // by bucket start time.
-          const lastRow = rowsByObjectId.at(-1);
-          if (!lastRow) {
-            return null;
-          }
-          return lastRow;
-        })
-        .filter(notNullOrUndefined)
-        .sort(sortLagInfo)
-        .slice(0, LINE_MAX_COUNT);
-
-      const dataByBucketStart = group(rows, (d) => d.bucketStart.getTime());
-
-      const historicalData = [...dataByBucketStart.entries()].map(
-        ([timestamp, rowsByBucketStart]) => {
-          const dataPoint: DataPoint = {
-            timestamp,
-            lag: {},
-          };
-
-          rowsByBucketStart.forEach((row) => {
-            dataPoint.lag[row.objectId] =
-              row.lag !== null
-                ? {
-                    queryable: true,
-                    totalMs: sumPostgresIntervalMs(row.lag),
-                    interval: row.lag,
-                    schemaName: row.schemaName,
-                    objectName: row.objectName,
-                  }
-                : {
-                    queryable: false,
-                    schemaName: row.schemaName,
-                    objectName: row.objectName,
-                  };
-          });
-
-          return dataPoint;
-        },
-      );
-
-      const lines = historicalData.reduce((acc, curr) => {
-        const objects = Object.entries(curr.lag);
-
-        objects.forEach(([objectId, lagInfo]) => {
-          acc.set(objectId, {
-            key: objectId,
-            label: formatFullyQualifiedObjectName({
-              schemaName: lagInfo.schemaName ?? "",
-              name: lagInfo.objectName ?? "",
-            }),
-            yAccessor: (d: DataPoint) => {
-              const dataPointLag = d.lag[objectId];
-              if (dataPointLag) {
-                // We want it to show up at the bottom.
-                return dataPointLag.queryable ? dataPointLag.totalMs : 0;
-              }
-
-              return null;
-            },
-          });
-        });
-
-        return acc;
-      }, new Map<string, GraphLineSeries>());
-
-      return {
-        historicalData,
-        currentData,
-        lines: Array.from(lines.values()),
-        startTime: historicalData.at(0)?.timestamp ?? 0,
-        endTime: historicalData.at(-1)?.timestamp ?? 0,
-      };
+      return rows;
     },
+    staleTime: binSizeMs,
+    refetchInterval: binSizeMs,
   });
+
+  const latest = useQuery({
+    queryKey: clusterQueryKeys.clusterFreshnessLatest({ objectIds }),
+    queryFn: async ({ queryKey, signal }): Promise<LatestReading[]> => {
+      if (objectIds.length === 0) return [];
+
+      const { rows } = await fetchLatestLag({
+        objectIds,
+        requestOptions: { signal },
+        queryKey,
+      });
+      return rows;
+    },
+    // A reading lands once a minute, so anything shorter re-asks a question
+    // whose answer cannot have changed.
+    staleTime: LATEST_READING_INTERVAL_MS,
+    refetchInterval: LATEST_READING_INTERVAL_MS,
+  });
+
+  // Undefined until both have answered. Building from one alone would show a
+  // graph whose "Now" column disagrees with it.
+  const data = useMemo(
+    () =>
+      series.data && latest.data
+        ? buildFreshnessData(
+            { readings: series.data, latest: latest.data },
+            objects,
+          )
+        : undefined,
+    [series.data, latest.data, objects],
+  );
+
+  // Only these fields are returned. Spreading a query object would make every
+  // consumer observe all of its state.
+  return { data, isError: series.isError || latest.isError };
 }
 
-export type CurrentClusterFreshnessData = Awaited<
-  ReturnType<typeof useClusterFreshness>["data"]
->["currentData"][0];
+export type FreshnessData = ReturnType<typeof buildFreshnessData>;
+
+export type CurrentClusterFreshnessData = FreshnessData["currentData"][0];

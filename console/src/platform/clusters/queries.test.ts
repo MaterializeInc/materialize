@@ -8,7 +8,9 @@
 // by the Apache License, Version 2.0.
 
 import { renderHook, waitFor } from "@testing-library/react";
+import { createStore } from "jotai";
 
+import { DatabaseObject } from "~/api/materialize/objects";
 import { ErrorCode, MzDataType } from "~/api/materialize/types";
 import {
   buildColumns,
@@ -18,6 +20,7 @@ import {
 import server from "~/api/mocks/server";
 import { roleQueryKeys } from "~/platform/roles/queries";
 import { getQueryClient } from "~/queryClient";
+import { allObjects } from "~/store/allObjects";
 import { createProviderWrapper } from "~/test/utils";
 
 import {

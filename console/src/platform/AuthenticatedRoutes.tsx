@@ -33,6 +33,7 @@ import ClusterRoutes from "~/platform/clusters/ClusterRoutes";
 import BlockedState from "~/platform/environment-not-ready/BlockedState";
 import { EnvironmentNotReadyRoutes } from "~/platform/environment-not-ready/EnvironmentNotReadyRoutes";
 import { EnvironmentOverviewRoutes } from "~/platform/environment-overview/EnvironmentOverviewRoutes";
+import FreshnessRoutes from "~/platform/freshness/FreshnessRoutes";
 import IntegrationsRoutes from "~/platform/integrations/IntegrationsRoutes";
 import { MaintainedObjectsRoutes } from "~/platform/maintained-objects/MaintainedObjectsRoutes";
 import { ObjectExplorerDetailRoutes } from "~/platform/object-explorer/ObjectExplorerDetailRoutes";
@@ -345,6 +346,19 @@ const EnvironmentRoutes = () => {
           />
         )}
 
+        {flags["freshness-page-CNS164"] && (
+          <Route path="freshness">
+            <Route
+              index
+              path="*"
+              element={
+                <BaseLayout>
+                  <FreshnessRoutes />
+                </BaseLayout>
+              }
+            />
+          </Route>
+        )}
         <Route path="query-history">
           <Route
             index

@@ -117,6 +117,14 @@ const getNavItems = ({
               },
             ]
           : []),
+        ...(flags["freshness-page-CNS164"]
+          ? [
+              {
+                label: "Freshness",
+                href: `/regions/${regionSlug}/freshness`,
+              },
+            ]
+          : []),
         {
           label: "Sources",
           href: `/regions/${regionSlug}/sources`,
