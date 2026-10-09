@@ -359,22 +359,23 @@ fn gib_per_sec(bytes: u64, wall: Duration) -> f64 {
 }
 
 /// Waits until the spill queue is empty and the pool reports the tier at or
-/// below its cap, or until the tier stops moving. Returns why it stopped.
-fn drain(pool: &Pool, timeout: Duration) -> &'static str {
+/// below its cap, or until the tier stops moving. Returns why it stopped, and
+/// for a stall, how long the tier sat unchanged before the drain gave up.
+fn drain(pool: &Pool, timeout: Duration) -> (&'static str, Duration) {
     let start = Instant::now();
     let mut last = (u64::MAX, Instant::now());
     loop {
         let stats = pool.stats();
         if stats.spill_in_flight == 0 && !pool.compressed_tier_above_cap() {
-            return "under cap";
+            return ("under cap", Duration::ZERO);
         }
         if stats.extent_resident_bytes != last.0 {
             last = (stats.extent_resident_bytes, Instant::now());
         } else if stats.spill_in_flight == 0 && last.1.elapsed() > Duration::from_secs(2) {
-            return "stalled above cap";
+            return ("stalled above cap", last.1.elapsed());
         }
         if start.elapsed() > timeout {
-            return "timed out";
+            return ("timed out", Duration::ZERO);
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -464,15 +465,18 @@ fn main() {
         }
         other => panic!("unknown backend {other:?}, use 'swap' or 'file'"),
     };
-    let pool = Pool::with_backend(backend).expect("create pool");
-    let kind = pool.backend_kind();
-    println!("backend requested={} actual={kind:?}", args.backend);
-    // A file store that cannot be used degrades to swap, which would make a
-    // file-mode measurement silently measure swap.
-    if args.backend == "file" && kind == BackendKind::Swap {
-        eprintln!("--backend file ran on the swap backend, refusing to measure");
+    let pool = Pool::with_backend(backend).unwrap_or_else(|err| {
+        eprintln!(
+            "cannot create a pool with --backend {}: {err}",
+            args.backend
+        );
         std::process::exit(1);
-    }
+    });
+    println!(
+        "backend requested={} actual={:?}",
+        args.backend,
+        pool.backend_kind()
+    );
     pool.set_budget(budget);
     pool.set_rss_target(rss_target);
     pool.set_spill_threads(args.spill_threads);
@@ -527,10 +531,10 @@ fn main() {
     );
 
     let phase = PhaseTimer::start("drain", &pool, true);
-    let why = drain(&pool, drain_timeout);
+    let (why, stalled) = drain(&pool, drain_timeout);
     // Wall time of every phase that writes extents, the denominator of the
-    // write rates. The final stats count the churn phase's writes too.
-    let mut write_wall = fill_wall + phase.finish(&pool);
+    // write rates, less the time a stalled drain watched an unchanged tier.
+    let mut write_wall = fill_wall + phase.finish(&pool).saturating_sub(stalled);
     println!("  drain ended: {why}");
     print_file_space("after drain", &pool);
 
@@ -546,12 +550,16 @@ fn main() {
         }
         write_wall += phase.finish(&pool);
         let phase = PhaseTimer::start("drain2", &pool, true);
-        let why = drain(&pool, drain_timeout);
-        write_wall += phase.finish(&pool);
+        let (why, stalled) = drain(&pool, drain_timeout);
+        write_wall += phase.finish(&pool).saturating_sub(stalled);
         println!("  drain ended: {why}");
         print_file_space("after churn", &pool);
     }
 
+    // The write rates' numerators. A drain that timed out leaves spill
+    // threads demoting during the read phase, whose wall time the rates
+    // exclude.
+    let write_stats = pool.stats();
     let mut latencies: Vec<Duration> = Vec::new();
     let mut read_wall = Duration::ZERO;
     if args.readers > 0 && !live.is_empty() {
@@ -602,11 +610,11 @@ fn main() {
     println!("VmRSS={rss:.1}MiB VmHWM={hwm:.1}MiB");
 
     let elided = final_stats.extent_demotions_elided;
-    let file_write_bytes = final_stats.extent_file_write_bytes_identity
-        + final_stats.extent_file_write_bytes_compressed;
+    let file_write_bytes = write_stats.extent_file_write_bytes_identity
+        + write_stats.extent_file_write_bytes_compressed;
     // Counts every extent write, identity-coded ones included, so it only
     // approximates the codec's ratio when `--identity-fraction` is 0.
-    let extents_written = final_stats.evictions_compress + final_stats.eager_backs;
+    let extents_written = write_stats.evictions_compress + write_stats.eager_backs;
     println!("\nderived:");
     println!(
         "  insert rate           {:.3} GiB/s ({:.1} MiB in {:.3}s)",
@@ -616,12 +624,12 @@ fn main() {
     );
     println!(
         "  extent write rate     {:.3} GiB/s over the writing phases ({:.1} MiB stored)",
-        gib_per_sec(final_stats.extent_bytes_written, write_wall),
-        mib(final_stats.extent_bytes_written)
+        gib_per_sec(write_stats.extent_bytes_written, write_wall),
+        mib(write_stats.extent_bytes_written)
     );
     println!(
         "  stored/body ratio     {:.3} ({} extents written, compressibility {})",
-        f64::cast_lossy(final_stats.extent_bytes_written)
+        f64::cast_lossy(write_stats.extent_bytes_written)
             / f64::cast_lossy((extents_written * chunk_bytes).max(1)),
         extents_written,
         args.compressibility
@@ -632,18 +640,18 @@ fn main() {
         "  demotion rate         {:.3} GiB/s over the writing phases ({:.1} MiB written, {:.1}% identity, {:.1} KiB per write)",
         gib_per_sec(file_write_bytes, write_wall),
         mib(file_write_bytes),
-        100.0 * f64::cast_lossy(final_stats.extent_file_write_bytes_identity)
+        100.0 * f64::cast_lossy(write_stats.extent_file_write_bytes_identity)
             / f64::cast_lossy(file_write_bytes.max(1)),
         f64::cast_lossy(file_write_bytes)
-            / f64::cast_lossy(final_stats.extent_file_writes.max(1))
+            / f64::cast_lossy(write_stats.extent_file_writes.max(1))
             / 1024.0
     );
     println!(
         "  inline share          {:.3} ({} of {} file writes ran in an inline pass)",
-        f64::cast_lossy(final_stats.extent_file_writes_inline)
-            / f64::cast_lossy(final_stats.extent_file_writes.max(1)),
-        final_stats.extent_file_writes_inline,
-        final_stats.extent_file_writes
+        f64::cast_lossy(write_stats.extent_file_writes_inline)
+            / f64::cast_lossy(write_stats.extent_file_writes.max(1)),
+        write_stats.extent_file_writes_inline,
+        write_stats.extent_file_writes
     );
     println!(
         "  demotion elision rate {:.3} ({elided} elided, {} pageouts)",
