@@ -39,9 +39,10 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
 use mz_adapter_types::dyncfgs::{
-    ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL,
-    ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL, ENABLE_MCP_PROTOCOL_2026_07_28,
-    MCP_MAX_RESPONSE_SIZE, MCP_REQUEST_TIMEOUT,
+    ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_EVENTS, ENABLE_MCP_AGENT_QUERY_TOOL,
+    ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL, ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL,
+    ENABLE_MCP_PROTOCOL_2026_07_28, MCP_EVENTS_HEARTBEAT_INTERVAL, MCP_EVENTS_MAX_CONCURRENT,
+    MCP_EVENTS_MAX_LIFETIME, MCP_EVENTS_MAX_PER_ROLE, MCP_MAX_RESPONSE_SIZE, MCP_REQUEST_TIMEOUT,
 };
 use mz_ore::cast::CastLossy;
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
@@ -59,6 +60,11 @@ use tracing::{debug, warn};
 use crate::http::AuthedClient;
 use crate::http::mcp_metrics::{McpCallStatus, McpMetrics, RequestGuard, ToolCallGuard};
 use crate::http::sql::{SqlRequest, SqlResponse, SqlResult, execute_request};
+
+mod events;
+mod events_protocol;
+
+pub use events::SubscriptionRegistry;
 
 // To add a new tool: add entry to tools/list, add handler function, add dispatch case.
 
@@ -278,6 +284,10 @@ enum McpRequestError {
     QueryExecutionFailed(String),
     #[error("Request timed out after {} seconds.", .0.as_secs())]
     RequestTimeout(Duration),
+    #[error("Subscription error: {}", .0.message)]
+    Subscription(McpError),
+    #[error("ResourceExhausted")]
+    ResourceExhausted(&'static str),
     #[error("Internal error: {0}")]
     Internal(#[from] anyhow::Error),
     #[error("Header mismatch: {0}")]
@@ -289,6 +299,8 @@ enum McpRequestError {
 impl McpRequestError {
     fn error_code(&self) -> i32 {
         match self {
+            Self::Subscription(error) => error.code,
+            Self::ResourceExhausted(_) => -32013,
             Self::InvalidJsonRpcVersion => error_codes::INVALID_REQUEST,
             Self::MethodNotFound(_) => error_codes::METHOD_NOT_FOUND,
             Self::ToolNotFound(_) => error_codes::INVALID_PARAMS,
@@ -304,7 +316,9 @@ impl McpRequestError {
 
     fn error_type(&self) -> &'static str {
         match self {
+            Self::Subscription(_) => "SubscriptionError",
             Self::RequestTimeout(_) => "Timeout",
+            Self::ResourceExhausted(_) => "ResourceExhausted",
             Self::InvalidJsonRpcVersion => "InvalidRequest",
             Self::MethodNotFound(_) => "MethodNotFound",
             Self::ToolNotFound(_) => "ToolNotFound",
@@ -331,6 +345,10 @@ pub(crate) struct McpRequest {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "method", content = "params")]
 enum McpMethod {
+    #[serde(rename = "events/list")]
+    EventsList(Option<serde_json::Value>),
+    #[serde(rename = "events/stream")]
+    EventsStream(Option<serde_json::Value>),
     /// Initialize method - params accepted but not currently used
     #[serde(rename = "initialize")]
     Initialize(#[allow(dead_code)] InitializeParams),
@@ -355,6 +373,8 @@ enum McpMethod {
 impl std::fmt::Display for McpMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            McpMethod::EventsList(_) => write!(f, "events/list"),
+            McpMethod::EventsStream(_) => write!(f, "events/stream"),
             McpMethod::Initialize(_) => write!(f, "initialize"),
             McpMethod::ToolsList(_) => write!(f, "tools/list"),
             McpMethod::ToolsCall(_) => write!(f, "tools/call"),
@@ -513,6 +533,14 @@ enum McpResult {
     Initialize(InitializeResult),
     ToolsList(ToolsListResult),
     ToolContent(ToolContentResult),
+    EventsList(events_protocol::ListResult),
+    EventsComplete(EventsCompleteResult),
+}
+
+#[derive(Debug, Default, Serialize)]
+struct EventsCompleteResult {
+    #[serde(rename = "_meta")]
+    meta: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -529,6 +557,8 @@ struct InitializeResult {
 #[derive(Debug, Serialize)]
 struct Capabilities {
     tools: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    events: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -610,6 +640,17 @@ struct McpError {
 
 impl From<McpRequestError> for McpError {
     fn from(err: McpRequestError) -> Self {
+        match err {
+            McpRequestError::Subscription(error) => return error,
+            McpRequestError::ResourceExhausted(limit) => {
+                return Self {
+                    code: -32013,
+                    message: "ResourceExhausted".into(),
+                    data: Some(json!({"limit": limit})),
+                };
+            }
+            _ => {}
+        }
         McpError {
             code: err.error_code(),
             message: err.to_string(),
@@ -654,6 +695,7 @@ pub async fn handle_mcp_agent(
     headers: HeaderMap,
     Extension(allowed_origins): Extension<Arc<Vec<HeaderValue>>>,
     Extension(metrics): Extension<McpMetrics>,
+    Extension(subscriptions): Extension<SubscriptionRegistry>,
     client: AuthedClient,
     body: Bytes,
 ) -> axum::response::Response {
@@ -671,6 +713,7 @@ pub async fn handle_mcp_agent(
         body,
         McpEndpointType::Agent,
         metrics,
+        subscriptions,
     )
     .await
     .into_response()
@@ -681,6 +724,7 @@ pub async fn handle_mcp_developer(
     headers: HeaderMap,
     Extension(allowed_origins): Extension<Arc<Vec<HeaderValue>>>,
     Extension(metrics): Extension<McpMetrics>,
+    Extension(subscriptions): Extension<SubscriptionRegistry>,
     client: AuthedClient,
     body: Bytes,
 ) -> axum::response::Response {
@@ -698,6 +742,7 @@ pub async fn handle_mcp_developer(
         body,
         McpEndpointType::Developer,
         metrics,
+        subscriptions,
     )
     .await
     .into_response()
@@ -788,9 +833,14 @@ struct McpEndpointConfig {
     enabled: bool,
     query_tool_enabled: bool,
     read_data_product_tool_enabled: bool,
+    events_enabled: bool,
     request_timeout: Duration,
     max_response_size: usize,
     protocol_2026_07_28_enabled: bool,
+    events_max_per_role: usize,
+    events_max_concurrent: usize,
+    events_max_lifetime: Duration,
+    events_heartbeat_interval: Duration,
 }
 
 impl McpEndpointConfig {
@@ -806,11 +856,34 @@ impl McpEndpointConfig {
                 McpEndpointType::Developer => ENABLE_MCP_DEVELOPER_QUERY_TOOL.get(dyncfgs),
             },
             read_data_product_tool_enabled: ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL.get(dyncfgs),
+            events_enabled: matches!(endpoint_type, McpEndpointType::Agent)
+                && ENABLE_MCP_AGENT_EVENTS.get(dyncfgs),
             request_timeout: MCP_REQUEST_TIMEOUT.get(dyncfgs),
             max_response_size: MCP_MAX_RESPONSE_SIZE.get(dyncfgs),
             protocol_2026_07_28_enabled: ENABLE_MCP_PROTOCOL_2026_07_28.get(dyncfgs),
+            events_max_per_role: MCP_EVENTS_MAX_PER_ROLE.get(dyncfgs),
+            events_max_concurrent: MCP_EVENTS_MAX_CONCURRENT.get(dyncfgs),
+            events_max_lifetime: MCP_EVENTS_MAX_LIFETIME.get(dyncfgs),
+            events_heartbeat_interval: MCP_EVENTS_HEARTBEAT_INTERVAL.get(dyncfgs),
         }
     }
+
+    fn event_request_id(
+        &self,
+        request: &McpRequest,
+    ) -> Result<events_protocol::RequestId, McpRequestError> {
+        if !self.events_enabled {
+            return Err(McpRequestError::MethodNotFound(request.method.to_string()));
+        }
+        events_protocol::RequestId::parse(request.id.clone().unwrap_or(serde_json::Value::Null))
+            .map_err(McpRequestError::QueryValidationFailed)
+    }
+}
+
+/// A method either produces a JSON result or transfers ownership of a live subscription.
+enum McpDispatch {
+    Result(McpResult),
+    StartedStream(events::StartedSubscription),
 }
 
 async fn handle_mcp_request(
@@ -820,6 +893,7 @@ async fn handle_mcp_request(
     body: Bytes,
     endpoint_type: McpEndpointType,
     metrics: McpMetrics,
+    subscriptions: SubscriptionRegistry,
 ) -> axum::response::Response {
     let mut guard = RequestGuard::new(
         &metrics,
@@ -903,15 +977,28 @@ async fn handle_mcp_request(
 
     let request_timeout = config.request_timeout;
     let metrics_inner = metrics.clone();
+    let subscription_state = events::SubscriptionState::default();
+    let task_state = subscription_state.clone();
     // Spawn task for fault isolation, with a timeout safety net.
     // `abort_on_drop` propagates the timeout to the task itself; without
     // it the task orphans and the SQL query keeps running in the
     // background after the client gives up (see database-issues#9947).
-    let task = mz_ore::task::spawn(|| "mcp_request", async move {
-        handle_mcp_method(client, &request, config, &metrics_inner).await
+    // Aborting the task also drops a stream that has not started yet,
+    // releasing its client and admission permit. The timeout ends once a
+    // started stream transfers to the response body.
+    let mut task = mz_ore::task::spawn(|| "mcp_request", async move {
+        handle_mcp_method(
+            client,
+            &request,
+            config,
+            &metrics_inner,
+            subscriptions,
+            task_state,
+        )
+        .await
     })
     .abort_on_drop();
-    let result = tokio::time::timeout(request_timeout, task).await;
+    let result = tokio::time::timeout(request_timeout, &mut task).await;
 
     let result = match result {
         Ok(result) => {
@@ -921,11 +1008,19 @@ async fn handle_mcp_request(
         Err(_elapsed) => {
             warn!(endpoint = %endpoint_type, timeout = ?request_timeout, "MCP request timed out");
             guard.set_status(McpCallStatus::Timeout);
-            Err(McpRequestError::RequestTimeout(request_timeout))
+            // Set the cause before aborting the task so subscription cleanup
+            // distinguishes startup failure from a disconnected client.
+            let error = McpRequestError::RequestTimeout(request_timeout);
+            subscription_state.startup_failed(error.to_string());
+            drop(task);
+            Err(error)
         }
     };
     match result {
-        Ok(result) => Json(McpResponse::success(request_id, result)).into_response(),
+        Ok(McpDispatch::Result(result)) => {
+            Json(McpResponse::success(request_id, result)).into_response()
+        }
+        Ok(McpDispatch::StartedStream(stream)) => stream.into_response(),
         Err(error) => {
             if !matches!(
                 error,
@@ -943,7 +1038,9 @@ async fn handle_mcp_method(
     request: &McpRequest,
     config: McpEndpointConfig,
     metrics: &McpMetrics,
-) -> Result<McpResult, McpRequestError> {
+    subscriptions: SubscriptionRegistry,
+    subscription_state: events::SubscriptionState,
+) -> Result<McpDispatch, McpRequestError> {
     if request.jsonrpc != JSONRPC_VERSION {
         return Err(McpRequestError::InvalidJsonRpcVersion);
     }
@@ -968,11 +1065,45 @@ async fn handle_mcp_method(
             )
             .await?
         }
+        McpMethod::EventsList(params) => {
+            config.event_request_id(request)?;
+            let params = events_protocol::ListParams::parse(params.clone())
+                .map_err(McpRequestError::QueryValidationFailed)?;
+            if params.cursor.is_some() {
+                return Err(McpRequestError::QueryValidationFailed(
+                    "Event discovery has no additional pages".into(),
+                ));
+            }
+            McpResult::EventsList(events::list(&config))
+        }
+        McpMethod::EventsStream(params) => {
+            let id = config.event_request_id(request)?;
+            let role = *client.client.session().current_role_id();
+            let permit = subscriptions
+                .acquire(
+                    role,
+                    config.events_max_per_role,
+                    config.events_max_concurrent,
+                )
+                .map_err(McpRequestError::ResourceExhausted)?;
+            let stream = events::stream(
+                client,
+                id,
+                params.clone().unwrap_or(serde_json::Value::Null),
+                &config,
+                subscription_state,
+                metrics.clone(),
+                permit,
+            )
+            .await
+            .map_err(McpRequestError::Subscription)?;
+            return Ok(McpDispatch::StartedStream(stream));
+        }
         McpMethod::Ping(_) | McpMethod::NotificationsInitialized(_) | McpMethod::Unknown => {
             return Err(McpRequestError::MethodNotFound("unknown method".into()));
         }
     };
-    Ok(result)
+    Ok(McpDispatch::Result(result))
 }
 
 /// Instructions returned in the `initialize` response for each endpoint type.
@@ -1067,7 +1198,10 @@ fn endpoint_instructions(
 fn handle_initialize(config: &McpEndpointConfig) -> McpResult {
     McpResult::Initialize(InitializeResult {
         protocol_version: MCP_PROTOCOL_VERSION.to_string(),
-        capabilities: Capabilities { tools: json!({}) },
+        capabilities: Capabilities {
+            tools: json!({}),
+            events: config.events_enabled.then(|| json!({})),
+        },
         server_info: ServerInfo {
             name: format!("materialize-mcp-{}", config.endpoint_type),
             version: env!("CARGO_PKG_VERSION").to_string(),

@@ -1373,6 +1373,7 @@ impl<'a> RunnerInner<'a> {
             },
             system_parameter_defaults: {
                 let mut params = BTreeMap::new();
+                params.insert("enable_mcp_agent_events".to_string(), "true".to_string());
                 params.insert(
                     "log_filter".to_string(),
                     config.tracing.startup_log_filter.to_string(),

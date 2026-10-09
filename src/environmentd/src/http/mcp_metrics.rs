@@ -18,7 +18,7 @@
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::stats::histogram_seconds_buckets;
-use prometheus::{HistogramTimer, HistogramVec, IntCounterVec};
+use prometheus::{HistogramTimer, HistogramVec, IntCounter, IntCounterVec, IntGauge};
 
 /// Closed set of outcomes recorded in the MCP `status` label. Keeping these
 /// as an enum (rather than free-form strings at the call sites) pins the
@@ -59,6 +59,9 @@ impl McpCallStatus {
 /// so the struct can be cloned freely and stored as an axum `Extension`.
 #[derive(Debug, Clone)]
 pub struct McpMetrics {
+    pub active_subscriptions: IntGauge,
+    pub subscription_events: IntCounter,
+    pub subscription_ends: IntCounterVec,
     /// Total MCP requests by endpoint type, JSON-RPC method, and status.
     pub requests: IntCounterVec,
     /// Total MCP `tools/call` invocations by endpoint type, tool name, and status.
@@ -155,6 +158,19 @@ impl Drop for ToolCallGuard<'_> {
 impl McpMetrics {
     pub fn register_into(registry: &MetricsRegistry) -> Self {
         Self {
+            active_subscriptions: registry.register(metric!(
+                name: "mz_mcp_active_subscriptions",
+                help: "Number of active MCP subscriptions.",
+            )),
+            subscription_events: registry.register(metric!(
+                name: "mz_mcp_subscription_events_total",
+                help: "Number of MCP subscription events queued for delivery.",
+            )),
+            subscription_ends: registry.register(metric!(
+                name: "mz_mcp_subscription_ends_total",
+                help: "Number of MCP subscriptions ended, by reason.",
+                var_labels: ["reason"],
+            )),
             requests: registry.register(metric!(
                 name: "mz_mcp_requests_total",
                 help: "Total number of MCP requests received.",

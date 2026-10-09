@@ -1371,3 +1371,101 @@ def workflow_auth_failure_modes(c: Composition) -> None:
             # before method routing dispatches.
             r = requests.get(agent)
             assert r.status_code == 401, f"{r.status_code}: {r.text}"
+
+
+def workflow_events(c: Composition) -> None:
+    c.up("materialized")
+    original = c.sql_query("SHOW enable_mcp_agent_events", user="mz_system", port=6877)[
+        0
+    ][0]
+
+    def setting(name: str, value: str) -> None:
+        c.sql(
+            f"ALTER SYSTEM SET {name} = '{value}'",
+            user="mz_system",
+            port=6877,
+            print_statement=False,
+        )
+
+    def post(body: dict, endpoint: str = "agent") -> requests.Response:
+        return requests.post(mcp_url(c, endpoint), json=body, timeout=(5, 10))
+
+    def rejected(response: requests.Response, code: int, request_id: object) -> None:
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["jsonrpc"] == "2.0", body
+        assert body["id"] == request_id, body
+        assert body["error"]["code"] == code, body
+
+    def events_capability(endpoint: str = "agent") -> bool:
+        response = post(
+            jsonrpc(
+                "initialize",
+                {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "0.1.0"},
+                },
+            ),
+            endpoint,
+        )
+        assert response.status_code == 200, response.text
+        return "events" in response.json()["result"]["capabilities"]
+
+    list_events = jsonrpc("events/list", {"_meta": {}})
+    stream_unknown = jsonrpc("events/stream", {"name": "unknown", "arguments": {}})
+
+    try:
+        setting("enable_mcp_agent_events", "true")
+
+        with c.test_case("events_discovery_and_endpoint_isolation"):
+            assert events_capability()
+            assert not events_capability("developer")
+            response = post(list_events)
+            assert response.status_code == 200, response.text
+            assert response.json()["result"]["events"] == []
+            rejected(post(stream_unknown), -32011, 1)
+            rejected(post(list_events, "developer"), -32601, 1)
+            rejected(post(stream_unknown, "developer"), -32601, 1)
+            setting("enable_mcp_agent_events", "false")
+            try:
+                assert not events_capability()
+                rejected(post(list_events), -32601, 1)
+                rejected(post(stream_unknown), -32601, 1)
+            finally:
+                setting("enable_mcp_agent_events", "true")
+
+        with c.test_case("events_correlated_protocol_validation"):
+            for method in ("events/list", "events/stream"):
+                for params in (False, [], 42, {"cursor": 5}):
+                    response = post(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": "malformed",
+                            "method": method,
+                            "params": params,
+                        }
+                    )
+                    rejected(response, -32602, "malformed")
+                response = post(
+                    {
+                        "jsonrpc": "1.0",
+                        "id": "version",
+                        "method": method,
+                        "params": False,
+                    }
+                )
+                rejected(response, -32600, "version")
+                for request_id in (True, 1.5, [], {}):
+                    response = post(
+                        {"jsonrpc": "2.0", "id": request_id, "method": method}
+                    )
+                    rejected(response, -32602, request_id)
+                for notification in ({"id": None}, {}):
+                    response = post(
+                        {"jsonrpc": "2.0", "method": method, **notification}
+                    )
+                    assert response.status_code == 202, response.text
+                    assert not response.content
+    finally:
+        setting("enable_mcp_agent_events", str(original))

@@ -1312,12 +1312,26 @@ metrics:
   - type
   source: src/adapter/src/metrics.rs
   visibility: internal
+- name: mz_mcp_active_subscriptions
+  help: Number of active MCP subscriptions.
+  source: src/environmentd/src/http/mcp_metrics.rs
+  visibility: internal
 - name: mz_mcp_requests_total
   help: Total number of MCP requests received.
   labels:
   - endpoint_type
   - method
   - status
+  source: src/environmentd/src/http/mcp_metrics.rs
+  visibility: internal
+- name: mz_mcp_subscription_ends_total
+  help: Number of MCP subscriptions ended, by reason.
+  labels:
+  - reason
+  source: src/environmentd/src/http/mcp_metrics.rs
+  visibility: internal
+- name: mz_mcp_subscription_events_total
+  help: Number of MCP subscription events queued for delivery.
   source: src/environmentd/src/http/mcp_metrics.rs
   visibility: internal
 - name: mz_mcp_tool_call_duration_seconds_bucket
