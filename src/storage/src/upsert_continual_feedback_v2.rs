@@ -96,15 +96,15 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::logging::Logger;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
 use differential_dataflow::operators::arrange::arrangement::{Arranged, arrange_core};
-use differential_dataflow::trace::chunk::{ChunkBatcher, ChunkBuilder, ChunkSpine};
-use differential_dataflow::trace::{Batcher, Cursor, Description, TraceReader};
+use differential_dataflow::trace::chunk::{ChunkBatch, ChunkBatcher, ChunkBuilder};
+use differential_dataflow::trace::{BatchReader, Batcher, Cursor, Description, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_dyncfg::ConfigSet;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 // Only the fuzzing-gated `datum_seq_to_upsert_value` takes a `DatumSeq`.
 #[cfg(feature = "fuzzing")]
 use mz_row_spine::DatumSeq;
-use mz_row_spine::{ValRowColPagedBuilder, ValRowSpine};
+use mz_row_spine::{FundedValRowSpine, ValRowColPagedBuilder};
 use mz_storage_types::dyncfgs::ENABLE_UPSERT_CHUNKED_STASH;
 use mz_storage_types::errors::{DataflowError, EnvelopeError, UpsertError};
 use mz_timely_util::builder_async::{
@@ -112,9 +112,10 @@ use mz_timely_util::builder_async::{
     PressOnDropButton,
 };
 use mz_timely_util::columnar::batcher::ColumnChunker;
+use mz_timely_util::columnar::body::ColumnBody;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::{ChunkChunker, ColumnChunk};
-use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
+use mz_timely_util::columnar::chunk::{ChunkChunker, ColumnChunk, StorageSpill};
+use mz_timely_util::columnar::merge_batcher::{ColumnMergeBatcher, PagedChunker};
 use mz_timely_util::columnar::unload::UnloadBatch;
 use mz_timely_util::columnar::{Col2ValPagedBatcher, Column};
 use mz_timely_util::containers::stack::FueledBuilder;
@@ -221,10 +222,12 @@ type FeedbackUpdate<T> = ((UpsertKey, Row), T, Diff);
 /// of RSS under the pool's budget, and the drain reads it back through the
 /// bulk [`UnloadChunk`](mz_timely_util::columnar::unload::UnloadChunk)
 /// surface: copy-out probes, no cursor borrows.
-type FeedbackChunk<T> = ColumnChunk<(UpsertKey, Row), T, Diff>;
+type FeedbackChunk<T> = ColumnChunk<(UpsertKey, Row), T, Diff, StorageSpill>;
 
-/// The feedback arrangement's trace: a spine of `Rc`-shared chunk batches.
-type FeedbackSpine<T> = ChunkSpine<FeedbackChunk<T>>;
+/// The feedback arrangement's trace: a funded spine of `Rc`-shared chunk
+/// batches. See [`mz_timely_util::funded_spine`].
+type FeedbackSpine<T> =
+    mz_timely_util::funded_spine::Spine<std::rc::Rc<ChunkBatch<FeedbackChunk<T>>>>;
 
 // The source stash carries the upsert payload in a custom diff type so the
 // merge batcher consolidates by (key, time), keeping the update with the
@@ -290,7 +293,7 @@ type UpsertUpdate<T, O> = (UpsertKey, T, UpsertDiff<O>);
 
 /// One stash chunk: a sorted, consolidated run of updates, resident or
 /// spilled to the buffer pool.
-type UpsertChunk<T, O> = ColumnChunk<UpsertKey, T, UpsertDiff<O>>;
+type UpsertChunk<T, O> = ColumnChunk<UpsertKey, T, UpsertDiff<O>, StorageSpill>;
 
 /// The chunked flavor's stash: differential's chunk merge batcher over
 /// `ColumnChunk`s. Data is pushed in unsorted. The batcher maintains
@@ -446,12 +449,12 @@ where
     match flavor {
         UpsertStashFlavor::Chunked => {
             // Chains and sealed batches alike are `FeedbackChunk`s whose
-            // bodies spill to the buffer pool, behind the same process spill
+            // bodies spill to the buffer pool, behind the same storage spill
             // gate as the source stash.
             let persist_arranged = arrange_core::<
                 _,
                 _,
-                ChunkChunker<(UpsertKey, Row), T, Diff>,
+                ChunkChunker<(UpsertKey, Row), T, Diff, StorageSpill>,
                 ChunkBatcher<FeedbackChunk<T>>,
                 ChunkBuilder<FeedbackChunk<T>>,
                 FeedbackSpine<T>,
@@ -474,10 +477,10 @@ where
             let persist_arranged = arrange_core::<
                 _,
                 _,
-                ColumnChunker<((UpsertKey, Row), T, Diff)>,
+                PagedChunker<((UpsertKey, Row), T, Diff)>,
                 UpsertFeedbackBatcher<T>,
                 ValRowColPagedBuilder<UpsertKey, T, Diff>,
-                ValRowSpine<UpsertKey, T, Diff>,
+                FundedValRowSpine<UpsertKey, T, Diff>,
             >(encoded, Pipeline, "Persist feedback");
             build_upsert_operator::<PagedArm, _, _>(
                 input,
@@ -648,7 +651,13 @@ where
             tokio::select! {
                 _ = input.ready() => {}
                 _ = persist_wakeup.ready() => {
-                    while persist_wakeup.next_sync().is_some() {}
+                    while let Some(event) = persist_wakeup.next_sync() {
+                        if let AsyncEvent::Data(_, batches) = event {
+                            for batch in batches {
+                                mz_timely_util::columnar::chunk::metrics::record_batch(batch.len());
+                            }
+                        }
+                    }
                 }
             }
 
@@ -876,11 +885,11 @@ where
     /// A new stash batcher for one source dataflow.
     fn new_batcher() -> Self::Batcher;
 
-    /// Push one sorted, consolidated `Column` chunk into the batcher, in the
+    /// Push one sorted, consolidated chunk body into the batcher, in the
     /// batcher's chunk representation.
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>);
+    fn push_chunk(batcher: &mut Self::Batcher, chunk: ColumnBody<UpsertUpdate<T, O>>);
 
-    /// Consolidate `updates` through `chunker` into `Column` chunks and push
+    /// Consolidate `updates` through `chunker` into chunk bodies and push
     /// them into `batcher`, emptying `updates` (keeping its capacity). The
     /// chunker readies a fully-consolidated chunk per `push_into`, so the
     /// `extract` loop drains everything it produced.
@@ -945,8 +954,8 @@ where
         Batcher::new(None, 0)
     }
 
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
-        batcher.push_into(ColumnChunk::from_column(chunk));
+    fn push_chunk(batcher: &mut Self::Batcher, chunk: ColumnBody<UpsertUpdate<T, O>>) {
+        batcher.push_into(ColumnChunk::from_body(chunk));
     }
 
     async fn drain(
@@ -960,7 +969,7 @@ where
         source_id: GlobalId,
     ) -> DrainStats {
         drain_sealed_input_chunked(
-            sealed.into_iter().map(ColumnChunk::into_column),
+            sealed.into_iter().map(ColumnChunk::into_body),
             ineligible,
             output_handle,
             output_cap,
@@ -986,7 +995,7 @@ where
     O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
     for<'a> columnar::Ref<'a, O>: Ord + Copy,
 {
-    type Spine = ValRowSpine<UpsertKey, T, Diff>;
+    type Spine = FundedValRowSpine<UpsertKey, T, Diff>;
     type Batcher = UpsertPagedBatcher<T, O>;
 
     fn new_batcher() -> Self::Batcher {
@@ -995,8 +1004,9 @@ where
         batcher
     }
 
-    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
-        batcher.push_into(chunk);
+    fn push_chunk(batcher: &mut Self::Batcher, chunk: ColumnBody<UpsertUpdate<T, O>>) {
+        // The pager's chains are edge containers, so the body goes back onto one.
+        batcher.push_into(Column::from(chunk));
     }
 
     async fn drain(
@@ -1092,7 +1102,7 @@ struct DrainStats {
 /// probe hits for its keys) is resident regardless of drain size. Only the
 /// re-stashed ineligible set is materialized.
 async fn drain_sealed_input_chunked<T, O>(
-    sealed: impl Iterator<Item = Column<UpsertUpdate<T, O>>>,
+    sealed: impl Iterator<Item = ColumnBody<UpsertUpdate<T, O>>>,
     ineligible: &mut Vec<UpsertUpdate<T, O>>,
     output_handle: &UpsertOutputHandle<T>,
     output_cap: &Capability<T>,
@@ -1307,7 +1317,7 @@ async fn drain_sealed_input_paged<T, O>(
     output_handle: &UpsertOutputHandle<T>,
     output_cap: &Capability<T>,
     persist_upper: &Antichain<T>,
-    trace: &mut TraceAgent<ValRowSpine<UpsertKey, T, Diff>>,
+    trace: &mut TraceAgent<FundedValRowSpine<UpsertKey, T, Diff>>,
     worker_id: usize,
     source_id: GlobalId,
 ) -> DrainStats

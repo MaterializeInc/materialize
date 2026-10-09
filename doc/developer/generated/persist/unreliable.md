@@ -1,6 +1,6 @@
 ---
 source: src/persist/src/unreliable.rs
-revision: 181b1e7efc
+revision: aafb0ea1df
 ---
 
 # persist::unreliable

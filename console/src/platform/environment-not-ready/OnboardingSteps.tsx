@@ -59,7 +59,14 @@ export const OnboardingSteps = ({ user }: { user: User }) => {
   const environmentReady =
     environment?.state === "enabled" && environment.status.health === "healthy";
   return (
-    <Box width="100%" height="100%" position="relative" overflowX="hidden">
+    <Flex
+      width="100%"
+      minHeight="100%"
+      flexShrink="0"
+      alignItems="center"
+      justifyContent="center"
+      overflowX="clip"
+    >
       <Flex
         alignItems="center"
         flexDir={{ base: "column-reverse", xl: "row" }}
@@ -68,13 +75,9 @@ export const OnboardingSteps = ({ user }: { user: User }) => {
           base: "center",
           xl: "space-between",
         }}
-        ml={{ base: "0", xl: "144px" }}
-        position="absolute"
-        top={{ base: "auto", xl: "50%" }}
-        right={{ base: "auto", xl: "0" }}
-        left={{ base: "auto", xl: "0" }}
-        mt={{ base: "auto", xl: "-300px" }}
+        px={{ base: 8, xl: 16 }}
         width="100%"
+        maxWidth="1500px"
       >
         <VStack
           alignItems="flex-start"
@@ -184,13 +187,13 @@ export const OnboardingSteps = ({ user }: { user: User }) => {
           src={slide.image.src}
           alt={slide.image.src}
           height="auto"
-          maxHeight={{ base: "auto", lg: "400px", xl: "600px" }}
-          mr={{ base: undefined, xl: "-44px" }}
+          maxHeight={{ base: "auto", lg: "400px", xl: "540px" }}
           px={{ base: "8", xl: "0" }}
           width={{ base: "100%", lg: "auto", xl: "auto" }}
+          maxWidth={{ xl: "55%" }}
         />
       </Flex>
-    </Box>
+    </Flex>
   );
 };
 

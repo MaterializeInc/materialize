@@ -22,7 +22,7 @@ variable "resource_group_name" {
 variable "location" {
   description = "The location of the Azure resources"
   type        = string
-  default     = "eastus2"
+  default     = "northcentralus"
 }
 
 variable "name_prefix" {

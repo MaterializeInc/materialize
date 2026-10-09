@@ -1,6 +1,6 @@
 ---
 source: src/service/src/boot.rs
-revision: 82d92a7fad
+revision: a501f783cc
 ---
 
 # mz-service::boot

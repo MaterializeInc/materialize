@@ -31,6 +31,7 @@
 //!   conservative — actual heap footprints (Row overhead, container
 //!   metadata, output buffers) land roughly 3× higher.
 
+use mz_alloc_default as _;
 use std::mem::size_of;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -229,7 +230,7 @@ fn bench_merge(c: &mut Criterion) {
                         let mut merger: ColumnMerger<Data, Time, Diff> = Default::default();
                         let mut output = Vec::new();
                         let mut stash = Vec::new();
-                        merger.merge(vec![ka], vec![kb], &mut output, &mut stash);
+                        merger.merge(vec![ka.into()], vec![kb.into()], &mut output, &mut stash);
                         output
                     },
                     BatchSize::LargeInput,

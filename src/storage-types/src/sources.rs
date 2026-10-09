@@ -1647,7 +1647,7 @@ impl SourceDataColumnarEncoder {
                 SourceDataRowColumnarEncoder::EmptyRow
             }
         };
-        let err_encoder = BinaryBuilder::new();
+        let err_encoder = BinaryBuilder::with_capacity(0, 0);
 
         SourceDataColumnarEncoder {
             row_encoder,

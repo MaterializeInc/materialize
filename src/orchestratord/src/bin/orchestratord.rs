@@ -18,6 +18,7 @@ use std::{
 use axum_server::tls_rustls::RustlsConfig;
 use futures::future::{Either, join4, select};
 use http::HeaderValue;
+use k8s_controller::{PrometheusMetrics, ReconcileObserver, events::EventRecorder};
 use k8s_openapi::{
     api::{
         apps::v1::Deployment,
@@ -209,6 +210,22 @@ pub struct Args {
     ephemeral_volume_class: Option<String>,
     #[clap(long)]
     scheduler_name: Option<String>,
+
+    /// The Teleport endpoint to register the environmentd Service against,
+    /// e.g. `materialize.teleport.sh:443`. When unset, orchestratord writes
+    /// no Teleport labels or annotations on the environmentd Service.
+    #[clap(
+        long,
+        requires = "teleport_stack_type",
+        requires = "teleport_cluster_name"
+    )]
+    teleport_endpoint: Option<String>,
+    /// Required when `--teleport-endpoint` is set.
+    #[clap(long)]
+    teleport_stack_type: Option<String>,
+    /// Required when `--teleport-endpoint` is set.
+    #[clap(long)]
+    teleport_cluster_name: Option<String>,
     #[clap(long)]
     enable_security_context: bool,
     #[clap(long)]
@@ -332,6 +349,9 @@ pub struct Args {
     #[clap(long, hide = true)]
     disable_license_key_checks: bool,
 
+    #[clap(long)]
+    disable_database_network_policies: bool,
+
     #[clap(flatten)]
     tracing: TracingCliArgs,
 
@@ -381,6 +401,17 @@ fn parse_data_rate(s: &str) -> anyhow::Result<usize> {
 async fn main() {
     mz_ore::panic::install_enhanced_handler();
 
+    // Pin the rustls crypto provider to aws-lc-rs. The kube client and the
+    // conversion webhook's `RustlsConfig` both build their rustls configs via
+    // `builder()`, which resolves the process-default provider. Installing it
+    // explicitly keeps the choice deterministic even in workspace builds where
+    // rustls' `ring` feature is also enabled by another crate (with both
+    // features on, rustls cannot pick a default on its own and would otherwise
+    // panic).
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("installing the aws-lc-rs crypto provider should not fail");
+
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("ORCHESTRATORD_"),
         enable_version_flag: true,
@@ -425,15 +456,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     // and `webhook_server` is what shutdown uses to drain the server. Both are
     // set only when the conversion webhook server is running.
     let (reload_config, webhook_server) = if args.install_v1_crd {
-        // Pin the rustls crypto provider to aws-lc-rs. `RustlsConfig` builds its
-        // `ServerConfig` via `ServerConfig::builder()`, which resolves the
-        // process-default provider. Installing it explicitly keeps the choice
-        // deterministic even in workspace builds where rustls' `ring` feature is
-        // also enabled by another crate (with both features on, rustls cannot
-        // pick a default on its own and would otherwise panic).
-        rustls::crypto::aws_lc_rs::default_provider()
-            .install_default()
-            .expect("installing the aws-lc-rs crypto provider should not fail");
         let config = RustlsConfig::from_pem_file(&tls_cert, &tls_key)
             .await
             .unwrap();
@@ -635,12 +657,22 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         &leader_election_identity,
     );
 
+    let observer: Arc<dyn ReconcileObserver> = Arc::<PrometheusMetrics>::clone(&metrics.reconcile);
+    let event_recorder = |controller: &str| {
+        Arc::new(EventRecorder::new(
+            client.clone(),
+            controller::event_reporter(controller, leader_election_identity.clone()),
+        ))
+    };
+
     // Each of these is rebuilt every time this replica wins the election, since
     // running a controller consumes it and we rejoin the election after losing
     // the lease.
     let make_materialize_controller = {
         let client = client.clone();
         let metrics = Arc::clone(&metrics);
+        let observer = Arc::clone(&observer);
+        let events = event_recorder(controller::materialize::CONTROLLER_NAME);
         let config = controller::materialize::Config {
             cloud_provider: args.cloud_provider,
             region: args.region,
@@ -711,8 +743,20 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 .environmentd_internal_persist_pubsub_port,
             default_certificate_specs: args.default_certificate_specs.clone(),
             disable_license_key_checks: args.disable_license_key_checks,
+            disable_database_network_policies: args.disable_database_network_policies,
             tracing: args.tracing,
             orchestratord_namespace: namespace,
+            teleport: args.teleport_endpoint.map(|endpoint| {
+                controller::materialize::teleport::TeleportConfig {
+                    endpoint,
+                    stack_type: args
+                        .teleport_stack_type
+                        .expect("clap requires --teleport-stack-type with --teleport-endpoint"),
+                    cluster_name: args
+                        .teleport_cluster_name
+                        .expect("clap requires --teleport-cluster-name with --teleport-endpoint"),
+                }
+            }),
         };
         move || {
             k8s_controller::Controller::namespaced_all(
@@ -720,6 +764,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 controller::materialize::Context::new(config.clone(), Arc::clone(&metrics)),
                 watcher::Config::default().timeout(29),
             )
+            .with_name(controller::materialize::CONTROLLER_NAME)
+            .with_observer(Arc::clone(&observer))
+            .with_event_recorder(Arc::clone(&events))
             .with_controller(|controller| {
                 let controller = controller
                     .owns(
@@ -761,6 +808,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     };
     let make_balancer_controller = {
         let client = client.clone();
+        let observer = Arc::clone(&observer);
+        let events = event_recorder(controller::balancer::CONTROLLER_NAME);
         let config = controller::balancer::Config {
             enable_security_context: args.enable_security_context,
             enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
@@ -783,6 +832,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 controller::balancer::Context::new(config.clone()),
                 watcher::Config::default().timeout(29),
             )
+            .with_name(controller::balancer::CONTROLLER_NAME)
+            .with_observer(Arc::clone(&observer))
+            .with_event_recorder(Arc::clone(&events))
             .with_controller(|controller| {
                 let controller = controller
                     .owns(
@@ -812,6 +864,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     };
     let make_console_controller = {
         let client = client.clone();
+        let observer = Arc::clone(&observer);
+        let events = event_recorder(controller::console::CONTROLLER_NAME);
         let config = controller::console::Config {
             enable_security_context: args.enable_security_context,
             enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
@@ -833,6 +887,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 controller::console::Context::new(config.clone()),
                 watcher::Config::default().timeout(29),
             )
+            .with_name(controller::console::CONTROLLER_NAME)
+            .with_observer(Arc::clone(&observer))
+            .with_event_recorder(Arc::clone(&events))
             .with_controller(|controller| {
                 let controller = controller
                     .owns(

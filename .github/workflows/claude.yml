@@ -40,23 +40,18 @@ jobs:
       actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Checkout PR branch
-        if: github.event.issue.pull_request
-        run: gh pr checkout "$PR_NUMBER"
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.issue.number }}
-
+      # The action checks out the PR branch itself, fetching fork PRs via
+      # `refs/pull/N/head`. NOTE: Checking out the branch in an earlier step
+      # breaks fork PRs, because git refuses to fetch into the checked-out
+      # branch.
       - name: Run Claude Code
         id: claude
-        # We use a fork of anthropics/claude-code-action until it is updated to work with fork PRs
-        # See https://github.com/MaterializeInc/claude-code-action/blob/mz-patches/README.md for details.
-        uses: MaterializeInc/claude-code-action@0433f2aa93835ea8b1de27f6ed7a48724b2d510a
+        uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea # v1.0.241
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |

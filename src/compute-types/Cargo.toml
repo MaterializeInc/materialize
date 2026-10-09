@@ -26,6 +26,7 @@ tracing.workspace = true
 [dev-dependencies]
 chrono.workspace = true
 chrono-tz.workspace = true
+hex.workspace = true
 mz-expr = { path = "../expr", features = ["func-registry"] }
 mz-pgtz = { path = "../pgtz" }
 serde-reflection.workspace = true

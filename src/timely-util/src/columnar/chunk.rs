@@ -7,13 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! [`ColumnChunk`]: differential's [`Chunk`] over [`Column`]-shaped updates.
+//! [`ColumnChunk`]: differential's [`Chunk`] over [`ColumnBody`] updates.
 //!
 //! A chunk is a sorted, consolidated run of `(D, T, R)` updates in the flat
 //! columnar layout, in one of two homes:
 //!
-//! * **Resident**: an `Rc`-shared [`Column`] on the heap. Fresh input, merge
-//!   output, and small tails live here.
+//! * **Resident**: an `Rc`-shared [`ColumnBody`] on the heap. Fresh input,
+//!   merge output, and small tails live here.
 //! * **Spilled**: the serialized body in the process [`Pool`], with the record
 //!   count and the first and last data items resident. The pool owns residency
 //!   from there, with slots under a memory budget and compression and device
@@ -25,9 +25,8 @@
 //! (see [`mz_ore::pool`]).
 //!
 //! Spilling happens in [`Chunk::settle`], the trait's designated commit point:
-//! chunks moved to settled output are handed to the pool when spilling is
-//! enabled (see [`set_compute_spill_enabled`] and [`set_storage_spill_enabled`]
-//! for how the per-commit destination resolves). Grading is by serialized
+//! chunks moved to settled output are handed to the pool while the chunk
+//! type's [`SpillGate`] is open. Grading is by serialized
 //! bytes, the ship size [`Column`] already targets, rather than by the
 //! record-count `TARGET`, since record count does not bound bytes for
 //! variable-width data.
@@ -43,11 +42,12 @@ use std::borrow::Cow;
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use columnar::bytes::indexed;
-use columnar::{Borrow, BorrowedOf, Columnar, Container as _, FromBytes, Index, Len, Push as _};
+use columnar::{Borrow, BorrowedOf, Columnar, Container as _, Index, Len, Push as _};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::chunk::Chunk;
@@ -57,19 +57,25 @@ use smallvec::SmallVec;
 use timely::Accountable;
 use timely::PartialOrder;
 use timely::container::{ContainerBuilder, PushInto};
-use timely::dataflow::channels::ContainerBytes;
 use timely::progress::Timestamp;
 use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::columnar::batcher::{ColumnChunker, gallop};
+use crate::columnar::body::{ColumnBody, borrow_words};
 use crate::columnar::unload::UnloadChunk;
 use crate::columnar::{Column, at_serialized_capacity};
 
-/// Compute's leg of the process spill gate. See [`set_compute_spill_enabled`].
+pub mod metrics;
+
+/// The gate of [`ComputeSpill`] chunks. See [`set_compute_spill_enabled`].
 static COMPUTE_SPILL_ENABLED: AtomicBool = AtomicBool::new(false);
 
-/// Storage's leg of the process spill gate. See [`set_storage_spill_enabled`].
+/// The gate of [`StorageSpill`] chunks. See [`set_storage_spill_enabled`].
 static STORAGE_SPILL_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// The gate for bodies spilled through [`try_spill_ref`]. See
+/// [`set_sink_spill_enabled`].
+static SINK_SPILL_ENABLED: AtomicBool = AtomicBool::new(false);
 
 thread_local! {
     /// A thread-scoped pool override, taking precedence over the global
@@ -87,28 +93,56 @@ thread_local! {
     static READ_SCRATCH: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Enable or disable chunk spilling on behalf of compute's arrangement
-/// batchers.
+/// Which process-wide gate decides whether a [`ColumnChunk`] spills.
 ///
-/// Chunks carry no subsystem identity, so the spill decision is process-wide:
-/// committed chunks spill while *either* the compute or the storage gate is
-/// set. Each subsystem's config application writes only its own gate, so the
-/// two dyncfg flags compose as an OR instead of clobbering each other.
-///
-/// Takes effect at the next `settle`. Already-spilled chunks are unaffected
-/// either way. The pool is resolved per commit through
-/// [`crate::pool_config::active_pool`], so chunks spill only once
-/// `apply_pool_config` has installed and budgeted the pool. With no pool
-/// installed chunks stay resident regardless of the gates.
+/// Compute and storage dataflows share a process and its worker threads, so
+/// the gate is part of the chunk type: each consumer names the gate of the
+/// subsystem that owns it, and one subsystem's flag cannot spill another's
+/// chunks. Every gate takes effect at the next commit, and only once
+/// `apply_pool_config` has installed the pool. With no pool installed chunks
+/// stay resident whatever the gate says.
+pub trait SpillGate: 'static {
+    /// Whether chunks of this gate spill at commit.
+    fn enabled() -> bool;
+}
+
+/// The gate of compute's chunk batchers. See [`set_compute_spill_enabled`].
+pub enum ComputeSpill {}
+
+impl SpillGate for ComputeSpill {
+    fn enabled() -> bool {
+        COMPUTE_SPILL_ENABLED.load(Ordering::Relaxed)
+    }
+}
+
+/// The gate of storage's upsert chunk batchers. See
+/// [`set_storage_spill_enabled`].
+pub enum StorageSpill {}
+
+impl SpillGate for StorageSpill {
+    fn enabled() -> bool {
+        STORAGE_SPILL_ENABLED.load(Ordering::Relaxed)
+    }
+}
+
+/// Enable or disable spilling of [`ComputeSpill`] chunks. Already-spilled
+/// chunks are unaffected either way.
 pub fn set_compute_spill_enabled(enabled: bool) {
     COMPUTE_SPILL_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
-/// Enable or disable chunk spilling on behalf of storage's upsert dataflows.
-///
-/// See [`set_compute_spill_enabled`] for the shared-gate semantics.
+/// Enable or disable spilling of [`StorageSpill`] chunks. Already-spilled
+/// chunks are unaffected either way.
 pub fn set_storage_spill_enabled(enabled: bool) {
     STORAGE_SPILL_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Enable or disable spilling of bodies offered through [`try_spill_ref`],
+/// which is how compute's MV sink correction buffer spills. Like the
+/// [`SpillGate`]s, it takes effect only once `apply_pool_config` has
+/// installed the pool.
+pub fn set_sink_spill_enabled(enabled: bool) {
+    SINK_SPILL_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
 /// Set or unset the pool through which this thread's chunk spills are
@@ -173,13 +207,20 @@ fn codec_for_depth(depth: u8) -> (&'static dyn ExtentCodec, bool) {
     }
 }
 
-/// The pool committed chunks spill to, if any.
-fn spill_pool() -> Option<Pool> {
+/// The pool a body of `len_bytes` spills into while `enabled`, or `None` when
+/// it stays resident.
+///
+/// The one place the spill decision lives: the thread override, the gate, the
+/// installed pool, and the size floor.
+fn spill_target(enabled: bool, len_bytes: usize) -> Option<Pool> {
+    resolve_pool(enabled).filter(|_| len_bytes >= SPILL_MIN_BYTES)
+}
+
+/// The thread's override pool, else the installed pool while `enabled`.
+fn resolve_pool(enabled: bool) -> Option<Pool> {
     if let Some(pool) = SPILL_OVERRIDE.with(|cell| cell.borrow().clone()) {
         return Some(pool);
     }
-    let enabled = COMPUTE_SPILL_ENABLED.load(Ordering::Relaxed)
-        || STORAGE_SPILL_ENABLED.load(Ordering::Relaxed);
     if enabled {
         crate::pool_config::active_pool()
     } else {
@@ -231,17 +272,19 @@ const SPILL_MIN_BYTES: usize = 64 << 10;
 /// their compression amortizes.
 const DEFAULT_COMPRESS_MIN_DEPTH: u8 = 1;
 
-/// Whether a column is big enough to commit on its own. A monotone
-/// threshold, so settle's carry, which grows by whole chunks, cannot step
-/// over it.
-fn at_commit_size<C: Columnar>(column: &Column<C>) -> bool {
-    column.length_in_bytes() >= COMMIT_BYTES - COMMIT_BYTES / 10
+/// Records of a body with `len` records in `bytes` that fit in `space`
+/// bytes at the body's average width, keeping 5% of `COMMIT_BYTES` as a
+/// margin for per-piece framing. Uniform rows cut this way fill their size
+/// class and leave one short remainder that `settle` can coalesce. Uneven
+/// widths can still overflow, so callers check the cut piece.
+fn cut_records(len: usize, bytes: usize, space: usize) -> usize {
+    let space = space.saturating_sub(COMMIT_BYTES / 20);
+    (len.saturating_mul(space) / bytes.max(1)).min(len)
 }
 
-/// Reconstructs the borrowed columnar view from serialized words, the same
-/// zero-copy decode [`Column::borrow`] performs on its `Align` variant.
-fn borrow_words<C: Columnar>(words: &[u64]) -> BorrowedOf<'_, C> {
-    <BorrowedOf<'_, C>>::from_bytes(&mut indexed::decode(words))
+/// Whether a body is big enough to commit on its own.
+fn at_commit_size<C: Columnar>(body: &ColumnBody<C>) -> bool {
+    body.length_in_bytes() >= COMMIT_BYTES - COMMIT_BYTES / 10
 }
 
 /// Narrow a columnar ref to a shorter lifetime, so refs from different
@@ -257,7 +300,7 @@ fn rr<'b, 'a: 'b, C: Columnar>(item: columnar::Ref<'a, C>) -> columnar::Ref<'b, 
 /// the record count, the first and last data items (the fence entries
 /// [`UnloadChunk::locate`] consults), and the time bounds `extract` consults
 /// to pass frontier-disjoint chunks through without loading them.
-pub struct SpilledBody<D: Columnar, T> {
+pub struct SpilledBody<D: Columnar, T, G> {
     /// Number of updates in the body.
     records: usize,
     /// The first and last data items, as a two-element container. One
@@ -287,6 +330,9 @@ pub struct SpilledBody<D: Columnar, T> {
     len_bytes: usize,
     /// The pool chunk holding the serialized column.
     handle: ChunkHandle,
+    /// Carries the chunk's [`SpillGate`], which the resident variant has no
+    /// field to hold.
+    gate: PhantomData<G>,
 }
 
 /// A sorted, consolidated run of `(D, T, R)` updates, resident or spilled.
@@ -305,14 +351,16 @@ pub struct SpilledBody<D: Columnar, T> {
 /// [`ChunkHints`], so repeatedly merged (older, colder) data lands in deeper
 /// eviction bands. Hints are fixed at insert, so a chunk aged without a
 /// re-spill keeps the band it spilled into.
-pub enum ColumnChunk<D: Columnar, T: Columnar, R: Columnar> {
+///
+/// `G` is the [`SpillGate`] that decides whether commits spill.
+pub enum ColumnChunk<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> {
     /// Body on the heap, shared via `Rc`, with its generational depth.
-    Resident(Rc<Column<(D, T, R)>>, u8),
+    Resident(Rc<ColumnBody<(D, T, R)>>, u8),
     /// Body in the pool, with its generational depth. See [`SpilledBody`].
-    Spilled(Rc<SpilledBody<D, T>>, u8),
+    Spilled(Rc<SpilledBody<D, T, G>>, u8),
 }
 
-impl<D: Columnar, T: Columnar, R: Columnar> Clone for ColumnChunk<D, T, R> {
+impl<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> Clone for ColumnChunk<D, T, R, G> {
     fn clone(&self) -> Self {
         match self {
             ColumnChunk::Resident(col, depth) => ColumnChunk::Resident(Rc::clone(col), *depth),
@@ -321,53 +369,116 @@ impl<D: Columnar, T: Columnar, R: Columnar> Clone for ColumnChunk<D, T, R> {
     }
 }
 
-impl<D: Columnar, T: Columnar, R: Columnar> Default for ColumnChunk<D, T, R> {
+impl<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> Default for ColumnChunk<D, T, R, G> {
     fn default() -> Self {
-        ColumnChunk::Resident(Rc::new(Column::default()), 0)
+        ColumnChunk::Resident(Rc::new(ColumnBody::default()), 0)
     }
 }
 
-impl<D: Columnar, T: Columnar, R: Columnar> Accountable for ColumnChunk<D, T, R> {
+impl<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> Accountable for ColumnChunk<D, T, R, G> {
     fn record_count(&self) -> i64 {
         i64::try_from(self.records()).expect("record count fits i64")
     }
 }
 
-impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
-    /// Wrap a sorted, consolidated, non-empty column as a resident chunk of
+impl<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> ColumnChunk<D, T, R, G> {
+    /// Wrap a sorted, consolidated, non-empty body as a resident chunk of
     /// the youngest generation.
-    pub fn from_column(column: Column<(D, T, R)>) -> Self {
-        mz_ore::soft_assert_no_log!(!column.is_empty(), "chunks must be non-empty");
-        ColumnChunk::Resident(Rc::new(column), 0)
+    pub fn from_body(body: ColumnBody<(D, T, R)>) -> Self {
+        mz_ore::soft_assert_no_log!(!body.is_empty(), "chunks must be non-empty");
+        ColumnChunk::Resident(Rc::new(body), 0)
     }
 
-    /// The body as an owned column. A spilled body is copied out of the pool
-    /// within this call. A shared resident body is copied.
-    pub fn into_column(self) -> Column<(D, T, R)> {
+    /// Append pieces of at most `COMMIT_BYTES`, preserving order and
+    /// generational depth. A single update may exceed the bound because it
+    /// cannot be split.
+    fn push_bounded(body: ColumnBody<(D, T, R)>, depth: u8, out: &mut VecDeque<Self>) {
+        let len = body.len();
+        let bytes = body.length_in_bytes();
+        if len <= 1 || bytes <= COMMIT_BYTES {
+            if len > 0 {
+                out.push_back(Self::Resident(Rc::new(body), depth));
+            }
+            return;
+        }
+        Self::push_cuts(
+            &body,
+            cut_records(len, bytes, COMMIT_BYTES).max(1),
+            depth,
+            out,
+        );
+    }
+
+    /// Append `body` in consecutive pieces of `records` records. A piece
+    /// that still exceeds `COMMIT_BYTES`, from uneven widths, is halved until
+    /// it fits or holds one record. Halving bounds the recursion depth by
+    /// log2 of `records`, where cutting again at the piece's own average
+    /// width can shrink a piece holding one wide record by only a few
+    /// percent per level.
+    fn push_cuts(
+        body: &ColumnBody<(D, T, R)>,
+        records: usize,
+        depth: u8,
+        out: &mut VecDeque<Self>,
+    ) {
+        let view = body.borrow();
+        Self::push_range(view, 0..view.len(), records, depth, out);
+    }
+
+    /// [`Self::push_cuts`] over `range` of `view`. An oversized piece is
+    /// dropped before descending, and the halves are cut again from `view`,
+    /// so transient memory is one piece rather than one copy of a wide
+    /// update per level.
+    fn push_range(
+        view: BorrowedOf<'_, (D, T, R)>,
+        range: std::ops::Range<usize>,
+        records: usize,
+        depth: u8,
+        out: &mut VecDeque<Self>,
+    ) {
+        let mut start = range.start;
+        while start < range.end {
+            let end = range.end.min(start + records);
+            let mut part = <(D, T, R) as Columnar>::Container::default();
+            part.extend_from_self(view, start..end);
+            let part = ColumnBody::Typed(part);
+            if end - start > 1 && part.length_in_bytes() > COMMIT_BYTES {
+                drop(part);
+                Self::push_range(view, start..end, (end - start).div_ceil(2), depth, out);
+            } else {
+                out.push_back(Self::Resident(Rc::new(part), depth));
+            }
+            start = end;
+        }
+    }
+
+    /// The body, owned. A spilled body is copied out of the pool within this
+    /// call. A shared resident body is copied in its current form.
+    pub fn into_body(self) -> ColumnBody<(D, T, R)> {
         match self {
             ColumnChunk::Resident(col, _) => {
-                Rc::try_unwrap(col).unwrap_or_else(|shared| copy_column(&shared))
+                Rc::try_unwrap(col).unwrap_or_else(|shared| shared.duplicate())
             }
             ColumnChunk::Spilled(body, _) => {
                 let mut words = Vec::new();
                 body.handle.read_into(&mut words);
-                Column::Align(words)
+                ColumnBody::Words(words)
             }
         }
     }
 
     /// The body for the duration of `f`: a resident body is borrowed, a
     /// spilled body is loaded from the pool for the call and dropped after it.
-    pub fn with_column<F, X>(&self, f: F) -> X
+    pub fn with_body<F, X>(&self, f: F) -> X
     where
-        F: FnOnce(&Column<(D, T, R)>) -> X,
+        F: FnOnce(&ColumnBody<(D, T, R)>) -> X,
     {
         match self {
             ColumnChunk::Resident(col, _) => f(col),
             ColumnChunk::Spilled(body, _) => {
                 let mut words = Vec::new();
                 body.handle.read_into(&mut words);
-                f(&Column::Align(words))
+                f(&ColumnBody::Words(words))
             }
         }
     }
@@ -380,7 +491,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     /// The number of updates, from resident state only.
     fn records(&self) -> usize {
         match self {
-            ColumnChunk::Resident(col, _) => col.borrow().len(),
+            ColumnChunk::Resident(col, _) => col.len(),
             ColumnChunk::Spilled(body, _) => body.records,
         }
     }
@@ -406,42 +517,42 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
         }
     }
 
-    /// Commit a non-empty column at the given generational depth: spill it to
-    /// the pool when spilling is on and the body is worth a slot, else keep it
+    /// Commit a non-empty body at the given generational depth: spill it to
+    /// the pool when `G` is open and the body is worth a slot, else keep it
     /// resident.
-    fn commit(column: Column<(D, T, R)>, depth: u8) -> Self
+    fn commit(body: ColumnBody<(D, T, R)>, depth: u8) -> Self
     where
         T: Timestamp,
     {
-        mz_ore::soft_assert_no_log!(!column.is_empty(), "chunks must be non-empty");
-        if let Some(pool) = spill_pool() {
-            if column.length_in_bytes() >= SPILL_MIN_BYTES {
-                return Self::spill_body(column, &pool, depth);
-            }
+        let len_bytes = body.length_in_bytes();
+        metrics::record(metrics::Stage::Commit, body.len(), len_bytes);
+        mz_ore::soft_assert_no_log!(!body.is_empty(), "chunks must be non-empty");
+        match spill_target(G::enabled(), len_bytes) {
+            Some(pool) => Self::spill_body(body, &pool, depth),
+            None => ColumnChunk::Resident(Rc::new(body), depth),
         }
-        ColumnChunk::Resident(Rc::new(column), depth)
     }
 
-    /// Spill a non-empty column into `pool` unconditionally, capturing the
+    /// Spill a non-empty body into `pool` unconditionally, capturing the
     /// resident fence metadata.
     ///
     /// Generations below the compression depth floor store under the
     /// identity codec: rewritten too soon for compression to amortize, they
     /// stay budgeted and swap-backed while encode and decode reduce to
     /// copies.
-    fn spill_body(column: Column<(D, T, R)>, pool: &Pool, depth: u8) -> Self
+    fn spill_body(body: ColumnBody<(D, T, R)>, pool: &Pool, depth: u8) -> Self
     where
         T: Timestamp,
     {
         let (codec, compressed) = codec_for_depth(depth);
-        let len_bytes = column.length_in_bytes();
-        let (time_lower, time_upper) = Self::time_bounds(&column);
-        let view = column.borrow();
+        let len_bytes = body.length_in_bytes();
+        let (time_lower, time_upper) = Self::time_bounds(&body);
+        let view = body.borrow();
         let records = view.len();
         let mut fences = D::Container::default();
         fences.push(view.0.get(0));
         fences.push(view.0.get(records - 1));
-        let handle = spill_column(column, pool, len_bytes, ChunkHints { depth }, codec);
+        let handle = spill_serialized(&body, pool, len_bytes, ChunkHints { depth }, codec);
         ColumnChunk::Spilled(
             Rc::new(SpilledBody {
                 records,
@@ -451,6 +562,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
                 compressed,
                 len_bytes,
                 handle,
+                gate: PhantomData,
             }),
             depth,
         )
@@ -483,10 +595,10 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
                 if !migrate || Rc::strong_count(&body) > 1 {
                     return ColumnChunk::Spilled(body, depth);
                 }
-                match spill_pool() {
+                match resolve_pool(G::enabled()) {
                     Some(pool) => {
-                        let column = ColumnChunk::Spilled(body, was).into_column();
-                        Self::spill_body(column, &pool, depth)
+                        let body = ColumnChunk::Spilled(body, was).into_body();
+                        Self::spill_body(body, &pool, depth)
                     }
                     None => ColumnChunk::Spilled(body, depth),
                 }
@@ -514,15 +626,15 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
         }
     }
 
-    /// The time bounds of a non-empty column: the antichain of minimal times
+    /// The time bounds of a non-empty body: the antichain of minimal times
     /// (every contained time is greater-or-equal to some element) and the
     /// set of maximal times (some contained time is greater-or-equal to a
     /// frontier exactly when some maximal one is).
-    fn time_bounds(column: &Column<(D, T, R)>) -> (Antichain<T>, Vec<T>)
+    fn time_bounds(body: &ColumnBody<(D, T, R)>) -> (Antichain<T>, Vec<T>)
     where
         T: Timestamp,
     {
-        let (_, times, _) = column.borrow();
+        let (_, times, _) = body.borrow();
         let mut lower = Antichain::new();
         let mut upper: Vec<T> = Vec::new();
         // One owned time reused across the scan, so times with owned
@@ -539,14 +651,6 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
         }
         (lower, upper)
     }
-}
-
-/// Copy a column into a fresh `Typed` column via bulk per-leaf extension.
-fn copy_column<C: Columnar>(column: &Column<C>) -> Column<C> {
-    let view = column.borrow();
-    let mut fresh = C::Container::default();
-    fresh.extend_from_self(view, 0..view.len());
-    Column::Typed(fresh)
 }
 
 /// The chunk-side [`ExtentCodec`]: a little-endian `u32` body-length prefix
@@ -585,47 +689,58 @@ impl ExtentCodec for Lz4Codec {
     }
 }
 
-/// Serialize a column into a pool slot. The `Align` variant is already the
-/// serialized form and copies in directly. Other variants write their
-/// [`ContainerBytes`] encoding through a cursor over the slot memory. Sizing
-/// is exact, so a short or overlong write is a contract violation and panics.
-fn spill_column<C: Columnar>(
-    column: Column<C>,
+/// Serialize a body into a pool slot, writing its serialized form through a cursor over the
+/// slot memory. A serialized body's encoding is one copy. Sizing is exact, so a short or
+/// overlong write is a contract violation and panics.
+fn spill_serialized<C: Columnar>(
+    body: &ColumnBody<C>,
     pool: &Pool,
     len_bytes: usize,
     hints: ChunkHints,
     codec: &'static dyn ExtentCodec,
 ) -> ChunkHandle {
     mz_ore::soft_assert_eq_no_log!(len_bytes % 8, 0);
-    match column {
-        Column::Align(words) => {
-            pool.insert_with(words.len(), hints, codec, |dst| dst.copy_from_slice(&words))
-        }
-        other => pool.insert_with(len_bytes / 8, hints, codec, |dst| {
-            let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst);
-            let mut cursor = std::io::Cursor::new(bytes);
-            other.into_bytes(&mut cursor);
-            assert_eq!(
-                usize::try_from(cursor.position()).expect("usize position"),
-                len_bytes,
-                "serialized body must fill the chunk exactly",
-            );
-        }),
-    }
+    pool.insert_with(len_bytes / 8, hints, codec, |dst| {
+        let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst);
+        let mut cursor = std::io::Cursor::new(bytes);
+        body.write_into(&mut cursor)
+            .expect("the slot is sized to the serialized body");
+        assert_eq!(
+            usize::try_from(cursor.position()).expect("usize position"),
+            len_bytes,
+            "serialized body must fill the chunk exactly",
+        );
+    })
 }
 
-/// A column is `Typed`, or becomes one by copy. Merge and settle accumulate
-/// into `Typed` targets. Serialized variants arrive from spill reads and
-/// remote channels.
-fn to_typed<C: Columnar>(column: Column<C>) -> Column<C> {
-    match column {
-        typed @ Column::Typed(_) => typed,
-        other => copy_column(&other),
-    }
+/// Spill a serialized copy of `body` into the process pool, leaving `body` untouched, or
+/// `None` when the body stays resident.
+///
+/// A body stays resident when the gate [`set_sink_spill_enabled`] sets is off, when no pool is
+/// installed, or when it is smaller than `SPILL_MIN_BYTES`. `depth` is the body's generational
+/// depth: it selects the stored codec and the pool's eviction band.
+///
+/// For consumers that keep their own chunk representation and so cannot use [`ColumnChunk`];
+/// the two share the spill decision through `spill_target`. The encode writes straight into
+/// the pool slot, so a spilled body costs no intermediate allocation and the caller can
+/// [`ColumnBody::clear`] and keep its allocation. A caller that gets `None` back still owns
+/// the body and must keep it resident itself.
+pub fn try_spill_ref<C: Columnar>(body: &ColumnBody<C>, depth: u8) -> Option<ChunkHandle> {
+    let len_bytes = body.length_in_bytes();
+    let pool = spill_target(SINK_SPILL_ENABLED.load(Ordering::Relaxed), len_bytes)?;
+    let (codec, _) = codec_for_depth(depth);
+    Some(spill_serialized(
+        body,
+        &pool,
+        len_bytes,
+        ChunkHints { depth },
+        codec,
+    ))
 }
 
-impl<D, T, R> Chunk for ColumnChunk<D, T, R>
+impl<D, T, R, G> Chunk for ColumnChunk<D, T, R, G>
 where
+    G: SpillGate,
     D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
     T: Columnar + Default + Timestamp + Lattice + Ord,
@@ -645,7 +760,7 @@ where
         self.records()
     }
 
-    /// [`Column::merge_from`] does the work: gallop bulk-copies for disjoint
+    /// [`ColumnBody::merge_from`] does the work: gallop bulk-copies for disjoint
     /// runs, semigroup consolidation on equal `(data, time)`, output cut at
     /// the ship threshold.
     ///
@@ -691,10 +806,10 @@ where
             ColumnChunk::Spilled(body, _) => Some(Rc::clone(body)),
             ColumnChunk::Resident(_, _) => None,
         };
-        let mut cols = [a.into_column(), b.into_column()];
+        let mut cols = [a.into_body(), b.into_body()];
         let mut positions = [0usize, 0usize];
         loop {
-            let mut result: Column<(D, T, R)> = Column::default();
+            let mut result: ColumnBody<(D, T, R)> = ColumnBody::default();
             let yielded = result.merge_from(&mut cols, &mut positions);
             if !result.is_empty() {
                 out.push_back(ColumnChunk::Resident(Rc::new(result), out_depth));
@@ -703,6 +818,9 @@ where
                 break;
             }
         }
+        // The disjoint fast paths above move fronts without reading a row, so
+        // only this path counts as merge work.
+        metrics::record(metrics::Stage::Merge, positions[0] + positions[1], 0);
         let [col_a, col_b] = &mut cols;
         // Per input side: the loaded column and the merge's consumed position
         // within it, the side's pre-merge depth, its original spilled body
@@ -711,7 +829,7 @@ where
             (col_a, positions[0], depths[0], &mut spill_a, in1),
             (col_b, positions[1], depths[1], &mut spill_b, in2),
         ] {
-            let len = col.borrow().len();
+            let len = col.len();
             if pos == 0 && len > 0 {
                 // Untouched survivor: restore it as it was (the loaded copy
                 // is dropped), aged one generation by its survival.
@@ -724,7 +842,10 @@ where
                 let view = col.borrow();
                 let mut rest = <(D, T, R) as Columnar>::Container::default();
                 rest.extend_from_self(view, pos..len);
-                queue.push_front(ColumnChunk::Resident(Rc::new(Column::Typed(rest)), depth));
+                queue.push_front(ColumnChunk::Resident(
+                    Rc::new(ColumnBody::Typed(rest)),
+                    depth,
+                ));
             }
         }
     }
@@ -764,17 +885,17 @@ where
         // Partitioning rewrites within a generation, so both sides keep the
         // input chunk's depth.
         let depth = chunk.depth();
-        let mut col = chunk.into_column();
-        let len = col.borrow().len();
+        let mut col = chunk.into_body();
+        let len = col.len();
         let mut pos = 0;
-        let mut keep_col: Column<(D, T, R)> = Column::default();
-        let mut ship_col: Column<(D, T, R)> = Column::default();
-        // TODO: rewrite the underlying `Column::extract` as two passes, the
+        let mut keep_col: ColumnBody<(D, T, R)> = ColumnBody::default();
+        let mut ship_col: ColumnBody<(D, T, R)> = ColumnBody::default();
+        // TODO: rewrite the underlying `ColumnBody::extract` as two passes, the
         // time column first to find run boundaries, then bulk per-range
         // copies of the remaining leaves.
         // Move a side's accumulation to its queue, at the ship threshold
         // mid-loop, or any non-empty remainder at the end.
-        let cut = |col: &mut Column<(D, T, R)>, queue: &mut VecDeque<Self>, force: bool| {
+        let cut = |col: &mut ColumnBody<(D, T, R)>, queue: &mut VecDeque<Self>, force: bool| {
             if !col.is_empty() && (force || at_serialized_capacity(&col.borrow())) {
                 queue.push_back(ColumnChunk::Resident(Rc::new(std::mem::take(col)), depth));
             }
@@ -811,17 +932,15 @@ where
         // Advancing rewrites within a generation, so output and carry keep
         // the deepest input depth. Only merges increment.
         let mut depth = front.depth();
-        // Concatenate the input into one column, reusing the front chunk's
+        // Concatenate the input into one body, reusing the front chunk's
         // storage when it is exclusively owned (the usual case: it is last
         // call's carry).
-        let mut base = to_typed(front.into_column());
+        let mut base = front.into_body();
         {
-            let Column::Typed(base_c) = &mut base else {
-                unreachable!("to_typed returns Typed");
-            };
+            let base_c = base.typed_mut();
             for chunk in input.drain(..) {
                 depth = depth.max(chunk.depth());
-                let col = chunk.into_column();
+                let col = chunk.into_body();
                 let view = col.borrow();
                 base_c.extend_from_self(view, 0..view.len());
             }
@@ -852,6 +971,10 @@ where
             }
             end
         };
+        // Count only the rows this call advances. The withheld carry is
+        // counted by the call that finally processes it, so a group spanning
+        // many calls counts once.
+        metrics::record(metrics::Stage::Advance, end, 0);
 
         let mut result = <(D, T, R) as Columnar>::Container::default();
         // Per-group scratch: advanced owned times with owned diffs.
@@ -901,7 +1024,7 @@ where
                             >= u64::cast_from(COMMIT_BYTES / 8)
                         {
                             out.push_back(ColumnChunk::Resident(
-                                Rc::new(Column::Typed(std::mem::take(&mut result))),
+                                Rc::new(ColumnBody::Typed(std::mem::take(&mut result))),
                                 depth,
                             ));
                         }
@@ -910,29 +1033,36 @@ where
             }
         }
         if !result.is_empty() {
-            out.push_back(ColumnChunk::Resident(Rc::new(Column::Typed(result)), depth));
+            out.push_back(ColumnChunk::Resident(
+                Rc::new(ColumnBody::Typed(result)),
+                depth,
+            ));
         }
 
         // Rebuild the withheld trailing group as the carry.
         if end < total {
             let mut carry = <(D, T, R) as Columnar>::Container::default();
             carry.extend_from_self(view, end..total);
-            input.push_front(ColumnChunk::Resident(Rc::new(Column::Typed(carry)), depth));
+            input.push_front(ColumnChunk::Resident(
+                Rc::new(ColumnBody::Typed(carry)),
+                depth,
+            ));
         }
     }
 
     /// Grade by serialized bytes and commit: spilled chunks pass through
     /// untouched, resident chunks at the commit size commit as they are, and
     /// smaller neighbors coalesce until the accumulation reaches it.
-    /// Committing is the spill hook (see `ColumnChunk::commit`). A
-    /// sub-threshold tail is withheld as the carry unless `done`.
+    /// Committing is the spill hook (see `ColumnChunk::commit`). Unless
+    /// `done`, a tail below the commit size returns to the front of `input`.
     fn settle(input: &mut VecDeque<Self>, done: bool, out: &mut VecDeque<Self>) {
         Self::settle_graded(input, done, out, true)
     }
 }
 
-impl<D, T, R> ColumnChunk<D, T, R>
+impl<D, T, R, G> ColumnChunk<D, T, R, G>
 where
+    G: SpillGate,
     D: Columnar,
     T: Columnar + Timestamp,
     R: Columnar,
@@ -951,65 +1081,118 @@ where
         out: &mut VecDeque<Self>,
         commit: bool,
     ) {
-        // Coalescing rewrites within a generation, so the carry commits at
-        // the deepest depth among its constituent chunks.
-        let mut carry: Option<(Column<(D, T, R)>, u8)> = None;
+        // Resident chunks below the commit size accumulate into `acc` until
+        // it reaches that size. Its depth is the deepest among the chunks it
+        // holds, since coalescing rewrites within a generation.
+        let mut acc: Option<(ColumnBody<(D, T, R)>, u8)> = None;
         while let Some(chunk) = input.pop_front() {
             let (rc, depth) = match chunk {
                 spilled @ ColumnChunk::Spilled(_, _) => {
-                    if let Some((col, depth)) = carry.take() {
-                        out.push_back(Self::grade(col, depth, commit));
+                    if let Some((body, depth)) = acc.take() {
+                        out.push_back(Self::grade(body, depth, commit));
                     }
                     out.push_back(spilled);
                     continue;
                 }
                 ColumnChunk::Resident(rc, depth) => (rc, depth),
             };
-            let full = at_commit_size(&rc);
-            // A sub-threshold chunk coalesces into the open carry by borrow,
-            // never unwrapping a shared body.
-            if !full && let Some((mut acc, acc_depth)) = carry.take() {
-                let Column::Typed(acc_c) = &mut acc else {
-                    unreachable!("carry is always Typed");
-                };
-                let view = rc.borrow();
-                acc_c.extend_from_self(view, 0..view.len());
-                let acc_depth = acc_depth.max(depth);
-                if at_commit_size(&acc) {
-                    out.push_back(Self::grade(acc, acc_depth, commit));
-                } else {
-                    carry = Some((acc, acc_depth));
+            if rc.length_in_bytes() > COMMIT_BYTES && rc.len() > 1 {
+                // Cut by borrow, so a shared body is copied once, into its
+                // pieces.
+                let records = cut_records(rc.len(), rc.length_in_bytes(), COMMIT_BYTES).max(1);
+                let mut pieces = VecDeque::new();
+                Self::push_cuts(&rc, records, depth, &mut pieces);
+                for piece in pieces.into_iter().rev() {
+                    input.push_front(piece);
                 }
                 continue;
             }
-            // Otherwise any open carry flushes, and the chunk either commits
-            // whole or opens the next carry.
-            if let Some((acc, acc_depth)) = carry.take() {
-                out.push_back(Self::grade(acc, acc_depth, commit));
+            let full = at_commit_size(&rc);
+            // A chunk is copied into `acc` from its borrow, so a shared body
+            // is never unwrapped.
+            let fits = acc.as_ref().is_some_and(|(body, _)| {
+                body.length_in_bytes().saturating_add(rc.length_in_bytes()) <= COMMIT_BYTES
+            });
+            if !full
+                && fits
+                && let Some((mut body, acc_depth)) = acc.take()
+            {
+                let view = rc.borrow();
+                body.typed_mut().extend_from_self(view, 0..view.len());
+                let acc_depth = acc_depth.max(depth);
+                if at_commit_size(&body) {
+                    out.push_back(Self::grade(body, acc_depth, commit));
+                } else {
+                    acc = Some((body, acc_depth));
+                }
+                continue;
             }
-            let col = Rc::try_unwrap(rc).unwrap_or_else(|rc| copy_column(&rc));
+            // The chunk does not fit in `acc`. If the chunk is below the
+            // commit size, as many of its records as fit move into `acc` and
+            // the rest return to the front of `input`. Without that move, a
+            // stream of chunks just over half the bound would commit each one
+            // at about half the bound. Either way `acc` then goes to `out`.
+            if let Some((mut body, acc_depth)) = acc.take() {
+                let len = rc.len();
+                let prefix = if full {
+                    0
+                } else {
+                    let space = COMMIT_BYTES.saturating_sub(body.length_in_bytes());
+                    cut_records(len, rc.length_in_bytes(), space)
+                };
+                if prefix == 0 || prefix >= len {
+                    out.push_back(Self::grade(body, acc_depth, commit));
+                } else {
+                    let view = rc.borrow();
+                    body.typed_mut().extend_from_self(view, 0..prefix);
+                    let mut rest = <(D, T, R) as Columnar>::Container::default();
+                    rest.extend_from_self(view, prefix..len);
+                    input.push_front(ColumnChunk::Resident(
+                        Rc::new(ColumnBody::Typed(rest)),
+                        depth,
+                    ));
+                    let acc_depth = acc_depth.max(depth);
+                    if body.length_in_bytes() > COMMIT_BYTES {
+                        // Uneven record widths pushed `acc` past the bound.
+                        let mut pieces = VecDeque::new();
+                        Self::push_bounded(body, acc_depth, &mut pieces);
+                        for piece in pieces {
+                            let ColumnChunk::Resident(piece, piece_depth) = piece else {
+                                unreachable!("push_bounded emits resident pieces");
+                            };
+                            let piece =
+                                Rc::try_unwrap(piece).unwrap_or_else(|piece| piece.duplicate());
+                            out.push_back(Self::grade(piece, piece_depth, commit));
+                        }
+                    } else {
+                        out.push_back(Self::grade(body, acc_depth, commit));
+                    }
+                    continue;
+                }
+            }
+            let body = Rc::try_unwrap(rc).unwrap_or_else(|rc| rc.duplicate());
             if full {
-                out.push_back(Self::grade(col, depth, commit));
+                out.push_back(Self::grade(body, depth, commit));
             } else {
-                carry = Some((to_typed(col), depth));
+                acc = Some((body, depth));
             }
         }
-        if let Some((col, depth)) = carry {
+        if let Some((body, depth)) = acc {
             if done {
-                out.push_back(Self::grade(col, depth, commit));
+                out.push_back(Self::grade(body, depth, commit));
             } else {
-                input.push_front(ColumnChunk::Resident(Rc::new(col), depth));
+                input.push_front(ColumnChunk::Resident(Rc::new(body), depth));
             }
         }
     }
 
-    /// A graded column as a chunk: committed, which may spill it, or left
+    /// A graded body as a chunk: committed, which may spill it, or left
     /// resident.
-    fn grade(column: Column<(D, T, R)>, depth: u8, commit: bool) -> Self {
+    fn grade(body: ColumnBody<(D, T, R)>, depth: u8, commit: bool) -> Self {
         if commit {
-            Self::commit(column, depth)
+            Self::commit(body, depth)
         } else {
-            ColumnChunk::Resident(Rc::new(column), depth)
+            ColumnChunk::Resident(Rc::new(body), depth)
         }
     }
 }
@@ -1057,8 +1240,9 @@ fn extract_view_into<'v, 'p, K, V, T, R>(
     }
 }
 
-impl<K, V, T, R> UnloadChunk for ColumnChunk<(K, V), T, R>
+impl<K, V, T, R, G> UnloadChunk for ColumnChunk<(K, V), T, R, G>
 where
+    G: SpillGate,
     K: Columnar,
     for<'a> columnar::Ref<'a, K>: Copy + Ord,
     V: Columnar,
@@ -1133,27 +1317,28 @@ where
 }
 
 /// A batch builder over [`ColumnChunk`] input that delegates to a builder
-/// over [`Column`] input, loading each chunk's body as it is pushed.
+/// over [`ColumnBody`] input, loading each chunk's body as it is pushed.
 ///
-/// This is the adapter that lets a [`ChunkBatcher`] feed the existing
-/// column-input batch builders (and through them the existing spine layouts):
+/// This is the adapter that lets a [`ChunkBatcher`] feed the body-input batch
+/// builders (and through them the existing spine layouts):
 /// the batcher's chains carry pool-spillable chunks, and bodies are read back
 /// copy-out only at the seal, one chunk at a time.
 ///
 /// [`ChunkBatcher`]: differential_dataflow::trace::chunk::ChunkBatcher
-pub struct UnchunkBuilder<Bu, D: Columnar, T: Columnar, R: Columnar> {
+pub struct UnchunkBuilder<Bu, D: Columnar, T: Columnar, R: Columnar, G: SpillGate> {
     inner: Bu,
-    _marker: std::marker::PhantomData<(D, T, R)>,
+    _marker: std::marker::PhantomData<(D, T, R, G)>,
 }
 
-impl<Bu, D, T, R> differential_dataflow::trace::Builder for UnchunkBuilder<Bu, D, T, R>
+impl<Bu, D, T, R, G> differential_dataflow::trace::Builder for UnchunkBuilder<Bu, D, T, R, G>
 where
-    Bu: differential_dataflow::trace::Builder<Input = Column<(D, T, R)>> + ChainState,
+    Bu: differential_dataflow::trace::Builder<Input = ColumnBody<(D, T, R)>> + ChainState,
     D: Columnar + 'static,
     T: Columnar + 'static,
     R: Columnar + 'static,
+    G: SpillGate,
 {
-    type Input = ColumnChunk<D, T, R>;
+    type Input = ColumnChunk<D, T, R, G>;
     type Time = Bu::Time;
     type Output = Bu::Output;
 
@@ -1165,8 +1350,8 @@ where
     }
 
     fn push(&mut self, chunk: &mut Self::Input) {
-        let mut column = std::mem::take(chunk).into_column();
-        self.inner.push(&mut column);
+        let mut body = std::mem::take(chunk).into_body();
+        self.inner.push(&mut body);
     }
 
     fn done(
@@ -1187,7 +1372,7 @@ where
             // figures for free. Folding a spilled body costs a second pool
             // read on top of the push below, so it waits on `wants_bodies`.
             if !chunk.is_spilled() || Bu::wants_bodies() {
-                chunk.with_column(|column| Bu::observe(&mut state, column));
+                chunk.with_body(|body| Bu::observe(&mut state, body));
             } else {
                 Bu::observe_records(&mut state, chunk.records());
             }
@@ -1244,31 +1429,35 @@ pub trait ChainState: differential_dataflow::trace::Builder {
 
 /// A chunker for `arrange_core` over [`ColumnChunk`]s: sorts and consolidates
 /// raw input columns through a [`ColumnChunker`] and wraps its output chunks.
-pub struct ChunkChunker<D: Columnar, T: Columnar, R: Columnar> {
+pub struct ChunkChunker<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> {
     inner: ColumnChunker<(D, T, R)>,
-    staged: ColumnChunk<D, T, R>,
+    ready: VecDeque<ColumnChunk<D, T, R, G>>,
+    staged: ColumnChunk<D, T, R, G>,
 }
 
-impl<D, T, R> Default for ChunkChunker<D, T, R>
+impl<D, T, R, G> Default for ChunkChunker<D, T, R, G>
 where
     D: Columnar,
     T: Columnar,
     R: Columnar,
+    G: SpillGate,
     ColumnChunker<(D, T, R)>: Default,
 {
     fn default() -> Self {
         Self {
             inner: Default::default(),
+            ready: VecDeque::new(),
             staged: Default::default(),
         }
     }
 }
 
-impl<'a, D, T, R> PushInto<&'a mut Column<(D, T, R)>> for ChunkChunker<D, T, R>
+impl<'a, D, T, R, G> PushInto<&'a mut Column<(D, T, R)>> for ChunkChunker<D, T, R, G>
 where
     D: Columnar,
     T: Columnar,
     R: Columnar,
+    G: SpillGate,
     ColumnChunker<(D, T, R)>: PushInto<&'a mut Column<(D, T, R)>>,
 {
     fn push_into(&mut self, item: &'a mut Column<(D, T, R)>) {
@@ -1276,24 +1465,31 @@ where
     }
 }
 
-impl<D, T, R> ContainerBuilder for ChunkChunker<D, T, R>
+impl<D, T, R, G> ContainerBuilder for ChunkChunker<D, T, R, G>
 where
     D: Columnar + 'static,
     T: Columnar + 'static,
     R: Columnar + 'static,
-    ColumnChunker<(D, T, R)>: ContainerBuilder<Container = Column<(D, T, R)>>,
+    G: SpillGate,
+    ColumnChunker<(D, T, R)>: ContainerBuilder<Container = ColumnBody<(D, T, R)>>,
 {
-    type Container = ColumnChunk<D, T, R>;
+    type Container = ColumnChunk<D, T, R, G>;
 
     fn extract(&mut self) -> Option<&mut Self::Container> {
-        let col = self.inner.extract()?;
-        self.staged = ColumnChunk::from_column(std::mem::take(col));
+        if self.ready.is_empty() {
+            let body = self.inner.extract()?;
+            ColumnChunk::push_bounded(std::mem::take(body), 0, &mut self.ready);
+        }
+        self.staged = self.ready.pop_front()?;
         Some(&mut self.staged)
     }
 
     fn finish(&mut self) -> Option<&mut Self::Container> {
-        let col = self.inner.finish()?;
-        self.staged = ColumnChunk::from_column(std::mem::take(col));
+        if self.ready.is_empty() {
+            let body = self.inner.finish()?;
+            ColumnChunk::push_bounded(std::mem::take(body), 0, &mut self.ready);
+        }
+        self.staged = self.ready.pop_front()?;
         Some(&mut self.staged)
     }
 }
@@ -1302,9 +1498,9 @@ where
 /// batcher size logger.
 ///
 /// [`ChunkBatcher`]: differential_dataflow::trace::chunk::ChunkBatcher
-pub type AccountedChunkBatcher<D, T, R> =
+pub type AccountedChunkBatcher<D, T, R, G> =
     differential_dataflow::trace::implementations::merge_batcher::MergeBatcher<
-        AccountedChunkMerger<D, T, R>,
+        AccountedChunkMerger<D, T, R, G>,
     >;
 
 /// The chunk merger of [`AccountedChunkBatcher`]: differential's merger with
@@ -1319,11 +1515,13 @@ pub type AccountedChunkBatcher<D, T, R> =
 /// to the operator that owns it is what keeps these tables whole.
 ///
 /// [`Merger::allocation`]: differential_dataflow::trace::implementations::merge_batcher::Merger::allocation
-pub struct AccountedChunkMerger<D: Columnar, T: Columnar, R: Columnar> {
-    inner: differential_dataflow::trace::chunk::ChunkMerger<ColumnChunk<D, T, R>>,
+pub struct AccountedChunkMerger<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> {
+    inner: differential_dataflow::trace::chunk::ChunkMerger<ColumnChunk<D, T, R, G>>,
 }
 
-impl<D: Columnar, T: Columnar, R: Columnar> Default for AccountedChunkMerger<D, T, R> {
+impl<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> Default
+    for AccountedChunkMerger<D, T, R, G>
+{
     fn default() -> Self {
         Self {
             inner: Default::default(),
@@ -1331,19 +1529,20 @@ impl<D: Columnar, T: Columnar, R: Columnar> Default for AccountedChunkMerger<D, 
     }
 }
 
-impl<D, T, R> differential_dataflow::trace::implementations::merge_batcher::Merger
-    for AccountedChunkMerger<D, T, R>
+impl<D, T, R, G> differential_dataflow::trace::implementations::merge_batcher::Merger
+    for AccountedChunkMerger<D, T, R, G>
 where
     D: Columnar + 'static,
     T: Columnar + Timestamp + 'static,
     R: Columnar + 'static,
+    G: SpillGate,
     for<'a> columnar::Ref<'a, D>: Ord,
     for<'a> columnar::Ref<'a, T>: Ord,
-    ColumnChunk<D, T, R>: Chunk,
-    <ColumnChunk<D, T, R> as Chunk>::Time: Clone + PartialOrder + 'static,
+    ColumnChunk<D, T, R, G>: Chunk,
+    <ColumnChunk<D, T, R, G> as Chunk>::Time: Clone + PartialOrder + 'static,
 {
-    type Chunk = ColumnChunk<D, T, R>;
-    type Time = <ColumnChunk<D, T, R> as Chunk>::Time;
+    type Chunk = ColumnChunk<D, T, R, G>;
+    type Time = <ColumnChunk<D, T, R, G> as Chunk>::Time;
 
     fn merge(
         &mut self,
@@ -1421,7 +1620,7 @@ mod tests {
     use super::*;
 
     type Tuple = ((u64, u64), u64, i64);
-    type TestChunk = ColumnChunk<(u64, u64), u64, i64>;
+    type TestChunk = ColumnChunk<(u64, u64), u64, i64, ComputeSpill>;
 
     /// The delegated codec's stored form is byte-identical to the extent
     /// store's previous hard-coded framing: a little-endian `u32`
@@ -1470,15 +1669,15 @@ mod tests {
             .prop_map(consolidate)
     }
 
-    fn build_column(v: &[Tuple]) -> Column<Tuple> {
-        let mut col: Column<Tuple> = Default::default();
+    fn build_column(v: &[Tuple]) -> ColumnBody<Tuple> {
+        let mut col: ColumnBody<Tuple> = Default::default();
         for tup in v {
             col.push_into(*tup);
         }
         col
     }
 
-    fn collect_column(col: &Column<Tuple>) -> Vec<Tuple> {
+    fn collect_column(col: &ColumnBody<Tuple>) -> Vec<Tuple> {
         col.borrow()
             .into_index_iter()
             .map(|((k, v), t, r)| {
@@ -1494,7 +1693,7 @@ mod tests {
     fn collect_chunks(chunks: impl IntoIterator<Item = TestChunk>) -> Vec<Tuple> {
         chunks
             .into_iter()
-            .flat_map(|chunk| collect_column(&chunk.into_column()))
+            .flat_map(|chunk| collect_column(&chunk.into_body()))
             .collect()
     }
 
@@ -1519,12 +1718,12 @@ mod tests {
         for cut in cuts {
             let end = (start + 1 + cut % 7).min(data.len());
             if end > start {
-                chunks.push_back(ColumnChunk::from_column(build_column(&data[start..end])));
+                chunks.push_back(ColumnChunk::from_body(build_column(&data[start..end])));
                 start = end;
             }
         }
         if start < data.len() {
-            chunks.push_back(ColumnChunk::from_column(build_column(&data[start..])));
+            chunks.push_back(ColumnChunk::from_body(build_column(&data[start..])));
         }
         chunks
     }
@@ -1552,7 +1751,7 @@ mod tests {
     /// keeping the chunk's depth.
     fn force_spill(chunk: TestChunk, pool: &Pool) -> TestChunk {
         let depth = chunk.depth();
-        TestChunk::spill_body(chunk.into_column(), pool, depth)
+        TestChunk::spill_body(chunk.into_body(), pool, depth)
     }
 
     /// The batcher size logger reports a body's bytes wherever the body
@@ -1563,15 +1762,15 @@ mod tests {
         use differential_dataflow::trace::implementations::merge_batcher::Merger;
 
         let data: Vec<Tuple> = (0..64u64).map(|i| ((i, i), 0, 1)).collect();
-        let resident = TestChunk::from_column(build_column(&data));
+        let resident = TestChunk::from_body(build_column(&data));
         let (size, capacity, allocations) =
-            AccountedChunkMerger::<(u64, u64), u64, i64>::allocation(&resident);
+            AccountedChunkMerger::<(u64, u64), u64, i64, ComputeSpill>::allocation(&resident);
         assert!(size > 0, "a resident body reports its bytes");
         assert_eq!((capacity, allocations), (size, 1));
 
         let spilled = force_spill(resident, &test_pool());
         assert_eq!(
-            AccountedChunkMerger::<(u64, u64), u64, i64>::allocation(&spilled),
+            AccountedChunkMerger::<(u64, u64), u64, i64, ComputeSpill>::allocation(&spilled),
             (size, capacity, allocations),
             "spilling a body does not change what its owner holds"
         );
@@ -1596,8 +1795,8 @@ mod tests {
         let data: Vec<Tuple> = (0..20_000u64).map(|i| ((i, i), 0, 1)).collect();
 
         set_spill_override(Some(test_pool()));
-        let mut batcher = AccountedChunkBatcher::<(u64, u64), u64, i64>::new(None, 0);
-        batcher.push_into(TestChunk::from_column(build_column(&data)));
+        let mut batcher = AccountedChunkBatcher::<(u64, u64), u64, i64, ComputeSpill>::new(None, 0);
+        batcher.push_into(TestChunk::from_body(build_column(&data)));
         let (chain, _description) = batcher.seal(Antichain::new());
         set_spill_override(None);
 
@@ -1815,7 +2014,7 @@ mod tests {
     /// placement: below, within, and past the chunk's keys.
     #[mz_ore::test]
     fn locate_spans_keys() {
-        let chunk = ColumnChunk::from_column(build_column(&[
+        let chunk = TestChunk::from_body(build_column(&[
             ((2, 0), 0, 1),
             ((4, 0), 0, 1),
             ((6, 0), 0, 1),
@@ -1837,12 +2036,226 @@ mod tests {
     fn collect_bounded(chunks: impl IntoIterator<Item = TestChunk>, bound: usize) -> Vec<Tuple> {
         let mut collected = Vec::new();
         for chunk in chunks {
-            let col = chunk.into_column();
+            let col = chunk.into_body();
             let bytes = col.length_in_bytes();
             assert!(bytes <= bound, "chunk of {bytes} bytes exceeds {bound}");
             Extend::extend(&mut collected, collect_column(&col));
         }
         collected
+    }
+
+    type WideUpdate = ((u64, String), u64, i64);
+    type WideChunk = ColumnChunk<(u64, String), u64, i64, ComputeSpill>;
+
+    fn wide_column(keys: impl Iterator<Item = u64>, bytes: usize) -> ColumnBody<WideUpdate> {
+        let mut column = ColumnBody::default();
+        for key in keys {
+            column.push_into(&((key, "x".repeat(bytes)), 0, 1));
+        }
+        column
+    }
+
+    fn assert_wide_byte_bound(chunks: VecDeque<WideChunk>, expected: usize, payload_bytes: usize) {
+        let mut keys = Vec::new();
+        for chunk in chunks {
+            let column = chunk.into_body();
+            assert!(
+                column.length_in_bytes() <= COMMIT_BYTES || column.len() == 1,
+                "{} bytes in a {}-record chunk",
+                column.length_in_bytes(),
+                column.len(),
+            );
+            let view = column.borrow();
+            for index in 0..view.len() {
+                let ((key, payload), time, diff) = view.get(index);
+                assert_eq!(payload.len(), payload_bytes);
+                assert!(payload.iter().all(|byte| *byte == b'x'));
+                assert_eq!((*time, *diff), (0, 1));
+                keys.push(*key);
+            }
+        }
+        assert_eq!(keys, (0..u64::cast_from(expected)).collect::<Vec<_>>());
+    }
+
+    #[mz_ore::test]
+    fn chunker_enforces_byte_bound() {
+        let mut chunker = ChunkChunker::default();
+        let mut input: Column<WideUpdate> = wide_column((0..4000).rev(), 3000).into();
+        chunker.push_into(&mut input);
+        let mut chunks = VecDeque::new();
+        if let Some(chunk) = chunker.extract() {
+            chunks.push_back(std::mem::take(chunk));
+        }
+        while let Some(chunk) = chunker.finish() {
+            chunks.push_back(std::mem::take(chunk));
+        }
+        assert_wide_byte_bound(chunks, 4000, 3000);
+    }
+
+    #[mz_ore::test]
+    fn merge_settle_enforces_byte_bound() {
+        let mut left = VecDeque::from([WideChunk::from_body(wide_column(
+            (0..2000).step_by(2),
+            2100,
+        ))]);
+        let mut right = VecDeque::from([WideChunk::from_body(wide_column(
+            (1..2000).step_by(2),
+            2100,
+        ))]);
+        let mut merged = VecDeque::new();
+        while !left.is_empty() && !right.is_empty() {
+            WideChunk::merge(&mut left, &mut right, &mut merged);
+        }
+        merged.append(&mut left);
+        merged.append(&mut right);
+        let mut settled = VecDeque::new();
+        WideChunk::settle(&mut merged, true, &mut settled);
+        assert_wide_byte_bound(settled, 2000, 2100);
+    }
+
+    #[mz_ore::test]
+    fn settle_enforces_byte_bound_after_coalescing() {
+        let mut input = VecDeque::from([
+            WideChunk::from_body(wide_column(0..400, 3000)),
+            WideChunk::from_body(wide_column(400..800, 3000)),
+        ]);
+        let mut settled = VecDeque::new();
+        WideChunk::settle(&mut input, true, &mut settled);
+        assert_wide_byte_bound(settled, 800, 3000);
+    }
+
+    #[mz_ore::test]
+    fn settle_byte_bound_allows_indivisible_update() {
+        let mut input = VecDeque::from([WideChunk::from_body(wide_column(0..1, 2 * COMMIT_BYTES))]);
+        let mut settled = VecDeque::new();
+        WideChunk::settle(&mut input, true, &mut settled);
+        assert_wide_byte_bound(settled, 1, 2 * COMMIT_BYTES);
+    }
+
+    /// One record just under the bound among many narrow ones, so a cut at
+    /// the average width leaves the piece holding the wide record over the
+    /// bound.
+    #[mz_ore::test]
+    fn push_bounded_splits_uneven_widths() {
+        let mut column: ColumnBody<WideUpdate> = ColumnBody::default();
+        column.push_into(&((0, "x".repeat(COMMIT_BYTES - 4096)), 0, 1));
+        for key in 1..20_000u64 {
+            column.push_into(&((key, "x".to_string()), 0, 1));
+        }
+        assert!(column.length_in_bytes() > COMMIT_BYTES);
+        let mut out = VecDeque::new();
+        WideChunk::push_bounded(column, 3, &mut out);
+        let mut keys = Vec::new();
+        for chunk in out {
+            let ColumnChunk::Resident(_, depth) = &chunk else {
+                panic!("pieces are resident");
+            };
+            assert_eq!(*depth, 3, "pieces keep the input's depth");
+            let column = chunk.into_body();
+            assert!(
+                column.length_in_bytes() <= COMMIT_BYTES || column.len() == 1,
+                "{} bytes in a {}-record piece",
+                column.length_in_bytes(),
+                column.len(),
+            );
+            let view = column.borrow();
+            for index in 0..view.len() {
+                let ((key, _), _, _) = view.get(index);
+                keys.push(*key);
+            }
+        }
+        assert_eq!(keys, (0..20_000u64).collect::<Vec<_>>());
+    }
+
+    /// Each side is under the bound, so any oversized output would have to
+    /// come from `merge_from` itself. One input interleaves record by record,
+    /// the other has runs long enough to gallop.
+    #[mz_ore::test]
+    fn merge_output_within_byte_bound_before_settle() {
+        let interleaved = (
+            wide_column((0..1600).step_by(2), 2100),
+            wide_column((1..1600).step_by(2), 2100),
+        );
+        let runs = (
+            wide_column((0..500).chain(1000..1100), 2100),
+            wide_column(500..1000, 2100),
+        );
+        for (left, right) in [interleaved, runs] {
+            let expected = left.len() + right.len();
+            let mut left = VecDeque::from([WideChunk::from_body(left)]);
+            let mut right = VecDeque::from([WideChunk::from_body(right)]);
+            let mut merged = VecDeque::new();
+            while !left.is_empty() && !right.is_empty() {
+                WideChunk::merge(&mut left, &mut right, &mut merged);
+            }
+            assert!(merged.len() > 1, "merge never cut its output");
+            merged.append(&mut left);
+            merged.append(&mut right);
+            assert_wide_byte_bound(merged, expected, 2100);
+        }
+    }
+
+    #[mz_ore::test]
+    fn settle_split_preserves_depth() {
+        let column = Rc::new(wide_column(0..2000, 2100));
+        let shared = Rc::clone(&column);
+        let mut input = VecDeque::from([WideChunk::Resident(column, 3)]);
+        let mut settled = VecDeque::new();
+        WideChunk::settle(&mut input, true, &mut settled);
+        assert!(settled.len() > 1, "oversized chunk was not split");
+        for chunk in &settled {
+            assert_eq!(chunk.depth(), 3, "split piece changed generation");
+        }
+        assert_eq!(shared.len(), 2000, "shared body was mutated");
+        assert_wide_byte_bound(settled, 2000, 2100);
+    }
+
+    /// The last piece of a split coalesces with a shallower neighbor and
+    /// commits at the deeper depth.
+    #[mz_ore::test]
+    fn settle_split_then_coalesce_keeps_depth() {
+        let mut input = VecDeque::from([
+            WideChunk::Resident(Rc::new(wide_column(0..800, 3000)), 2),
+            WideChunk::Resident(Rc::new(wide_column(800..810, 3000)), 0),
+        ]);
+        let mut settled = VecDeque::new();
+        WideChunk::settle(&mut input, true, &mut settled);
+        assert!(settled.len() > 1, "oversized chunk was not split");
+        for chunk in &settled {
+            assert_eq!(chunk.depth(), 2, "coalescing lost the deeper generation");
+        }
+        assert_wide_byte_bound(settled, 810, 3000);
+    }
+
+    /// Chunks of just over half the bound: unless settle moves part of each
+    /// chunk into the column it is accumulating, every chunk commits at about
+    /// half a slot.
+    #[mz_ore::test]
+    fn settle_fills_accumulated_column_from_next_chunk() {
+        let per_chunk = 370;
+        let mut input: VecDeque<WideChunk> = (0..8u64)
+            .map(|i| {
+                let start = i * per_chunk;
+                WideChunk::from_body(wide_column(start..start + per_chunk, 3000))
+            })
+            .collect();
+        let chunk_bytes = input[0].clone().into_body().length_in_bytes();
+        assert!(2 * chunk_bytes > COMMIT_BYTES && chunk_bytes < COMMIT_BYTES);
+        let mut settled = VecDeque::new();
+        WideChunk::settle(&mut input, true, &mut settled);
+        let sizes: Vec<usize> = settled
+            .iter()
+            .map(|chunk| chunk.clone().into_body().length_in_bytes())
+            .collect();
+        let (last, rest) = sizes.split_last().expect("settled output");
+        assert!(*last <= COMMIT_BYTES);
+        for size in rest {
+            assert!(
+                *size >= COMMIT_BYTES - COMMIT_BYTES / 10 && *size <= COMMIT_BYTES,
+                "committed {size} bytes, sizes {sizes:?}",
+            );
+        }
+        assert_wide_byte_bound(settled, 8 * 370, 3000);
     }
 
     /// Advancing a large input cuts the output into several chunks near the
@@ -1851,7 +2264,7 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn advance_cuts_large_output() {
         let records: Vec<Tuple> = (0..300_000u64).map(|k| ((k, 0), 0, 1)).collect();
-        let mut input = VecDeque::from([ColumnChunk::from_column(build_column(&records))]);
+        let mut input = VecDeque::from([ColumnChunk::from_body(build_column(&records))]);
         let frontier = Antichain::from_elem(0u64);
         let mut out = VecDeque::new();
         TestChunk::advance(&mut input, frontier.borrow(), true, &mut out);
@@ -1872,7 +2285,7 @@ mod tests {
         let records: Vec<Tuple> = (0..100u64).map(|t| ((7, 7), t, 1)).collect();
         let mut input: VecDeque<TestChunk> = VecDeque::new();
         for piece in records.chunks(30) {
-            input.push_back(ColumnChunk::from_column(build_column(piece)));
+            input.push_back(ColumnChunk::from_body(build_column(piece)));
         }
         let frontier = Antichain::from_elem(50u64);
         let mut out = VecDeque::new();
@@ -1924,9 +2337,9 @@ mod tests {
         assert_eq!(keep.len(), 1);
         assert!(keep[0].is_spilled(), "kept whole: body untouched");
         assert_eq!(residual, Antichain::from_elem(6));
-        let shipped = ship.pop_front().unwrap().into_column();
+        let shipped = ship.pop_front().unwrap().into_body();
         assert_eq!(collect_column(&shipped), consolidate(low));
-        let kept = keep.pop_front().unwrap().into_column();
+        let kept = keep.pop_front().unwrap().into_body();
         assert_eq!(collect_column(&kept), consolidate(high));
         set_spill_override(None);
     }
@@ -1937,7 +2350,7 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn extract_cuts_large_output() {
         let records: Vec<Tuple> = (0..300_000u64).map(|k| ((k, 0), k % 2, 1)).collect();
-        let mut input = VecDeque::from([ColumnChunk::from_column(build_column(&records))]);
+        let mut input = VecDeque::from([ColumnChunk::from_body(build_column(&records))]);
         let frontier = Antichain::from_elem(1u64);
         let mut residual = Antichain::new();
         let (mut keep, mut ship) = (VecDeque::new(), VecDeque::new());
@@ -1973,7 +2386,7 @@ mod tests {
     fn locate_uses_resident_bounds() {
         let pool = test_pool();
         let data: Vec<Tuple> = vec![((2, 0), 0, 1), ((4, 0), 0, 1)];
-        let chunk = force_spill(ColumnChunk::from_column(build_column(&data)), &pool);
+        let chunk = force_spill(ColumnChunk::from_body(build_column(&data)), &pool);
 
         let mut probe_col = <u64 as Columnar>::Container::default();
         for key in [1u64, 3, 5] {
@@ -2001,11 +2414,11 @@ mod tests {
         let committed = TestChunk::commit(column, 0);
         assert!(committed.is_spilled(), "large body must spill");
         assert_eq!(committed.len(), data.len());
-        assert_eq!(collect_column(&committed.clone().into_column()), data);
+        assert_eq!(collect_column(&committed.clone().into_body()), data);
 
         let mut batcher: ChunkBatcher<TestChunk> = Batcher::new(None, 0);
         for piece in data.chunks(10_000) {
-            batcher.push_into(ColumnChunk::from_column(build_column(piece)));
+            batcher.push_into(ColumnChunk::from_body(build_column(piece)));
         }
         let (sealed, _) = batcher.seal(Antichain::new());
         assert!(
@@ -2054,11 +2467,11 @@ mod tests {
         let high: Vec<Tuple> = (1000..1100u64).map(|i| ((i, 0), 0, 1i64)).collect();
 
         let mut in1 = VecDeque::from([force_spill(
-            ColumnChunk::from_column(build_column(&low)),
+            ColumnChunk::from_body(build_column(&low)),
             &pool,
         )]);
         let mut in2 = VecDeque::from([force_spill(
-            ColumnChunk::from_column(build_column(&high)),
+            ColumnChunk::from_body(build_column(&high)),
             &pool,
         )]);
         let mut out = VecDeque::new();
@@ -2083,8 +2496,8 @@ mod tests {
     fn merge_derives_generational_depth() {
         let low: Vec<Tuple> = (0..100u64).map(|i| ((i, 0), 0, 1i64)).collect();
         let high: Vec<Tuple> = (50..150u64).map(|i| ((i, 0), 0, 1i64)).collect();
-        let mut in1 = VecDeque::from([ColumnChunk::from_column(build_column(&low))]);
-        let mut in2 = VecDeque::from([ColumnChunk::from_column(build_column(&high))]);
+        let mut in1 = VecDeque::from([ColumnChunk::from_body(build_column(&low))]);
+        let mut in2 = VecDeque::from([ColumnChunk::from_body(build_column(&high))]);
         assert_eq!(in1[0].depth(), 0, "fresh chunks start at depth 0");
         let mut out = VecDeque::new();
         TestChunk::merge(&mut in1, &mut in2, &mut out);
@@ -2102,7 +2515,7 @@ mod tests {
         // unchanged, one generation older for having outlived the merge.
         let mut in1 = VecDeque::from([ColumnChunk::Resident(Rc::new(build_column(&low)), 3)]);
         let far: Vec<Tuple> = (1000..1100u64).map(|i| ((i, 0), 0, 1i64)).collect();
-        let mut in2 = VecDeque::from([ColumnChunk::from_column(build_column(&far))]);
+        let mut in2 = VecDeque::from([ColumnChunk::from_body(build_column(&far))]);
         let mut out = VecDeque::new();
         TestChunk::merge(&mut in1, &mut in2, &mut out);
         assert_eq!(out.len(), 1);
@@ -2140,7 +2553,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // too slow
     fn settle_commits_at_accumulated_depth() {
         set_spill_override(Some(test_pool()));
-        let big: Vec<Tuple> = (0..100_000u64).map(|i| ((i, 0), 0, 1i64)).collect();
+        let big: Vec<Tuple> = (0..60_000u64).map(|i| ((i, 0), 0, 1i64)).collect();
         let mut input = VecDeque::from([
             ColumnChunk::Resident(Rc::new(build_column(&big)), 1),
             ColumnChunk::Resident(Rc::new(build_column(&[((0, 0), 0, 1)])), 0),
@@ -2163,16 +2576,14 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn settle_carry_commits_at_target() {
-        // ~1.5 MiB per chunk (a row serializes to 32 bytes): under
-        // `at_commit_size`, so the carry has to coalesce, and a coalesced
-        // pair lands in the dead zone of the periodic window check.
-        let chunk_rows = u64::cast_from(1_500_000usize / 32);
+        // Two inputs fit in one slot. A third must start another chunk.
+        let chunk_rows = u64::cast_from(800_000usize / 32);
         let mut input: VecDeque<TestChunk> = (0..4u64)
             .map(|c| {
                 let data: Vec<Tuple> = (0..chunk_rows)
                     .map(|i| ((c * chunk_rows + i, 0), 0, 1i64))
                     .collect();
-                ColumnChunk::from_column(build_column(&data))
+                ColumnChunk::from_body(build_column(&data))
             })
             .collect();
         let mut out = VecDeque::new();
@@ -2181,10 +2592,10 @@ mod tests {
         // commits each chunk as-is and the size cap below holds vacuously.
         assert!(out.len() < 4, "nothing coalesced");
         for chunk in &out {
-            let col = chunk.clone().into_column();
+            let col = chunk.clone().into_body();
             assert!(
-                col.length_in_bytes() < 2 * COMMIT_BYTES,
-                "settled chunk of {} bytes exceeds twice the commit target",
+                col.length_in_bytes() <= COMMIT_BYTES,
+                "settled chunk of {} bytes exceeds the commit target",
                 col.length_in_bytes(),
             );
         }
@@ -2204,8 +2615,8 @@ mod tests {
 
     /// The smallest column whose serialized size reaches `SPILL_MIN_BYTES`.
     /// One record less sits under the spill floor.
-    fn column_at_spill_floor() -> (Column<Tuple>, u64) {
-        let mut col: Column<Tuple> = Column::default();
+    fn column_at_spill_floor() -> (ColumnBody<Tuple>, u64) {
+        let mut col: ColumnBody<Tuple> = ColumnBody::default();
         let mut n = 0u64;
         while col.length_in_bytes() < SPILL_MIN_BYTES {
             col.push_into(((n, n), 0, 1));
@@ -2220,7 +2631,7 @@ mod tests {
     fn spill_floor_boundary() {
         set_spill_override(Some(test_pool()));
         let (col, n) = column_at_spill_floor();
-        let mut under: Column<Tuple> = Column::default();
+        let mut under: ColumnBody<Tuple> = ColumnBody::default();
         for m in 0..n - 1 {
             under.push_into(((m, m), 0, 1));
         }
@@ -2257,7 +2668,7 @@ mod tests {
         for depth in [0u8, 1, 2, 3] {
             let chunk = TestChunk::commit(column.clone(), depth);
             assert!(chunk.is_spilled(), "depth {depth} must spill");
-            assert_eq!(collect_column(&chunk.into_column()), data);
+            assert_eq!(collect_column(&chunk.into_body()), data);
         }
         set_spill_override(None);
         set_compress_min_depth_override(None);
@@ -2450,12 +2861,10 @@ mod tests {
         set_compress_min_depth_override(None);
     }
 
-    /// The compute and storage spill gates compose as an OR: either gate
-    /// routes commits to the installed pool, and each setter writes only its
-    /// own gate.
+    /// One test, because the gates are process-global.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
-    fn spill_gates_compose_as_or() {
+    fn spill_gates_are_independent() {
         let installed =
             crate::pool_config::apply_pool_config(crate::pool_config::PoolPagerConfig {
                 budget_bytes: 32 << 20,
@@ -2466,40 +2875,64 @@ mod tests {
         assert!(installed, "pool reservation failed");
         // A body at the spill floor, so the gates alone decide.
         let (col, _) = column_at_spill_floor();
-        let commit = |col: &Column<Tuple>| TestChunk::commit(col.clone(), 0).is_spilled();
+        let compute = |col: &ColumnBody<Tuple>| TestChunk::commit(col.clone(), 0).is_spilled();
+        let storage = |col: &ColumnBody<Tuple>| {
+            ColumnChunk::<(u64, u64), u64, i64, StorageSpill>::commit(col.clone(), 0).is_spilled()
+        };
+        let sink = |col: &ColumnBody<Tuple>| try_spill_ref(col, 0).is_some();
 
-        assert!(!commit(&col), "both gates off");
+        assert!(!compute(&col), "all gates off");
+        assert!(!storage(&col), "all gates off");
+        assert!(!sink(&col), "all gates off");
+
         set_storage_spill_enabled(true);
-        assert!(commit(&col), "the storage gate alone spills");
-        set_compute_spill_enabled(false);
+        assert!(storage(&col), "the storage gate spills storage chunks");
         assert!(
-            commit(&col),
-            "the compute setter must not clobber the storage gate"
+            !compute(&col),
+            "the storage gate must not spill compute chunks"
         );
-        set_compute_spill_enabled(true);
+        assert!(!sink(&col), "the storage gate must not spill sink bodies");
         set_storage_spill_enabled(false);
-        assert!(commit(&col), "the compute gate alone spills");
+
+        set_compute_spill_enabled(true);
+        assert!(compute(&col), "the compute gate spills compute chunks");
+        assert!(
+            !storage(&col),
+            "the compute gate must not spill storage chunks"
+        );
+        assert!(!sink(&col), "the compute gate must not spill sink bodies");
         set_compute_spill_enabled(false);
-        assert!(!commit(&col), "both gates off again");
+
+        set_sink_spill_enabled(true);
+        assert!(sink(&col), "the sink gate spills sink bodies");
+        assert!(
+            !compute(&col),
+            "the sink gate must not spill compute chunks"
+        );
+        assert!(
+            !storage(&col),
+            "the sink gate must not spill storage chunks"
+        );
+        set_sink_spill_enabled(false);
         set_compress_min_depth_override(None);
     }
 
-    /// Re-spilling an already-serialized body exercises the `Column::Align`
-    /// branch of `spill_column` and round-trips byte-identically.
+    /// Re-spilling an already-serialized body exercises the `ColumnBody::Words`
+    /// branch of `spill_serialized` and round-trips byte-identically.
     #[mz_ore::test]
     fn spill_align_round_trip() {
         let pool = test_pool();
         let data: Vec<Tuple> = (0..64u64).map(|k| ((k, k), 0, 1)).collect();
-        let spilled = force_spill(ColumnChunk::from_column(build_column(&data)), &pool);
-        let column = spilled.into_column();
-        let Column::Align(words) = &column else {
-            panic!("a spilled body reads back as Column::Align");
+        let spilled = force_spill(ColumnChunk::from_body(build_column(&data)), &pool);
+        let column = spilled.into_body();
+        let ColumnBody::Words(words) = &column else {
+            panic!("a spilled body reads back as ColumnBody::Words");
         };
         let words = words.clone();
-        let respilled = force_spill(ColumnChunk::from_column(column), &pool);
-        let reread = respilled.into_column();
-        let Column::Align(words2) = &reread else {
-            panic!("a spilled body reads back as Column::Align");
+        let respilled = force_spill(ColumnChunk::from_body(column), &pool);
+        let reread = respilled.into_body();
+        let ColumnBody::Words(words2) = &reread else {
+            panic!("a spilled body reads back as ColumnBody::Words");
         };
         assert_eq!(&words, words2, "byte-identical round trip");
         assert_eq!(collect_column(&reread), data);
@@ -2525,11 +2958,11 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn into_column_copies_shared_resident() {
+    fn into_body_copies_shared_resident() {
         let data: Vec<Tuple> = vec![((1, 1), 0, 1), ((2, 2), 0, 1)];
-        let a = ColumnChunk::from_column(build_column(&data));
+        let a = TestChunk::from_body(build_column(&data));
         let b = a.clone();
-        assert_eq!(collect_column(&a.into_column()), data);
-        assert_eq!(collect_column(&b.into_column()), data);
+        assert_eq!(collect_column(&a.into_body()), data);
+        assert_eq!(collect_column(&b.into_body()), data);
     }
 }

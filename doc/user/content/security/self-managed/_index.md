@@ -24,8 +24,8 @@ This section covers security for Self-Managed Materialize.
 
 | Guide | Description |
 |-------|-------------|
+| [Configure single sign-on](/self-managed-deployments/sso/) | Set up OIDC or advanced single sign-on with an external identity provider |
 | [Authentication](/security/self-managed/authentication/) | Enable authentication |
-| [Single sign-on (SSO)](/security/self-managed/sso/) | Configure OIDC-based single sign-on with an external identity provider |
 | [Access control](/security/self-managed/access-control/) | Reference for role-based access management (RBAC) |
 
 See also

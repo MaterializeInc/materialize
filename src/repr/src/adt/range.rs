@@ -32,6 +32,7 @@ use crate::scalar::{DatumKind, SqlScalarType};
 include!(concat!(env!("OUT_DIR"), "/mz_repr.adt.range.rs"));
 
 bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub(crate) struct InternalFlags: u8 {
         const EMPTY = 1;
         const LB_INCLUSIVE = 1 << 1;
@@ -42,6 +43,7 @@ bitflags! {
 }
 
 bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub(crate) struct PgFlags: u8 {
         const EMPTY = 0b0000_0001;
         const LB_INCLUSIVE = 0b0000_0010;

@@ -47,7 +47,7 @@ assert_cmd.workspace = true
 tempfile.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-security-framework = "3.7.0"
+security-framework.workspace = true
 
 [package.metadata.deb]
 name = "materialize-cli"

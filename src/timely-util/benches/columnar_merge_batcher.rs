@@ -29,6 +29,7 @@
 //! Two axes match the sister bench `columnar_merger.rs`:
 //! regime × size. See that file for axis rationale.
 
+use mz_alloc_default as _;
 use std::collections::VecDeque;
 use std::mem::size_of;
 use std::sync::Arc;
@@ -177,7 +178,7 @@ fn bench_merge_batcher(c: &mut Criterion) {
                         let mut merger: ColumnMerger<Data, Time, Diff> = Default::default();
                         let mut output = Vec::new();
                         let mut stash = Vec::new();
-                        merger.merge(vec![ca], vec![cb], &mut output, &mut stash);
+                        merger.merge(vec![ca.into()], vec![cb.into()], &mut output, &mut stash);
                         output
                     },
                     BatchSize::LargeInput,

@@ -1654,7 +1654,7 @@ pub mod v1 {
             {
                 hasher.update(annotation);
             }
-            format!("{:x}", hasher.finalize())
+            hex::encode(hasher.finalize())
         }
 
         pub fn backend_secret_name(&self) -> String {

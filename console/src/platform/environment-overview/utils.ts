@@ -17,10 +17,7 @@ import { MaterializeTheme } from "~/theme";
 export type ClusterCategory = "compute" | "storage" | "hybrid" | "empty";
 
 export type MemDiskUtilizationStatus =
-  | "optimal"
-  | "suboptimal"
-  | "underProvisioned"
-  | "empty";
+  "optimal" | "suboptimal" | "underProvisioned" | "empty";
 
 export type ThresholdPercentages = {
   // We call a replica optimal if < thresholdPercentages.optimal

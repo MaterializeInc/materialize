@@ -479,7 +479,7 @@ def port_forward_environmentd(
 
 def retry(fn: Callable, timeout: int) -> None:
     end_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=timeout)
+        datetime.datetime.now(datetime.UTC) + datetime.timedelta(seconds=timeout)
     ).timestamp()
     while time.time() < end_time:
         try:
@@ -3630,6 +3630,118 @@ def workflow_webhook_cert_rotation(
     print("webhook cert rotation test PASSED")
 
 
+# The reporter of the events the Materialize controller publishes.
+MATERIALIZE_EVENT_REPORTER = "orchestratord.materialize.cloud/materialize"
+
+
+def get_materialize_events(definition: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the events published about the test's Materialize resource."""
+    name = definition["materialize"]["metadata"]["name"]
+    events = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                # `kubectl get events` serves the core v1 view of events, which
+                # renames the events.k8s.io fields these tests read.
+                "events.events.k8s.io",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "json",
+            ],
+        )
+    )["items"]
+    return [
+        event
+        for event in events
+        if event.get("regarding", {}).get("kind") == "Materialize"
+        and event.get("regarding", {}).get("name") == name
+    ]
+
+
+def wait_for_failure_note(
+    definition: dict[str, Any],
+    matches: Callable[[str], bool],
+) -> str:
+    """Wait for a ReconcileFailed event on the Materialize resource whose note
+    satisfies `matches`, and return that note."""
+    found: list[str] = []
+
+    def check() -> None:
+        failures = [
+            event
+            for event in get_materialize_events(definition)
+            if event.get("reason") == "ReconcileFailed"
+        ]
+        matching = [event for event in failures if matches(event.get("note") or "")]
+        assert (
+            matching
+        ), f"No matching ReconcileFailed event; notes were {[e.get('note') for e in failures]}"
+        assert matching[0]["type"] == "Warning", matching[0]
+        found.append(matching[0]["note"])
+
+    retry(check, 300)
+    return found[0]
+
+
+def workflow_failure_events(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
+    """Test that the ReconcileFailed event on a Materialize resource follows
+    the current cause of the failure, rather than the first one.
+
+    The environment first fails because its backend secret is missing, then,
+    once the secret exists with an invalid license key, because the key fails
+    to validate.
+    """
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    definition = setup(c, args)
+    init(definition)
+
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all(
+            [definition["namespace"], definition["materialize"]]
+        ).encode(),
+    )
+    first = wait_for_failure_note(definition, lambda note: "not found" in note.lower())
+    print(f"First failure reported: {first}")
+
+    secret = copy.deepcopy(definition["secret"])
+    secret["stringData"]["license_key"] = "not-a-real-license-key"
+    spawn.runv(
+        ["kubectl", "apply", "-f", "-"],
+        stdin=yaml.dump_all([secret]).encode(),
+    )
+    second = wait_for_failure_note(definition, lambda note: note != first)
+    print(f"Second failure reported: {second}")
+
+    reporters = {
+        event["reportingController"] for event in get_materialize_events(definition)
+    }
+    assert reporters == {MATERIALIZE_EVENT_REPORTER}, reporters
+    print("workflow_failure_events PASSED")
+
+
 def workflow_manually_promote(
     c: Composition,
     parser: WorkflowArgumentParser,
@@ -3735,7 +3847,21 @@ def workflow_manually_promote(
     wait_for_rollout_complete()
     print("Test 2 PASSED: Promotion via v1 requestedRolloutHash succeeded")
 
+    check_lifecycle_events(definition)
     print("workflow_manually_promote PASSED")
+
+
+def check_lifecycle_events(definition: dict[str, Any]) -> None:
+    """Assert that each phase of a ManuallyPromote rollout was published as an
+    event on the Materialize resource, with the condition's reason and
+    message."""
+    by_reason = {event["reason"]: event for event in get_materialize_events(definition)}
+    for reason in ("Applying", "ReadyToPromote", "Promoting", "Applied"):
+        assert reason in by_reason, f"No {reason} event, found {sorted(by_reason)}"
+        event = by_reason[reason]
+        assert event["type"] == "Normal", event
+        assert event["reportingController"] == MATERIALIZE_EVENT_REPORTER, event
+        assert "generation" in (event.get("note") or ""), event
 
 
 def apply_materialize(definition: dict[str, Any]) -> None:
@@ -4770,7 +4896,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     if args.runtime:
         end_time = (
-            datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
+            datetime.datetime.now(datetime.UTC)
+            + datetime.timedelta(seconds=args.runtime)
         ).timestamp()
 
     action = Action(args.action)
@@ -4778,7 +4905,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     mod_source = make_mod_source(properties, mod_classes, rng)
 
     end_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=args.runtime or 1800)
+        datetime.datetime.now(datetime.UTC)
+        + datetime.timedelta(seconds=args.runtime or 1800)
     ).timestamp()
     versions = get_all_self_managed_versions()
 
@@ -4923,6 +5051,8 @@ def setup(c: Composition, args) -> dict[str, Any]:
     # definition["operator"]["networkPolicies"]["ingress"]["enabled"] = True
     # TODO: Remove when fixed: error: unexpected argument '--disable-license-key-checks' found
     definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
+    # TODO: Remove once the pinned operator image knows '--disable-database-network-policies'
+    definition["operator"]["operator"]["args"]["enableDatabaseNetworkPolicies"] = True
     definition["operator"]["clusterd"]["nodeSelector"][
         "workload"
     ] = "materialize-instance"
@@ -5363,6 +5493,28 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
             ]
         )
         raise ValueError("Never completed")
+
+    if expect_fail:
+        wait_for_reconcile_failed_event(definition)
+
+
+def wait_for_reconcile_failed_event(definition: dict[str, Any]) -> None:
+    """Assert that the operator published a ReconcileFailed warning event on
+    the Materialize resource, with the error as its note."""
+
+    def check() -> None:
+        failures = [
+            event
+            for event in get_materialize_events(definition)
+            if event.get("reason") == "ReconcileFailed"
+        ]
+        assert failures, "No ReconcileFailed event on the Materialize resource"
+        event = failures[0]
+        assert event["type"] == "Warning", event
+        assert event["reportingController"] == MATERIALIZE_EVENT_REPORTER, event
+        assert event.get("note"), event
+
+    retry(check, 120)
 
 
 def run_balancer(definition: dict[str, Any], expect_fail: bool) -> None:

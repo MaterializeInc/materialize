@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM node:26-alpine AS builder
+# Pinned by rolling tag + multi-arch index digest so dependabot refreshes the
+# digest for security fixes.
+FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS builder
 
 WORKDIR /app
 
@@ -39,6 +41,7 @@ FROM nginxinc/nginx-unprivileged:alpine@sha256:c3fed6436b61d2bf2201ec032c35c0008
 
 LABEL maintainer="support@materialize.com" \
     version="1.0" \
+    org.opencontainers.image.source="https://github.com/MaterializeInc/materialize" \
     description="Materialize Console"
 
 COPY --from=builder /app/dist /usr/share/nginx/html

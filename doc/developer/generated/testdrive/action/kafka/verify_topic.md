@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/action/kafka/verify_topic.rs
-revision: 12fbe31d24
+revision: 1718310c06
 ---
 
 # testdrive::action::kafka::verify_topic

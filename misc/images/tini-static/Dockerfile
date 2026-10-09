@@ -23,7 +23,9 @@
 #   docker cp extract:/output/tini ./tini
 #   docker rm extract
 
-FROM debian:13-slim AS builder
+# Pinned by rolling tag + multi-arch index digest, matching materialized-base,
+# so dependabot refreshes the digest for security fixes.
+FROM debian:13-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a AS builder
 
 ARG TINI_VERSION=v0.19.0
 

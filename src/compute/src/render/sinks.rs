@@ -14,9 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use differential_dataflow::VecCollection;
-use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
-use mz_expr::{EvalError, MapFilterProject, permutation_for_arrangement};
+use mz_expr::EvalError;
 use mz_ore::soft_assert_or_log;
 use mz_ore::str::StrExt;
 use mz_ore::vec::PartialOrdVecExt;
@@ -61,32 +60,33 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
             }
         }
 
-        // TODO[btv] - We should determine the key and permutation to use during planning,
-        // rather than at runtime.
-        //
-        // This is basically an inlined version of the old `as_collection`.
+        // Which arrangement of the `from` collection to consume, and the MFP that reconstructs
+        // full rows from it, were decided during LIR lowering and recorded in
+        // `sink.from_arrangement`. An unarranged form takes precedence when the bundle provides
+        // one. Lowering promises one exactly when `from_arrangement` is `None`, but the renderer
+        // can produce one where lowering promised only an arrangement: a snapshot-excluded
+        // subscribe imports an index as a filtered collection instead (see `import_index`).
         let bundle = self
             .lookup_id(mz_expr::Id::Global(sink.from))
             .expect("Sink source collection not loaded");
-        let (ok_collection, mut err_collection) = if let Some((oks, errs)) = &bundle.collection {
-            (columnar_to_vec(oks.clone()), errs.clone())
-        } else {
-            let (key, _arrangement) = bundle
-                .arranged
-                .iter()
-                .next()
-                .expect("Invariant violated: at least one collection must be present.");
-            let unthinned_arity = sink.from_desc.arity();
-            let (permutation, thinning) = permutation_for_arrangement(key, unthinned_arity);
-            let mut mfp = MapFilterProject::<LirScalarExpr>::new(unthinned_arity);
-            mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
-            let mfp_plan = mfp.into_plan().expect("MFP planning failed");
-            // The sink serializes rows, so decode to `Vec` here. This is the
-            // sanctioned sink leaf, the same seam as the raw-collection arm
-            // above.
-            let (oks, errs) =
-                bundle.as_collection_core(mfp_plan, Some((key.clone(), None)), self.until.clone());
-            (columnar_to_vec(oks), errs)
+        let (ok_collection, mut err_collection) = match (&bundle.collection, &sink.from_arrangement)
+        {
+            (Some((oks, errs)), _) => (columnar_to_vec(oks.clone()), errs.clone()),
+            (None, Some((key, mfp_plan))) => {
+                // The sink serializes rows, so decode to `Vec` here. This is the
+                // sanctioned sink leaf, the same seam as the raw-collection arm
+                // above.
+                let (oks, errs) = bundle.as_collection_core(
+                    mfp_plan.clone(),
+                    Some((key.clone(), None)),
+                    self.until.clone(),
+                );
+                (columnar_to_vec(oks), errs)
+            }
+            (None, None) => panic!(
+                "sink source {} has neither a collection nor a planned arrangement",
+                sink.from
+            ),
         };
 
         // Attach logging of dataflow errors.

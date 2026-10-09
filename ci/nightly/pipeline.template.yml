@@ -1776,7 +1776,6 @@ steps:
             ci-builder: stable
             run-timeout: 60m
       branches: "main v*.* *gcp* *tf* *terraform* *helm* *self-managed* *orchestratord*"
-      skip: "materialize-terraform-self-managed#157"
 
     - id: terraform-azure
       topics: [self-managed]
@@ -1798,7 +1797,6 @@ steps:
             ci-builder: stable
             run-timeout: 60m
       branches: "main v*.* *azure* *tf* *terraform* *helm* *self-managed* *orchestratord*"
-      skip: "Not enough capacity on Azure currently, see #operations"
       # Unreliable port-forward to Azure
       retry:
         automatic:
@@ -2455,14 +2453,14 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
-  - id: occ-mixed-mode-read-then-write
-    label: "Read-then-write sequencing split across two environmentd processes"
+  - id: occ-read-then-write-fencing
+    label: "Read-then-write fencing across two environmentd processes"
     depends_on: build-aarch64
     timeout_in_minutes: 30
     plugins:
       - ./ci/plugins/mzcompose:
           composition: txn-wal-fencing
-          run: mixed-mode-read-then-write
+          run: read-then-write
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
@@ -2796,6 +2794,20 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
               run: server-side-apply
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-failure-events
+        topics: [self-managed]
+        label: "Orchestratord reconciliation failure event tests"
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: failure-events
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb

@@ -1,7 +1,7 @@
 [package]
 name = "mz-orchestratord"
 description = "Kubernetes operator for Materialize regions"
-version = "26.45.0-dev.0"
+version = "26.47.0-dev.0"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
@@ -15,11 +15,13 @@ async-trait.workspace = true
 axum.workspace = true
 axum-server.workspace = true
 clap = { workspace = true, features = ["env"] }
+data-encoding.workspace = true
 futures.workspace = true
 gcp_auth.workspace = true
+hex.workspace = true
 http.workspace = true
 humantime.workspace = true
-k8s-controller.workspace = true
+k8s-controller = { workspace = true, features = ["prometheus"] }
 k8s-openapi.workspace = true
 kube.workspace = true
 maplit.workspace = true

@@ -17,6 +17,7 @@ clap.workspace = true
 dec.workspace = true
 fallible-iterator.workspace = true
 futures.workspace = true
+hex.workspace = true
 itertools.workspace = true
 junit-report.workspace = true
 maplit.workspace = true
@@ -34,8 +35,8 @@ mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
+mz-secrets-cli = { path = "../secrets-cli" }
 mz-server-core = { path = "../server-core" }
-mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-storage-types = { path = "../storage-types" }

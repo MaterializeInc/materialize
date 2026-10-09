@@ -10,8 +10,8 @@
 import { Button, useTheme } from "@chakra-ui/react";
 import { useSetAtom } from "jotai";
 import { useAtomCallback } from "jotai/utils";
-import { useEffect, useMemo, useState } from "react";
 import React from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useSegment } from "~/analytics/segment";
 import { Cluster, Notice } from "~/api/materialize/types";

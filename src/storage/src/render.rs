@@ -210,6 +210,7 @@ use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::scope_label::ScopeExt;
+use timely::PartialOrder;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave};
 use timely::progress::Antichain;
@@ -253,7 +254,16 @@ pub fn build_ingestion_dataflow(
 
             let mut tokens = vec![];
 
-            let (feedback_handle, feedback) = mz_scope.feedback(Default::default());
+            // One feedback edge per export, so the source pipeline can observe each
+            // export's committed upper individually. Concatenating them would only expose
+            // their meet.
+            let mut export_upper_handles = BTreeMap::new();
+            let mut export_upper_streams = BTreeMap::new();
+            for export_id in description.source_exports.keys() {
+                let (handle, stream) = mz_scope.feedback(Default::default());
+                export_upper_handles.insert(*export_id, handle);
+                export_upper_streams.insert(*export_id, stream);
+            }
 
             let connection = description.desc.connection.clone();
             tracing::info!(
@@ -271,6 +281,12 @@ pub fn build_ingestion_dataflow(
             } else {
                 Arc::new(Semaphore::new(Semaphore::MAX_PERMITS))
             };
+
+            // Only Postgres keeps its remap upper still through a snapshot, so only its ceiling
+            // ends near where the frontier lands when the pin lifts. MySQL and SQL Server tick
+            // through theirs, which would hold the shard upper at the as_of for the whole replay.
+            // TODO: include them once their snapshots run concurrently with CDC.
+            let oltp_source = matches!(connection, GenericSourceConnection::Postgres(_));
 
             let base_source_config = RawSourceCreationConfig {
                 name: format!("{}-{}", connection.name(), primary_source_id),
@@ -298,14 +314,14 @@ pub fn build_ingestion_dataflow(
                 busy_signal: Arc::clone(&busy_signal),
             };
 
-            let (outputs, source_health, source_tokens) = match connection {
+            let (outputs, source_health, remap_upper, source_tokens) = match connection {
                 GenericSourceConnection::Kafka(c) => crate::render::sources::render_source(
                     mz_scope,
                     root_scope,
                     &debug_name,
                     c,
                     description.clone(),
-                    feedback,
+                    export_upper_streams,
                     storage_state,
                     base_source_config,
                 ),
@@ -315,7 +331,7 @@ pub fn build_ingestion_dataflow(
                     &debug_name,
                     c,
                     description.clone(),
-                    feedback,
+                    export_upper_streams,
                     storage_state,
                     base_source_config,
                 ),
@@ -325,7 +341,7 @@ pub fn build_ingestion_dataflow(
                     &debug_name,
                     c,
                     description.clone(),
-                    feedback,
+                    export_upper_streams,
                     storage_state,
                     base_source_config,
                 ),
@@ -335,7 +351,7 @@ pub fn build_ingestion_dataflow(
                     &debug_name,
                     c,
                     description.clone(),
-                    feedback,
+                    export_upper_streams,
                     storage_state,
                     base_source_config,
                 ),
@@ -345,14 +361,13 @@ pub fn build_ingestion_dataflow(
                     &debug_name,
                     c,
                     description.clone(),
-                    feedback,
+                    export_upper_streams,
                     storage_state,
                     base_source_config,
                 ),
             };
             tokens.extend(source_tokens);
 
-            let mut upper_streams = vec![];
             let mut health_streams = Vec::with_capacity(source_health.len() + outputs.len());
             health_streams.extend(source_health);
             for (export_id, (ok, err)) in outputs {
@@ -372,6 +387,14 @@ pub fn build_ingestion_dataflow(
                     export_id,
                     primary_source_id
                 );
+
+                // An export snapshots when its resume upper is at or below the as_of. The
+                // controller uses the same test to hand the connector a minimum from-time resume
+                // upper.
+                let snapshotting = oltp_source
+                    && resume_uppers
+                        .get(&export_id)
+                        .is_some_and(|upper| PartialOrder::less_equal(upper, &as_of));
                 let (upper_stream, errors, sink_tokens) = crate::render::persist_sink::render(
                     mz_scope,
                     export_id,
@@ -380,8 +403,14 @@ pub fn build_ingestion_dataflow(
                     storage_state,
                     metrics,
                     Arc::clone(&busy_signal),
+                    snapshotting.then(|| as_of.clone()),
+                    description.desc.timestamp_interval,
+                    remap_upper.clone(),
                 );
-                upper_streams.push(upper_stream);
+                let feedback_handle = export_upper_handles
+                    .remove(&export_id)
+                    .expect("each output corresponds to a source export");
+                upper_stream.connect_loop(feedback_handle);
                 tokens.extend(sink_tokens);
 
                 let sink_health = errors.map(move |err: Rc<anyhow::Error>| {
@@ -396,9 +425,14 @@ pub fn build_ingestion_dataflow(
                 health_streams.push(sink_health.leave(root_scope));
             }
 
-            mz_scope
-                .concatenate(upper_streams)
-                .connect_loop(feedback_handle);
+            // Assert explicitly for debugging. Timely only builds a feedback operator in
+            // `connect_loop`, so a handle left here would fail dataflow construction with an
+            // opague error.
+            assert!(
+                export_upper_handles.is_empty(),
+                "source rendered no output for exports {:?}",
+                export_upper_handles.keys(),
+            );
 
             let health_stream = root_scope.concatenate(health_streams);
             let health_token = crate::healthcheck::health_operator(

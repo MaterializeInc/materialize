@@ -32,6 +32,7 @@
 //! See `mz-compute/benches/columnar_merger_row.rs` for the `Row`-keyed
 //! companion bench (variable-length payload regime).
 
+use mz_alloc_default as _;
 use std::mem::size_of;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -181,7 +182,7 @@ fn bench_merge(c: &mut Criterion) {
                         let mut merger: ColumnMerger<Data, Time, Diff> = Default::default();
                         let mut output = Vec::new();
                         let mut stash = Vec::new();
-                        merger.merge(vec![ca], vec![cb], &mut output, &mut stash);
+                        merger.merge(vec![ca.into()], vec![cb.into()], &mut output, &mut stash);
                         output
                     },
                     BatchSize::LargeInput,

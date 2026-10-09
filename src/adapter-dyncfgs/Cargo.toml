@@ -1,0 +1,18 @@
+[package]
+name = "mz-adapter-dyncfgs"
+description = "Dynamic configuration and lightweight types for Materialize's adapter layer."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+mz-dyncfg = { path = "../dyncfg" }
+mz-ore = { path = "../ore", default-features = false, features = ["id_gen"] }
+serde_json.workspace = true
+
+[features]
+default = []

@@ -18,9 +18,7 @@ import {
 } from "@chakra-ui/react";
 import { AxisBottom, AxisLeft, AxisScale } from "@visx/axis";
 import { GridRows } from "@visx/grid";
-import ParentSize, {
-  ParentSizeProvidedProps,
-} from "@visx/responsive/lib/components/ParentSize";
+import { useParentSize } from "@visx/responsive";
 import { scaleLinear, scaleTime } from "@visx/scale";
 import { Line, LinePath } from "@visx/shape";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
@@ -88,7 +86,7 @@ export const ClusterUtilizationGraphInner = ({
   startTime,
   title,
   width,
-}: UtilizationGraphProps & ParentSizeProvidedProps) => {
+}: UtilizationGraphProps & { width: number; height: number }) => {
   const [statusVisible, setStatusVisible] = React.useState(true);
   const [metricVisible, setMetricVisible] = React.useState(true);
   const { colors, fonts } = useTheme<MaterializeTheme>();
@@ -380,22 +378,17 @@ export const ClusterUtilizationGraphInner = ({
 };
 
 export const UtilizationGraph = (props: UtilizationGraphProps) => {
+  // Measure only the width. visx's `ParentSize` would collapse to 0px tall
+  // here, since this graph sets its own height instead of filling a parent.
+  const { parentRef, width } = useParentSize({ debounceTime: 10 });
   return (
-    <ParentSize
-      className="graph-container"
-      debounceTime={10}
-      style={{ width: "100%", minWidth: 0 }}
-    >
-      {(parentSizeState) => {
-        return (
-          <ClusterUtilizationGraphInner
-            {...parentSizeState}
-            height={graphHeightPx}
-            {...props}
-          />
-        );
-      }}
-    </ParentSize>
+    <Box ref={parentRef} className="graph-container" width="100%" minWidth={0}>
+      <ClusterUtilizationGraphInner
+        width={width}
+        height={graphHeightPx}
+        {...props}
+      />
+    </Box>
   );
 };
 

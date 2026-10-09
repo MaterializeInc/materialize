@@ -51,7 +51,9 @@ use mz_ore::tracing::{
 };
 use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_client::cfg::{CONSENSUS_CONNECTION_POOL_MAX_SIZE, PersistConfig};
+use mz_persist_client::cfg::{
+    CONSENSUS_CONNECTION_POOL_MAX_SIZE, PersistConfig, SHARD_METRICS, ShardMetricsExport,
+};
 use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_postgres_util::{
     Sql, batch_execute as pg_batch_execute, execute as pg_execute, query_one as pg_query_one, sql,
@@ -238,6 +240,10 @@ impl Default for TestHarness {
                 (
                     ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE.name().to_string(),
                     "true".to_string(),
+                ),
+                (
+                    SHARD_METRICS.name().to_string(),
+                    ShardMetricsExport::Summary.as_str().to_string(),
                 ),
             ]),
             internal_console_redirect_url: None,
@@ -900,8 +906,8 @@ impl Listeners {
                     now: config.now.clone(),
                     metrics_registry: metrics_registry.clone(),
                     persist_pubsub_url: format!("http://localhost:{}", persist_pubsub_server_port),
-                    secrets_args: mz_service::secrets::SecretsReaderCliArgs {
-                        secrets_reader: mz_service::secrets::SecretsControllerKind::LocalFile,
+                    secrets_args: mz_secrets_cli::SecretsReaderCliArgs {
+                        secrets_reader: mz_secrets_cli::SecretsControllerKind::LocalFile,
                         secrets_reader_local_file_dir: Some(data_directory.join("secrets")),
                         secrets_reader_kubernetes_context: None,
                         secrets_reader_aws_prefix: None,

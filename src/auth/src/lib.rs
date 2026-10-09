@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 pub mod group_claims;
 pub mod hash;
 pub mod password;
+pub mod user;
 
 /// Identifies which authentication mechanism was used for a session.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

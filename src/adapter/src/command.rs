@@ -597,9 +597,6 @@ pub struct StartupResponse {
     /// Semaphore for limiting concurrent OCC (optimistic concurrency control)
     /// write operations.
     pub occ_write_semaphore: Arc<Semaphore>,
-    /// Whether frontend OCC read-then-write is enabled (determined once at
-    /// process startup).
-    pub frontend_read_then_write_enabled: bool,
     /// Requests a group commit, which is how the frontend asks for the write
     /// timeline to advance without having anything to write.
     pub group_commit_notifier: crate::coord::appends::GroupCommitNotifier,
@@ -738,7 +735,10 @@ pub enum ExecuteResponse {
     /// The temporary objects associated with the session have been discarded.
     DiscardedTemp,
     /// All state associated with the session has been discarded.
-    DiscardedAll,
+    DiscardedAll {
+        /// Session parameters that changed because the session was reset.
+        params: BTreeMap<&'static str, String>,
+    },
     /// The requested object was dropped.
     DroppedObject(ObjectType),
     /// The requested objects were dropped.
@@ -902,7 +902,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::DeclaredCursor => Ok(ExecuteResponse::DeclaredCursor),
             ExecuteResponseKind::Deleted => Err(()),
             ExecuteResponseKind::DiscardedTemp => Ok(ExecuteResponse::DiscardedTemp),
-            ExecuteResponseKind::DiscardedAll => Ok(ExecuteResponse::DiscardedAll),
+            ExecuteResponseKind::DiscardedAll => Err(()),
             ExecuteResponseKind::DroppedObject => Err(()),
             ExecuteResponseKind::DroppedOwned => Ok(ExecuteResponse::DroppedOwned),
             ExecuteResponseKind::EmptyQuery => Ok(ExecuteResponse::EmptyQuery),
@@ -965,7 +965,7 @@ impl ExecuteResponse {
             DeclaredCursor => Some("DECLARE CURSOR".into()),
             Deleted(n) => Some(format!("DELETE {}", n)),
             DiscardedTemp => Some("DISCARD TEMP".into()),
-            DiscardedAll => Some("DISCARD ALL".into()),
+            DiscardedAll { .. } => Some("DISCARD ALL".into()),
             DroppedObject(o) => Some(format!("DROP {o}")),
             DroppedOwned => Some("DROP OWNED".into()),
             EmptyQuery => None,

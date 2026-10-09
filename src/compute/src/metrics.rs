@@ -46,6 +46,9 @@ pub struct ComputeMetrics {
     arrangement_maintenance_seconds_total: raw::CounterVec,
     arrangement_maintenance_active_info: raw::UIntGaugeVec,
 
+    // logging
+    logging_records_total: raw::IntCounterVec,
+
     // timings
     //
     // Note that this particular metric unfortunately takes some care to
@@ -57,6 +60,7 @@ pub struct ComputeMetrics {
     // yielding, but it should hopefully alert us when there is something to
     // look at.
     timely_step_duration_seconds: HistogramVec,
+    logging_step_duration_seconds: HistogramVec,
     persist_peek_seconds: HistogramVec,
     handle_command_duration_seconds: HistogramVec,
 
@@ -89,6 +93,9 @@ pub struct ComputeMetrics {
 
     // subscribes
     subscribe_snapshots_skipped_total: IntCounter,
+
+    // metric sinks
+    metric_sink_registration_retries_total: IntCounter,
 }
 
 /// Applies the per-role const label to `opts`, unless `role` is `Solo`.
@@ -194,6 +201,17 @@ impl ComputeMetrics {
                 const_labels: {"cluster" => "compute"},
                 var_labels: ["worker_id"],
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 32.0),
+            ), role)),
+            logging_step_duration_seconds: registry.register(with_role(metric!(
+                name: "mz_compute_logging_step_duration_seconds",
+                help: "The time spent in each scheduling of the logging dataflow.",
+                var_labels: ["worker_id"],
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_016, 8.0),
+            ), role)),
+            logging_records_total: registry.register(with_role(metric!(
+                name: "mz_compute_logging_records_total",
+                help: "The number of log records handed to the logging dataflow, by log.",
+                var_labels: ["worker_id", "log"],
             ), role)),
             shared_row_heap_capacity_bytes: registry.register(with_role(metric!(
                 name: "mz_dataflow_shared_row_heap_capacity_bytes",
@@ -305,6 +323,10 @@ impl ComputeMetrics {
                 name: "mz_subscribe_snapshots_skipped_total",
                 help: "The number of collection snapshots that were skipped by the subscribe snapshot optimization.",
             ), role)),
+            metric_sink_registration_retries_total: registry.register(with_role(metric!(
+                name: "mz_compute_metric_sink_registration_retries_total",
+                help: "The number of times a metric sink failed to register its collector and scheduled a retry.",
+            ), role)),
         }
     }
 
@@ -389,6 +411,17 @@ impl ComputeMetrics {
     }
 }
 
+/// Per-worker metrics of the logging dataflow.
+#[derive(Clone, Debug)]
+pub(crate) struct LoggingMetrics {
+    pub(crate) timely_records_total: IntCounter,
+    pub(crate) reachability_records_total: IntCounter,
+    pub(crate) differential_records_total: IntCounter,
+    pub(crate) compute_records_total: IntCounter,
+    /// Duration of each scheduling of the logging dataflow as a whole.
+    pub(crate) step_duration_seconds: Histogram,
+}
+
 /// Per-worker metrics.
 #[derive(Clone, Debug)]
 pub struct WorkerMetrics {
@@ -457,6 +490,24 @@ pub struct WorkerMetrics {
 }
 
 impl WorkerMetrics {
+    pub(crate) fn for_logging(&self) -> LoggingMetrics {
+        let records_total = |log| {
+            self.metrics
+                .logging_records_total
+                .with_label_values(&[self.worker_label.as_ref(), log])
+        };
+        LoggingMetrics {
+            timely_records_total: records_total("timely"),
+            reachability_records_total: records_total("reachability"),
+            differential_records_total: records_total("differential"),
+            compute_records_total: records_total("compute"),
+            step_duration_seconds: self
+                .metrics
+                .logging_step_duration_seconds
+                .with_label_values(&[&self.worker_label]),
+        }
+    }
+
     pub fn for_history(&self) -> HistoryMetrics<UIntGauge> {
         let command_counts = CommandMetrics::build(|typ| {
             self.metrics
@@ -555,6 +606,15 @@ impl WorkerMetrics {
 
     pub fn inc_subscribe_snapshot_optimization(&self) {
         self.metrics.subscribe_snapshots_skipped_total.inc()
+    }
+
+    /// Increment the count of metric sink collector registrations that collided and will be
+    /// retried.
+    ///
+    /// Unlabeled on purpose: this is an "is registration contending" signal, and the sink's
+    /// identity comes from the log line the sink emits on its first failure.
+    pub fn inc_metric_sink_registration_retries(&self) {
+        self.metrics.metric_sink_registration_retries_total.inc()
     }
 
     /// Sets the workload class for the compute metrics.

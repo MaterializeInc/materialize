@@ -1761,54 +1761,66 @@ fn array_to_decoder(
 }
 
 /// Small helper function to create a [`DatumColumnEncoder`] from a [`SqlScalarType`]
+///
+/// Every builder starts with zero capacity. Arrow's `new()` preallocates 1024 slots per builder,
+/// 2.7 MiB for a 360-leaf schema before any row is appended, and a persist writer can hold many
+/// encoders open at once.
 fn scalar_type_to_encoder(col_ty: &SqlScalarType) -> Result<DatumColumnEncoder, anyhow::Error> {
     let encoder = match &col_ty {
-        SqlScalarType::Bool => DatumColumnEncoder::Bool(BooleanBuilder::new()),
-        SqlScalarType::PgLegacyChar => DatumColumnEncoder::U8(UInt8Builder::new()),
-        SqlScalarType::UInt16 => DatumColumnEncoder::U16(UInt16Builder::new()),
+        SqlScalarType::Bool => DatumColumnEncoder::Bool(BooleanBuilder::with_capacity(0)),
+        SqlScalarType::PgLegacyChar => DatumColumnEncoder::U8(UInt8Builder::with_capacity(0)),
+        SqlScalarType::UInt16 => DatumColumnEncoder::U16(UInt16Builder::with_capacity(0)),
         SqlScalarType::UInt32
         | SqlScalarType::Oid
         | SqlScalarType::RegClass
         | SqlScalarType::RegProc
-        | SqlScalarType::RegType => DatumColumnEncoder::U32(UInt32Builder::new()),
-        SqlScalarType::UInt64 => DatumColumnEncoder::U64(UInt64Builder::new()),
-        SqlScalarType::Int16 => DatumColumnEncoder::I16(Int16Builder::new()),
-        SqlScalarType::Int32 => DatumColumnEncoder::I32(Int32Builder::new()),
-        SqlScalarType::Int64 => DatumColumnEncoder::I64(Int64Builder::new()),
-        SqlScalarType::Float32 => DatumColumnEncoder::F32(Float32Builder::new()),
-        SqlScalarType::Float64 => DatumColumnEncoder::F64(Float64Builder::new()),
+        | SqlScalarType::RegType => DatumColumnEncoder::U32(UInt32Builder::with_capacity(0)),
+        SqlScalarType::UInt64 => DatumColumnEncoder::U64(UInt64Builder::with_capacity(0)),
+        SqlScalarType::Int16 => DatumColumnEncoder::I16(Int16Builder::with_capacity(0)),
+        SqlScalarType::Int32 => DatumColumnEncoder::I32(Int32Builder::with_capacity(0)),
+        SqlScalarType::Int64 => DatumColumnEncoder::I64(Int64Builder::with_capacity(0)),
+        SqlScalarType::Float32 => DatumColumnEncoder::F32(Float32Builder::with_capacity(0)),
+        SqlScalarType::Float64 => DatumColumnEncoder::F64(Float64Builder::with_capacity(0)),
         SqlScalarType::Numeric { .. } => DatumColumnEncoder::Numeric {
-            approx_values: Float64Builder::new(),
-            binary_values: BinaryBuilder::new(),
+            approx_values: Float64Builder::with_capacity(0),
+            binary_values: BinaryBuilder::with_capacity(0, 0),
             numeric_context: crate::adt::numeric::cx_datum().clone(),
         },
         SqlScalarType::String
         | SqlScalarType::PgLegacyName
         | SqlScalarType::Char { .. }
-        | SqlScalarType::VarChar { .. } => DatumColumnEncoder::String(StringBuilder::new()),
-        SqlScalarType::Bytes => DatumColumnEncoder::Bytes(BinaryBuilder::new()),
-        SqlScalarType::Date => DatumColumnEncoder::Date(Int32Builder::new()),
+        | SqlScalarType::VarChar { .. } => {
+            DatumColumnEncoder::String(StringBuilder::with_capacity(0, 0))
+        }
+        SqlScalarType::Bytes => DatumColumnEncoder::Bytes(BinaryBuilder::with_capacity(0, 0)),
+        SqlScalarType::Date => DatumColumnEncoder::Date(Int32Builder::with_capacity(0)),
         SqlScalarType::Time => {
-            DatumColumnEncoder::Time(FixedSizeBinaryBuilder::new(TIME_FIXED_BYTES))
+            DatumColumnEncoder::Time(FixedSizeBinaryBuilder::with_capacity(0, TIME_FIXED_BYTES))
         }
-        SqlScalarType::Timestamp { .. } => {
-            DatumColumnEncoder::Timestamp(FixedSizeBinaryBuilder::new(TIMESTAMP_FIXED_BYTES))
+        SqlScalarType::Timestamp { .. } => DatumColumnEncoder::Timestamp(
+            FixedSizeBinaryBuilder::with_capacity(0, TIMESTAMP_FIXED_BYTES),
+        ),
+        SqlScalarType::TimestampTz { .. } => DatumColumnEncoder::TimestampTz(
+            FixedSizeBinaryBuilder::with_capacity(0, TIMESTAMP_FIXED_BYTES),
+        ),
+        SqlScalarType::MzTimestamp => {
+            DatumColumnEncoder::MzTimestamp(UInt64Builder::with_capacity(0))
         }
-        SqlScalarType::TimestampTz { .. } => {
-            DatumColumnEncoder::TimestampTz(FixedSizeBinaryBuilder::new(TIMESTAMP_FIXED_BYTES))
-        }
-        SqlScalarType::MzTimestamp => DatumColumnEncoder::MzTimestamp(UInt64Builder::new()),
-        SqlScalarType::Interval => {
-            DatumColumnEncoder::Interval(FixedSizeBinaryBuilder::new(INTERVAL_FIXED_BYTES))
-        }
+        SqlScalarType::Interval => DatumColumnEncoder::Interval(
+            FixedSizeBinaryBuilder::with_capacity(0, INTERVAL_FIXED_BYTES),
+        ),
         SqlScalarType::Uuid => {
-            DatumColumnEncoder::Uuid(FixedSizeBinaryBuilder::new(UUID_FIXED_BYTES))
+            DatumColumnEncoder::Uuid(FixedSizeBinaryBuilder::with_capacity(0, UUID_FIXED_BYTES))
         }
-        SqlScalarType::AclItem => {
-            DatumColumnEncoder::AclItem(FixedSizeBinaryBuilder::new(ACL_ITEM_FIXED_BYTES))
+        SqlScalarType::AclItem => DatumColumnEncoder::AclItem(
+            FixedSizeBinaryBuilder::with_capacity(0, ACL_ITEM_FIXED_BYTES),
+        ),
+        SqlScalarType::MzAclItem => {
+            DatumColumnEncoder::MzAclItem(BinaryBuilder::with_capacity(0, 0))
         }
-        SqlScalarType::MzAclItem => DatumColumnEncoder::MzAclItem(BinaryBuilder::new()),
-        SqlScalarType::Range { .. } => DatumColumnEncoder::Range(BinaryBuilder::new()),
+        SqlScalarType::Range { .. } => {
+            DatumColumnEncoder::Range(BinaryBuilder::with_capacity(0, 0))
+        }
         SqlScalarType::Jsonb => DatumColumnEncoder::Jsonb {
             offsets: vec![0],
             buf: Vec::new(),
@@ -1822,7 +1834,10 @@ fn scalar_type_to_encoder(col_ty: &SqlScalarType) -> Result<DatumColumnEncoder, 
             };
             let inner = scalar_type_to_encoder(element_type)?;
             DatumColumnEncoder::Array {
-                dims: ListBuilder::new(FixedSizeBinaryBuilder::new(ARRAY_DIMENSION_FIXED_BYTES)),
+                dims: ListBuilder::new(FixedSizeBinaryBuilder::with_capacity(
+                    0,
+                    ARRAY_DIMENSION_FIXED_BYTES,
+                )),
                 val_lengths: Vec::new(),
                 vals: Box::new(inner),
                 nulls: None,
@@ -1840,13 +1855,13 @@ fn scalar_type_to_encoder(col_ty: &SqlScalarType) -> Result<DatumColumnEncoder, 
             let inner = scalar_type_to_encoder(&*value_type)?;
             DatumColumnEncoder::Map {
                 lengths: Vec::new(),
-                keys: StringBuilder::new(),
+                keys: StringBuilder::with_capacity(0, 0),
                 vals: Box::new(inner),
                 nulls: None,
             }
         }
         SqlScalarType::Record { fields, .. } if fields.is_empty() => {
-            DatumColumnEncoder::RecordEmpty(BooleanBuilder::new())
+            DatumColumnEncoder::RecordEmpty(BooleanBuilder::with_capacity(0))
         }
         SqlScalarType::Record { fields, .. } => {
             let encoders = fields

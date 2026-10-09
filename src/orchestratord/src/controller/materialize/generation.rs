@@ -458,7 +458,7 @@ impl Resources {
     pub fn generate_hash(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(&serde_json::to_string(self).unwrap());
-        format!("{:x}", hasher.finalize())
+        hex::encode(hasher.finalize())
     }
 }
 
@@ -467,13 +467,18 @@ fn create_public_service_object(
     mz: &Materialize,
     generation: u64,
 ) -> Service {
-    create_base_service_object(
+    let mut service = create_base_service_object(
         config,
         mz,
         generation,
         &mz.environmentd_service_name(),
         true,
-    )
+    );
+    // Only the stable, public Service is annotated for Teleport discovery,
+    // not the per-generation Service: the agent must not see the name churn
+    // on every rollout.
+    super::teleport::apply_teleport_registration(config, mz, &mut service);
+    service
 }
 
 fn create_generation_service_object(
@@ -741,6 +746,10 @@ fn create_environmentd_statefulset_object(
 
     if !mz.spec.enable_rbac {
         args.push("--system-parameter-default=enable_rbac_checks=false".into());
+    }
+
+    if config.disable_database_network_policies {
+        args.push("--system-parameter-default=enable_network_policies=false".into());
     }
 
     // Add persist arguments.

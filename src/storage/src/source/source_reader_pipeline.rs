@@ -68,7 +68,9 @@ use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
 use crate::metrics::StorageMetrics;
 use crate::metrics::source::SourceMetrics;
 use crate::source::reclock::ReclockOperator;
-use crate::source::types::{Probe, SourceMessage, SourceOutput, SourceRender, StackedCollection};
+use crate::source::types::{
+    Probe, ResumeUppers, SourceMessage, SourceOutput, SourceRender, StackedCollection,
+};
 use crate::statistics::SourceStatistics;
 
 /// Shared configuration information for all source types. This is used in the
@@ -160,13 +162,16 @@ impl RawSourceCreationConfig {
 /// See the [`source` module docs](crate::source) for more details about how raw
 /// sources are used.
 ///
-/// The `resume_stream` parameter will contain frontier updates whenever times are durably
-/// recorded which allows the ingestion to release upstream resources.
+/// The `committed_uppers` parameter contains one stream per export whose frontier advances
+/// whenever times are durably recorded for that export. They are reclocked into the
+/// [`ResumeUppers`] the source observes.
+///
+/// Alongside the reclocked exports this returns a no-data stream whose frontier is the remap upper.
 pub fn create_raw_source<'scope, 'root, C>(
     scope: Scope<'scope, mz_repr::Timestamp>,
     root_scope: Scope<'root, ()>,
     storage_state: &crate::storage_state::StorageState,
-    committed_upper: StreamVec<'scope, mz_repr::Timestamp, ()>,
+    committed_uppers: BTreeMap<GlobalId, StreamVec<'scope, mz_repr::Timestamp, ()>>,
     config: &RawSourceCreationConfig,
     source_connection: C,
     start_signal: impl std::future::Future<Output = ()> + 'static,
@@ -181,6 +186,7 @@ pub fn create_raw_source<'scope, 'root, C>(
         >,
     >,
     StreamVec<'root, (), HealthStatusMessage>,
+    StreamVec<'scope, mz_repr::Timestamp, ()>,
     Vec<PressOnDropButton>,
 )
 where
@@ -208,10 +214,17 @@ where
     let remap_collection = remap_collection.inner.broadcast().as_collection();
     tokens.push(remap_token);
 
-    let committed_upper = reclock_committed_upper(
+    // Drops the bidings, as this stream is only used to track the remap upper, which drives
+    // ceiling calculation in the persist sink during snapshots.
+    let remap_upper = remap_collection
+        .inner
+        .clone()
+        .flat_map::<Vec<()>, _, _>(|_| None::<()>);
+
+    let resume_uppers = reclock_committed_upper(
         remap_collection.clone(),
         config.as_of.clone(),
-        committed_upper,
+        committed_uppers,
         id,
         Arc::clone(&source_metrics),
     );
@@ -225,7 +238,7 @@ where
             config,
             source_connection,
             probed_upper_tx,
-            committed_upper,
+            resume_uppers,
             start_signal,
         );
 
@@ -255,7 +268,7 @@ where
 
     tokens.extend(source_tokens);
 
-    (reclocked_exports, health, tokens)
+    (reclocked_exports, health, remap_upper, tokens)
 }
 
 /// Renders the source dataflow fragment from the given [SourceConnection]. This returns a
@@ -265,7 +278,7 @@ fn source_render_operator<'scope, C>(
     config: &RawSourceCreationConfig,
     source_connection: C,
     probed_upper_tx: watch::Sender<Option<Probe<C::Time>>>,
-    resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
+    resume_uppers: impl futures::Stream<Item = ResumeUppers<C::Time>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     BTreeMap<GlobalId, StackedCollection<'scope, C::Time, Result<SourceMessage, DataflowError>>>,
@@ -278,9 +291,11 @@ where
     let source_id = config.id;
     let worker_id = config.worker_id;
 
-    let resume_uppers = resume_uppers.inspect(move |upper| {
-        let upper = upper.pretty();
-        trace!(%upper, "timely-{worker_id} source({source_id}) received resume upper");
+    let resume_uppers = resume_uppers.inspect(move |uppers| {
+        trace!(
+            %uppers,
+            "timely-{worker_id} source({source_id}) received resume uppers"
+        );
     });
 
     let (exports, health, probe_stream, tokens) =
@@ -556,28 +571,54 @@ where
     (remap_stream.as_collection(), button.press_on_drop())
 }
 
-/// Reclocks an `IntoTime` frontier stream into a `FromTime` frontier stream. This is used for the
-/// virtual (through persist) feedback edge so that we convert the `IntoTime` resumption frontier
-/// into the `FromTime` frontier that is used with the source's `OffsetCommiter`.
+/// Reclocks the per-export `IntoTime` committed upper streams into `FromTime` [`ResumeUppers`].
+/// This is used for the virtual (through persist) feedback edge so that we convert the `IntoTime`
+/// resumption frontiers into the `FromTime` frontiers that are used with the source's
+/// `OffsetCommiter`.
 fn reclock_committed_upper<'scope, T, FromTime>(
     bindings: VecCollection<'scope, T, FromTime, Diff>,
     as_of: Antichain<T>,
-    committed_upper: StreamVec<'scope, T, ()>,
+    committed_uppers: BTreeMap<GlobalId, StreamVec<'scope, T, ()>>,
     id: GlobalId,
     metrics: Arc<SourceMetrics>,
-) -> impl futures::stream::Stream<Item = Antichain<FromTime>> + 'static
+) -> impl futures::stream::Stream<Item = ResumeUppers<FromTime>> + 'static
 where
     T: Timestamp + Lattice + TotalOrder,
     FromTime: SourceTimestamp,
 {
-    let (tx, rx) = watch::channel(Antichain::from_elem(FromTime::minimum()));
+    // Only used within this function, rather than create a comment to explain the fields.
+    struct ExportState<FromTime> {
+        id: GlobalId,
+        input_index: usize,
+        source_upper: MutableAntichain<FromTime>,
+        applied: usize,
+    }
+
+    let (tx, rx) = watch::channel(ResumeUppers {
+        source: None,
+        exports: BTreeMap::new(),
+    });
     let scope = bindings.scope().clone();
 
     let name = format!("ReclockCommitUpper({id})");
     let mut builder = OperatorBuilderRc::new(name, scope);
 
     let mut bindings = builder.new_input(bindings.inner.clone(), Pipeline);
-    let _ = builder.new_input(committed_upper.clone(), Pipeline);
+
+    let mut exports: Vec<_> = committed_uppers
+        .into_iter()
+        .map(|(export_id, committed_upper)| {
+            let input_index = builder.shape().inputs();
+            // not reading data, just the frontiers
+            let _ = builder.new_input(committed_upper, Pipeline);
+            ExportState {
+                id: export_id,
+                input_index,
+                source_upper: MutableAntichain::new(),
+                applied: 0,
+            }
+        })
+        .collect();
 
     builder.build(move |_| {
         // Remap bindings beyond the upper
@@ -585,9 +626,13 @@ where
         let mut accepted_times: ChangeBatch<(T, FromTime)> = ChangeBatch::new();
         // The upper frontier of the bindings
         let mut upper = Antichain::from_elem(Timestamp::minimum());
-        // Remap bindings not beyond upper
+        // Remap bindings not beyond upper that some export has not yet applied, in `into` order.
+        // This is a shared queue of remap bindings. A binding is retained until every export has
+        // applied it.
         let mut ready_times = VecDeque::new();
-        let mut source_upper = MutableAntichain::new();
+        // The number of bindings dropped from the front of `ready_times`, which makes the
+        // per-export positions absolute rather than deque indices.
+        let mut drained = 0;
 
         move |frontiers| {
             // Accept new bindings
@@ -617,9 +662,22 @@ where
 
             // The received times only accumulate correctly for times beyond the as_of.
             if as_of.iter().all(|t| !upper.less_equal(t)) {
-                let committed_upper = frontiers[1].frontier();
-                if as_of.iter().all(|t| !committed_upper.less_equal(t)) {
-                    // We have committed this source up until `committed_upper`. Because we have
+                let mut resume_uppers = ResumeUppers {
+                    source: Some(Antichain::new()),
+                    exports: BTreeMap::new(),
+                };
+                // The export with the least committed upper. Its reclocked upper is the
+                // source-wide one, because t1 <= t2 => remap[t1] <= remap[t2].
+                let mut least: Option<(T, GlobalId)> = None;
+                let mut min_applied = drained + ready_times.len();
+                for export in exports.iter_mut() {
+                    let committed_upper = frontiers[export.input_index].frontier();
+                    if !as_of.iter().all(|t| !committed_upper.less_equal(t)) {
+                        resume_uppers.source = None;
+                        min_applied = min_applied.min(export.applied);
+                        continue;
+                    }
+                    // We have committed this export up until `committed_upper`. Because we have
                     // required that IntoTime is a total order this will be either a singleton set
                     // or the empty set.
                     //
@@ -661,19 +719,39 @@ where
                     // we can just assume TotalOrder.
                     let reclocked_upper = match committed_upper.as_option() {
                         Some(t_next) => {
-                            let idx = ready_times.partition_point(|(_, t, _)| t < t_next);
+                            let end = ready_times.partition_point(|(_, t, _)| t < t_next);
                             let updates = ready_times
-                                .drain(0..idx)
-                                .map(|(from_time, _, diff)| (from_time, diff));
-                            source_upper.update_iter(updates);
+                                .range(export.applied - drained..end)
+                                .map(|(from_time, _, diff)| (from_time.clone(), *diff));
+                            export.source_upper.update_iter(updates);
+                            export.applied = drained + end;
+                            if least.as_ref().is_none_or(|(t, _)| t_next < t) {
+                                least = Some((t_next.clone(), export.id));
+                            }
                             // At this point source_upper contains all updates that are less than
                             // t_next, which is equal to remap[t_prev]
-                            source_upper.frontier().to_owned()
+                            export.source_upper.frontier().to_owned()
                         }
-                        None => Antichain::new(),
+                        None => {
+                            export.applied = drained + ready_times.len();
+                            Antichain::new()
+                        }
                     };
-                    tx.send_replace(reclocked_upper);
+                    min_applied = min_applied.min(export.applied);
+                    resume_uppers.exports.insert(export.id, reclocked_upper);
                 }
+                if let (Some(source), Some((_, export_id))) = (&mut resume_uppers.source, least) {
+                    source.clone_from(&resume_uppers.exports[&export_id]);
+                }
+                ready_times.drain(..min_applied - drained);
+                drained = min_applied;
+                tx.send_if_modified(|published| {
+                    let modified = *published != resume_uppers;
+                    if modified {
+                        *published = resume_uppers;
+                    }
+                    modified
+                });
             }
 
             metrics
@@ -686,4 +764,223 @@ where
     });
 
     WatchStream::from_changes(rx)
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::FutureExt;
+    use futures::stream::LocalBoxStream;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_repr::Timestamp;
+    use mz_storage_types::sources::MzOffset;
+    use timely::dataflow::operators::Input;
+    use timely::dataflow::operators::vec::input::Handle;
+    use timely::worker::Worker;
+
+    use super::*;
+    use crate::metrics::source::GeneralSourceMetricDefs;
+
+    const A: GlobalId = GlobalId::User(1);
+    const B: GlobalId = GlobalId::User(2);
+
+    /// Drives `reclock_committed_upper` with an as_of of `{0}`. [`Harness::bind`] makes the source
+    /// frontier `10 * t` at each `IntoTime` `t`, so a committed upper of `{t}` reclocks to
+    /// `{10 * (t - 1)}`.
+    struct Harness {
+        bindings: Handle<Timestamp, (MzOffset, Timestamp, Diff)>,
+        committed_uppers: BTreeMap<GlobalId, Handle<Timestamp, ()>>,
+        resume_uppers: LocalBoxStream<'static, ResumeUppers<MzOffset>>,
+        metrics: Arc<SourceMetrics>,
+    }
+
+    impl Harness {
+        fn new(worker: &mut Worker, exports: &[GlobalId]) -> Self {
+            let defs = GeneralSourceMetricDefs::register_with(&MetricsRegistry::new());
+            let metrics = Arc::new(SourceMetrics::new(&defs, GlobalId::User(0), 0));
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (bindings, bindings_stream) = scope.new_input();
+                let mut committed_uppers = BTreeMap::new();
+                let mut streams = BTreeMap::new();
+                for id in exports {
+                    let (handle, stream) = scope.new_input();
+                    committed_uppers.insert(*id, handle);
+                    streams.insert(*id, stream);
+                }
+                let resume_uppers = reclock_committed_upper(
+                    bindings_stream.as_collection(),
+                    Antichain::from_elem(Timestamp::MIN),
+                    streams,
+                    GlobalId::User(0),
+                    Arc::clone(&metrics),
+                )
+                .boxed_local();
+                Harness {
+                    bindings,
+                    committed_uppers,
+                    resume_uppers,
+                    metrics,
+                }
+            })
+        }
+
+        /// Binds `IntoTime` `t` to the source frontier `{10 * t}` and closes the bindings through
+        /// `t`.
+        fn bind(&mut self, t: u64) {
+            if t > 0 {
+                self.bindings.send((
+                    MzOffset::from(10 * (t - 1)),
+                    Timestamp::from(t),
+                    Diff::MINUS_ONE,
+                ));
+            }
+            self.bindings
+                .send((MzOffset::from(10 * t), Timestamp::from(t), Diff::ONE));
+            self.bindings.advance_to(Timestamp::from(t + 1));
+        }
+
+        fn commit(&mut self, id: GlobalId, t: u64) {
+            self.committed_uppers
+                .get_mut(&id)
+                .expect("export is open")
+                .advance_to(Timestamp::from(t));
+        }
+
+        fn close(&mut self, id: GlobalId) {
+            self.committed_uppers.remove(&id);
+        }
+
+        /// Steps the dataflow until it is quiescent and returns the last value it published, if
+        /// it published any.
+        fn step(&mut self, worker: &mut Worker) -> Option<ResumeUppers<MzOffset>> {
+            // A single worker reaches quiescence within a few steps. Extra steps are no-ops.
+            for _ in 0..10 {
+                worker.step();
+            }
+            let mut latest = None;
+            while let Some(Some(uppers)) = self.resume_uppers.next().now_or_never() {
+                latest = Some(uppers);
+            }
+            latest
+        }
+
+        fn ready_times(&self) -> u64 {
+            self.metrics.commit_upper_ready_times.get()
+        }
+    }
+
+    fn uppers(
+        source: Option<Antichain<MzOffset>>,
+        exports: impl IntoIterator<Item = (GlobalId, Antichain<MzOffset>)>,
+    ) -> Option<ResumeUppers<MzOffset>> {
+        Some(ResumeUppers {
+            source,
+            exports: exports.into_iter().collect(),
+        })
+    }
+
+    fn offset(offset: u64) -> Antichain<MzOffset> {
+        Antichain::from_elem(MzOffset::from(offset))
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn reclock_committed_upper_reports_each_export() {
+        timely::execute_directly(|worker| {
+            let mut h = Harness::new(worker, &[A, B]);
+            for t in 0..=3 {
+                h.bind(t);
+            }
+            assert_eq!(h.step(worker), None, "no export is beyond the as_of");
+
+            h.commit(A, 3);
+            assert_eq!(
+                h.step(worker),
+                uppers(None, [(A, offset(20))]),
+                "B holds back the source upper until it is beyond the as_of",
+            );
+
+            h.commit(B, 2);
+            assert_eq!(
+                h.step(worker),
+                uppers(Some(offset(10)), [(A, offset(20)), (B, offset(10))]),
+                "the source upper is B's, the least",
+            );
+
+            h.commit(B, 4);
+            assert_eq!(
+                h.step(worker),
+                uppers(Some(offset(20)), [(A, offset(20)), (B, offset(30))]),
+                "the source upper is A's once B passes it",
+            );
+        });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn reclock_committed_upper_retains_bindings_for_slowest_export() {
+        timely::execute_directly(|worker| {
+            let mut h = Harness::new(worker, &[A, B]);
+            for t in 0..=3 {
+                h.bind(t);
+            }
+            h.commit(A, 4);
+            h.commit(B, 2);
+            assert_eq!(
+                h.step(worker),
+                uppers(Some(offset(10)), [(A, offset(30)), (B, offset(10))]),
+            );
+            // Seven updates bind times 0 through 3. B has applied the three below time 2.
+            assert_eq!(h.ready_times(), 4);
+
+            h.bind(4);
+            h.commit(A, 5);
+            assert_eq!(
+                h.step(worker),
+                uppers(Some(offset(10)), [(A, offset(40)), (B, offset(10))]),
+            );
+            assert_eq!(h.ready_times(), 6, "B has not applied the new bindings");
+
+            h.commit(B, 3);
+            assert_eq!(
+                h.step(worker),
+                uppers(Some(offset(20)), [(A, offset(40)), (B, offset(20))]),
+            );
+            assert_eq!(h.ready_times(), 4);
+
+            h.commit(B, 5);
+            assert_eq!(
+                h.step(worker),
+                uppers(Some(offset(40)), [(A, offset(40)), (B, offset(40))]),
+            );
+            assert_eq!(h.ready_times(), 0, "every export has applied every binding");
+        });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn reclock_committed_upper_closed_exports() {
+        timely::execute_directly(|worker| {
+            let mut h = Harness::new(worker, &[A, B]);
+            for t in 0..=3 {
+                h.bind(t);
+            }
+            h.commit(B, 2);
+            h.close(A);
+            assert_eq!(
+                h.step(worker),
+                uppers(Some(offset(10)), [(A, Antichain::new()), (B, offset(10))]),
+                "a closed export does not constrain the source upper",
+            );
+
+            h.close(B);
+            assert_eq!(
+                h.step(worker),
+                uppers(
+                    Some(Antichain::new()),
+                    [(A, Antichain::new()), (B, Antichain::new())],
+                ),
+            );
+            assert_eq!(h.ready_times(), 0);
+        });
+    }
 }

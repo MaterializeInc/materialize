@@ -16,7 +16,10 @@ use mz_ore::metrics::{
     remove_children_with_label,
 };
 use mz_ore::stats::{histogram_milliseconds_buckets, histogram_seconds_buckets};
-use mz_sql::ast::{AstInfo, Statement, StatementKind, SubscribeOutput};
+use mz_sql::ast::{
+    AsOf, AstInfo, CopyRelation, CopyStatement, SelectStatement, Statement, StatementKind,
+    SubscribeOutput, SubscribeStatement,
+};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::IsolationLevel;
@@ -46,6 +49,7 @@ pub struct Metrics {
     pub hydration_history_rows_affected: IntCounterVec,
     pub hydration_history_sweep_duration_seconds: Histogram,
     pub subscribe_outputs: IntCounterVec,
+    pub as_of_queries: IntCounterVec,
     pub canceled_peeks: IntCounter,
     pub linearize_message_seconds: HistogramVec,
     pub statement_logging_records: IntCounterVec,
@@ -159,6 +163,11 @@ impl Metrics {
                 name: "mz_subscribe_outputs",
                 help: "The total number of different subscribe outputs used",
                 var_labels: ["session_type", "subscribe_output"],
+            )),
+            as_of_queries: registry.register(metric!(
+                name: "mz_as_of_queries_total",
+                help: "The total number of SELECT and SUBSCRIBE executions with an AS OF clause.",
+                var_labels: ["session_type", "kind", "statement", "application_name"],
             )),
             canceled_peeks: registry.register(metric!(
                 name: "mz_canceled_peeks_total",
@@ -321,6 +330,7 @@ impl Metrics {
             session_startup_table_writes_seconds: self.session_startup_table_writes_seconds.clone(),
             query_total: self.query_total.clone(),
             subscribe_outputs: self.subscribe_outputs.clone(),
+            as_of_queries: self.as_of_queries.clone(),
             by_cluster: self.by_cluster.clone(),
             optimization_notices: self.optimization_notices.clone(),
             statement_logging_records: self.statement_logging_records.clone(),
@@ -337,6 +347,7 @@ pub struct SessionMetrics {
     session_startup_table_writes_seconds: Histogram,
     query_total: IntCounterVec,
     subscribe_outputs: IntCounterVec,
+    as_of_queries: IntCounterVec,
     by_cluster: ClusterLabeledMetrics,
     optimization_notices: IntCounterVec,
     statement_logging_records: IntCounterVec,
@@ -359,6 +370,10 @@ impl SessionMetrics {
 
     pub(crate) fn subscribe_outputs(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
         self.subscribe_outputs.with_label_values(label_values)
+    }
+
+    pub(crate) fn as_of_queries(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
+        self.as_of_queries.with_label_values(label_values)
     }
 
     pub(crate) fn by_cluster(&self) -> &ClusterLabeledMetrics {
@@ -410,6 +425,47 @@ where
         SubscribeOutput::EnvelopeUpsert { .. } => "envelope_upsert",
         SubscribeOutput::EnvelopeDebezium { .. } => "envelope_debezium",
     }
+}
+
+/// Returns the `mz_as_of_queries_total` label values for an execution of `stmt`, or `None` if
+/// `stmt` is not a `SELECT` or `SUBSCRIBE` with an `AS OF` clause. A `COPY` counts as the
+/// statement it copies.
+pub(crate) fn as_of_query_label_values<T>(
+    session_type: &'static str,
+    application_name: ApplicationNameHint,
+    stmt: &Statement<T>,
+) -> Option<[&'static str; 4]>
+where
+    T: AstInfo,
+{
+    let (as_of, statement) = match stmt {
+        Statement::Select(SelectStatement {
+            as_of: Some(as_of), ..
+        })
+        | Statement::Copy(CopyStatement {
+            relation:
+                CopyRelation::Select(SelectStatement {
+                    as_of: Some(as_of), ..
+                }),
+            ..
+        }) => (as_of, "select"),
+        Statement::Subscribe(SubscribeStatement {
+            as_of: Some(as_of), ..
+        })
+        | Statement::Copy(CopyStatement {
+            relation:
+                CopyRelation::Subscribe(SubscribeStatement {
+                    as_of: Some(as_of), ..
+                }),
+            ..
+        }) => (as_of, "subscribe"),
+        _ => return None,
+    };
+    let kind = match as_of {
+        AsOf::At(_) => "at",
+        AsOf::AtLeast(_) => "at_least",
+    };
+    Some([session_type, kind, statement, application_name.as_str()])
 }
 
 /// Adapter metrics whose series carry a cluster id label.

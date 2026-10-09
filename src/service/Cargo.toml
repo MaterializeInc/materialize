@@ -14,15 +14,10 @@ anyhow.workspace = true
 async-stream.workspace = true
 async-trait.workspace = true
 bincode.workspace = true
-clap = { workspace = true, features = ["env"] }
 futures.workspace = true
 itertools.workspace = true
-mz-aws-secrets-controller = { path = "../aws-secrets-controller", default-features = false }
 mz-build-info = { path = "../build-info", default-features = false }
-mz-secrets = { path = "../secrets", default-features = false }
-mz-orchestrator-process = { path = "../orchestrator-process", default-features = false }
-mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes", default-features = false }
-mz-ore = { path = "../ore", default-features = false }
+mz-ore = { path = "../ore", default-features = false, features = ["network"] }
 os_info.workspace = true
 pin-project.workspace = true
 prometheus.workspace = true
@@ -32,7 +27,6 @@ sysinfo.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true
-sentry-tracing.workspace = true
 
 [dev-dependencies]
 mz-ore = { path = "../ore", features = ["test", "turmoil"] }

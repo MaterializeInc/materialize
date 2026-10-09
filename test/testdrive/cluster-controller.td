@@ -175,13 +175,11 @@ scale=1,workers=1
 # ----- Non-shape changes while a reconfiguration is in flight -----
 #
 # The WAIT-without-shape rejection is planner-level and covered in
-# managed_cluster.slt. Asserted here: the replication factor is refused while
-# a reconfiguration is in flight because cut-over sets it atomically from the
-# record's target. A WORKLOAD CLASS change applies immediately without
+# managed_cluster.slt. A WORKLOAD CLASS change applies immediately without
 # disturbing the reconfiguration.
 #
 # A sleeping dataflow keeps the target from hydrating, so controller wakeups
-# cannot settle the reconfiguration before the refusal assertions. `mz_sleep`
+# cannot settle the reconfiguration before the schedule assertion. `mz_sleep`
 # blocks the worker thread and dropping the view does not interrupt a sleep
 # already in flight, so unlike the rest of this file the duration is bounded:
 # this section asserts the convergence that happens once it expires.
@@ -197,10 +195,7 @@ ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
 
 > ALTER CLUSTER cc_nonshape SET (SIZE 'scale=1,workers=2')
 
-! ALTER CLUSTER cc_nonshape SET (REPLICATION FACTOR 2)
-contains:cannot change replication factor while a reconfiguration is in progress
-
-# The schedule is refused the same way: it decides which strategy owns the
+# The schedule is refused: it decides which strategy owns the
 # replica set, so it cannot flip under an in-flight record.
 ! ALTER CLUSTER cc_nonshape SET (SCHEDULE = ON REFRESH)
 contains:cannot change the cluster schedule while a reconfiguration is in progress
@@ -651,6 +646,7 @@ in-progress
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET max_replicas_per_cluster = 2
+ALTER SYSTEM SET max_credit_consumption_rate = 0
 
 > ALTER CLUSTER cc_limit_cancel SET (SIZE 'scale=1,workers=1')
 > SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters c ON c.id = recon.cluster_id WHERE c.name = 'cc_limit_cancel'
@@ -664,6 +660,7 @@ scale=1,workers=1 3
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
 ALTER SYSTEM RESET max_replicas_per_cluster
+ALTER SYSTEM RESET max_credit_consumption_rate
 
 # ----- The controller reports a reshape that exceeds the replica budget -----
 #
@@ -1695,9 +1692,8 @@ scale=1,workers=2 2
 > SELECT r.size, count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_cutover' GROUP BY r.size
 scale=1,workers=2 2
 
-# A factor change while a record is in flight is refused on every path: the
-# record's cut-over writes its target factor, which would silently clobber the
-# change.
+# Factor-only changes retarget the in-flight record without changing the
+# realized configuration or losing the pending size.
 > ALTER CLUSTER cc_cutover SET (SIZE 'scale=1,workers=4')
 
 > SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_cutover'
@@ -1706,29 +1702,48 @@ in-progress
 scale=1,workers=2 2
 scale=1,workers=4 2
 
+# Budget for the pending baseline's 8 credits, excluding the realized set's
+# 4 credits. RF3 must fail synchronously: its target costs 12, not the 6 it
+# would cost at the realized size. Restating RF2 fits exactly, even though
+# the live overlap exceeds the budget.
+$ set-from-sql var=retarget_credit_limit
+SELECT (sum(s.credits_per_hour) - 4)::text FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id JOIN mz_catalog.mz_cluster_replica_sizes s ON r.size = s.size WHERE c.id LIKE 'u%'
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET max_credit_consumption_rate = ${retarget_credit_limit}
+
 ! ALTER CLUSTER cc_cutover SET (REPLICATION FACTOR 3)
-contains:cannot change replication factor while a reconfiguration is in progress
+contains: creating cluster replica would violate max_credit_consumption_rate limit
 
-# No path is exempt, a zero-timeout commit included: it writes a record like any
-# other, and that record's cut-over would restore the target factor a tick
-# later.
-! ALTER CLUSTER cc_cutover SET (SIZE 'scale=1,workers=4', REPLICATION FACTOR 1) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
-contains:cannot change replication factor while a reconfiguration is in progress
+> ALTER CLUSTER cc_cutover SET (REPLICATION FACTOR 2)
+> SELECT size, replication_factor FROM mz_clusters WHERE name = 'cc_cutover'
+scale=1,workers=2 2
+> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_cutover'
+in-progress
 
-# Forcing a wedged resize through and scaling down therefore takes two
-# statements: commit the record with a zero-timeout WAIT, then change the factor
-# once nothing is in flight. The factor is untouched by the commit (the record
-# carries the realized 2 as its target), so only the size moves here.
-> ALTER CLUSTER cc_cutover SET (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM RESET max_credit_consumption_rate
 
-> SELECT size FROM mz_clusters WHERE name = 'cc_cutover'
-scale=1,workers=4
+> ALTER CLUSTER cc_cutover SET (REPLICATION FACTOR 3)
+
+> SELECT size, replication_factor FROM mz_clusters WHERE name = 'cc_cutover'
+scale=1,workers=2 2
 > SELECT r.size, count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_cutover' GROUP BY r.size
+scale=1,workers=2 2
+scale=1,workers=4 3
+
+# Lowering the target back to the realized factor is not a no-op. The target
+# set shrinks while the resize remains in flight.
+> ALTER CLUSTER cc_cutover SET (REPLICATION FACTOR 2)
+> SELECT r.size, count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_cutover' GROUP BY r.size
+scale=1,workers=2 2
 scale=1,workers=4 2
 > SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_cutover'
-finalized
+in-progress
 
-> ALTER CLUSTER cc_cutover SET (REPLICATION FACTOR 1)
+# An RF-only alter can update the timeout and force the new target through
+# without restating the pending size.
+> ALTER CLUSTER cc_cutover SET (REPLICATION FACTOR 1) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
 
 > SELECT size, replication_factor FROM mz_clusters WHERE name = 'cc_cutover'
 scale=1,workers=4 1
@@ -1737,6 +1752,44 @@ scale=1,workers=4 1
 
 > DROP CLUSTER cc_cutover CASCADE
 > DROP TABLE cc_cutover_t
+
+# ----- Retargeting a reconfiguration that started at RF0 (SQL-753) -----
+#
+# The sleeping view keeps the target unready. RF0 must still be reachable,
+# both by cancelling back to the realized configuration and by finalizing the
+# pending size with zero replicas, which requires no hydration.
+> CREATE CLUSTER cc_rf_zero (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0)
+> CREATE TABLE cc_rf_zero_t (id int)
+> INSERT INTO cc_rf_zero_t VALUES (1)
+> CREATE MATERIALIZED VIEW cc_rf_zero_slow IN CLUSTER cc_rf_zero AS
+  SELECT mz_unsafe.mz_sleep(id * 3600) AS s FROM cc_rf_zero_t
+
+> ALTER CLUSTER cc_rf_zero SET (SIZE 'scale=1,workers=2', REPLICATION FACTOR 1)
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_rf_zero'
+1
+
+> ALTER CLUSTER cc_rf_zero SET (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0)
+> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_rf_zero'
+cancelled
+> SELECT size, replication_factor FROM mz_clusters WHERE name = 'cc_rf_zero'
+scale=1,workers=1 0
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_rf_zero'
+0
+
+> ALTER CLUSTER cc_rf_zero SET (SIZE 'scale=1,workers=2', REPLICATION FACTOR 1)
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_rf_zero'
+1
+
+> ALTER CLUSTER cc_rf_zero SET (REPLICATION FACTOR 0)
+> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_rf_zero'
+finalized
+> SELECT size, replication_factor FROM mz_clusters WHERE name = 'cc_rf_zero'
+scale=1,workers=2 0
+> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_rf_zero'
+0
+
+> DROP CLUSTER cc_rf_zero CASCADE
+> DROP TABLE cc_rf_zero_t
 
 # ----- A forced cut-over preserves an active hydration burst -----
 #

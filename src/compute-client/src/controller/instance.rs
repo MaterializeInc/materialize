@@ -141,13 +141,6 @@ pub(super) struct Instance {
     workload_class: Option<String>,
     /// The replicas of this compute instance.
     replicas: BTreeMap<ReplicaId, ReplicaState>,
-    /// Per-replica dyncfg overrides, merged into the `UpdateConfiguration`
-    /// command sent to each replica (and into the command-history replay used
-    /// to hydrate new replicas). Populated from the scoped feature flags
-    /// (replica-local) layer; empty by default, in which case every replica
-    /// receives the unmodified environment-wide configuration. Stores only the
-    /// values that differ from the environment-wide value, so the map is sparse.
-    replica_dyncfg_overrides: BTreeMap<ReplicaId, ConfigUpdates>,
     /// Currently installed compute collections.
     ///
     /// New entries are added for all collections exported from dataflows created through
@@ -353,6 +346,7 @@ impl Instance {
         client: ReplicaClient,
         config: ReplicaConfig,
         epoch: u64,
+        dyncfg_override: ConfigUpdates,
     ) -> Result<(), read_holds::ReadHoldIssuerHungUp> {
         let log_ids: BTreeSet<_> = config.logging.index_logs.values().copied().collect();
 
@@ -364,6 +358,7 @@ impl Instance {
             metrics,
             self.introspection_tx.clone(),
             epoch,
+            dyncfg_override,
         );
 
         // Add per-replica collection state.
@@ -882,7 +877,6 @@ impl Instance {
             read_only,
             workload_class,
             replicas,
-            replica_dyncfg_overrides: _,
             collections,
             log_sources: _,
             peeks,
@@ -988,7 +982,6 @@ impl Instance {
             read_only,
             workload_class: None,
             replicas: Default::default(),
-            replica_dyncfg_overrides: Default::default(),
             collections,
             log_sources,
             peeks: Default::default(),
@@ -1139,20 +1132,20 @@ impl Instance {
 
         let target_replica = self.target_replica(&cmd);
 
-        // Borrow the overrides and dyncfg separately from `self.replicas` so the per-replica
-        // specialization below does not conflict with the mutable replica borrow.
-        let overrides = &self.replica_dyncfg_overrides;
         let dyncfg = &self.dyncfg;
-
         if let Some(rid) = target_replica {
             if let Some(replica) = self.replicas.get_mut(&rid) {
-                let cmd = Self::specialize_command_for_replica(cmd, rid, overrides, dyncfg);
+                let cmd =
+                    Self::specialize_command_for_replica(cmd, &replica.dyncfg_override, dyncfg);
                 let _ = replica.client.send(cmd);
             }
         } else {
-            for (rid, replica) in self.replicas.iter_mut() {
-                let cmd =
-                    Self::specialize_command_for_replica(cmd.clone(), *rid, overrides, dyncfg);
+            for replica in self.replicas.values_mut() {
+                let cmd = Self::specialize_command_for_replica(
+                    cmd.clone(),
+                    &replica.dyncfg_override,
+                    dyncfg,
+                );
                 let _ = replica.client.send(cmd);
             }
         }
@@ -1167,24 +1160,18 @@ impl Instance {
     /// and override values current at the time the command is sent or replayed to the replica.
     fn specialize_command_for_replica(
         mut cmd: ComputeCommand,
-        replica_id: ReplicaId,
-        overrides: &BTreeMap<ReplicaId, ConfigUpdates>,
+        dyncfg_override: &ConfigUpdates,
         dyncfg: &ConfigSet,
     ) -> ComputeCommand {
-        let over = overrides.get(&replica_id);
         match &mut cmd {
             ComputeCommand::UpdateConfiguration(params) => {
-                if let Some(over) = over
-                    && !over.updates.is_empty()
-                {
-                    params.dyncfg_updates.extend(over.clone());
+                if !dyncfg_override.updates.is_empty() {
+                    params.dyncfg_updates.extend(dyncfg_override.clone());
                 }
             }
             ComputeCommand::CreateInstance(config) => {
                 let mut initial = ConfigUpdates::from(dyncfg);
-                if let Some(over) = over {
-                    initial.extend(over.clone());
-                }
+                initial.extend(dyncfg_override.clone());
                 config.initial_config = initial;
             }
             _ => {}
@@ -1192,14 +1179,16 @@ impl Instance {
         cmd
     }
 
-    /// Replaces the per-replica dyncfg overrides. Callers should follow this
-    /// with a configuration push (e.g. `update_configuration`) so that existing
-    /// replicas observe the new overrides.
+    /// Replaces the dyncfg overrides of this instance's replicas. A replica absent from
+    /// `overrides` has its override cleared. Callers should follow this with a configuration push
+    /// (e.g. `update_configuration`) so that existing replicas observe the new overrides.
     pub(super) fn update_replica_dyncfg_overrides(
         &mut self,
-        overrides: BTreeMap<ReplicaId, ConfigUpdates>,
+        mut overrides: BTreeMap<ReplicaId, ConfigUpdates>,
     ) {
-        self.replica_dyncfg_overrides = overrides;
+        for (id, replica) in self.replicas.iter_mut() {
+            replica.dyncfg_override = overrides.remove(id).unwrap_or_default();
+        }
     }
 
     /// Determine the target replica for a compute command. Retrieves the
@@ -1239,12 +1228,16 @@ impl Instance {
     }
 
     /// Add a new instance replica, by ID.
+    ///
+    /// `dyncfg_override` holds the replica's scoped parameters, which every configuration
+    /// command sent or replayed to the replica carries.
     #[mz_ore::instrument(level = "debug")]
     pub fn add_replica(
         &mut self,
         id: ReplicaId,
         mut config: ReplicaConfig,
         epoch: Option<u64>,
+        dyncfg_override: ConfigUpdates,
     ) -> Result<(), ReplicaExists> {
         if self.replica_exists(id) {
             return Err(ReplicaExists(id));
@@ -1283,8 +1276,7 @@ impl Instance {
             // create-instance snapshot from the current dyncfg.
             let command = Self::specialize_command_for_replica(
                 command.clone(),
-                id,
-                &self.replica_dyncfg_overrides,
+                &dyncfg_override,
                 &self.dyncfg,
             );
             if client.send(command).is_err() {
@@ -1296,7 +1288,10 @@ impl Instance {
         }
 
         // Add replica to tracked state.
-        if self.add_replica_state(id, client, config, epoch).is_err() {
+        if self
+            .add_replica_state(id, client, config, epoch, dyncfg_override)
+            .is_err()
+        {
             // A storage read hold issuer hung up, which only happens during process shutdown.
             // There is no way to correctly bring up the replica anymore, so we shut the instance
             // down instead of running on with half-initialized replica state. `add_replica_state`
@@ -1312,11 +1307,6 @@ impl Instance {
     #[mz_ore::instrument(level = "debug")]
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
         let replica = self.replicas.remove(&id).ok_or(ReplicaMissing(id))?;
-
-        // The coordinator only re-pushes the override map when the scoped configuration itself
-        // changes, so a dropped replica's entry would otherwise be retained until the next such
-        // change.
-        self.replica_dyncfg_overrides.remove(&id);
 
         // Before dropping the replica state (and the contained input read holds), log read holds
         // that are the last line of defense against compaction of a dataflow's storage inputs. If
@@ -1399,11 +1389,13 @@ impl Instance {
     ///
     /// Panics if the specified replica does not exist.
     fn rehydrate_replica(&mut self, id: ReplicaId) {
-        let config = self.replicas[&id].config.clone();
-        let epoch = self.replicas[&id].epoch + 1;
+        let replica = &self.replicas[&id];
+        let config = replica.config.clone();
+        let epoch = replica.epoch + 1;
+        let dyncfg_override = replica.dyncfg_override.clone();
 
         self.remove_replica(id).expect("replica must exist");
-        let result = self.add_replica(id, config, Some(epoch));
+        let result = self.add_replica(id, config, Some(epoch), dyncfg_override);
 
         match result {
             Ok(()) => (),
@@ -1591,6 +1583,7 @@ impl Instance {
                 up_to: se.up_to,
                 non_null_assertions: se.non_null_assertions,
                 refresh_schedule: se.refresh_schedule,
+                from_arrangement: se.from_arrangement,
             };
             sink_exports.insert(id, desc);
         }
@@ -3131,6 +3124,10 @@ struct ReplicaState {
     collections: BTreeMap<GlobalId, ReplicaCollectionState>,
     /// The epoch of the replica.
     epoch: u64,
+    /// The replica's dyncfg override, merged into every configuration command sent or replayed
+    /// to it. Holds only the scoped values that differ from the environment-wide configuration,
+    /// and is empty for a replica without scoped parameters.
+    dyncfg_override: ConfigUpdates,
 }
 
 impl ReplicaState {
@@ -3141,6 +3138,7 @@ impl ReplicaState {
         metrics: ReplicaMetrics,
         introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
         epoch: u64,
+        dyncfg_override: ConfigUpdates,
     ) -> Self {
         Self {
             id,
@@ -3149,6 +3147,7 @@ impl ReplicaState {
             metrics,
             introspection_tx,
             epoch,
+            dyncfg_override,
             collections: Default::default(),
         }
     }
@@ -3230,6 +3229,7 @@ impl ReplicaState {
             metrics: _,
             introspection_tx: _,
             epoch,
+            dyncfg_override,
             collections,
         } = self;
 
@@ -3242,6 +3242,7 @@ impl ReplicaState {
             "id": id.to_string(),
             "collections": collections,
             "epoch": epoch,
+            "dyncfg_override": format!("{dyncfg_override:?}"),
         }))
     }
 }
@@ -3512,7 +3513,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeSet;
 
     use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_MZ_JOIN_CORE};
     use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
@@ -3757,11 +3758,9 @@ mod tests {
         updates.apply(&dyncfg);
 
         // A replica without an override sees exactly the instance-wide values.
-        let overrides = BTreeMap::new();
         let cmd = Instance::specialize_command_for_replica(
             create_instance_command(),
-            ReplicaId::User(1),
-            &overrides,
+            &ConfigUpdates::default(),
             &dyncfg,
         );
         let snapshot = initial_config(&cmd);
@@ -3784,15 +3783,12 @@ mod tests {
         updates.add(&ENABLE_COLUMN_PAGED_BATCHER, true);
         updates.apply(&dyncfg);
 
-        let replica = ReplicaId::User(1);
         let mut override_updates = ConfigUpdates::default();
         override_updates.add(&ENABLE_COLUMN_PAGED_BATCHER, false);
-        let overrides = BTreeMap::from([(replica, override_updates)]);
 
         let cmd = Instance::specialize_command_for_replica(
             create_instance_command(),
-            replica,
-            &overrides,
+            &override_updates,
             &dyncfg,
         );
         assert_eq!(
@@ -3809,15 +3805,12 @@ mod tests {
     fn update_configuration_merges_replica_override() {
         let dyncfg = ConfigSet::default().add(&ENABLE_COLUMN_PAGED_BATCHER);
 
-        let replica = ReplicaId::User(1);
         let mut override_updates = ConfigUpdates::default();
         override_updates.add(&ENABLE_COLUMN_PAGED_BATCHER, true);
-        let overrides = BTreeMap::from([(replica, override_updates)]);
 
         let cmd = Instance::specialize_command_for_replica(
             ComputeCommand::UpdateConfiguration(Box::new(Default::default())),
-            replica,
-            &overrides,
+            &override_updates,
             &dyncfg,
         );
         match cmd {

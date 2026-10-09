@@ -118,7 +118,7 @@ describe("IncidentStatusWidget", () => {
     );
 
     // Asserts that Testing Library's findByText won't be able to find the text
-    expect(
+    await expect(
       (async () => {
         await screen.findByText("Error was not guarded", undefined, {
           timeout: 1000,

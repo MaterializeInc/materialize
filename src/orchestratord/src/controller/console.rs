@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use k8s_controller::TraceMetadata;
+use k8s_controller::{Outcome, TraceMetadata};
 use k8s_openapi::{
     api::{
         apps::v1::{Deployment, DeploymentSpec},
@@ -50,6 +50,10 @@ use mz_cloud_resources::crd::{
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_ore::{cli::KeyValueArg, instrument};
 use mz_server_core::listeners::AuthenticatorKind;
+
+/// The name identifying this controller in its reconciliation metrics and in
+/// the reporter of the events it publishes.
+pub const CONTROLLER_NAME: &str = "console";
 
 #[derive(Clone)]
 pub struct Config {
@@ -587,9 +591,10 @@ impl k8s_controller::Context for Context {
         &self,
         client: Client,
         console: &Self::Resource,
-        _metadata: &mut TraceMetadata,
+        metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error> {
         if console.status.is_none() {
+            let step = metadata.step("initialize_status");
             let console_api: Api<Console> =
                 Api::namespaced(client.clone(), &console.meta().namespace.clone().unwrap());
             let mut new_console = console.clone();
@@ -601,6 +606,7 @@ impl k8s_controller::Context for Context {
                     &new_console,
                 )
                 .await?;
+            step.finish(Outcome::Completed);
             // Updating the status should trigger a reconciliation
             // which will include a status this time.
             return Ok(None);
@@ -613,33 +619,51 @@ impl k8s_controller::Context for Context {
         let service_api: Api<Service> = Api::namespaced(client.clone(), &namespace);
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), &namespace);
 
+        let step = metadata.step("network_policies");
         trace!("creating new network policies");
         let network_policies = self.create_network_policies(console);
         for network_policy in &network_policies {
             apply_resource(&network_policy_api, network_policy).await?;
         }
+        step.finish(if network_policies.is_empty() {
+            Outcome::Skipped
+        } else {
+            Outcome::Completed
+        });
 
+        let step = metadata.step("configmap");
         trace!("creating new console configmap");
         let console_configmap = self.create_console_app_configmap_object(console);
         apply_resource(&configmap_api, &console_configmap).await?;
+        step.finish(Outcome::Completed);
 
+        let step = metadata.step("deployment");
         trace!("creating new console deployment");
         let console_deployment = self.create_console_deployment_object(console);
         self.fix_deployment(&deployment_api, &console_deployment)
             .await?;
         apply_resource(&deployment_api, &console_deployment).await?;
+        step.finish(Outcome::Completed);
 
+        let step = metadata.step("service");
         trace!("creating new console service");
         let console_service = self.create_console_service_object(console);
         apply_resource(&service_api, &console_service).await?;
+        step.finish(Outcome::Completed);
 
+        let step = metadata.step("certificate");
         let console_external_certificate = self.create_console_external_certificate(console)?;
         if let Some(certificate) = &console_external_certificate {
             trace!("creating new console external certificate");
             apply_resource(&certificate_api, certificate).await?;
+            step.finish(Outcome::Completed);
+        } else {
+            step.finish(Outcome::Skipped);
         }
 
+        let step = metadata.step("sync_status");
         self.sync_deployment_status(&client, console).await?;
+        step.finish(Outcome::Completed);
 
         Ok(None)
     }

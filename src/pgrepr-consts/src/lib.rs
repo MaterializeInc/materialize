@@ -9,5 +9,8 @@
 
 //! Constants used in the representation of and serialization for PostgreSQL datums.
 
+mod format;
 pub mod oid;
 pub mod regproc;
+
+pub use format::Format;

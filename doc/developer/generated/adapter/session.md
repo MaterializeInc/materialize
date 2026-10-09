@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/session.rs
-revision: b0d4c751f6
+revision: bb5c454adc
 ---
 
 # adapter::session

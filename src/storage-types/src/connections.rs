@@ -67,7 +67,7 @@ use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use regex::Regex;
 use reqsign_core::time::Timestamp;
-use reqwest::Request;
+use reqwest_0_12::Request;
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::net;
 use tokio::runtime::Handle;
@@ -811,7 +811,7 @@ pub struct IcebergCatalogConnection<C: ConnectionAccess = InlinedConnection> {
     /// The catalog impl impl of that catalog
     pub catalog: IcebergCatalogImpl<C>,
     /// Where the catalog is located
-    pub uri: reqwest::Url,
+    pub uri: reqwest_0_12::Url,
 }
 
 impl AlterCompatible for IcebergCatalogConnection {
@@ -1054,7 +1054,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
     async fn vended_credential_endpoint(
         &self,
         rest: &RestIcebergCatalog,
-        client: &reqwest::Client,
+        client: &reqwest_0_12::Client,
         token: &Arc<dyn TokenProvider>,
         headers: &HeaderMap,
         table: Option<&TableIdent>,
@@ -1078,7 +1078,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
     /// Builds a GCS storage factory, refreshing vended credentials from `endpoint` if there is one.
     fn gcs_storage_factory(
         endpoint: Option<Url>,
-        client: &reqwest::Client,
+        client: &reqwest_0_12::Client,
         token: &Arc<dyn TokenProvider>,
         headers: &HeaderMap,
     ) -> OpenDalStorageFactory {
@@ -1112,7 +1112,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
 
         // One client for catalog requests, OAuth token requests, and credential refreshes, so all
         // three share a connection pool. `iceberg-rust` would otherwise default to its own.
-        let client = reqwest::Client::new();
+        let client = reqwest_0_12::Client::new();
 
         // Catalog auth is configured through a combination of `props` and `.with_authenticator(...)`,
         // which happen at different stages of the [`RestCatalogBuilder`] -> [`RestCatalog`]
@@ -1737,9 +1737,6 @@ impl KafkaConnection {
             ),
         };
 
-        // TODO(roshan): Implement enforcement of external address validation once
-        // rdkafka client has been updated to support providing multiple resolved
-        // addresses for brokers
         let mut context = TunnelingClientContext::new(
             context,
             Handle::current(),
@@ -1750,6 +1747,7 @@ impl KafkaConnection {
             storage_configuration.parameters.ssh_timeout_config,
             aws_config,
             in_task,
+            ENFORCE_EXTERNAL_ADDRESSES.get(storage_configuration.config_set()),
         );
 
         match &self.default_tunnel {
@@ -1871,7 +1869,9 @@ impl KafkaConnection {
             }
         }
 
-        Ok(config.create_with_context(context)?)
+        Ok(mz_kafka_util::client::create_with_context(
+            &config, context,
+        )?)
     }
 
     async fn validate(

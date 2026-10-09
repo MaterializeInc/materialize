@@ -28,12 +28,12 @@ def main() -> None:
         },
         size_gb=64,
     )
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.UTC)
     scratch.launch_cluster(
         [desc],
-        nonce=now.replace(tzinfo=datetime.timezone.utc).isoformat(),
+        nonce=now.replace(tzinfo=datetime.UTC).isoformat(),
         # Keep alive for at least a day.
-        delete_after=datetime.datetime.utcnow() + datetime.timedelta(days=1),
+        delete_after=datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=1),
     )
 
 

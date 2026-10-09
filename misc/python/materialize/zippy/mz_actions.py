@@ -181,7 +181,7 @@ class Mz0dtDeploy(Mz0dtDeployBaseAction):
             )
             c.promote_mz(
                 state.mz_service,
-                retire=(
+                retire_mz_service=(
                     "materialized2"
                     if state.mz_service == "materialized"
                     else "materialized"

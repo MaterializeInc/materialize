@@ -32,8 +32,8 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
+use mz_secrets_cli::SecretsReaderCliArgs;
 use mz_service::emit_boot_diagnostics;
-use mz_service::secrets::SecretsReaderCliArgs;
 use mz_service::transport;
 use mz_service::transport::ClusterServerMetrics;
 use mz_storage::storage_state::StorageInstanceContext;
@@ -281,9 +281,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         info!("no heap limit announced; disabling memory limiter");
     }
 
-    let secrets_reader = args
-        .secrets
-        .load()
+    let secrets_reader = mz_secrets_loader::load(args.secrets)
         .await
         .context("loading secrets reader")?;
 

@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { Box, HStack, Text, useTheme } from "@chakra-ui/react";
-import { TooltipInPortalProps } from "@visx/tooltip/lib/hooks/useTooltipInPortal";
+import { TooltipInPortalProps } from "@visx/tooltip";
 import React from "react";
 
 import { GraphTooltip, TooltipColorSwatch } from "~/components/graphComponents";

@@ -19,7 +19,7 @@ use differential_dataflow::trace::Batcher;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ColumnChunk};
+use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ColumnChunk, ComputeSpill};
 use mz_timely_util::columnar::columnar_exchange_data;
 use mz_timely_util::temporal::{Bucket, BucketChain, BucketRange, BucketTimestamp};
 use timely::Accountable;
@@ -158,11 +158,10 @@ where
                 let peeled = chain.peel(upper.borrow());
                 if let Some(cap) = cap.as_ref() {
                     let mut session = output.session_with_builder(cap);
-                    // The chain hands back chunks whose bodies load into a
-                    // `Column` already in the output's shape, so each one moves as
-                    // a container.
+                    // The chain hands back chunks whose bodies go back onto the
+                    // edge container as a move, so each one ships as a container.
                     for chunk in peeled.into_iter().flat_map(|x| x.done()) {
-                        let mut column = chunk.into_column();
+                        let mut column = Column::from(chunk.into_body());
                         session.give_container(&mut column);
                     }
                 } else {
@@ -290,10 +289,9 @@ where
                     if let Some(cap) = cap.as_ref() {
                         let mut session = output.session_with_builder(cap);
                         for chunk in peeled.into_iter().flat_map(|x| x.done()) {
-                            let column = chunk.into_column();
+                            let body = chunk.into_body();
                             session.give_iterator(
-                                column
-                                    .borrow()
+                                body.borrow()
                                     .into_index_iter()
                                     .map(<(D, T, mz_repr::Diff)>::into_owned),
                             );
@@ -350,7 +348,7 @@ where
     logger: Option<differential_dataflow::logging::Logger>,
     operator_id: usize,
     chunker: ColumnChunker<(D, T, R)>,
-    inner: AccountedChunkBatcher<D, T, R>,
+    inner: AccountedChunkBatcher<D, T, R, ComputeSpill>,
 }
 
 impl<D, T, R> MergeBatcherWrapper<D, T, R>
@@ -385,7 +383,7 @@ where
         buffer.clear();
         while let Some(chunk) = self.chunker.extract() {
             self.inner
-                .push_into(ColumnChunk::from_column(std::mem::take(chunk)));
+                .push_into(ColumnChunk::from_body(std::mem::take(chunk)));
         }
     }
 
@@ -394,12 +392,12 @@ where
         use timely::container::{ContainerBuilder as _, PushInto as _};
         while let Some(chunk) = self.chunker.finish() {
             self.inner
-                .push_into(ColumnChunk::from_column(std::mem::take(chunk)));
+                .push_into(ColumnChunk::from_body(std::mem::take(chunk)));
         }
     }
 
     /// Reveal the contents of the merge batcher, returning a vector of chunks.
-    fn done(mut self) -> Vec<ColumnChunk<D, T, R>> {
+    fn done(mut self) -> Vec<ColumnChunk<D, T, R, ComputeSpill>> {
         self.flush();
         let (chain, _description) = self.inner.seal(Antichain::new());
         chain

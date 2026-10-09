@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/render/columnar.rs
-revision: e5f47b7088
+revision: 241f928bf3
 ---
 
 # mz-compute::render::columnar
@@ -13,6 +13,6 @@ Defines `ColCollection`, the columnar collection that dataflow edges between Pla
 
 `ColCollection` is a type alias for `ColumnarCollection<'scope, T, Row, Diff>`. Every producer emits this columnar representation. Within a Plan node, operators may freely work with row-based (`Vec`) collections, but only the columnar edge format is used at node boundaries. A node that produces a row-based collection re-encodes it to the columnar edge via `vec_to_columnar`. A node that must consume rows decodes at its input leaf via `columnar_to_vec`. Both are named operators (`VecToColumnar`, `ColumnarToVec`) so those conversion seams stay visible in dataflow introspection.
 
-`columnar_consolidate` consolidates a `ColumnarCollection` natively without a row round-trip. A `ChunkChunker` sorts and consolidates the input columns and an `AccountedChunkBatcher` merges them, both holding data in `Column`, so nothing outside the exchange pact visits a record or materializes an owned `Row`. The batcher's chains are `ColumnChunk`s that the process buffer pool spills while the chunk spill gate is set, bounding what a consolidation holds resident.
+`columnar_consolidate` consolidates a `ColumnarCollection` natively without a row round-trip. A `ChunkChunker` sorts and consolidates the input columns and an `AccountedChunkBatcher` merges them, both holding their data in columnar form, so nothing outside the exchange pact visits a record or materializes an owned `Row`. The batcher's chains are `ColumnChunk`s that the process buffer pool spills while the chunk spill gate is set, bounding what a consolidation holds resident.
 
 `flat_map_datums` is the canonical entry point for operators that decode `mz_repr::Datum`s from each row; it takes a `name` parameter used as the rendered Timely operator's name, and iterates the columnar batch directly without materializing owned `Row` values.

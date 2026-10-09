@@ -101,6 +101,12 @@ impl Columnation for DataflowErrorSer {
     type InnerRegion = DataflowErrorSerRegion;
 }
 
+impl crate::sink::correction_v2::DataBytes for DataflowErrorSer {
+    fn data_bytes(&self) -> usize {
+        std::mem::size_of::<Self>() + self.0.len()
+    }
+}
+
 /// A [`Region`] for [`DataflowErrorSer`], delegating to the region for `Vec<u8>`.
 #[derive(Default)]
 pub struct DataflowErrorSerRegion {

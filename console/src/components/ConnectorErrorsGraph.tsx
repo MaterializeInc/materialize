@@ -12,13 +12,14 @@ import { AxisBottom, AxisLeft, AxisScale } from "@visx/axis";
 import { localPoint } from "@visx/event";
 import { GridRows } from "@visx/grid";
 import { Group } from "@visx/group";
-import ParentSize from "@visx/responsive/lib/components/ParentSize";
+import { ParentSize } from "@visx/responsive";
 import { scaleLinear, scaleTime } from "@visx/scale";
 import { Bar } from "@visx/shape";
-import { useTooltip } from "@visx/tooltip";
-import useTooltipInPortal, {
+import {
   TooltipInPortalProps,
-} from "@visx/tooltip/lib/hooks/useTooltipInPortal";
+  useTooltip,
+  useTooltipInPortal,
+} from "@visx/tooltip";
 import {
   differenceInDays,
   differenceInHours,
@@ -293,7 +294,7 @@ export const ConnectorErrorGraph = (props: ConnectorErrorGraphProps) => {
     <ParentSize
       className="graph-container"
       debounceTime={10}
-      style={{ width: "100%", minWidth: 0 }}
+      style={{ width: "100%", minWidth: 0, height: HEIGHT_PX }}
     >
       {(parentSizeState) => {
         return (

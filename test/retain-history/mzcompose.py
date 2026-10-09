@@ -10,7 +10,7 @@
 """Test the retain history feature."""
 
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from textwrap import dedent
 
 from materialize.mzcompose.composition import Composition, Service
@@ -92,7 +92,7 @@ def workflow_mv_on_table(c: Composition) -> None:
     )
 
     mz_time1 = fetch_now_from_mz(c)
-    test_time1 = datetime.now()
+    test_time1 = datetime.now(UTC)
 
     c.testdrive(
         dedent(
@@ -214,7 +214,7 @@ def workflow_mv_on_table(c: Composition) -> None:
         )
     )
 
-    test_time5 = datetime.now()
+    test_time5 = datetime.now(UTC)
 
     if (test_time5 - test_time1).total_seconds() <= mv_on_mv1_retention_in_sec:
         time.sleep(1)

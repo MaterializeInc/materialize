@@ -2490,11 +2490,11 @@ impl CatalogItem {
                     name: None,
                     option: ColumnOption::Versioned {
                         action: ColumnVersioned::Added,
-                        version: next_version.into(),
+                        version: mz_sql::normalize::ast_version(next_version),
                     },
                 };
                 let column = ColumnDef {
-                    name: name.into(),
+                    name: mz_sql::normalize::column_name_ident(&name),
                     data_type: sql,
                     collation: None,
                     options: vec![version],

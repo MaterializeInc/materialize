@@ -15,10 +15,7 @@ import {
 import { useRegionSlug } from "~/store/environments";
 
 export type RoutableObjectType =
-  | "source"
-  | "sink"
-  | "index"
-  | "materialized-view";
+  "source" | "sink" | "index" | "materialized-view";
 
 export const regionPath = (regionSlug: string) => {
   return `/regions/${regionSlug}`;

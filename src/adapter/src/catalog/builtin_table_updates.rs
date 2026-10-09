@@ -19,8 +19,8 @@ use mz_catalog::builtin::{
     MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
     MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEX_COLUMNS, MZ_LICENSE_KEYS, MZ_LIST_TYPES,
     MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OPERATORS, MZ_PSEUDO_TYPES,
-    MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
-    MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_WEBHOOKS_SOURCES,
+    MZ_ROLE_AUTH, MZ_SESSIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_TYPE_PG_METADATA,
+    MZ_TYPES, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::memory::error::Error;
 use mz_catalog::memory::objects::{
@@ -347,17 +347,6 @@ impl CatalogState {
                     Datum::Null,
                     Datum::Null,
                     Datum::Null,
-                ]),
-                diff,
-            ));
-        }
-
-        if let Some(target_id) = mview.replacement_target {
-            updates.push(BuiltinTableUpdate::row(
-                &*MZ_REPLACEMENTS,
-                Row::pack_slice(&[
-                    Datum::String(&id.to_string()),
-                    Datum::String(&target_id.to_string()),
                 ]),
                 diff,
             ));
