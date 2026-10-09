@@ -451,23 +451,29 @@ impl ComputeController {
         Ok(ids)
     }
 
-    /// Returns `true` iff the given collection has been hydrated.
+    /// Requests whether each collection is hydrated on at least one hosting replica.
     ///
-    /// For this check, zero-replica clusters are always considered hydrated.
-    /// Their collections would never normally be considered hydrated but it's
-    /// clearly intentional that they have no replicas.
-    pub async fn collection_hydrated(
+    /// Collections with no hosting replicas count as hydrated. Missing collections
+    /// have an error entry. A dropped response means the instance shut down
+    /// before answering. This method sends one request and does not wait for it.
+    pub fn collections_hydrated(
         &self,
         instance_id: ComputeInstanceId,
-        collection_id: GlobalId,
-    ) -> Result<bool, anyhow::Error> {
+        collection_ids: Vec<GlobalId>,
+    ) -> Result<
+        oneshot::Receiver<BTreeMap<GlobalId, Result<bool, CollectionMissing>>>,
+        InstanceMissing,
+    > {
         let instance = self.instance(instance_id)?;
-
-        let res = instance
-            .call_sync(move |i| i.collection_hydrated(collection_id))
-            .await?;
-
-        Ok(res)
+        let (tx, rx) = oneshot::channel();
+        instance.call(move |i| {
+            let result = collection_ids
+                .into_iter()
+                .map(|id| (id, i.collection_hydrated(id)))
+                .collect();
+            let _ = tx.send(result);
+        });
+        Ok(rx)
     }
 
     /// Returns `true` if all non-transient, non-excluded collections are ready on any of the
