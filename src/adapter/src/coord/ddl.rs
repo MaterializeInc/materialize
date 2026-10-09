@@ -1539,7 +1539,10 @@ impl Coordinator {
         let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
         let mut oracle_write_ts = match prepared.initial_write_ts.take() {
             Some(ts) => ts,
-            None => self.get_catalog_write_ts().await,
+            None => trace_catalog_await!(
+                "prepared_commit_oracle_allocate",
+                self.get_catalog_write_ts().await
+            ),
         };
         let mut ops = prepared.ops.clone();
         let rewritten_objects = &mut prepared.rewritten_objects;
@@ -1584,22 +1587,26 @@ impl Coordinator {
             if !collections.is_empty() {
                 let conn =
                     conn_id.map(|id| self.active_conns.get(id).expect("connection must exist"));
-                let (candidate, _) = self
-                    .catalog()
-                    .transact_incremental_dry_run(
-                        self.catalog().state(),
-                        ops.clone(),
-                        conn,
-                        None,
-                        oracle_write_ts,
-                    )
-                    .await?;
+                let (candidate, _) = trace_catalog_await!(
+                    "creator_admission_dry_run",
+                    self.catalog()
+                        .transact_incremental_dry_run(
+                            self.catalog().state(),
+                            ops.clone(),
+                            conn,
+                            None,
+                            oracle_write_ts,
+                        )
+                        .await
+                )?;
                 // Common admission computes the floor. Protect the creating
                 // client's timeline in that same commit, before any publisher
                 // can advance a new MV output or index toward a future refresh.
-                let publication = self
-                    .prepare_admission_timeline_publication(client, &candidate, collections)
-                    .await?;
+                let publication = trace_catalog_await!(
+                    "creator_admission_timeline_grant",
+                    self.prepare_admission_timeline_publication(client, &candidate, collections)
+                        .await
+                )?;
                 ops.push(publication.op());
                 timeline_publication = Some(publication);
             }
