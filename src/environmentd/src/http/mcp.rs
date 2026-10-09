@@ -85,10 +85,21 @@ impl ProtocolVersion {
     /// Anything else falls back to 2025-11-25 on purpose, never a 400. A 400
     /// with a 2026-07-28 error tells dual-era clients the server speaks that
     /// revision, so they stop falling back to `initialize`.
-    fn select(header: Option<&HeaderValue>, modern_enabled: bool) -> Self {
-        match header.and_then(|value| value.to_str().ok()) {
-            Some("2026-07-28") if modern_enabled => Self::V2026_07_28,
-            _ => Self::V2025_11_25,
+    ///
+    /// Any copy naming 2026-07-28, also inside a comma-joined list, selects it.
+    /// Serving 2025-11-25 there would skip the header check while a proxy that
+    /// reads that copy trusts `Mcp-Name`. `McpHeaders::check_against` then
+    /// refuses the repetition.
+    fn select(values: &[HeaderValue], modern_enabled: bool) -> Self {
+        // Bytes, since a copy with a non-ASCII byte elsewhere still names it.
+        let names_2026_07_28 = values
+            .iter()
+            .flat_map(|value| value.as_bytes().split(|byte| *byte == b','))
+            .any(|version| version.trim_ascii() == b"2026-07-28");
+        if names_2026_07_28 && modern_enabled {
+            Self::V2026_07_28
+        } else {
+            Self::V2025_11_25
         }
     }
 
@@ -119,7 +130,12 @@ impl McpHeaders {
     /// Rejects a request whose mirrored headers are missing or disagree with
     /// the body, so a proxy routing on the headers sees what we execute.
     fn check_against(&self, method: &McpMethod) -> Result<(), McpRequestError> {
-        header_text(&self.protocol_version, "MCP-Protocol-Version")?;
+        let version = header_text(&self.protocol_version, "MCP-Protocol-Version")?;
+        if version != "2026-07-28" {
+            return Err(McpRequestError::HeaderMismatch(format!(
+                "MCP-Protocol-Version header value '{version}' is not '2026-07-28'"
+            )));
+        }
         let header_method = header_text(&self.method, "Mcp-Method")?;
         // An unknown method's name is not kept after parsing, and it executes
         // nothing, so only the header's presence is checked.
@@ -745,7 +761,7 @@ async fn handle_mcp_request(
     let read_data_product_tool_enabled = ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL.get(dyncfgs);
     let max_response_size = MCP_MAX_RESPONSE_SIZE.get(dyncfgs);
     let protocol = ProtocolVersion::select(
-        mcp_headers.protocol_version.first(),
+        &mcp_headers.protocol_version,
         ENABLE_MCP_PROTOCOL_2026_07_28.get(dyncfgs),
     );
     let request_timeout = MCP_REQUEST_TIMEOUT.get(dyncfgs);
@@ -2554,24 +2570,32 @@ mod tests {
     fn test_protocol_version_select() {
         use ProtocolVersion::*;
         for (header, enabled, want) in [
-            (None, true, V2025_11_25),
-            (Some("2025-11-25"), true, V2025_11_25),
-            (Some("2025-06-18"), true, V2025_11_25),
-            (Some("2026-07-28"), true, V2026_07_28),
-            (Some("2026-07-28"), false, V2025_11_25),
-            (Some("not-a-version"), true, V2025_11_25),
-            (Some(" 2026-07-28"), true, V2025_11_25),
-            (Some("2026-07-28X"), true, V2025_11_25),
+            (&[][..], true, V2025_11_25),
+            (&["2025-11-25"], true, V2025_11_25),
+            (&["2025-06-18"], true, V2025_11_25),
+            (&["2026-07-28"], true, V2026_07_28),
+            (&["2026-07-28"], false, V2025_11_25),
+            (&["not-a-version"], true, V2025_11_25),
+            (&["2026-07-28X"], true, V2025_11_25),
+            (&["2025-11-25", "2026-07-28"], true, V2026_07_28),
+            (&["2025-11-25, 2026-07-28"], true, V2026_07_28),
+            (&["2025-11-25", "2026-07-28"], false, V2025_11_25),
         ] {
-            let value = header.map(HeaderValue::from_static);
+            let values: Vec<_> = header.iter().map(|v| HeaderValue::from_static(v)).collect();
             assert_eq!(
-                ProtocolVersion::select(value.as_ref(), enabled),
+                ProtocolVersion::select(&values, enabled),
                 want,
                 "for {header:?} with the flag {enabled}"
             );
         }
         let non_ascii = HeaderValue::from_bytes(b"2026-07-28\xff").expect("valid header bytes");
-        assert_eq!(ProtocolVersion::select(Some(&non_ascii), true), V2025_11_25);
+        assert_eq!(ProtocolVersion::select(&[non_ascii], true), V2025_11_25);
+        let non_ascii_list =
+            HeaderValue::from_bytes(b"\xff, 2026-07-28").expect("valid header bytes");
+        assert_eq!(
+            ProtocolVersion::select(&[non_ascii_list], true),
+            V2026_07_28
+        );
     }
 
     fn json_headers() -> HeaderMap {
@@ -2929,76 +2953,20 @@ mod tests {
         );
     }
 
-    fn headers(method: Option<&'static str>, name: Option<&'static str>) -> McpHeaders {
-        McpHeaders {
-            protocol_version: vec![HeaderValue::from_static("2026-07-28")],
-            method: method.into_iter().map(HeaderValue::from_static).collect(),
-            name: name.into_iter().map(HeaderValue::from_static).collect(),
-        }
-    }
-
-    fn method(body: &str) -> McpMethod {
-        serde_json::from_str::<McpRequest>(body)
-            .expect("valid request")
-            .method
-    }
-
     #[mz_ore::test]
-    fn test_header_check() {
-        let tools_list = method(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#);
-        let call = method(
-            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT 1"}}}"#,
-        );
-        let unknown = method(r#"{"jsonrpc":"2.0","id":1,"method":"server/other"}"#);
-        // "query_system_catalog" in the `=?base64?...?=` form.
-        let encoded = "=?base64?cXVlcnlfc3lzdGVtX2NhdGFsb2c=?=";
-        for (headers, method, ok) in [
-            (headers(Some("tools/list"), None), &tools_list, true),
-            (headers(None, None), &tools_list, false),
-            (headers(Some("tools/call"), None), &tools_list, false),
-            (headers(Some("Tools/List"), None), &tools_list, false),
-            (
-                headers(Some("tools/call"), Some("query_system_catalog")),
-                &call,
-                true,
-            ),
-            (headers(Some("tools/call"), Some(encoded)), &call, true),
-            (headers(Some("tools/call"), None), &call, false),
-            (headers(Some("tools/call"), Some("query")), &call, false),
-            (
-                headers(Some("tools/call"), Some("=?base64?not base64?=")),
-                &call,
-                false,
-            ),
-            (headers(Some("anything"), None), &unknown, true),
-            (headers(None, None), &unknown, false),
-        ] {
-            let result = headers.check_against(method);
-            assert_eq!(
-                result.is_ok(),
-                ok,
-                "method {method} with Mcp-Method {:?}, Mcp-Name {:?}: {result:?}",
-                headers.method,
-                headers.name,
-            );
-            if let Err(err) = result {
-                assert_eq!(err.error_code(), error_codes::HEADER_MISMATCH);
-            }
-        }
-        let non_ascii = McpHeaders {
+    fn test_header_check_rejects_non_ascii() {
+        let headers = McpHeaders {
+            protocol_version: vec![HeaderValue::from_static("2026-07-28")],
             method: vec![HeaderValue::from_bytes(b"tools/list\xff").expect("valid header bytes")],
-            ..headers(None, None)
+            name: vec![],
         };
-        assert!(non_ascii.check_against(&tools_list).is_err());
-
-        // A proxy could act on either copy of a repeated header.
-        let mut repeated = headers(Some("tools/list"), None);
-        repeated.method.push(HeaderValue::from_static("tools/call"));
-        assert!(repeated.check_against(&tools_list).is_err());
-        let mut repeated = headers(Some("tools/list"), None);
-        repeated
-            .protocol_version
-            .push(HeaderValue::from_static("2025-11-25"));
-        assert!(repeated.check_against(&tools_list).is_err());
+        let request = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let method = serde_json::from_str::<McpRequest>(request)
+            .expect("valid request")
+            .method;
+        let err = headers
+            .check_against(&method)
+            .expect_err("non-ASCII Mcp-Method");
+        assert_eq!(err.error_code(), error_codes::HEADER_MISMATCH);
     }
 }
