@@ -570,6 +570,7 @@ impl McpResult {
     fn into_body(self, protocol: ProtocolVersion, endpoint_type: McpEndpointType) -> McpResultBody {
         let common = protocol.is_modern().then(|| CommonResultFields {
             result_type: "complete",
+            cache: self.cache_hints(),
             meta: ResultMeta {
                 server_info: server_info(endpoint_type),
             },
@@ -579,7 +580,23 @@ impl McpResult {
             common,
         }
     }
+
+    fn cache_hints(&self) -> Option<CacheHints> {
+        match self {
+            // `private` so a shared cache never serves it to a caller who
+            // cannot authenticate to this environment.
+            McpResult::ToolsList(_) => Some(CacheHints {
+                ttl_ms: CACHE_TTL_MS,
+                cache_scope: "private",
+            }),
+            McpResult::Initialize(_) | McpResult::ToolContent(_) => None,
+        }
+    }
 }
+
+/// How long a client may consider a cacheable result fresh, in milliseconds.
+/// Kept short so flag changes reach clients soon.
+const CACHE_TTL_MS: u64 = 60_000;
 
 /// A result as sent. `common` is `None` on 2025-11-25, whose results carry
 /// neither field.
@@ -595,8 +612,19 @@ struct McpResultBody {
 struct CommonResultFields {
     #[serde(rename = "resultType")]
     result_type: &'static str,
+    #[serde(flatten)]
+    cache: Option<CacheHints>,
     #[serde(rename = "_meta")]
     meta: ResultMeta,
+}
+
+/// Required on cacheable results, such as `tools/list`.
+#[derive(Debug, Serialize)]
+struct CacheHints {
+    #[serde(rename = "ttlMs")]
+    ttl_ms: u64,
+    #[serde(rename = "cacheScope")]
+    cache_scope: &'static str,
 }
 
 #[derive(Debug, Serialize)]
