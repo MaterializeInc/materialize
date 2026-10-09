@@ -41,17 +41,21 @@ pub use mz_ore::pool::ExtentBackend;
 /// configurations where the reservation fails, the pool is permanently
 /// unavailable for this process and [`apply_pool_config`] reports that by
 /// returning `false`.
-///
-/// The first [`apply_pool_config`] call installs the pool, and its backend
-/// fixes the extent store for the process. Later calls only retune the
-/// installed pool, so a changed backend, or a flag or scratch directory that
-/// feeds it, has no effect.
 static GLOBAL_POOL: std::sync::OnceLock<Option<mz_ore::pool::Pool>> = std::sync::OnceLock::new();
 
 /// Whether [`apply_pool_config`] has installed the pool as the process's
 /// spill mechanism. [`active_pool`] reads this so consumers stay inert until
 /// the first config apply budgets the pool.
 static POOL_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the pool was asked for a file backend and installed on swap.
+static FILE_FALLBACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether [`apply_pool_config`] was asked for a file backend and installed
+/// the pool on swap instead.
+pub fn file_backend_fell_back() -> bool {
+    FILE_FALLBACK.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Returns the process-wide buffer pool only if something already
 /// initialized it; never triggers the virtual reservation itself. Metrics
@@ -83,8 +87,14 @@ fn build_pool(backend: ExtentBackend) -> Option<mz_ore::pool::Pool> {
         ExtentBackend::File { dir, .. } => std::fs::create_dir_all(dir)
             .and_then(|()| mz_ore::pool::Pool::with_backend(backend.clone()))
             .or_else(|err| {
-                tracing::warn!(%err, ?dir, "buffer pool file store unavailable, using swap");
-                mz_ore::pool::Pool::new()
+                // The error can also come from the pool's own reservation,
+                // which the swap attempt then reports again.
+                tracing::warn!(%err, ?dir, "buffer pool with a file store failed, trying swap");
+                let pool = mz_ore::pool::Pool::new();
+                if pool.is_ok() {
+                    FILE_FALLBACK.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                pool
             }),
     };
     match built {
@@ -107,8 +117,11 @@ fn build_pool(backend: ExtentBackend) -> Option<mz_ore::pool::Pool> {
 /// that never calls it, because the spill gate is off or it is unconfigured,
 /// never reserves the pool's address space or spawns its spill threads.
 /// Returns `false` (and changes nothing) if the pool is unavailable because
-/// its virtual reservation failed. `backend` takes effect only on the first
-/// call, see `GLOBAL_POOL`.
+/// its virtual reservation failed.
+///
+/// The first call installs the pool, and its `backend` fixes the extent store
+/// for the process. Later calls only retune the installed pool, so a changed
+/// backend, or a flag or scratch directory that feeds it, has no effect.
 ///
 /// On success the pool becomes reachable through [`active_pool`] and its
 /// resident budget is retuned in place so live handles stay coherent.
@@ -226,5 +239,6 @@ mod tests {
         assert!(ok, "the fallback installs a pool");
         let pool = slot.get().cloned().flatten().expect("installed");
         assert_eq!(pool.backend_kind(), mz_ore::pool::BackendKind::Swap);
+        assert!(file_backend_fell_back(), "the fallback is reported");
     }
 }
