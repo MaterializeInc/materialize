@@ -824,41 +824,44 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 
             let orchestrator = Arc::new(
                 runtime
-                    .block_on(KubernetesOrchestrator::new(KubernetesOrchestratorConfig {
-                        context: args.orchestrator_kubernetes_context.clone(),
-                        scheduler_name: args.orchestrator_kubernetes_scheduler_name,
-                        priority_class_name: args.orchestrator_kubernetes_priority_class_name,
-                        service_annotations: args
-                            .orchestrator_kubernetes_service_annotation
-                            .into_iter()
-                            .map(|l| (l.key, l.value))
-                            .collect(),
-                        service_labels: args
-                            .orchestrator_kubernetes_service_label
-                            .into_iter()
-                            .map(|l| (l.key, l.value))
-                            .collect(),
-                        service_node_selector: args
-                            .orchestrator_kubernetes_service_node_selector
-                            .into_iter()
-                            .map(|l| (l.key, l.value))
-                            .collect(),
-                        service_affinity: args.orchestrator_kubernetes_service_affinity,
-                        service_tolerations: args.orchestrator_kubernetes_service_tolerations,
-                        service_account: args.orchestrator_kubernetes_service_account,
-                        image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
-                        aws_external_id_prefix: args.aws_external_id_prefix.clone(),
-                        coverage: args.orchestrator_kubernetes_coverage,
-                        ephemeral_volume_storage_class: args
-                            .orchestrator_kubernetes_ephemeral_volume_class
-                            .clone(),
-                        service_fs_group: args.orchestrator_kubernetes_service_fs_group.clone(),
-                        name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
-                        collect_pod_metrics: !args
-                            .orchestrator_kubernetes_disable_pod_metrics_collection,
-                        enable_prometheus_scrape_annotations: args
-                            .orchestrator_kubernetes_enable_prometheus_scrape_annotations,
-                    }))
+                    .block_on(KubernetesOrchestrator::new(
+                        KubernetesOrchestratorConfig {
+                            context: args.orchestrator_kubernetes_context.clone(),
+                            scheduler_name: args.orchestrator_kubernetes_scheduler_name,
+                            priority_class_name: args.orchestrator_kubernetes_priority_class_name,
+                            service_annotations: args
+                                .orchestrator_kubernetes_service_annotation
+                                .into_iter()
+                                .map(|l| (l.key, l.value))
+                                .collect(),
+                            service_labels: args
+                                .orchestrator_kubernetes_service_label
+                                .into_iter()
+                                .map(|l| (l.key, l.value))
+                                .collect(),
+                            service_node_selector: args
+                                .orchestrator_kubernetes_service_node_selector
+                                .into_iter()
+                                .map(|l| (l.key, l.value))
+                                .collect(),
+                            service_affinity: args.orchestrator_kubernetes_service_affinity,
+                            service_tolerations: args.orchestrator_kubernetes_service_tolerations,
+                            service_account: args.orchestrator_kubernetes_service_account,
+                            image_pull_policy: args.orchestrator_kubernetes_image_pull_policy,
+                            aws_external_id_prefix: args.aws_external_id_prefix.clone(),
+                            coverage: args.orchestrator_kubernetes_coverage,
+                            ephemeral_volume_storage_class: args
+                                .orchestrator_kubernetes_ephemeral_volume_class
+                                .clone(),
+                            service_fs_group: args.orchestrator_kubernetes_service_fs_group.clone(),
+                            name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
+                            collect_pod_metrics: !args
+                                .orchestrator_kubernetes_disable_pod_metrics_collection,
+                            enable_prometheus_scrape_annotations: args
+                                .orchestrator_kubernetes_enable_prometheus_scrape_annotations,
+                        },
+                        &metrics_registry,
+                    ))
                     .context("creating kubernetes orchestrator")?,
             );
             let secrets_controller: Arc<dyn SecretsController> = match args.secrets_controller {

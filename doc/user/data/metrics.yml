@@ -1687,6 +1687,13 @@ metrics:
   - case
   source: src/compute-types/src/plan.rs
   visibility: internal
+- name: mz_orchestrator_kubernetes_process_metrics_fetch_failures_total
+  help: The number of failed per-process metrics fetches, by fetch step and error kind.
+  labels:
+  - kind
+  - step
+  source: src/orchestrator-kubernetes/src/metrics.rs
+  visibility: internal
 - name: mz_otel_on_close
   help: count of on_close events sent to otel
   source: src/ore/src/tracing.rs
