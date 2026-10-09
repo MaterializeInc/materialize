@@ -613,7 +613,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         .client_read_requirements
         .into_iter()
         .filter(|(key, _)| key.into_proto().incarnation == warm_client)
-        .collect::<BTreeMap<_, _>>();
+        .collect::<imbl::OrdMap<_, _>>();
     pending.sync_to_current_updates().await.unwrap();
     let mut prepared = pending.transaction().await.unwrap();
     prepared

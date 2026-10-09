@@ -430,7 +430,7 @@ async fn replacement_retains_index_history_without_granting_earlier_reads() {
             .expect("snapshot transferred history");
         assert_eq!(
             after.client_read_requirements,
-            BTreeMap::from([(
+            imbl::OrdMap::from_iter([(
                 ClientReadRequirementKey {
                     incarnation: current,
                     id: COLLECTION,
