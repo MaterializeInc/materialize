@@ -107,7 +107,8 @@ pub(crate) enum WriteError {
     /// slot back, so the caller must not free it.
     Full,
     /// Writes are disabled for the store's lifetime, by this write's I/O
-    /// error or an earlier one.
+    /// error or an earlier one. The caller still owns the slot and must free
+    /// it.
     Disabled,
 }
 
@@ -300,10 +301,11 @@ impl FileStore {
         if warm {
             return Ok(slot);
         }
-        // A cold or never-touched slot has no blocks.
-        if !self.reserve(size) {
-            self.punch_for(class, size);
-            if !self.reserve(size) {
+        // A cold or never-touched slot has no blocks. A concurrent
+        // allocation can take the room a punch made, so punch again until
+        // the reservation succeeds or nothing is left to punch.
+        while !self.reserve(size) {
+            if !self.punch_for(class, size) {
                 c.slots().free(index, false);
                 return Err(AllocError::Full);
             }
@@ -311,8 +313,24 @@ impl FileStore {
         match sys::fallocate(&c.file, self.offset(slot), c.size) {
             Ok(()) => Ok(slot),
             Err(err) => {
-                self.allocated.fetch_sub(size, Ordering::Relaxed);
-                c.slots().free(index, false);
+                // A failed `fallocate` can leave part of the range
+                // allocated. Punching returns those blocks. If the punch
+                // fails too, the slot goes warm and stays charged, so its
+                // blocks stay counted.
+                match sys::punch_hole(&c.file, self.offset(slot), c.size) {
+                    Ok(()) => {
+                        self.allocated.fetch_sub(size, Ordering::Relaxed);
+                        c.slots().free(index, false);
+                    }
+                    Err(punch_err) => {
+                        tracing::warn!(
+                            "pool file store: punching a slot after a failed fallocate failed: \
+                             {punch_err}"
+                        );
+                        c.slots().free(index, true);
+                        c.warm_bytes.fetch_add(size, Ordering::Relaxed);
+                    }
+                }
                 if err.raw_os_error() == Some(libc::ENOSPC) {
                     self.lower_capacity("fallocate");
                     Err(AllocError::Full)
@@ -325,7 +343,8 @@ impl FileStore {
     }
 
     /// Returns a slot. Its blocks stay allocated. Must not be called while a
-    /// write to the slot is in flight.
+    /// read or write of the slot is in flight, since the slot can be punched
+    /// or handed out again at once.
     pub(crate) fn free(&self, slot: FileSlot) {
         let c = &self.classes[slot.class];
         let mut slots = c.slots();
@@ -398,7 +417,9 @@ impl FileStore {
         // provisioning) can fail the write despite the `fallocate`. Its
         // blocks are then in an unknown state, and a warm slot would hand
         // the same failure to the next demotion of this class. Punching
-        // returns the blocks and makes the slot cold.
+        // returns the blocks and makes the slot cold. If the punch fails,
+        // the slot goes on no free list and stays charged, so it is never
+        // reused and its blocks stay counted.
         match sys::punch_hole(&c.file, self.offset(slot), c.size) {
             Ok(()) => {
                 c.slots().free(slot.index, false);
@@ -408,10 +429,9 @@ impl FileStore {
                     .fetch_add(size, Ordering::Relaxed);
             }
             Err(err) => {
-                tracing::warn!("pool file store: punching a slot after ENOSPC failed: {err}");
-                let mut slots = c.slots();
-                slots.free(slot.index, true);
-                c.warm_bytes.fetch_add(size, Ordering::Relaxed);
+                tracing::warn!(
+                    "pool file store: punching a slot after ENOSPC failed, leaking it: {err}"
+                );
             }
         }
         self.lower_capacity("write");
@@ -458,6 +478,15 @@ impl FileStore {
                     "pool file store: short read: class {}, index {}, offset {offset}, \
                      {done} of {n} bytes",
                     slot.class, slot.index,
+                ),
+                // A direct read resumed at `offset + done` would be
+                // unaligned unless `done` is, and fail `EINVAL`.
+                Ok(k) if self.io_mode == IoMode::Direct && done + k < n => panic!(
+                    "pool file store: short read: class {}, index {}, offset {offset}, \
+                     {} of {n} bytes",
+                    slot.class,
+                    slot.index,
+                    done + k,
                 ),
                 Ok(k) => done += k,
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
@@ -590,8 +619,9 @@ impl FileStore {
     }
 
     /// Punches warm slots of classes other than `class` until `size` more
-    /// bytes fit or no other class has a warm slot.
-    fn punch_for(&self, class: usize, size: u64) {
+    /// bytes fit or no other class has a warm slot, and returns whether they
+    /// fit.
+    fn punch_for(&self, class: usize, size: u64) -> bool {
         while !self.fits(size) {
             // Choose from the lock-free warm-bytes snapshot: holding two
             // class mutexes at once could deadlock against a concurrent
@@ -605,7 +635,7 @@ impl FileStore {
                 .filter(|&(warm_bytes, _)| warm_bytes > 0)
                 .max();
             let Some((_, victim)) = victim else {
-                return;
+                return false;
             };
             let c = &self.classes[victim];
             let class_size = u64::cast_from(c.size);
@@ -658,9 +688,10 @@ impl FileStore {
             }
             if !warm.is_empty() {
                 // A punch failed.
-                return;
+                return false;
             }
         }
+        true
     }
 
     fn disable_writes(&self, op: &str, err: &io::Error) {
@@ -762,8 +793,6 @@ pub(crate) struct AlignedBuf {
 
 // SAFETY: `AlignedBuf` exclusively owns its allocation, like `Vec<u8>`.
 unsafe impl Send for AlignedBuf {}
-// SAFETY: shared access only reads through `as_slice`, like `Vec<u8>`.
-unsafe impl Sync for AlignedBuf {}
 
 impl AlignedBuf {
     pub(crate) const fn new() -> AlignedBuf {
@@ -889,6 +918,8 @@ pub(crate) mod fault {
         /// The `O_TMPFILE` open of a class file. Its fault needs a nonzero
         /// errno.
         OpenTmpfile,
+        /// A hole punch. Its fault needs a nonzero errno.
+        Punch,
     }
 
     thread_local! {
@@ -939,11 +970,18 @@ mod sys {
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))
     }
 
+    /// Names the unlinked fallback file tries before `EEXIST` fails the
+    /// open.
+    const OPEN_NAMED_ATTEMPTS: usize = 8;
+
     fn off_t(offset: u64) -> io::Result<libc::off_t> {
         libc::off_t::try_from(offset).map_err(|_| io::Error::from_raw_os_error(libc::EFBIG))
     }
 
     /// Whether `path` is on tmpfs or ramfs.
+    ///
+    /// NOTE: this checks the filesystem type of `path` alone. An overlay
+    /// whose upper layer is tmpfs reports the overlay type and passes.
     pub(super) fn is_memory_backed(path: &Path) -> io::Result<bool> {
         let path = c_path(path)?;
         let mut st = std::mem::MaybeUninit::<libc::statfs>::uninit();
@@ -997,21 +1035,38 @@ mod sys {
             Err(err) if matches!(err.raw_os_error(), Some(libc::EOPNOTSUPP | libc::EISDIR)) => {
                 // The filesystem lacks `O_TMPFILE`: create a unique name and
                 // unlink it at once, leaving the same lifetime as an
-                // anonymous file.
+                // anonymous file. A crash between the two leaves the name
+                // behind, and a restarted container can reuse the pid, so
+                // the name carries the clock too and a collision retries.
                 static NONCE: AtomicU64 = AtomicU64::new(0);
-                let name = format!(
-                    ".mz-pool-extents-{}-{class}-{}",
-                    std::process::id(),
-                    NONCE.fetch_add(1, Ordering::Relaxed),
-                );
-                let path = dir.join(name);
-                let file = OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .create_new(true)
-                    .mode(0o600)
-                    .custom_flags(direct)
-                    .open(&path)?;
+                let mut attempts = 0;
+                let (file, path) = loop {
+                    let nanos = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_nanos());
+                    let path = dir.join(format!(
+                        ".mz-pool-extents-{}-{nanos}-{class}-{}",
+                        std::process::id(),
+                        NONCE.fetch_add(1, Ordering::Relaxed),
+                    ));
+                    match OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .create_new(true)
+                        .mode(0o600)
+                        .custom_flags(direct)
+                        .open(&path)
+                    {
+                        Ok(file) => break (file, path),
+                        Err(err)
+                            if err.kind() == io::ErrorKind::AlreadyExists
+                                && attempts + 1 < OPEN_NAMED_ATTEMPTS =>
+                        {
+                            attempts += 1;
+                        }
+                        Err(err) => return Err(err),
+                    }
+                };
                 std::fs::remove_file(&path)?;
                 Ok(file)
             }
@@ -1040,6 +1095,10 @@ mod sys {
     /// Deallocates the blocks of `[offset, offset + len)`, keeping the file
     /// size.
     pub(super) fn punch_hole(file: &File, offset: u64, len: usize) -> io::Result<()> {
+        #[cfg(test)]
+        if let Some(result) = super::fault::inject(super::fault::Op::Punch) {
+            return result.map(|_| ());
+        }
         fallocate_mode(
             file,
             libc::FALLOC_FL_PUNCH_HOLE | libc::FALLOC_FL_KEEP_SIZE,
