@@ -427,7 +427,6 @@ def run_cargo_nextest(
             _handle_registry_fetch_failure()
         clusterd_thread.join()
 
-    tests_ran = False
     try:
         run_and_detect_retryable_build_failure(
             [
@@ -447,50 +446,10 @@ def run_cargo_nextest(
             cwd=MZ_ROOT,
             env=env,
         )
-        tests_ran = True
     except RustIncrementalBuildFailure:
         _handle_incremental_build_failure()
     except CargoRegistryFetchFailure:
         _handle_registry_fetch_failure()
-    except subprocess.CalledProcessError as error:
-        tests_ran = error.returncode == 100  # nextest TEST_RUN_FAILED
-        raise
-    finally:
-        if (
-            tests_ran
-            and os.getenv("BUILDKITE")
-            and not args.args
-            and (
-                buildkite.get_parallelism_count() == 1
-                or buildkite.get_parallelism_index() == 1
-            )
-        ):
-            # Export the canonical generator's output without changing the
-            # snapshot against which the tests above actually ran.
-            snapshot = (
-                MZ_ROOT / "src/catalog/src/durable/upgrade/snapshots/objects_v95.txt"
-            )
-            original = snapshot.read_bytes()
-            snapshot.unlink()
-            try:
-                result = subprocess.run(
-                    [
-                        "cargo",
-                        "nextest",
-                        "run",
-                        *nextest_common_args,
-                        *nextest_test_args,
-                        "--run-ignored=only",
-                        "-E",
-                        "package(mz-catalog) & test(durable::upgrade::tests::generate_missing_encodings)",
-                    ],
-                    cwd=MZ_ROOT,
-                    env=env,
-                )
-                if result.returncode == 0:
-                    buildkite.upload_artifact(str(snapshot.relative_to(MZ_ROOT)))
-            finally:
-                snapshot.write_bytes(original)
 
 
 def _handle_incremental_build_failure() -> None:
