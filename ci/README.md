@@ -173,12 +173,13 @@ an easy way to isolate builds on macOS.
 
 ### DNS resolvers
 
-The agents use public resolvers rather than MacStadium's, because MacStadium's
-resolvers intermittently failed to resolve `github.com`. That broke checkout with
+Checkout on `mac-2` intermittently failed with
 `fatal: unable to access 'https://github.com/MaterializeInc/materialize.git/':
 Could not resolve host: github.com` (exit status 128), which retries do not ride
-out because an outage outlasts the three attempts. Google is primary and
-Cloudflare is the fallback:
+out because an outage outlasts the three attempts. At the time its resolvers were
+set by hand with MacStadium's own servers first. They are the suspected cause,
+but that is not confirmed. `mac-2` now uses public resolvers, with Google as
+primary and Cloudflare as the fallback:
 
 ```shell
 % networksetup -getdnsservers Ethernet
@@ -197,7 +198,8 @@ To set it, or to restore it after a network reset:
 
 On macOS `/etc/resolv.conf` is generated, so edit DNS with `networksetup`, not
 by writing that file. The previous setting on `mac-2` was
-`207.254.72.253 207.254.72.254 8.8.8.8` (changed 2026-10-09).
+`207.254.72.253 207.254.72.254 8.8.8.8` (changed 2026-10-09); the first two are
+MacStadium addresses.
 
 ## Agent security
 
