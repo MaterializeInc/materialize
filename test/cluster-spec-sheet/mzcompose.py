@@ -133,6 +133,7 @@ SERVICES = [
             "mzbuild": "dbbench",
         },
     ),
+    MzComposeService("qps-pgbench", {"mzbuild": "qps-pgbench"}),
 ]
 
 SCENARIO_AUCTION_STRONG = "auction_strong"
@@ -2050,10 +2051,16 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
 
     VERSION = "3.0.0"
 
-    def __init__(self, options: QpsSweep, numa_diagnostic: bool = False) -> None:
+    def __init__(
+        self,
+        options: QpsSweep,
+        numa_diagnostic: bool = False,
+        pgbench_comparison: bool = False,
+    ) -> None:
         super().__init__(1, None)
         self.options = options
         self.numa_diagnostic = numa_diagnostic
+        self.pgbench_comparison = pgbench_comparison
         self.warnings: list[str] = []
 
     def name(self) -> str:
@@ -2102,6 +2109,26 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
                         )
                     else:
                         self.measure(runner, size, concurrency, protocol)
+                        if not self.pgbench_comparison:
+                            continue
+                        self.measure(
+                            runner, size, concurrency, protocol, driver="pgbench"
+                        )
+                        if concurrency == max(self.options.concurrencies):
+                            self.measure(
+                                runner,
+                                size,
+                                concurrency,
+                                protocol,
+                                driver="pgbench-unlogged",
+                            )
+                            self.measure(
+                                runner,
+                                size,
+                                concurrency,
+                                protocol,
+                                driver="pgbench-one-thread",
+                            )
         finally:
             runner.run_query("SET cluster = 'c'")
             runner.run_query("DROP VIEW IF EXISTS qps_gen_view CASCADE")
@@ -2115,8 +2142,10 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         concurrency: int,
         protocol: str,
         diagnostic_phase: str | None = None,
+        driver: str = "qpsbench",
     ) -> None:
         name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters"
+        name += f"_{driver}"
         if diagnostic_phase is not None:
             name += f"_{diagnostic_phase}"
         print(
@@ -2125,14 +2154,33 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         config = self.options.config(
             runner.target.dbbench_connection_flags(), concurrency, protocol
         )
+        config["threads_per_cluster"] = 1 if driver == "pgbench-one-thread" else 2
+        config["transaction_logging"] = driver != "pgbench-unlogged"
         output = runner.target.composition.run(
-            "dbbench",
-            entrypoint="qpsbench",
+            "dbbench" if driver == "qpsbench" else "qps-pgbench",
+            *([] if driver == "qpsbench" else ["/usr/local/bin/qps-pgbench.py"]),
+            entrypoint="qpsbench" if driver == "qpsbench" else "python3",
             rm=True,
             capture=True,
             stdin=json.dumps(config),
         )
         result = json.loads(output.stdout)
+        if driver == "pgbench-unlogged":
+            # Native summaries include startup/warmup. This is a logging-cost
+            # qualification, not another point on the measured-window plots.
+            path = (
+                MZ_ROOT
+                / "test/cluster-spec-sheet/qps-logs"
+                / f"{runner.envd_cpus}_{name}.json"
+            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(result, indent=2))
+            print(json.dumps(result))
+            if buildkite.is_in_buildkite():
+                buildkite.upload_artifact(
+                    str(path.relative_to(MZ_ROOT)), cwd=MZ_ROOT, quiet=True
+                )
+            return
         validate_qps_result(result, concurrency, protocol)
         warnings = list(result["driver"]["warnings"])
         replica_cpu = None
@@ -2197,6 +2245,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
             qps_details={
                 "concurrency": concurrency,
                 "protocol": protocol,
+                "load_driver": driver,
                 "query_clusters": self.options.clusters,
                 "active_query_clusters": result["clusters"],
                 "cluster_size": size,
@@ -2563,6 +2612,7 @@ ENVD_FIELDNAMES: list[str] = [
     "qps",
     "concurrency",
     "protocol",
+    "load_driver",
     "query_clusters",
     "active_query_clusters",
     "cluster_size",
@@ -4117,6 +4167,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         default=None,
         help="Optional environmentd CPU sizes for focused QPS runs",
     )
+    parser.add_argument("--qps-pgbench-comparison", action="store_true")
     parser.add_argument(
         "--qps-numa-diagnostic",
         action="store_true",
@@ -4644,6 +4695,7 @@ SCENARIOS: list[ScenarioSpec] = [
                     a.qps_query_timeout,
                 ),
                 numa_diagnostic=a.qps_numa_diagnostic,
+                pgbench_comparison=a.qps_pgbench_comparison,
             ),
             cpu_scales=a.qps_envd_cpus,
         ),
@@ -4908,19 +4960,26 @@ def analyze_envd_results_file(file: str) -> None:
         )
         if not sweep.empty:
             for protocol, protocol_df in sweep.groupby("protocol"):
+                if "load_driver" not in protocol_df:
+                    protocol_df = protocol_df.assign(load_driver="qpsbench")
+                protocol_df = protocol_df.assign(
+                    load_driver=protocol_df["load_driver"].fillna("qpsbench")
+                )
                 for metric, label in [
                     ("qps", "Queries / second"),
                     ("mean_latency_ms", "Mean latency (ms)"),
                     ("p99_latency_ms", "p99 latency upper bound (ms)"),
                 ]:
                     fig, ax = plt.subplots()
-                    for cpus, points in protocol_df.groupby("envd_cpus"):
+                    for (cpus, driver), points in protocol_df.groupby(
+                        ["envd_cpus", "load_driver"]
+                    ):
                         points = points.sort_values("concurrency")
                         ax.plot(
                             points["concurrency"],
                             points[metric],
                             "o-",
-                            label=f"{cpus} CPUs",
+                            label=f"{cpus} CPUs, {driver}",
                         )
                         single = points[points["concurrency"] == 1]
                         if metric == "qps" and not single.empty:
