@@ -103,17 +103,18 @@ Keep durable renewal, aggregate advancement and end-to-end SQL progress separate
 Credit publications only after commit. The plain view's exact queue residence
 remains unmeasured.
 Failed background advancement/bounds publication returns at the existing staggered
-publication cadence without deferring independent heartbeat renewal. Renewal still
-fails despite heartbeat dispatch: catch-up and transaction-open work occupy long
-heartbeat turns that never reach a candidate. CI138432 CPU samples identify a
-separate coordinator cost: token updates rescan every retained dependency definition.
-Definitions remain covered by committed grants, so only publication completion can
-make them releasable. Cleanup stays at that boundary, not per token. CI138433 verifies
-retention/release coverage and samples pruning only at publication completion,
-not token callbacks. The temporary capture is removed. Complete trace accounting
-must still establish renewal and advancement progress. Acquisition,
-DDL retries, replica timing and safety checks remain unchanged. Keep stalled
-advancement open even if SQL starts passing.
+publication cadence without deferring independent heartbeat renewal. Dependency
+cleanup stays at publication completion, not per token. The temporary CPU capture
+is removed. Renewal and stalled aggregate advancement remain separate outcomes.
+The latest measured MV timeout is before admission: dequeue loses the available
+guard during asynchronous catalog certification and requeues behind other DDL.
+Verify the bounded handoff repair, retaining the existing guard through freshness
+and resuming below transaction setup. Preserve cancellation, revision checks and
+transaction-end ownership without promising FIFO. Selected holders also retry
+heavily. Three creator-commit await probes distinguish allocation, dry-run admission
+and timeline-grant preparation before choosing any further cost repair. Acquisition,
+DDL retry policy, replica timing and safety checks stay unchanged. Keep stalled
+advancement open even if SQL passes.
 No broader scheduling or protocol change is approved.
 Both native promotion jobs in CI138229 verify graceful deployment fencing.
 Private prewarming's separate catalog and inline bootstrap are unchanged.

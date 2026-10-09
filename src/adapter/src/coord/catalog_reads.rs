@@ -42,6 +42,11 @@ pub enum ExecuteCatalogContinuation {
         stmt: Arc<Statement<Raw>>,
         params: Params,
     },
+    /// Transaction setup is complete and ConnMeta owns the serialization guard.
+    AdmittedStatement {
+        stmt: Arc<Statement<Raw>>,
+        params: Params,
+    },
 }
 
 impl Coordinator {
@@ -157,7 +162,8 @@ impl Coordinator {
                 .session()
                 .get_portal_unverified(portal_name)
                 .and_then(|portal| portal.stmt.clone()),
-            ExecuteCatalogContinuation::Statement { stmt, .. } => Some(Arc::clone(stmt)),
+            ExecuteCatalogContinuation::Statement { stmt, .. }
+            | ExecuteCatalogContinuation::AdmittedStatement { stmt, .. } => Some(Arc::clone(stmt)),
         };
         super::trace_create_mv_phase(ctx.session(), timing_stmt.as_deref(), "catalog_read_start");
         let handle = task::spawn(|| "execute_catalog_read", async move {
@@ -201,6 +207,15 @@ impl Coordinator {
             ctx.retire(Err(AdapterError::Canceled));
             return;
         }
+        if !matches!(&continuation, ExecuteCatalogContinuation::Portal { .. })
+            && let Some(portal) = ctx.query_portal.clone()
+        {
+            let catalog = Arc::clone(ctx.query_catalog().expect("certified catalog"));
+            if let Err(error) = Self::verify_portal(&catalog, ctx.session_mut(), &portal) {
+                ctx.retire(Err(error));
+                return;
+            }
+        }
         match continuation {
             ExecuteCatalogContinuation::Portal {
                 portal_name,
@@ -210,14 +225,11 @@ impl Coordinator {
                     .await;
             }
             ExecuteCatalogContinuation::Statement { stmt, params } => {
-                if let Some(portal) = ctx.query_portal.clone() {
-                    let catalog = Arc::clone(ctx.query_catalog().expect("certified catalog"));
-                    if let Err(error) = Self::verify_portal(&catalog, ctx.session_mut(), &portal) {
-                        ctx.retire(Err(error));
-                        return;
-                    }
-                }
                 self.handle_execute_inner_certified(stmt, params, ctx).await;
+            }
+            ExecuteCatalogContinuation::AdmittedStatement { stmt, params } => {
+                self.handle_execute_admitted_certified(stmt, params, ctx)
+                    .await;
             }
         }
     }

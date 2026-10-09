@@ -6957,8 +6957,11 @@ impl<T> LockedVecDeque<T> {
         self.items.push_back(value)
     }
 
-    pub fn pop_front(&mut self) -> Option<T> {
-        self.items.pop_front()
+    /// Take work only with its guard, retaining admission across asynchronous preparation.
+    pub fn pop_front_locked(&mut self) -> Option<(T, OwnedMutexGuard<()>)> {
+        let guard = self.try_lock_owned().ok()?;
+        let item = self.items.pop_front()?;
+        Some((item, guard))
     }
 
     pub fn remove(&mut self, index: usize) -> Option<T> {
@@ -7252,5 +7255,34 @@ mod arrangement_sizes_pruner_tests {
     fn retraction_in_input_panics() {
         let rows = vec![(history_row(100), -1)];
         let _ = arrangement_sizes_expired_retractions(rows, 1_000, item_id());
+    }
+}
+
+#[cfg(test)]
+mod serialized_ddl_tests {
+    use super::LockedVecDeque;
+
+    #[mz_ore::test]
+    fn dequeue_retains_admission_until_release() {
+        let mut queue = LockedVecDeque::new();
+        let current = queue.try_lock_owned().expect("initial admission");
+        queue.push_back(1);
+        queue.push_back(2);
+        assert!(queue.pop_front_locked().is_none());
+        drop(current);
+
+        let (first, preparing) = queue.pop_front_locked().expect("first waiter");
+        assert_eq!(first, 1);
+        // Freshness work may yield. Neither a new request nor a duplicate wakeup
+        // may take admission away from the dequeued statement during that work.
+        assert!(queue.try_lock_owned().is_err());
+        assert!(queue.pop_front_locked().is_none());
+        drop(preparing);
+
+        let (second, guard) = queue.pop_front_locked().expect("successor after release");
+        assert_eq!(second, 2);
+        drop(guard);
+        assert!(queue.pop_front_locked().is_none());
+        assert!(queue.try_lock_owned().is_ok());
     }
 }

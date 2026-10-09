@@ -4249,19 +4249,49 @@ impl Coordinator {
         // It is possible Message::DeferredStatementReady was sent but then a session cancellation
         // was processed, removing the single element from deferred_statements, so it is expected
         // that this is sometimes empty.
-        let Some(DeferredPlanStatement { ctx, ps }) = self.serialized_ddl.pop_front() else {
-            return;
+        let (ctx, ps, guard) = loop {
+            let Some((DeferredPlanStatement { ctx, ps }, guard)) =
+                self.serialized_ddl.pop_front_locked()
+            else {
+                return;
+            };
+            if !self.active_conns.contains_key(ctx.session().conn_id()) {
+                ctx.retire(Err(AdapterError::Canceled));
+                continue;
+            }
+            break (ctx, ps, guard);
         };
         match ps {
             crate::coord::PlanStatement::Statement { stmt, params } => {
                 crate::coord::trace_create_mv_phase(ctx.session(), Some(&stmt), "ddl_lock_dequeue");
-                self.handle_execute_inner(stmt, params, ctx).await;
+                let previous = self
+                    .active_conns
+                    .get_mut(ctx.session().conn_id())
+                    .expect("connection checked above")
+                    .deferred_lock
+                    .replace(guard);
+                assert!(previous.is_none(), "connection already owns the DDL guard");
+                tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                    session_id = %ctx.session().uuid(), conn_id = %ctx.session().conn_id(),
+                    transaction_id = ?ctx.session().transaction().inner().map(|txn| txn.id),
+                    statement_kind = ?mz_sql_parser::ast::StatementKind::from(&*stmt),
+                    "DDL lock acquired");
+                self.start_execute_catalog_read(
+                    ctx,
+                    crate::coord::catalog_reads::ExecuteCatalogContinuation::AdmittedStatement {
+                        stmt,
+                        params,
+                    },
+                );
             }
             crate::coord::PlanStatement::Plan {
                 plan,
                 resolved_ids,
                 sql_impl_resolved_ids,
             } => {
+                // Transaction end acquires the guard before its first yield.
+                // It also owns transaction extraction and must run that path once.
+                drop(guard);
                 self.sequence_plan(ctx, plan, resolved_ids, sql_impl_resolved_ids)
                     .await;
             }

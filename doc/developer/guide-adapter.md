@@ -62,6 +62,12 @@ replan releases its DDL guard and wakes queued statements before reacquiring it.
 Queued continuations must reject terminated connections even after their cancel
 watches have been removed.
 
+Dequeuing serialized DDL reserves its existing guard before asynchronous catalog
+certification. Resume below transaction setup and lock acquisition, but recheck
+freshness and the live revision before name resolution. A wakeup is not an admission
+permit: a busy queue stays intact. This preserves the selected waiter's turn, not
+global FIFO ordering. Transaction-end plans retain their own acquisition and cleanup.
+
 Single-attempt client-protection writes catch up after oracle allocation, whose
 await can make an earlier refresh stale. A structural change invalidates preparation and yields
 before retry. Sampled compaction and reclamation proposals instead retain their

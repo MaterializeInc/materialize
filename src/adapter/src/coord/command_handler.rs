@@ -1377,8 +1377,8 @@ impl Coordinator {
         // MV REFRESH input discovery also consults live controller/catalog state,
         // including when explaining a CREATE MATERIALIZED VIEW.
         // If another statement changed it while certification was in flight,
-        // refresh before transaction-state checks or name resolution. Deferred
-        // DDL also enters through handle_execute_inner and obtains a new anchor.
+        // refresh before transaction-state checks or name resolution. Dequeued
+        // DDL rechecks at its admitted continuation while retaining its guard.
         let needs_current_revision = StatementClassification::from(&*stmt).is_ddl()
             || matches!(
                 &*stmt,
@@ -1691,6 +1691,51 @@ impl Coordinator {
             }
         }
 
+        Box::pin(self.handle_execute_statement_certified(stmt, params, ctx)).await;
+    }
+
+    /// Resume a dequeued DDL without repeating transaction setup or reacquiring its guard.
+    pub(crate) async fn handle_execute_admitted_certified(
+        &mut self,
+        stmt: Arc<Statement<Raw>>,
+        params: Params,
+        ctx: ExecuteContext,
+    ) {
+        assert!(
+            self.active_conns
+                .get(ctx.session().conn_id())
+                .expect("connection must exist")
+                .deferred_lock
+                .is_some()
+        );
+        // The local guard does not prevent external catalog changes. Preserve it
+        // through recertification so another local statement cannot take this turn.
+        if ctx
+            .query_catalog()
+            .expect("certified catalog")
+            .transient_revision()
+            != self.catalog().transient_revision()
+        {
+            self.start_execute_catalog_read(
+                ctx,
+                super::catalog_reads::ExecuteCatalogContinuation::AdmittedStatement {
+                    stmt,
+                    params,
+                },
+            );
+            return;
+        }
+        Box::pin(self.handle_execute_statement_certified(stmt, params, ctx)).await;
+    }
+
+    /// Resolve and plan after freshness, transaction checks and any DDL admission.
+    async fn handle_execute_statement_certified(
+        &mut self,
+        stmt: Arc<Statement<Raw>>,
+        params: Params,
+        ctx: ExecuteContext,
+    ) {
+        let query_catalog = Arc::clone(ctx.query_catalog().expect("certified before planning"));
         let catalog = query_catalog.for_session(ctx.session());
         let original_stmt = Arc::clone(&stmt);
         super::trace_create_mv_phase(ctx.session(), Some(&original_stmt), "resolve_start");
