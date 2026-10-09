@@ -80,7 +80,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     sometimes,
 )
 
-from materialize.antithesis import sql, state
+from materialize.antithesis import ddl_hold, sql, state
 from materialize.antithesis.drivers import configure
 from materialize.antithesis.drivers.recovery import mark_expected_unhealthy
 from materialize.antithesis.drivers.source_status import (
@@ -971,6 +971,7 @@ def upstream_main() -> int:
                     and kind in TERMINAL_KINDS
                     and slot in ready_slots
                     and rng.random() < reexport_p
+                    and not ddl_hold.active()
                 ):
                     _create_export(endpoints, host, db, up, slot, j)
             else:

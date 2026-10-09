@@ -44,6 +44,7 @@ import sqlite3
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -60,7 +61,7 @@ from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
 
 from materialize import orchestratord
-from materialize.antithesis import kube_watch, spec_model, sql
+from materialize.antithesis import ddl_hold, kube_watch, spec_model, sql
 from materialize.antithesis.drivers import counters, history, lifecycle
 from materialize.antithesis.endpoints import Endpoints
 from materialize.antithesis.environment import Environment
@@ -725,13 +726,17 @@ class TimelineParams:
 
     weights: dict[str, int]
     kill_probability: float
+    ddl_hold_probability: float
+    """Chance that an action holds discretionary DDL (`ddl_hold`) while it runs."""
 
 
 def timeline_params(db: sqlite3.Connection) -> TimelineParams:
     row = db.execute("SELECT value FROM params WHERE key = 'timeline'").fetchone()
     if row is not None:
         raw = json.loads(row[0])
-        return TimelineParams(raw["weights"], raw["kill_probability"])
+        return TimelineParams(
+            raw["weights"], raw["kill_probability"], raw["ddl_hold_probability"]
+        )
     while True:
         weights = {a: rng.choice([0, 1, 1, 4]) for a in ACTIONS}
         # paced_ddl holds a long quiet period, so it is never the dominant action.
@@ -742,12 +747,18 @@ def timeline_params(db: sqlite3.Connection) -> TimelineParams:
         weights["upgrade"] = rng.choice([1, 2, 4])
         if any(weights.values()):
             break
-    params = TimelineParams(weights, rng.choice([0.0, 0.3, 0.9]))
+    params = TimelineParams(
+        weights, rng.choice([0.0, 0.3, 0.9]), rng.choice([0.0, 0.5, 1.0])
+    )
     db.execute(
         "INSERT OR IGNORE INTO params (key, value) VALUES ('timeline', ?)",
         (
             json.dumps(
-                {"weights": params.weights, "kill_probability": params.kill_probability}
+                {
+                    "weights": params.weights,
+                    "kill_probability": params.kill_probability,
+                    "ddl_hold_probability": params.ddl_hold_probability,
+                }
             ),
         ),
     )
@@ -1668,9 +1679,14 @@ def driver_main() -> int:
             if i > 0 and time.monotonic() - start > FOLLOW_TIMEOUT_SECONDS:
                 break
             action = rng.choices(names, weights=weights)[0]
-            log(f"action {action}")
+            # paced_ddl measures convergence under its own DDL only.
+            hold = (
+                action == "paced_ddl" or rng.random() < ctx.params.ddl_hold_probability
+            )
+            log(f"action {action}{' holding discretionary DDL' if hold else ''}")
             try:
-                ACTION_FNS[action](ctx)
+                with ddl_hold.held(f"rollouts:{action}") if hold else nullcontext():
+                    ACTION_FNS[action](ctx)
             except TRANSIENT_ERRORS as e:
                 log(f"action {action} interrupted: {e}")
     except LeaseLost as e:
@@ -2476,6 +2492,26 @@ def check_serving_version(
     except BaseException:
         db.execute("ROLLBACK")
         raise
+
+
+def seed_serving_version() -> None:
+    """Record the version serving SQL before any rollout.
+
+    The first upgrade often completes before an observer samples, which would
+    leave the starting release unrecorded and "SQL served by a newer
+    environmentd version than before" unreachable.
+    """
+    env = Environment()
+    deadline = time.monotonic() + 120
+    while True:
+        try:
+            check_serving_version(observer_db(env), env, None)
+            return
+        except TRANSIENT_ERRORS as e:
+            if time.monotonic() >= deadline:
+                log(f"seeding the serving version failed: {e}")
+                return
+            time.sleep(POLL_SECONDS)
 
 
 def run_watches(watchers: list[CrWatcher | StatefulSetWatcher]) -> None:
