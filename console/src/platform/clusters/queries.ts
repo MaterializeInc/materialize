@@ -1129,11 +1129,10 @@ export function useClusterFreshness({
 }: ClusterFreshnessParams) {
   const objectIds = objects.map((object) => object.objectId);
 
-  // The binned series and the latest readings go in separate requests because
-  // they go stale at different rates. A bin cannot change faster than its own
-  // width, which at a 24 hour range is 24 minutes, so refetching the series on
-  // the one minute clock would re-read the whole window to change at most one
-  // point.
+  // The series refetches once per bin, which at a 24 hour range is 24 minutes,
+  // so it re-reads the whole window at most once per new point.
+  // NOTE: the trailing bin is partial, so between fetches it can miss a lag
+  // that started since. See `computeStats`.
   const binSizeMs = calculateBucketSizeFromLookback(lookbackMs);
 
   // NOTE: `useQuery`, not `useSuspenseQuery`. A suspending query stops the

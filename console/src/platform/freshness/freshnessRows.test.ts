@@ -173,6 +173,12 @@ describe("computeStats", () => {
     expect(stats.peak).toBe(9_000);
   });
 
+  it("counts a lag that started after the series was fetched in pMAX", () => {
+    const stats = computeStats("spiky", data, 600_000);
+    expect(stats.peak).toBe(600_000);
+    expect(stats.p90).toBe(9_000);
+  });
+
   it("lets one unreadable reading in sixty pass p90", () => {
     // Unreadable once about twenty hours ago, healthy since. It has to still
     // breach "at any moment", because that reading was

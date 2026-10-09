@@ -444,7 +444,8 @@ const FreshnessPage = () => {
           percentile of those maxima. The &ldquo;Now&rdquo; column is the most
           recent single reading rather than a binned point, so at wider ranges a
           point on the graph can sit above the &ldquo;Now&rdquo; value in its
-          row.
+          row. The graph refreshes once per point, so pMAX can include a newer
+          &ldquo;Now&rdquo; value that the graph has not drawn yet.
         </Text>
       </VStack>
     </MainContentContainer>

@@ -117,12 +117,16 @@ export function computeStats(
   const sorted = [...values].sort((a, b) => a - b);
   const rank = Math.max(0, Math.ceil(0.9 * sorted.length) - 1);
 
+  const current = currentFrom(latest);
+
   return {
     // The newest reading, not the newest bin. A bin reports the worst reading
     // in its span, so at a 24 hour range the last one answers "the worst of
     // the last 24 minutes" when the question asked was "right now".
-    current: currentFrom(latest),
-    peak: sorted[sorted.length - 1],
+    current,
+    // The series refetches once per bin and the latest reading once a minute,
+    // so a lag that starts between series fetches is only in `current`.
+    peak: Math.max(sorted[sorted.length - 1], current ?? -Infinity),
     p90: sorted[rank],
   };
 }
