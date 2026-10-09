@@ -77,7 +77,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     unreachable,
 )
 
-from materialize.antithesis import schema_model, sql, state
+from materialize.antithesis import ddl_hold, schema_model, sql, state
 from materialize.antithesis.drivers import configure, history
 from materialize.antithesis.drivers.session_mix import classify_read, quote_literal
 from materialize.antithesis.drivers.sources_common import (
@@ -1370,6 +1370,9 @@ def driver_main() -> int:
         host = Environment().sql_host()
     except Exception as e:
         log(f"no environmentd host: {e}")
+        return 0
+    if ddl_hold.active():
+        log("discretionary DDL is held; skipping")
         return 0
     db = open_state()
     if not ensure_setup(host, db):

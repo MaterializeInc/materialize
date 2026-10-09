@@ -54,7 +54,10 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
 
 from materialize.antithesis import quiet, sql, state
 from materialize.antithesis.drivers import counters, history
-from materialize.antithesis.drivers.sources_common import timeline_choice
+from materialize.antithesis.drivers.sources_common import (
+    SOURCE_ERROR_MARKERS,
+    timeline_choice,
+)
 from materialize.antithesis.environment import Environment
 from materialize.antithesis.rng import rng
 
@@ -216,7 +219,14 @@ def _p7(conn: psycopg.Connection) -> dict[str, Any]:
     conn.execute("SET real_time_recency = true")
     conn.execute(f"SET real_time_recency_timeout = '{RTR_TIMEOUT_S}s'".encode())
     qualified = ".".join(f'"{p}"' for p in (database, schema, table))
-    conn.execute(f"SELECT count(*) FROM {qualified}".encode()).fetchone()
+    try:
+        conn.execute(f"SELECT count(*) FROM {qualified}".encode()).fetchone()
+    except psycopg.Error as e:
+        # The source drivers provoke definite source errors on purpose, and a
+        # read of an errored export returns that error.
+        if e.sqlstate == "XX000" and any(m in str(e) for m in SOURCE_ERROR_MARKERS):
+            raise Skip(f"{qualified} holds a definite source error") from e
+        raise
     return {"table": qualified}
 
 
