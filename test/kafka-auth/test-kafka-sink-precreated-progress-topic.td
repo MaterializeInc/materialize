@@ -61,9 +61,9 @@ $ kafka-verify-data format=json key=false sink=materialize.public.working sort-m
 {"a": 1}
 {"a": 2}
 
-# Verify the sink never entered the stalled status.
-> SELECT DISTINCT status FROM mz_sinks
+# Require Running history and reject any recorded unexpected status. Starting
+# is transient and need not be observed by a new status subscription.
+> SELECT bool_or(status = 'running'), bool_and(status IN ('starting', 'running')) FROM mz_sinks
   JOIN mz_internal.mz_sink_status_history ON mz_sinks.id = mz_sink_status_history.sink_id
   WHERE mz_sinks.name = 'working'
-starting
-running
+true true
