@@ -421,7 +421,7 @@ impl Coordinator {
     async fn create_materialized_view_optimize(
         &mut self,
         CreateMaterializedViewOptimize {
-            validity,
+            mut validity,
             plan,
             resolved_ids,
             explain_ctx,
@@ -472,6 +472,7 @@ impl Coordinator {
             self.optimizer_metrics(),
         );
 
+        let catalog = self.owned_catalog();
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize create materialized view",
@@ -502,6 +503,16 @@ impl Coordinator {
 
                     let stage = match pipeline() {
                         Ok((local_mir_plan, global_mir_plan, global_lir_plan)) => {
+                            // The finish stage acquires read holds on the dataflow's imports,
+                            // which can include indexes that the statement doesn't name.
+                            let imports = dataflow_import_id_bundle(
+                                global_lir_plan.df_desc(),
+                                plan.materialized_view.cluster_id,
+                            );
+                            validity.extend_dependencies(
+                                &catalog,
+                                imports.iter().map(|id| catalog.resolve_item_id(&id)),
+                            );
                             if let ExplainContext::Plan(explain_ctx) = explain_ctx {
                                 let (_, df_meta) = global_lir_plan.unapply();
                                 CreateMaterializedViewStage::Explain(

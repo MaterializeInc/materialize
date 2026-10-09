@@ -311,7 +311,7 @@ impl Coordinator {
     async fn create_index_optimize(
         &mut self,
         CreateIndexOptimize {
-            validity,
+            mut validity,
             plan,
             resolved_ids,
             explain_ctx,
@@ -346,6 +346,7 @@ impl Coordinator {
             optimizer_config,
             self.optimizer_metrics(),
         );
+        let catalog = self.owned_catalog();
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize create index",
@@ -376,6 +377,16 @@ impl Coordinator {
 
                     let stage = match pipeline() {
                         Ok((global_mir_plan, global_lir_plan)) => {
+                            // The finish stage acquires read holds on the dataflow's imports,
+                            // which can include indexes that the statement doesn't name.
+                            let imports = dataflow_import_id_bundle(
+                                global_lir_plan.df_desc(),
+                                plan.index.cluster_id,
+                            );
+                            validity.extend_dependencies(
+                                &catalog,
+                                imports.iter().map(|id| catalog.resolve_item_id(&id)),
+                            );
                             if let ExplainContext::Plan(explain_ctx) = explain_ctx {
                                 let (_, df_meta) = global_lir_plan.unapply();
                                 CreateIndexStage::Explain(CreateIndexExplain {
