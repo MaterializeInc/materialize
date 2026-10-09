@@ -59,7 +59,7 @@
 
 mod extent;
 // TODO: remove the allowance once the pool selects the file store.
-#[allow(dead_code)]
+#[expect(dead_code)]
 mod file;
 mod region;
 
