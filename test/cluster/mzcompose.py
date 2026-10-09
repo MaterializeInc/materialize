@@ -9403,7 +9403,8 @@ def workflow_adapter_loss(c: Composition) -> None:
     Table/webhook-fed work may pause. The stopped adapter's holds retain history
     until replacement. Queries and those dataflows must catch up after restart.
     All outage observations use Kafka or read-only Persist CLI, never another
-    adapter. Compute and storage replicas must remain alive.
+    adapter. Physical compaction is checked after adapter replacement with
+    replicas alive, before testing replica reconstruction without SQL ingress.
     """
     timeout = 420
     adapter = Materialized(
@@ -9885,7 +9886,77 @@ def workflow_adapter_loss(c: Composition) -> None:
                     )
 
             successive_observer_progress(running_replicas)
-            # Reconstruct with no SQL ingress while the adapter's holds persist.
+            for shard in shards.values():
+                held_state = inspect(shard)
+                assert (
+                    held_state["since"] and held_state["since"][0] <= held_ts
+                ), held_state
+
+            # Explicit adapter replacement retires the transaction's holds.
+            # Keep replicas alive until physical compaction is observed: SIGKILL
+            # leaves valid Persist reader leases that can still pin old history.
+            c.up(adapter.name)
+            wait_for_client_retirement(
+                c,
+                adapter_ids,
+                [predecessors[key] for key in adapter_ids],
+                timeout=timeout,
+            )
+            # Only replacement releases the stopped adapter's transient holds. Keep
+            # the outage cutoffs and physical-compaction deadline for both shards.
+            deadline = time.monotonic() + timeout
+            compaction_wave_size = None
+            compaction_waves_remaining = 4
+            input_count = 1
+            while True:
+                first = n + 1
+                produce(first, input_count)
+                n += input_count
+                expected.update(value * 10 for value in range(first, n + 1))
+                actual = consume("source", len(expected))
+                after = {name: inspect(shard) for name, shard in shards.items()}
+                physical_progress = {
+                    name: compacted_past(after[name], thresholds[name])
+                    for name in shards
+                }
+                if actual == expected and all(physical_progress.values()):
+                    break
+                assert time.monotonic() < deadline, (
+                    f"History did not compact after adapter replacement: {physical_progress}, "
+                    f"{held_ts=}, {after}, {expected=}, Kafka={actual}"
+                )
+                input_count = 1
+                if (
+                    actual == expected
+                    and not all(physical_progress.values())
+                    and compaction_waves_remaining
+                    and all(
+                        state["since"] and state["since"][0] > thresholds[name]
+                        for name, state in after.items()
+                    )
+                ):
+                    # Permission alone does not rewrite batches. Supply bounded
+                    # ordinary input, completing each wave through Kafka first.
+                    if compaction_wave_size is None:
+                        compaction_wave_size = max(
+                            1,
+                            max(
+                                sum(batch["len"] for batch in state["batches"])
+                                for state in after.values()
+                            ),
+                        )
+                    input_count = compaction_wave_size
+                    compaction_waves_remaining -= 1
+
+            # Capture the executions this outage replaces, including the second
+            # adapter execution and the replicas about to be killed.
+            predecessors = catalog_client_incarnations(c)
+            metric_baselines = {
+                replica: curated_frontiers(replica) for replica in replicas
+            }
+            c.kill(adapter.name)
+            absent()
+            # Reconstruct with no SQL ingress after the first hold was retired.
             # Stop the surviving compute sibling before producing a fresh value:
             # its shared Persist upper cannot stand in for restarted-replica work.
             c.kill("clusterd3")
@@ -9961,11 +10032,6 @@ def workflow_adapter_loss(c: Composition) -> None:
             else:
                 assert not response.ok, "stopped adapter accepted webhook input"
             absent()
-            for shard in shards.values():
-                held_state = inspect(shard)
-                assert (
-                    held_state["since"] and held_state["since"][0] <= held_ts
-                ), held_state
         finally:
             # Restore ingress even on failure, without turning failed outage
             # observations into passing post-restart observations.
@@ -9976,51 +10042,6 @@ def workflow_adapter_loss(c: Composition) -> None:
         wait_for_client_retirement(
             c, predecessors, predecessors.values(), timeout=timeout
         )
-        # Only replacement releases the stopped adapter's transient holds. Keep
-        # the outage cutoffs and physical-compaction deadline for both shards.
-        deadline = time.monotonic() + timeout
-        compaction_wave_size = None
-        compaction_waves_remaining = 4
-        input_count = 1
-        while True:
-            first = n + 1
-            produce(first, input_count)
-            n += input_count
-            expected.update(value * 10 for value in range(first, n + 1))
-            actual = consume("source", len(expected))
-            after = {name: inspect(shard) for name, shard in shards.items()}
-            physical_progress = {
-                name: compacted_past(after[name], thresholds[name]) for name in shards
-            }
-            if actual == expected and all(physical_progress.values()):
-                break
-            assert time.monotonic() < deadline, (
-                f"History did not compact after adapter replacement: {physical_progress}, "
-                f"{held_ts=}, {after}, {expected=}, Kafka={actual}"
-            )
-            input_count = 1
-            if (
-                actual == expected
-                and not all(physical_progress.values())
-                and compaction_waves_remaining
-                and all(
-                    state["since"] and state["since"][0] > thresholds[name]
-                    for name, state in after.items()
-                )
-            ):
-                # Permission alone does not rewrite batches. Supply bounded
-                # ordinary input, completing each wave through Kafka first.
-                if compaction_wave_size is None:
-                    compaction_wave_size = max(
-                        1,
-                        max(
-                            sum(batch["len"] for batch in state["batches"])
-                            for state in after.values()
-                        ),
-                    )
-                input_count = compaction_wave_size
-                compaction_waves_remaining -= 1
-
         # No executor has ever existed for this index. Observe its retention
         # window across advancing permissions, without an arrangement or reader
         # protecting the historical points being tested.
