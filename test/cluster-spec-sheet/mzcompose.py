@@ -60,7 +60,7 @@ PRODUCTION_USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.co
 PRODUCTION_APP_PASSWORD = os.getenv("MZ_CLI_APP_PASSWORD")
 
 # Must match the region of the CI agents (the AWS `linux-aarch64-small` queue
-# runs in us-east-1). dbbench sessions are closed-loop, so cross-region RTT caps
+# runs in us-east-1). qps sessions are closed-loop, so cross-region RTT caps
 # per-session QPS and the envd_qps_scalability results would measure network
 # latency rather than environmentd.
 STAGING_REGION = "aws/us-east-1"
