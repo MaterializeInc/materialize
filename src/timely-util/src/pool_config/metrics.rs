@@ -84,6 +84,13 @@ pub fn register(registry: &MetricsRegistry) {
         gauge(registry, metric!(name: "mz_column_pool_extent_file_holes_punched_bytes_total", help: "Bytes of free file store slots returned to the filesystem."), |s| s.extent_file_holes_punched_bytes);
         read_latency_gauges(registry);
         backend_gauges(registry);
+        let _gauge: ComputedUIntGauge = registry.register_computed_gauge(
+            metric!(
+                name: "mz_column_pool_backend_fallback",
+                help: "1 if the buffer pool was configured for the file store and runs on swap instead, else 0.",
+            ),
+            || u64::from(crate::pool_config::file_backend_fell_back()),
+        );
     });
 }
 
@@ -105,7 +112,7 @@ fn gauge(
 /// Registers the file store's read-latency histogram as one computed gauge
 /// per bucket, since the registry has no computed histogram. Each gauge
 /// carries an `le` label, the bucket's upper bound in seconds, and counts the
-/// reads at or below that bound, so the series aggregate like the buckets of a
+/// reads under that bound, so the series aggregate like the buckets of a
 /// Prometheus histogram. Bucket `i` below the last holds reads under
 /// `32 µs << i`, and the last bucket is `+Inf`.
 fn read_latency_gauges(registry: &MetricsRegistry) {
@@ -117,7 +124,7 @@ fn read_latency_gauges(registry: &MetricsRegistry) {
         let _gauge: ComputedUIntGauge = registry.register_computed_gauge(
             metric!(
                 name: "mz_column_pool_extent_file_read_latency_bucket",
-                help: "Cumulative count of file store reads that took at most `le` seconds.",
+                help: "Cumulative count of file store reads that took less than `le` seconds.",
                 const_labels: {"le" => le}
             ),
             move || {
