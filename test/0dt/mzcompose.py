@@ -26,6 +26,7 @@ from psycopg.sql import SQL, Identifier
 from materialize import buildkite
 from materialize.mzcompose import get_default_system_parameters, sanitizer_enabled
 from materialize.mzcompose.composition import Composition, Service
+from materialize.mzcompose.service import Service as DockerService
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import (
     LEADER_STATUS_HEALTHCHECK,
@@ -55,6 +56,24 @@ HYDRATED_SELECT_FACTOR = 10 if sanitizer_enabled() else 1
 SYSTEM_PARAMETER_DEFAULTS = get_default_system_parameters()
 
 SERVICES = [
+    DockerService(
+        name="hydration-flags",
+        config={
+            "image": "python:3.12-slim",
+            "volumes": ["./mock_hydration_flags.py:/app/server.py"],
+            "command": ["python3", "-u", "/app/server.py"],
+            "healthcheck": {
+                "test": [
+                    "CMD",
+                    "python3",
+                    "-c",
+                    "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')",
+                ],
+                "interval": "1s",
+                "start_period": "30s",
+            },
+        },
+    ),
     MySql(),
     Postgres(),
     SqlServer(),
@@ -3132,6 +3151,166 @@ def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
 
     c.promote_mz("mz_new", retire_mz_service="mz_old")
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+
+
+def _leader_with_hydration_flags() -> Materialized:
+    return Materialized(
+        name="mz_old",
+        sanity_restart=False,
+        deploy_generation=0,
+        system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
+        external_metadata_store=True,
+        default_replication_factor=2,
+        environment_extra=[
+            "MZ_LAUNCHDARKLY_SDK_KEY=sdk-mock-key",
+            "MZ_LAUNCHDARKLY_BASE_URI=http://hydration-flags:8080",
+            "MZ_LAUNCHDARKLY_KEY_MAP=compute_hydration_concurrency=hydration-concurrency",
+            "MZ_CONFIG_SYNC_LOOP_INTERVAL=1s",
+        ],
+    )
+
+
+def workflow_caught_up_leader_unhydrated_collection(c: Composition) -> None:
+    c.down(destroy_volumes=True)
+    c.up("hydration-flags")
+    with c.override(_leader_with_hydration_flags()):
+        c.up("mz_old")
+        c.sql(
+            "ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '10s'",
+            service="mz_old",
+            port=6877,
+            user="mz_system",
+        )
+        c.sql(
+            """
+            CREATE CLUSTER waiting REPLICAS (
+                r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1')
+            );
+            CREATE TABLE waiting_input (a int);
+            INSERT INTO waiting_input VALUES (1);
+            """,
+            service="mz_old",
+        )
+        deadline = time.time() + 120
+        while not c.sql_query(
+            "SELECT count(*) = 2 FROM mz_internal.mz_replica_system_parameters p "
+            "JOIN mz_cluster_replicas r ON r.id = p.replica_id "
+            "JOIN mz_clusters c ON c.id = r.cluster_id "
+            "WHERE c.name = 'waiting' AND p.name = 'compute_hydration_concurrency' AND p.value = '0'",
+            service="mz_old",
+        )[0][0]:
+            assert (
+                time.time() < deadline
+            ), "replica hydration overrides were not applied"
+            time.sleep(0.5)
+        c.sql(
+            "CREATE INDEX waiting_idx IN CLUSTER waiting ON waiting_input (a)",
+            service="mz_old",
+        )
+        index_id = c.sql_query(
+            "SELECT id FROM mz_indexes WHERE name = 'waiting_idx'", service="mz_old"
+        )[0][0]
+        deadline = time.time() + 120
+        while not c.sql_query(
+            "SELECT count(*) = 2 AND bool_and(time_ns IS NULL) "
+            "FROM mz_internal.mz_compute_hydration_times "
+            f"WHERE object_id = '{index_id}'",
+            service="mz_old",
+        )[0][0]:
+            assert (
+                time.time() < deadline
+            ), "leader did not report both replicas unhydrated"
+            time.sleep(0.5)
+
+        c.up("mz_new")
+        c.await_mz_deployment_status(
+            DeploymentStatus.READY_TO_PROMOTE, "mz_new", timeout=120
+        )
+        with c.sql_cursor(service="mz_new", reuse_connection=False) as cursor:
+            cursor.execute("SET cluster = waiting")
+            cursor.execute("SET cluster_replica = r1")
+            cursor.execute("SET transaction_isolation = serializable")
+            cursor.execute(
+                (
+                    "SELECT hydrated_at FROM mz_introspection.mz_compute_hydration_times_per_worker "
+                    f"WHERE export_id = '{index_id}'"
+                ).encode()
+            )
+            rows = cursor.fetchall()
+        assert rows and all(
+            row[0] is None for row in rows
+        ), "incoming index unexpectedly hydrated"
+
+
+def workflow_caught_up_leader_unhydrated_replica(c: Composition) -> None:
+    c.down(destroy_volumes=True)
+    c.up("hydration-flags")
+    with c.override(_leader_with_hydration_flags()):
+        c.up("mz_old")
+        c.sql(
+            "ALTER SYSTEM SET with_0dt_caught_up_check_stability_period = '10s'",
+            service="mz_old",
+            port=6877,
+            user="mz_system",
+        )
+        c.sql(
+            """
+            CREATE CLUSTER mixed REPLICAS (
+                r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1')
+            );
+            CREATE TABLE mixed_input (a int);
+            INSERT INTO mixed_input VALUES (1);
+            """,
+            service="mz_old",
+        )
+        deadline = time.time() + 120
+        while not c.sql_query(
+            "SELECT count(*) = 1 FROM mz_internal.mz_replica_system_parameters p "
+            "JOIN mz_cluster_replicas r ON r.id = p.replica_id "
+            "JOIN mz_clusters c ON c.id = r.cluster_id "
+            "WHERE c.name = 'mixed' AND r.name = 'r2' "
+            "AND p.name = 'compute_hydration_concurrency' AND p.value = '0'",
+            service="mz_old",
+        )[0][0]:
+            assert time.time() < deadline, "replica hydration override was not applied"
+            time.sleep(0.5)
+        c.sql(
+            "CREATE INDEX mixed_idx IN CLUSTER mixed ON mixed_input (a)",
+            service="mz_old",
+        )
+        index_id = c.sql_query(
+            "SELECT id FROM mz_indexes WHERE name = 'mixed_idx'", service="mz_old"
+        )[0][0]
+        deadline = time.time() + 120
+        while c.sql_query(
+            "SELECT r.name, h.time_ns IS NULL FROM mz_internal.mz_compute_hydration_times h "
+            "JOIN mz_cluster_replicas r ON r.id = h.replica_id "
+            f"WHERE h.object_id = '{index_id}' ORDER BY r.name",
+            service="mz_old",
+        ) != [("r1", False), ("r2", True)]:
+            assert time.time() < deadline, "leader did not report mixed hydration"
+            time.sleep(0.5)
+
+        c.up("mz_new")
+        c.await_mz_deployment_status(
+            DeploymentStatus.READY_TO_PROMOTE, "mz_new", timeout=120
+        )
+        # A hydrated r1 vetoes the collection waiver. Readiness with this
+        # unhydrated r2 therefore requires the separate replica exemption.
+        with c.sql_cursor(service="mz_new", reuse_connection=False) as cursor:
+            cursor.execute("SET cluster = mixed")
+            cursor.execute("SET cluster_replica = r2")
+            cursor.execute("SET transaction_isolation = serializable")
+            cursor.execute(
+                (
+                    "SELECT hydrated_at FROM mz_introspection.mz_compute_hydration_times_per_worker "
+                    f"WHERE export_id = '{index_id}'"
+                ).encode()
+            )
+            rows = cursor.fetchall()
+        assert rows and all(
+            row[0] is None for row in rows
+        ), "incoming r2 unexpectedly hydrated"
 
 
 def workflow_caught_up_stability_without_dataflows(c: Composition) -> None:
