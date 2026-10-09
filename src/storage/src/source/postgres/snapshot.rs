@@ -743,6 +743,33 @@ pub(crate) fn render<'scope>(
 
             for (&oid, outputs) in tables_to_snapshot.iter() {
                 for (&output_index, info) in outputs.iter() {
+                    // Test-only pause point. Configuring the failpoint as
+                    // `pg_snapshot_pause=return(<table name>)` holds the snapshot of that table
+                    // here, before any of its data is emitted, until the failpoint is
+                    // deactivated. `return(<table name>:<millis>)` holds it for that long
+                    // instead, so the snapshot completes in the same dataflow incarnation.
+                    // Tables are snapshotted in OID order, so tables ordered before the paused
+                    // one complete their snapshots.
+                    let held_since = std::time::Instant::now();
+                    loop {
+                        let held = fail::eval("pg_snapshot_pause", |payload| {
+                            let (table, millis) = payload
+                                .as_deref()
+                                .map(|p| p.split_once(':').unwrap_or((p, "")))
+                                .unwrap_or_default();
+                            table == info.desc.name
+                                && millis.parse::<u64>().map_or(true, |millis| {
+                                    held_since.elapsed() < std::time::Duration::from_millis(millis)
+                                })
+                        });
+                        match held {
+                            Some(true) => {
+                                tokio::time::sleep(std::time::Duration::from_millis(100)).await
+                            }
+                            _ => break,
+                        }
+                    }
+
                     if let Err(err) = verify_schema(oid, info, &upstream_info) {
                         let update = (Err(err.into()), MzOffset::minimum(), Diff::ONE);
                         raw_handles
