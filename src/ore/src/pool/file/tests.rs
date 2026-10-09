@@ -510,3 +510,146 @@ fn tmpfile_unsupported_falls_back_to_unlinked_file() {
     drop(s);
     assert_eq!(visible(), 0, "no file is visible");
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[cfg(target_os = "linux")]
+fn failed_fallocate_punches_the_slot() {
+    let (_dir, s) = store(64 << 20);
+    let class = s.class_for(50_000).unwrap();
+    fault::fail_next(fault::Op::Fallocate, libc::ENOSPC);
+    assert_eq!(s.alloc(class), Err(AllocError::Full));
+    assert_eq!(s.allocated_bytes(), 0, "the punched slot is uncharged");
+    assert_eq!(s.classes[class].warm_bytes.load(Ordering::Relaxed), 0);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[cfg(target_os = "linux")]
+fn failed_fallocate_and_punch_keeps_the_slot_charged() {
+    let (_dir, s) = store(64 << 20);
+    let class = s.class_for(50_000).unwrap();
+    let size = u64::cast_from(s.class_size(class));
+    fault::fail_next(fault::Op::Fallocate, libc::ENOSPC);
+    fault::fail_next(fault::Op::Punch, libc::EIO);
+    assert_eq!(s.alloc(class), Err(AllocError::Full));
+    assert_eq!(s.allocated_bytes(), size, "unknown blocks stay counted");
+    assert_eq!(
+        s.classes[class].warm_bytes.load(Ordering::Relaxed),
+        size,
+        "the slot is warm"
+    );
+    assert_eq!(s.capacity_bytes(), size, "capacity lowered to what is held");
+    let reused = s.alloc(class).expect("the warm slot serves");
+    let data = pattern(50_000, 23);
+    write_bytes(&s, reused, &data).unwrap();
+    assert_reads_back(&s, reused, &data);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[cfg(target_os = "linux")]
+fn fallocate_error_disables_writes() {
+    let (_dir, s) = store(64 << 20);
+    let class = s.class_for(50_000).unwrap();
+    fault::fail_next(fault::Op::Fallocate, libc::EIO);
+    assert_eq!(s.alloc(class), Err(AllocError::WritesDisabled));
+    assert!(s.writes_disabled());
+    assert_eq!(s.stats().write_errors, 1);
+    assert_eq!(s.allocated_bytes(), 0);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[cfg(target_os = "linux")]
+fn write_enospc_with_failed_punch_leaks_the_slot() {
+    let (_dir, s) = store(64 << 20);
+    let data = pattern(50_000, 29);
+    let class = s.class_for(data.len()).unwrap();
+    let size = u64::cast_from(s.class_size(class));
+    let slot = s.alloc(class).unwrap();
+    fault::fail_next(fault::Op::Write, libc::ENOSPC);
+    fault::fail_next(fault::Op::Punch, libc::EIO);
+    assert!(matches!(
+        write_bytes(&s, slot, &data),
+        Err(WriteError::Full)
+    ));
+    assert_eq!(s.allocated_bytes(), size, "the leaked slot stays counted");
+    assert_eq!(s.classes[class].warm_bytes.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        s.classes[class].slots().in_use(),
+        1,
+        "the slot is on no free list"
+    );
+    assert_eq!(s.alloc(class), Err(AllocError::Full));
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[cfg(target_os = "linux")]
+fn punch_failure_fails_the_allocation_and_keeps_the_victim_warm() {
+    let classes = classes();
+    let big = classes.len() - 1;
+    let (_dir, s) = store(u64::cast_from(classes[big]));
+    let slot = s.alloc(big).unwrap();
+    s.free(slot);
+    fault::fail_next(fault::Op::Punch, libc::EIO);
+    assert_eq!(s.alloc(0), Err(AllocError::Full));
+    assert_eq!(
+        s.classes[big].warm_bytes.load(Ordering::Relaxed),
+        u64::cast_from(classes[big]),
+        "the victim went back warm"
+    );
+    assert_eq!(s.allocated_bytes(), s.capacity_bytes());
+    s.alloc(0).expect("a later punch succeeds");
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+#[cfg(target_os = "linux")]
+fn concurrent_allocations_all_find_punchable_room() {
+    let classes = classes();
+    let big = classes.len() - 1;
+    let small = 0;
+    let big_size = u64::cast_from(classes[big]);
+    let small_size = u64::cast_from(classes[small]);
+    let slots = 4;
+    let (_dir, s) = store(slots * big_size);
+    let held: Vec<_> = (0..slots).map(|_| s.alloc(big).unwrap()).collect();
+    for slot in held {
+        s.free(slot);
+    }
+    // Every allocation fits once warm big slots are punched, but a punch
+    // frees only its own shortfall, so threads race for the room another
+    // thread made.
+    let threads = 8;
+    let per_thread = usize::try_from(slots * big_size / small_size / threads)
+        .expect("fits")
+        .min(64);
+    let s = &s;
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(move || {
+                for _ in 0..per_thread {
+                    s.alloc(small).expect("punchable room remains");
+                }
+            });
+        }
+    });
+    let warm: u64 = s
+        .classes
+        .iter()
+        .map(|c| c.warm_bytes.load(Ordering::Relaxed))
+        .sum();
+    let in_use: u64 = s
+        .classes
+        .iter()
+        .map(|c| u64::cast_from(c.slots().in_use()) * u64::cast_from(c.size))
+        .sum();
+    assert_eq!(
+        s.allocated_bytes(),
+        in_use + warm,
+        "allocated matches the slots"
+    );
+    assert!(s.allocated_bytes() <= s.capacity_bytes());
+}
