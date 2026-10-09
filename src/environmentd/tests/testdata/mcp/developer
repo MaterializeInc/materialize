@@ -190,6 +190,15 @@ mcp-developer
 200 OK
 {"jsonrpc":"2.0","id":42,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
 
+# With enable_mcp_protocol_2026_07_28 off, a 2026-07-28 request is served as
+# 2025-11-25, so its missing Mcp-Method is not checked.
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":43,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\"]\n]"}],"isError":false}}
+
 # An unknown notification with params is still a notification.
 mcp-developer
 {"jsonrpc":"2.0","method":"notifications/other","params":{}}
