@@ -56,7 +56,8 @@ use crate::render::columnar::{ColCollection, flat_map_datums};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
+    ErrAgent, ErrBatcher, ErrBuilder, ErrSpine, ImportedErrEnter, ImportedRowRowEnter, RowRowAgent,
+    RowRowSpine,
 };
 use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder};
 
@@ -225,14 +226,15 @@ pub enum ArrangementFlavor<'scope, T: RenderTimestamp> {
         Arranged<'scope, RowRowAgent<T, Diff>>,
         Arranged<'scope, ErrAgent<T, Diff>>,
     ),
-    /// An imported trace from outside the dataflow.
+    /// An imported trace from outside the dataflow, maintained by this runtime or published by the
+    /// process's other compute runtime.
     ///
     /// The `GlobalId` identifier exists so that exports of this same trace
     /// can refer back to and depend on the original instance.
     Trace(
         GlobalId,
-        Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>,
-        Arranged<'scope, ErrEnter<mz_repr::Timestamp, T>>,
+        Arranged<'scope, ImportedRowRowEnter<T>>,
+        Arranged<'scope, ImportedErrEnter<T>>,
     ),
 }
 
@@ -524,8 +526,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// reads is the consumer's choice, and a delta join reads both within one operator, so a
     /// binding's definition cannot know which form to collapse.
     ///
-    /// NOTE: Leaves imported arrangements (`ArrangementFlavor::Trace`) alone, whose error traces
-    /// this dataflow cannot rewrite in place. Their errors arrive bounded by the exporting
+    /// NOTE: Leaves imported arrangements (`ArrangementFlavor::Trace`) alone, whose error traces this
+    /// dataflow cannot rewrite in place. Their errors arrive bounded by the exporting
     /// dataflow's last level of sharing rather than collapsed to one, since nothing collapses at an
     /// export. A global read more than once within one dataflow is not collapsed either, because
     /// only local bindings reach this.

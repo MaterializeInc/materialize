@@ -77,6 +77,17 @@ impl<Tr: TraceReader> Published<Tr> {
     }
 }
 
+/// Drops every dataflow installed on `worker`, as compute drops a collection's dataflow.
+///
+/// A live import never completes on its own, because a dropped writer leaves it at the last
+/// published `upper`, so a test that ends with one installed must drop it before
+/// `execute_directly` waits for its dataflows to finish.
+pub(crate) fn drop_dataflows(worker: &mut timely::worker::Worker) {
+    for dataflow in worker.installed_dataflows() {
+        worker.drop_dataflow(dataflow);
+    }
+}
+
 /// Test-only observations on a publication point reached through one of its readers.
 ///
 /// `SharedReader` is defined in `mz-timely-util`, so these cannot be inherent methods here.
@@ -1152,8 +1163,11 @@ fn dropped_writer_leaves_imports_at_its_last_upper() {
             arranged.stream.probe_with(&probe);
         });
         drop(handle);
+        let mut steps = 0;
         while probe.less_than(&Timestamp::from(1_u64)) {
             worker.step();
+            steps += 1;
+            assert!(steps < 10_000, "the live import did not seal time 0");
         }
 
         // Drop the writer the way `drop_collection` does, the trace handle before the dataflow,
