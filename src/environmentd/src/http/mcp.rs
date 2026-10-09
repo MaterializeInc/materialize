@@ -114,6 +114,12 @@ impl ProtocolVersion {
     fn uses_per_request_meta(self) -> bool {
         matches!(self, Self::V2026_07_28)
     }
+
+    /// Whether every result carries `resultType` and the server's identity in
+    /// `_meta`.
+    fn adds_result_fields(self) -> bool {
+        matches!(self, Self::V2026_07_28)
+    }
 }
 
 /// Checks the `params._meta` fields every 2026-07-28 request must carry: the
@@ -515,14 +521,14 @@ struct McpResponse {
     jsonrpc: String,
     id: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<McpResult>,
+    result: Option<McpResultBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<McpError>,
 }
 
 impl McpResponse {
     /// A successful JSON-RPC response carrying `result`.
-    fn success(id: serde_json::Value, result: McpResult) -> Self {
+    fn success(id: serde_json::Value, result: McpResultBody) -> Self {
         Self {
             jsonrpc: JSONRPC_VERSION.to_string(),
             id,
@@ -549,6 +555,45 @@ enum McpResult {
     Initialize(InitializeResult),
     ToolsList(ToolsListResult),
     ToolContent(ToolContentResult),
+}
+
+impl McpResult {
+    fn into_body(self, protocol: ProtocolVersion, endpoint_type: McpEndpointType) -> McpResultBody {
+        let common = protocol.adds_result_fields().then(|| CommonResultFields {
+            result_type: "complete",
+            meta: ResultMeta {
+                server_info: server_info(endpoint_type),
+            },
+        });
+        McpResultBody {
+            result: self,
+            common,
+        }
+    }
+}
+
+/// A result as sent. `common` is `None` on 2025-11-25, which keeps that
+/// output unchanged.
+#[derive(Debug, Serialize)]
+struct McpResultBody {
+    #[serde(flatten)]
+    result: McpResult,
+    #[serde(flatten)]
+    common: Option<CommonResultFields>,
+}
+
+#[derive(Debug, Serialize)]
+struct CommonResultFields {
+    #[serde(rename = "resultType")]
+    result_type: &'static str,
+    #[serde(rename = "_meta")]
+    meta: ResultMeta,
+}
+
+#[derive(Debug, Serialize)]
+struct ResultMeta {
+    #[serde(rename = "io.modelcontextprotocol/serverInfo")]
+    server_info: ServerInfo,
 }
 
 #[derive(Debug, Serialize)]
@@ -1015,6 +1060,7 @@ async fn handle_mcp_request(
             handle_mcp_request_inner(
                 &mut client,
                 request,
+                protocol,
                 endpoint_type,
                 query_tool_enabled,
                 read_data_product_tool_enabled,
@@ -1106,6 +1152,7 @@ fn answer_parse_failure(
 async fn handle_mcp_request_inner(
     client: &mut AuthedClient,
     request: McpRequest,
+    protocol: ProtocolVersion,
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
     read_data_product_tool_enabled: bool,
@@ -1129,7 +1176,9 @@ async fn handle_mcp_request_inner(
     let status_label = call_status(&result);
 
     let response = match result {
-        Ok(result_value) => McpResponse::success(request_id, result_value),
+        Ok(result_value) => {
+            McpResponse::success(request_id, result_value.into_body(protocol, endpoint_type))
+        }
         Err(e) => {
             // Log non-trivial errors
             if !matches!(
@@ -1286,6 +1335,13 @@ fn endpoint_instructions(
     }
 }
 
+fn server_info(endpoint_type: McpEndpointType) -> ServerInfo {
+    ServerInfo {
+        name: format!("materialize-mcp-{}", endpoint_type),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    }
+}
+
 fn handle_initialize(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
@@ -1294,10 +1350,7 @@ fn handle_initialize(
     Ok(McpResult::Initialize(InitializeResult {
         protocol_version: MCP_PROTOCOL_VERSION.to_string(),
         capabilities: Capabilities { tools: json!({}) },
-        server_info: ServerInfo {
-            name: format!("materialize-mcp-{}", endpoint_type),
-            version: env!("CARGO_PKG_VERSION").to_string(),
-        },
+        server_info: server_info(endpoint_type),
         instructions: endpoint_instructions(
             endpoint_type,
             query_tool_enabled,
@@ -2168,7 +2221,8 @@ mod tests {
             McpResult::ToolContent(ToolContentResult {
                 content: vec![],
                 is_error: false,
-            }),
+            })
+            .into_body(ProtocolVersion::V2025_11_25, McpEndpointType::Developer),
         );
         assert_eq!(ok.jsonrpc, JSONRPC_VERSION);
         assert!(ok.result.is_some());
