@@ -8,9 +8,13 @@
 // by the Apache License, Version 2.0.
 
 import { renderHook, waitFor } from "@testing-library/react";
-import { delay, http } from "msw";
-import { describe, expect, it } from "vitest";
+import { delay, http, HttpResponse } from "msw";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  buildColumns,
+  mapKyselyToTabular,
+} from "~/api/mocks/buildSqlQueryHandler";
 import server from "~/api/mocks/server";
 import {
   FreshnessObject,
@@ -74,5 +78,58 @@ describe("freshness queries", () => {
     // Long enough for a second request started in the same render to land.
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(pending).toHaveLength(1);
+  });
+
+  describe("when the page is opened again", () => {
+    const DAY_MS = 86_400_000;
+    let requests = 0;
+
+    // Answers the series with no rows and counts each request.
+    beforeEach(() => {
+      requests = 0;
+      server.use(
+        http.post("*/api/sql", () => {
+          requests += 1;
+          return HttpResponse.json({
+            results: [
+              mapKyselyToTabular({
+                columns: buildColumns(["bucketStart", "objectId", "lag"]),
+                rows: [],
+              }),
+            ],
+          });
+        }),
+      );
+      vi.useFakeTimers({ toFake: ["Date"] });
+    });
+
+    afterEach(() => vi.useRealTimers());
+
+    const openPage = async () => {
+      const ProviderWrapper = await createProviderWrapper();
+      const view = renderHook(
+        () => useClusterFreshness({ lookbackMs: DAY_MS, objects }),
+        { wrapper: ProviderWrapper },
+      );
+      await waitFor(() => expect(view.result.current.data).toBeDefined());
+      return view;
+    };
+
+    it("refetches a series older than a reading, though its bin is 24 minutes", async () => {
+      (await openPage()).unmount();
+      vi.setSystemTime(Date.now() + 61_000);
+
+      // The cached series shows at once and the refetch runs behind it.
+      await openPage();
+      await waitFor(() => expect(requests).toBe(2));
+    });
+
+    it("reuses a series fetched within the last reading", async () => {
+      (await openPage()).unmount();
+      vi.setSystemTime(Date.now() + 30_000);
+
+      await openPage();
+      expect(requests).toBe(1);
+    });
   });
 });

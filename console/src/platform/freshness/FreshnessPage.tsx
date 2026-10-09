@@ -443,11 +443,12 @@ const FreshnessPage = () => {
           Freshness is wallclock lag: how far behind wall clock time an
           object&rsquo;s results are. Readings are binned to 60 points per
           range, and each point is the worst lag in its span, so p90 is a
-          percentile of those maxima. The &ldquo;Now&rdquo; column is the most
-          recent single reading rather than a binned point, so at wider ranges a
-          point on the graph can sit above the &ldquo;Now&rdquo; value in its
-          row. The graph refreshes once per point, so pMAX can include a newer
-          &ldquo;Now&rdquo; value that the graph has not drawn yet.
+          percentile of those maxima. The &ldquo;Now&rdquo; column and the
+          &ldquo;right now&rdquo; option both use the most recent single reading
+          rather than a binned point, so at wider ranges a point on the graph
+          can sit above the &ldquo;Now&rdquo; value in its row. While the page
+          stays open the graph refreshes once per point, so pMAX can include a
+          newer &ldquo;Now&rdquo; value that the graph has not drawn yet.
         </Text>
       </VStack>
     </MainContentContainer>

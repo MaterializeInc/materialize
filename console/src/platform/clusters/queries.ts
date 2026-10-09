@@ -91,6 +91,7 @@ import {
 import {
   calculateBucketSizeFromLookback,
   fetchObjectLagHistory,
+  LATEST_READING_INTERVAL_MS,
 } from "~/api/materialize/freshness/lagHistory";
 import { assertNoMoreThanOneRow } from "~/api/materialize/MoreThanOneRowError";
 import { fetchOwners } from "~/api/materialize/owners";
@@ -1087,8 +1088,11 @@ export function useClusterFreshness({
 }: ClusterFreshnessParams) {
   const objectIds = objects.map((object) => object.objectId);
 
-  // The series refetches once per bin, which at a 24 hour range is 24 minutes,
-  // so it re-reads the whole window at most once per new point.
+  // While the page sits open, the series refetches once per bin, which at a
+  // 24 hour range is 24 minutes, so it re-reads the whole window at most once
+  // per new point. A load or a return to the tab refetches anything older than
+  // a reading: people open this page when they suspect a problem, and a cached
+  // series up to a bin old would hide it.
   // NOTE: the trailing bin is partial, so between fetches it can miss a lag
   // that started since. See `computeStats`.
   const binSizeMs = calculateBucketSizeFromLookback(lookbackMs);
@@ -1112,7 +1116,7 @@ export function useClusterFreshness({
       });
       return rows;
     },
-    staleTime: binSizeMs,
+    staleTime: LATEST_READING_INTERVAL_MS,
     refetchInterval: binSizeMs,
   });
 
