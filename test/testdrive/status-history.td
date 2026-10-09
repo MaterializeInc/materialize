@@ -402,22 +402,23 @@ kafka2  paused
 $ set-from-sql var=replica_id_1
 SELECT r.id FROM mz_clusters c JOIN mz_cluster_replicas r ON c.id = r.cluster_id  WHERE c.name = 'sinks'
 
+# Native observation subscriptions replay the current status, not missed
+# transitions. Require a recorded running status for each new replica without
+# requiring observation of its transient starting status.
 > SELECT o.name, s.status, s.details, s.replica_id
   FROM mz_internal.mz_sink_status_history s
   JOIN mz_sinks o ON o.id = s.sink_id
-  WHERE o.name = 'kafka1'
+  WHERE o.name = 'kafka1' AND s.status = 'running'
   ORDER BY occurred_at DESC
-  LIMIT 2
-kafka1  starting  <null>  ${replica_id_1}
+  LIMIT 1
 kafka1  running   <null>  ${replica_id_1}
 
 > SELECT o.name, s.status, s.details, s.replica_id
   FROM mz_internal.mz_sink_status_history s
   JOIN mz_sinks o ON o.id = s.sink_id
-  WHERE o.name = 'kafka2'
+  WHERE o.name = 'kafka2' AND s.status = 'running'
   ORDER BY occurred_at DESC
-  LIMIT 2
-kafka2  starting  <null>  ${replica_id_1}
+  LIMIT 1
 kafka2  running   <null>  ${replica_id_1}
 
 > SELECT o.name, s.status FROM mz_internal.mz_sink_statuses s JOIN mz_sinks o USING (id)
@@ -460,19 +461,17 @@ SELECT r.id FROM mz_clusters c JOIN mz_cluster_replicas r ON c.id = r.cluster_id
 > SELECT o.name, s.status, s.details, s.replica_id
   FROM mz_internal.mz_sink_status_history s
   JOIN mz_sinks o ON o.id = s.sink_id
-  WHERE o.name = 'kafka1'
+  WHERE o.name = 'kafka1' AND s.status = 'running'
   ORDER BY occurred_at DESC
-  LIMIT 2
-kafka1  starting  <null>  ${replica_id_2}
+  LIMIT 1
 kafka1  running   <null>  ${replica_id_2}
 
 > SELECT o.name, s.status, s.details, s.replica_id
   FROM mz_internal.mz_sink_status_history s
   JOIN mz_sinks o ON o.id = s.sink_id
-  WHERE o.name = 'kafka2'
+  WHERE o.name = 'kafka2' AND s.status = 'running'
   ORDER BY occurred_at DESC
-  LIMIT 2
-kafka2  starting  <null>  ${replica_id_2}
+  LIMIT 1
 kafka2  running   <null>  ${replica_id_2}
 
 > SELECT o.name, s.status FROM mz_internal.mz_sink_statuses s JOIN mz_objects o USING (id)
