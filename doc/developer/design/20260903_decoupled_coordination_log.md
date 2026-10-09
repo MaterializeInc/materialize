@@ -31,15 +31,21 @@ from readmission. The pending question is whether to add an internal retirement
 endpoint on the serving deployment. Removing a member without preventing its rejoin
 is insufficient. Do not add a process registry or timed cleanup.
 
-Retired deployment membership, runtime configuration and replica-owned observation
-selections can remain as metadata leftovers. They do not retain read frontiers or
-restore execution authority. Keep their cleanup distinct from shared declarations,
-SQL-owned plans and historical observations, which must survive other owners' retirement.
+Promotion also retracts retired memberships, runtime configuration, replica settings
+and replica-owned observation selections in its authority CAS. Raw snapshot rows
+preserve pre-migration encodings. Shared declarations, SQL-owned plans, historical
+observations and surviving owners remain intact. Verify this combined path in CI.
 
-Regenerate the unreleased catalog serialization fixture with its canonical generator
-and remove the temporary artifact-generation hook once the fixture is checked in.
-Keep earlier branch-built catalog conversion outside scope. Verify the combined
-lifecycle path in the existing workflows before claiming the slice complete.
+The creator-admission acknowledgement fix preserves results even without a changed
+catalog projection. Replica conflict coverage now requires real grant changes and
+published advancement. The outage fixture checks physical compaction before replica
+SIGKILLs, without shortening abandoned Persist reader leases or extending deadlines.
+Keep earlier branch-built catalog conversion outside scope.
+
+CI138465 still has parallel DDL timeouts, unfinished SLT comment/webhook tests and
+increasing Zippy readiness waits. Their precise wait owners remain unresolved.
+Do not attribute these to the acknowledgement bug or claim lifecycle changes solve
+them without correlated evidence. Detailed captures and verification are in the PR.
 
 Continue the parallel-workload repairs. Repeated catalog conflicts amplify
 client read-protection publication and ordinary DDL into long coordinator-owned
