@@ -6206,6 +6206,7 @@ dependencies = [
  "openssl",
  "opentelemetry",
  "prometheus",
+ "proptest",
  "prost",
  "qcell",
  "rand 0.10.3",

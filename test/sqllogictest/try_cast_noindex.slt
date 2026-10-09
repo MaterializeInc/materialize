@@ -1,0 +1,274 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# The numeric(5,2) blocks of the TRY_CAST matrix in try_cast.slt. They live
+# apart because a constant-folded numeric(5,2) literal loses its scale on the
+# view path: `SELECT 1.5::numeric(5,2)::text` gives `1.50`, but the same
+# expression in a CREATE VIEW gives `1.5`, for CAST and TRY_CAST alike. The
+# indexed views that --auto-index-selects wraps queries in hit that, so this
+# file is kept out of that mode. The blocks have the same shape as in
+# try_cast.slt.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_try_cast = true
+----
+COMPLETE 0
+
+## numeric(5,2) targets
+
+# smallint -> numeric(5,2)
+query TBB
+SELECT TRY_CAST(1::int2 AS numeric(5,2))::text, TRY_CAST(1::int2 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(1::int2 AS numeric(5,2))::text, TRY_CAST(NULL::int2 AS numeric(5,2)) IS NULL
+----
+1.00  true  true
+
+query TBB
+SELECT TRY_CAST(32767::int2 AS numeric(5,2))::text, TRY_CAST(32767::int2 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(32767::int2 AS numeric(5,2))::text, TRY_CAST(NULL::int2 AS numeric(5,2)) IS NULL
+----
+32767.00  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int2 AS numeric(5,2))::text, TRY_CAST((-1)::int2 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST((-1)::int2 AS numeric(5,2))::text, TRY_CAST(NULL::int2 AS numeric(5,2)) IS NULL
+----
+-1.00  true  true
+
+# integer -> numeric(5,2)
+query TBB
+SELECT TRY_CAST(1 AS numeric(5,2))::text, TRY_CAST(1 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(1 AS numeric(5,2))::text, TRY_CAST(NULL::int4 AS numeric(5,2)) IS NULL
+----
+1.00  true  true
+
+query TBB
+SELECT TRY_CAST(2147483647 AS numeric(5,2))::text, TRY_CAST(2147483647 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(2147483647 AS numeric(5,2))::text, TRY_CAST(NULL::int4 AS numeric(5,2)) IS NULL
+----
+2147483647.00  true  true
+
+query TBB
+SELECT TRY_CAST(-1 AS numeric(5,2))::text, TRY_CAST(-1 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(-1 AS numeric(5,2))::text, TRY_CAST(NULL::int4 AS numeric(5,2)) IS NULL
+----
+-1.00  true  true
+
+query TBB
+SELECT TRY_CAST(100000 AS numeric(5,2))::text, TRY_CAST(100000 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(100000 AS numeric(5,2))::text, TRY_CAST(NULL::int4 AS numeric(5,2)) IS NULL
+----
+100000.00  true  true
+
+# bigint -> numeric(5,2)
+query TBB
+SELECT TRY_CAST(1::int8 AS numeric(5,2))::text, TRY_CAST(1::int8 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(1::int8 AS numeric(5,2))::text, TRY_CAST(NULL::int8 AS numeric(5,2)) IS NULL
+----
+1.00  true  true
+
+query TBB
+SELECT TRY_CAST(9223372036854775807::int8 AS numeric(5,2))::text, TRY_CAST(9223372036854775807::int8 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(9223372036854775807::int8 AS numeric(5,2))::text, TRY_CAST(NULL::int8 AS numeric(5,2)) IS NULL
+----
+9223372036854775807.00  true  true
+
+query TBB
+SELECT TRY_CAST((-1)::int8 AS numeric(5,2))::text, TRY_CAST((-1)::int8 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST((-1)::int8 AS numeric(5,2))::text, TRY_CAST(NULL::int8 AS numeric(5,2)) IS NULL
+----
+-1.00  true  true
+
+query TBB
+SELECT TRY_CAST(3000000000::int8 AS numeric(5,2))::text, TRY_CAST(3000000000::int8 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(3000000000::int8 AS numeric(5,2))::text, TRY_CAST(NULL::int8 AS numeric(5,2)) IS NULL
+----
+3000000000.00  true  true
+
+# uint2 -> numeric(5,2)
+query TBB
+SELECT TRY_CAST(1::uint2 AS numeric(5,2))::text, TRY_CAST(1::uint2 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(1::uint2 AS numeric(5,2))::text, TRY_CAST(NULL::uint2 AS numeric(5,2)) IS NULL
+----
+1.00  true  true
+
+query TBB
+SELECT TRY_CAST(65535::uint2 AS numeric(5,2))::text, TRY_CAST(65535::uint2 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(65535::uint2 AS numeric(5,2))::text, TRY_CAST(NULL::uint2 AS numeric(5,2)) IS NULL
+----
+65535.00  true  true
+
+# uint4 -> numeric(5,2)
+query TBB
+SELECT TRY_CAST(1::uint4 AS numeric(5,2))::text, TRY_CAST(1::uint4 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(1::uint4 AS numeric(5,2))::text, TRY_CAST(NULL::uint4 AS numeric(5,2)) IS NULL
+----
+1.00  true  true
+
+query TBB
+SELECT TRY_CAST(4294967295::uint4 AS numeric(5,2))::text, TRY_CAST(4294967295::uint4 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(4294967295::uint4 AS numeric(5,2))::text, TRY_CAST(NULL::uint4 AS numeric(5,2)) IS NULL
+----
+4294967295.00  true  true
+
+# uint8 -> numeric(5,2)
+query TBB
+SELECT TRY_CAST(1::uint8 AS numeric(5,2))::text, TRY_CAST(1::uint8 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(1::uint8 AS numeric(5,2))::text, TRY_CAST(NULL::uint8 AS numeric(5,2)) IS NULL
+----
+1.00  true  true
+
+query TBB
+SELECT TRY_CAST(18446744073709551615::uint8 AS numeric(5,2))::text, TRY_CAST(18446744073709551615::uint8 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(18446744073709551615::uint8 AS numeric(5,2))::text, TRY_CAST(NULL::uint8 AS numeric(5,2)) IS NULL
+----
+18446744073709551615.00  true  true
+
+# text -> numeric(5,2)
+query TBB
+SELECT TRY_CAST('1.5' AS numeric(5,2))::text, TRY_CAST('1.5' AS numeric(5,2))::text IS NOT DISTINCT FROM CAST('1.5' AS numeric(5,2))::text, TRY_CAST(NULL AS numeric(5,2)) IS NULL
+----
+1.50  true  true
+
+statement error
+SELECT CAST('abc' AS numeric(5,2))
+
+query T
+SELECT TRY_CAST('abc' AS numeric(5,2))::text
+----
+NULL
+
+statement error
+SELECT CAST('' AS numeric(5,2))
+
+query T
+SELECT TRY_CAST('' AS numeric(5,2))::text
+----
+NULL
+
+# numeric -> numeric(5,2)
+query TBB
+SELECT TRY_CAST(1.5::numeric AS numeric(5,2))::text, TRY_CAST(1.5::numeric AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(1.5::numeric AS numeric(5,2))::text, TRY_CAST(NULL::numeric AS numeric(5,2)) IS NULL
+----
+1.50  true  true
+
+statement error
+SELECT CAST(1e38::numeric AS numeric(5,2))
+
+query T
+SELECT TRY_CAST(1e38::numeric AS numeric(5,2))::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST((-1.5)::numeric AS numeric(5,2))::text, TRY_CAST((-1.5)::numeric AS numeric(5,2))::text IS NOT DISTINCT FROM CAST((-1.5)::numeric AS numeric(5,2))::text, TRY_CAST(NULL::numeric AS numeric(5,2)) IS NULL
+----
+-1.50  true  true
+
+query TBB
+SELECT TRY_CAST('NaN'::numeric AS numeric(5,2))::text, TRY_CAST('NaN'::numeric AS numeric(5,2))::text IS NOT DISTINCT FROM CAST('NaN'::numeric AS numeric(5,2))::text, TRY_CAST(NULL::numeric AS numeric(5,2)) IS NULL
+----
+NaN  true  true
+
+query TBB
+SELECT TRY_CAST(123.456::numeric AS numeric(5,2))::text, TRY_CAST(123.456::numeric AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(123.456::numeric AS numeric(5,2))::text, TRY_CAST(NULL::numeric AS numeric(5,2)) IS NULL
+----
+123.46  true  true
+
+# real -> numeric(5,2)
+query TBB
+SELECT TRY_CAST(1.5::float4 AS numeric(5,2))::text, TRY_CAST(1.5::float4 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(1.5::float4 AS numeric(5,2))::text, TRY_CAST(NULL::float4 AS numeric(5,2)) IS NULL
+----
+1.50  true  true
+
+statement error
+SELECT CAST('3.4e38'::float4 AS numeric(5,2))
+
+query T
+SELECT TRY_CAST('3.4e38'::float4 AS numeric(5,2))::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST((-1.5)::float4 AS numeric(5,2))::text, TRY_CAST((-1.5)::float4 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST((-1.5)::float4 AS numeric(5,2))::text, TRY_CAST(NULL::float4 AS numeric(5,2)) IS NULL
+----
+-1.50  true  true
+
+query TBB
+SELECT TRY_CAST('NaN'::float4 AS numeric(5,2))::text, TRY_CAST('NaN'::float4 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST('NaN'::float4 AS numeric(5,2))::text, TRY_CAST(NULL::float4 AS numeric(5,2)) IS NULL
+----
+NaN  true  true
+
+statement error
+SELECT CAST('Infinity'::float4 AS numeric(5,2))
+
+query T
+SELECT TRY_CAST('Infinity'::float4 AS numeric(5,2))::text
+----
+NULL
+
+# double precision -> numeric(5,2)
+query TBB
+SELECT TRY_CAST(1.5::float8 AS numeric(5,2))::text, TRY_CAST(1.5::float8 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST(1.5::float8 AS numeric(5,2))::text, TRY_CAST(NULL::float8 AS numeric(5,2)) IS NULL
+----
+1.50  true  true
+
+statement error
+SELECT CAST('1.7e308'::float8 AS numeric(5,2))
+
+query T
+SELECT TRY_CAST('1.7e308'::float8 AS numeric(5,2))::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST((-1.5)::float8 AS numeric(5,2))::text, TRY_CAST((-1.5)::float8 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST((-1.5)::float8 AS numeric(5,2))::text, TRY_CAST(NULL::float8 AS numeric(5,2)) IS NULL
+----
+-1.50  true  true
+
+query TBB
+SELECT TRY_CAST('NaN'::float8 AS numeric(5,2))::text, TRY_CAST('NaN'::float8 AS numeric(5,2))::text IS NOT DISTINCT FROM CAST('NaN'::float8 AS numeric(5,2))::text, TRY_CAST(NULL::float8 AS numeric(5,2)) IS NULL
+----
+NaN  true  true
+
+statement error
+SELECT CAST('Infinity'::float8 AS numeric(5,2))
+
+query T
+SELECT TRY_CAST('Infinity'::float8 AS numeric(5,2))::text
+----
+NULL
+
+# jsonb -> numeric(5,2)
+query TBB
+SELECT TRY_CAST('1'::jsonb AS numeric(5,2))::text, TRY_CAST('1'::jsonb AS numeric(5,2))::text IS NOT DISTINCT FROM CAST('1'::jsonb AS numeric(5,2))::text, TRY_CAST(NULL::jsonb AS numeric(5,2)) IS NULL
+----
+1.00  true  true
+
+statement error
+SELECT CAST('"x"'::jsonb AS numeric(5,2))
+
+query T
+SELECT TRY_CAST('"x"'::jsonb AS numeric(5,2))::text
+----
+NULL
+
+statement error
+SELECT CAST('[1]'::jsonb AS numeric(5,2))
+
+query T
+SELECT TRY_CAST('[1]'::jsonb AS numeric(5,2))::text
+----
+NULL
+
+query TBB
+SELECT TRY_CAST('1e30'::jsonb AS numeric(5,2))::text, TRY_CAST('1e30'::jsonb AS numeric(5,2))::text IS NOT DISTINCT FROM CAST('1e30'::jsonb AS numeric(5,2))::text, TRY_CAST(NULL::jsonb AS numeric(5,2)) IS NULL
+----
+1000000000000000000000000000000.00  true  true
+
+statement error
+SELECT CAST('true'::jsonb AS numeric(5,2))
+
+query T
+SELECT TRY_CAST('true'::jsonb AS numeric(5,2))::text
+----
+NULL
+
+statement error
+SELECT CAST('null'::jsonb AS numeric(5,2))
+
+query T
+SELECT TRY_CAST('null'::jsonb AS numeric(5,2))::text
+----
+NULL

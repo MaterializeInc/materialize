@@ -3650,6 +3650,13 @@
   "TruncFloat32": "UNITSTRUCT",
   "TruncFloat64": "UNITSTRUCT",
   "TruncNumeric": "UNITSTRUCT",
+  "TryCast": {
+    "STRUCT": {
+      "inner": {
+        "TYPENAME": "UnaryFunc"
+      }
+    }
+  },
   "TryParseMonotonicIso8601Timestamp": "UNITSTRUCT",
   "UnaryFunc": {
     "ENUM": {
@@ -5321,6 +5328,11 @@
       "TruncNumeric": {
         "NEWTYPE": {
           "TYPENAME": "TruncNumeric"
+        }
+      },
+      "TryCast": {
+        "NEWTYPE": {
+          "TYPENAME": "TryCast"
         }
       },
       "TryParseMonotonicIso8601Timestamp": {

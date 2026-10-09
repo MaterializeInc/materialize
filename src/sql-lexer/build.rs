@@ -44,6 +44,9 @@ fn main() -> Result<()> {
 
         let mut buf = CodegenBuf::new();
 
+        // Multi-word keywords like `TRY_CAST` keep their underscore in the
+        // variant name so that `as_str` can uppercase it verbatim.
+        buf.writeln("#[allow(non_camel_case_types)]");
         buf.writeln("#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]");
         buf.write_block("pub enum Keyword", |buf| {
             for kw in &keywords {
