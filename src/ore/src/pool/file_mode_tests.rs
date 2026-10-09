@@ -1157,6 +1157,43 @@ fn background_pass_with_queued_evictions_demotes_one_extent() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
+fn spill_job_leaves_the_trim_to_the_spill_loop() {
+    let (_dir, pool) = file_pool(1 << 30, 1 << 30);
+    let handles = evicted_chunks(&pool, 4);
+    pool.enable_spill_without_threads();
+    pool.fake_spill_threads();
+    let first = insert(&pool, &payload(SMALL, 4));
+    let second = insert(&pool, &payload(SMALL, 5));
+    pool.evict(&first);
+    pool.evict(&second);
+    pool.0.rss_target_bytes.store(1, Ordering::Relaxed);
+
+    // One loop iteration: the job, then the loop's trim. The job alone
+    // demotes nothing, and the trim demotes one extent while the other job
+    // is still queued.
+    let job = pool.0.spill_queue().pop_front().expect("a queued job");
+    pool.0.spill_process(&job, SpillKind::Evict);
+    pool.0.spill.in_flight.fetch_sub(1, Ordering::Relaxed);
+    assert_eq!(pool.stats().extent_file_writes, 0, "the job demoted");
+    let mut hinted_retry = std::time::Instant::now();
+    pool.0.spill_trim(&mut hinted_retry);
+    assert_eq!(pool.stats().extent_file_writes, 1);
+
+    while pool.spill_step() {}
+    for (seed, handle) in (0..4).zip_eq(&handles) {
+        assert_eq!(read(handle), payload(SMALL, seed));
+    }
+    assert_eq!(read(&first), payload(SMALL, 4));
+    assert_eq!(read(&second), payload(SMALL, 5));
+    drop(job);
+    drop(handles);
+    drop(first);
+    drop(second);
+    assert_drained(&pool);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
 fn budget_pass_trims_the_tier_between_evictions() {
     let (_dir, pool) = file_pool(256 << 20, 64 << 20);
     const CHUNKS: u64 = 32;
