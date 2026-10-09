@@ -163,6 +163,14 @@ pub(crate) fn render<'scope>(
     let op_name = format!("ReplicationReader({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope.clone());
 
+    // Read at render time, matching the value the persist sink reads in the same dataflow build.
+    // A read in the async body can observe an `UpdateConfiguration` sequenced after this dataflow's
+    // creation and disagree with the sink because the `ConfigSet` is updated in place.
+    // A nonzero lookahead is the switch, see `STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD`.
+    let concurrent_replication = !STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD
+        .get(config.config.config_set())
+        .is_zero();
+
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
     // One data output port per source export, in output index order. With concurrent
     // replication enabled a port holds the minimum capability only while its export has a
@@ -199,9 +207,6 @@ pub(crate) fn render<'scope>(
             let (data_cap_sets, caps) = caps.split_at_mut(export_count);
             let [definite_error_cap_set, probe_cap]: &mut [_; 2] = caps.try_into().unwrap();
             let mut data_outputs = SharedFuel::new(data_outputs);
-            let concurrent_replication = !STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD
-                .get(config.config.config_set())
-                .is_zero();
 
             if !config.responsible_for("slot") {
                 // Emit 0, to mark this worker as having started up correctly.
