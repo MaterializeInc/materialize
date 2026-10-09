@@ -21,6 +21,11 @@ from . import deploy_util
 def main() -> None:
     target = f"{Arch.host()}-apple-darwin"
 
+    print("--- Checking version")
+    version = deploy_util.mz_deploy_version()
+
+    # No macOS mzbuild image exists, so this is the one target that still builds
+    # from source at deploy time.
     print("--- Building mz-deploy")
     spawn.runv(
         ["cargo", "build", "--bin", "mz-deploy", "--release"],
@@ -29,10 +34,14 @@ def main() -> None:
 
     uploader = TarballUploader(
         package_name="mz-deploy",
-        version=deploy_util.MZ_DEPLOY_VERSION,
+        version=version,
     )
 
-    uploader.deploy_tarball(target, Path("target") / "release" / "mz-deploy")
+    uploader.deploy_tarball(
+        target,
+        Path("target") / "release" / "mz-deploy",
+        update_latest=deploy_util.should_update_latest(version),
+    )
 
 
 if __name__ == "__main__":
