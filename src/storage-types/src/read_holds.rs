@@ -52,7 +52,7 @@ impl Debug for ReadHold {
     }
 }
 
-/// The issuer of a [`ReadHold`] has hung up, so the hold can no longer be cloned.
+/// The issuer of a [`ReadHold`] has hung up, so the hold can no longer be cloned or merged.
 ///
 /// This happens during process shutdown, when the tokio runtime drops tasks in arbitrary order
 /// and the issuer task can disappear while holds still exist, and to compute holds once their
@@ -107,11 +107,15 @@ impl ReadHold {
 
     /// Merges `other` into `self`, keeping the overall read hold.
     ///
+    /// Returns an `Err` when the issuer of the read hold has hung up, in which
+    /// case `self` no longer holds back the since of the collection, see
+    /// [`ReadHoldIssuerHungUp`].
+    ///
     /// # Panics
     ///
     /// Panics when trying to merge a [ReadHold] for a different collection
     /// (different [GlobalId]).
-    pub fn merge_assign(&mut self, mut other: ReadHold) {
+    pub fn merge_assign(&mut self, mut other: ReadHold) -> Result<(), ReadHoldIssuerHungUp> {
         assert_eq!(
             self.id, other.id,
             "can only merge ReadHolds for the same ID"
@@ -133,12 +137,7 @@ impl ReadHold {
         // in one go.
         changes.extend(self.since.iter().map(|t| (t.clone(), 1)));
 
-        match (self.change_tx)(self.id, changes) {
-            Ok(_) => (),
-            Err(e) => {
-                panic!("cannot merge ReadHold: {}", e);
-            }
-        }
+        (self.change_tx)(self.id, changes).map_err(|_| ReadHoldIssuerHungUp(self.id))
     }
 
     /// Downgrades `self` to the given `frontier`. Returns `Err` when the new
@@ -180,9 +179,8 @@ impl ReadHold {
     /// the since of the collection.
     ///
     /// The issuer hangs up during process shutdown, and for compute holds when
-    /// their compute instance is dropped (see [`ReadHoldIssuerHungUp`]). Callers
-    /// that may run concurrently with either can use this method to handle that
-    /// case gracefully, instead of panicking via [Clone::clone].
+    /// their compute instance is dropped, see [`ReadHoldIssuerHungUp`]. This is
+    /// why [ReadHold] does not implement [Clone].
     pub fn try_clone(&self) -> Result<Self, ReadHoldIssuerHungUp> {
         if self.id.is_user() {
             tracing::trace!("cloning ReadHold on {}: {:?}", self.id, self.since);
@@ -205,15 +203,6 @@ impl ReadHold {
             since: self.since.clone(),
             change_tx: Arc::clone(&self.change_tx),
         })
-    }
-}
-
-impl Clone for ReadHold {
-    fn clone(&self) -> Self {
-        match self.try_clone() {
-            Ok(clone) => clone,
-            Err(e) => panic!("cannot clone ReadHold: {}", e),
-        }
     }
 }
 

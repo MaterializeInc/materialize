@@ -434,9 +434,8 @@ impl PeekClient {
         let (peek_target, target_read_hold, literal_constraints, mfp, strategy) = match fast_path {
             FastPathPlan::PeekExisting(_coll_id, idx_id, literal_constraints, mfp) => {
                 let peek_target = PeekTarget::Index { id: idx_id };
-                // Take the hold rather than clone it: cloning a compute hold
-                // panics once a concurrent DROP CLUSTER has shut its instance
-                // down. The peek below then fails with a "was dropped" error.
+                // If a concurrent DROP CLUSTER shut this hold's instance down,
+                // the peek below fails with a "was dropped" error.
                 let target_read_hold = input_read_holds
                     .compute_holds
                     .remove(&(compute_instance, idx_id))

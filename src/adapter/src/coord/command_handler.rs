@@ -430,8 +430,7 @@ impl Coordinator {
                     read_holds,
                     tx,
                 } => {
-                    self.store_transaction_read_holds(conn_id, read_holds);
-                    let _ = tx.send(());
+                    let _ = tx.send(self.store_transaction_read_holds(conn_id, read_holds));
                 }
 
                 Command::ExecuteSlowPathPeek {
@@ -1968,7 +1967,7 @@ impl Coordinator {
             // NOTE: The Drop impl of ReadHolds makes sure that the hold is
             // released when we don't use it.
             if acquire_read_holds {
-                self.store_transaction_read_holds(session.conn_id().clone(), read_holds);
+                self.store_transaction_read_holds(session.conn_id().clone(), read_holds)?;
             }
 
             mz_now_ts

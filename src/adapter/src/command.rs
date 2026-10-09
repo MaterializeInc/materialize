@@ -274,11 +274,12 @@ pub enum Command {
         tx: oneshot::Sender<Result<Option<ReadHolds>, AdapterError>>,
     },
 
-    /// _Merges_ the given read holds into the given connection's stored transaction read holds.
+    /// _Merges_ the given read holds into the given connection's stored transaction read holds,
+    /// failing if the issuer of a merged hold hung up, see `ReadHolds::merge`.
     StoreTransactionReadHolds {
         conn_id: ConnectionId,
         read_holds: ReadHolds,
-        tx: oneshot::Sender<()>,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
     },
 
     ExecuteSlowPathPeek {

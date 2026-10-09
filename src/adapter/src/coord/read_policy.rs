@@ -41,7 +41,7 @@ use crate::util::ResultExt;
 /// that read frontiers cannot advance past the held time as long as they exist.
 /// Dropping a [`ReadHolds`] also drops the [`ReadHold`] tokens within and
 /// relinquishes the associated read capabilities.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct ReadHolds {
     pub storage_holds: BTreeMap<GlobalId, ReadHold>,
     pub compute_holds: BTreeMap<(ComputeInstanceId, GlobalId), ReadHold>,
@@ -139,10 +139,8 @@ impl ReadHolds {
         Ok(result)
     }
 
-    /// Returns a new ReadHolds containing only the holds for collections in `id_bundle`.
-    ///
-    /// Moves the holds out of `self` rather than cloning them: cloning a compute
-    /// hold panics once `DROP CLUSTER` has shut its instance down.
+    /// Returns a new ReadHolds containing only the holds for collections in `id_bundle`,
+    /// moved out of `self`.
     pub fn subset(mut self, id_bundle: &CollectionIdBundle) -> ReadHolds {
         let mut result = ReadHolds::new();
 
@@ -202,29 +200,38 @@ impl ReadHolds {
     }
 
     /// Merge the read holds in `other` into the contained read holds.
-    fn merge(&mut self, other: Self) {
+    ///
+    /// Fails like [`ReadHolds::try_clone`] if the issuer of a hold hung up. The
+    /// holds merged until then stay in `self`, and the rest of `other` is
+    /// released.
+    fn merge(&mut self, other: Self) -> Result<(), AdapterError> {
         use std::collections::btree_map::Entry;
 
         for (id, other_hold) in other.storage_holds {
             match self.storage_holds.entry(id) {
                 Entry::Occupied(mut o) => {
-                    o.get_mut().merge_assign(other_hold);
+                    o.get_mut()
+                        .merge_assign(other_hold)
+                        .map_err(|_| storage_hold_hung_up(id))?;
                 }
                 Entry::Vacant(v) => {
                     v.insert(other_hold);
                 }
             }
         }
-        for (id, other_hold) in other.compute_holds {
-            match self.compute_holds.entry(id) {
+        for ((instance_id, id), other_hold) in other.compute_holds {
+            match self.compute_holds.entry((instance_id, id)) {
                 Entry::Occupied(mut o) => {
-                    o.get_mut().merge_assign(other_hold);
+                    o.get_mut()
+                        .merge_assign(other_hold)
+                        .map_err(|_| compute_hold_hung_up(instance_id))?;
                 }
                 Entry::Vacant(v) => {
                     v.insert(other_hold);
                 }
             }
         }
+        Ok(())
     }
 
     /// Extend the contained read holds with those in `other`.
@@ -439,21 +446,20 @@ impl crate::coord::Coordinator {
     }
 
     /// Stash transaction read holds. They will be released when the transaction
-    /// is cleaned up.
+    /// is cleaned up, also after a failed merge, see [`ReadHolds::merge`].
     pub(crate) fn store_transaction_read_holds(
         &mut self,
         conn_id: ConnectionId,
         read_holds: ReadHolds,
-    ) {
+    ) -> Result<(), AdapterError> {
         use std::collections::btree_map::Entry;
 
         match self.txn_read_holds.entry(conn_id) {
             Entry::Vacant(v) => {
                 v.insert(read_holds);
+                Ok(())
             }
-            Entry::Occupied(mut o) => {
-                o.get_mut().merge(read_holds);
-            }
+            Entry::Occupied(mut o) => o.get_mut().merge(read_holds),
         }
     }
 }

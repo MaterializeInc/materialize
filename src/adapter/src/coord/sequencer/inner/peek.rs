@@ -1104,7 +1104,7 @@ impl Coordinator {
                 });
             }
         } else if let Some(read_holds) = read_holds {
-            self.store_transaction_read_holds(session.conn_id().clone(), read_holds);
+            self.store_transaction_read_holds(session.conn_id().clone(), read_holds)?;
         }
 
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems
