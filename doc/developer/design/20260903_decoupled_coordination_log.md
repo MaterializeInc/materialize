@@ -67,7 +67,7 @@ candidate work.
 Explicit DDL COMMIT retains extracted operations and completion effects across
 retries, with final variable/response completion on success, error or cancellation.
 Protocol cleanup precedes continuation creation. The original transaction revision
-takes precedence over statement-level validity checks. This slice needs CI.
+takes precedence over statement-level validity checks.
 Written-plan preparation retains its candidate, immutable selections, current
 optimized replacement and earlier holds across single-attempt acquisition retries.
 The existing SQL continuations yield and revalidate revision/incarnation on resume.
@@ -111,12 +111,16 @@ setup. Boundary coverage and captured handoffs confirm this, including repeated
 certification. Remaining MV waits include other holders' retries and post-planning
 revision invalidation. Do not expand the scheduler or promise FIFO.
 Creator dry-run admission and catalog catch-up are the measured expensive waits.
-Trace storage-lock acquisition, recent-upper fetching, listen fetching and update
-application before choosing their repair. An enclosing await does not establish
-CPU versus I/O or scheduling cost. Preserve eager freshness, cancellation, revision
-checks, transaction-end ownership and definitive writes. Acquisition, DDL retry
-policy, replica timing and safety checks stay unchanged. Keep stalled advancement
-open even if SQL passes.
+The largest cumulative dry-run component in selected holders is Persist listen
+fetching, not update application. Some individual waits instead spend most time
+acquiring storage. Neither establishes pure I/O or CPU cost.
+Creator admission catches up after allocation and revalidates retained work before
+dry-run open. Verify this in existing workloads without assuming it resolves fetch
+cost, renewal or the later transaction-open and CAS conflicts. Identify publication
+owners from actual commits rather than inferring their rate or role from update-batch sizes.
+Preserve eager freshness, cancellation, revision checks, transaction-end ownership
+and definitive writes. Acquisition, DDL retry policy, replica timing and safety
+checks stay unchanged. Keep stalled advancement open even if SQL passes.
 No broader scheduling or protocol change is approved.
 Both native promotion jobs in CI138229 verify graceful deployment fencing.
 Private prewarming's separate catalog and inline bootstrap are unchanged.

@@ -73,6 +73,11 @@ await can make an earlier refresh stale. A structural change invalidates prepara
 before retry. Sampled compaction and reclamation proposals instead retain their
 prefix check so their owners resample, rather than replaying them after catch-up.
 
+Creator admission also catches up after allocation and before its dry-run open.
+Recheck the revision, incarnation and resource limits after catch-up. A builtin
+index admitted by a peer already has a committed window, not a new creator birth.
+Transaction open and compare-and-append still enforce subsequent freshness.
+
 Incarnation renewal retains committed requirements without preparing an advancing
 aggregate. It does not acknowledge pending grants or clear their acquisition
 barrier. Successful renewal updates renewal age, not the advancement cadence.

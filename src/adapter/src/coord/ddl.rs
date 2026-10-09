@@ -1468,21 +1468,7 @@ impl Coordinator {
         if refresh_client_protection {
             // Allocate the oracle timestamp before catch-up. That await can let
             // peers invalidate an otherwise freshly synchronized prefix.
-            if let Err(error) = self.refresh_catalog(None).await {
-                if matches!(&error, AdapterError::Catalog(error) if matches!(
-                    &error.kind,
-                    mz_catalog::memory::error::ErrorKind::Durable(
-                        mz_catalog::durable::DurableCatalogError::Fence(_)
-                    )
-                )) {
-                    // Catch-up must preserve transaction-open's terminal fence
-                    // policy rather than leave cached grants usable.
-                    Err::<(), _>(error)
-                        .unwrap_or_terminate("refreshing catalog for read protection");
-                    unreachable!("unwrap_or_terminate does not return on Err");
-                }
-                return Err(error);
-            }
+            self.refresh_catalog_for_write().await?;
             if self.catalog().transient_revision() != prepared.revision {
                 // Metadata owners resample after yielding. Do not expose the
                 // non-retryable prepared-DDL invalidation to grant requesters.
@@ -1493,19 +1479,29 @@ impl Coordinator {
             .await
     }
 
-    async fn commit_prepared_catalog_transaction(
-        &mut self,
-        conn_id: Option<&ConnectionId>,
-        prepared: &mut CatalogTransactionState,
-        retry_inline: bool,
-    ) -> Result<CommittedCatalogTransaction, AdapterError> {
-        assert!(matches!(prepared.preparation, CatalogPreparation::Complete));
-        if self.catalog().transient_revision() != prepared.revision {
-            return Err(AdapterError::CatalogSnapshotChanged);
+    async fn refresh_catalog_for_write(&mut self) -> Result<(), AdapterError> {
+        if let Err(error) = self.refresh_catalog(None).await {
+            if matches!(&error, AdapterError::Catalog(error) if matches!(
+                &error.kind,
+                mz_catalog::memory::error::ErrorKind::Durable(
+                    mz_catalog::durable::DurableCatalogError::Fence(_)
+                )
+            )) {
+                // Catch-up must preserve transaction-open's terminal fence
+                // policy rather than leave cached grants usable.
+                Err::<(), _>(error).unwrap_or_terminate("refreshing catalog for read protection");
+                unreachable!("unwrap_or_terminate does not return on Err");
+            }
+            return Err(error);
         }
-        if prepared.initial_write_ts.is_none()
-            && let Some(incarnation) = prepared.incarnation
-        {
+        Ok(())
+    }
+
+    fn validate_prepared_catalog_incarnation(
+        &self,
+        prepared: &CatalogTransactionState,
+    ) -> Result<(), AdapterError> {
+        if let Some(incarnation) = prepared.incarnation {
             let client = self.query_client.as_ref().ok_or_else(|| {
                 AdapterError::internal(
                     "prepared catalog transaction",
@@ -1528,6 +1524,22 @@ impl Coordinator {
                 ));
             }
         }
+        Ok(())
+    }
+
+    async fn commit_prepared_catalog_transaction(
+        &mut self,
+        conn_id: Option<&ConnectionId>,
+        prepared: &mut CatalogTransactionState,
+        retry_inline: bool,
+    ) -> Result<CommittedCatalogTransaction, AdapterError> {
+        assert!(matches!(prepared.preparation, CatalogPreparation::Complete));
+        if self.catalog().transient_revision() != prepared.revision {
+            return Err(AdapterError::CatalogSnapshotChanged);
+        }
+        if prepared.initial_write_ts.is_none() {
+            self.validate_prepared_catalog_incarnation(prepared)?;
+        }
         let internal_metadata = conn_id.is_none()
             && self.controller.replica_owned_compute()
             && prepared.ops.iter().all(catalog::Op::is_deployment_metadata);
@@ -1545,14 +1557,11 @@ impl Coordinator {
             ),
         };
         let mut ops = prepared.ops.clone();
-        let rewritten_objects = &mut prepared.rewritten_objects;
-        let webhook_sources_to_restart = &mut prepared.webhook_sources_to_restart;
-        let prepared_observer = &prepared.observer;
         let mut timeline_publication = None;
         if self.controller.replica_owned_compute()
             && let Some(client) = self.query_client.clone()
         {
-            let collections: BTreeSet<_> =
+            let mut collections: BTreeSet<_> =
                 ops.iter()
                     .filter_map(|op| match op {
                         Op::CreateItem {
@@ -1585,6 +1594,31 @@ impl Coordinator {
                     })
                     .collect();
             if !collections.is_empty() {
+                // Retry backoff and oracle allocation allow peer publications to
+                // accumulate. Drain them before opening the admission candidate,
+                // then revalidate retained work against that projection. Transaction
+                // open and compare-and-append still enforce subsequent freshness.
+                trace_catalog_await!(
+                    "creator_admission_refresh",
+                    self.refresh_catalog_for_write().await
+                )?;
+                if self.catalog().transient_revision() != prepared.revision {
+                    // Match structural invalidation during conflict catch-up.
+                    return Err(AdapterError::DDLTransactionRace);
+                }
+                self.validate_prepared_catalog_incarnation(prepared)?;
+                self.validate_resource_limits(&ops, conn_id.unwrap_or(&SYSTEM_CONN_ID))?;
+                // A peer may have admitted a builtin index without changing its
+                // definition. Its committed window is no longer a creator birth.
+                collections.retain(|id| {
+                    !self
+                        .catalog()
+                        .state()
+                        .collection_compaction_bounds()
+                        .contains_key(id)
+                });
+            }
+            if !collections.is_empty() {
                 let conn =
                     conn_id.map(|id| self.active_conns.get(id).expect("connection must exist"));
                 let (candidate, _) = trace_catalog_await!(
@@ -1611,6 +1645,10 @@ impl Coordinator {
                 timeline_publication = Some(publication);
             }
         }
+
+        let rewritten_objects = &mut prepared.rewritten_objects;
+        let webhook_sources_to_restart = &mut prepared.webhook_sources_to_restart;
+        let prepared_observer = &prepared.observer;
 
         // Metadata publication does not invalidate immutable plans or their
         // held inputs. Retry commit validation against the refreshed prefix,
