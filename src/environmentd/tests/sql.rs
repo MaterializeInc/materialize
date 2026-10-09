@@ -4382,3 +4382,57 @@ async fn test_explain_create_index_after_concurrent_relation_drop() {
         .await
         .expect("environmentd is still up");
 }
+
+// An EXPLAIN CREATE VIEW whose target schema is dropped while the view is optimized fails with a
+// "was dropped" error, instead of aborting environmentd.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_explain_create_view_after_concurrent_schema_drop() {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    ddl_client.batch_execute("CREATE SCHEMA s").await.unwrap();
+
+    let err = explain_with_concurrent_drop(
+        &server,
+        &ddl_client,
+        "create_view_optimize",
+        "EXPLAIN LOCALLY OPTIMIZED PLAN FOR CREATE VIEW s.v AS SELECT 1",
+        "DROP SCHEMA s",
+    )
+    .await
+    .expect_err("EXPLAIN must fail on the dropped schema")
+    .unwrap_db_error();
+    assert_contains!(err.message(), "was dropped");
+    ddl_client
+        .batch_execute("SELECT 1")
+        .await
+        .expect("environmentd is still up");
+}
+
+// An EXPLAIN CREATE MATERIALIZED VIEW whose target schema is dropped while the materialized view is
+// optimized fails with a "was dropped" error, instead of aborting environmentd.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_explain_create_materialized_view_after_concurrent_schema_drop() {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    ddl_client.batch_execute("CREATE SCHEMA s").await.unwrap();
+
+    let err = explain_with_concurrent_drop(
+        &server,
+        &ddl_client,
+        "create_materialized_view_optimize",
+        "EXPLAIN CREATE MATERIALIZED VIEW s.mv AS SELECT 1",
+        "DROP SCHEMA s",
+    )
+    .await
+    .expect_err("EXPLAIN must fail on the dropped schema")
+    .unwrap_db_error();
+    assert_contains!(err.message(), "was dropped");
+    ddl_client
+        .batch_execute("SELECT 1")
+        .await
+        .expect("environmentd is still up");
+}

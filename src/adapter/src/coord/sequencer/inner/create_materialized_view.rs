@@ -476,6 +476,9 @@ impl Coordinator {
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize create materialized view",
             move || {
+                // Test-only synchronization point: parks the optimization, so a
+                // test can drop a dependency before the next stage.
+                fail::fail_point!("create_materialized_view_optimize");
                 span.in_scope(|| {
                     let mut pipeline = || -> Result<(
                         optimize::materialized_view::LocalMirPlan,
