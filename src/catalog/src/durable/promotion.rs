@@ -293,14 +293,12 @@ mod tests {
         let mut expected = BTreeSet::new();
         for generation in [0, 2, 3] {
             let owner = json!({"replica_id": {"User": 1}, "deployment_generation": generation});
-            let mut client_value = json!({"deployment_generation": generation, "extra": true});
-            if generation == 0 {
+            let client_value = if generation == 0 {
                 // Zero is omitted by the durable ClientIncarnation encoding.
-                client_value
-                    .as_object_mut()
-                    .unwrap()
-                    .remove("deployment_generation");
-            }
+                json!({"extra": true})
+            } else {
+                json!({"deployment_generation": generation, "extra": true})
+            };
             let mut rows = vec![
                 retirement_row("ClientIncarnation", json!({"id": generation}), client_value),
                 retirement_row(
