@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use maplit::btreemap;
 use mz_catalog::memory::error::ErrorKind;
@@ -116,7 +116,6 @@ impl Coordinator {
         // executing the optimizer pipeline.
         let optimizer_trace = OptimizerTrace::new(stage.paths());
 
-        // Not used in the EXPLAIN path so it's OK to generate a dummy value.
         let resolved_ids = ResolvedIds::empty();
 
         let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
@@ -288,10 +287,14 @@ impl Coordinator {
     ) -> Result<CreateIndexStage, AdapterError> {
         // Track the target cluster and resolved dependencies so concurrent
         // drops are caught between stages instead of panicking later when the
-        // persisted SQL is re-parsed during catalog application.
+        // persisted SQL is re-parsed during catalog application, or when the
+        // explain stage looks up the indexed relation. EXPLAIN passes no
+        // resolved ids, so add the indexed relation explicitly.
+        let mut dependencies: BTreeSet<_> = resolved_ids.items().copied().collect();
+        dependencies.insert(self.catalog().resolve_item_id(&plan.index.on));
         let validity = PlanValidity::new(
             self.catalog(),
-            resolved_ids.items().copied().collect(),
+            dependencies,
             Some(plan.index.cluster_id),
             None,
             session.role_metadata().clone(),
