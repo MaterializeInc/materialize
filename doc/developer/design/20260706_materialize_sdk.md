@@ -667,9 +667,27 @@ of that key would create it with nothing left to remove it. Per-document
 conditions cannot stop that write, because there is no document to compare
 against. A new incarnation keeps every stale write in the retired one.
 
-The upsert envelope emits `key_violation` rows when a key has more than one
-value. The SDK will pass them to `reject` by default, and a sink can choose
-`stall` instead, so a key violation never crashes the process.
+The upsert envelope of `SUBSCRIBE` is stateless per timestamp. It turns one
+timestamp's changes for a key into `upsert`, `delete`, or `key_violation`
+without knowing the key's other rows (`process_response` in
+`src/adapter/src/active_compute_sink.rs`). If the key is not unique in the
+object, a removed row becomes a `delete` even while another row with that key
+remains, and an added duplicate becomes an `upsert` that replaces the first
+value. A `key_violation` appears only when a key's changes inside one timestamp
+do not fit an insert, update, or delete. So a sink's key must be unique in the
+object. `CREATE SINK` enforces this: the key must match a unique key Materialize
+infers for the object, or the user writes `KEY (...) NOT ENFORCED`
+(`src/sql/src/plan/statement/ddl.rs:3429-3445`). `SUBSCRIBE` only checks that
+the key columns exist (`src/sql/src/plan/statement/dml.rs:1727-1750`).
+
+The SDK will apply the `CREATE SINK` rule. The catalog does not expose the
+unique keys Materialize infers for a user object, so the check needs a server
+change (see "Materialize-side workstream"). Until it lands, a sink must declare
+its key as not enforced, the same acknowledgement `CREATE SINK` asks for, and
+the docs will state that a key that is not unique makes deletes wrong.
+
+The SDK will pass `key_violation` rows to `reject` by default, and a sink can
+choose `stall` instead, so a key violation never crashes the process.
 
 Event targets (webhooks, queues, notifications) will read the diff envelope
 under `at_least_once`, with the idempotency key above. They will declare what a
@@ -692,10 +710,9 @@ will call turbopuffer's HTTP API directly. The tombstone, condition, and
 checkpoint rules below do not depend on the language, so a Python version can
 follow the same design.
 
-The sink will read the upsert envelope keyed by the document id. The server
-emits a delete for a key only when no row has that key, so the sink needs no
-multiplicity count, and a key with several rows arrives as `key_violation`,
-which goes to `reject`.
+The sink will read the upsert envelope keyed by the document id, which must be
+unique in the object (see "Sink module"). With a unique key, one document per
+key is enough and the sink needs no multiplicity count.
 
 turbopuffer's documentation states that one write request to one namespace is
 applied atomically and is durable on return, and that there are no transactions
@@ -1040,6 +1057,10 @@ program.
 7. Docs that cross-link the durable-subscriptions pattern from every client page
    now, and lead with the SDK once it ships.
 8. A stable WebSocket `SUBSCRIBE`, the gate for browser and function transports.
+9. Upsert key validation for `SUBSCRIBE`: check the `ENVELOPE UPSERT` key
+   against the unique keys Materialize infers, with the same `NOT ENFORCED`
+   escape as `CREATE SINK`, or expose those keys in the catalog so the SDK can
+   check them. Until then, a sink's key is unchecked.
 
 The server-side buffering bound (#37905) has landed and needs no further work.
 
