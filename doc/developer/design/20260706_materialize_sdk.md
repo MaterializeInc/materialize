@@ -495,7 +495,7 @@ resolves by id, not by name, and fails with `InvalidId` once the id is gone
 (`src/sql/src/names.rs:1585-1608`). A swap leaves ids unchanged, so the stream
 keeps reading the object that was checked, and an `InvalidId` failure at
 `DECLARE` follows the rule above. The syntax is not documented for
-users, so open question 13 asks whether the SDK can rely on it.
+users, so deferred question 2 asks whether the SDK can rely on it.
 
 A replacement keeps the storage shard and gives the view a new catalog id
 (`src/adapter/src/catalog/transact.rs:1334`), so its data history is continuous.
@@ -735,7 +735,7 @@ Filtering on `mz_timestamp` cannot rebuild an earlier cut, because an upsert
 replaces the earlier version. The guarantee for turbopuffer is therefore
 convergence: after each completed batch, every namespace equals the cut. The
 sink does not give readers a consistent view while a batch is being written. The
-sink's docs will state this, and open question 12 asks whether that is enough.
+sink's docs will state this, and deferred question 5 asks whether that is enough.
 
 After a name swap, the sink writes the new object into new namespaces (see
 "Object identity"). Namespace names carry an incarnation number, for example
@@ -1093,45 +1093,65 @@ produce.
 
 ## Open questions
 
-1. Name: Materialize SDK, Subscribe SDK, or Sink SDK? The reasoning is under
-   "Naming". This is cheap to change now and expensive after the first publish.
-2. First language: Rust is decided, with Python and Node as stretch goals, so the
-   October turbopuffer sink is written in Rust against turbopuffer's HTTP API.
-   The existing turbopuffer sink and its transforms are Python. Is a Rust
-   turbopuffer sink acceptable for October, or should it wait for the Python
-   package?
-3. Generation strategy: is a protocol core with bindings acceptable for
-   packaging and support, or do we start with B plus A?
-4. turbopuffer tombstones: searches must filter on `deleted = false`, tombstones
-   need a placeholder vector in namespaces with vectors, and by default they are
-   kept forever. Is that storage cost acceptable, and is a placeholder vector
-   acceptable to users? For sinks that opt into the sweep, what grace period
-   should the docs recommend?
-5. Retention margin check: can a sink role read the catalog state it needs (the
-   object's readable frontier and the cluster's indexes) without extra grants?
-6. `mzq`: a transport under this SDK, or a separate path?
-7. Object swaps: should `refollow`, which re-snapshots from the new object, be
-   the default for a blue/green name swap? A re-snapshot after every deploy
-   costs a full snapshot. Could deploy tooling confirm that the old and new
-   objects are equal at the handoff, so the sink can skip it? Deploy tooling also
-   has to carry `RETAIN HISTORY` onto replacement materialized views, which take
-   their retention from the replacement. For a replacement, does a running
-   subscribe end at the switch, and does the new catalog id's readable frontier
-   cover a checkpoint taken before it?
-8. Egress cost: data leaves through `environmentd`. What does a sink with a large
-   snapshot cost a customer, and does the docs story need a sizing page?
-9. Stateless workers before durable subscriptions: is there demand that cannot
-   wait?
-10. Repository home: should the packages stay under `misc/` in this repository
-    for good, or move to their own repository once the spec settles, keeping
-    the protocol core, vectors, and end-to-end suite here?
-11. Future-work modules: are any of them worth their maintenance cost, and what
-    evidence should trigger one?
-12. turbopuffer visibility: is convergence after each batch enough for search,
-    or do readers need a consistent view while a batch is written, within one
-    namespace or across several? That would need versioned documents and a
-    visible-cut pointer that readers filter on.
-13. Subscribing by id: can the SDK rely on the `[u123 AS "db"."schema"."name"]`
-    reference syntax in `SUBSCRIBE`, which the catalog uses for stored
-    definitions but the user docs do not cover? It is what makes the identity
-    check race-free.
+Each question is either resolved by the review or deferred with an owner and a
+point by which it has to be answered. None of the deferred ones blocks the
+October work, because the doc picks a safe default for each.
+
+### Resolved during review
+
+- First language: the Rust package comes first, with Python and Node as stretch
+  goals, and the October turbopuffer sink is written in Rust against
+  turbopuffer's HTTP API.
+- Generation strategy: one protocol core with bindings (option C). If native
+  packaging proves too costly when the second language lands, the fallback is B
+  plus A.
+- Catalog access for the startup checks: every relation the SDK reads is
+  readable by `PUBLIC`: `mz_internal.mz_frontiers` (the readable frontier),
+  `mz_catalog.mz_indexes`, `mz_internal.mz_storage_shards`,
+  `mz_internal.mz_object_global_ids`,
+  `mz_internal.mz_object_transitive_dependencies`, and
+  `mz_internal.mz_kafka_source_tables`. A sink role needs no extra grants for
+  them.
+- Sink scope: sinks read one table, source, or materialized view with
+  `SUBSCRIBE <object>`, the same objects `CREATE SINK` accepts.
+
+### Deferred
+
+1. Name. The doc proposes Materialize SDK (see "Naming"). Owner: product.
+   Answer before the first package is published, since renaming after that is
+   expensive.
+2. Subscribing by id. Resolving `[u123 AS "db"."schema"."name"]` by catalog id,
+   with the name used only as an alias, is confirmed in review and covered for
+   user queries by `test/sqllogictest/id.slt`. Owner: database team. Confirm it
+   is a supported contract for `SUBSCRIBE` before the Rust package ships, since
+   it is what makes the identity check race-free.
+3. Object swaps. Until answered, a name swap stops the sink by default, and
+   `refollow` re-snapshots into new namespaces, which is safe but costs a full
+   snapshot per deploy. Owner: deploy tooling with the database team. Answer
+   before `refollow` ships: can deploy tooling confirm that the old and new
+   objects are equal at the handoff, so the sink can skip the snapshot, and
+   carry `RETAIN HISTORY` onto staged views and replacement materialized views?
+   For a replacement, does a running subscribe end at the switch, and does the
+   new catalog id's readable frontier cover a checkpoint taken before it?
+4. turbopuffer tombstones. Tombstones are kept forever by default and carry a
+   placeholder vector in namespaces with vectors. Owner: DevEx, with the first
+   turbopuffer users, during the sink build. Is the storage cost and the
+   placeholder vector acceptable, and what grace period should the docs
+   recommend for sinks that opt into the sweep?
+5. turbopuffer visibility. The sink documents convergence after each batch.
+   Owner: DevEx, with the first search users. Do readers need a consistent view
+   while a batch is written? That would need versioned documents and a
+   visible-cut pointer that readers filter on.
+6. Repository home. The doc proposes keeping the packages under `misc/` in this
+   repository. Owner: DevEx with the engineering leads, once the spec settles:
+   do the packages move to their own repository, keeping the protocol core,
+   vectors, and end-to-end suite here?
+7. `mzq` (PRD-87). Owner: product. Is it a transport under this SDK, or a
+   separate path?
+8. Egress cost. Owner: product with the cloud team, before the GA docs. What
+   does a sink with a large snapshot cost a customer, and do the docs need a
+   sizing page?
+9. Stateless workers. Out of scope until durable subscriptions land. Owner:
+   product. Is there demand that cannot wait?
+10. Future-work modules. The rule for adding one is in "Future work". Owner:
+    DevEx, per module, when evidence appears.
