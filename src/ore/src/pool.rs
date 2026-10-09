@@ -468,7 +468,9 @@ pub struct Pool(Arc<PoolInner>);
 /// while waiting on chunk state. Scans only ever `try_lock` a chunk they
 /// pop, with one exception: a demotion re-locks its victim with a blocking
 /// `lock` to commit after the unlocked write. That wait holds no other
-/// lock, so `enforce_compressed_cap` must never run while its caller holds
+/// chunk or queue lock. From budget enforcement it holds the `enforcing`
+/// single-flight mutex, which is only ever `try_lock`ed, so no thread waits
+/// on it. Hence `enforce_compressed_cap` must never run while its caller holds
 /// any chunk's state lock: two such callers demoting each other's chunks
 /// would deadlock on the re-lock. The admitting read's victim steal is the
 /// one place a chunk's state lock is held while probing another chunk's,
@@ -1285,9 +1287,12 @@ impl Pool {
         };
         self.0.spill_process(&meta, SpillKind::Evict);
         self.0.spill.in_flight.fetch_sub(1, Ordering::Relaxed);
-        // The spill loop's trim, so tests observe deterministic post-commit
-        // states.
-        self.0.enforce_compressed_cap(Pass::Background);
+        // The spill loop's trim, without its pacing, so tests observe
+        // deterministic post-commit states. While the full hint is set, a
+        // pass would probe the store for nothing.
+        if !self.0.full_hint.load(Ordering::Relaxed) {
+            self.0.enforce_compressed_cap(Pass::Background);
+        }
         true
     }
 
@@ -1348,6 +1353,9 @@ impl Pool {
         let prev = self.0.rss_target_bytes.swap(new, Ordering::Relaxed);
         if new < prev {
             self.0.enforce_compressed_cap(Pass::Inline);
+            // An inline file-mode pass stops at the backstop threshold, and
+            // the spill threads demote the rest.
+            self.0.spill.cv.notify_all();
         }
     }
 
@@ -1904,8 +1912,10 @@ impl PoolInner {
             }
         };
         // The fresh resident extent may put the tier over its cap. The spill
-        // loop trims once per iteration. A trim here as well would trim
-        // twice per eviction, with `in_flight` still counting this job.
+        // loop trims once per iteration, so a spill thread alternates one
+        // eviction with one demotion. A trim here as well would demote twice
+        // per eviction, with `in_flight` still counting this job, which
+        // pushes evictions inline onto the threads that trip the budget.
     }
 
     /// Releases whichever resident form the chunk holds, its slot or its
@@ -2538,7 +2548,10 @@ impl PoolInner {
                         (refused, stopped) = (true, true);
                         break;
                     }
-                    Demotion::WriteFailed => break,
+                    Demotion::WriteFailed => {
+                        (refused, stopped) = (true, true);
+                        break;
+                    }
                 }
                 continue;
             }
@@ -2633,6 +2646,9 @@ impl PoolInner {
         );
         #[cfg(test)]
         DEMOTION_PROBES.with(|probes| probes.set(probes.get() + 1));
+        // NOTE: the allocation runs under the chunk lock and can punch holes
+        // or `fallocate`, so this lock can be held across those syscalls. The
+        // lock order permits it, since the store's locks are leaves.
         let file_slot = match store.can_alloc(class).then(|| store.alloc(class)) {
             Some(Ok(file_slot)) => file_slot,
             Some(Err(_)) | None => {
