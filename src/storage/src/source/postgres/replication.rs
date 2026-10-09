@@ -397,16 +397,13 @@ pub(crate) fn render<'scope>(
 
             let stream_result = raw_stream(
                 &config,
+                &connection,
                 replication_client,
                 Arc::clone(&metadata_client),
-                &connection.publication_details.slot,
-                &connection.publication_details.timeline_id,
-                &connection.publication,
                 resume_lsn,
                 committed_uppers.as_mut(),
                 &probe_output,
                 &probe_cap[0],
-                connection.publication_details.get_is_physical_replica(),
             )
             .await?;
 
@@ -692,49 +689,30 @@ pub(crate) fn render<'scope>(
 /// The returned stream will contain all transactions that whose commit LSN is beyond `resume_lsn`.
 async fn raw_stream<'a>(
     config: &'a RawSourceCreationConfig,
+    connection: &'a PostgresSourceConnection,
     replication_client: Client,
     metadata_client: Arc<Client>,
-    slot: &'a str,
-    timeline_id: &'a Option<u64>,
-    publication: &'a str,
     resume_lsn: MzOffset,
     uppers: impl futures::Stream<Item = ResumeUppers<MzOffset>> + 'a,
     probe_output: &'a AsyncOutputHandle<MzOffset, CapacityContainerBuilder<Vec<Probe<MzOffset>>>>,
     probe_cap: &'a Capability<MzOffset>,
-    is_physical_replica: bool,
 ) -> Result<
     Result<impl AsyncStream<Item = Result<LogicalReplMsg, TransientError>> + 'a, DefiniteError>,
     TransientError,
 > {
-    if let Err(err) = ensure_publication_exists(&*metadata_client, publication).await? {
-        // If the publication gets deleted there is nothing else to do. These errors
-        // are not retractable.
-        return Ok(Err(err));
-    }
+    let slot = &connection.publication_details.slot;
+    let publication = &connection.publication;
+    let is_physical_replica = connection.publication_details.get_is_physical_replica();
 
-    // Ensure the upstream server's physical replica status hasn't changed since the source was
-    // created. We use the metadata client here for the same reason as "SHOW wal_sender_timeout" below.
-    //
-    // This runs before the timeline ID check on purpose. Promoting a physical replica to a primary
-    // both flips pg_is_in_recovery() and switches the timeline, so either check could fire. Running
-    // this one first means a promotion always surfaces as the specific InvalidPhysicalReplica error
-    // (rather than the more generic timeline mismatch), which is the clearer signal for an operator.
-    if let Err(err) = ensure_physical_replica(&*metadata_client, is_physical_replica).await? {
+    if let Err(err) = ensure_replication_prerequisites(
+        &metadata_client,
+        &replication_client,
+        connection,
+        config.config.config_set(),
+    )
+    .await?
+    {
         return Ok(Err(err));
-    }
-
-    // Skip the timeline ID check for sources without a known timeline ID
-    // (sources created before the timeline ID was added to the source details)
-    if let Some(expected_timeline_id) = timeline_id {
-        if let Err(err) = ensure_replication_timeline_id(
-            &replication_client,
-            expected_timeline_id,
-            config.config.config_set(),
-        )
-        .await?
-        {
-            return Ok(Err(err));
-        }
     }
 
     // How often a proactive standby status update message should be sent to the server.
@@ -1173,6 +1151,41 @@ where
         packer.push(datum);
     }
     Ok(row.clone())
+}
+
+/// Ensures the upstream still meets the conditions the replication stream depends on. Once
+/// violated, these conditions stay violated. It returns an outer transient error in case of
+/// connection issues and an inner definite error for the first violated condition.
+pub(super) async fn ensure_replication_prerequisites(
+    metadata_client: &Client,
+    replication_client: &Client,
+    connection: &PostgresSourceConnection,
+    config_set: &ConfigSet,
+) -> Result<Result<(), DefiniteError>, TransientError> {
+    if let Err(err) = ensure_publication_exists(metadata_client, &connection.publication).await? {
+        return Ok(Err(err));
+    }
+
+    // This runs before the timeline ID check on purpose. Promoting a physical replica to a primary
+    // both flips pg_is_in_recovery() and switches the timeline, so either check could fire. Running
+    // this one first means a promotion always surfaces as the specific InvalidPhysicalReplica error
+    // (rather than the more generic timeline mismatch), which is the clearer signal for an operator.
+    let is_physical_replica = connection.publication_details.get_is_physical_replica();
+    if let Err(err) = ensure_physical_replica(metadata_client, is_physical_replica).await? {
+        return Ok(Err(err));
+    }
+
+    // Sources created before the timeline ID was recorded have none to check against.
+    if let Some(expected_timeline_id) = &connection.publication_details.timeline_id {
+        if let Err(err) =
+            ensure_replication_timeline_id(replication_client, expected_timeline_id, config_set)
+                .await?
+        {
+            return Ok(Err(err));
+        }
+    }
+
+    Ok(Ok(()))
 }
 
 /// Ensures the publication exists on the server. It returns an outer transient error in case of
