@@ -108,9 +108,10 @@ fails despite heartbeat dispatch: catch-up and transaction-open work occupy long
 heartbeat turns that never reach a candidate. CI138432 CPU samples identify a
 separate coordinator cost: token updates rescan every retained dependency definition.
 Definitions remain covered by committed grants, so only publication completion can
-make them releasable. Cleanup stays at that boundary, not per token. Verify this
-bounded cost repair in the existing workloads, then remove the temporary capture.
-It does not explain every catch-up wait or establish renewal progress. Acquisition,
+make them releasable. Cleanup stays at that boundary, not per token. CI138433 verifies
+retention/release coverage and samples pruning only at publication completion,
+not token callbacks. The temporary capture is removed. Complete trace accounting
+must still establish renewal and advancement progress. Acquisition,
 DDL retries, replica timing and safety checks remain unchanged. Keep stalled
 advancement open even if SQL starts passing.
 No broader scheduling or protocol change is approved.
