@@ -80,6 +80,10 @@ enum ProtocolVersion {
 impl ProtocolVersion {
     /// Picks the revision from the `MCP-Protocol-Version` header's value, not
     /// its presence: 2025-06-18 and 2025-11-25 clients send the header too.
+    ///
+    /// Anything else falls back to 2025-11-25 on purpose, never a 400. A 400
+    /// with a 2026-07-28 error tells dual-era clients the server speaks that
+    /// revision, so they stop falling back to `initialize`.
     fn select(header: Option<&HeaderValue>, modern_enabled: bool) -> Self {
         match header.and_then(|value| value.to_str().ok()) {
             Some("2026-07-28") if modern_enabled => Self::V2026_07_28,
