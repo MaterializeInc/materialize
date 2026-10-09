@@ -135,7 +135,7 @@ pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
 );
 
 /// Whether the buffer pool may use the scratch directory as its extent
-/// store. Takes effect only at pool installation, see `GLOBAL_POOL` in
+/// store. Takes effect only at pool installation, see `apply_pool_config` in
 /// `mz_timely_util::pool_config`.
 pub const ENABLE_COLUMN_PAGED_BATCHER_FILE_EXTENTS: Config<bool> = Config::new(
     "enable_column_paged_batcher_file_extents",
