@@ -409,6 +409,14 @@ pub(crate) fn render<'scope>(
         }
     }
 
+    // Read at render time, matching the value the persist sink reads in the same dataflow build.
+    // A read in the async body can observe an `UpdateConfiguration` sequenced after this dataflow's
+    // creation and disagree with the sink because the `ConfigSet` is updated in place.
+    // A nonzero lookahead is the switch, see `STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD`.
+    let concurrent_replication = !STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD
+        .get(config.config.config_set())
+        .is_zero();
+
     let (button, transient_errors) = builder.build_fallible(move |caps| {
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
@@ -422,12 +430,7 @@ pub(crate) fn render<'scope>(
                 definite_error_cap_set,
             ]: &mut [_; 4] = caps.try_into().unwrap();
             let mut raw_handles = SharedFuel::new(raw_handles);
-            // Read once, so that every decision below that depends on it agrees for the lifetime
-            // of this operator. A nonzero lookahead is the switch, see
-            // `STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD`.
-            let concurrent_replication = !STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD
-                .get(config.config.config_set())
-                .is_zero();
+
 
             let connection_config = connection
                 .connection
