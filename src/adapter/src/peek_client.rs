@@ -293,6 +293,10 @@ impl PeekClient {
         id_bundle: CollectionIdBundle,
         determination: TimestampDetermination,
     ) -> Result<(), AdapterError> {
+        // Test-only synchronization point: parks the statement before the
+        // coordinator looks up the frontiers of `id_bundle`, so a test can drop
+        // one of its collections in between.
+        fail::fail_point!("timestamp_notice_before_dispatch");
         let request = self.call_coordinator(|tx| Command::ExplainTimestamp {
             conn_id: session.conn_id().clone(),
             session_wall_time: session.pcx().wall_time,
