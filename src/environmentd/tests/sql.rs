@@ -1189,6 +1189,140 @@ async fn test_subscribe_shutdown() {
     // function exits, things are working correctly.
 }
 
+/// Creates cluster `c` with an index on table `t` in it, for the cluster-drop tests below.
+#[allow(clippy::disallowed_methods)]
+async fn setup_indexed_table_in_cluster_c(client: &tokio_postgres::Client) {
+    for stmt in [
+        "CREATE CLUSTER c REPLICAS (r1 (size 'scale=1,workers=1'))",
+        "CREATE TABLE t (a int)",
+        "INSERT INTO t VALUES (1)",
+        "CREATE DEFAULT INDEX t_idx IN CLUSTER c ON t",
+    ] {
+        client.batch_execute(stmt).await.unwrap();
+    }
+}
+
+// A fast-path SELECT whose cluster is dropped while the SELECT is optimized fails with a "was
+// dropped" error, instead of panicking on the read hold of the index it peeks.
+//
+// The SELECT parks at the `peek_before_optimize` failpoint, which runs on a blocking thread, after
+// it acquired its read holds. `DROP CLUSTER` only asks the cluster's instance task to shut down. If
+// that task hasn't exited when the SELECT resumes, the read holds still work and the SELECT fails
+// at the cluster lookup instead, so the test then passes even without the fix. The failpoint is
+// process-global, so the test relies on running in its own process, as nextest runs it.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_fast_path_peek_after_concurrent_cluster_drop() {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    setup_indexed_table_in_cluster_c(&ddl_client).await;
+    let reader = server.connect().await.unwrap();
+    reader.batch_execute("SET cluster = c").await.unwrap();
+
+    // Arm only once setup is done, so it's the SELECT below that parks.
+    let parked = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    fail::cfg_callback("peek_before_optimize", {
+        let parked = Arc::clone(&parked);
+        let resume = Arc::clone(&resume);
+        move || {
+            parked.wait();
+            resume.wait();
+        }
+    })
+    .unwrap();
+
+    let select = task::spawn(|| "reader_select", async move {
+        reader.query("SELECT * FROM t", &[]).await
+    });
+    task::spawn_blocking(|| "wait_parked", move || parked.wait()).await;
+
+    ddl_client
+        .batch_execute("DROP CLUSTER c CASCADE")
+        .await
+        .unwrap();
+
+    // Disarm before handing the SELECT back, so that no later statement parks.
+    fail::remove("peek_before_optimize");
+    task::spawn_blocking(|| "resume", move || resume.wait()).await;
+
+    // A session-task panic would close the connection, which `unwrap_db_error` rejects.
+    let err = select
+        .await
+        .expect_err("SELECT must fail on the dropped cluster")
+        .unwrap_db_error();
+    assert_contains!(err.message(), "was dropped");
+    ddl_client
+        .batch_execute("SELECT 1")
+        .await
+        .expect("environmentd is still up");
+}
+
+// A SELECT in a transaction whose cluster is dropped before the SELECT fetches the transaction's
+// read holds fails with a "was dropped" error, instead of panicking the coordinator, which kept the
+// holds on the dropped cluster.
+//
+// The SELECT parks at the `txn_read_holds_before_dispatch` failpoint, after it took its catalog
+// snapshot. `DROP CLUSTER` only asks the cluster's instance task to shut down, so depending on when
+// that task exits, the SELECT fails either at fetching the transaction's read holds or at looking
+// up the cluster. The asserted property holds for both. The failpoint is process-global, so the
+// test relies on running in its own process, as nextest runs it.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_transaction_read_holds_after_concurrent_cluster_drop() {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    setup_indexed_table_in_cluster_c(&ddl_client).await;
+    let reader = server.connect().await.unwrap();
+    reader.batch_execute("SET cluster = c").await.unwrap();
+    reader.batch_execute("BEGIN").await.unwrap();
+    // The first SELECT of the transaction stores read holds on the index in `c`.
+    reader.query("SELECT * FROM t", &[]).await.unwrap();
+
+    // Arm only once setup is done, so it's the SELECT below that parks.
+    let parked = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    fail::cfg_callback("txn_read_holds_before_dispatch", {
+        let parked = Arc::clone(&parked);
+        let resume = Arc::clone(&resume);
+        move || {
+            // This runs on a worker of the runtime that also has to run the `DROP CLUSTER` below.
+            // `block_in_place` hands this worker's queue to another thread before parking.
+            tokio::task::block_in_place(|| {
+                parked.wait();
+                resume.wait();
+            });
+        }
+    })
+    .unwrap();
+
+    let select = task::spawn(|| "reader_select", async move {
+        reader.query("SELECT * FROM t", &[]).await
+    });
+    task::spawn_blocking(|| "wait_parked", move || parked.wait()).await;
+
+    ddl_client
+        .batch_execute("DROP CLUSTER c CASCADE")
+        .await
+        .unwrap();
+
+    // Disarm before handing the SELECT back, so that no later statement parks.
+    fail::remove("txn_read_holds_before_dispatch");
+    task::spawn_blocking(|| "resume", move || resume.wait()).await;
+
+    let err = select
+        .await
+        .expect_err("SELECT must fail on the dropped cluster")
+        .unwrap_db_error();
+    assert_contains!(err.message(), "was dropped");
+    ddl_client
+        .batch_execute("SELECT 1")
+        .await
+        .expect("environmentd is still up");
+}
+
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_subscribe_table_rw_timestamps() {

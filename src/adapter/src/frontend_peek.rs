@@ -705,6 +705,10 @@ impl PeekClient {
                 // - Use the transaction's stored timestamp determination.
                 // - Use the (relevant subset of the) transaction's read holds.
 
+                // Test-only synchronization point: parks a statement in a
+                // transaction before it fetches the transaction's read holds, so a
+                // test can drop their cluster in between.
+                fail::fail_point!("txn_read_holds_before_dispatch");
                 let txn_read_holds_opt = self
                     .call_coordinator(|tx| Command::GetTransactionReadHoldsBundle {
                         conn_id: session.conn_id().clone(),
@@ -1003,6 +1007,10 @@ impl PeekClient {
                 mz_ore::task::spawn_blocking(
                     || "optimize peek",
                     move || {
+                        // Test-only synchronization point: parks a SELECT's
+                        // optimization, after it acquired its read holds, so a test
+                        // can drop their cluster in between.
+                        fail::fail_point!("peek_before_optimize");
                         span.in_scope(|| {
                             let _dispatch_guard = explain_ctx.dispatch_guard();
 
