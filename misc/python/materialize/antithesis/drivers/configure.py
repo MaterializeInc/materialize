@@ -106,6 +106,7 @@ HARNESS_REQUIRED: dict[str, str] = {
     "enable_alter_table_add_column": "true",
     "enable_replacement_materialized_views": "true",
     "enable_logical_compaction_window": "true",
+    "enable_index_options": "true",
 }
 
 # Keys the mzcompose profiles set that conflict with the harness. The CR fixes
