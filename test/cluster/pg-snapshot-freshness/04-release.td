@@ -63,12 +63,15 @@ t_paused false
 302
 303
 
-> SELECT s.name, bool_and(u.snapshot_committed)
+# The snapshot point precedes the insert of 300. The copy stages only 100 and
+# 200, and 300 to 303 arrive through the staged CDC. A snapshot re-run after a
+# dataflow restart copies all six rows.
+> SELECT s.name, bool_and(u.snapshot_committed), sum(u.snapshot_records_staged)
   FROM mz_internal.mz_source_statuses s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name = 't_paused'
   GROUP BY s.name
-t_paused true
+t_paused true 2
 
 # And CDC after the release lands as for any hydrated table.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
