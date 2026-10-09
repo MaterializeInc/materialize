@@ -225,6 +225,18 @@ describe("useFreshnessObjects", () => {
     await waitFor(() => expect(result.current[0].objectName).toBe("after"));
     expect(result.current).not.toBe(first);
   });
+
+  it("keeps a name that contains control characters intact", async () => {
+    const { result } = await renderFreshnessObjects([
+      buildObject({ id: "u10", name: "orders\u0001u2" }),
+      buildObject({ id: "u11", name: "\u0002" }),
+    ]);
+
+    expect(result.current.map((o) => [o.objectId, o.objectName])).toEqual([
+      ["u10", "orders\u0001u2"],
+      ["u11", "\u0002"],
+    ]);
+  });
 });
 
 describe("buildFreshnessData", () => {
