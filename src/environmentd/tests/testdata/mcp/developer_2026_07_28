@@ -1,0 +1,176 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Runs with enable_mcp_protocol_2026_07_28 on. Lines before the JSON body are
+# request headers.
+
+# =============================================================================
+# Mcp-Method and Mcp-Name must mirror the body
+# =============================================================================
+
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: query_system_catalog
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\"]\n]"}],"isError":false}}
+
+# Names that are not plain ASCII arrive Base64 encoded, and any client may use
+# the encoded form.
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: =?base64?cXVlcnlfc3lzdGVtX2NhdGFsb2c=?=
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\"]\n]"}],"isError":false}}
+
+# Mcp-Name is only required on tools/call.
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/list
+{"jsonrpc":"2.0","id":27,"method":"tools/list"}
+----
+200 OK
+{"jsonrpc":"2.0","id":27,"result":{"tools":[{"name":"query_system_catalog","title":"Query System Catalog","description":"Query Materialize system catalog tables for troubleshooting and observability. Only mz_*, pg_catalog, and information_schema tables are accessible. Use the mz_internal.mz_ontology_* tables to discover tables, columns, and join paths before writing queries. Response limit: 1.0 MB.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_*, pg_catalog, or information_schema tables"}},"required":["sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"query","title":"Query","description":"Execute a read-only SQL query (SELECT, SHOW, or EXPLAIN) against any object the role can access, including system catalog and user objects. Requires a cluster, which is what enables EXPLAIN ANALYZE and queries against indexed user objects. For pure system catalog lookups that do not need a cluster, prefer `query_system_catalog`. Response limit: 1.0 MB.","inputSchema":{"type":"object","properties":{"cluster":{"type":"string","description":"Exact cluster name the query should run on. Required: EXPLAIN ANALYZE and queries against indexed user objects need a specific cluster to execute on."},"cluster_replica":{"type":"string","description":"Optional replica name (e.g. 'r1') to target one replica of the cluster. Required for EXPLAIN ANALYZE on clusters with more than one replica. Find replica names in mz_catalog.mz_cluster_replicas."},"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN statement. Multi-statement queries are rejected."}},"required":["cluster","sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}]}}
+
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+{"jsonrpc":"2.0","id":3,"method":"tools/list"}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":3,"error":{"code":-32020,"message":"Header mismatch: missing Mcp-Method header","data":{"error_type":"HeaderMismatch"}}}
+
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+{"jsonrpc":"2.0","id":4,"method":"tools/list"}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":4,"error":{"code":-32020,"message":"Header mismatch: Mcp-Method header value 'tools/call' does not match body value 'tools/list'","data":{"error_type":"HeaderMismatch"}}}
+
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT 1"}}}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":5,"error":{"code":-32020,"message":"Header mismatch: missing Mcp-Name header","data":{"error_type":"HeaderMismatch"}}}
+
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: query
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT 1"}}}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":6,"error":{"code":-32020,"message":"Header mismatch: Mcp-Name header value 'query' does not match body value 'query_system_catalog'","data":{"error_type":"HeaderMismatch"}}}
+
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: Tools/List
+{"jsonrpc":"2.0","id":22,"method":"tools/list"}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":22,"error":{"code":-32020,"message":"Header mismatch: Mcp-Method header value 'Tools/List' does not match body value 'tools/list'","data":{"error_type":"HeaderMismatch"}}}
+
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: =?base64?not base64?=
+{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT 1"}}}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":23,"error":{"code":-32020,"message":"Header mismatch: Mcp-Name header has invalid Base64","data":{"error_type":"HeaderMismatch"}}}
+
+# The transport leaves header rules for notifications undefined, so a
+# notification without Mcp-Method is still accepted.
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+----
+202 Accepted
+
+# A notification with a matching Mcp-Method is still answered 202.
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: notifications/initialized
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+----
+202 Accepted
+
+# A proxy could act on either copy of a repeated header, so both are refused.
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/list
+Mcp-Method: tools/call
+{"jsonrpc":"2.0","id":8,"method":"tools/list"}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":8,"error":{"code":-32020,"message":"Header mismatch: repeated Mcp-Method header","data":{"error_type":"HeaderMismatch"}}}
+
+# Any copy naming 2026-07-28 selects it, so the repetition is refused instead
+# of served as 2025-11-25 without the header check.
+mcp-developer
+MCP-Protocol-Version: 2025-11-25
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/list
+{"jsonrpc":"2.0","id":24,"method":"tools/list"}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":24,"error":{"code":-32020,"message":"Header mismatch: repeated MCP-Protocol-Version header","data":{"error_type":"HeaderMismatch"}}}
+
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+MCP-Protocol-Version: 2025-11-25
+Mcp-Method: tools/list
+{"jsonrpc":"2.0","id":25,"method":"tools/list"}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":25,"error":{"code":-32020,"message":"Header mismatch: repeated MCP-Protocol-Version header","data":{"error_type":"HeaderMismatch"}}}
+
+mcp-developer
+MCP-Protocol-Version: 2025-11-25, 2026-07-28
+Mcp-Method: tools/list
+{"jsonrpc":"2.0","id":26,"method":"tools/list"}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":26,"error":{"code":-32020,"message":"Header mismatch: MCP-Protocol-Version header value '2025-11-25, 2026-07-28' is not '2026-07-28'","data":{"error_type":"HeaderMismatch"}}}
+
+# An unknown method only needs Mcp-Method to be present.
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: server/other
+{"jsonrpc":"2.0","id":9,"method":"server/other","params":{}}
+----
+200 OK
+{"jsonrpc":"2.0","id":9,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
+
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+{"jsonrpc":"2.0","id":10,"method":"server/other","params":{}}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":10,"error":{"code":-32020,"message":"Header mismatch: missing Mcp-Method header","data":{"error_type":"HeaderMismatch"}}}
+
+# =============================================================================
+# Earlier revisions are never checked
+# =============================================================================
+
+# A 2025-11-25 client sends no Mcp-Method, so a mismatched one is ignored.
+mcp-developer
+MCP-Protocol-Version: 2025-11-25
+Mcp-Method: tools/list
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":7,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\"]\n]"}],"isError":false}}

@@ -5354,13 +5354,28 @@ fn run_mcp_datadriven_inner(
             // Origin header to exercise the DNS-rebinding defense. (Datadriven
             // arg values cannot contain `:` or `/`, so the origin value is a
             // fixed constant here rather than a directive parameter.)
+            //
+            // Input lines before the JSON body are `Name: value` request
+            // headers, written the way they appear on the wire.
             let client = Client::new();
+            let lines: Vec<&str> = tc.input.lines().collect();
+            let body_start = lines
+                .iter()
+                .position(|line| line.trim_start().starts_with('{'))
+                .unwrap_or(lines.len());
+            let (header_lines, body) = lines.split_at(body_start);
             let mut req = if tc.args.contains_key("get") {
                 client.get(url)
             } else {
-                let json: serde_json::Value = serde_json::from_str(&tc.input).unwrap();
+                let json: serde_json::Value = serde_json::from_str(&body.join("\n")).unwrap();
                 client.post(url).json(&json)
             };
+            for line in header_lines {
+                let (name, value) = line
+                    .split_once(':')
+                    .expect("header lines are `Name: value`");
+                req = req.header(name.trim(), value.trim());
+            }
             if tc.args.contains_key("origin") {
                 req = req.header("origin", "https://evil.example.com");
             }
@@ -5440,6 +5455,19 @@ fn test_mcp_agent_disabled() {
         .with_mcp_routes(true, false)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "false".to_string());
     run_mcp_datadriven("tests/testdata/mcp/agent_disabled", harness);
+}
+
+/// Tests the 2026-07-28 request headers on the MCP developer endpoint.
+#[mz_ore::test]
+fn test_mcp_developer_protocol_2026_07_28() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(false, true)
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "enable_mcp_protocol_2026_07_28".to_string(),
+            "true".to_string(),
+        );
+    run_mcp_datadriven("tests/testdata/mcp/developer_2026_07_28", harness);
 }
 
 /// Tests the MCP developer endpoint with the query tool explicitly disabled.
