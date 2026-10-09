@@ -57,14 +57,20 @@ TESTDRIVE_DEFAULT_TIMEOUT = os.environ.get("PLATFORM_CHECKS_TD_TIMEOUT", "300s")
 
 
 def capture_catalog_cpu(c: Composition, stop: threading.Event) -> None:
-    # Sample the observed late-run catch-up slowdown without changing the workload.
+    # Sample catch-up under contention without changing the workload.
     # Diagnostic failures must not replace the scenario's outcome.
-    for sample, delay in enumerate((600, 300, 300), start=1):
+    started = time.monotonic()
+    print(f"Catalog CPU capture armed at {time.time()}", flush=True)
+    for sample, delay in enumerate((300, 300, 300), start=1):
         if stop.wait(delay):
+            print(
+                f"Catalog CPU capture stopped after {time.monotonic() - started:.3f}s",
+                flush=True,
+            )
             return
         try:
-            port = c.port("materialized", 6878)
             print(f"Catalog CPU capture {sample} starts at {time.time()}", flush=True)
+            port = c.port("materialized", 6878)
             response = requests.post(
                 f"http://localhost:{port}/prof/cpu",
                 json={"seconds": 30, "hz": 99, "merge_threads": False},
