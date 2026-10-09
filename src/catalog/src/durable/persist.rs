@@ -1552,11 +1552,15 @@ impl UnopenedPersistCatalogState {
             if !defer_admission {
                 fence_updates.append(&mut admission_updates);
             }
+            let mut fence_updates: Vec<_> = fence_updates
+                .into_iter()
+                .map(|(row, diff)| (StateUpdateKindJson::from(row), diff))
+                .collect();
             // Recollect on every CAS attempt. Only the successful attempt's
             // snapshot grants cleanup authority, not subsequent publications.
             let owners = if protection_enabled && promoting {
                 fence_updates.extend(
-                    super::promotion::retired_protection(
+                    super::promotion::retired_realizations(
                         self.snapshot.iter().map(|(kind, _, _)| kind),
                         admitted_generation,
                     )?
@@ -1570,10 +1574,7 @@ impl UnopenedPersistCatalogState {
                 None
             };
             if matches!(self.mode, Mode::Writable) {
-                match self
-                    .compare_and_append(fence_updates.clone(), commit_ts)
-                    .await
-                {
+                match self.compare_and_append(fence_updates, commit_ts).await {
                     Ok(upper) => {
                         commit_ts = upper;
                     }

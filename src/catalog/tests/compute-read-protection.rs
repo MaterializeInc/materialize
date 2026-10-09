@@ -641,22 +641,24 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         update.kind,
         StateUpdateKind::ActiveDeploymentGeneration(8)
     ) && update.diff == StateDiff::Addition));
+    let promoted_snapshot = pending.snapshot().await.unwrap();
+    assert_eq!(promoted_snapshot.client_read_requirements, protected);
+    // This fixture retired its private membership before promotion. The fence
+    // now removes the active deployment's metadata, not shared declarations or
+    // the SQL index's selected plan.
+    assert!(promoted_snapshot.cluster_replicas.is_empty());
+    assert!(promoted_snapshot.cluster_runtimes.is_empty());
+    assert!(promoted_snapshot.replica_system_configurations.is_empty());
     assert_eq!(
-        pending.snapshot().await.unwrap().client_read_requirements,
-        protected
+        promoted_snapshot.cluster_replica_declarations,
+        retired.cluster_replica_declarations,
     );
+    assert_eq!(promoted_snapshot.written_plans, retired.written_plans);
     assert!(
-        !pending
-            .snapshot()
-            .await
-            .unwrap()
-            .client_incarnations
-            .contains_key(
-                &objects::ClientIncarnationKey::from_proto(ClientIncarnationKey {
-                    id: active_client
-                })
+        !promoted_snapshot.client_incarnations.contains_key(
+            &objects::ClientIncarnationKey::from_proto(ClientIncarnationKey { id: active_client })
                 .unwrap()
-            )
+        )
     );
     assert!(active.sync_to_current_updates().await.is_err());
     let mut tx = pending.transaction().await.unwrap();
