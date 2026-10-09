@@ -725,7 +725,16 @@ impl Coordinator {
         let (mut df_desc, raw_df_meta) = global_lir_plan.unapply();
         let df_meta = {
             let system_catalog = self.catalog().for_system_session();
-            let full_name = self.catalog().resolve_full_name(&name, None);
+            // The plan's validity doesn't cover the schema, so only DDL
+            // serialization keeps a `DROP SCHEMA` from landing during the
+            // off-thread optimization.
+            let full_name = self
+                .catalog()
+                .try_resolve_full_name(&name, None)
+                .ok_or_else(|| AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "schema",
+                    dependency_id: name.qualifiers.schema_spec.to_string(),
+                })?;
             let transient_items = btreemap! {
                 global_id => TransientItem::new(
                     Some(full_name.into_parts()),
