@@ -626,6 +626,10 @@ metrics:
   - backend
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
+- name: mz_column_pool_backend_fallback
+  help: 1 if the buffer pool was configured for the file store and runs on swap instead, else 0.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
 - name: mz_column_pool_direct_extent_inserts_total
   help: Inserts written directly to an extent because resident admission was full.
   source: src/timely-util/src/pool_config/metrics.rs
@@ -679,7 +683,7 @@ metrics:
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_extent_file_read_latency_bucket
-  help: Cumulative count of file store reads that took at most `le` seconds.
+  help: Cumulative count of file store reads that took less than `le` seconds.
   labels:
   - le
   source: src/timely-util/src/pool_config/metrics.rs
