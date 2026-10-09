@@ -245,6 +245,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             c.sql(
                 "ALTER SYSTEM SET log_filter = "
                 "'info,mz_compute::render=debug,"
+                "mz_storage_operators::persist_source::decode_progress=debug,"
                 "mz_compute_client::sequential_hydration=debug';",
                 port=6877,
                 user="mz_system",

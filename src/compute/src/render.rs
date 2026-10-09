@@ -2231,7 +2231,8 @@ where
                 // Capability for the lower bound of `pending_times`, if any.
                 let mut retained_cap: Option<Capability<mz_repr::Timestamp>> = None;
 
-                let activator = scope.activator_for(info.address);
+                let activator = scope.activator_for(info.address.clone());
+                let worker = scope.index();
                 handle.activate(activator.clone());
 
                 move |(input, frontier), output| {
@@ -2287,7 +2288,9 @@ where
                     if !pending_times.is_empty() {
                         tracing::debug!(
                             name,
+                            worker,
                             info.global_id,
+                            address = ?info.address,
                             pending_times = %PendingTimesDisplay(pending_times.iter().cloned()),
                             frontier = ?frontier.frontier().get(0),
                             probe = ?handle.with_frontier(|f| f.get(0).cloned()),

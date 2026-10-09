@@ -343,6 +343,11 @@ cleanup() {
   CI_ANNOTATE_ERRORS_RESULT=0
   # We have to upload artifacts before ci-annotate-errors, so that the annotations can link to the artifacts
   {
+    # Keep the scanned plaintext for annotations and provide a compact copy for
+    # downloading large diagnostic captures. Both contain the same log bytes.
+    if [ -s services.log ] && bin/ci-builder run "$builder" zstd -1 -q -f -o services.log.zst services.log; then
+      buildkite-agent artifact upload services.log.zst
+    fi
     buildkite-agent artifact upload "$artifacts_str"
   } &
   UPLOAD_PID=$!

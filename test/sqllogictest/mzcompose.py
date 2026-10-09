@@ -408,10 +408,10 @@ def run_sqllogictest(
                 c.metadata_store(),
                 rewrite_results=rewrite_results,
             )
-            trace_statements = file == "test/sqllogictest/materialized_views.slt"
+            trace_statements = file == "test/sqllogictest/comment.slt"
             if trace_statements:
-                # Preserve active statements and the real-time compaction window
-                # in the timestamped job log, including on job timeout.
+                # Preserve the active statement or reset phase in the timestamped
+                # job log, including on job timeout.
                 cmd.insert(1, "--verbose")
             try:
                 c.exec(

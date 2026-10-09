@@ -894,8 +894,29 @@ impl<'a> Runner<'a> {
     pub async fn reset(&mut self) -> Result<(), anyhow::Error> {
         // Explicitly drop the old runner here to ensure that we wait for threads to terminate
         // before starting a new runner
+        if self.config.verbose {
+            writeln!(
+                self.config.stdout,
+                "runner {}: reset shutdown begin",
+                std::process::id()
+            );
+        }
         drop(self.inner.take());
+        if self.config.verbose {
+            writeln!(
+                self.config.stdout,
+                "runner {}: reset startup begin",
+                std::process::id()
+            );
+        }
         self.inner = Some(RunnerInner::start(self.config).await?);
+        if self.config.verbose {
+            writeln!(
+                self.config.stdout,
+                "runner {}: reset startup complete",
+                std::process::id()
+            );
+        }
 
         Ok(())
     }
@@ -927,11 +948,28 @@ impl<'a> Runner<'a> {
     }
 
     async fn check_catalog(&self) -> Result<(), anyhow::Error> {
-        self.inner
+        if self.config.verbose {
+            writeln!(
+                self.config.stdout,
+                "runner {}: catalog check begin",
+                std::process::id()
+            );
+        }
+        let result = self
+            .inner
             .as_ref()
             .expect("RunnerInner missing")
             .check_catalog()
-            .await
+            .await;
+        if self.config.verbose {
+            writeln!(
+                self.config.stdout,
+                "runner {}: catalog check complete, success={}",
+                std::process::id(),
+                result.is_ok()
+            );
+        }
+        result
     }
 
     #[allow(clippy::disallowed_methods)]

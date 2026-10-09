@@ -34,7 +34,7 @@ is insufficient. Do not add a process registry or timed cleanup.
 Promotion also retracts retired memberships, runtime configuration, replica settings
 and replica-owned observation selections in its authority CAS. Raw snapshot rows
 preserve pre-migration encodings. Shared declarations, SQL-owned plans, historical
-observations and surviving owners remain intact. Verify this combined path in CI.
+observations and surviving owners remain intact.
 
 The creator-admission acknowledgement fix preserves results even without a changed
 catalog projection. Replica conflict coverage now requires real grant changes and
@@ -42,8 +42,14 @@ published advancement. The outage fixture checks physical compaction before repl
 SIGKILLs, without shortening abandoned Persist reader leases or extending deadlines.
 Keep earlier branch-built catalog conversion outside scope.
 
-CI138465 still has parallel DDL timeouts, unfinished SLT comment/webhook tests and
-increasing Zippy readiness waits. Their precise wait owners remain unresolved.
+CI138467 passes Cargo, both Clippys and the native outage/handover workflows.
+Compatible-version promotion through SQL readiness took 8.697s, followed by the
+first indexed query in 0.627s, with the existing 20M/40M row assertions unchanged.
+Parallel failures and SLT/Zippy timeouts remain. SLT shows broad slowdown, not an
+identified blocking owner. Trace the recurring comment fixture's statements and
+reset phases. Zippy's two-slot hydration occupancy grows across deployments, but
+does not establish CPU or replay volume. Correlate scoped decode work/time and
+frontier diagnostics before choosing a repair.
 Do not attribute these to the acknowledgement bug or claim lifecycle changes solve
 them without correlated evidence. Detailed captures and verification are in the PR.
 

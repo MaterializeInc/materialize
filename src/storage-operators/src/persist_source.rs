@@ -17,6 +17,7 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::hash::Hash;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, future::Either};
@@ -579,13 +580,26 @@ where
 
     builder.build(move |_caps| {
         // Acquire an activator to reschedule the operator when it has unfinished work.
-        let activator = Activator::new(operator_info.address, scope.activations());
+        let activator = Activator::new(operator_info.address.clone(), scope.activations());
+        let worker = scope.index();
         let panic_on_audit_failure = STATS_AUDIT_PANIC.handle(&cfg);
         let mut pending_work = VecDeque::new();
         let mut datum_vec = DatumVec::new();
         let mut row_builder = Row::default();
+        // Diagnostic work units are existing decode fuel, not rows or fetched
+        // bytes. Outputs count MFP emissions before container consolidation.
+        // Active time is elapsed time inside scheduled calls, not thread CPU time.
+        let mut work_units = 0_u64;
+        let mut emitted_records = 0_u64;
+        let mut active_time = Duration::ZERO;
+        let mut last_report = Instant::now();
 
-        move |_frontier| {
+        move |frontier| {
+            let started = tracing::enabled!(
+                target: "mz_storage_operators::persist_source::decode_progress",
+                tracing::Level::DEBUG
+            )
+            .then(Instant::now);
             fetched_input.for_each(|time, data| {
                 let capabilities = [time.retain(0), time.retain(1)];
                 let panic_on_audit_failure = panic_on_audit_failure.get();
@@ -623,9 +637,14 @@ where
                     &mut row_builder,
                     &mut work,
                     yield_fuel,
-                    |record, time, diff| match record {
-                        Ok(row) => ok_session.give((row.into_owned(), record_time(time), diff)),
-                        Err(err) => err_session.give((err, record_time(time), diff)),
+                    |record, time, diff| {
+                        if started.is_some() {
+                            emitted_records = emitted_records.saturating_add(1);
+                        }
+                        match record {
+                            Ok(row) => ok_session.give((row.into_owned(), record_time(time), diff)),
+                            Err(err) => err_session.give((err, record_time(time), diff)),
+                        }
                     },
                 );
                 drop(ok_session);
@@ -636,6 +655,27 @@ where
             }
             if !pending_work.is_empty() {
                 activator.activate();
+            }
+            if let Some(started) = started {
+                work_units = work_units.saturating_add(u64::cast_from(work));
+                active_time += started.elapsed();
+                if last_report.elapsed() >= Duration::from_secs(5) {
+                    tracing::debug!(
+                        target: "mz_storage_operators::persist_source::decode_progress",
+                        name,
+                        worker,
+                        operator_info.global_id,
+                        address = ?operator_info.address,
+                        work_units,
+                        emitted_records,
+                        active_seconds = active_time.as_secs_f64(),
+                        fetched_frontier = ?frontier[0].frontier(),
+                        pending_parts = pending_work.len(),
+                        pending_at = ?pending_work.front().map(|part| part.capabilities[0].time()),
+                        "source decode progress",
+                    );
+                    last_report = Instant::now();
+                }
             }
         }
     });
