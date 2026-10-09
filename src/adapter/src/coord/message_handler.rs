@@ -187,7 +187,7 @@ impl Coordinator {
                 self.run_hydration_history_collection();
             }
             Message::CaughtUpCheck(request) => {
-                self.handle_caught_up_check_request(request).await;
+                self.handle_caught_up_check_request(request);
             }
             Message::RetireExecute {
                 otel_ctx,
