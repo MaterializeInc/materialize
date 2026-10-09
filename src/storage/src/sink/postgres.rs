@@ -32,21 +32,28 @@
 
 use std::convert::Infallible;
 use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::{cell::RefCell, fmt::Write as _};
 
 use anyhow::{Context, bail};
+use bytes::Bytes;
+use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{Hashable, VecCollection};
+use futures::{SinkExt, StreamExt};
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::UnitSchema;
+use mz_pgcopy::{CopyFormatParams, encode_copy_format};
+use mz_pgrepr::TextEncodeSettings;
 use mz_postgres_util::{Client, Sql, batch_execute, sql};
 use mz_repr::{
-    Diff, GlobalId, RelationDesc, SqlColumnType, SqlRelationType, SqlScalarType, Timestamp,
+    Datum, Diff, GlobalId, RelationDesc, Row, SqlColumnType, SqlRelationType, SqlScalarType,
+    Timestamp,
 };
 use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -54,22 +61,37 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{PostgresSinkConnection, StorageSinkDesc};
 use mz_storage_types::sources::SourceData;
-use mz_timely_util::builder_async::{OperatorBuilder, PressOnDropButton};
+use mz_timely_util::builder_async::{Event, OperatorBuilder, PressOnDropButton};
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::vec::{Map, ToStream};
 use timely::dataflow::operators::{CapabilitySet, Concatenate};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp as _};
+use tokio_postgres::CopyInSink;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::render::sinks::{SinkBatchStream, SinkRender};
+use crate::render::sinks::{SinkBatchStream, SinkRender, SinkTrace};
 use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
+
+type SinkBatch = <SinkTrace as TraceReader>::Batch;
+type SinkCursor = <SinkBatch as Navigable>::Cursor;
 
 /// Staging table column holding the Materialize timestamp of a row.
 const TIMESTAMP_COLUMN: &str = "mz_timestamp";
 /// Staging table column holding `1` for an insertion or `-1` for a retraction.
 const DIFF_COLUMN: &str = "mz_diff";
+
+/// Encoded bytes accumulated before a chunk is handed to the COPY stream.
+const COPY_CHUNK_BYTES: usize = 1 << 20;
+
+/// COPY BINARY stream header: the 11 byte signature, an i32 of flags (none
+/// set) and an i32 header extension length (zero). See the "Binary Format"
+/// section of the PostgreSQL `COPY` documentation.
+const COPY_BINARY_HEADER: &[u8] = b"PGCOPY\n\xff\r\n\0\0\0\0\0\0\0\0\0";
+/// COPY BINARY stream trailer: an i16 of `-1` in place of a tuple field count.
+const COPY_BINARY_TRAILER: &[u8] = &(-1i16).to_be_bytes();
 
 impl<'scope> SinkRender<'scope> for PostgresSinkConnection {
     fn get_key_indices(&self) -> Option<&[usize]> {
@@ -235,20 +257,147 @@ fn setup_postgres_tables<'scope>(
 /// Timely combines that across workers, so a downstream operator observing the
 /// frontier knows when a timestamp is complete in staging.
 fn encode_and_stage_input<'scope>(
-    _name: String,
-    _batches: SinkBatchStream<'scope>,
-    _tables_ready: StreamVec<'scope, Timestamp, Infallible>,
-    _connection: PostgresSinkConnection,
-    _storage_configuration: StorageConfiguration,
-    _from_desc: RelationDesc,
-    _sink_id: GlobalId,
-    _statistics: SinkStatistics,
+    name: String,
+    batches: SinkBatchStream<'scope>,
+    tables_ready: StreamVec<'scope, Timestamp, Infallible>,
+    connection: PostgresSinkConnection,
+    storage_configuration: StorageConfiguration,
+    from_desc: RelationDesc,
+    sink_id: GlobalId,
+    statistics: SinkStatistics,
 ) -> (
     StreamVec<'scope, Timestamp, Infallible>,
     StreamVec<'scope, Timestamp, HealthStatusMessage>,
     PressOnDropButton,
 ) {
-    unimplemented!("Postgres sink staging operator")
+    let scope = batches.scope();
+    let worker_index = scope.index();
+    let mut builder = OperatorBuilder::new(name, scope);
+    let (output, progress) = builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
+    let mut input = builder.new_input_for(batches, Pipeline, &output);
+    let mut tables_ready = builder.new_disconnected_input(tables_ready, Pipeline);
+
+    let (button, errors) = builder.build_fallible(move |caps| {
+        Box::pin(async move {
+            let [capset]: &mut [_; 1] = caps.try_into().unwrap();
+
+            while let Some(_) = tables_ready.next().await {
+                // Wait for the setup operator to release its barrier.
+            }
+
+            let staging_typ = staging_relation_type(&from_desc)?;
+            let client = connect(
+                &connection,
+                &storage_configuration,
+                sink_id,
+                &format!("postgres-sink-{sink_id}-copy-{worker_index}"),
+            )
+            .await?;
+
+            let columns = Sql::join(
+                from_desc
+                    .iter_names()
+                    .map(|name| Sql::ident(name.as_str()))
+                    .chain([Sql::ident(TIMESTAMP_COLUMN), Sql::ident(DIFF_COLUMN)]),
+                ", ",
+            );
+            let copy_stmt = sql!(
+                "COPY {}.{} ({}) FROM STDIN (FORMAT BINARY)",
+                Sql::ident(&connection.schema),
+                Sql::ident(&connection.staging_table_name(sink_id)),
+                columns,
+            );
+
+            // NOTE: fallible work happens below while capabilities are held.
+            // On an error `build_fallible` parks this future with the
+            // capabilities still held, the health stream reports halting, and
+            // the whole sink dataflow restarts. That restart is required: a
+            // failed COPY leaves no way to tell which rows landed, and the
+            // setup operator truncates the staging table on the way back up.
+            let mut copy: Option<Pin<Box<CopyInSink<Bytes>>>> = None;
+            let mut buf: Vec<u8> = Vec::new();
+            let mut scratch: Vec<u8> = Vec::new();
+            let mut row_buf = Row::default();
+            let mut times: Vec<(Timestamp, Diff)> = Vec::new();
+
+            while let Some(event) = input.next().await {
+                match event {
+                    Event::Data(_cap, batches) => {
+                        for batch in &batches {
+                            let mut rows = 0u64;
+                            let mut bytes = 0u64;
+                            let mut cursor = batch.cursor();
+                            while cursor.key_valid(batch) {
+                                while cursor.val_valid(batch) {
+                                    times.clear();
+                                    cursor.map_times(batch, |time, diff| {
+                                        times.push((
+                                            SinkCursor::owned_time(time),
+                                            SinkCursor::owned_diff(diff),
+                                        ));
+                                    });
+                                    let val = cursor.val(batch);
+                                    for &(time, diff) in &times {
+                                        let ts = i64::try_from(u64::from(time))
+                                            .context("timestamp does not fit in a bigint")?;
+                                        let sign: i16 = if diff.is_negative() { -1 } else { 1 };
+                                        let mut packer = row_buf.packer();
+                                        packer.extend(val);
+                                        packer.push(Datum::Int64(ts));
+                                        packer.push(Datum::Int16(sign));
+
+                                        scratch.clear();
+                                        encode_copy_format(
+                                            &CopyFormatParams::Binary,
+                                            &row_buf,
+                                            &staging_typ,
+                                            &mut scratch,
+                                            TextEncodeSettings::STABLE,
+                                        )?;
+                                        // An update with multiplicity `n` becomes
+                                        // `n` staging rows carrying `mz_diff = ±1`.
+                                        let n = diff.unsigned_abs();
+                                        for _ in 0..n {
+                                            buf.extend_from_slice(&scratch);
+                                        }
+                                        rows += n;
+                                        bytes += u64::cast_from(scratch.len()) * n;
+                                    }
+                                    cursor.step_val(batch);
+                                }
+                                cursor.step_key(batch);
+                            }
+                            statistics.inc_messages_staged_by(rows);
+                            statistics.inc_bytes_staged_by(bytes);
+
+                            if buf.len() >= COPY_CHUNK_BYTES {
+                                send_buffered(&client, &copy_stmt, &mut copy, &mut buf).await?;
+                            }
+                        }
+                    }
+                    Event::Progress(frontier) => {
+                        // Every row with a time below `frontier` has been
+                        // handed to the COPY, so finishing it commits them.
+                        // Rows at or beyond the frontier that arrived early
+                        // commit along with them, which is fine because only
+                        // completed timestamps are moved to the target table.
+                        send_buffered(&client, &copy_stmt, &mut copy, &mut buf).await?;
+                        if let Some(mut sink) = copy.take() {
+                            sink.send(Bytes::from_static(COPY_BINARY_TRAILER)).await?;
+                            sink.as_mut().finish().await?;
+                        }
+                        // Downgrading the held capability is the progress
+                        // signal to downstream operators.
+                        capset.downgrade(frontier.iter());
+                    }
+                }
+            }
+
+            Ok::<(), anyhow::Error>(())
+        })
+    });
+
+    (progress, health_statuses(errors), button.press_on_drop())
 }
 
 /// Moves each completed timestamp window from the staging table into the target
@@ -449,6 +598,30 @@ async fn connect(
     )
     .await?;
     Ok(client)
+}
+
+/// Hands the buffered rows to the COPY in progress, opening one first if there
+/// is none.
+///
+/// A COPY is only ever open while it has rows in it, so an idle sink holds no
+/// open transaction on the staging table.
+async fn send_buffered(
+    client: &Client,
+    copy_stmt: &Sql,
+    copy: &mut Option<Pin<Box<CopyInSink<Bytes>>>>,
+    buf: &mut Vec<u8>,
+) -> Result<(), anyhow::Error> {
+    if buf.is_empty() {
+        return Ok(());
+    }
+    if copy.is_none() {
+        let mut sink = Box::pin(client.copy_in(copy_stmt.as_str()).await?);
+        sink.send(Bytes::from_static(COPY_BINARY_HEADER)).await?;
+        *copy = Some(sink);
+    }
+    let sink = copy.as_mut().expect("opened above");
+    sink.send(Bytes::from(std::mem::take(buf))).await?;
+    Ok(())
 }
 
 fn health_statuses<'scope>(
