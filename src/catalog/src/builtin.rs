@@ -750,6 +750,33 @@ impl Fingerprint for &BuiltinSource {
     }
 }
 
+// The fingerprint is the SQL text, so a change to the row shape of a relation
+// the MV reads (for example `mz_indexes` reading `mz_builtin_indexes`) goes
+// unnoticed by the fingerprint check in the adapter's `update_fingerprints`
+// unless the MV's own SQL changes. The ways an upstream change can regress a
+// builtin MV, and what catches each:
+//
+// 1. The upstream relation drops a referenced column: planning the MV fails at
+//    catalog open, which every test that opens a catalog hits.
+// 2. The upstream relation adds a column that the MV is changed to reference:
+//    the SQL changes, so the fingerprint changes, and `update_fingerprints`
+//    panics at upgrade until a `MigrationStep` is added.
+// 3. The upstream relation changes a referenced column's type: the planned
+//    desc changes and `verify_builtin_descs` fails until `desc` is updated. The
+//    fingerprint does not change, so without a `MigrationStep` the upgrade
+//    registers the new desc against the old shard. Persist rejects that when
+//    the Arrow encoding differs (int32 to int64) and cannot tell when it is
+//    shared (timestamp to timestamptz, both the same fixed-size binary).
+// 4. The upstream relation changes a referenced column's nullability: as in 3,
+//    `verify_builtin_descs` fails until `desc` is updated. If the shard keeps a
+//    non-nullable column and the relation emits NULL, the replica panics in
+//    `DatumEncoder::push` on write.
+// 5. The MV is `SELECT *` over the upstream relation, which reorders or swaps
+//    columns: persist matches columns by position, so this is case 3 for each
+//    moved column.
+//
+// `verify_builtin_descs` therefore asks for a `MigrationStep` whenever a
+// shard-backed builtin's `desc` changes.
 impl Fingerprint for &BuiltinMaterializedView {
     fn fingerprint(&self) -> String {
         self.create_sql()
