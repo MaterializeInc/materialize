@@ -8,8 +8,10 @@
 // by the Apache License, Version 2.0.
 
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import React from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { THRESHOLD_DRAG_SETTLE_MS } from "./constants";
 import { useThresholdControl } from "./useThresholdControl";
 
 describe("useThresholdControl", () => {
@@ -88,6 +90,52 @@ describe("useThresholdControl", () => {
 
     expect(result.current.graphProps.threshold).toBe(9_000);
     expect(result.current.inputProps.valueMs).toBe(9_000);
+  });
+
+  describe("with a commit that lands in a transition", () => {
+    // `BrowserRouter` navigates inside `startTransition`, so this is how a
+    // search-param `commit` behaves on the page.
+    const renderWithTransitionCommit = () => {
+      const shown: number[] = [];
+      const hook = renderHook(() => {
+        const [committed, setCommitted] = React.useState(2_000);
+        const control = useThresholdControl(committed, (value) =>
+          React.startTransition(() => setCommitted(value)),
+        );
+        const threshold = control.graphProps.threshold;
+        React.useLayoutEffect(() => {
+          if (shown.at(-1) !== threshold) shown.push(threshold);
+        });
+        return control;
+      });
+      return { ...hook, shown };
+    };
+
+    afterEach(() => vi.useRealTimers());
+
+    it("never shows the old value when a drag settles", () => {
+      vi.useFakeTimers();
+      const { result, shown } = renderWithTransitionCommit();
+
+      act(() => result.current.graphProps.onThresholdChange(5_000));
+      act(() => vi.advanceTimersByTime(THRESHOLD_DRAG_SETTLE_MS));
+
+      expect(shown).toEqual([2_000, 5_000]);
+    });
+
+    it("keeps a new drag that starts before the last one lands", () => {
+      vi.useFakeTimers();
+      const { result, shown } = renderWithTransitionCommit();
+
+      act(() => result.current.graphProps.onThresholdChange(5_000));
+      act(() => {
+        vi.advanceTimersByTime(THRESHOLD_DRAG_SETTLE_MS);
+        result.current.graphProps.onThresholdChange(7_000);
+      });
+
+      expect(shown.at(-1)).toBe(7_000);
+      expect(shown.slice(1)).not.toContain(2_000);
+    });
   });
 
   it("keeps each prop object stable while nothing changes", () => {

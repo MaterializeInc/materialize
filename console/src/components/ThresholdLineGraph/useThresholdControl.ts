@@ -76,11 +76,12 @@ export function useThresholdControl(
       setPending(value);
       clearTimeout(timer.current);
       timer.current = setTimeout(() => {
-        // Both updates come from one callback, so React batches them into a
-        // single render. Clearing `pending` later would show `committed`
-        // before it caught up, which reads as the control springing back.
+        // `commit` usually navigates, and `BrowserRouter` navigates inside a
+        // transition. Clearing `pending` outside one renders first and shows
+        // the old `committed` for a frame, which reads as the control
+        // springing back.
         commitRef.current(value);
-        setPending(undefined);
+        React.startTransition(() => setPending(undefined));
       }, settleMs);
     },
     [commitRef],
