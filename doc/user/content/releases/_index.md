@@ -20,6 +20,34 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.46.0
+*Released to Materialize Cloud: 2026-10-15* <br>
+*Released to Materialize Self-Managed: 2026-10-16* <br>
+
+### Metric Sinks {#v26.46-metric-sinks}
+`CREATE METRIC SINK`, `DROP METRIC SINK`, and `SHOW METRIC SINKS` are now available without setting a feature flag. A metric sink exports a relation that supplies `metric_name`, `metric_type`, `labels`, `value`, and `help` columns as Prometheus metrics under a name you choose, and every cluster now also renders two built-in curated sinks covering arrangement sizes and dataflow errors. Cluster-level health and your own SQL-defined measurements reach your existing Prometheus monitoring without a separate exporter.
+
+### Improvements {#v26.46-improvements}
+- **Replication-factor changes during a cluster reconfiguration**: `ALTER CLUSTER ... SET (REPLICATION FACTOR ...)` is now accepted while a graceful reconfiguration is in flight, preserving the dimensions and the deadline you did not name, so you can scale a stuck reconfiguration down to zero or cancel it by restoring the original configuration instead of waiting it out.
+- **Zero-downtime deployment readiness follows replica hydration**: A zero-downtime deployment now asks each replica how long it has been hydrated instead of tracking cluster status itself, so a read-only `environmentd` restart that picks up DDL no longer resets the stability period, drop-only DDL restarts the read-only generation so it can release obsolete replicas and read holds, and a replica that stays online but never hydrates holds the cut-over until `with_0dt_deployment_max_wait` passes or the deployment is promoted with skip-catchup.
+- **Constraint exclusion for MySQL source tables**: `CREATE TABLE ... FROM SOURCE` now accepts `EXCLUDE CONSTRAINTS` and `EXCLUDE ALL CONSTRAINTS` against MySQL sources as it already did for Postgres, dropping the named primary key and unique constraints — and, with `EXCLUDE ALL CONSTRAINTS`, the nullability constraints too — so that an upstream constraint change does not stall the table.
+- **Read-then-write statements no longer take a table write lock**: `DELETE`, `UPDATE`, and read-then-write `INSERT` now sequence through optimistic concurrency control by default, detecting intervening writes through timestamp conflicts rather than holding a per-table write lock for the span between the read and the write.
+- **Lower memory when ingesting wide schemas**: Sources with wide or deeply nested schemas now need less memory to write their data, because each column's encoding buffer starts empty and grows on demand instead of preallocating 1,024 slots.
+- **Kafka sink message attribution** (private preview): Kafka sinks can now attach a `materialize-sink-id` header carrying the sink's ID to every message they produce, so a consumer of a topic that several sinks write to can tell which sink produced each message.
+- **Kafka broker addresses are checked against private IP ranges**: In Materialize Cloud, a Kafka connection that reaches its brokers directly, rather than through PrivateLink or an SSH tunnel, now fails with "Broker address resolved to a private IP" unless every address the broker resolves to is a global address — at bootstrap, from cluster metadata, and on every re-resolution — while self-managed deployments are unaffected.
+- **Network policies are off by default in self-managed deployments**: The operator Helm chart now starts `environmentd` with `CREATE NETWORK POLICY` and `ALTER NETWORK POLICY` disabled, because network policies match on the client IP and self-managed access paths such as port-forwards present a proxy address instead; set `operator.args.enableDatabaseNetworkPolicies` to turn them back on.
+- **Account pages are reachable before an environment is ready**: The Console now renders the environment-not-ready flow inside the standard layout, so an organization still waiting on its first environment can reach App Passwords, License, and Usage & Billing from the navigation.
+- **Lower `mz_catalog_server` load from open cluster pages**: Cluster detail pages now resolve blue/green lineage with a peek refreshed every five minutes and subscribe to utilization by literal cluster ID, so each open page performs index lookups on `mz_catalog_server` instead of a dataflow that fully scans the utilization and lineage indexes.
+
+### Bug Fixes {#v26.46-bug-fixes}
+- Fixed casts from `"char"` to numbers and other non-string types, which panicked the optimizer during constant folding or crashed the replica running an operator over a `"char"` column; `"char"` to `int4` now yields the byte value, and every other target goes through the text representation.
+- Fixed `EXPLAIN ANALYZE CPU` and `EXPLAIN ANALYZE CLUSTER CPU` counting operators nested inside regions more than once, which reported 1.5x to 3x the real CPU time for joins, reduces, and `TopK` — on a test rig a hierarchical `MAX` reported 217 s against an actual 74 s.
+- Fixed `offset_committed` in `mz_source_statistics` reporting the progress of a source's slowest export for every one of its exports, so a subsource or table that is still snapshotting no longer inflates the ingestion lag reported for the others.
+- Fixed replica-scoped configuration overrides being dropped when a compute replica reconnected after its controller connection timed out, which left that replica running without its overrides for the rest of its life while `mz_replica_system_parameters` still listed them.
+- Fixed `COPY FROM` a URL decoding the response body into the target table when the server answered with a 4xx or 5xx status, which now fails with `server returned HTTP <code>`.
+- Fixed the MCP server rejecting a `tools/call` request that omits the optional `arguments` key with a bare 422 instead of running the tool.
+- Fixed the MCP server answering an unknown method that carries `params` with a bare 422 instead of a JSON-RPC "method not found" error.
+
 ## v26.44.1
 *Released to Materialize Cloud: 2026-10-01* <br>
 *Released to Materialize Self-Managed: 2026-10-02* <br>
