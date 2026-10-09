@@ -18,7 +18,7 @@ import {
 } from "~/platform/clusters/queries";
 import { createProviderWrapper } from "~/test/utils";
 
-import { useFreshnessHydration } from "./queries";
+import { useFreshnessHydration, useLatestLag } from "./queries";
 
 const objects: FreshnessObject[] = [
   {
@@ -30,26 +30,49 @@ const objects: FreshnessObject[] = [
   },
 ];
 
+// Records each SQL request and never answers, so a test sees which requests
+// start before any has returned.
+const recordRequests = () => {
+  const pending: string[] = [];
+  server.use(
+    http.post("*/api/sql", async ({ request }) => {
+      pending.push(new URL(request.url).searchParams.get("query_key") ?? "");
+      await delay("infinite");
+    }),
+  );
+  return pending;
+};
+
 describe("freshness queries", () => {
   it("sends every request before any has answered", async () => {
-    const pending: string[] = [];
-    server.use(
-      http.post("*/api/sql", async ({ request }) => {
-        pending.push(new URL(request.url).searchParams.get("query_key") ?? "");
-        await delay("infinite");
-      }),
-    );
+    const pending = recordRequests();
 
     // The page's hooks, in the page's order.
     const ProviderWrapper = await createProviderWrapper();
     renderHook(
       () => {
         useClusterFreshness({ lookbackMs: 3_600_000, objects });
+        useLatestLag(["u1"]);
         useFreshnessHydration(["u1"]);
       },
       { wrapper: ProviderWrapper },
     );
 
     await waitFor(() => expect(pending).toHaveLength(3));
+  });
+
+  it("asks only for the series when only the graph is shown", async () => {
+    // Cluster Overview's card reads the series alone.
+    const pending = recordRequests();
+
+    const ProviderWrapper = await createProviderWrapper();
+    renderHook(() => useClusterFreshness({ lookbackMs: 3_600_000, objects }), {
+      wrapper: ProviderWrapper,
+    });
+
+    await waitFor(() => expect(pending).toHaveLength(1));
+    // Long enough for a second request started in the same render to land.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(pending).toHaveLength(1);
   });
 });

@@ -258,7 +258,7 @@ describe("buildFreshnessData", () => {
   ];
 
   it("runs time forwards whatever order the rows arrive in", () => {
-    const data = buildFreshnessData({ readings, latest: [] }, objects);
+    const data = buildFreshnessData(readings, objects);
 
     expect(data.startTime).toBe(60_000);
     expect(data.endTime).toBe(180_000);
@@ -268,7 +268,7 @@ describe("buildFreshnessData", () => {
   });
 
   it("reports each object's newest bin as its current lag", () => {
-    const data = buildFreshnessData({ readings, latest: [] }, objects);
+    const data = buildFreshnessData(readings, objects);
 
     expect(data.currentData[0].lag).toEqual(parse("00:00:01"));
   });

@@ -63,7 +63,11 @@ import {
   PREDICATE_LABELS,
 } from "./freshnessRows";
 import { FreshnessTable } from "./FreshnessTable";
-import { HydrationCounts, useFreshnessHydration } from "./queries";
+import {
+  HydrationCounts,
+  useFreshnessHydration,
+  useLatestLag,
+} from "./queries";
 import { parsePredicate, useFreshnessParams } from "./useFreshnessParams";
 import { useFreshnessRows } from "./useFreshnessRows";
 
@@ -118,10 +122,10 @@ const FreshnessContent = ({
   // Distinguishes a cluster that has nothing on it from one whose objects have
   // not arrived yet. Both are an empty list, and they are not the same state.
   const { snapshotComplete } = useAllObjects();
+  const objectIds = objects.map((object) => object.objectId);
   const freshness = useClusterFreshness({ lookbackMs, objects });
-  const hydration = useFreshnessHydration(
-    objects.map((object) => object.objectId),
-  );
+  const latest = useLatestLag(objectIds);
+  const hydration = useFreshnessHydration(objectIds);
 
   // Before the headline, the graph and the tables, because each of them would
   // otherwise render its own "0" and the page would read as a passing health
@@ -134,10 +138,12 @@ const FreshnessContent = ({
     );
   }
 
-  // An error only replaces the page when there is nothing to show. A failed
-  // refetch keeps the last good readings on screen.
-  if (!freshness.data || objects.length === 0) {
-    return freshness.isError ? (
+  // Waits for both, because drawing the graph before the latest readings would
+  // show a "Now" column that disagrees with it. An error only replaces the page
+  // when there is nothing to show, so a failed refetch keeps the last good
+  // readings on screen.
+  if (!freshness.data || !latest.data || objects.length === 0) {
+    return freshness.isError || latest.isError ? (
       <ErrorBox message="An error occurred fetching freshness data." />
     ) : (
       <Box height="320px" width="100%">
@@ -151,6 +157,7 @@ const FreshnessContent = ({
   return (
     <FreshnessView
       data={freshness.data}
+      latestByObjectId={latest.data}
       hydrationByObjectId={hydration.data ?? NO_HYDRATION}
       {...viewOptions}
     />
@@ -158,14 +165,8 @@ const FreshnessContent = ({
 };
 
 const FreshnessView = ({
-  data: {
-    historicalData,
-    startTime,
-    endTime,
-    lines,
-    objectsById,
-    latestByObjectId,
-  },
+  data: { historicalData, startTime, endTime, lines, objectsById },
+  latestByObjectId,
   hydrationByObjectId,
   rangeLabel,
   predicate,
@@ -173,6 +174,7 @@ const FreshnessView = ({
   typeFilters,
 }: FreshnessViewOptions & {
   data: FreshnessData;
+  latestByObjectId: Map<string, number | null>;
   hydrationByObjectId: Map<string, HydrationCounts>;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();

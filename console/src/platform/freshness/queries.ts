@@ -14,6 +14,11 @@ import {
   buildRegionQueryKey,
 } from "~/api/buildQueryKeySchema";
 import { fetchHydrationCounts } from "~/api/materialize/freshness/hydrationCounts";
+import {
+  fetchLatestLag,
+  LATEST_READING_INTERVAL_MS,
+} from "~/api/materialize/freshness/lagHistory";
+import { sumPostgresIntervalMs } from "~/util";
 
 export interface HydrationCounts {
   hydratedReplicas: number;
@@ -34,7 +39,49 @@ export const freshnessQueryKeys = {
         objectIds: [...objectIds].sort().join(","),
       }),
     ] as const,
+  // No lookback: the newest reading is the newest reading whatever range is
+  // being graphed, so changing the range must not refetch it.
+  latestLag: (objectIds: string[]) =>
+    [
+      ...freshnessQueryKeys.all(),
+      buildQueryKeyPart("latestLag", {
+        objectIds: [...objectIds].sort().join(","),
+      }),
+    ] as const,
 };
+
+/**
+ * Each object's newest lag in milliseconds, keyed by object ID.
+ *
+ * Null where the newest reading reports the object as unreadable, which is not
+ * the same as the object being absent from the map: that means no reading at
+ * all.
+ */
+export function useLatestLag(objectIds: string[]) {
+  return useQuery({
+    queryKey: freshnessQueryKeys.latestLag(objectIds),
+    queryFn: async ({ queryKey, signal }) => {
+      if (objectIds.length === 0) return new Map<string, number | null>();
+
+      const { rows } = await fetchLatestLag({
+        objectIds,
+        queryKey,
+        requestOptions: { signal },
+      });
+
+      return new Map<string, number | null>(
+        rows.map((row) => [
+          row.objectId,
+          row.lag === null ? null : sumPostgresIntervalMs(row.lag),
+        ]),
+      );
+    },
+    // A reading lands once a minute, so anything shorter re-asks a question
+    // whose answer cannot have changed.
+    staleTime: LATEST_READING_INTERVAL_MS,
+    refetchInterval: LATEST_READING_INTERVAL_MS,
+  });
+}
 
 /**
  * Replica hydration for the objects on screen, keyed by object ID.

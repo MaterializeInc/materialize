@@ -90,9 +90,7 @@ import {
 } from "~/api/materialize/cluster/replicaUtilizationHistory";
 import {
   calculateBucketSizeFromLookback,
-  fetchLatestLag,
   fetchObjectLagHistory,
-  LATEST_READING_INTERVAL_MS,
 } from "~/api/materialize/freshness/lagHistory";
 import { assertNoMoreThanOneRow } from "~/api/materialize/MoreThanOneRowError";
 import { fetchOwners } from "~/api/materialize/owners";
@@ -200,15 +198,6 @@ export const clusterQueryKeys = {
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("clusterFreshnessSeries", {
         lookbackMs: params.lookbackMs,
-        objectIds: [...params.objectIds].sort().join(","),
-      }),
-    ] as const,
-  // No lookback: the newest reading is the newest reading whatever range is
-  // being graphed, so changing the range must not refetch it.
-  clusterFreshnessLatest: (params: { objectIds: string[] }) =>
-    [
-      ...clusterQueryKeys.all(),
-      buildQueryKeyPart("clusterFreshnessLatest", {
         objectIds: [...params.objectIds].sort().join(","),
       }),
     ] as const,
@@ -980,15 +969,6 @@ export interface FreshnessObject {
 type LagReading = Awaited<
   ReturnType<typeof fetchObjectLagHistory>
 >["rows"][number];
-type LatestReading = Awaited<ReturnType<typeof fetchLatestLag>>["rows"][number];
-
-export interface LagQueryRows {
-  /** One binned point per object per bin, each the worst reading in its span. */
-  readings: LagReading[];
-  /** One row per object, its most recent reading. */
-  latest: LatestReading[];
-}
-
 /**
  * Shapes lag readings for the freshness graph, naming each object from the
  * caller's list.
@@ -996,9 +976,12 @@ export interface LagQueryRows {
  * Separate from the query so names are not cached with the readings: the query
  * key tracks which objects were asked for, not what they are called, so a
  * rename would otherwise survive in the cache until the set changed.
+ *
+ * @param readings One binned point per object per bin, each the worst reading
+ * in its span.
  */
 export function buildFreshnessData(
-  { readings, latest }: LagQueryRows,
+  readings: LagReading[],
   objects: FreshnessObject[],
 ) {
   // Everything below reads row order as time order: the graph's start and end,
@@ -1009,15 +992,6 @@ export function buildFreshnessData(
   );
   const objectsById = new Map(
     objects.map((object) => [object.objectId, object]),
-  );
-
-  // Null where the newest reading reports the object as unreadable, which is
-  // not the same as the object having no reading at all.
-  const latestByObjectId = new Map<string, number | null>(
-    latest.map((row) => [
-      row.objectId,
-      row.lag === null ? null : sumPostgresIntervalMs(row.lag),
-    ]),
   );
 
   const currentData = flatGroup(rows, (d) => d.objectId)
@@ -1093,7 +1067,6 @@ export function buildFreshnessData(
     historicalData,
     currentData,
     objectsById,
-    latestByObjectId,
     lines: Array.from(lines.values()),
     startTime: historicalData.at(0)?.timestamp ?? 0,
     endTime: historicalData.at(-1)?.timestamp ?? 0,
@@ -1143,40 +1116,14 @@ export function useClusterFreshness({
     refetchInterval: binSizeMs,
   });
 
-  const latest = useQuery({
-    queryKey: clusterQueryKeys.clusterFreshnessLatest({ objectIds }),
-    queryFn: async ({ queryKey, signal }): Promise<LatestReading[]> => {
-      if (objectIds.length === 0) return [];
-
-      const { rows } = await fetchLatestLag({
-        objectIds,
-        requestOptions: { signal },
-        queryKey,
-      });
-      return rows;
-    },
-    // A reading lands once a minute, so anything shorter re-asks a question
-    // whose answer cannot have changed.
-    staleTime: LATEST_READING_INTERVAL_MS,
-    refetchInterval: LATEST_READING_INTERVAL_MS,
-  });
-
-  // Undefined until both have answered. Building from one alone would show a
-  // graph whose "Now" column disagrees with it.
   const data = useMemo(
-    () =>
-      series.data && latest.data
-        ? buildFreshnessData(
-            { readings: series.data, latest: latest.data },
-            objects,
-          )
-        : undefined,
-    [series.data, latest.data, objects],
+    () => (series.data ? buildFreshnessData(series.data, objects) : undefined),
+    [series.data, objects],
   );
 
   // Only these fields are returned. Spreading a query object would make every
   // consumer observe all of its state.
-  return { data, isError: series.isError || latest.isError };
+  return { data, isError: series.isError };
 }
 
 export type FreshnessData = ReturnType<typeof buildFreshnessData>;
