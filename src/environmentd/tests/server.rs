@@ -2719,7 +2719,8 @@ async fn test_caught_up_reads_do_not_block_coordinator() {
     let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
     let resume_rx = Mutex::new(resume_rx);
     fail::cfg_callback("0dt_caught_up_read", move || {
-        if let Some(tx) = entered_tx.lock().unwrap().take() {
+        let tx = entered_tx.lock().unwrap().take();
+        if let Some(tx) = tx {
             // Leave runtime workers available while the catch-up read is held.
             tokio::task::block_in_place(|| {
                 let _ = tx.send(());
