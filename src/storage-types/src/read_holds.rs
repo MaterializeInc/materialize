@@ -54,8 +54,9 @@ impl Debug for ReadHold {
 
 /// The issuer of a [`ReadHold`] has hung up, so the hold can no longer be cloned.
 ///
-/// This is only expected during process shutdown, when the tokio runtime drops tasks in
-/// arbitrary order and the issuer task can disappear while holds still exist.
+/// This happens during process shutdown, when the tokio runtime drops tasks in arbitrary order
+/// and the issuer task can disappear while holds still exist, and to compute holds once their
+/// compute instance is dropped, e.g., by `DROP CLUSTER`.
 #[derive(Error, Debug)]
 #[error("read hold issuer for collection {0} has hung up")]
 pub struct ReadHoldIssuerHungUp(pub GlobalId);
@@ -178,10 +179,10 @@ impl ReadHold {
     /// hold has hung up, in which case the clone would not actually hold back
     /// the since of the collection.
     ///
-    /// The issuer hanging up is only expected during process shutdown, when
-    /// the tokio runtime drops tasks in arbitrary order. Callers that may run
-    /// concurrently with shutdown can use this method to handle that case
-    /// gracefully, instead of panicking via [Clone::clone].
+    /// The issuer hangs up during process shutdown, and for compute holds when
+    /// their compute instance is dropped (see [`ReadHoldIssuerHungUp`]). Callers
+    /// that may run concurrently with either can use this method to handle that
+    /// case gracefully, instead of panicking via [Clone::clone].
     pub fn try_clone(&self) -> Result<Self, ReadHoldIssuerHungUp> {
         if self.id.is_user() {
             tracing::trace!("cloning ReadHold on {}: {:?}", self.id, self.since);

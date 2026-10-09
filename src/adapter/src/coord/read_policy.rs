@@ -29,6 +29,7 @@ use mz_storage_types::read_policy::ReadPolicy;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as _;
 
+use crate::AdapterError;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::util::ResultExt;
@@ -44,6 +45,22 @@ use crate::util::ResultExt;
 pub struct ReadHolds {
     pub storage_holds: BTreeMap<GlobalId, ReadHold>,
     pub compute_holds: BTreeMap<(ComputeInstanceId, GlobalId), ReadHold>,
+}
+
+/// The error for a storage hold whose issuer hung up.
+fn storage_hold_hung_up(id: GlobalId) -> AdapterError {
+    AdapterError::ConcurrentDependencyDrop {
+        dependency_kind: "collection",
+        dependency_id: id.to_string(),
+    }
+}
+
+/// The error for a compute hold whose issuer, its compute instance, hung up.
+fn compute_hold_hung_up(instance_id: ComputeInstanceId) -> AdapterError {
+    AdapterError::ConcurrentDependencyDrop {
+        dependency_kind: "cluster",
+        dependency_id: instance_id.to_string(),
+    }
 }
 
 impl ReadHolds {
@@ -102,22 +119,43 @@ impl ReadHolds {
         self.compute_holds.remove(&(instance_id, id));
     }
 
+    /// Clones the holds, failing with [`AdapterError::ConcurrentDependencyDrop`] if
+    /// the issuer of one of them hung up, see
+    /// [`ReadHoldIssuerHungUp`](mz_storage_types::read_holds::ReadHoldIssuerHungUp).
+    /// A transaction's stored holds, for example, outlive a `DROP CLUSTER` of
+    /// their cluster.
+    pub fn try_clone(&self) -> Result<Self, AdapterError> {
+        let mut result = ReadHolds::new();
+        for (id, hold) in &self.storage_holds {
+            let hold = hold.try_clone().map_err(|_| storage_hold_hung_up(*id))?;
+            result.storage_holds.insert(*id, hold);
+        }
+        for ((instance_id, id), hold) in &self.compute_holds {
+            let hold = hold
+                .try_clone()
+                .map_err(|_| compute_hold_hung_up(*instance_id))?;
+            result.compute_holds.insert((*instance_id, *id), hold);
+        }
+        Ok(result)
+    }
+
     /// Returns a new ReadHolds containing only the holds for collections in `id_bundle`.
-    pub fn subset(&self, id_bundle: &CollectionIdBundle) -> ReadHolds {
+    ///
+    /// Moves the holds out of `self` rather than cloning them: cloning a compute
+    /// hold panics once `DROP CLUSTER` has shut its instance down.
+    pub fn subset(mut self, id_bundle: &CollectionIdBundle) -> ReadHolds {
         let mut result = ReadHolds::new();
 
         for id in &id_bundle.storage_ids {
-            if let Some(hold) = self.storage_holds.get(id) {
-                result.storage_holds.insert(*id, hold.clone());
+            if let Some(hold) = self.storage_holds.remove(id) {
+                result.storage_holds.insert(*id, hold);
             }
         }
 
         for (instance_id, ids) in &id_bundle.compute_ids {
             for id in ids {
-                if let Some(hold) = self.compute_holds.get(&(*instance_id, *id)) {
-                    result
-                        .compute_holds
-                        .insert((*instance_id, *id), hold.clone());
+                if let Some(hold) = self.compute_holds.remove(&(*instance_id, *id)) {
+                    result.compute_holds.insert((*instance_id, *id), hold);
                 }
             }
         }

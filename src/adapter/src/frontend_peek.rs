@@ -710,7 +710,7 @@ impl PeekClient {
                         conn_id: session.conn_id().clone(),
                         tx,
                     })
-                    .await?;
+                    .await??;
 
                 if let Some(txn_read_holds) = txn_read_holds_opt {
                     let allowed_id_bundle = txn_read_holds.id_bundle();

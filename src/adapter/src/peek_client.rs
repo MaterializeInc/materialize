@@ -369,7 +369,7 @@ impl PeekClient {
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
         row_set_finishing_seconds: Histogram,
-        input_read_holds: ReadHolds,
+        mut input_read_holds: ReadHolds,
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
         conn_id: mz_adapter_types::connection::ConnectionId,
@@ -434,11 +434,13 @@ impl PeekClient {
         let (peek_target, target_read_hold, literal_constraints, mfp, strategy) = match fast_path {
             FastPathPlan::PeekExisting(_coll_id, idx_id, literal_constraints, mfp) => {
                 let peek_target = PeekTarget::Index { id: idx_id };
+                // Take the hold rather than clone it: cloning a compute hold
+                // panics once a concurrent DROP CLUSTER has shut its instance
+                // down. The peek below then fails with a "was dropped" error.
                 let target_read_hold = input_read_holds
                     .compute_holds
-                    .get(&(compute_instance, idx_id))
-                    .expect("missing compute read hold on PeekExisting peek target")
-                    .clone();
+                    .remove(&(compute_instance, idx_id))
+                    .expect("missing compute read hold on PeekExisting peek target");
                 let strategy = statement_logging::StatementExecutionStrategy::FastPath;
                 (
                     peek_target,
@@ -461,9 +463,8 @@ impl PeekClient {
                 };
                 let target_read_hold = input_read_holds
                     .storage_holds
-                    .get(&coll_id)
-                    .expect("missing storage read hold on PeekPersist peek target")
-                    .clone();
+                    .remove(&coll_id)
+                    .expect("missing storage read hold on PeekPersist peek target");
                 let strategy = statement_logging::StatementExecutionStrategy::PersistFastPath;
                 (
                     peek_target,

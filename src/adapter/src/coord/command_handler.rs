@@ -417,7 +417,11 @@ impl Coordinator {
                 }
 
                 Command::GetTransactionReadHoldsBundle { conn_id, tx } => {
-                    let read_holds = self.txn_read_holds.get(&conn_id).cloned();
+                    let read_holds = self
+                        .txn_read_holds
+                        .get(&conn_id)
+                        .map(|holds| holds.try_clone())
+                        .transpose();
                     let _ = tx.send(read_holds);
                 }
 
