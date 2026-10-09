@@ -89,6 +89,9 @@ impl State {
         }
     }
 
+    // Definitions are registered under committed grants, which token changes
+    // cannot remove. Only publication completion can release those grants and
+    // make definitions eligible for pruning.
     fn prune_dependencies(&mut self) {
         self.dependencies.retain(|id, _| {
             self.active.contains_key(id)
@@ -240,7 +243,6 @@ impl ClientReadProtection {
         let change_tx: ChangeTx = Arc::new(move |id, mut changes| {
             let mut state = local.lock().expect("read protection mutex poisoned");
             state.update(id, &changes.drain().collect::<Vec<_>>());
-            state.prune_dependencies();
             Ok(())
         });
         for id in compute_ids {

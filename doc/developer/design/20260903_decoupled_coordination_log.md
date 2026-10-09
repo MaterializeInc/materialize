@@ -105,10 +105,14 @@ remains unmeasured.
 Failed background advancement/bounds publication returns at the existing staggered
 publication cadence without deferring independent heartbeat renewal. Renewal still
 fails despite heartbeat dispatch: catch-up and transaction-open work occupy long
-heartbeat turns that never reach a candidate. Attribute that cost with bounded CPU
-samples through the existing profiler in the same parallel workload, then remove
-the temporary capture. Acquisition, DDL retries, replica timing and safety checks
-remain unchanged. Keep stalled advancement open even if SQL starts passing.
+heartbeat turns that never reach a candidate. CI138432 CPU samples identify a
+separate coordinator cost: token updates rescan every retained dependency definition.
+Definitions remain covered by committed grants, so only publication completion can
+make them releasable. Cleanup stays at that boundary, not per token. Verify this
+bounded cost repair in the existing workloads, then remove the temporary capture.
+It does not explain every catch-up wait or establish renewal progress. Acquisition,
+DDL retries, replica timing and safety checks remain unchanged. Keep stalled
+advancement open even if SQL starts passing.
 No broader scheduling or protocol change is approved.
 Both native promotion jobs in CI138229 verify graceful deployment fencing.
 Private prewarming's separate catalog and inline bootstrap are unchanged.

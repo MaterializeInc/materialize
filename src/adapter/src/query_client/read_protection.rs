@@ -508,7 +508,26 @@ mod tests {
                 .is_none()
         );
         assert!(client.prepare_publication(BTreeMap::new()).is_empty());
+        client.finish_publication(false);
+        let changed_dependencies = [(GlobalId::User(2), [GlobalId::User(3)].into())].into();
+        assert!(
+            client
+                .try_acquire(&bundle(), &request, &changed_dependencies)
+                .expect("open")
+                .is_none()
+        );
+
+        assert!(client.prepare_publication(BTreeMap::new()).is_empty());
         client.finish_publication(true);
+        publish(&client, requirements(&[(1, 10), (2, 10), (3, 10)]));
+        let _holds = client
+            .try_acquire(&bundle(), &request, &changed_dependencies)
+            .expect("open")
+            .expect("released definition can be replaced");
+        assert_eq!(
+            client.active_frontiers(),
+            requirements(&[(1, 10), (2, 10), (3, 10)])
+        );
     }
 
     #[mz_ore::test]
