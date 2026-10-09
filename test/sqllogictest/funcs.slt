@@ -1240,10 +1240,13 @@ SELECT cot(0::double)
 ----
 inf
 
+# cot treats -0.0 as +0.0 so that the result does not depend on whether the
+# input crossed a packing boundary (packing canonicalizes -0.0 to +0.0).
+# PostgreSQL returns -Infinity here.
 query R
 SELECT cot(-0::double)
 ----
--inf
+inf
 
 query R
 SELECT sin(1::double)
@@ -1476,6 +1479,42 @@ SELECT ln(-1)
 
 query error function ln is not defined for zero
 SELECT ln(0)
+
+# A float -0.0 input behaves exactly like +0.0 in ln, log10, and power, so
+# that results (and error messages) do not depend on whether the input
+# crossed a packing boundary (packing canonicalizes -0.0 to +0.0).
+
+query error function ln is not defined for zero
+SELECT ln('-0'::double)
+
+query error function log10 is not defined for zero
+SELECT log10('-0'::double)
+
+query R
+SELECT power('-0'::double, 0.5)
+----
+0
+
+query R
+SELECT power(0::double, '-0'::double)
+----
+1
+
+# NaN inputs propagate in ln and power regardless of the NaN's sign bit,
+# matching PostgreSQL.
+query R
+SELECT ln('-NaN'::double)
+----
+NaN
+
+query R
+SELECT power('-NaN'::double, 0.5)
+----
+NaN
+
+# A numeric negative zero (reachable via rounding) also errors like zero.
+query error function log10 is not defined for zero
+SELECT log10((-0.1)::decimal(10,0))
 
 query R
 SELECT ln(13.0000::decimal(15, 5))
