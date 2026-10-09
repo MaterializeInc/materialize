@@ -693,7 +693,7 @@ impl Coordinator {
         let (builtin, updates) = match result {
             Err(mz_catalog::durable::CatalogError::Durable(
                 mz_catalog::durable::DurableCatalogError::Fence(error),
-            )) => mz_ore::halt!("adapter deployment was fenced: {error}"),
+            )) => mz_ore::halt!("this deployment has been fenced out: {error}"),
             result => result?,
         };
         if self.client_protection_catalog.is_none() {

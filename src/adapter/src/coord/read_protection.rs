@@ -449,7 +449,7 @@ impl Coordinator {
                     mz_catalog::durable::DurableCatalogError::Fence(_)
                 )
             ) {
-                mz_ore::halt!("adapter deployment was fenced: {error}");
+                mz_ore::halt!("this deployment has been fenced out: {error}");
             }
             return Err(error.into());
         }

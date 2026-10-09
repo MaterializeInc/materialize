@@ -31,6 +31,11 @@ from readmission. The pending question is whether to add an internal retirement
 endpoint on the serving deployment. Removing a member without preventing its rejoin
 is insufficient. Do not add a process registry or timed cleanup.
 
+Retired deployment membership, runtime configuration and replica-owned observation
+selections can remain as metadata leftovers. They do not retain read frontiers or
+restore execution authority. Keep their cleanup distinct from shared declarations,
+SQL-owned plans and historical observations, which must survive other owners' retirement.
+
 Regenerate the unreleased catalog serialization fixture with its canonical generator
 and remove the temporary artifact-generation hook once the fixture is checked in.
 Keep earlier branch-built catalog conversion outside scope. Verify the combined
