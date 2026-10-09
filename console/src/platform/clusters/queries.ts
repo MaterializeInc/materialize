@@ -1018,9 +1018,15 @@ export interface LagQueryRows {
  * rename would otherwise survive in the cache until the set changed.
  */
 export function buildFreshnessData(
-  { readings: rows, latest }: LagQueryRows,
+  { readings, latest }: LagQueryRows,
   objects: FreshnessObject[],
 ) {
+  // Everything below reads row order as time order: the graph's start and end,
+  // and each object's last row as its newest. Sorted here so that holds
+  // whatever order the query returns.
+  const rows = [...readings].sort(
+    (a, b) => a.bucketStart.getTime() - b.bucketStart.getTime(),
+  );
   const objectsById = new Map(
     objects.map((object) => [object.objectId, object]),
   );
@@ -1035,7 +1041,6 @@ export function buildFreshnessData(
   );
 
   const currentData = flatGroup(rows, (d) => d.objectId)
-    // The last row per object is the most current: the query sorts by bucket.
     .map(([, rowsByObjectId]) => rowsByObjectId.at(-1))
     .filter(notNullOrUndefined)
     .sort(sortLagInfo)

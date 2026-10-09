@@ -100,7 +100,7 @@ export function buildObjectLagHistoryQuery({
       // `buildLagHistoryQuery` reports.
       .distinctOn(["bucket_start", "object_id"])
       .select(["bucket_start as bucketStart", "object_id as objectId", "lag"])
-      .orderBy(["bucket_start desc", "object_id", "lag desc"])
+      .orderBy(["bucket_start", "object_id", "lag desc"])
   );
 }
 

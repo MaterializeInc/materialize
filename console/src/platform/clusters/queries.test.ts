@@ -9,6 +9,7 @@
 
 import { renderHook, waitFor } from "@testing-library/react";
 import { createStore } from "jotai";
+import parse from "postgres-interval";
 
 import { DatabaseObject } from "~/api/materialize/objects";
 import { ErrorCode, MzDataType } from "~/api/materialize/types";
@@ -23,7 +24,7 @@ import { getQueryClient } from "~/queryClient";
 import { allObjects } from "~/store/allObjects";
 import { createProviderWrapper } from "~/test/utils";
 
-import { useFreshnessObjects, useOwners } from "./queries";
+import { buildFreshnessData, useFreshnessObjects, useOwners } from "./queries";
 
 const ownersColumns = buildColumns([
   "id",
@@ -223,5 +224,40 @@ describe("useFreshnessObjects", () => {
 
     await waitFor(() => expect(result.current[0].objectName).toBe("after"));
     expect(result.current).not.toBe(first);
+  });
+});
+
+describe("buildFreshnessData", () => {
+  // Newest first, so a builder that trusts row order fails. Three bins a
+  // minute apart, with the newest reading the healthiest.
+  const readings = [
+    { bucketStart: new Date(180_000), objectId: "u1", lag: parse("00:00:01") },
+    { bucketStart: new Date(120_000), objectId: "u1", lag: parse("00:00:05") },
+    { bucketStart: new Date(60_000), objectId: "u1", lag: parse("00:10:00") },
+  ];
+  const objects = [
+    {
+      objectId: "u1",
+      objectName: "orders_mv",
+      schemaName: "public",
+      databaseName: "materialize",
+      objectType: "materialized-view",
+    },
+  ];
+
+  it("runs time forwards whatever order the rows arrive in", () => {
+    const data = buildFreshnessData({ readings, latest: [] }, objects);
+
+    expect(data.startTime).toBe(60_000);
+    expect(data.endTime).toBe(180_000);
+    expect(data.historicalData.map((d) => d.timestamp)).toEqual([
+      60_000, 120_000, 180_000,
+    ]);
+  });
+
+  it("reports each object's newest bin as its current lag", () => {
+    const data = buildFreshnessData({ readings, latest: [] }, objects);
+
+    expect(data.currentData[0].lag).toEqual(parse("00:00:01"));
   });
 });
