@@ -45,6 +45,8 @@ Worth adding to the sweep even though the panel omits them: `mz_persist_compacti
 
 The remaining rows are for drill-down once the sweep flags something: `By Shard` for per-shard state, `Compaction` and `Compaction state` for compaction internals, `GC`, `External`, `Retries`, `Codec`, `Audit`, `Postgres/Consensus`, `PubSub Server` and `PubSub Client`, `Schema/Structured`, `Rehydration`, and `Txns`. Per-shard panels are keyed by `shard` and often by `name`, which is how a source or collection is joined to its shard, for example `mz_persist_shard_update_count{name="$source"}`.
 
+From v26.43.0, 14 per-shard panels render empty because [#38664](https://github.com/MaterializeInc/materialize/pull/38664) removed the metrics behind them: `# shards`, `# shards by env`, `upper`, `consensus_bytes / shard`, `consensus_started / shard`, `shard since`, `Stale versions`, `batch parts by version`, `schema reg`, the two inline-write panels, and the three pubsub `diffs applied` panels. An empty after-window on these is a dashboard gap, not a finding.
+
 ## Hazards and invariants
 
 Each entry states a property that holds at any fleet size, followed by the measurement it came from. The property is what survives a release. The measurement is dated, describes whatever fleet existed when it was taken, and is recorded only so the property is not mistaken for a guess.

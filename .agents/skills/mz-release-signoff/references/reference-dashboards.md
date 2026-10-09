@@ -50,8 +50,10 @@ The downtime panels compute `sum_over_time((1 - max by (org) (metric))[$__range:
 
 | Metric | Notes |
 |---|---|
-| `mz_dataflow_initial_output_duration_seconds` | Present once a dataflow has produced output. `sgn()` of it over the count of series gives the hydrated fraction. |
+| `mz_dataflow_initial_output_duration_seconds` | Removed in 2f8f257339 ("compute: rip out the mz_dataflow_initial_output_duration_seconds metric"), so panel 64 arm A and panel 66 arms A to C are empty. Use the next row instead. |
 | `mz_compute_collection_count` | Carries a `hydrated` label. The by-generation panel extracts `gen` from `environmentd_materialize_cloud_service_id` with the pattern `.*-replica-.*-gen-(.*)`, which is how the new generation's hydration is separated from the old one's. |
+
+Other panels that return no series in production: release-health 34 arm A (`mz_envd_up`), and networking 65 (`cilium_datapath_signals_handled_total`) and 47 (`cilium_node_connectivity_latency_seconds`), checked over three weeks in production us-east-1 and us-west-2 in September 2026. Release-health 62 and 63 read `mz_external_envd_up`, which has one series per region, a canary environment, so they measure canary reachability rather than the fleet.
 
 This is the only place hydration progress is broken out per generation, which makes it the right dashboard for answering whether the new version hydrated as fast as the old one.
 
