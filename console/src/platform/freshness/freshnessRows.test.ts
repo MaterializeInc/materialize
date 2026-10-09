@@ -163,12 +163,9 @@ describe("computeStats", () => {
   it('takes "Now" from the latest reading, not the worst in the last bin', () => {
     // At a wide range the final bin is a maximum over many minutes, so it
     // reads high for an object that has already recovered.
-    const lastBinMax = Math.max(
-      ...(SERIES.spiky as number[]).map((r) => r as number),
-    );
-    expect(lastBinMax).toBe(9_000);
+    const recovered = buildData({ recovered: [400, 410, 9_000] }, 3);
 
-    const stats = computeStats("spiky", data, 430);
+    const stats = computeStats("recovered", recovered, 430);
     expect(stats.current).toBe(430);
     expect(stats.peak).toBe(9_000);
   });
