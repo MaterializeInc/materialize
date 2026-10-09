@@ -391,7 +391,7 @@ impl Context {
         pod_template_labels.extend(recommended_k8s_labels(balancer.app_name()));
 
         let deployment_spec = DeploymentSpec {
-            replicas: Some(balancer.replicas()),
+            replicas: balancer.replicas(),
             selector: LabelSelector {
                 match_labels: Some(match_labels),
                 ..Default::default()
@@ -652,9 +652,8 @@ mod tests {
     use super::*;
     use mz_cloud_resources::crd::balancer::v1alpha1::{BalancerSpec, StaticRoutingConfig};
 
-    #[mz_ore::test]
-    fn configmap_reference_controls_file_sync() {
-        let context = Context::new(Config {
+    fn test_context() -> Context {
+        Context::new(Config {
             enable_security_context: false,
             enable_prometheus_scrape_annotations: false,
             image_pull_policy: KubernetesImagePullPolicy::IfNotPresent,
@@ -669,22 +668,48 @@ mod tests {
             balancerd_sql_port: 6875,
             balancerd_http_port: 6876,
             balancerd_internal_http_port: 6878,
-        });
+        })
+    }
+
+    fn test_balancer(spec: BalancerSpec) -> Balancer {
+        let mut balancer = Balancer::new(
+            "test",
+            BalancerSpec {
+                static_routing: Some(StaticRoutingConfig {
+                    environmentd_namespace: "test".to_owned(),
+                    environmentd_service_name: "environmentd".to_owned(),
+                }),
+                ..spec
+            },
+        );
+        balancer.metadata.namespace = Some("test".to_owned());
+        balancer.metadata.uid = Some("test".to_owned());
+        balancer.status = Some(balancer.status());
+        balancer
+    }
+
+    #[mz_ore::test]
+    fn externally_scaled_omits_replicas() {
+        let context = test_context();
+        for (externally_scaled, expected) in [(None, Some(3)), (Some(true), None)] {
+            let balancer = test_balancer(BalancerSpec {
+                replicas: Some(3),
+                externally_scaled,
+                ..Default::default()
+            });
+            let deployment = context.create_deployment_object(&balancer).unwrap();
+            assert_eq!(deployment.spec.unwrap().replicas, expected);
+        }
+    }
+
+    #[mz_ore::test]
+    fn configmap_reference_controls_file_sync() {
+        let context = test_context();
         for configmap_name in [None, Some("balancerd-settings".to_owned())] {
-            let mut balancer = Balancer::new(
-                "test",
-                BalancerSpec {
-                    configmap_name: configmap_name.clone(),
-                    static_routing: Some(StaticRoutingConfig {
-                        environmentd_namespace: "test".to_owned(),
-                        environmentd_service_name: "environmentd".to_owned(),
-                    }),
-                    ..Default::default()
-                },
-            );
-            balancer.metadata.namespace = Some("test".to_owned());
-            balancer.metadata.uid = Some("test".to_owned());
-            balancer.status = Some(balancer.status());
+            let balancer = test_balancer(BalancerSpec {
+                configmap_name: configmap_name.clone(),
+                ..Default::default()
+            });
             let pod = context
                 .create_deployment_object(&balancer)
                 .unwrap()

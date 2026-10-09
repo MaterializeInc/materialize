@@ -73,6 +73,10 @@ pub mod v1alpha1 {
         pub resource_requirements: Option<ResourceRequirements>,
         // Number of balancerd pods to create
         pub replicas: Option<i32>,
+        /// Leave the balancerd Deployment's replica count unset so an external
+        /// autoscaler, such as a HorizontalPodAutoscaler, can own it. `replicas`
+        /// is ignored when this is true.
+        pub externally_scaled: Option<bool>,
         // The configuration for generating an x509 certificate using cert-manager for balancerd
         // to present to incoming connections.
         // The dns_names and issuer_ref fields are required.
@@ -112,8 +116,13 @@ pub mod v1alpha1 {
             self.name_prefixed("balancerd")
         }
 
-        pub fn replicas(&self) -> i32 {
-            self.spec.replicas.unwrap_or(2)
+        /// The replica count to apply, or `None` if replicas are externally scaled.
+        pub fn replicas(&self) -> Option<i32> {
+            if self.spec.externally_scaled.unwrap_or(false) {
+                None
+            } else {
+                Some(self.spec.replicas.unwrap_or(2))
+            }
         }
 
         pub fn app_name(&self) -> String {

@@ -43,6 +43,14 @@
         "deprecated": false
       },
       {
+        "name": "balancerdExternallyScaled",
+        "type": "Bool",
+        "description": "Leave the balancerd Deployment's replica count unset so an external\nautoscaler, such as a HorizontalPodAutoscaler, can own it.\n`balancerd_replicas` is ignored when this is true.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
         "name": "balancerdReplicas",
         "type": "Integer",
         "description": "Number of balancerd pods to create.",
