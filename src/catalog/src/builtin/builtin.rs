@@ -302,8 +302,8 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, key
 /// Generates `mz_internal.mz_builtin_log_indexes`: per builtin log, the key of
 /// the introspection index each cluster maintains on it, and its privileges.
 /// `mz_catalog.mz_indexes` reads the keys to report those indexes, and
-/// `mz_builtin_sources` reads the privileges for its log rows. See
-/// `MZ_INDEXES` for what that means for migrations.
+/// `mz_builtin_sources` reads the privileges for its log rows. See the
+/// `Fingerprint` impl for `BuiltinMaterializedView` for what that means for migrations.
 fn make_builtin_log_indexes(builtin_items: &[Builtin<NameReference>]) -> BuiltinView {
     let iter = builtin_items.iter().filter_map(|b| match b {
         Builtin::Log(x) => Some(*x),

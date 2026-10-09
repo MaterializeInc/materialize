@@ -3056,16 +3056,31 @@ mod tests {
             let conn_catalog = catalog.for_system_session();
 
             for builtin in BUILTINS::iter() {
-                let (schema, name, expected_desc) = match builtin {
-                    Builtin::Table(t) => (&t.schema, &t.name, &t.desc),
-                    Builtin::View(v) => (&v.schema, &v.name, &v.desc),
-                    Builtin::MaterializedView(mv) => (&mv.schema, &mv.name, &mv.desc),
-                    Builtin::Source(s) => (&s.schema, &s.name, &s.desc),
+                let (schema, name, expected_desc, shard_backed) = match builtin {
+                    Builtin::Table(t) => (&t.schema, &t.name, &t.desc, true),
+                    Builtin::View(v) => (&v.schema, &v.name, &v.desc, false),
+                    Builtin::MaterializedView(mv) => (&mv.schema, &mv.name, &mv.desc, true),
+                    Builtin::Source(s) => (&s.schema, &s.name, &s.desc, true),
                     Builtin::Log(_)
                     | Builtin::Type(_)
                     | Builtin::Func(_)
                     | Builtin::Index(_)
                     | Builtin::Connection(_) => continue,
+                };
+                // A shard-backed builtin registers `desc` as its persist shard's
+                // schema, so a type change in `desc` needs a `MigrationStep`. Tables
+                // and sources carry `desc` into the catalog verbatim and cannot fail
+                // here. A materialized view is planned, and its fingerprint is its
+                // SQL, so nothing else detects a `desc` change at upgrade. See the
+                // `Fingerprint` impl for `BuiltinMaterializedView`.
+                let migration_hint = if shard_backed {
+                    format!(
+                        "; {schema}.{name} is backed by a persist shard, so after updating its \
+                         `desc` also add a `MigrationStep` for it to `MIGRATIONS` in \
+                         `src/adapter/src/catalog/open/builtin_schema_migration.rs`"
+                    )
+                } else {
+                    String::new()
                 };
                 let item = conn_catalog
                     .resolve_item(&PartialItemName {
@@ -3077,18 +3092,30 @@ mod tests {
                     .at_version(RelationVersionSelector::Latest);
 
                 let actual_desc = item.relation_desc().expect("invalid item type");
+                assert_eq!(
+                    actual_desc.arity(),
+                    expected_desc.arity(),
+                    "item {schema}.{name} column count did not match its expected column count{migration_hint}"
+                );
                 for (index, ((actual_name, actual_typ), (expected_name, expected_typ))) in
                     actual_desc.iter().zip_eq(expected_desc.iter()).enumerate()
                 {
                     assert_eq!(
                         actual_name, expected_name,
-                        "item {schema}.{name} column {index} name did not match its expected name"
+                        "item {schema}.{name} column {index} name did not match its expected name{migration_hint}"
                     );
                     assert_eq!(
                         actual_typ, expected_typ,
-                        "item {schema}.{name} column {index} ('{actual_name}') type did not match its expected type"
+                        "item {schema}.{name} column {index} ('{actual_name}') type did not match its expected type{migration_hint}"
                     );
                 }
+                // Keys never reach the shard schema, so a key mismatch needs no
+                // migration, only a corrected `desc`.
+                assert_eq!(
+                    actual_desc.typ().keys,
+                    expected_desc.typ().keys,
+                    "item {schema}.{name} keys did not match its expected keys"
+                );
                 assert_eq!(
                     &*actual_desc, expected_desc,
                     "item {schema}.{name} did not match its expected RelationDesc"

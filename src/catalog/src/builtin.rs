@@ -750,6 +750,35 @@ impl Fingerprint for &BuiltinSource {
     }
 }
 
+// The fingerprint is the SQL text, so a change to the row shape of a relation
+// the MV reads (for example `mz_indexes` reading `mz_builtin_indexes`) goes
+// unnoticed by the fingerprint check in the adapter's `update_fingerprints`
+// unless the MV's own SQL changes. The ways an upstream change can regress a
+// builtin MV, and what catches each:
+//
+// 1. The upstream relation drops a referenced column: planning the MV fails at
+//    catalog open, which every test that opens a catalog hits.
+// 2. The upstream relation adds a column that the MV is changed to reference:
+//    the SQL changes, so the fingerprint changes, and `update_fingerprints`
+//    panics at upgrade until a `MigrationStep` is added.
+// 3. The upstream relation changes a referenced column's type: the planned
+//    desc changes and `verify_builtin_descs` fails until `desc` is updated. The
+//    fingerprint does not change, so without a `MigrationStep` the coordinator
+//    evolves the existing shard to the new desc at bootstrap, in
+//    `evolve_nullability_for_bootstrap`. Persist refuses when the Arrow
+//    encoding differs (int32 to int64), which terminates environmentd, and
+//    cannot tell when the encoding is shared (timestamp to timestamptz), which
+//    silently reinterprets the stored bytes.
+// 4. The upstream relation changes a referenced column's nullability: as in 3,
+//    `verify_builtin_descs` fails until `desc` is updated. Boot then evolves the
+//    shard to the new desc (`evolve_nullability_for_bootstrap`), which persist
+//    accepts for widening and rejects for narrowing, terminating envd.
+// 5. The MV is `SELECT *` over the upstream relation, which reorders or swaps
+//    columns: persist matches columns by position, so this is case 3 for each
+//    moved column.
+//
+// `verify_builtin_descs` therefore asks for a `MigrationStep` whenever a
+// shard-backed builtin's `desc` changes in more than nullability.
 impl Fingerprint for &BuiltinMaterializedView {
     fn fingerprint(&self) -> String {
         self.create_sql()
