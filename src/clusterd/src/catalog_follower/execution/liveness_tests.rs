@@ -453,7 +453,7 @@ async fn exercise_liveness() {
             None,
             vec![Op::PublishClientReadRequirements {
                 incarnation: peer,
-                requirements: BTreeMap::new(),
+                requirements: BTreeMap::from([(fixture.source, Timestamp::new(20_000))]),
             }],
         )
         .await
@@ -471,7 +471,10 @@ async fn exercise_liveness() {
         .await
         .unwrap();
     assert_eq!(driver.pending_installations(&effects), 0);
-    assert!(catalog.state().client_incarnations().contains_key(&peer));
+    assert_eq!(
+        catalog.state().client_read_requirements()[&(peer, fixture.source)],
+        Timestamp::new(20_000),
+    );
     timeout(Duration::from_secs(30), async {
         loop {
             driver.apply_progress(&catalog);
@@ -505,13 +508,20 @@ async fn exercise_liveness() {
         ))
         .await;
 
-    // Bounds conflicts yield too. A peer adds historical protection between
-    // attempts, so retry must derive new proposals instead of resubmitting ops.
+    // Publish the installed reader's advancement before testing bounds. A
+    // deferred aggregate would itself retain the old bound and require no write.
     driver.configure_publication(
         catalog
             .system_config()
             .catalog_read_protection_publish_interval(),
     );
+    driver.publication_clock.as_mut().unwrap().due = Instant::now();
+    driver
+        .publish(&mut catalog, &mut effects, cluster, &build, true, None)
+        .await
+        .unwrap();
+    // Bounds conflicts yield too. A peer adds historical protection between
+    // attempts, so retry must derive new proposals instead of resubmitting ops.
     driver.publication_clock.as_mut().unwrap().due = deferred;
     fixture.writer.sync_to_current_updates().await.unwrap();
     let ts = fixture.writer.current_upper().await;
