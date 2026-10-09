@@ -146,14 +146,32 @@ Mcp-Method: tools/list
 400 Bad Request
 {"jsonrpc":"2.0","id":26,"error":{"code":-32020,"message":"Header mismatch: MCP-Protocol-Version header value '2025-11-25, 2026-07-28' is not '2026-07-28'","data":{"error_type":"HeaderMismatch"}}}
 
-# An unknown method only needs Mcp-Method to be present.
+# An unknown method with a matching Mcp-Method gets a 404.
 mcp-developer
 MCP-Protocol-Version: 2026-07-28
 Mcp-Method: server/other
 {"jsonrpc":"2.0","id":9,"method":"server/other","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
 ----
-200 OK
+404 Not Found
 {"jsonrpc":"2.0","id":9,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
+
+# An unknown method's Mcp-Method must still match the body.
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/list
+{"jsonrpc":"2.0","id":21,"method":"server/other","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":21,"error":{"code":-32020,"message":"Header mismatch: Mcp-Method header value 'tools/list' does not match body value 'server/other'","data":{"error_type":"HeaderMismatch"}}}
+
+# 2026-07-28 removed ping.
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: ping
+{"jsonrpc":"2.0","id":15,"method":"ping","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+----
+404 Not Found
+{"jsonrpc":"2.0","id":15,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
 
 mcp-developer
 MCP-Protocol-Version: 2026-07-28
@@ -206,6 +224,56 @@ Mcp-Method: notifications/initialized
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 ----
 202 Accepted
+
+# =============================================================================
+# Bodies that do not parse as a request get a JSON-RPC error
+# =============================================================================
+
+# An unknown tool or bad arguments get -32602 in a normal response.
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: nonexistent_tool
+{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"nonexistent_tool","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":16,"error":{"code":-32602,"message":"Invalid params: Failed to deserialize the JSON body into the target type: .: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 212","data":{"error_type":"InvalidParams"}}}
+
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: query_system_catalog
+{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":18,"error":{"code":-32602,"message":"Invalid params: Failed to deserialize the JSON body into the target type: .: missing field `sql_query` at line 1 column 216","data":{"error_type":"InvalidParams"}}}
+
+# The header and _meta checks still come first.
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: query
+{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"nonexistent_tool","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":17,"error":{"code":-32020,"message":"Header mismatch: Mcp-Name header value 'query' does not match body value 'nonexistent_tool'","data":{"error_type":"HeaderMismatch"}}}
+
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/call
+Mcp-Name: nonexistent_tool
+{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"nonexistent_tool","arguments":{}}}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":19,"error":{"code":-32602,"message":"Invalid params: missing params._meta","data":{"error_type":"InvalidParams"}}}
+
+# A notification that cannot be accepted gets a 400, since it has no reply.
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+{"jsonrpc":"2.0","method":"tools/call","params":{"name":"nonexistent_tool"}}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":null,"error":{"code":-32602,"message":"Invalid params: Failed to deserialize the JSON body into the target type: .: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 76","data":{"error_type":"InvalidParams"}}}
 
 # =============================================================================
 # Earlier revisions are never checked
