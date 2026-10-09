@@ -12,6 +12,7 @@
 import json
 import re
 import time
+from datetime import UTC, datetime
 
 import requests
 from psycopg import Cursor
@@ -35,7 +36,7 @@ def mcp_url(c: Composition, endpoint: str) -> str:
     return f"http://localhost:{port}/api/mcp/{endpoint}"
 
 
-def jsonrpc(method: str, params: dict | None = None, req_id: int = 1) -> dict:
+def jsonrpc(method: str, params: dict | None = None, req_id: int | str = 1) -> dict:
     msg: dict = {"jsonrpc": "2.0", "id": req_id, "method": method}
     if params is not None:
         msg["params"] = params
@@ -1373,33 +1374,173 @@ def workflow_auth_failure_modes(c: Composition) -> None:
             assert r.status_code == 401, f"{r.status_code}: {r.text}"
 
 
+class EventStream:
+    def __init__(self, response: requests.Response, request_id: int | str = 9001):
+        self.response = response
+        self.request_id = request_id
+        assert response.status_code == 200, response.text
+        assert response.headers["Content-Type"].startswith("text/event-stream")
+        response.encoding = "utf-8"
+        self.lines = response.iter_lines(chunk_size=1, decode_unicode=True)
+        self.subscription_id: int | str | None = None
+        self.cursor: str | None = None
+
+    def message(self, timeout: float = 10) -> dict:
+        deadline = time.monotonic() + timeout
+        data: list[str] = []
+        for line in self.lines:
+            assert time.monotonic() < deadline, "timed out waiting for SSE message"
+            if line.startswith("data:"):
+                data.append(line[5:].strip())
+            elif not line and data:
+                message = json.loads("\n".join(data))
+                if "method" in message:
+                    params = message["params"]
+                    subscription_id = params["_meta"][
+                        "io.modelcontextprotocol/subscriptionId"
+                    ]
+                    assert subscription_id == self.request_id, message
+                    if self.subscription_id is None:
+                        self.subscription_id = subscription_id
+                    assert subscription_id == self.subscription_id, message
+                    cursor = params["cursor"]
+                    if cursor is not None:
+                        assert cursor.isdigit(), message
+                        assert self.cursor is None or int(cursor) >= int(
+                            self.cursor
+                        ), message
+                        self.cursor = cursor
+                return message
+        raise AssertionError("stream ended before the expected message")
+
+    def notification(self, kind: str) -> dict:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            message = self.message(timeout=deadline - time.monotonic())
+            if message.get("method") == f"notifications/events/{kind}":
+                return message["params"]
+            assert message.get("method") == "notifications/events/heartbeat", message
+        raise AssertionError(f"timed out waiting for {kind}")
+
+    def progress(self) -> dict:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            params = self.notification("heartbeat")
+            if params["cursor"] is not None:
+                return params
+        raise AssertionError("subscription made no initial progress")
+
+    def terminal(self) -> str:
+        params = self.notification("terminated")
+        final = self.message()
+        assert final["id"] == self.request_id, final
+        assert final["result"] == {"_meta": {}}, final
+        error = params["error"]
+        assert isinstance(error["code"], int), error
+        assert isinstance(error["data"]["reason"], str), error
+        assert next(self.lines, None) is None, "messages followed the final response"
+        return error["message"]
+
+
 def workflow_events(c: Composition) -> None:
     c.up("materialized")
-    original = c.sql_query("SHOW enable_mcp_agent_events", user="mz_system", port=6877)[
-        0
-    ][0]
+    settings = (
+        "enable_mcp_agent_events",
+        "enable_mcp_agent_subscribe",
+        "mcp_events_max_per_role",
+        "mcp_events_max_concurrent",
+        "mcp_events_max_lifetime",
+        "mcp_events_heartbeat_interval",
+        "mcp_max_response_size",
+    )
+    original = {
+        name: c.sql_query(f"SHOW {name}", user="mz_system", port=6877)[0][0]
+        for name in settings
+    }
+    streams: list[requests.Response] = []
+
+    def system(sql: str) -> None:
+        c.sql(sql, user="mz_system", port=6877, print_statement=False)
 
     def setting(name: str, value: str) -> None:
-        c.sql(
-            f"ALTER SYSTEM SET {name} = '{value}'",
-            user="mz_system",
-            port=6877,
-            print_statement=False,
+        system(f"ALTER SYSTEM SET {name} = '{value}'")
+
+    def request(
+        arguments: dict | None = None,
+        endpoint: str = "agent",
+        cursor: str | None = None,
+        request_id: int | str = 9001,
+    ) -> requests.Response:
+        args = {"query": "SELECT * FROM mcp_event_rows", "cluster": "quickstart"}
+        if arguments is not None:
+            args.update(arguments)
+        response = requests.post(
+            mcp_url(c, endpoint),
+            json=jsonrpc(
+                "events/stream",
+                {
+                    "name": "subscribe",
+                    "arguments": args,
+                    "cursor": cursor,
+                    "_meta": {},
+                },
+                req_id=request_id,
+            ),
+            headers={"Accept": "application/json, text/event-stream"},
+            stream=True,
+            timeout=(5, 10),
+        )
+        streams.append(response)
+        return response
+
+    def opened(arguments: dict | None = None) -> EventStream:
+        stream = EventStream(request(arguments))
+        assert stream.notification("active")["truncated"] is False
+        return stream
+
+    def rejected(
+        response: requests.Response, code: int = -32602, request_id: object = 9001
+    ) -> None:
+        try:
+            assert not response.headers.get("Content-Type", "").startswith(
+                "text/event-stream"
+            ), "invalid subscription was activated"
+            assert response.status_code == 200, response.text
+            body = response.json()
+            assert body["jsonrpc"] == "2.0", body
+            assert body["id"] == request_id, body
+            assert body["error"]["code"] == code, body
+        finally:
+            response.close()
+
+    def event(stream: EventStream, operation: str, count: str, row: list) -> None:
+        params = stream.notification("event")
+        assert isinstance(params["eventId"], str), params
+        assert params["name"] == "subscribe", params
+        timestamp = datetime.fromisoformat(params["timestamp"])
+        assert timestamp.utcoffset() == UTC.utcoffset(timestamp), params
+        data = params["data"]
+        assert data["final"] is True, data
+        # The event carries every change at its timestamp, so resuming from its
+        # cursor starts after it.
+        assert int(params["cursor"]) > int(data["logicalTimestamp"]), params
+        assert data["changes"] == [
+            {"operation": operation, "count": count, "row": row}
+        ], data
+        assert [column["name"] for column in data["columns"]] == ["id", "label"]
+        assert all(isinstance(column["type"], str) for column in data["columns"])
+
+    def list_events(endpoint: str = "agent") -> requests.Response:
+        return requests.post(
+            mcp_url(c, endpoint),
+            json=jsonrpc("events/list", {"_meta": {}}),
+            timeout=(5, 10),
         )
 
-    def post(body: dict, endpoint: str = "agent") -> requests.Response:
-        return requests.post(mcp_url(c, endpoint), json=body, timeout=(5, 10))
-
-    def rejected(response: requests.Response, code: int, request_id: object) -> None:
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert body["jsonrpc"] == "2.0", body
-        assert body["id"] == request_id, body
-        assert body["error"]["code"] == code, body
-
     def events_capability(endpoint: str = "agent") -> bool:
-        response = post(
-            jsonrpc(
+        response = requests.post(
+            mcp_url(c, endpoint),
+            json=jsonrpc(
                 "initialize",
                 {
                     "protocolVersion": "2025-11-25",
@@ -1407,65 +1548,473 @@ def workflow_events(c: Composition) -> None:
                     "clientInfo": {"name": "test", "version": "0.1.0"},
                 },
             ),
-            endpoint,
+            timeout=(5, 10),
         )
         assert response.status_code == 200, response.text
         return "events" in response.json()["result"]["capabilities"]
 
-    list_events = jsonrpc("events/list", {"_meta": {}})
-    stream_unknown = jsonrpc("events/stream", {"name": "unknown", "arguments": {}})
-
     try:
         setting("enable_mcp_agent_events", "true")
+        setting("enable_mcp_agent_subscribe", "true")
+        setting("mcp_events_heartbeat_interval", "100ms")
+        # The no-auth HTTP listener provisions this role on its first request.
+        requests.post(
+            mcp_url(c, "agent"), json=jsonrpc("tools/list"), timeout=(5, 10)
+        ).raise_for_status()
+        system("""
+            DROP TABLE IF EXISTS mcp_event_rows CASCADE;
+            CREATE TABLE mcp_event_rows (id bigint, label text);
+            INSERT INTO mcp_event_rows VALUES (1, 'before');
+            GRANT SELECT ON mcp_event_rows TO anonymous_http_user;
+            GRANT USAGE ON CLUSTER quickstart TO anonymous_http_user;
+            GRANT USAGE ON DATABASE materialize TO anonymous_http_user;
+            GRANT USAGE ON SCHEMA public TO anonymous_http_user;
+            """)
+
+        with c.test_case("events_failed_final_preserves_cursor"):
+            stream = opened(
+                {
+                    "query": "SELECT g, CASE WHEN g = 1 THEN 'small' ELSE repeat(chr(34), 600000) END AS payload FROM mcp_event_rows, generate_series(1, 2) AS g",
+                    "snapshot": True,
+                }
+            )
+            try:
+                partial = stream.notification("event")
+                assert partial["data"]["final"] is False, partial
+                assert partial["data"]["changes"] == [
+                    {"operation": "insert", "count": "1", "row": ["1", "small"]}
+                ], partial
+                assert "maximum response size" in stream.terminal()
+                assert stream.cursor == partial["cursor"], (
+                    "failed final event advanced the resume cursor",
+                    partial,
+                    stream.cursor,
+                )
+            finally:
+                stream.response.close()
+
+        for count in (1, 40):
+            with c.test_case(f"events_finite_snapshot_{count}_rows"):
+                setting("mcp_max_response_size", "4096")
+                query = (
+                    f"SELECT g, repeat('y', 200) FROM generate_series(1, {count}) AS g"
+                )
+                stream = opened({"query": query, "snapshot": True})
+                try:
+                    rows = []
+                    parts = 0
+                    while True:
+                        params = stream.notification("event")
+                        data = params["data"]
+                        rows += [change["row"][0] for change in data["changes"]]
+                        parts += 1
+                        if data["final"]:
+                            assert int(params["cursor"]) > int(data["logicalTimestamp"])
+                            break
+                    assert sorted(rows, key=int) == [
+                        str(g) for g in range(1, count + 1)
+                    ]
+                    assert (parts > 1) == (count > 1), parts
+                    assert stream.terminal() == "completed"
+                    resumed = EventStream(
+                        request({"query": query}, cursor=stream.cursor)
+                    )
+                    try:
+                        resumed.notification("active")
+                        assert resumed.terminal() == "completed"
+                    finally:
+                        resumed.response.close()
+                finally:
+                    stream.response.close()
+                    setting(
+                        "mcp_max_response_size", str(original["mcp_max_response_size"])
+                    )
 
         with c.test_case("events_discovery_and_endpoint_isolation"):
             assert events_capability()
             assert not events_capability("developer")
-            response = post(list_events)
+            response = list_events()
             assert response.status_code == 200, response.text
-            assert response.json()["result"]["events"] == []
-            rejected(post(stream_unknown), -32011, 1)
-            rejected(post(list_events, "developer"), -32601, 1)
-            rejected(post(stream_unknown, "developer"), -32601, 1)
+            events = response.json()["result"]["events"]
+            assert [e["name"] for e in events] == ["subscribe"]
+            assert events[0]["delivery"] == ["push"]
+            assert events[0]["inputSchema"]["required"] == ["query", "cluster"]
+            changes = events[0]["payloadSchema"]["properties"]["changes"]
+            assert changes["items"]["properties"]["row"]["items"] == {
+                "type": ["string", "null"]
+            }
+            rejected(request(endpoint="developer"), -32601)
+            rejected(list_events("developer"), -32601, 1)
+            rejected(
+                requests.post(
+                    mcp_url(c, "agent"),
+                    json=jsonrpc(
+                        "events/stream", {"name": "unknown", "arguments": {}}, 9001
+                    ),
+                    timeout=(5, 10),
+                ),
+                -32011,
+            )
+            setting("enable_mcp_agent_subscribe", "false")
+            try:
+                response = list_events()
+                assert response.status_code == 200, response.text
+                assert response.json()["result"]["events"] == []
+                rejected(request(), -32011)
+            finally:
+                setting("enable_mcp_agent_subscribe", "true")
             setting("enable_mcp_agent_events", "false")
             try:
                 assert not events_capability()
-                rejected(post(list_events), -32601, 1)
-                rejected(post(stream_unknown), -32601, 1)
+                rejected(list_events(), -32601, 1)
+                rejected(request(), -32601)
             finally:
                 setting("enable_mcp_agent_events", "true")
 
         with c.test_case("events_correlated_protocol_validation"):
             for method in ("events/list", "events/stream"):
                 for params in (False, [], 42, {"cursor": 5}):
-                    response = post(
-                        {
+                    response = requests.post(
+                        mcp_url(c, "agent"),
+                        json={
                             "jsonrpc": "2.0",
                             "id": "malformed",
                             "method": method,
                             "params": params,
-                        }
+                        },
+                        timeout=(5, 10),
                     )
                     rejected(response, -32602, "malformed")
-                response = post(
-                    {
+                response = requests.post(
+                    mcp_url(c, "agent"),
+                    json={
                         "jsonrpc": "1.0",
                         "id": "version",
                         "method": method,
                         "params": False,
-                    }
+                    },
+                    timeout=(5, 10),
                 )
                 rejected(response, -32600, "version")
                 for request_id in (True, 1.5, [], {}):
-                    response = post(
-                        {"jsonrpc": "2.0", "id": request_id, "method": method}
+                    response = requests.post(
+                        mcp_url(c, "agent"),
+                        json={"jsonrpc": "2.0", "id": request_id, "method": method},
+                        timeout=(5, 10),
                     )
                     rejected(response, -32602, request_id)
                 for notification in ({"id": None}, {}):
-                    response = post(
-                        {"jsonrpc": "2.0", "method": method, **notification}
+                    response = requests.post(
+                        mcp_url(c, "agent"),
+                        json={"jsonrpc": "2.0", "method": method, **notification},
+                        timeout=(5, 10),
                     )
                     assert response.status_code == 202, response.text
                     assert not response.content
+                    response.close()
+
+        cases = {
+            "multiple_statements": {"query": "SELECT 1; SELECT 2"},
+            "write": {"query": "INSERT INTO mcp_event_rows VALUES (0, 'bad')"},
+            "explicit_subscribe": {"query": "SUBSCRIBE mcp_event_rows"},
+            "as_of": {"query": "SELECT * FROM mcp_event_rows AS OF 1"},
+            "empty_query": {"query": ""},
+            "invalid_sql": {"query": "SELECT FROM"},
+            "structured_parameter": {"query": "SELECT $1", "parameters": [{}]},
+            "non_array_parameters": {"parameters": "bad"},
+            "non_boolean_snapshot": {"snapshot": "true"},
+            "non_integer_ttl": {"ttlMs": "1000"},
+            "missing_parameter": {"query": "SELECT $1::int", "parameters": []},
+            "extra_parameter": {"query": "SELECT 1", "parameters": [1]},
+            "zero_ttl": {"ttlMs": 0},
+            "excessive_ttl": {"ttlMs": 86_400_001},
+        }
+        for name, arguments in cases.items():
+            with c.test_case(f"events_reject_{name}"):
+                code = (
+                    -32000
+                    if name in ("missing_parameter", "extra_parameter")
+                    else -32602
+                )
+                rejected(request(arguments), code)
+        with c.test_case("events_reject_invalid_cursor"):
+            rejected(request(cursor="not-a-timestamp"))
+            rejected(request(cursor="0"))
+            rejected(request(cursor="18446744073709551617"))
+            rejected(request({"snapshot": True}, cursor="1"))
+
+        with c.test_case("events_resume_from_cursor"):
+            system("""
+                CREATE MATERIALIZED VIEW mcp_event_retained IN CLUSTER quickstart
+                    WITH (RETAIN HISTORY FOR '5m') AS SELECT * FROM mcp_event_rows;
+                GRANT SELECT ON mcp_event_retained TO anonymous_http_user;
+                """)
+            try:
+                query = {"query": "SELECT * FROM mcp_event_retained"}
+                stream = opened(query)
+                try:
+                    cursor = stream.progress()["cursor"]
+                finally:
+                    stream.response.close()
+                system("INSERT INTO mcp_event_rows VALUES (3, 'while away')")
+                resumed = EventStream(request(query, cursor=cursor))
+                try:
+                    assert resumed.notification("active")["cursor"] == cursor
+                    event(resumed, "insert", "1", ["3", "while away"])
+                finally:
+                    resumed.response.close()
+            finally:
+                system("""
+                    DELETE FROM mcp_event_rows WHERE id = 3;
+                    DROP MATERIALIZED VIEW mcp_event_retained;
+                    """)
+
+        with c.test_case("events_resume_without_history"):
+            stream = opened()
+            try:
+                cursor = stream.progress()["cursor"]
+            finally:
+                stream.response.close()
+            # The table keeps the default one-second compaction window, so its
+            # since soon passes the cursor.
+            deadline = time.monotonic() + 30
+            while True:
+                response = request(cursor=cursor)
+                try:
+                    if not response.headers["Content-Type"].startswith(
+                        "text/event-stream"
+                    ):
+                        error = response.json()["error"]
+                        assert error["code"] == -32011, error
+                        assert error["data"]["reason"] == "history_unavailable", error
+                        break
+                finally:
+                    response.close()
+                assert time.monotonic() < deadline, "cursor history never compacted"
+                time.sleep(1)
+
+        with c.test_case("events_changes_only_and_multiplicity"):
+            stream = opened()
+            try:
+                # Activation precedes the initial frontier. Wait for progress
+                # before inserting so the mutation is beyond the baseline.
+                stream.progress()
+                system(
+                    "INSERT INTO mcp_event_rows VALUES (2, 'duplicate'), (2, 'duplicate')"
+                )
+                event(stream, "insert", "2", ["2", "duplicate"])
+                system("DELETE FROM mcp_event_rows WHERE id = 2")
+                event(stream, "delete", "2", ["2", "duplicate"])
+            finally:
+                stream.response.close()
+
+        with c.test_case("events_snapshot_then_changes"):
+            stream = opened({"snapshot": True})
+            try:
+                event(stream, "insert", "1", ["1", "before"])
+                stream.progress()
+                system("INSERT INTO mcp_event_rows VALUES (3, 'after')")
+                event(stream, "insert", "1", ["3", "after"])
+                system("DELETE FROM mcp_event_rows WHERE id = 3")
+                event(stream, "delete", "1", ["3", "after"])
+            finally:
+                stream.response.close()
+
+        with c.test_case("events_bound_parameters"):
+            stream = opened(
+                {
+                    "query": "SELECT * FROM mcp_event_rows WHERE id = $1::bigint AND label = $2::text",
+                    "parameters": [9007199254740993, "quoted ' café"],
+                }
+            )
+            try:
+                stream.progress()
+                system(
+                    "INSERT INTO mcp_event_rows VALUES (9007199254740993, 'quoted '' café'), (4, 'filtered')"
+                )
+                event(stream, "insert", "1", ["9007199254740993", "quoted ' café"])
+                system("DELETE FROM mcp_event_rows WHERE id IN (9007199254740993, 4)")
+                event(stream, "delete", "1", ["9007199254740993", "quoted ' café"])
+            finally:
+                stream.response.close()
+
+        with c.test_case("events_postgres_text_cells"):
+            stream = opened(
+                {
+                    "query": "SELECT id, $1::boolean AS flag, $2::text AS empty, 'null'::jsonb AS json_null, array_fill(7, ARRAY[2], ARRAY[5]) AS bounded FROM mcp_event_rows",
+                    "parameters": [True, None],
+                    "snapshot": True,
+                }
+            )
+            try:
+                data = stream.notification("event")["data"]
+                assert [change["row"] for change in data["changes"]] == [
+                    ["1", "t", None, "null", "[5:6]={7,7}"]
+                ], data
+                assert [column["name"] for column in data["columns"]] == [
+                    "id",
+                    "flag",
+                    "empty",
+                    "json_null",
+                    "bounded",
+                ], data
+            finally:
+                stream.response.close()
+
+        with c.test_case("events_missing_cluster_privilege"):
+            system(
+                "CREATE CLUSTER mcp_event_restricted REPLICAS (r1 (SIZE 'scale=1,workers=1'))"
+            )
+            try:
+                rejected(request({"cluster": "mcp_event_restricted"}), -32012)
+            finally:
+                system("DROP CLUSTER mcp_event_restricted CASCADE")
+
+        with c.test_case("events_privilege_required_at_startup"):
+            system("REVOKE SELECT ON mcp_event_rows FROM anonymous_http_user")
+            try:
+                rejected(request(), -32012)
+            finally:
+                system("GRANT SELECT ON mcp_event_rows TO anonymous_http_user")
+
+        with c.test_case("events_view_replacement"):
+            system("""
+                CREATE TABLE mcp_event_a (id bigint, label text);
+                CREATE TABLE mcp_event_b (id bigint, label text);
+                CREATE VIEW mcp_event_view AS SELECT * FROM mcp_event_a;
+                GRANT SELECT ON mcp_event_view TO anonymous_http_user;
+                """)
+            stream = opened({"query": "SELECT * FROM mcp_event_view"})
+            try:
+                stream.progress()
+                system(
+                    "CREATE OR REPLACE VIEW mcp_event_view AS SELECT * FROM mcp_event_b"
+                )
+                reason = stream.terminal()
+                assert "dropped" in reason, reason
+            finally:
+                stream.response.close()
+                system("""
+                    DROP VIEW IF EXISTS mcp_event_view;
+                    DROP TABLE mcp_event_a, mcp_event_b;
+                    """)
+
+        with c.test_case("events_ttl_and_heartbeats"):
+            stream = opened({"ttlMs": 3000})
+            try:
+                stream.progress()
+                stream.notification("heartbeat")
+                assert stream.terminal() == "ttl expired"
+            finally:
+                stream.response.close()
+
+        with c.test_case("events_string_request_id"):
+            stream = EventStream(request({"ttlMs": 1000}, request_id="watch"), "watch")
+            try:
+                assert stream.notification("active")["truncated"] is False
+                assert stream.terminal() == "ttl expired"
+            finally:
+                stream.response.close()
+
+        for name in ("mcp_events_max_per_role", "mcp_events_max_concurrent"):
+            with c.test_case(f"events_{name}_and_disconnect_cleanup"):
+                setting(name, "1")
+                first = opened()
+                try:
+                    rejected(request(), -32013)
+                finally:
+                    first.response.close()
+                deadline = time.monotonic() + 10
+                replacement: requests.Response | None = None
+                while time.monotonic() < deadline:
+                    candidate = request()
+                    if candidate.headers.get("Content-Type", "").startswith(
+                        "text/event-stream"
+                    ):
+                        replacement = candidate
+                        break
+                    rejected(candidate, -32013)
+                    time.sleep(0.1)
+                assert replacement is not None, "disconnect did not release quota"
+                try:
+                    EventStream(replacement).notification("active")
+                finally:
+                    replacement.close()
+                    setting(name, str(original[name]))
+
+        with c.test_case("events_timestamp_is_one_event"):
+            stream = opened()
+            try:
+                stream.progress()
+                system("INSERT INTO mcp_event_rows VALUES (6, 'a'), (7, 'b'), (8, 'c')")
+                params = stream.notification("event")
+                data = params["data"]
+                assert data["final"] is True, data
+                assert int(params["cursor"]) > int(data["logicalTimestamp"]), params
+                assert sorted(change["row"] for change in data["changes"]) == [
+                    ["6", "a"],
+                    ["7", "b"],
+                    ["8", "c"],
+                ], data
+            finally:
+                stream.response.close()
+                system("DELETE FROM mcp_event_rows WHERE id IN (6, 7, 8)")
+
+        with c.test_case("events_large_timestamp_splits_into_parts"):
+            setting("mcp_max_response_size", "4096")
+            stream = opened()
+            try:
+                cursor = stream.progress()["cursor"]
+                system(
+                    "INSERT INTO mcp_event_rows SELECT g, repeat('y', 200) FROM generate_series(100, 139) g"
+                )
+                rows = []
+                parts = 0
+                while True:
+                    params = stream.notification("event")
+                    data = params["data"]
+                    rows += [change["row"][0] for change in data["changes"]]
+                    parts += 1
+                    if data["final"]:
+                        assert int(params["cursor"]) > int(
+                            data["logicalTimestamp"]
+                        ), params
+                        break
+                    # A partial timestamp leaves the cursor before it.
+                    assert int(params["cursor"]) <= int(
+                        data["logicalTimestamp"]
+                    ), params
+                    assert int(params["cursor"]) >= int(cursor), params
+                assert parts > 1, parts
+                assert sorted(rows, key=int) == [str(g) for g in range(100, 140)]
+            finally:
+                stream.response.close()
+                setting("mcp_max_response_size", str(original["mcp_max_response_size"]))
+                system("DELETE FROM mcp_event_rows WHERE id BETWEEN 100 AND 139")
+
+        with c.test_case("events_oversized_payload"):
+            setting("mcp_max_response_size", "1024")
+            stream = opened()
+            try:
+                stream.progress()
+                system("INSERT INTO mcp_event_rows VALUES (5, repeat('x', 4096))")
+                assert "maximum response size" in stream.terminal()
+            finally:
+                stream.response.close()
+                setting("mcp_max_response_size", str(original["mcp_max_response_size"]))
+                system("DELETE FROM mcp_event_rows WHERE id = 5")
+
+        with c.test_case("events_dependency_drop"):
+            stream = opened()
+            try:
+                stream.progress()
+                system("DROP TABLE mcp_event_rows")
+                assert stream.terminal()
+            finally:
+                stream.response.close()
     finally:
-        setting("enable_mcp_agent_events", str(original))
+        for response in streams:
+            response.close()
+        system("DROP TABLE IF EXISTS mcp_event_rows CASCADE")
+        for name, value in original.items():
+            setting(name, str(value))

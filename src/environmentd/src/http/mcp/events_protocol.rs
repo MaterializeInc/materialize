@@ -9,8 +9,6 @@
 
 //! Wire types shared by every MCP event.
 
-#![allow(dead_code, reason = "no event is registered")]
-
 use schemars::Schema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

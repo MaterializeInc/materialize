@@ -332,6 +332,13 @@ pub const ENABLE_MCP_AGENT_EVENTS: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+pub const ENABLE_MCP_AGENT_SUBSCRIBE: Config<bool> = Config::new(
+    "enable_mcp_agent_subscribe",
+    false,
+    "Whether MCP Events offers the `subscribe` event, which streams changes to a SELECT result.",
+    ParameterScope::Environment,
+);
+
 pub const MCP_EVENTS_MAX_PER_ROLE: Config<usize> = Config::new(
     "mcp_events_max_per_role",
     16,
@@ -633,6 +640,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&MCP_MAX_RESPONSE_SIZE)
         .add(&MCP_REQUEST_TIMEOUT)
         .add(&ENABLE_MCP_AGENT_EVENTS)
+        .add(&ENABLE_MCP_AGENT_SUBSCRIBE)
         .add(&MCP_EVENTS_MAX_PER_ROLE)
         .add(&MCP_EVENTS_MAX_CONCURRENT)
         .add(&MCP_EVENTS_MAX_LIFETIME)

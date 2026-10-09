@@ -3455,6 +3455,7 @@ class FlipFlagsAction(Action):
             "enable_password_auth",
             "enable_mcp_agent",
             "enable_mcp_agent_events",
+            "enable_mcp_agent_subscribe",
             "enable_mcp_agent_query_tool",
             "enable_mcp_agent_read_data_product_tool",
             "enable_mcp_developer",

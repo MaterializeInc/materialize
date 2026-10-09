@@ -40,9 +40,10 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
 use mz_adapter_types::dyncfgs::{
     ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_EVENTS, ENABLE_MCP_AGENT_QUERY_TOOL,
-    ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL, ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL,
-    ENABLE_MCP_PROTOCOL_2026_07_28, MCP_EVENTS_HEARTBEAT_INTERVAL, MCP_EVENTS_MAX_CONCURRENT,
-    MCP_EVENTS_MAX_LIFETIME, MCP_EVENTS_MAX_PER_ROLE, MCP_MAX_RESPONSE_SIZE, MCP_REQUEST_TIMEOUT,
+    ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL, ENABLE_MCP_AGENT_SUBSCRIBE, ENABLE_MCP_DEVELOPER,
+    ENABLE_MCP_DEVELOPER_QUERY_TOOL, ENABLE_MCP_PROTOCOL_2026_07_28, MCP_EVENTS_HEARTBEAT_INTERVAL,
+    MCP_EVENTS_MAX_CONCURRENT, MCP_EVENTS_MAX_LIFETIME, MCP_EVENTS_MAX_PER_ROLE,
+    MCP_MAX_RESPONSE_SIZE, MCP_REQUEST_TIMEOUT,
 };
 use mz_ore::cast::CastLossy;
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
@@ -834,6 +835,7 @@ struct McpEndpointConfig {
     query_tool_enabled: bool,
     read_data_product_tool_enabled: bool,
     events_enabled: bool,
+    subscribe_enabled: bool,
     request_timeout: Duration,
     max_response_size: usize,
     protocol_2026_07_28_enabled: bool,
@@ -858,6 +860,7 @@ impl McpEndpointConfig {
             read_data_product_tool_enabled: ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL.get(dyncfgs),
             events_enabled: matches!(endpoint_type, McpEndpointType::Agent)
                 && ENABLE_MCP_AGENT_EVENTS.get(dyncfgs),
+            subscribe_enabled: ENABLE_MCP_AGENT_SUBSCRIBE.get(dyncfgs),
             request_timeout: MCP_REQUEST_TIMEOUT.get(dyncfgs),
             max_response_size: MCP_MAX_RESPONSE_SIZE.get(dyncfgs),
             protocol_2026_07_28_enabled: ENABLE_MCP_PROTOCOL_2026_07_28.get(dyncfgs),

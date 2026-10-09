@@ -15,8 +15,6 @@
 //! delivery time, emits heartbeats, and ends the response with `terminated` followed by the
 //! JSON-RPC result.
 
-#![allow(dead_code, reason = "no event is registered")]
-
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::future::Future;
@@ -41,6 +39,8 @@ use super::{EventsCompleteResult, McpEndpointConfig, McpError, McpResponse, McpR
 use crate::http::mcp_metrics::McpMetrics;
 use crate::http::{AuthLifetime, AuthedClient};
 
+mod subscribe;
+
 /// Lifetime of a stream whose request names none.
 const DEFAULT_TTL: Duration = Duration::from_secs(60 * 60);
 /// Upper bound on any stream lifetime, regardless of `mcp_events_max_lifetime`.
@@ -49,8 +49,14 @@ const MAX_CONTROL_SIZE: usize = 64 * 1024;
 /// How long one notification may wait for the client before the stream ends as a slow consumer.
 const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
-pub(super) fn list(_config: &McpEndpointConfig) -> ListResult {
-    ListResult { events: Vec::new() }
+pub(super) fn list(config: &McpEndpointConfig) -> ListResult {
+    ListResult {
+        events: config
+            .subscribe_enabled
+            .then(subscribe::definition)
+            .into_iter()
+            .collect(),
+    }
 }
 
 pub(super) async fn stream(
@@ -62,8 +68,8 @@ pub(super) async fn stream(
     metrics: McpMetrics,
     permit: SubscriptionPermit,
 ) -> Result<StartedSubscription, McpError> {
-    let _params = StreamParams::parse(params)?;
-    let _start = Start {
+    let params = StreamParams::parse(params)?;
+    let start = Start {
         id,
         auth: client.lifetime.clone(),
         config,
@@ -71,12 +77,14 @@ pub(super) async fn stream(
         metrics,
         permit,
     };
-    drop(client);
-    Err(McpError {
-        code: -32011,
-        message: "unknown event name".into(),
-        data: None,
-    })
+    match params.name.as_str() {
+        "subscribe" if config.subscribe_enabled => subscribe::stream(client, params, start).await,
+        _ => Err(McpError {
+            code: -32011,
+            message: "unknown event name".into(),
+            data: None,
+        }),
+    }
 }
 
 /// Admission state shared by every MCP listener in one environmentd process.
