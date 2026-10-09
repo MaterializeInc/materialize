@@ -18,7 +18,7 @@ mcp-developer
 MCP-Protocol-Version: 2026-07-28
 Mcp-Method: tools/call
 Mcp-Name: query_system_catalog
-{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\"]\n]"}],"isError":false}}
@@ -29,7 +29,7 @@ mcp-developer
 MCP-Protocol-Version: 2026-07-28
 Mcp-Method: tools/call
 Mcp-Name: =?base64?cXVlcnlfc3lzdGVtX2NhdGFsb2c=?=
-{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\"]\n]"}],"isError":false}}
@@ -38,7 +38,7 @@ Mcp-Name: =?base64?cXVlcnlfc3lzdGVtX2NhdGFsb2c=?=
 mcp-developer
 MCP-Protocol-Version: 2026-07-28
 Mcp-Method: tools/list
-{"jsonrpc":"2.0","id":27,"method":"tools/list"}
+{"jsonrpc":"2.0","id":27,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":27,"result":{"tools":[{"name":"query_system_catalog","title":"Query System Catalog","description":"Query Materialize system catalog tables for troubleshooting and observability. Only mz_*, pg_catalog, and information_schema tables are accessible. Use the mz_internal.mz_ontology_* tables to discover tables, columns, and join paths before writing queries. Response limit: 1.0 MB.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_*, pg_catalog, or information_schema tables"}},"required":["sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"query","title":"Query","description":"Execute a read-only SQL query (SELECT, SHOW, or EXPLAIN) against any object the role can access, including system catalog and user objects. Requires a cluster, which is what enables EXPLAIN ANALYZE and queries against indexed user objects. For pure system catalog lookups that do not need a cluster, prefer `query_system_catalog`. Response limit: 1.0 MB.","inputSchema":{"type":"object","properties":{"cluster":{"type":"string","description":"Exact cluster name the query should run on. Required: EXPLAIN ANALYZE and queries against indexed user objects need a specific cluster to execute on."},"cluster_replica":{"type":"string","description":"Optional replica name (e.g. 'r1') to target one replica of the cluster. Required for EXPLAIN ANALYZE on clusters with more than one replica. Find replica names in mz_catalog.mz_cluster_replicas."},"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN statement. Multi-statement queries are rejected."}},"required":["cluster","sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}]}}
@@ -150,7 +150,7 @@ Mcp-Method: tools/list
 mcp-developer
 MCP-Protocol-Version: 2026-07-28
 Mcp-Method: server/other
-{"jsonrpc":"2.0","id":9,"method":"server/other","params":{}}
+{"jsonrpc":"2.0","id":9,"method":"server/other","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":9,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
@@ -161,6 +161,51 @@ MCP-Protocol-Version: 2026-07-28
 ----
 400 Bad Request
 {"jsonrpc":"2.0","id":10,"error":{"code":-32020,"message":"Header mismatch: missing Mcp-Method header","data":{"error_type":"HeaderMismatch"}}}
+
+# =============================================================================
+# params._meta must carry the protocol version and client capabilities
+# =============================================================================
+
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/list
+{"jsonrpc":"2.0","id":11,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/clientCapabilities":{}}}}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":11,"error":{"code":-32602,"message":"Invalid params: missing io.modelcontextprotocol/protocolVersion in params._meta","data":{"error_type":"InvalidParams"}}}
+
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/list
+{"jsonrpc":"2.0","id":12,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2025-11-25","io.modelcontextprotocol/clientCapabilities":{}}}}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":12,"error":{"code":-32020,"message":"Header mismatch: MCP-Protocol-Version header value '2026-07-28' does not match body value '2025-11-25'","data":{"error_type":"HeaderMismatch"}}}
+
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/list
+{"jsonrpc":"2.0","id":13,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":13,"error":{"code":-32602,"message":"Invalid params: missing io.modelcontextprotocol/clientCapabilities in params._meta","data":{"error_type":"InvalidParams"}}}
+
+# A request with no params at all has no _meta.
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: tools/list
+{"jsonrpc":"2.0","id":14,"method":"tools/list"}
+----
+400 Bad Request
+{"jsonrpc":"2.0","id":14,"error":{"code":-32602,"message":"Invalid params: missing params._meta","data":{"error_type":"InvalidParams"}}}
+
+# Notifications are not requests, so they carry no required _meta.
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: notifications/initialized
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+----
+202 Accepted
 
 # =============================================================================
 # Earlier revisions are never checked
