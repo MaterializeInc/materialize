@@ -465,10 +465,14 @@ The checkpoint fingerprint lets the SDK tell three kinds of change apart:
 | Same columns, new storage shard | `ALTER SCHEMA ... SWAP` in a blue/green deploy | stop | re-snapshot from the new object, into a new namespace for targets without transactions |
 | The name resolves to nothing | the object was dropped while the sink was offline | stop with `ObjectDropped` | stop |
 
-The SDK will look the name up in the catalog before each `SUBSCRIBE`. Without
-that lookup, a name that resolves to nothing fails planning with `XX000`, which
-would be misread as `StreamPoisoned` (`src/adapter/src/error.rs:1003`). `42704`
-arrives only for a drop during a running stream.
+The SDK will look the name up in the catalog before each `SUBSCRIBE`, and it will
+classify errors by the statement that raised them. A name that resolves to
+nothing, and an id that no longer exists, both fail planning at `DECLARE` with
+`XX000` (`src/adapter/src/error.rs:1003`), the same code a dataflow error has. So
+any failure of `DECLARE` sends the SDK back to the name lookup and the table
+above, and only errors raised during `FETCH` are classified as `StreamPoisoned`
+or by the rest of "Typed errors". `42704` arrives only for a drop during a
+running stream.
 
 A name swap needs a re-snapshot even when the new object's history covers the
 checkpoint. The target holds the old object's state at `F - 1`, and resuming the
@@ -489,8 +493,8 @@ subscribe by the catalog id it fingerprinted, with the bracket syntax the catalo
 uses for stored definitions: `SUBSCRIBE [u123 AS "db"."schema"."name"]`. That
 resolves by id, not by name, and fails with `InvalidId` once the id is gone
 (`src/sql/src/names.rs:1585-1608`). A swap leaves ids unchanged, so the stream
-keeps reading the object that was checked, and a failed resolution sends the SDK
-back to the name lookup and the table above. The syntax is not documented for
+keeps reading the object that was checked, and an `InvalidId` failure at
+`DECLARE` follows the rule above. The syntax is not documented for
 users, so open question 13 asks whether the SDK can rely on it.
 
 A replacement keeps the storage shard and gives the view a new catalog id
@@ -567,7 +571,7 @@ generations will stage these changes in the target and make them visible at
 | `HistoryLost` | `22000` plus the timestamp-selection message, after the index re-check | history-loss policy |
 | `ObjectDropped` | `42704` | see "Object identity" |
 | `SchemaMismatch` | checkpoint fingerprint | see "Object identity" |
-| `StreamPoisoned` | `XX000` with any other message, which includes genuine internal errors | stop |
+| `StreamPoisoned` | `XX000` during `FETCH` with any other message, which includes genuine internal errors | stop |
 | `Fenced` | checkpoint commit | stop |
 | `IndexedTarget` | startup check, and the re-check before `HistoryLost` | stop with remedy |
 | `Fatal` | anything else (auth, TLS, SQL) | stop |
@@ -733,12 +737,21 @@ convergence: after each completed batch, every namespace equals the cut. The
 sink does not give readers a consistent view while a batch is being written. The
 sink's docs will state this, and open question 12 asks whether that is enough.
 
-After a name swap, the sink writes the new object into new namespaces and
-switches readers when the snapshot completes (see "Object identity"). A stale
-worker still reading the old object keeps writing only to the old namespaces,
-which readers no longer use. The sink deletes them after a grace period. turbopuffer
-creates a namespace on its first write, so a stale write after that recreates an
-unused namespace, which the next cleanup removes.
+After a name swap, the sink writes the new object into new namespaces (see
+"Object identity"). Namespace names carry an incarnation number, for example
+`articles__i3`, and the checkpoint document records the active incarnation and
+the list of retired ones. The checkpoint document is the reader contract: a
+reader looks up the active incarnation there, with a small helper the sink
+package ships, and derives every namespace name from it. When the snapshot
+completes, the sink switches readers by patching the active incarnation, one
+write to one document, so the switch is atomic for every namespace at once for
+any reader that looks it up again. Until then, readers of the old namespaces see
+data frozen at the swap, and the sink's docs will say so. A stale worker still
+reading the old object keeps writing only to the retired namespaces. The sink
+deletes them after a grace period, using the durable list in the checkpoint
+document. turbopuffer creates a namespace on its first write, so a stale write
+after that recreates an unused namespace. Retired incarnations therefore stay on
+the list, and every later cleanup removes their namespaces again if they exist.
 
 Embedding cost will follow the existing sink's transform model: a transform
 declares the columns it reads, and runs only for rows where those columns
