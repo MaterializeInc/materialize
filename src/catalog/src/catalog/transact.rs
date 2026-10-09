@@ -590,8 +590,9 @@ pub struct TransactionResult {
     pub creator_read_requirements: BTreeMap<u64, BTreeMap<GlobalId, mz_repr::Timestamp>>,
 }
 
+#[derive(Default)]
 struct TransactInnerResult {
-    state: CatalogState,
+    state: Option<CatalogState>,
     planning_changed: bool,
     created_client_incarnations: Vec<u64>,
     creator_read_requirements: BTreeMap<u64, BTreeMap<GlobalId, mz_repr::Timestamp>>,
@@ -991,37 +992,31 @@ impl Catalog {
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
-        let mut created_clients = Vec::new();
-        let mut creator_grants = BTreeMap::new();
-        let mut position_planning_changed = false;
-        if let Some(TransactInnerResult {
+        let TransactInnerResult {
             state,
             planning_changed,
             created_client_incarnations,
             creator_read_requirements,
-        }) = new_state
-        {
-            if planning_changed {
-                self.transient_revision += 1;
-                // Publish before any planning-visible effects (responses,
-                // notices, builtin table writes) can be observed, so sessions
-                // that observe them must refresh their cached catalog snapshot.
-                self.shared_transient_revision
-                    .store(self.transient_revision, atomic::Ordering::SeqCst);
-            }
-            self.state = state;
-            created_clients = created_client_incarnations;
-            creator_grants = creator_read_requirements;
-            position_planning_changed = planning_changed;
+        } = new_state;
+        if planning_changed {
+            self.transient_revision += 1;
+            // Publish before any planning-visible effects (responses,
+            // notices, builtin table writes) can be observed, so sessions
+            // that observe them must refresh their cached catalog snapshot.
+            self.shared_transient_revision
+                .store(self.transient_revision, atomic::Ordering::SeqCst);
         }
-        self.advance_positions(upper, position_planning_changed.then_some(upper));
+        if let Some(state) = state {
+            self.state = state;
+        }
+        self.advance_positions(upper, planning_changed.then_some(upper));
 
         Ok(TransactionResult {
             builtin_table_updates,
             catalog_updates,
             audit_events,
-            created_client_incarnations: created_clients,
-            creator_read_requirements: creator_grants,
+            created_client_incarnations,
+            creator_read_requirements,
         })
     }
 
@@ -1105,9 +1100,7 @@ impl Catalog {
         // Transaction is NOT committed — drop it.
         drop(storage);
 
-        let state = new_state
-            .map(|result| result.state)
-            .unwrap_or_else(|| base_state.clone());
+        let state = new_state.state.unwrap_or_else(|| base_state.clone());
         Ok((state, new_snapshot))
     }
 
@@ -1160,9 +1153,9 @@ impl Catalog {
         exprs
     }
 
-    /// Performs the transaction described by `ops` and returns the new state of the catalog, if
-    /// it has changed. If `ops` don't result in a change in the state this method returns `None`.
-    /// The result indicates which catalog revisions must advance on commit.
+    /// Performs the transaction described by `ops`, returning its acknowledgements
+    /// even when the catalog state is unchanged. A replacement state is returned
+    /// only if modified. The result indicates which revisions advance on commit.
     ///
     /// `mode` controls whether storage prepare-state side effects are allowed.
     /// In `DryRun` mode, this method may update the in-memory state returned to
@@ -1182,7 +1175,7 @@ impl Catalog {
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &CatalogState,
-    ) -> Result<Option<TransactInnerResult>, CatalogError> {
+    ) -> Result<TransactInnerResult, CatalogError> {
         // Each operation sees preceding operations in the preliminary state.
         // Final state and effects must instead describe the consolidated batch,
         // including mutations derived by admission and storage preparation.
@@ -1196,7 +1189,7 @@ impl Catalog {
         let mut state = Cow::Borrowed(state);
 
         if ops.is_empty() {
-            return Ok(None);
+            return Ok(TransactInnerResult::default());
         }
 
         // Extract optimized expressions from CreateItem ops to avoid re-optimization
@@ -1599,15 +1592,15 @@ impl Catalog {
                 "catalog candidate section complete");
         }
 
-        match state {
-            Cow::Owned(state) => Ok(Some(TransactInnerResult {
-                state,
-                planning_changed,
-                created_client_incarnations,
-                creator_read_requirements,
-            })),
-            Cow::Borrowed(_) => Ok(None),
-        }
+        Ok(TransactInnerResult {
+            state: match state {
+                Cow::Owned(state) => Some(state),
+                Cow::Borrowed(_) => None,
+            },
+            planning_changed,
+            created_client_incarnations,
+            creator_read_requirements,
+        })
     }
 
     /// Performs the transaction operation described by `op`. This function prepares the changes in
