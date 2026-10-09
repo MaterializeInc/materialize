@@ -456,20 +456,27 @@ struct SlotMetadata {
     /// The address (LSN) up to which the logical slot's consumer has confirmed receiving data.
     /// Data corresponding to the transactions committed before this LSN is not available anymore.
     confirmed_flush_lsn: MzOffset,
+    /// Whether the slot can no longer be read from, which PostgreSQL reports as a `wal_status` of
+    /// `lost`.
+    invalidated: bool,
 }
 
-/// Fetches the minimum LSN at which this slot can safely resume.
+/// Fetches the state of `slot`, waiting for it to finish initializing.
 async fn fetch_slot_metadata(
     client: &Client,
     slot: &str,
     interval: Duration,
 ) -> Result<SlotMetadata, TransientError> {
     loop {
+        // `wal_status` exists on PostgreSQL 13 and later, which are also the only versions that
+        // invalidate slots. Reading it through `to_jsonb` yields NULL on earlier versions instead
+        // of failing the query.
         let Some(row) = query_opt(
             &**client,
             sql!(
-                "SELECT active_pid, confirmed_flush_lsn \
-                 FROM pg_replication_slots WHERE slot_name = $1"
+                "SELECT active_pid, confirmed_flush_lsn, \
+                    to_jsonb(s) ->> 'wal_status' = 'lost' AS invalidated \
+                 FROM pg_replication_slots s WHERE slot_name = $1"
             ),
             &[&slot],
         )
@@ -486,6 +493,7 @@ async fn fetch_slot_metadata(
                 return Ok(SlotMetadata {
                     confirmed_flush_lsn: MzOffset::from(lsn),
                     active_pid: row.get("active_pid"),
+                    invalidated: row.get::<_, Option<bool>>("invalidated").unwrap_or(false),
                 });
             }
             // It can happen that confirmed_flush_lsn is NULL as the slot initializes

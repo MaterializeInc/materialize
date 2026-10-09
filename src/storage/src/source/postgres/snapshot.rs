@@ -175,7 +175,9 @@ use mz_postgres_util::schemas::get_pg_major_version;
 use mz_postgres_util::{Client, Config, PostgresError, Sql, simple_query, simple_query_opt, sql};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::dyncfgs::STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD;
+use mz_storage_types::dyncfgs::{
+    PG_FETCH_SLOT_RESUME_LSN_INTERVAL, STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD,
+};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::parameters::PgSourceSnapshotConfig;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
@@ -195,7 +197,7 @@ use tracing::trace;
 
 use crate::metrics::source::postgres::PgSnapshotMetrics;
 use crate::source::RawSourceCreationConfig;
-use crate::source::postgres::replication::RewindRequest;
+use crate::source::postgres::replication::{RewindRequest, ensure_replication_prerequisites};
 use crate::source::postgres::{
     DefiniteError, ReplicationError, SourceOutputInfo, TransientError, verify_schema,
 };
@@ -431,7 +433,6 @@ pub(crate) fn render<'scope>(
             ]: &mut [_; 4] = caps.try_into().unwrap();
             let mut raw_handles = SharedFuel::new(raw_handles);
 
-
             let connection_config = connection
                 .connection
                 .config(
@@ -489,7 +490,44 @@ pub(crate) fn render<'scope>(
 
             // replication client is only set if this worker is the snapshot leader
             let client = match replication_client {
-                Some(client) => {
+                Some(client) => 'leader: {
+                    // The replication operator detects the same conditions before it reads the
+                    // stream. With concurrent replication that happens during the copy, and a
+                    // definite error found there cannot commit while this operator holds the
+                    // exports at the minimum. The dataflow then restarts and repeats the copy for
+                    // as long as the condition holds. Checking here first fails before any copy.
+                    //
+                    // Definite errors are broadcast in place of the snapshot info so that every
+                    // worker returns and releases its capabilities. A worker left waiting for the
+                    // snapshot info holds the exports at the minimum.
+                    let metadata_client = connection_config
+                        .connect(
+                            "snapshot metadata",
+                            &config.config.connection_context.ssh_tunnel_manager,
+                        )
+                        .await?;
+                    let slot_metadata = super::fetch_slot_metadata(
+                        &metadata_client,
+                        &connection.publication_details.slot,
+                        PG_FETCH_SLOT_RESUME_LSN_INTERVAL.get(config.config.config_set()),
+                    )
+                    .await?;
+                    let prerequisites = if slot_metadata.invalidated {
+                        Err(DefiniteError::InvalidReplicationSlot)
+                    } else {
+                        ensure_replication_prerequisites(
+                            &metadata_client,
+                            &client,
+                            &connection,
+                            config.config.config_set(),
+                        )
+                        .await?
+                    };
+                    if let Err(err) = prerequisites {
+                        snapshot_handle.give(&snapshot_cap_set[0], Err(err));
+                        break 'leader client;
+                    }
+
                     let tmp_slot = format!("mzsnapshot_{}", uuid::Uuid::new_v4()).replace('-', "");
                     tracing::info!(
                         %id,
@@ -550,35 +588,8 @@ pub(crate) fn render<'scope>(
                             // nothing else to do. These errors are not retractable.
                             Err(PostgresError::PublicationMissing(publication)) => {
                                 let err = DefiniteError::PublicationDropped(publication);
-                                for outputs in tables_to_snapshot.values() {
-                                    // Produce a definite error here and then exit to ensure
-                                    // a missing publication doesn't generate a transient
-                                    // error and restart this dataflow indefinitely.
-                                    //
-                                    // We pick `u64::MAX` as the LSN which will (in
-                                    // practice) never conflict any previously revealed
-                                    // portions of the TVC.
-                                    for output_index in outputs.keys() {
-                                        let update = (
-                                            Err(err.clone().into()),
-                                            MzOffset::from(u64::MAX),
-                                            Diff::ONE,
-                                        );
-                                        raw_handles
-                                            .give(
-                                                *output_index,
-                                                &data_cap_sets[*output_index][0],
-                                                update,
-                                            )
-                                            .await;
-                                    }
-                                }
-
-                                definite_error_handle.give(
-                                    &definite_error_cap_set[0],
-                                    ReplicationError::Definite(Rc::new(err)),
-                                );
-                                return Ok(());
+                                snapshot_handle.give(&snapshot_cap_set[0], Err(err));
+                                break 'leader client;
                             },
                             Err(e) => Err(TransientError::from(e))?,
                             Ok(i) => i,
@@ -594,7 +605,7 @@ pub(crate) fn render<'scope>(
                     trace!(
                         %id,
                         "timely-{worker_id} exporting snapshot info {snapshot_info:?}");
-                    snapshot_handle.give(&snapshot_cap_set[0], snapshot_info);
+                    snapshot_handle.give(&snapshot_cap_set[0], Ok(snapshot_info));
 
                     client
                 }
@@ -634,45 +645,53 @@ pub(crate) fn render<'scope>(
                     ),
                 }
             };
-            let SnapshotInfo {
-                snapshot_id,
-                snapshot_lsn,
-                table_block_counts,
-                upstream_info,
-            } = snapshot_info;
 
             // The snapshot transaction starts after every output's schema was captured during
             // purification, so no output's initial LSN can exceed the snapshot LSN. A violation
             // means the upstream went back in time, which would leave the rewind range the
             // replication operator subtracts unable to reach the snapshot.
-            if let Some(err) = tables_to_snapshot.values().flatten().find_map(|(_, info)| {
-                (info.initial_lsn > snapshot_lsn).then_some(DefiniteError::InvalidSnapshotLsn {
-                    initial_lsn: info.initial_lsn,
-                    snapshot_lsn,
-                })
-            }) {
-                for (&oid, outputs) in tables_to_snapshot.iter() {
-                    for &output_index in outputs.keys() {
-                        if !config.responsible_for((oid, output_index)) {
-                            continue;
+            let snapshot_info = snapshot_info.and_then(|info| {
+                let invalid_lsn = tables_to_snapshot.values().flatten().find_map(|(_, output)| {
+                    (output.initial_lsn > info.snapshot_lsn).then_some(
+                        DefiniteError::InvalidSnapshotLsn {
+                            initial_lsn: output.initial_lsn,
+                            snapshot_lsn: info.snapshot_lsn,
+                        },
+                    )
+                });
+                invalid_lsn.map_or(Ok(info), Err)
+            });
+            let SnapshotInfo {
+                snapshot_id,
+                snapshot_lsn,
+                table_block_counts,
+                upstream_info,
+            } = match snapshot_info {
+                Ok(info) => info,
+                Err(err) => {
+                    for (&oid, outputs) in tables_to_snapshot.iter() {
+                        for &output_index in outputs.keys() {
+                            if !config.responsible_for((oid, output_index)) {
+                                continue;
+                            }
+                            // We pick `u64::MAX` as the LSN which will (in practice) never conflict
+                            // any previously revealed portions of the TVC.
+                            let update =
+                                (Err(err.clone().into()), MzOffset::from(u64::MAX), Diff::ONE);
+                            raw_handles
+                                .give(output_index, &data_cap_sets[output_index][0], update)
+                                .await;
                         }
-                        // We pick `u64::MAX` as the LSN which will (in practice) never conflict
-                        // any previously revealed portions of the TVC.
-                        let update =
-                            (Err(err.clone().into()), MzOffset::from(u64::MAX), Diff::ONE);
-                        raw_handles
-                            .give(output_index, &data_cap_sets[output_index][0], update)
-                            .await;
                     }
+                    if is_snapshot_leader {
+                        definite_error_handle.give(
+                            &definite_error_cap_set[0],
+                            ReplicationError::Definite(Rc::new(err)),
+                        );
+                    }
+                    return Ok(());
                 }
-                if is_snapshot_leader {
-                    definite_error_handle.give(
-                        &definite_error_cap_set[0],
-                        ReplicationError::Definite(Rc::new(err)),
-                    );
-                }
-                return Ok(());
-            }
+            };
 
             // Snapshot leader is already in identified transaction but all other workers need to enter it.
             if !is_snapshot_leader {
