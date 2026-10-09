@@ -7,8 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Moving data to external systems
+use crate::names::Aug;
+use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::{PostgresSinkConfigOption, PostgresSinkConfigOptionName};
 
-mod iceberg;
-mod kafka;
-mod postgres;
+generate_extracted_config!(
+    PostgresSinkConfigOption,
+    (Table, String),
+    (Schema, String, Default("public".to_string()))
+);
