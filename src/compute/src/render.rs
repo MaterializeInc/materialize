@@ -2231,7 +2231,7 @@ where
                 // Capability for the lower bound of `pending_times`, if any.
                 let mut retained_cap: Option<Capability<mz_repr::Timestamp>> = None;
 
-                let activator = scope.activator_for(info.address.clone());
+                let activator = scope.activator_for(Rc::clone(&info.address));
                 let worker = scope.index();
                 handle.activate(activator.clone());
 

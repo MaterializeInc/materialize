@@ -16,6 +16,7 @@ use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::Hash;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -580,7 +581,7 @@ where
 
     builder.build(move |_caps| {
         // Acquire an activator to reschedule the operator when it has unfinished work.
-        let activator = Activator::new(operator_info.address.clone(), scope.activations());
+        let activator = Activator::new(Rc::clone(&operator_info.address), scope.activations());
         let worker = scope.index();
         let panic_on_audit_failure = STATS_AUDIT_PANIC.handle(&cfg);
         let mut pending_work = VecDeque::new();
