@@ -179,6 +179,11 @@ describe("computeStats", () => {
     expect(stats.p90).toBe(9_000);
   });
 
+  it("takes pMAX from the latest reading before the series has any", () => {
+    const stats = computeStats("absent", data, 5_000);
+    expect(stats).toEqual({ current: 5_000, peak: 5_000, p90: null });
+  });
+
   it("lets one unreadable reading in sixty pass p90", () => {
     // Unreadable once about twenty hours ago, healthy since. It has to still
     // breach "at any moment", because that reading was

@@ -110,14 +110,14 @@ export function computeStats(
     values.push(reading.queryable ? reading.totalMs : UNREADABLE);
   }
 
+  const current = currentFrom(latest);
+
   if (values.length === 0) {
-    return { current: currentFrom(latest), peak: null, p90: null };
+    return { current, peak: current, p90: null };
   }
 
   const sorted = [...values].sort((a, b) => a - b);
   const rank = Math.max(0, Math.ceil(0.9 * sorted.length) - 1);
-
-  const current = currentFrom(latest);
 
   return {
     // The newest reading, not the newest bin. A bin reports the worst reading
