@@ -93,6 +93,10 @@ pub async fn system_parameter_sync(
             backend.push(&mut params).await;
         }
 
+        // This tick's environment-wide values are now in the catalog, so the
+        // same read's rules can be resolved against them.
+        frontend.publish_config_file();
+
         // Reconcile the scoped (per-cluster and per-replica) parameters. We do
         // this every tick (independent of whether the environment-wide values
         // changed) so the overrides track the current set of live objects.
