@@ -2082,6 +2082,15 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
         # Drop the index on the base table. This will change the plan of `mv1` the
         # next time it is replanned, which should cause reconciliation to replace
         # it, as well as the other dataflows that depend on `mv1`.
+        #
+        # NOTE: This deliberately orphans `idx`'s dataflow. `mv` and `idx1` read
+        # from `idx`, so their plans only change on replan if `idx` goes away
+        # while they survive, which `enable_unsafe_drop_index` allows.
+        c.sql(
+            "ALTER SYSTEM SET enable_unsafe_drop_index = true",
+            port=6877,
+            user="mz_system",
+        )
         c.sql("DROP INDEX idx")
 
         # Restart environmentd to trigger a replanning and reconciliation.
@@ -2773,8 +2782,8 @@ def workflow_test_replica_metrics(c: Composition) -> None:
 
         # Check that collection metrics update when collections are dropped.
         c.sql("""
-            DROP INDEX idx;
             DROP MATERIALIZED VIEW mv;
+            DROP INDEX idx;
             """)
 
         time.sleep(2)
@@ -2929,8 +2938,8 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
 
     # Drop the dataflows.
     c.sql("""
-        DROP INDEX idx;
         DROP MATERIALIZED VIEW mv;
+        DROP INDEX idx;
         """)
 
     # Wait for the controller to asynchronously drop the dataflows and update
