@@ -431,7 +431,7 @@ impl PeekClient {
                 &row_set_finishing_seconds,
             ) {
                 Ok((rows, _bytes)) => Ok(Coordinator::send_immediate_rows(rows)),
-                // TODO(peek-seq): make this a structured error. (also in the old sequencing)
+                // TODO(peek-seq): make this a structured error.
                 Err(e) => Err(AdapterError::ResultSize(e)),
             };
         }

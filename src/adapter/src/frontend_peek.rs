@@ -10,56 +10,65 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::future::Future;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
+use http::Uri;
 use itertools::Itertools;
+use maplit::btreemap;
+use mz_catalog::memory::objects::Cluster;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{CollectionPlan, ResultSpec, RowSetFinishing};
+use mz_expr::{CollectionPlan, Eval, ResultSpec, RowSetFinishing};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::JoinHandle;
 use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
-use mz_repr::explain::ExplainFormat;
+use mz_repr::explain::{ExplainFormat, ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-use mz_repr::{Datum, GlobalId, IntoRowIterator, Row, RowIterator, Timestamp};
+use mz_repr::{Datum, GlobalId, IntoRowIterator, Row, RowArena, RowIterator, Timestamp};
 use mz_sql::ast::Raw;
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::Params;
 use mz_sql::plan::{
-    self, Explainee, ExplaineeStatement, Plan, QueryWhen, SelectPlan, SideEffectingFunc,
-    SubscribeFrom, SubscribePlan,
+    self, Explainee, ExplaineeStatement, HirScalarExpr, Plan, QueryWhen, SelectPlan,
+    SideEffectingFunc, SubscribeFrom, SubscribePlan,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{
-    CLUSTER, CLUSTER_REPLICA, IsolationLevel, TRANSACTION_ISOLATION, Var, VarInput,
+    self, CLUSTER, CLUSTER_REPLICA, IsolationLevel, SessionVars, TRANSACTION_ISOLATION, Var,
+    VarInput,
 };
 use mz_sql_parser::ast::{CopyDirection, ExplainStage, ShowStatement, Statement};
-use mz_transform::EmptyStatisticsOracle;
+use mz_storage_client::storage_collections::StorageCollections;
+use mz_storage_types::controller::StorageError;
 use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::{EmptyStatisticsOracle, StatisticsOracle};
 use opentelemetry::trace::TraceContextExt;
 use timely::progress::Antichain;
 use tracing::{Span, debug, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, CatalogState};
 use crate::command::{CatalogSnapshot, Command};
 use crate::coord;
 use crate::coord::peek::{FastPathPlan, PeekPlan, PeekResponseUnary};
-use crate::coord::sequencer::{eval_copy_to_uri, statistics_oracle};
 use crate::coord::timeline::timedomain_for;
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{Coordinator, CopyToContext, ExplainContext, ExplainPlanContext, TargetCluster};
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::Optimize;
-use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
+use crate::optimize::dataflows::{
+    ComputeInstanceSnapshot, DataflowBuilder, EvalTime, ExprPrep, ExprPrepOneShot,
+};
+use crate::optimize::peek;
 use crate::peek_client::{ExecutionLogging, TakeOver};
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
@@ -675,7 +684,7 @@ impl PeekClient {
         }
 
         if !is_explain_timestamp {
-            let notices = coord::sequencer::check_log_reads(
+            let notices = check_log_reads(
                 &catalog,
                 cluster,
                 &source_ids,
@@ -902,8 +911,6 @@ impl PeekClient {
             self.log_set_timestamp(logging_id, *timestamp);
         }
 
-        // (TODO(peek-seq): The below TODO is copied from the old peek sequencing. We should resolve
-        // this when we decide what to with `AS OF` in transactions.)
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems
         // arbitrary and we don't recall why we did it (possibly an error!). Change this to always
         // set the transaction ops. Decide and document what our policy should be on AS OF queries.
@@ -1362,7 +1369,7 @@ impl PeekClient {
                 optimizer,
                 insights_ctx,
             } => {
-                let rows = coord::sequencer::explain_plan_inner(
+                let rows = explain_plan_inner(
                     session,
                     &catalog,
                     df_meta,
@@ -1387,7 +1394,7 @@ impl PeekClient {
                 if let Some(bound) = equal_bounds {
                     session.add_notice(AdapterNotice::EqualSubscribeBounds { bound });
                 }
-                let rows = coord::sequencer::explain_subscribe_inner(
+                let rows = explain_subscribe_inner(
                     session,
                     &catalog,
                     df_meta,
@@ -1956,4 +1963,280 @@ enum Execution {
         imports: BTreeMap<GlobalId, mz_expr::MapFilterProject>,
         determination: TimestampDetermination,
     },
+}
+
+/// Evaluates a COPY TO target URI expression and validates it.
+fn eval_copy_to_uri(
+    to: HirScalarExpr,
+    session: &Session,
+    catalog_state: &CatalogState,
+) -> Result<Uri, AdapterError> {
+    let style = ExprPrepOneShot {
+        logical_time: EvalTime::NotAvailable,
+        session,
+        catalog_state,
+    };
+    let mut to = to.lower_uncorrelated(catalog_state.system_config())?;
+    style.prep_scalar_expr(&mut to)?;
+    let temp_storage = RowArena::new();
+    let evaled = to.eval(&[], &temp_storage)?;
+    if evaled == Datum::Null {
+        coord_bail!("COPY TO target value can not be null");
+    }
+    let to_url = match Uri::from_str(evaled.unwrap_str()) {
+        Ok(url) => {
+            if url.scheme_str() != Some("s3") && url.scheme_str() != Some("gs") {
+                coord_bail!("only 's3://...' and 'gs://...' urls are supported as COPY TO target");
+            }
+            url
+        }
+        Err(e) => coord_bail!("could not parse COPY TO target url: {}", e),
+    };
+    Ok(to_url)
+}
+
+/// Generates EXPLAIN PLAN output.
+async fn explain_plan_inner(
+    session: &Session,
+    catalog: &Catalog,
+    df_meta: DataflowMetainfo,
+    explain_ctx: ExplainPlanContext,
+    optimizer: peek::Optimizer,
+    insights_ctx: Option<Box<PlanInsightsContext>>,
+) -> Result<Vec<Row>, AdapterError> {
+    let ExplainPlanContext {
+        config,
+        format,
+        stage,
+        desc,
+        optimizer_trace,
+        ..
+    } = explain_ctx;
+
+    let desc = desc.expect("RelationDesc for SelectPlan in EXPLAIN mode");
+
+    let session_catalog = catalog.for_session(session);
+    let expr_humanizer = {
+        let transient_items = btreemap! {
+            optimizer.select_id() => TransientItem::new(
+                Some(vec![GlobalId::Explain.to_string()]),
+                Some(desc.iter_names().map(|c| c.to_string()).collect()),
+            )
+        };
+        ExprHumanizerExt::new(transient_items, &session_catalog)
+    };
+
+    let finishing = if optimizer.finishing().is_trivial(desc.arity()) {
+        None
+    } else {
+        Some(optimizer.finishing().clone())
+    };
+
+    let target_cluster = catalog.get_cluster(optimizer.cluster_id());
+    let features = optimizer.config().features.clone();
+
+    let rows = optimizer_trace
+        .into_rows(
+            format,
+            &config,
+            &features,
+            &expr_humanizer,
+            finishing,
+            Some(target_cluster),
+            df_meta,
+            stage,
+            plan::ExplaineeStatementKind::Select,
+            insights_ctx,
+        )
+        .await?;
+
+    Ok(rows)
+}
+
+/// Renders the rows of an `EXPLAIN ... SUBSCRIBE` from its optimizer trace.
+///
+/// `features` are the optimizer features the `SUBSCRIBE` was optimized with.
+async fn explain_subscribe_inner(
+    session: &Session,
+    catalog: &Catalog,
+    df_meta: DataflowMetainfo,
+    explain_ctx: ExplainPlanContext,
+    sink_id: GlobalId,
+    cluster_id: ComputeInstanceId,
+    features: &OptimizerFeatures,
+) -> Result<Vec<Row>, AdapterError> {
+    let ExplainPlanContext {
+        config,
+        format,
+        stage,
+        desc,
+        optimizer_trace,
+        ..
+    } = explain_ctx;
+
+    let session_catalog = catalog.for_session(session);
+    let expr_humanizer = {
+        let transient_items = btreemap! {
+            sink_id => TransientItem::new(
+                Some(vec![GlobalId::Explain.to_string()]),
+                desc.map(|d| d.iter_names().map(|c| c.to_string()).collect()),
+            )
+        };
+        ExprHumanizerExt::new(transient_items, &session_catalog)
+    };
+
+    let target_cluster = catalog.get_cluster(cluster_id);
+
+    let rows = optimizer_trace
+        .into_rows(
+            format,
+            &config,
+            features,
+            &expr_humanizer,
+            None,
+            Some(target_cluster),
+            df_meta,
+            stage,
+            plan::ExplaineeStatementKind::Subscribe,
+            None,
+        )
+        .await?;
+
+    Ok(rows)
+}
+
+/// Creates a statistics oracle for query optimization.
+async fn statistics_oracle(
+    session: &Session,
+    source_ids: &BTreeSet<GlobalId>,
+    query_as_of: &Antichain<Timestamp>,
+    is_oneshot: bool,
+    system_config: &vars::SystemVars,
+    storage_collections: &dyn StorageCollections,
+) -> Result<Box<dyn StatisticsOracle>, AdapterError> {
+    if !session.vars().enable_session_cardinality_estimates() {
+        let stats: Box<dyn StatisticsOracle> = Box::new(EmptyStatisticsOracle);
+        return Ok(stats);
+    }
+
+    let timeout = if is_oneshot {
+        // TODO(mgree): ideally, we would shorten the timeout even more if we think the query could take the fast path
+        system_config.optimizer_oneshot_stats_timeout()
+    } else {
+        system_config.optimizer_stats_timeout()
+    };
+
+    let cached_stats = mz_ore::future::timeout(
+        timeout,
+        CachedStatisticsOracle::new(source_ids, query_as_of, storage_collections),
+    )
+    .await;
+
+    match cached_stats {
+        Ok(stats) => Ok(Box::new(stats)),
+        Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
+            warn!(
+                is_oneshot = is_oneshot,
+                "optimizer statistics collection timed out after {}ms",
+                timeout.as_millis()
+            );
+
+            Ok(Box::new(EmptyStatisticsOracle))
+        }
+        Err(mz_ore::future::TimeoutError::Inner(e)) => Err(AdapterError::Storage(e)),
+    }
+}
+
+/// Checks whether we should emit diagnostic
+/// information associated with reading per-replica sources.
+///
+/// If an unrecoverable error is found (today: an untargeted read on a
+/// cluster with a non-1 number of replicas), return that.  Otherwise,
+/// return a list of associated notices (today: we always emit exactly
+/// one notice if there are any per-replica log dependencies and if
+/// `emit_introspection_query_notice` is set, and none otherwise.)
+fn check_log_reads(
+    catalog: &Catalog,
+    cluster: &Cluster,
+    source_ids: &BTreeSet<GlobalId>,
+    target_replica: &mut Option<ReplicaId>,
+    vars: &SessionVars,
+) -> Result<impl IntoIterator<Item = AdapterNotice>, AdapterError>
+where
+{
+    let log_names = source_ids
+        .iter()
+        .map(|gid| catalog.resolve_item_id(gid))
+        .flat_map(|item_id| catalog.introspection_dependencies(item_id))
+        .map(|item_id| catalog.get_entry(&item_id).name().item.clone())
+        .collect::<Vec<_>>();
+
+    if log_names.is_empty() {
+        return Ok(None);
+    }
+
+    // Reading from log sources on replicated clusters is only allowed if a
+    // target replica is selected. Otherwise, we have no way of knowing which
+    // replica we read the introspection data from.
+    let num_replicas = cluster.replicas().count();
+    if target_replica.is_none() {
+        if num_replicas == 1 {
+            *target_replica = cluster.replicas().map(|r| r.replica_id).next();
+        } else {
+            return Err(AdapterError::UntargetedLogRead { log_names });
+        }
+    }
+
+    // Ensure that logging is initialized for the target replica, lest
+    // we try to read from a non-existing arrangement.
+    let replica_id = target_replica.expect("set to `Some` above");
+    let replica = &cluster.replica(replica_id).expect("Replica must exist");
+    if !replica.config.compute.logging.enabled() {
+        return Err(AdapterError::IntrospectionDisabled { log_names });
+    }
+
+    Ok(vars
+        .emit_introspection_query_notice()
+        .then_some(AdapterNotice::PerReplicaLogRead { log_names }))
+}
+
+#[derive(Debug)]
+struct CachedStatisticsOracle {
+    cache: BTreeMap<GlobalId, usize>,
+}
+
+impl CachedStatisticsOracle {
+    pub async fn new(
+        ids: &BTreeSet<GlobalId>,
+        as_of: &Antichain<Timestamp>,
+        storage_collections: &dyn StorageCollections,
+    ) -> Result<Self, StorageError> {
+        let mut cache = BTreeMap::new();
+
+        for id in ids {
+            let stats = storage_collections.snapshot_stats(*id, as_of.clone()).await;
+
+            match stats {
+                Ok(stats) => {
+                    cache.insert(*id, stats.num_updates);
+                }
+                Err(StorageError::IdentifierMissing(id)) => {
+                    ::tracing::debug!("no statistics for {id}")
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(Self { cache })
+    }
+}
+
+impl StatisticsOracle for CachedStatisticsOracle {
+    fn cardinality_estimate(&self, id: GlobalId) -> Option<usize> {
+        self.cache.get(&id).map(|estimate| *estimate)
+    }
+
+    fn as_map(&self) -> BTreeMap<GlobalId, usize> {
+        self.cache.clone()
+    }
 }
