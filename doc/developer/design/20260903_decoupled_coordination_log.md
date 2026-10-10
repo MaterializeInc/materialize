@@ -42,9 +42,6 @@ published advancement. The outage fixture checks physical compaction before repl
 SIGKILLs, without shortening abandoned Persist reader leases or extending deadlines.
 Keep earlier branch-built catalog conversion outside scope.
 
-CI138467 passes Cargo, both Clippys and the native outage/handover workflows.
-Compatible-version promotion through SQL readiness took 8.697s, followed by the
-first indexed query in 0.627s, with the existing 20M/40M row assertions unchanged.
 Parallel failures and SLT/Zippy timeouts remain. SLT shows broad slowdown, not an
 identified blocking owner. Trace the recurring comment fixture's statements and
 reset phases. Zippy's two-slot hydration occupancy grows across deployments, but
