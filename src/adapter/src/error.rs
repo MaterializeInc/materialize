@@ -1776,6 +1776,20 @@ impl From<mz_sql_parser::parser::ParserStatementError> for AdapterError {
     }
 }
 
+impl AdapterError {
+    /// Rewrites an unrecognized-parameter error for the lowercased variable `name` to report
+    /// `written_name`, the spelling in the statement (see `plan_variable_name`).
+    pub(crate) fn with_written_variable_name(self, name: &str, written_name: &str) -> Self {
+        match self {
+            AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind:
+                    mz_catalog::memory::error::ErrorKind::VarError(VarError::UnknownParameter(unknown)),
+            }) if unknown == name => VarError::UnknownParameter(written_name.to_string()).into(),
+            e => e,
+        }
+    }
+}
+
 impl From<VarError> for AdapterError {
     fn from(e: VarError) -> Self {
         let e: mz_catalog::memory::error::Error = e.into();
