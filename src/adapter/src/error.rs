@@ -1133,6 +1133,7 @@ impl AdapterError {
         }
     }
 
+    /// Maps a lookup error of the session task's compute instance clients.
     pub fn concurrent_dependency_drop_from_collection_lookup_error(
         e: CollectionLookupError,
         compute_instance: ComputeInstanceId,
@@ -1155,7 +1156,8 @@ impl AdapterError {
         }
     }
 
-    pub fn concurrent_dependency_drop_from_watch_set_install_error(
+    /// Maps a collection lookup error of the compute controller.
+    pub fn concurrent_dependency_drop_from_compute_lookup_error(
         e: compute_error::CollectionLookupError,
     ) -> Self {
         match e {

@@ -966,19 +966,8 @@ impl PeekClient {
             &df_meta.optimizer_notices,
         );
         if session.vars().emit_timestamp_notice() {
-            let conn_id = session.conn_id().clone();
-            let session_wall_time = session.pcx().wall_time;
-            let explanation = self
-                .call_coordinator(|tx| Command::ExplainTimestamp {
-                    conn_id,
-                    session_wall_time,
-                    cluster_id,
-                    id_bundle: bundle,
-                    determination,
-                    tx,
-                })
+            self.add_timestamp_notice(session, cluster_id, bundle, determination)
                 .await?;
-            session.add_notice(crate::AdapterNotice::QueryTimestamp { explanation });
         }
 
         let arity = df_desc

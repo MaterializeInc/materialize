@@ -275,6 +275,12 @@ impl Coordinator {
         ))
     }
 
+    /// Explains `determination`, the timestamp chosen for a statement that reads `id_bundle`.
+    ///
+    /// Fails with [`AdapterError::ConcurrentDependencyDrop`] if a collection in `id_bundle` no
+    /// longer exists. Callers outside the coordinator determine the timestamp and its read holds
+    /// before sending [`crate::command::Command::ExplainTimestamp`], and a DROP can land in
+    /// between: read holds hold back compaction, not drops.
     pub(crate) fn explain_timestamp(
         &self,
         conn_id: &ConnectionId,
@@ -282,7 +288,7 @@ impl Coordinator {
         cluster_id: ClusterId,
         id_bundle: &CollectionIdBundle,
         determination: TimestampDetermination,
-    ) -> TimestampExplanation {
+    ) -> Result<TimestampExplanation, AdapterError> {
         let mut sources = Vec::new();
         {
             let storage_ids = id_bundle.storage_ids.iter().cloned().collect_vec();
@@ -290,7 +296,7 @@ impl Coordinator {
                 .controller
                 .storage
                 .collections_frontiers(storage_ids)
-                .expect("missing collection");
+                .map_err(AdapterError::concurrent_dependency_drop_from_collection_missing)?;
 
             for (id, since, upper) in frontiers {
                 let name = self
@@ -318,7 +324,9 @@ impl Coordinator {
                         .controller
                         .compute
                         .collection_frontiers(*id, Some(cluster_id))
-                        .expect("id does not exist");
+                        .map_err(
+                            AdapterError::concurrent_dependency_drop_from_compute_lookup_error,
+                        )?;
                     let name = catalog
                         .try_get_entry_by_global_id(id)
                         .map(|item| item.name())
@@ -333,12 +341,12 @@ impl Coordinator {
             }
         }
         let respond_immediately = determination.respond_immediately();
-        TimestampExplanation {
+        Ok(TimestampExplanation {
             determination,
             sources,
             session_wall_time,
             respond_immediately,
-        }
+        })
     }
 
     #[instrument]
@@ -385,7 +393,7 @@ impl Coordinator {
             cluster_id,
             &id_bundle,
             determination,
-        );
+        )?;
 
         let s = if is_json {
             serde_json::to_string_pretty(&explanation).expect("failed to serialize explanation")
