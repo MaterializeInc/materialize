@@ -19,7 +19,6 @@ import itertools
 import json
 import os
 import re
-import shlex
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
@@ -34,7 +33,12 @@ import psycopg
 from psycopg import InterfaceError, OperationalError
 from psycopg import sql as psycopg_sql
 
-from materialize import MZ_ROOT, buildkite
+from materialize import MZ_ROOT, buildkite, pgbench
+from materialize.cluster_spec_sheet_qps import (
+    QPS_CONCURRENCIES,
+    QpsSweep,
+    validate_qps_result,
+)
 from materialize.mz_env_util import print_environment_id
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
@@ -120,11 +124,10 @@ SERVICES = [
         propagate_crashes=True,
         additional_system_parameter_defaults=MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
     ),
-    # dbbench service built from our mzbuild Dockerfile (test/dbbench)
     MzComposeService(
-        "dbbench",
+        "qps-pgbench",
         {
-            "mzbuild": "dbbench",
+            "mzbuild": "postgres",
         },
     ),
 ]
@@ -317,6 +320,7 @@ class ScenarioRunner:
         qps: float | None = None,
         healthy: int | None = None,
         failure_mode: str | None = None,
+        qps_details: dict | None = None,
     ) -> None:
         """Write one result row.
 
@@ -341,6 +345,7 @@ class ScenarioRunner:
                 "qps": qps,
                 "healthy": healthy,
                 "failure_mode": failure_mode,
+                **(qps_details or {}),
             }
         )
 
@@ -432,146 +437,6 @@ class ScenarioRunner:
                     self.run_query(after_part)
 
             self.connection.retryable(inner)
-
-    def measure_dbbench(
-        self,
-        category: str,
-        name: str,
-        *,
-        setup: list[str],
-        query: list[str],
-        after: list[str],
-        duration: str,
-        concurrency: int | None = None,
-    ) -> None:
-        """
-        Run dbbench via the 'dbbench' mzcompose service and record its final QPS.
-
-        Parameters somewhat mirror ScenarioRunner.measure for consistency, but are applied to a
-        generated dbbench.ini:
-          - setup:    SQL statements run once before the workload (dbbench [setup])
-          - query:    SQL statements that form the workload (dbbench [loadtest] query=...)
-          - after:    SQL statements run once after the workload (dbbench [teardown])
-          - duration: length of the workload (top-level duration=...)
-          - concurrency: concurrent sessions for the workload.
-
-        We capture and parse dbbench's output (stderr or stdout) to find the last
-        occurrence of a "QPS" value that dbbench reports in its summary, and store that
-        as the 'qps' column in the results CSV. If no QPS is found, the test fails.
-        (We omit time_ms for these rows since wall-clock time is not meaningful here.)
-        """
-
-        # Build a dbbench command that targets the current Materialize instance and
-        # the active cluster 'c' using target-provided flags.
-        flags = self.target.dbbench_connection_flags()
-
-        # Render a minimal INI file for dbbench.
-        def ini_escape(s: str) -> str:
-            return s.replace("\n", " ")
-
-        lines: list[str] = []
-        lines.append(f"duration={duration}")
-        # [setup]
-        if setup:
-            lines.append("")
-            lines.append("[setup]")
-            for q in setup:
-                q = dedent(q).strip()
-                if q:
-                    lines.append(f"query={ini_escape(q)}")
-        # [teardown]
-        if after:
-            lines.append("")
-            lines.append("[teardown]")
-            for q in after:
-                q = dedent(q).strip()
-                if q:
-                    lines.append(f"query={ini_escape(q)}")
-        # [loadtest]
-        lines.append("")
-        lines.append("[loadtest]")
-        for q in query:
-            q = dedent(q).strip()
-            if q:
-                lines.append(f"query={ini_escape(q)}")
-        if concurrency is not None:
-            lines.append(f"concurrency={int(concurrency)}")
-
-        ini_text = "\n".join(lines) + "\n"
-
-        # Construct a shell snippet to write the INI and execute dbbench
-        quoted_flags = " ".join(shlex.quote(x) for x in flags)
-        script = (
-            "set -euo pipefail; "
-            'tmp="$(mktemp -t dbbench.XXXXXX)"; '
-            'cat > "$tmp"; '
-            f'exec dbbench {quoted_flags} -intermediate-stats=false "$tmp"'
-        )
-
-        print(f"--- Running dbbench step '{name}' for {self.envd_cpus} ...")
-        # Execute the command in the 'dbbench' service container and capture output
-        result = self.target.composition.run(
-            "dbbench",
-            "-lc",  # sh arg to make it run `script`
-            script,
-            entrypoint="bash",
-            rm=True,
-            capture_and_print=True,
-            stdin=ini_text,
-        )
-
-        # dbbench writes its final summary to stderr; prefer stderr but also
-        # consider stdout just in case.
-        stderr_out = result.stderr or ""
-        stdout_out = result.stdout or ""
-        combined_out = f"{stderr_out}\n{stdout_out}".strip()
-
-        # Persist full dbbench output to a log file for later inspection
-        logs_dir = os.path.join("test", "cluster-spec-sheet", "dbbench-logs")
-        os.makedirs(logs_dir, exist_ok=True)
-
-        # Build a descriptive, filesystem-safe filename
-        def _slug(x: Any) -> str:
-            return re.sub(r"[^A-Za-z0-9._=-]+", "-", str(x))
-
-        fname = f"{_slug(self.scenario)}_{_slug(self.mode)}_{_slug(self.envd_cpus)}_{_slug(name)}.log"
-        log_path = os.path.join(logs_dir, fname)
-        with open(log_path, "w", encoding="utf-8") as f:
-            f.write(combined_out + ("\n" if not combined_out.endswith("\n") else ""))
-        print(f"dbbench logs saved to {log_path}")
-
-        # Parse QPS from output.
-        # (Alternatively, we could make our fork of dbbench print a more machine-readable output.)
-        # TODO: Later, we'll want to also look at latency (avg and tail-latency), but seems too unstable for now.
-        qps_val: float | None = None
-        try:
-            qps_matches = re.findall(r"([0-9]+(?:\.[0-9]+)?)\s*QPS", combined_out)
-            if len(qps_matches) > 1:
-                raise UIError(
-                    f"dbbench: found multiple QPS values in output: {qps_matches}"
-                )
-            if qps_matches:
-                qps_val = float(qps_matches[0])
-        except Exception as e:
-            raise UIError(f"Failed to parse dbbench QPS from output: {e}")
-
-        if qps_val is None:
-            tail = "\n".join(combined_out.splitlines()[-25:])
-            raise UIError("dbbench: failed to find QPS in output. Last lines:\n" + tail)
-        else:
-            print(f"dbbench parsed QPS: {qps_val}")
-
-        # Record a result row: put QPS into the 'qps' column, and omit time_ms (not applicable)
-        self.add_result(
-            category,
-            name,
-            # For QPS measurements, we have only one repetition (i.e., repetition 0). We have `duration` instead of
-            # `repetitions` in QPS benchmarks currently (but maybe it's good to keep `repetition` in the schema in case
-            # we ever want also multiple repetitions for QPS).
-            0,
-            None,
-            qps=qps_val,
-        )
 
     def size_of_dataflow(self, object: str) -> int | None:
         retries = 10
@@ -2040,6 +1905,13 @@ class AuctionScenario(ClusterScalingScenario):
 
 class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
 
+    VERSION = "3.0.0"
+
+    def __init__(self, options: QpsSweep) -> None:
+        super().__init__(1, None)
+        self.options = options
+        self.warnings: list[str] = []
+
     def name(self) -> str:
         return SCENARIO_QPS_ENVD_STRONG_SCALING
 
@@ -2047,55 +1919,144 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         return []
 
     def run(self, runner: ScenarioRunner) -> None:
-        runner.measure_dbbench(
-            category="peek_qps",
-            name="dbbench_256_conns",
-            setup=[
-                "create view if not exists gen_view as select generate_series as x from generate_series(1, 10)",
-                "create default index on gen_view",
-                "select * from gen_view",  # Wait for hydration
-            ],
-            query=[
-                "select * from gen_view",
-            ],
-            after=[
-                "drop view gen_view cascade",
-            ],
-            duration="40s",
-            concurrency=256,
-        )
+        size = "50cc" if isinstance(runner.target, CloudTarget) else "scale=1,workers=1"
+        try:
+            # Reuse c and remove the unused setup cluster so the configured
+            # query-cluster count also fits an account with that cluster limit.
+            runner.run_query("DROP CLUSTER IF EXISTS quickstart CASCADE")
+            runner.run_query(
+                f"ALTER CLUSTER c SET (SIZE '{size}', REPLICATION FACTOR 1)"
+            )
+            runner.run_query(
+                "CREATE VIEW qps_gen_view AS SELECT generate_series AS x FROM generate_series(1, 10)"
+            )
+            for i in range(self.options.clusters):
+                cluster = "c" if i == 0 else f"qps_{i}"
+                if i != 0:
+                    runner.run_query(
+                        f"CREATE CLUSTER {cluster} SIZE '{size}', REPLICATION FACTOR 1"
+                    )
+                runner.run_query(
+                    f"CREATE INDEX qps_idx_{i} IN CLUSTER {cluster} ON qps_gen_view (x)"
+                )
+                runner.run_query(f"SET cluster = '{cluster}'")
+                runner.run_query("SELECT * FROM qps_gen_view")
+            runner.run_query("SET cluster = 'c'")
+            for protocol in self.options.protocols:
+                for concurrency in self.options.concurrencies:
+                    self.measure(runner, size, concurrency, protocol)
+        finally:
+            runner.run_query("SET cluster = 'c'")
+            runner.run_query("DROP VIEW IF EXISTS qps_gen_view CASCADE")
+            for i in range(1, self.options.clusters):
+                runner.run_query(f"DROP CLUSTER IF EXISTS qps_{i} CASCADE")
 
-        runner.measure_dbbench(
-            category="peek_qps",
-            name="dbbench_512_conns",
-            setup=[
-                "create view if not exists gen_view as select generate_series as x from generate_series(1, 10)",
-                "create default index on gen_view",
-                "select * from gen_view",  # Wait for hydration
-            ],
-            query=[
-                "select * from gen_view",
-            ],
-            after=[
-                "drop view gen_view cascade",
-            ],
-            duration="40s",
-            concurrency=512,
+    def measure(
+        self, runner: ScenarioRunner, size: str, concurrency: int, protocol: str
+    ) -> None:
+        name = f"qps_{protocol}_{concurrency}_conns_{self.options.clusters}_clusters"
+        print(
+            f"--- {name}: envd={runner.envd_cpus} CPUs, {self.options.duration}s measured + {self.options.warmup}s warmup"
         )
-
-        # TODO: Add more scenarios as the QPS/CPS work progresses:
-        # - different connection counts
-        # - distribute queries across more clusters;
-        #   see manual test results with multiple clusters here:
-        #   https://docs.google.com/presentation/d/1bIyTWaRiyEqBXFxoxpHwWSywztSW1jRw_JP3M-Zj_6A/edit?slide=id.g39de8b7440c_0_86#slide=id.g39de8b7440c_0_86
-        # - explicit transactions (which are currently super slow)
-        # - (slow-path queries are kinda expected to be slow, so it's not so important to measure them)
-        # - I think dbbench uses the "Simple Query Protocol" by default. We might want to also measure the
-        #   "Extended Query Protocol" / prepared statements.
-        # - Lookups in a large index, especially on a larger replica.
-        # - Larger result sets.
-        #
-        # We'll also want to measure latency, including tail latency.
+        config = self.options.config(
+            runner.target.qps_connection_flags(), concurrency, protocol
+        )
+        result = pgbench.run(config, runner.target.composition)
+        validate_qps_result(result, concurrency, protocol)
+        warnings = list(result["driver"]["warnings"])
+        replica_cpu = None
+        replica_samples = 0
+        try:
+            metrics = runner.run_query(
+                """SELECT max(u.cpu_percent), count(u.cpu_percent)
+                   FROM mz_internal.mz_cluster_replica_utilization_history u
+                   JOIN mz_catalog.mz_cluster_replicas r ON u.replica_id = r.id
+                   JOIN mz_catalog.mz_clusters c ON r.cluster_id = c.id
+                   WHERE (c.name = 'c' OR c.name LIKE 'qps_%%')
+                     AND u.occurred_at >= %(start)s::timestamptz
+                     AND u.occurred_at <= %(end)s::timestamptz""",
+                fetch=True,
+                start=result["started_at"],
+                end=result["finished_at"],
+            )
+            assert metrics is not None
+            replica_cpu, replica_samples = metrics[0]
+        except psycopg.Error:
+            warnings.append("query-replica utilization telemetry unavailable")
+        if replica_samples == 0:
+            warnings.append("no query-replica CPU samples in measurement window")
+        if replica_cpu is not None and replica_cpu >= 80:
+            warnings.append(
+                "query replica reached at least 80% CPU; increase --qps-clusters before attributing the plateau to environmentd"
+            )
+        if isinstance(runner.target, DockerTarget):
+            warnings.append(
+                "Docker query replicas share environmentd's container quota; this is not an isolated adapter benchmark"
+            )
+        result.update(
+            replica_cpu_peak_percent=replica_cpu,
+            replica_cpu_samples=replica_samples,
+            warnings=warnings,
+            envd_cpus=runner.envd_cpus,
+            query_cluster_size=size,
+            query=config["query"],
+            expected_rows=config["expected_rows"],
+        )
+        logs_dir = os.path.join("test", "cluster-spec-sheet", "qps-logs")
+        os.makedirs(logs_dir, exist_ok=True)
+        with open(os.path.join(logs_dir, f"{runner.envd_cpus}_{name}.json"), "w") as f:
+            json.dump(result, f, indent=2)
+        if buildkite.is_in_buildkite():
+            buildkite.upload_artifact(
+                os.path.join(logs_dir, f"{runner.envd_cpus}_{name}.json"),
+                cwd=MZ_ROOT,
+                quiet=True,
+            )
+        print(json.dumps(result))
+        runner.add_result(
+            "peek_qps",
+            name,
+            0,
+            None,
+            qps=result["qps"],
+            qps_details={
+                "concurrency": concurrency,
+                "protocol": protocol,
+                "query_clusters": self.options.clusters,
+                "active_query_clusters": result["clusters"],
+                "cluster_size": size,
+                **{
+                    k: result[k]
+                    for k in (
+                        "mean_latency_ms",
+                        "p50_latency_ms",
+                        "p95_latency_ms",
+                        "p99_latency_ms",
+                        "max_latency_ms",
+                        "replica_cpu_peak_percent",
+                        "replica_cpu_samples",
+                    )
+                },
+                "driver_cpu_percent": result["driver"]["cpu_percent"],
+                "driver_throttled_period_percent": result["driver"][
+                    "throttled_period_percent"
+                ],
+                "driver_peak_thread_cpu_percent": result["driver"][
+                    "peak_thread_cpu_percent"
+                ],
+                "warnings": json.dumps(warnings),
+            },
+        )
+        for warning in warnings:
+            print(f"WARNING: {name} at {runner.envd_cpus} CPUs: {warning}")
+            self.warnings.append(f"- {name}, envd={runner.envd_cpus}: {warning}")
+        if self.warnings and buildkite.is_in_buildkite():
+            buildkite.add_annotation(
+                "warning",
+                "QPS benchmark qualification warnings",
+                "\n".join(self.warnings),
+                context="qps-headroom",
+            )
 
 
 class CopyFromStdinEnvdStrongScalingScenario(ClusterScalingScenario):
@@ -2426,6 +2387,22 @@ ENVD_FIELDNAMES: list[str] = [
     "envd_cpus",
     "repetition",
     "qps",
+    "concurrency",
+    "protocol",
+    "query_clusters",
+    "active_query_clusters",
+    "cluster_size",
+    "mean_latency_ms",
+    "p50_latency_ms",
+    "p95_latency_ms",
+    "p99_latency_ms",
+    "max_latency_ms",
+    "replica_cpu_peak_percent",
+    "replica_cpu_samples",
+    "driver_cpu_percent",
+    "driver_throttled_period_percent",
+    "driver_peak_thread_cpu_percent",
+    "warnings",
 ]
 
 
@@ -3942,6 +3919,41 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         "--scale-tpch", type=float, default=8, help="TPCH scale factor."
     )
     parser.add_argument(
+        "--qps-concurrencies",
+        type=lambda s: [int(x) for x in s.split(",")],
+        default=QPS_CONCURRENCIES,
+    )
+    parser.add_argument(
+        "--qps-protocols",
+        type=lambda s: s.split(","),
+        default=["prepared"],
+        help="prepared (default), simple, or prepared,simple",
+    )
+    parser.add_argument(
+        "--qps-clusters",
+        type=int,
+        default=32,
+        help="Independently routed one-worker query clusters (Cloud size 50cc)",
+    )
+    parser.add_argument(
+        "--qps-duration",
+        type=float,
+        default=20,
+        help="Measurement seconds per concurrency/protocol/CPU point",
+    )
+    parser.add_argument(
+        "--qps-warmup",
+        type=float,
+        default=5,
+        help="Unmeasured warmup seconds per point",
+    )
+    parser.add_argument(
+        "--qps-query-timeout",
+        type=float,
+        default=30,
+        help="Startup and individual-query timeout seconds",
+    )
+    parser.add_argument(
         "--scale-tpch-queries", type=float, default=4, help="TPCH queries scale factor."
     )
     parser.add_argument(
@@ -3997,6 +4009,14 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
     )
 
     args = parser.parse_args()
+    QpsSweep(
+        args.qps_concurrencies,
+        args.qps_protocols,
+        args.qps_clusters,
+        args.qps_duration,
+        args.qps_warmup,
+        args.qps_query_timeout,
+    )
 
     scenarios: set[str] = set()
     for s in args.scenarios or ["all"]:
@@ -4139,10 +4159,10 @@ class BenchTarget:
         return None
 
     @abstractmethod
-    def dbbench_connection_flags(self) -> list[str]:
+    def qps_connection_flags(self) -> list[str]:
         """
-        Return dbbench connection flags appropriate for this target, excluding the
-        workload file path. The result should include driver, host, port, username,
+        Return connection flags for the QPS configuration's target adapter.
+        The result should include driver, host, port, username,
         optional password, database, and params (including sslmode and cluster=c).
         """
         ...
@@ -4164,7 +4184,7 @@ class CloudTarget(BenchTarget):
         self.new_app_password: str | None = None
         self.is_staging = is_staging
 
-    def dbbench_connection_flags(self) -> list[str]:
+    def qps_connection_flags(self) -> list[str]:
         assert self.new_app_password is not None
         return [
             "-driver",
@@ -4240,7 +4260,7 @@ class DockerTarget(BenchTarget):
     def __init__(self, composition: Composition) -> None:
         self.composition = composition
 
-    def dbbench_connection_flags(self) -> list[str]:
+    def qps_connection_flags(self) -> list[str]:
         return [
             "-driver",
             "postgres",
@@ -4398,7 +4418,16 @@ SCENARIOS: list[ScenarioSpec] = [
         "QPS envd strong scaling",
         lambda a, t: EnvdCpuSweep(
             SCENARIO_QPS_ENVD_STRONG_SCALING,
-            QpsEnvdStrongScalingScenario(1, t.replica_size_for_scale(1)),
+            QpsEnvdStrongScalingScenario(
+                QpsSweep(
+                    a.qps_concurrencies,
+                    a.qps_protocols,
+                    a.qps_clusters,
+                    a.qps_duration,
+                    a.qps_warmup,
+                    a.qps_query_timeout,
+                )
+            ),
         ),
         groups=("envd_qps_scalability",),
     ),
