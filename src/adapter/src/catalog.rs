@@ -45,8 +45,8 @@ use crate::{AdapterError, ExecuteResponse};
 pub use mz_catalog::catalog::{
     BuiltinTableUpdate, CatalogState, CatalogStateView, CatalogUpperHandle, DebugAwsContext,
     DropObjectInfo, InitializeStateResult, InjectedAuditEvent, Op, ReplicaCreateDropReason,
-    TransactionResult, UpdatePrivilegeVariant, is_public_role, is_reserved_name,
-    is_reserved_role_name,
+    TransactionCatchUp, TransactionResult, UpdatePrivilegeVariant, is_public_role,
+    is_reserved_name, is_reserved_role_name,
 };
 pub(crate) use mz_catalog::catalog::{
     catalog_type_to_audit_object_type, cluster_state, consistency,
@@ -155,7 +155,7 @@ impl Catalog {
     }
     pub async fn transact(
         &mut self,
-        writer_incarnation: Option<u64>,
+        catch_up: Option<&mut TransactionCatchUp>,
         storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
         oracle_write_ts: Timestamp,
         session: Option<&ConnMeta>,
@@ -165,7 +165,7 @@ impl Catalog {
         Ok(self
             .0
             .transact(
-                writer_incarnation,
+                catch_up,
                 storage_collections,
                 oracle_write_ts,
                 session.as_ref(),

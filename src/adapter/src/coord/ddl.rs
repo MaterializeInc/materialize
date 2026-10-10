@@ -732,6 +732,15 @@ impl Coordinator {
         // empty group commit can let peer publications win every catalog retry,
         // delaying protection acquisition when table writes are delayed.
         let notify = (!builtin.is_empty()).then(|| self.builtin_table_update().execute(builtin));
+        self.apply_caught_up_catalog_updates(updates).await;
+        if let Some(notify) = notify {
+            trace_catalog_await!("catalog_refresh_builtin_wait", notify.await);
+        }
+        Ok(())
+    }
+
+    /// Enact already committed changes even when the operation that caught up fails.
+    async fn apply_caught_up_catalog_updates(&mut self, updates: Vec<ParsedStateUpdate>) {
         match trace_catalog_await!(
             "catalog_refresh_implications",
             mz_ore::future::OreFutureExt::ore_catch_unwind(std::panic::AssertUnwindSafe(Box::pin(
@@ -748,10 +757,6 @@ impl Coordinator {
                 mz_ore::halt!("cannot enact committed catalog changes, restart required: {cause}")
             }
         }
-        if let Some(notify) = notify {
-            trace_catalog_await!("catalog_refresh_builtin_wait", notify.await);
-        }
-        Ok(())
     }
 
     /// Perform a catalog transaction. [`Coordinator::ship_dataflow`] must be
@@ -1671,10 +1676,10 @@ impl Coordinator {
                         .unwrap_or_default(),
                 });
             }
-            let writer_incarnation = self
+            let mut catch_up = self
                 .query_client
                 .as_ref()
-                .map(|client| client.protection.incarnation());
+                .map(|client| catalog::TransactionCatchUp::new(client.protection.incarnation()));
             let result = {
                 let Coordinator {
                     catalog,
@@ -1689,7 +1694,7 @@ impl Coordinator {
                     "catalog_transact",
                     Arc::make_mut(catalog)
                         .transact(
-                            writer_incarnation,
+                            catch_up.as_mut(),
                             Some(&mut controller.storage_collections),
                             oracle_write_ts,
                             conn,
@@ -1700,6 +1705,15 @@ impl Coordinator {
                         .await
                 )
             };
+            // Success includes caught-up permissions in the candidate's complete
+            // create/bound/drop effects. Failure must still enact its committed
+            // prefix before releasing the publication barrier or suspending.
+            if let Some(catch_up) = catch_up
+                && !catch_up.updates.is_empty()
+            {
+                self.apply_caught_up_catalog_updates(catch_up.updates.into_values().collect())
+                    .await;
+            }
             tracing::debug!(target: "mz_adapter::frontend_read_then_write",
                 failed = result.is_err(), "catalog commit attempt completed");
             match result {
@@ -1728,6 +1742,8 @@ impl Coordinator {
                     // A metadata-only grant can invalidate that sample without
                     // changing the planning revision. Let the publisher resample
                     // with its pending work intact, rather than replaying bounds.
+                    // Requirements-only operations keep their fixed-frontier
+                    // validation on this outer path, not common immediate retry.
                     if ops.iter().any(|op| {
                         matches!(op, Op::SetReadProtection { bounds, .. } if !bounds.is_empty())
                     }) {

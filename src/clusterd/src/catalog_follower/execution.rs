@@ -368,10 +368,22 @@ impl ReplicaEnactment {
         ops: Vec<Op>,
     ) -> anyhow::Result<()> {
         let ts = self.io.wait(catalog.current_upper()).await;
+        let mut catch_up =
+            mz_catalog::catalog::TransactionCatchUp::new(self.protection.incarnation());
         let result = self
             .io
-            .wait(catalog.transact(None, None, ts, None, ops))
-            .await?;
+            .wait(catalog.transact(Some(&mut catch_up), None, ts, None, ops))
+            .await;
+        // Failed candidates still leave the committed projection advanced.
+        // Native compaction follows its current bounds through reconciliation.
+        absorb_updates(
+            effects,
+            catalog,
+            cluster,
+            build,
+            catch_up.updates.into_values().collect(),
+        );
+        let result = result?;
         absorb_updates(effects, catalog, cluster, build, result.catalog_updates);
         Ok(())
     }
