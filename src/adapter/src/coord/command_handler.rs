@@ -444,21 +444,19 @@ impl Coordinator {
                     watch_set,
                     tx,
                 } => {
-                    let result = self
-                        .implement_slow_path_peek(
-                            *dataflow_plan,
-                            determination,
-                            finishing,
-                            compute_instance,
-                            target_replica,
-                            intermediate_result_type,
-                            source_ids,
-                            conn_id,
-                            max_result_size,
-                            max_query_result_size,
-                            watch_set,
-                        )
-                        .await;
+                    let result = self.implement_slow_path_peek(
+                        *dataflow_plan,
+                        determination,
+                        finishing,
+                        compute_instance,
+                        target_replica,
+                        intermediate_result_type,
+                        source_ids,
+                        conn_id,
+                        max_result_size,
+                        max_query_result_size,
+                        watch_set,
+                    );
                     let _ = tx.send(result);
                 }
 
@@ -474,13 +472,9 @@ impl Coordinator {
                     statement_logging_id,
                     tx,
                 } => {
-                    let mut ctx_extra = ExecuteContextGuard::new(
-                        statement_logging_id,
-                        self.internal_cmd_tx.clone(),
-                    );
                     match self
                         .implement_subscribe(
-                            &mut ctx_extra,
+                            statement_logging_id,
                             df_desc,
                             dependency_ids,
                             cluster_id,
@@ -502,12 +496,6 @@ impl Coordinator {
                             });
                         }
                         Err(e) => {
-                            // On success the guard's contents moved into the
-                            // `Subscribing` response. On error the frontend
-                            // logs the error end, so we defuse rather than
-                            // let the guard's `Drop` emit a spurious
-                            // `Aborted`.
-                            let _ = ctx_extra.defuse();
                             let _ = tx.send(Err(e));
                         }
                     }

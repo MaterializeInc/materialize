@@ -32,13 +32,14 @@ use crate::coord::Coordinator;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::peek::PeekResponseUnary;
 use crate::error::AdapterError;
+use crate::statement_logging::StatementLoggingId;
 use crate::{ExecuteContextGuard, ReadHolds};
 
 impl Coordinator {
     #[instrument]
     pub(crate) async fn implement_subscribe(
         &mut self,
-        ctx_extra: &mut ExecuteContextGuard,
+        statement_logging_id: Option<StatementLoggingId>,
         df_desc: DataflowDescription<LirRelationExpr>,
         dependency_ids: BTreeSet<GlobalId>,
         cluster_id: ComputeInstanceId,
@@ -126,7 +127,7 @@ impl Coordinator {
         });
         let resp = ExecuteResponse::Subscribing {
             rx: Box::new(rx),
-            ctx_extra: std::mem::take(ctx_extra),
+            ctx_extra: ExecuteContextGuard::new(statement_logging_id, self.internal_cmd_tx.clone()),
             instance_id: cluster_id,
         };
         let resp = match plan.copy_to {
