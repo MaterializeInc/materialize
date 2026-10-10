@@ -2546,24 +2546,33 @@ fn test_internal_http_auth() {
         "http://{}/api/leader/retire",
         server.internal_http_local_addr()
     );
-    let retire = |user: &str, body: serde_json::Value| {
+    let retire = |body: serde_json::Value| {
         Client::new()
             .post(&retirement_url)
-            .header("x-materialize-user", user)
             .json(&body)
             .send()
             .unwrap()
     };
+    // Leadership routes on this unauthenticated internal listener use the
+    // listener boundary, not the SQL route's proxy-user header.
     assert_eq!(
-        retire("invalid value", serde_json::json!({"generation": 1})).status(),
-        StatusCode::UNAUTHORIZED
+        Client::new()
+            .post(format!(
+                "http://{}/api/leader/retire",
+                server.http_local_addr()
+            ))
+            .json(&serde_json::json!({"generation": 1}))
+            .send()
+            .unwrap()
+            .status(),
+        StatusCode::NOT_FOUND
     );
     assert_eq!(
-        retire("mz_system", serde_json::json!({})).status(),
+        retire(serde_json::json!({})).status(),
         StatusCode::UNPROCESSABLE_ENTITY
     );
     assert_eq!(
-        retire("mz_system", serde_json::json!({"generation": 0})).status(),
+        retire(serde_json::json!({"generation": 0})).status(),
         StatusCode::CONFLICT,
         "the serving generation cannot be retired"
     );
@@ -2571,7 +2580,7 @@ fn test_internal_http_auth() {
     Retry::default()
         .max_duration(Duration::from_secs(10))
         .retry(|_| {
-            let response = retire("mz_system", serde_json::json!({"generation": 1}));
+            let response = retire(serde_json::json!({"generation": 1}));
             if response.status() == StatusCode::OK {
                 Ok(())
             } else {
@@ -2579,7 +2588,7 @@ fn test_internal_http_auth() {
             }
         })
         .unwrap();
-    let response = retire("mz_system", serde_json::json!({"generation": 1}));
+    let response = retire(serde_json::json!({"generation": 1}));
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response.json::<serde_json::Value>().unwrap(),
