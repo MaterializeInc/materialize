@@ -423,6 +423,7 @@ impl StateUpdateKindJson {
                 StateUpdateKind::DeploymentAdmission(DeploymentAdmission {
                     members: Default::default(),
                     persist_target: semver::Version::new(0, 0, 0),
+                    retired: Default::default(),
                 }),
                 StateUpdateKind::FenceToken(FenceToken {
                     deploy_generation: 1,
