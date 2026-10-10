@@ -250,14 +250,26 @@ metrics:
   - existing_session
   source: src/frontegg-auth/src/metrics.rs
   visibility: internal
+- name: mz_balancer_connection_accepting
+  help: 'Whether /api/readyz reports ready: 1 in load balancer rotation, 0 out.'
+  source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_connection_active
   help: Count of currently open network connections.
   labels:
   - source
   source: src/balancerd/src/lib.rs
   visibility: internal
+- name: mz_balancer_connection_high_watermark
+  help: Connections at which balancerd leaves load balancer rotation, -1 if disabled.
+  source: src/balancerd/src/lib.rs
+  visibility: internal
 - name: mz_balancer_connection_limit
   help: Maximum number of connections proxied at once, 0 if unlimited.
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_connection_low_watermark
+  help: Connections below which balancerd returns to load balancer rotation, -1 if disabled.
   source: src/balancerd/src/lib.rs
   visibility: internal
 - name: mz_balancer_connection_rejected_total
@@ -269,6 +281,10 @@ metrics:
   labels:
   - source
   - status
+  source: src/balancerd/src/lib.rs
+  visibility: internal
+- name: mz_balancer_connection_watermark_transitions_total
+  help: Count of times balancerd left or returned to load balancer rotation because of the connection watermarks.
   source: src/balancerd/src/lib.rs
   visibility: internal
 - name: mz_balancer_metadata_seconds
