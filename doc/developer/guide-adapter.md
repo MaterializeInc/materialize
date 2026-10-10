@@ -29,12 +29,11 @@ catalog implications is when we update everything downstream of those writes.
 Implications are derived from the committed diff, not from the input ops and not
 from sequencer closures.
 
-Why derive from the diff? So a side effect fires identically whether this node
-applied the change or whether it is following a catalog change made by another
-writer. This is the same distributed stance as "No local-only assumptions"
-below, and a more scalable multi-`environmentd` coordinator depends on it (PR
-#29673, `database-issues#8488`). No code applies another node's diff today, but
-the framework is built so that capability is achievable.
+Why derive from the diff? Each owner must enact the change whether it committed
+the transaction or followed another writer. The shared catalog applies committed
+updates and derives implications. The adapter enacts coordinator effects, while
+native replicas reconcile their own execution. This is the same distributed
+stance as "No local-only assumptions" below.
 
 Two contracts on the implications phase:
 
@@ -356,12 +355,12 @@ right state.
 
 Sessions cache catalog snapshots and reuse them while
 `Catalog::transient_revision` is unchanged (see
-`doc/developer/design/20260709_session_catalog_snapshot_cache.md`). Only
-`Catalog::transact` bumps the revision. So when adding a new way to mutate
-the Coordinator's in-memory catalog, either route it through `transact` or
-keep the change invisible to session-visible catalog reads (name resolution,
-planning). Otherwise sessions serve stale catalogs where today they would see
-the change.
+`doc/developer/design/20260709_session_catalog_snapshot_cache.md`). Both
+`Catalog::transact` and committed-update refresh advance the revision when their
+updates affect planning. Classify against the transaction's pre-application state.
+Metadata-only protection and progress must not invalidate that planning context.
+Any other mutation of the coordinator's in-memory catalog must preserve these
+rules, or sessions can reuse stale name resolution and plans.
 
 ### Group commits and generation handover
 
