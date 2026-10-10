@@ -78,10 +78,11 @@ use url::Url;
 use crate::AlterCompatible;
 use crate::configuration::StorageConfiguration;
 use crate::connections::aws::{
-    AwsAuth, AwsConnection, AwsConnectionReference, AwsConnectionValidationError,
+    AwsAssumeRoleExt, AwsAuth, AwsConnection, AwsConnectionExt, AwsConnectionReference,
+    AwsConnectionValidationError,
 };
 use crate::connections::gcp::{GcpConnectionReference, GcpTokenProvider};
-use crate::connections::string_or_secret::StringOrSecret;
+use crate::connections::string_or_secret::{StringOrSecret, StringOrSecretExt};
 use crate::controller::AlterError;
 use crate::dyncfgs::{
     ENFORCE_EXTERNAL_ADDRESSES, KAFKA_CLIENT_ID_ENRICHMENT_RULES,

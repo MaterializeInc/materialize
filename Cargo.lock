@@ -6899,12 +6899,13 @@ dependencies = [
  "fail",
  "hex",
  "itertools 0.15.0",
+ "mz-cluster-client",
  "mz-dyncfg",
  "mz-expr",
  "mz-ore",
  "mz-pgtz",
  "mz-repr",
- "mz-storage-types",
+ "mz-storage-types-base",
  "serde",
  "serde-reflection",
  "serde_json",
@@ -8982,6 +8983,7 @@ dependencies = [
  "mz-sql-server-util",
  "mz-ssh-util",
  "mz-storage-types",
+ "mz-storage-types-base",
  "mz-timely-util",
  "mz-tls-util",
  "mz-tracing",
@@ -9004,6 +9006,18 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "mz-storage-types-base"
+version = "0.0.0"
+dependencies = [
+ "mz-pgcopy",
+ "mz-repr",
+ "mz-storage-types-base",
+ "proptest",
+ "proptest-derive",
+ "serde",
 ]
 
 [[package]]

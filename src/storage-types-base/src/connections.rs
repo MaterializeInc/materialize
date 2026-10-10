@@ -7,18 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![warn(missing_docs)]
+//! Connection types.
 
-//! Shared types for the `mz-compute*` crates
-
-pub mod config;
-pub mod dataflows;
-pub mod dyncfgs;
-pub mod explain;
-pub mod optimizer_metrics;
-pub mod plan;
-pub mod sinks;
-pub mod sources;
-
-/// Identifier of a compute instance.
-pub type ComputeInstanceId = mz_cluster_client::instances::StorageInstanceId;
+pub mod aws;
+pub mod string_or_secret;

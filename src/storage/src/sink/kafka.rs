@@ -113,6 +113,7 @@ use mz_repr::{Datum, DatumVec, Diff, GlobalId, RelationDesc, Row, RowArena, Time
 use mz_storage_client::sink::progress_key::ProgressKey;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
+use mz_storage_types::connections::aws::AwsConnectionExt;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs::{
     KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS, KAFKA_SINK_BATCH_NUM_MESSAGES,

@@ -16,7 +16,7 @@ use mz_repr::{CatalogItemId, GlobalId};
 use tracing::{debug, info};
 
 use crate::connections::ConnectionContext;
-use crate::connections::aws::AwsConnection;
+use crate::connections::aws::{AwsConnection, AwsConnectionExt};
 use crate::sinks::S3UploadInfo;
 
 /// Performs preflight checks for a copy to operation.

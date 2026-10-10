@@ -12,8 +12,8 @@
 use mz_expr::{ColumnOrder, MfpPlan};
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc, Timestamp};
-use mz_storage_types::connections::aws::AwsConnection;
-use mz_storage_types::sinks::S3UploadInfo;
+use mz_storage_types_base::connections::aws::AwsConnection;
+use mz_storage_types_base::sinks::S3UploadInfo;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 

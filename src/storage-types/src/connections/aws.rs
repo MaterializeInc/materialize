@@ -26,8 +26,9 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::task::AbortOnDropHandle;
 use mz_repr::{CatalogItemId, GlobalId};
-#[cfg(any(test, feature = "proptest"))]
-use proptest_derive::Arbitrary;
+pub use mz_storage_types_base::connections::aws::{
+    AwsAssumeRole, AwsAuth, AwsConnection, AwsCredentials,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::watch;
@@ -42,22 +43,8 @@ use crate::controller::AlterError;
 use crate::dyncfgs;
 use crate::{
     configuration::StorageConfiguration,
-    connections::{ConnectionContext, StringOrSecret},
+    connections::{ConnectionContext, StringOrSecretExt},
 };
-
-/// AWS connection configuration.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
-pub struct AwsConnection {
-    pub auth: AwsAuth,
-    /// The AWS region to use.
-    ///
-    /// Uses the default region (looking at env vars, config files, etc) if not
-    /// provided.
-    pub region: Option<String>,
-    /// The custom AWS endpoint to use, if any.
-    pub endpoint: Option<String>,
-}
 
 impl AlterCompatible for AwsConnection {
     fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
@@ -66,106 +53,76 @@ impl AlterCompatible for AwsConnection {
     }
 }
 
-/// Describes how to authenticate with AWS.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
-pub enum AwsAuth {
-    /// Authenticate with an access key.
-    Credentials(AwsCredentials),
-    //// Authenticate via assuming an IAM role.
-    AssumeRole(AwsAssumeRole),
+/// Loads a credentials provider with the configured credentials.
+async fn load_static_credentials_provider(
+    credentials: &AwsCredentials,
+    connection_context: &ConnectionContext,
+    // Whether or not to do IO in a separate Tokio task.
+    in_task: InTask,
+) -> Result<impl ProvideCredentials + use<>, anyhow::Error> {
+    let secrets_reader = &connection_context.secrets_reader;
+    Ok(Credentials::from_keys(
+        credentials
+            .access_key_id
+            // We will already be contained within a tokio task from `load_sdk_config`.
+            .get_string(in_task, secrets_reader)
+            .await
+            .map_err(|_| {
+                anyhow!("internal error: failed to read access key ID from secret store")
+            })?,
+        connection_context
+            .secrets_reader
+            .read_string(credentials.secret_access_key)
+            .await
+            .map_err(|_| {
+                anyhow!("internal error: failed to read secret access key from secret store")
+            })?,
+        match &credentials.session_token {
+            Some(t) => {
+                let t = t.get_string(in_task, secrets_reader).await.map_err(|_| {
+                    anyhow!("internal error: failed to read session token from secret store")
+                })?;
+                Some(t)
+            }
+            None => None,
+        },
+    ))
 }
 
-/// AWS credentials to access an AWS account using user access keys.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
-pub struct AwsCredentials {
-    /// The AWS API Access Key required to connect to the AWS account.
-    pub access_key_id: StringOrSecret,
-    /// The Secret Access Key required to connect to the AWS account.
-    pub secret_access_key: CatalogItemId,
-    /// Optional session token to connect to the AWS account.
-    pub session_token: Option<StringOrSecret>,
+/// Loads a credentials provider that will assume the specified role
+/// with the appropriate external ID.
+///
+/// `sts_connect_timeout`, if set, replaces the AWS SDK's default connect timeout.
+async fn load_assume_role_credentials_provider(
+    assume_role: &AwsAssumeRole,
+    connection_context: &ConnectionContext,
+    connection_id: CatalogItemId,
+    sts_connect_timeout: Option<Duration>,
+) -> Result<impl ProvideCredentials + use<>, anyhow::Error> {
+    let external_id = assume_role
+        .external_id(connection_context, connection_id)
+        .with_context(|| {
+            format!(
+                "failed to compute external ID for AWS AssumeRole connection {} (role arn {})",
+                connection_id, assume_role.arn
+            )
+        })?;
+    // It's okay to use `dangerously_load_credentials_provider` here, as
+    // this is the method that provides a safe wrapper by forcing use of the
+    // correct external ID.
+    dangerously_load_credentials_provider(
+        assume_role,
+        connection_context,
+        connection_id,
+        Some(external_id),
+        sts_connect_timeout,
+    )
+    .await
 }
 
-impl AwsCredentials {
-    /// Loads a credentials provider with the configured credentials.
-    async fn load_credentials_provider(
-        &self,
-        connection_context: &ConnectionContext,
-        // Whether or not to do IO in a separate Tokio task.
-        in_task: InTask,
-    ) -> Result<impl ProvideCredentials + use<>, anyhow::Error> {
-        let secrets_reader = &connection_context.secrets_reader;
-        Ok(Credentials::from_keys(
-            self.access_key_id
-                // We will already be contained within a tokio task from `load_sdk_config`.
-                .get_string(in_task, secrets_reader)
-                .await
-                .map_err(|_| {
-                    anyhow!("internal error: failed to read access key ID from secret store")
-                })?,
-            connection_context
-                .secrets_reader
-                .read_string(self.secret_access_key)
-                .await
-                .map_err(|_| {
-                    anyhow!("internal error: failed to read secret access key from secret store")
-                })?,
-            match &self.session_token {
-                Some(t) => {
-                    let t = t.get_string(in_task, secrets_reader).await.map_err(|_| {
-                        anyhow!("internal error: failed to read session token from secret store")
-                    })?;
-                    Some(t)
-                }
-                None => None,
-            },
-        ))
-    }
-}
-
-/// Describes an AWS IAM role to assume.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
-pub struct AwsAssumeRole {
-    /// The Amazon Resource Name of the role to assume.
-    pub arn: String,
-    /// The optional session name for the session.
-    pub session_name: Option<String>,
-}
-
-impl AwsAssumeRole {
-    /// Loads a credentials provider that will assume the specified role
-    /// with the appropriate external ID.
-    ///
-    /// `sts_connect_timeout`, if set, replaces the AWS SDK's default connect timeout.
-    async fn load_credentials_provider(
-        &self,
-        connection_context: &ConnectionContext,
-        connection_id: CatalogItemId,
-        sts_connect_timeout: Option<Duration>,
-    ) -> Result<impl ProvideCredentials + use<>, anyhow::Error> {
-        let external_id = self
-            .external_id(connection_context, connection_id)
-            .with_context(|| {
-                format!(
-                    "failed to compute external ID for AWS AssumeRole connection {} (role arn {})",
-                    connection_id, self.arn
-                )
-            })?;
-        // It's okay to use `dangerously_load_credentials_provider` here, as
-        // this is the method that provides a safe wrapper by forcing use of the
-        // correct external ID.
-        self.dangerously_load_credentials_provider(
-            connection_context,
-            connection_id,
-            Some(external_id),
-            sts_connect_timeout,
-        )
-        .await
-    }
-
+/// Behavior of [`AwsAssumeRole`] that needs the connection context.
+#[async_trait::async_trait]
+pub trait AwsAssumeRoleExt {
     /// Returns a provider that serves cached credentials for this role,
     /// kept fresh by a background task that assumes the role ahead of expiry.
     ///
@@ -174,7 +131,32 @@ impl AwsAssumeRole {
     ///
     /// The provider's callers wait only while the first fetch is still in flight.
     /// If fetching has failed and no unexpired credentials remain, callers receive an error.
-    pub async fn prefetch_credentials(
+    async fn prefetch_credentials(
+        &self,
+        connection_context: &ConnectionContext,
+        connection_id: CatalogItemId,
+        configs: &ConfigSet,
+        diagnostic_label: String,
+    ) -> Result<SharedCredentialsProvider, anyhow::Error>;
+
+    /// Returns the external ID that the role's trust policy must require.
+    fn external_id(
+        &self,
+        connection_context: &ConnectionContext,
+        connection_id: CatalogItemId,
+    ) -> Result<String, anyhow::Error>;
+
+    /// Returns an example trust policy for the role.
+    fn example_trust_policy(
+        &self,
+        connection_context: &ConnectionContext,
+        connection_id: CatalogItemId,
+    ) -> Result<serde_json::Value, anyhow::Error>;
+}
+
+#[async_trait::async_trait]
+impl AwsAssumeRoleExt for AwsAssumeRole {
+    async fn prefetch_credentials(
         &self,
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,
@@ -195,16 +177,20 @@ impl AwsAssumeRole {
             );
             sts_connect_timeout = default;
         }
-        let provider = self
-            .load_credentials_provider(connection_context, connection_id, Some(sts_connect_timeout))
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to initialize AssumeRole credential provider for \
-                     connection {} (role arn {})",
-                    connection_id, self.arn
-                )
-            })?;
+        let provider = load_assume_role_credentials_provider(
+            self,
+            connection_context,
+            connection_id,
+            Some(sts_connect_timeout),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "failed to initialize AssumeRole credential provider for \
+                 connection {} (role arn {})",
+                connection_id, self.arn
+            )
+        })?;
         Ok(SharedCredentialsProvider::new(CredentialPrefetcher::new(
             SharedCredentialsProvider::new(provider),
             sts_connect_timeout,
@@ -212,82 +198,11 @@ impl AwsAssumeRole {
         )))
     }
 
-    /// DANGEROUS: only for internal use!
-    ///
-    /// Like `load_credentials_provider`, but accepts an arbitrary external ID.
-    /// Only for use in the internal implementation of AWS connections. Using
-    /// this method incorrectly can result in violating our AWS security
-    /// requirements.
-    async fn dangerously_load_credentials_provider(
-        &self,
-        connection_context: &ConnectionContext,
-        connection_id: CatalogItemId,
-        external_id: Option<String>,
-        sts_connect_timeout: Option<Duration>,
-    ) -> Result<impl ProvideCredentials + use<>, anyhow::Error> {
-        let Some(aws_connection_role_arn) = &connection_context.aws_connection_role_arn else {
-            bail!(
-                "internal error: no AWS connection role configured while loading AssumeRole \
-                 credentials for connection {} (role arn {})",
-                connection_id,
-                self.arn
-            );
-        };
-
-        // Load the default SDK configuration to use for the assume role
-        // operations themselves.
-        let mut loader = mz_aws_util::defaults();
-        if let Some(timeout) = sts_connect_timeout {
-            // Replaces the SDK's 3.1 second connect-timeout default. The SDK
-            // classifies timed-out connections as transient and retries them
-            // itself.
-            loader =
-                loader.timeout_config(TimeoutConfig::builder().connect_timeout(timeout).build());
-        }
-        let assume_role_sdk_config = loader.load().await;
-
-        // The default session name identifies the environment and the
-        // connection.
-        let default_session_name =
-            format!("{}-{}", connection_context.environment_id, connection_id);
-
-        // First we create a credentials provider that will assume the "jump
-        // role" provided to this Materialize environment. This is the role that
-        // we've told the end user to allow in their role trust policy. No need
-        // to specify the external ID here as we're still within the Materialize
-        // sphere of trust. The ambient AWS credentials provided to this
-        // environment will be provided via the default credentials change and
-        // allow us to assume the jump role. We always use the default session
-        // name here, so that we can identify the specific environment and
-        // connection ID that initiated the session in our internal CloudTrail
-        // logs. This session isn't visible to the end user.
-        let jump_credentials = AssumeRoleProvider::builder(aws_connection_role_arn)
-            .configure(&assume_role_sdk_config)
-            .session_name(default_session_name.clone())
-            .build()
-            .await;
-
-        // Then we create the provider that will assume the end user's role.
-        // Here, we *must* install the external ID, as we're using the jump role
-        // to hop into the end user's AWS account, and the external ID is the
-        // only thing that allows them to limit their trust of the jump role to
-        // this specific Materialize environment and AWS connection. We also
-        // respect the user's configured session name, if any, as this is the
-        // session that will be visible to them.
-        let mut credentials = AssumeRoleProvider::builder(&self.arn)
-            .configure(&assume_role_sdk_config)
-            .session_name(self.session_name.clone().unwrap_or(default_session_name));
-        if let Some(external_id) = external_id {
-            credentials = credentials.external_id(external_id);
-        }
-        Ok(credentials.build_from_provider(jump_credentials).await)
-    }
-
     // NOTE: the `mz_internal.mz_aws_connections` builtin materialized view
     // reconstructs this `mz_<prefix>_<conn>` format in SQL (see
     // MZ_AWS_CONNECTIONS in src/catalog/src/builtin/mz_internal.rs). Keep the
     // two in sync.
-    pub fn external_id(
+    fn external_id(
         &self,
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,
@@ -302,7 +217,7 @@ impl AwsAssumeRole {
     // reconstructs this trust-policy JSON with `jsonb_build_object` (see
     // MZ_AWS_CONNECTIONS in src/catalog/src/builtin/mz_internal.rs). Keep the
     // structure (keys, nesting) in sync.
-    pub fn example_trust_policy(
+    fn example_trust_policy(
         &self,
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,
@@ -332,23 +247,110 @@ impl AwsAssumeRole {
     }
 }
 
-impl AwsConnection {
-    /// Returns a string describing the authentication method of this connection, for use in error messages.
-    pub(crate) fn auth_method(&self) -> &'static str {
-        match self.auth {
-            AwsAuth::Credentials(_) => "credentials",
-            AwsAuth::AssumeRole(_) => "assume_role",
-        }
-    }
+/// DANGEROUS: only for internal use!
+///
+/// Like `load_assume_role_credentials_provider`, but accepts an arbitrary external ID.
+/// Only for use in the internal implementation of AWS connections. Using
+/// this method incorrectly can result in violating our AWS security
+/// requirements.
+async fn dangerously_load_credentials_provider(
+    assume_role: &AwsAssumeRole,
+    connection_context: &ConnectionContext,
+    connection_id: CatalogItemId,
+    external_id: Option<String>,
+    sts_connect_timeout: Option<Duration>,
+) -> Result<impl ProvideCredentials + use<>, anyhow::Error> {
+    let Some(aws_connection_role_arn) = &connection_context.aws_connection_role_arn else {
+        bail!(
+            "internal error: no AWS connection role configured while loading AssumeRole \
+             credentials for connection {} (role arn {})",
+            connection_id,
+            assume_role.arn
+        );
+    };
 
+    // Load the default SDK configuration to use for the assume role
+    // operations themselves.
+    let mut loader = mz_aws_util::defaults();
+    if let Some(timeout) = sts_connect_timeout {
+        // Replaces the SDK's 3.1 second connect-timeout default. The SDK
+        // classifies timed-out connections as transient and retries them
+        // itself.
+        loader = loader.timeout_config(TimeoutConfig::builder().connect_timeout(timeout).build());
+    }
+    let assume_role_sdk_config = loader.load().await;
+
+    // The default session name identifies the environment and the
+    // connection.
+    let default_session_name = format!("{}-{}", connection_context.environment_id, connection_id);
+
+    // First we create a credentials provider that will assume the "jump
+    // role" provided to this Materialize environment. This is the role that
+    // we've told the end user to allow in their role trust policy. No need
+    // to specify the external ID here as we're still within the Materialize
+    // sphere of trust. The ambient AWS credentials provided to this
+    // environment will be provided via the default credentials change and
+    // allow us to assume the jump role. We always use the default session
+    // name here, so that we can identify the specific environment and
+    // connection ID that initiated the session in our internal CloudTrail
+    // logs. This session isn't visible to the end user.
+    let jump_credentials = AssumeRoleProvider::builder(aws_connection_role_arn)
+        .configure(&assume_role_sdk_config)
+        .session_name(default_session_name.clone())
+        .build()
+        .await;
+
+    // Then we create the provider that will assume the end user's role.
+    // Here, we *must* install the external ID, as we're using the jump role
+    // to hop into the end user's AWS account, and the external ID is the
+    // only thing that allows them to limit their trust of the jump role to
+    // this specific Materialize environment and AWS connection. We also
+    // respect the user's configured session name, if any, as this is the
+    // session that will be visible to them.
+    let mut credentials = AssumeRoleProvider::builder(&assume_role.arn)
+        .configure(&assume_role_sdk_config)
+        .session_name(
+            assume_role
+                .session_name
+                .clone()
+                .unwrap_or(default_session_name),
+        );
+    if let Some(external_id) = external_id {
+        credentials = credentials.external_id(external_id);
+    }
+    Ok(credentials.build_from_provider(jump_credentials).await)
+}
+
+/// Behavior of [`AwsConnection`] that needs the AWS SDK.
+#[async_trait::async_trait]
+pub trait AwsConnectionExt {
     /// The custom DNS resolver wired into the AWS HTTP client is only
     /// invoked for hostnames. IP-literal endpoints (e.g. `http://127.0.0.1`)
     /// bypass it. Validate IP literals here so they cannot circumvent
     /// the global-address enforcement.
-    pub(crate) fn validate_endpoint(
+    fn validate_endpoint(&self, enforce_external_addresses: bool) -> Result<(), anyhow::Error>;
+
+    /// Loads the AWS SDK configuration with the configuration specified on this
+    /// object.
+    async fn load_sdk_config(
         &self,
+        connection_context: &ConnectionContext,
+        connection_id: CatalogItemId,
+        in_task: InTask,
         enforce_external_addresses: bool,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<SdkConfig, anyhow::Error>;
+
+    /// Validates the connection by calling STS with it.
+    async fn validate(
+        &self,
+        id: CatalogItemId,
+        storage_configuration: &StorageConfiguration,
+    ) -> Result<(), AwsConnectionValidationError>;
+}
+
+#[async_trait::async_trait]
+impl AwsConnectionExt for AwsConnection {
+    fn validate_endpoint(&self, enforce_external_addresses: bool) -> Result<(), anyhow::Error> {
         if enforce_external_addresses
             && let Some(endpoint) = &self.endpoint
             && let Ok(url) = url::Url::parse(endpoint)
@@ -358,9 +360,7 @@ impl AwsConnection {
         Ok(())
     }
 
-    /// Loads the AWS SDK configuration with the configuration specified on this
-    /// object.
-    pub async fn load_sdk_config(
+    async fn load_sdk_config(
         &self,
         connection_context: &ConnectionContext,
         connection_id: CatalogItemId,
@@ -374,8 +374,7 @@ impl AwsConnection {
         async move {
             let credentials = match &this.auth {
                 AwsAuth::Credentials(credentials) => SharedCredentialsProvider::new(
-                    credentials
-                        .load_credentials_provider(&connection_context, InTask::No)
+                    load_static_credentials_provider(credentials, &connection_context, InTask::No)
                         .await
                         .with_context(|| {
                             format!(
@@ -385,19 +384,23 @@ impl AwsConnection {
                         })?,
                 ),
                 AwsAuth::AssumeRole(assume_role) => SharedCredentialsProvider::new(
-                    assume_role
-                        .load_credentials_provider(&connection_context, connection_id, None)
-                        .await
-                        .with_context(|| {
-                            format!(
-                                "failed to initialize AssumeRole credential provider for \
-                                 connection {} (role arn {})",
-                                connection_id, assume_role.arn
-                            )
-                        })?,
+                    load_assume_role_credentials_provider(
+                        assume_role,
+                        &connection_context,
+                        connection_id,
+                        None,
+                    )
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "failed to initialize AssumeRole credential provider for \
+                             connection {} (role arn {})",
+                            connection_id, assume_role.arn
+                        )
+                    })?,
                 ),
             };
-            this.load_sdk_config_from_credentials(credentials, enforce_external_addresses)
+            load_sdk_config_from_credentials(&this, credentials, enforce_external_addresses)
                 .await
                 .with_context(|| {
                     format!(
@@ -414,26 +417,7 @@ impl AwsConnection {
         .await
     }
 
-    async fn load_sdk_config_from_credentials(
-        &self,
-        credentials: impl ProvideCredentials + 'static,
-        enforce_external_addresses: bool,
-    ) -> Result<SdkConfig, anyhow::Error> {
-        let mut loader = mz_aws_util::defaults().credentials_provider(credentials);
-        if let Some(region) = &self.region {
-            loader = loader.region(Region::new(region.clone()));
-        }
-        if let Some(endpoint) = &self.endpoint {
-            self.validate_endpoint(enforce_external_addresses)?;
-            loader = loader.http_client(mz_aws_util::http_client_with_resolver(
-                enforce_external_addresses,
-            ));
-            loader = loader.endpoint_url(endpoint);
-        }
-        Ok(loader.load().await)
-    }
-
-    pub(crate) async fn validate(
+    async fn validate(
         &self,
         id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
@@ -458,17 +442,17 @@ impl AwsConnection {
             // role rejects `AssumeRole` requests that don't specify an
             // external ID.
             let external_id = None;
-            let credentials = assume_role
-                .dangerously_load_credentials_provider(
-                    &storage_configuration.connection_context,
-                    id,
-                    external_id,
-                    None,
-                )
-                .await?;
-            let aws_config = self
-                .load_sdk_config_from_credentials(credentials, enforce_external_addresses)
-                .await?;
+            let credentials = dangerously_load_credentials_provider(
+                assume_role,
+                &storage_configuration.connection_context,
+                id,
+                external_id,
+                None,
+            )
+            .await?;
+            let aws_config =
+                load_sdk_config_from_credentials(self, credentials, enforce_external_addresses)
+                    .await?;
             let sts_client = aws_sdk_sts::Client::new(&aws_config);
             if sts_client.get_caller_identity().send().await.is_ok() {
                 return Err(AwsConnectionValidationError::RoleDoesNotRequireExternalId {
@@ -479,10 +463,25 @@ impl AwsConnection {
 
         Ok(())
     }
+}
 
-    pub(crate) fn validate_by_default(&self) -> bool {
-        false
+async fn load_sdk_config_from_credentials(
+    connection: &AwsConnection,
+    credentials: impl ProvideCredentials + 'static,
+    enforce_external_addresses: bool,
+) -> Result<SdkConfig, anyhow::Error> {
+    let mut loader = mz_aws_util::defaults().credentials_provider(credentials);
+    if let Some(region) = &connection.region {
+        loader = loader.region(Region::new(region.clone()));
     }
+    if let Some(endpoint) = &connection.endpoint {
+        connection.validate_endpoint(enforce_external_addresses)?;
+        loader = loader.http_client(mz_aws_util::http_client_with_resolver(
+            enforce_external_addresses,
+        ));
+        loader = loader.endpoint_url(endpoint);
+    }
+    Ok(loader.load().await)
 }
 
 /// An error returned by `AwsConnection::validate`.

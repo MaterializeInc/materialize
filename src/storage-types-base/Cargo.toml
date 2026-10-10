@@ -1,0 +1,26 @@
+[package]
+name = "mz-storage-types-base"
+description = "Plain data types for the `mz-storage*` crates that need no external system clients"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+mz-pgcopy = { path = "../pgcopy" }
+mz-repr = { path = "../repr" }
+proptest = { workspace = true, optional = true }
+proptest-derive = { workspace = true, optional = true }
+serde.workspace = true
+
+[dev-dependencies]
+mz-storage-types-base = { path = ".", features = ["proptest"] }
+proptest.workspace = true
+proptest-derive.workspace = true
+
+[features]
+default = []
+proptest = ["dep:proptest", "dep:proptest-derive", "mz-repr/proptest"]

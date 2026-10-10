@@ -2626,7 +2626,7 @@ pub static MZ_AWS_CONNECTIONS: LazyLock<BuiltinMaterializedView> = LazyLock::new
             ),
         ]),
         // `external_id` reproduces `AwsAssumeRole::external_id` and
-        // `example_trust_policy` reproduces `AwsAssumeRole::example_trust_policy`
+        // `example_trust_policy` reproduces `AwsAssumeRoleExt::example_trust_policy`
         // (both in src/storage-types/src/connections/aws.rs). Keep them in sync.
         sql: "
 IN CLUSTER mz_catalog_server
