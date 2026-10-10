@@ -69,12 +69,12 @@ flow control when assessing a repair at that boundary.
 Do not attribute these to the acknowledgement bug or claim lifecycle changes solve
 them without correlated evidence. Detailed captures and verification are in the PR.
 
-The zero-row OCC fixture can miss its required oracle window. Parking a group
-committer does not freeze independent catalog completion. Preserve the zero-row
-response-ordering promise at its owning boundary, not a larger sleep or a passing
-non-witness assertion. Review found that a small rendezvous replacement can also
-miss the window. Retirement with an explicit coverage gap versus broader test
-control awaits a decision. No fixture or production semantics have changed.
+The brittle zero-row OCC timing fixture is retired by design decision. Coverage
+no longer directly tests response ordering in the delayed-oracle race. The
+production linearization check and existing focused tests remain required.
+Parking a group committer does not freeze independent catalog completion. Do not
+replace the fixture with a non-witness pass, longer sleeps or a larger M2
+synchronization harness. This is a testing-scope limit, not a correctness exemption.
 
 Continue the parallel-workload repairs. Repeated catalog conflicts amplify
 client read-protection publication and ordinary DDL into long coordinator-owned

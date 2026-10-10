@@ -566,11 +566,9 @@ impl GroupCommitter {
         // table's upper, but its completion has not yet been applied to the
         // oracle. Concurrent catalog commits may already have advanced the oracle
         // beyond this timestamp. Reads following Persist can observe the write
-        // before its acknowledgement, so a test can hold that window open here.
-        // Every txns-shard write parks here while armed,
-        // including the keepalives that advance table uppers, so arm it with a
-        // bounded `sleep` rather than a `pause`. Used by
-        // workflow_test_occ_zero_row_write_linearization.
+        // before its acknowledgement. This hook delays this writer's completion,
+        // not independent catalog completion. It applies to every txns-shard write,
+        // including keepalives that advance table uppers.
         fail::fail_point!("group_commit_before_apply_write");
 
         self.oracle.apply_write(write_ts.timestamp).await;
