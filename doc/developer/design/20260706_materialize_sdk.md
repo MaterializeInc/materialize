@@ -499,11 +499,15 @@ plans it again if the catalog changed in between (`verify_portal` in
 or an id that no longer exists, fails with `XX000`
 (`src/adapter/src/error.rs:1001`) at either point, the same code a dataflow
 error has, and changed columns fail at the first `FETCH` with `0A000`
-(`ChangedPlan`, `src/adapter/src/error.rs:942`). Any error before the cursor's
-first progress row is therefore a start error: it sends the SDK back to the
-name lookup and the table above. The one exception is `HistoryLost`, which keeps
-its own classification. Errors after the first progress row are classified by
-"Typed errors". `42704` arrives only for a drop during a running stream.
+(`ChangedPlan`, `src/adapter/src/error.rs:942`). So an `XX000` other than the
+result-size error, or a `0A000`, before the cursor's first progress row is a
+start error: the SDK repeats the name lookup and classifies the change through
+the table above. If the object is unchanged, the original error keeps its own
+classification. Every other error before the first progress row, such as a
+dropped connection, a cancel, expired credentials, or `HistoryLost`, is
+classified by "Typed errors" as it would be later. After the first progress row,
+an `XX000` is a dataflow error. `42704` arrives only for a drop during a running
+stream.
 
 A name swap needs a re-snapshot even when the new object's history covers the
 checkpoint. The target holds the old object's state at `F - 1`, and resuming the
@@ -594,10 +598,12 @@ If one member's history no longer covers the cut and the history-loss policy is
 `resnapshot`, recovery depends on the target. A target that commits data and
 checkpoint in one transaction follows the recipe in #38468. The SDK
 re-snapshots each expired member at a new timestamp `t_i` while the others
-resume from the cut, re-establishes the cut at `t*`, the largest `t_i`, and
-stages every stream in the target under a new generation until its progress
-passes `t*`. It then makes in one step each re-snapshotted member's snapshot and
-every member's changes through `t*` visible, and sweeps older generations. The
+resume from the cut, and re-establishes the cut at `t*`, the largest `t_i`.
+Each re-snapshotted member writes its snapshot under a new generation scoped to
+that member. The other members stage their changes as ordinary changes, not as
+replacement state. In one step at `t*`, the SDK makes the new snapshots and every
+member's changes through `t*` visible and sweeps older generations of the
+re-snapshotted members only, so unchanged rows of the other members stay. The
 live members stage every change from the old cut to `t*`, which spans the whole
 outage, and the catch-up can still hit `max_result_size` (see "Buffering
 limits").
@@ -1330,10 +1336,11 @@ October work, because the doc picks a safe default for each.
    say how native embedding treats a patch that leaves the text attribute out, or
    a document without text, such as a tombstone, so the sink build has to test
    both first.
-5. turbopuffer visibility. The sink documents convergence after each batch.
-   Owner: DevEx, with the first search users. Do readers need a consistent view
-   while a batch is written? That would need versioned documents and a
-   visible-cut pointer that readers filter on.
+5. turbopuffer visibility. The sink documents convergence: once it has caught up
+   past every write and turbopuffer has indexed them, each namespace equals the
+   cut at the committed frontier. Owner: DevEx, with the first search users. Do
+   readers need a consistent view before that? That would need versioned
+   documents and a visible-cut pointer that readers filter on.
 6. Repository home. The doc proposes keeping the packages under `misc/` in this
    repository. Owner: DevEx with the engineering leads, once the spec settles:
    do the packages move to their own repository, keeping the protocol core,
