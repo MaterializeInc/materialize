@@ -233,7 +233,7 @@ export function buildSqlQueryHandler(
   mockQueries: Array<SQLQuery>,
   { waitTimeMs }: SqlHandlerOptions = {},
 ) {
-  return http.post("*/api/sql", async (info) => {
+  return http.post<never, ExtendedRequest>("*/api/sql", async (info) => {
     const results: SqlResult[] = [];
 
     const body = await info.request.clone().json();
