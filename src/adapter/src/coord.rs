@@ -426,11 +426,6 @@ pub enum Message {
         span: Span,
         stage: CreateMaterializedViewStage,
     },
-    SubscribeStageReady {
-        ctx: ExecuteContext,
-        span: Span,
-        stage: SubscribeStage,
-    },
     IntrospectionSubscribeStageReady {
         span: Span,
         stage: IntrospectionSubscribeStage,
@@ -560,7 +555,6 @@ impl Message {
             Message::CreateMaterializedViewStageReady { .. } => {
                 "create_materialized_view_stage_ready"
             }
-            Message::SubscribeStageReady { .. } => "subscribe_stage_ready",
             Message::IntrospectionSubscribeStageReady { .. } => {
                 "introspection_subscribe_stage_ready"
             }
@@ -918,79 +912,6 @@ pub struct CreateMaterializedViewExplain {
     validity: PlanValidity,
     plan: plan::CreateMaterializedViewPlan,
     df_meta: DataflowMetainfo,
-    explain_ctx: ExplainPlanContext,
-}
-
-#[derive(Debug)]
-pub enum SubscribeStage {
-    OptimizeMir(SubscribeOptimizeMir),
-    LinearizeTimestamp(SubscribeLinearizeTimestamp),
-    TimestampOptimizeLir(SubscribeTimestampOptimizeLir),
-    Finish(SubscribeFinish),
-    Explain(SubscribeExplain),
-}
-
-#[derive(Debug)]
-pub struct SubscribeOptimizeMir {
-    validity: PlanValidity,
-    plan: plan::SubscribePlan,
-    timeline: TimelineContext,
-    dependency_ids: BTreeSet<GlobalId>,
-    cluster_id: ComputeInstanceId,
-    replica_id: Option<ReplicaId>,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct SubscribeLinearizeTimestamp {
-    validity: PlanValidity,
-    plan: plan::SubscribePlan,
-    timeline: TimelineContext,
-    optimizer: optimize::subscribe::Optimizer,
-    global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
-    dependency_ids: BTreeSet<GlobalId>,
-    replica_id: Option<ReplicaId>,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct SubscribeTimestampOptimizeLir {
-    validity: PlanValidity,
-    plan: plan::SubscribePlan,
-    timeline: TimelineContext,
-    optimizer: optimize::subscribe::Optimizer,
-    global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
-    dependency_ids: BTreeSet<GlobalId>,
-    replica_id: Option<ReplicaId>,
-    /// The linearized read timestamp, read off the coordinator loop in the
-    /// preceding `LinearizeTimestamp` stage. `None` when no linearized read is
-    /// needed.
-    oracle_read_ts: Option<Timestamp>,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct SubscribeFinish {
-    validity: PlanValidity,
-    cluster_id: ComputeInstanceId,
-    replica_id: Option<ReplicaId>,
-    plan: plan::SubscribePlan,
-    global_lir_plan: optimize::subscribe::GlobalLirPlan,
-    dependency_ids: BTreeSet<GlobalId>,
-}
-
-#[derive(Debug)]
-pub struct SubscribeExplain {
-    validity: PlanValidity,
-    optimizer: optimize::subscribe::Optimizer,
-    df_meta: DataflowMetainfo,
-    cluster_id: ComputeInstanceId,
     explain_ctx: ExplainPlanContext,
 }
 

@@ -110,7 +110,7 @@ use crate::coord::{
     AlterConnectionValidationReady, AlterMaterializedViewReadyContext, AlterSinkReadyContext,
     Coordinator, CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext, Message,
     NetworkPolicyError, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, StageResult,
-    Staged, StagedContext, TargetCluster, WatchSetResponse, validate_ip_with_policy_rules,
+    Staged, StagedContext, WatchSetResponse, validate_ip_with_policy_rules,
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
@@ -2427,7 +2427,6 @@ impl Coordinator {
         &mut self,
         ctx: ExecuteContext,
         plan: plan::ExplainPlanPlan,
-        target_cluster: TargetCluster,
     ) {
         match &plan.explainee {
             plan::Explainee::Statement(stmt) => match stmt {
@@ -2440,16 +2439,14 @@ impl Coordinator {
                 plan::ExplaineeStatement::CreateIndex { .. } => {
                     self.explain_create_index(ctx, plan).await;
                 }
-                stmt @ plan::ExplaineeStatement::Select { .. } => {
+                stmt @ (plan::ExplaineeStatement::Select { .. }
+                | plan::ExplaineeStatement::Subscribe { .. }) => {
                     let msg = format!(
                         "EXPLAIN of a {} reached the coordinator despite frontend routing",
                         plan::ExplaineeStatementKind::from(stmt)
                     );
                     soft_panic_or_log!("{msg}");
                     ctx.retire(Err(AdapterError::Internal(msg)));
-                }
-                plan::ExplaineeStatement::Subscribe { .. } => {
-                    self.explain_subscribe(ctx, plan, target_cluster).await;
                 }
             },
             plan::Explainee::View(_) => {

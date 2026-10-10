@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use itertools::Itertools;
-use mz_adapter_types::dyncfgs::ENABLE_FRONTEND_SUBSCRIBES;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -31,7 +30,7 @@ use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::Params;
 use mz_sql::plan::{
     self, Explainee, ExplaineeStatement, Plan, QueryWhen, SelectPlan, SideEffectingFunc,
-    SubscribePlan,
+    SubscribeFrom, SubscribePlan,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -133,17 +132,16 @@ impl PeekClient {
                     // We handle `Plan::ShowColumns` specially in `try_frontend_peek_inner`.
                 }
                 Statement::ExplainPlan(explain_stmt) => {
-                    // Only handle ExplainPlan for SELECT statements.
+                    // Only handle ExplainPlan for SELECT and SUBSCRIBE statements.
                     // We don't want to handle e.g. EXPLAIN CREATE MATERIALIZED VIEW here, because that
                     // requires purification before planning, which the frontend peek sequencing doesn't
                     // do.
                     match &explain_stmt.explainee {
-                        mz_sql_parser::ast::Explainee::Select(..) => {
-                            // This is a SELECT, continue
-                        }
+                        mz_sql_parser::ast::Explainee::Select(..)
+                        | mz_sql_parser::ast::Explainee::Subscribe(..) => {}
                         _ => {
                             debug!(
-                                "Bailing out from try_frontend_peek, because EXPLAIN is not for a SELECT query"
+                                "Bailing out from try_frontend_peek, because EXPLAIN is not for a SELECT or SUBSCRIBE"
                             );
                             return Ok(None);
                         }
@@ -175,11 +173,7 @@ impl PeekClient {
                     }
                 }
 
-                Statement::Subscribe(_)
-                    if ENABLE_FRONTEND_SUBSCRIBES.get(catalog.system_config().dyncfgs()) =>
-                {
-                    // We have a subscribe statement to process; continue.
-                }
+                Statement::Subscribe(_) => {}
                 _ => {
                     debug!(
                         "Bailing out from try_frontend_peek, because statement type is not supported"
@@ -490,6 +484,27 @@ impl PeekClient {
                 return Ok(Some(response));
             }
             Plan::Subscribe(subscribe) => (QueryPlan::Subscribe(subscribe), ExplainContext::None),
+            Plan::ExplainPlan(plan::ExplainPlanPlan {
+                stage,
+                format,
+                config,
+                explainee: Explainee::Statement(ExplaineeStatement::Subscribe { broken, plan }),
+            }) => {
+                let desc = match &plan.from {
+                    SubscribeFrom::Id(_) => None,
+                    SubscribeFrom::Query { desc, .. } => Some(desc.clone()),
+                };
+                let explain_ctx = ExplainContext::Plan(ExplainPlanContext {
+                    broken: *broken,
+                    config: config.clone(),
+                    format: *format,
+                    stage: *stage,
+                    replan: None,
+                    desc,
+                    optimizer_trace: OptimizerTrace::new(stage.paths()),
+                });
+                (QueryPlan::Subscribe(plan), explain_ctx)
+            }
             _ => {
                 // This shouldn't happen because we already checked for this at the AST
                 // level before calling `try_frontend_peek_inner`. The logging takeover has
@@ -850,7 +865,7 @@ impl PeekClient {
         let mut transaction_determination = determination.clone();
         match query_plan {
             QueryPlan::Subscribe { .. } => {
-                if when.is_transactional() {
+                if when.is_transactional() && explain_ctx.needs_cluster() {
                     session.add_transaction_ops(TransactionOps::Subscribe)?;
                 }
             }
@@ -1144,6 +1159,7 @@ impl PeekClient {
                 let plan = plan.clone();
                 let catalog: Arc<Catalog> = Arc::clone(&catalog);
                 let debug_name = format!("subscribe-{}", index_id);
+                let features = optimizer_config.features.clone();
                 let mut optimizer = optimize::subscribe::Optimizer::new(
                     catalog,
                     compute_instance_snapshot.clone(),
@@ -1175,8 +1191,30 @@ impl PeekClient {
                             let local_mir_plan =
                                 global_mir_plan.resolve(Antichain::from_elem(as_of));
 
-                            let global_lir_plan =
-                                optimizer.catch_unwind_optimize(local_mir_plan)?;
+                            let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan);
+                            if let ExplainContext::Plan(explain_ctx) = explain_ctx {
+                                let df_meta = match global_lir_plan {
+                                    Ok(global_lir_plan) => global_lir_plan.unapply().1,
+                                    // EXPLAIN BROKEN: log the error and continue with defaults.
+                                    Err(err) if explain_ctx.broken => {
+                                        tracing::error!(
+                                            "error while handling EXPLAIN statement: {}",
+                                            err
+                                        );
+                                        Default::default()
+                                    }
+                                    Err(err) => return Err(err.into()),
+                                };
+                                return Ok(Execution::ExplainSubscribe {
+                                    df_meta,
+                                    explain_ctx,
+                                    sink_id: optimizer.sink_id(),
+                                    cluster_id: optimizer.cluster_id(),
+                                    features,
+                                    equal_bounds: optimizer.up_to().filter(|up_to| *up_to == as_of),
+                                });
+                            }
+                            let global_lir_plan = global_lir_plan?;
                             let optimization_finished_at = now();
 
                             let (df_desc, df_meta) = global_lir_plan.unapply();
@@ -1248,6 +1286,32 @@ impl PeekClient {
                     explain_ctx,
                     optimizer,
                     insights_ctx,
+                )
+                .await?;
+
+                Ok(Some(ExecuteResponse::SendingRowsImmediate {
+                    rows: Box::new(rows.into_row_iter()),
+                }))
+            }
+            Execution::ExplainSubscribe {
+                df_meta,
+                explain_ctx,
+                sink_id,
+                cluster_id,
+                features,
+                equal_bounds,
+            } => {
+                if let Some(bound) = equal_bounds {
+                    session.add_notice(AdapterNotice::EqualSubscribeBounds { bound });
+                }
+                let rows = coord::sequencer::explain_subscribe_inner(
+                    session,
+                    &catalog,
+                    df_meta,
+                    explain_ctx,
+                    sink_id,
+                    cluster_id,
+                    &features,
                 )
                 .await?;
 
@@ -1715,7 +1779,9 @@ impl PeekClient {
                     "CopyToS3",
                 )
             }
-            Execution::ExplainPlan { .. } | Execution::ExplainPushdown { .. } => {
+            Execution::ExplainPlan { .. }
+            | Execution::ExplainSubscribe { .. }
+            | Execution::ExplainPushdown { .. } => {
                 // No read holds assertions needed for EXPLAIN variants
                 return;
             }
@@ -1818,6 +1884,15 @@ enum Execution {
         explain_ctx: ExplainPlanContext,
         optimizer: optimize::peek::Optimizer,
         insights_ctx: Option<Box<PlanInsightsContext>>,
+    },
+    ExplainSubscribe {
+        df_meta: DataflowMetainfo,
+        explain_ctx: ExplainPlanContext,
+        sink_id: GlobalId,
+        cluster_id: ComputeInstanceId,
+        features: OptimizerFeatures,
+        /// The `UP TO` bound, when it equals the `AS OF`.
+        equal_bounds: Option<Timestamp>,
     },
     ExplainPushdown {
         imports: BTreeMap<GlobalId, mz_expr::MapFilterProject>,
