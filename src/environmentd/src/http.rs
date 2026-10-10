@@ -766,21 +766,14 @@ async fn handle_deployment_retire(
     })
     .await;
     match result {
-        Ok(Ok(true)) => {
-            (StatusCode::OK, Json(json!({"retired": request.generation}))).into_response()
-        }
-        Ok(Ok(false)) => (
+        Ok(true) => (StatusCode::OK, Json(json!({"retired": request.generation}))).into_response(),
+        Ok(false) => (
             StatusCode::CONFLICT,
             Json(json!({"error": "catalog changed; retry retirement of the same generation"})),
         )
             .into_response(),
-        Ok(Err(error)) => (
-            StatusCode::CONFLICT,
-            Json(json!({"error": error.to_string()})),
-        )
-            .into_response(),
         Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::CONFLICT,
             Json(json!({"error": error.to_string()})),
         )
             .into_response(),
