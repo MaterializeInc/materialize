@@ -24,6 +24,7 @@
 #![allow(clippy::needless_borrow)]
 
 use std::cell::RefCell;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -587,11 +588,23 @@ where
     FromTime: SourceTimestamp,
 {
     // Only used within this function, rather than create a comment to explain the fields.
-    struct ExportState<FromTime> {
+    struct ExportState<T, FromTime> {
         id: GlobalId,
         input_index: usize,
+        /// The committed upper that `source_upper` and `applied` reflect.
+        committed_upper: Antichain<T>,
         source_upper: MutableAntichain<FromTime>,
         applied: usize,
+    }
+
+    impl<T: Timestamp, FromTime: Timestamp> ExportState<T, FromTime> {
+        fn reclocked_upper(&self) -> Antichain<FromTime> {
+            if self.committed_upper.is_empty() {
+                Antichain::new()
+            } else {
+                self.source_upper.frontier().to_owned()
+            }
+        }
     }
 
     let (tx, rx) = watch::channel(ResumeUppers {
@@ -614,6 +627,7 @@ where
             ExportState {
                 id: export_id,
                 input_index,
+                committed_upper: Antichain::from_elem(T::minimum()),
                 source_upper: MutableAntichain::new(),
                 applied: 0,
             }
@@ -625,7 +639,7 @@ where
         use timely::progress::ChangeBatch;
         let mut accepted_times: ChangeBatch<(T, FromTime)> = ChangeBatch::new();
         // The upper frontier of the bindings
-        let mut upper = Antichain::from_elem(Timestamp::minimum());
+        let mut bindings_upper = Antichain::from_elem(Timestamp::minimum());
         // Remap bindings not beyond upper that some export has not yet applied, in `into` order.
         // This is a shared queue of remap bindings. A binding is retained until every export has
         // applied it.
@@ -633,6 +647,8 @@ where
         // The number of bindings dropped from the front of `ready_times`, which makes the
         // per-export positions absolute rather than deque indices.
         let mut drained = 0;
+        // Indices of the exports whose reclocked upper may have changed in this invocation.
+        let mut touched = Vec::new();
 
         move |frontiers| {
             // Accept new bindings
@@ -643,39 +659,43 @@ where
                 }));
             });
             // Extract ready bindings
-            let new_upper = frontiers[0].frontier();
-            if PartialOrder::less_than(&upper.borrow(), &new_upper) {
-                upper = new_upper.to_owned();
-                // Drain consolidated accepted times not greater or equal to `upper` into `ready_times`.
-                // Retain accepted times greater or equal to `upper` in
+            let new_bindings_upper = frontiers[0].frontier();
+            let ready_before = ready_times.len();
+            if PartialOrder::less_than(&bindings_upper.borrow(), &new_bindings_upper) {
+                bindings_upper = new_bindings_upper.to_owned();
+                // Drain consolidated accepted times not greater or equal to `bindings_upper` into `ready_times`.
+                // Retain accepted times greater or equal to `bindings_upper` in
                 let mut pending_times = std::mem::take(&mut accepted_times).into_inner();
                 // These should already be sorted, as part of `.into_inner()`, but sort defensively in case.
                 pending_times.sort_unstable_by(|a, b| a.0.cmp(&b.0));
                 for ((into, from), diff) in pending_times.drain(..) {
-                    if !upper.less_equal(&into) {
+                    if !bindings_upper.less_equal(&into) {
                         ready_times.push_back((from, into, diff));
                     } else {
                         accepted_times.update((into, from), diff);
                     }
                 }
             }
+            let bindings_ready = ready_times.len() > ready_before;
 
             // The received times only accumulate correctly for times beyond the as_of.
-            if as_of.iter().all(|t| !upper.less_equal(t)) {
-                let mut resume_uppers = ResumeUppers {
-                    source: Some(Antichain::new()),
-                    exports: BTreeMap::new(),
-                };
+            if as_of.iter().all(|t| !bindings_upper.less_equal(t)) {
+                let mut all_beyond_as_of = true;
                 // The export with the least committed upper. Its reclocked upper is the
                 // source-wide one, because t1 <= t2 => remap[t1] <= remap[t2].
-                let mut least: Option<(T, GlobalId)> = None;
+                let mut least_committed_upper: Option<(T, usize)> = None;
                 let mut min_applied = drained + ready_times.len();
-                for export in exports.iter_mut() {
+                for (index, export) in exports.iter_mut().enumerate() {
                     let committed_upper = frontiers[export.input_index].frontier();
                     if !as_of.iter().all(|t| !committed_upper.less_equal(t)) {
-                        resume_uppers.source = None;
+                        all_beyond_as_of = false;
                         min_applied = min_applied.min(export.applied);
                         continue;
+                    }
+                    let advanced =
+                        PartialOrder::less_than(&export.committed_upper.borrow(), &committed_upper);
+                    if advanced {
+                        export.committed_upper = committed_upper.to_owned();
                     }
                     // We have committed this export up until `committed_upper`. Because we have
                     // required that IntoTime is a total order this will be either a singleton set
@@ -717,38 +737,71 @@ where
                     // down to computing the meet of all the times in `committed_upper` and then
                     // treating that as `t_next` (I think). Until we need to deal with that though
                     // we can just assume TotalOrder.
-                    let reclocked_upper = match committed_upper.as_option() {
+                    match committed_upper.as_option() {
                         Some(t_next) => {
-                            let end = ready_times.partition_point(|(_, t, _)| t < t_next);
-                            let updates = ready_times
-                                .range(export.applied - drained..end)
-                                .map(|(from_time, _, diff)| (from_time.clone(), *diff));
-                            export.source_upper.update_iter(updates);
-                            export.applied = drained + end;
-                            if least.as_ref().is_none_or(|(t, _)| t_next < t) {
-                                least = Some((t_next.clone(), export.id));
+                            // The remap input and this export's committed upper input advance
+                            // independently, so bindings below `t_next` can become ready after
+                            // the export committed `t_next`. Either input moving can therefore
+                            // add bindings for this export to apply.
+                            if advanced || bindings_ready {
+                                let start = export.applied - drained;
+                                let end = ready_times.partition_point(|(_, t, _)| t < t_next);
+                                if end > start {
+                                    let updates = ready_times
+                                        .range(start..end)
+                                        .map(|(from_time, _, diff)| (from_time.clone(), *diff));
+                                    export.source_upper.update_iter(updates);
+                                    export.applied = drained + end;
+                                    touched.push(index);
+                                }
                             }
-                            // At this point source_upper contains all updates that are less than
-                            // t_next, which is equal to remap[t_prev]
-                            export.source_upper.frontier().to_owned()
+                            if least_committed_upper
+                                .as_ref()
+                                .is_none_or(|(t, _)| t_next < t)
+                            {
+                                least_committed_upper = Some((t_next.clone(), index));
+                            }
                         }
                         None => {
                             export.applied = drained + ready_times.len();
-                            Antichain::new()
+                            if advanced {
+                                touched.push(index);
+                            }
                         }
-                    };
+                    }
                     min_applied = min_applied.min(export.applied);
-                    resume_uppers.exports.insert(export.id, reclocked_upper);
                 }
-                if let (Some(source), Some((_, export_id))) = (&mut resume_uppers.source, least) {
-                    source.clone_from(&resume_uppers.exports[&export_id]);
-                }
+
+                // If all exports are beyond the as_of, the source upper is the meet of the exports
+                // committed uppers, or all exports are complete and it's the empty frontier.
+                let source = all_beyond_as_of.then(|| match least_committed_upper {
+                    Some((_, index)) => exports[index].reclocked_upper(),
+                    None => Antichain::new(),
+                });
                 ready_times.drain(..min_applied - drained);
                 drained = min_applied;
+                // From testing, the common case is seeing a few exports updated in a given
+                // invocation. The published value is updated in place for the touched exports,
+                // rather than wholly replace the existing map with a new allocation.
                 tx.send_if_modified(|published| {
-                    let modified = *published != resume_uppers;
-                    if modified {
-                        *published = resume_uppers;
+                    let mut modified = false;
+                    for export in touched.drain(..).map(|index| &exports[index]) {
+                        let reclocked_upper = export.reclocked_upper();
+                        match published.exports.entry(export.id) {
+                            Entry::Occupied(entry) if *entry.get() == reclocked_upper => {}
+                            Entry::Occupied(mut entry) => {
+                                entry.insert(reclocked_upper);
+                                modified = true;
+                            }
+                            Entry::Vacant(entry) => {
+                                entry.insert(reclocked_upper);
+                                modified = true;
+                            }
+                        }
+                    }
+                    if published.source != source {
+                        published.source = source;
+                        modified = true;
                     }
                     modified
                 });
@@ -953,6 +1006,35 @@ mod tests {
                 uppers(Some(offset(40)), [(A, offset(40)), (B, offset(40))]),
             );
             assert_eq!(h.ready_times(), 0, "every export has applied every binding");
+        });
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn reclock_committed_upper_applies_bindings_arriving_after_the_commit() {
+        timely::execute_directly(|worker| {
+            let mut h = Harness::new(worker, &[A]);
+            for t in 0..=3 {
+                h.bind(t);
+            }
+            h.commit(A, 5);
+            assert_eq!(
+                h.step(worker),
+                uppers(Some(offset(30)), [(A, offset(30))]),
+                "only bindings through time 3 exist",
+            );
+            assert_eq!(
+                h.step(worker),
+                None,
+                "nothing changed, nothing is published"
+            );
+
+            h.bind(4);
+            assert_eq!(
+                h.step(worker),
+                uppers(Some(offset(40)), [(A, offset(40))]),
+                "the binding for time 4 applies without A committing again",
+            );
         });
     }
 
