@@ -13,8 +13,7 @@ use std::time::Duration;
 
 use mz_cluster_client::client::TryIntoProtocolNonce;
 use mz_cluster_client::params::GrpcClientParameters;
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::render_plan::RenderPlan;
+use mz_compute_types::dataflows::RenderDataflowDescription;
 use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -90,6 +89,8 @@ pub enum ComputeCommand {
     /// Configuration parameters that should not be applied globally, but only to specific
     /// dataflows or peeks, should be added to the [`DataflowDescription`] or [`Peek`] types,
     /// rather than as [`ComputeParameters`].
+    ///
+    /// [`DataflowDescription`]: mz_compute_types::dataflows::DataflowDescription
     UpdateConfiguration(Box<ComputeParameters>),
 
     /// `CreateDataflow` instructs the replica to create a dataflow according to the given
@@ -134,14 +135,15 @@ pub enum ComputeCommand {
     /// the compute controller should eventually send a `Schedule` command for each sent
     /// `CreateDataflow` command.
     ///
-    /// [`objects_to_build`]: DataflowDescription::objects_to_build
-    /// [`source_imports`]: DataflowDescription::source_imports
-    /// [`index_imports`]: DataflowDescription::index_imports
-    /// [`as_of`]: DataflowDescription::as_of
+    /// [`DataflowDescription`]: mz_compute_types::dataflows::DataflowDescription
+    /// [`objects_to_build`]: mz_compute_types::dataflows::DataflowDescription::objects_to_build
+    /// [`source_imports`]: mz_compute_types::dataflows::DataflowDescription::source_imports
+    /// [`index_imports`]: mz_compute_types::dataflows::DataflowDescription::index_imports
+    /// [`as_of`]: mz_compute_types::dataflows::DataflowDescription::as_of
     /// [`Frontiers`]: super::response::ComputeResponse::Frontiers
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
     /// [`CopyToResponse`]: super::response::ComputeResponse::CopyToResponse
-    CreateDataflow(Box<DataflowDescription<RenderPlan, CollectionMetadata>>),
+    CreateDataflow(Box<RenderDataflowDescription<CollectionMetadata>>),
 
     /// `Schedule` allows the replica to start computation for a compute collection.
     ///

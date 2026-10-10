@@ -12,7 +12,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_expr::{
+    CollectionPlan, MapFilterProject, MfpPlan, MirRelationExpr, MirScalarExpr,
+    OptimizedMirRelationExpr,
+};
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
@@ -29,9 +32,9 @@ use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct DataflowDescription<P, S: 'static = ()> {
+pub struct DataflowDescription<P, S: 'static = (), O = MapFilterProject> {
     /// Sources instantiations made available to the dataflow pair with monotonicity information.
-    pub source_imports: BTreeMap<GlobalId, SourceImport<S>>,
+    pub source_imports: BTreeMap<GlobalId, SourceImport<S, O>>,
     /// Indexes made available to the dataflow.
     /// (id of index, import)
     pub index_imports: BTreeMap<GlobalId, IndexImport>,
@@ -69,7 +72,7 @@ pub struct DataflowDescription<P, S: 'static = ()> {
     pub time_dependence: Option<TimeDependence>,
 }
 
-impl<P, S> DataflowDescription<P, S> {
+impl<P, S, O> DataflowDescription<P, S, O> {
     /// Tests if the dataflow refers to a single timestamp, namely
     /// that `as_of` has a single coordinate and that the `until`
     /// value corresponds to the `as_of` value plus one, or `as_of`
@@ -104,7 +107,7 @@ impl<P, S> DataflowDescription<P, S> {
     }
 }
 
-impl DataflowDescription<LirRelationExpr, ()> {
+impl LirDataflowDescription {
     /// Check invariants expected to be true about `DataflowDescription`s.
     pub fn check_invariants(&self) -> Result<(), String> {
         let mut plans: Vec<_> = self.objects_to_build.iter().map(|o| &o.plan).collect();
@@ -255,7 +258,71 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
     }
 }
 
-impl<P, S> DataflowDescription<P, S> {
+impl<P, S, O> DataflowDescription<P, S, O> {
+    /// Applies `f` to the operators of every source import, failing on the
+    /// first error.
+    pub fn try_map_source_operators<O2, E>(
+        self,
+        mut f: impl FnMut(O) -> Result<O2, E>,
+    ) -> Result<DataflowDescription<P, S, O2>, E> {
+        let DataflowDescription {
+            source_imports,
+            index_imports,
+            objects_to_build,
+            index_exports,
+            sink_exports,
+            as_of,
+            until,
+            initial_storage_as_of,
+            refresh_schedule,
+            debug_name,
+            time_dependence,
+        } = self;
+        let source_imports = source_imports
+            .into_iter()
+            .map(|(id, import)| {
+                let SourceImport {
+                    desc:
+                        SourceInstanceDesc {
+                            arguments: SourceInstanceArguments { operators },
+                            storage_metadata,
+                            typ,
+                        },
+                    monotonic,
+                    with_snapshot,
+                    upper,
+                } = import;
+                let desc = SourceInstanceDesc {
+                    arguments: SourceInstanceArguments {
+                        operators: operators.map(&mut f).transpose()?,
+                    },
+                    storage_metadata,
+                    typ,
+                };
+                let import = SourceImport {
+                    desc,
+                    monotonic,
+                    with_snapshot,
+                    upper,
+                };
+                Ok((id, import))
+            })
+            .collect::<Result<_, E>>()?;
+        Ok(DataflowDescription {
+            source_imports,
+            index_imports,
+            objects_to_build,
+            index_exports,
+            sink_exports,
+            as_of,
+            until,
+            initial_storage_as_of,
+            refresh_schedule,
+            debug_name,
+            time_dependence,
+        })
+    }
+
     /// Creates a new dataflow description with a human-readable name.
     pub fn new(name: String) -> Self {
         Self {
@@ -414,7 +481,7 @@ impl<P, S> DataflowDescription<P, S> {
     }
 }
 
-impl<P, S> DataflowDescription<P, S>
+impl<P, S, O> DataflowDescription<P, S, O>
 where
     P: CollectionPlan,
 {
@@ -507,9 +574,10 @@ where
     }
 }
 
-impl<S> DataflowDescription<RenderPlan, S>
+impl<S, O> DataflowDescription<RenderPlan, S, O>
 where
     S: Clone + PartialEq,
+    O: Clone + PartialEq,
 {
     /// Determine if a dataflow description is compatible with this dataflow description.
     ///
@@ -604,6 +672,12 @@ where
 /// A commonly used name for dataflows contain MIR expressions.
 pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr, ()>;
 
+/// A dataflow lowered to LIR.
+pub type LirDataflowDescription<S = ()> = DataflowDescription<LirRelationExpr, S, MfpPlan>;
+
+/// A dataflow ready to render.
+pub type RenderDataflowDescription<S = ()> = DataflowDescription<RenderPlan, S, MfpPlan>;
+
 /// An index storing processed updates so they can be queried
 /// or reused in other computations
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
@@ -639,9 +713,9 @@ pub struct IndexImport {
 
 /// Information about an imported source, and how it will be used by the dataflow.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct SourceImport<S: 'static = ()> {
+pub struct SourceImport<S: 'static = (), O = MapFilterProject> {
     /// Description of the source instance to import.
-    pub desc: SourceInstanceDesc<S>,
+    pub desc: SourceInstanceDesc<S, O>,
     /// Whether the source will supply monotonic data.
     pub monotonic: bool,
     /// Whether this import must include the snapshot data.
@@ -661,7 +735,8 @@ pub struct BuildDesc<P> {
 
 #[cfg(test)]
 mod tests {
-    use mz_expr::{AccessStrategy, Id, MirRelationExpr};
+    use mz_expr::{AccessStrategy, Id, MirRelationExpr, UnmaterializableFunc, func};
+    use mz_repr::optimize::OptimizerFeatures;
     use mz_repr::{RelationDesc, ReprRelationType, ReprScalarType, SqlRelationType};
 
     use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
@@ -798,5 +873,31 @@ mod tests {
         );
 
         assert_eq!(df.used_import_ids(), BTreeSet::from([imported_index]));
+    }
+
+    #[mz_ore::test]
+    fn lowering_plans_source_operators() {
+        // `#1 = #0::mz_timestamp`, filtered by `mz_now() < #1` and
+        // `mz_now() = #0::mz_timestamp`.
+        let mz_now = || MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
+        let cast = || MirScalarExpr::column(0).call_unary(func::CastInt64ToMzTimestamp);
+        let mfp = MapFilterProject::new(1).map([cast()]).filter([
+            mz_now().call_binary(MirScalarExpr::column(1), func::Lt),
+            mz_now().call_binary(cast(), func::Eq),
+        ]);
+        let planned = MfpPlan::create_from(mfp.clone()).expect("plannable");
+
+        let mut df = dataflow(MirRelationExpr::Get {
+            id: Id::Global(READ),
+            typ: typ(),
+            access_strategy: AccessStrategy::Persist,
+        });
+        let unread = df.source_imports.get_mut(&UNREAD).expect("imported");
+        unread.desc.arguments.operators = Some(mfp);
+
+        let lowered = LirRelationExpr::finalize_dataflow(df, &OptimizerFeatures::default(), None)
+            .expect("lowers");
+        let operators = &lowered.source_imports[&UNREAD].desc.arguments.operators;
+        assert_eq!(operators.as_ref(), Some(&planned));
     }
 }

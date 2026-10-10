@@ -18,7 +18,7 @@ use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use differential_dataflow::lattice::Lattice;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::WallclockLagFn;
-use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
+use mz_compute_types::dataflows::{BuildDesc, DataflowDescription, LirDataflowDescription};
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection,
@@ -1422,7 +1422,7 @@ impl Instance {
     #[mz_ore::instrument(level = "debug")]
     pub fn create_dataflow(
         &mut self,
-        dataflow: DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
+        dataflow: LirDataflowDescription,
         import_read_holds: Vec<ReadHold>,
         mut shared_collection_state: BTreeMap<GlobalId, SharedCollectionState>,
         target_replica: Option<ReplicaId>,

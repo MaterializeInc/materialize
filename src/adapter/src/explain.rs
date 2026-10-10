@@ -47,8 +47,8 @@ impl<'a, T> Explainable<'a, T> {
 /// Convenience method to derive an `ExplainContext` from the `index_imports` in
 /// the given `plan` and all other input parameters, wrap the `plan` in an
 /// `Explainable`, and finally compute and return the `explain(...)` result.
-pub(crate) fn explain_dataflow<T>(
-    mut plan: DataflowDescription<T>,
+pub(crate) fn explain_dataflow<T, O>(
+    mut plan: DataflowDescription<T, (), O>,
     format: ExplainFormat,
     config: &ExplainConfig,
     features: &OptimizerFeatures,
@@ -58,7 +58,8 @@ pub(crate) fn explain_dataflow<T>(
     dataflow_metainfo: &DataflowMetainfo<Arc<OptimizerNotice>>,
 ) -> Result<String, AdapterError>
 where
-    for<'a> Explainable<'a, DataflowDescription<T>>: Explain<'a, Context = ExplainContext<'a>>,
+    for<'a> Explainable<'a, DataflowDescription<T, (), O>>:
+        Explain<'a, Context = ExplainContext<'a>>,
 {
     // Collect the list of indexes used by the dataflow at this point.
     let used_indexes = dataflow_metainfo.used_indexes(&plan);

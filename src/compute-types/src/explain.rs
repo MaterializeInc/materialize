@@ -11,6 +11,7 @@
 
 pub(crate) mod text;
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use mz_expr::explain::{ExplainContext, ExplainMultiPlan, ExplainSource, enforce_linear_chains};
@@ -18,10 +19,10 @@ use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::GlobalId;
 use mz_repr::explain::{AnnotatedPlan, Explain, ExplainError, UnsupportedFormat};
 
-use crate::dataflows::DataflowDescription;
+use crate::dataflows::{DataflowDescription, LirDataflowDescription};
 use crate::plan::LirRelationExpr;
 
-impl<'a> Explain<'a> for DataflowDescription<LirRelationExpr> {
+impl<'a> Explain<'a> for LirDataflowDescription {
     type Context = ExplainContext<'a>;
 
     type Text = ExplainMultiPlan<'a, LirRelationExpr>;
@@ -39,7 +40,7 @@ impl<'a> Explain<'a> for DataflowDescription<LirRelationExpr> {
     }
 }
 
-impl<'a> DataflowDescription<LirRelationExpr> {
+impl<'a> LirDataflowDescription {
     fn as_explain_multi_plan(
         &'a mut self,
         context: &'a ExplainContext<'a>,
@@ -70,7 +71,10 @@ impl<'a> DataflowDescription<LirRelationExpr> {
             .source_imports
             .iter_mut()
             .map(|(id, import)| {
+                // Folding the plan back is display-only, and need not
+                // reproduce the planned operators exactly.
                 let op = import.desc.arguments.operators.as_ref();
+                let op = op.map(|plan| Cow::Owned(plan.clone().into_map_filter_project()));
                 ExplainSource::new(*id, op, context.config.filter_pushdown)
             })
             .collect::<Vec<_>>();
@@ -138,7 +142,7 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
             .source_imports
             .iter_mut()
             .map(|(id, import)| {
-                let op = import.desc.arguments.operators.as_ref();
+                let op = import.desc.arguments.operators.as_ref().map(Cow::Borrowed);
                 ExplainSource::new(*id, op, context.config.filter_pushdown)
             })
             .collect::<Vec<_>>();
@@ -152,7 +156,7 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
 }
 
 /// TODO(database-issues#7533): Add documentation.
-pub fn export_ids_for<P, S>(dd: &DataflowDescription<P, S>) -> BTreeMap<GlobalId, GlobalId> {
+pub fn export_ids_for<P, S, O>(dd: &DataflowDescription<P, S, O>) -> BTreeMap<GlobalId, GlobalId> {
     let mut map = BTreeMap::<GlobalId, GlobalId>::default();
 
     // Dataflows created from a `CREATE MATERIALIZED VIEW` have:

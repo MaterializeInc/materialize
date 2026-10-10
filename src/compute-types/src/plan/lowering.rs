@@ -22,7 +22,7 @@ use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{GlobalId, StableRow, Timestamp};
 
-use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
+use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport, LirDataflowDescription};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::scalar::{
@@ -136,7 +136,7 @@ impl Context {
     pub fn lower(
         mut self,
         desc: DataflowDescription<OptimizedMirRelationExpr>,
-    ) -> Result<DataflowDescription<LirRelationExpr>, String> {
+    ) -> Result<LirDataflowDescription, String> {
         // Sources might provide arranged forms of their data, in the future.
         // Indexes provide arranged forms of their data.
         for IndexImport {
@@ -240,7 +240,7 @@ impl Context {
         // source's reads and hoist the shared prefix into the source itself.
         self.refine_source_mfps(&mut dataflow);
 
-        Ok(dataflow)
+        dataflow.try_map_source_operators(MfpPlan::create_from)
     }
 
     /// Identifies common parts of the `MapFilterProject`s pushed onto sibling `Get::Collection`
