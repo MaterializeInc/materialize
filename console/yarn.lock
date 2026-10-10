@@ -3109,7 +3109,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@juggle/resize-observer@npm:^3.3.1, @juggle/resize-observer@npm:^3.4.0":
+"@juggle/resize-observer@npm:^3.4.0":
   version: 3.4.0
   resolution: "@juggle/resize-observer@npm:3.4.0"
   checksum: 10c0/12930242357298c6f2ad5d4ec7cf631dfb344ca7c8c830ab7f64e6ac11eb1aae486901d8d880fd08fb1b257800c160a0da3aee1e7ed9adac0ccbb9b7c5d93347
@@ -11788,8 +11788,8 @@ __metadata:
     react-refresh: "npm:^0.19.0"
     react-router-dom: "npm:^7.18.4"
     react-select: "npm:^5.10.2"
-    react-virtualized-auto-sizer: "npm:^1.0.24"
-    react-window: "npm:^1.8.10"
+    react-virtualized-auto-sizer: "npm:^1.0.25"
+    react-window: "npm:^1.8.11"
     scroll-into-view-if-needed: "npm:^3.1.0"
     semver: "npm:^7.8.5"
     storybook: "npm:^10"
@@ -11803,7 +11803,7 @@ __metadata:
     typescript: "npm:^6.0.3"
     typescript-eslint: "npm:^8.71.0"
     typescript-eslint-language-service: "npm:^5.0.5"
-    use-resize-observer: "npm:^9.1.0"
+    use-resize-observer: "npm:^10.0.0"
     uuid: "npm:^14.0.2"
     vite: "npm:^8.3.1"
     vite-bundle-analyzer: "npm:^1.3.9"
@@ -13607,26 +13607,26 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-virtualized-auto-sizer@npm:^1.0.24":
-  version: 1.0.24
-  resolution: "react-virtualized-auto-sizer@npm:1.0.24"
+"react-virtualized-auto-sizer@npm:^1.0.25":
+  version: 1.0.25
+  resolution: "react-virtualized-auto-sizer@npm:1.0.25"
   peerDependencies:
-    react: ^15.3.0 || ^16.0.0-alpha || ^17.0.0 || ^18.0.0
-    react-dom: ^15.3.0 || ^16.0.0-alpha || ^17.0.0 || ^18.0.0
-  checksum: 10c0/d400489e5005a2ad0635228958379aa26b66fdae62a5b9fbf4dcb5fecd4e99454990b1cd59fe55ff277419b37bdf098c26e7185e0ef1b6ca775a477f913bb763
+    react: ^15.3.0 || ^16.0.0-alpha || ^17.0.0 || ^18.0.0 || ^19.0.0
+    react-dom: ^15.3.0 || ^16.0.0-alpha || ^17.0.0 || ^18.0.0 || ^19.0.0
+  checksum: 10c0/5060aa673df2692530d8620083a044b90149ab4ea584cdb0886c4467bd432dc746a6541488c4cfb98400ace2a671bcb86cb05d20c97efd0e19757ad89a65573a
   languageName: node
   linkType: hard
 
-"react-window@npm:^1.8.10":
-  version: 1.8.10
-  resolution: "react-window@npm:1.8.10"
+"react-window@npm:^1.8.11":
+  version: 1.8.11
+  resolution: "react-window@npm:1.8.11"
   dependencies:
     "@babel/runtime": "npm:^7.0.0"
     memoize-one: "npm:>=3.1.1 <6"
   peerDependencies:
-    react: ^15.0.0 || ^16.0.0 || ^17.0.0 || ^18.0.0
-    react-dom: ^15.0.0 || ^16.0.0 || ^17.0.0 || ^18.0.0
-  checksum: 10c0/eda9afb667d9784513dcc2755b65edf3a1412e7877975322993c1382908aaef0c0b948b7e3b2d705e353306556274d90f7ab19ac40aef2184fa39d4c1e2232ea
+    react: ^15.0.0 || ^16.0.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+    react-dom: ^15.0.0 || ^16.0.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+  checksum: 10c0/5ae8da1bc5c47d8f0a428b28a600256e2db511975573e52cb65a9b27ed1a0e5b9f7b3bee5a54fb0da93956d782c24010be434be451072f46ba5a89159d2b3944
   languageName: node
   linkType: hard
 
@@ -15735,15 +15735,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"use-resize-observer@npm:^9.1.0":
-  version: 9.1.0
-  resolution: "use-resize-observer@npm:9.1.0"
-  dependencies:
-    "@juggle/resize-observer": "npm:^3.3.1"
+"use-resize-observer@npm:^10.0.0":
+  version: 10.0.0
+  resolution: "use-resize-observer@npm:10.0.0"
   peerDependencies:
-    react: 16.8.0 - 18
-    react-dom: 16.8.0 - 18
-  checksum: 10c0/6ccdeb09fe20566ec182b1635a22f189e13d46226b74610432590e69b31ef5d05d069badc3306ebd0d2bb608743b17981fb535763a1d7dc2c8ae462ee8e5999c
+    react: ">=18.2"
+  checksum: 10c0/90b3c913f18f17775fab09cc56f2b2962ce1f3aa3604bab2807b722f4ea6809ab0b987d2e9177f2643305d104f027fb4c83d79d7a77b47630ccd54df7bd32cb6
   languageName: node
   linkType: hard
 
