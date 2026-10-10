@@ -95,8 +95,8 @@ const plugins = [
       typescript: true,
       template: svgrTemplate,
     },
-    esbuildOptions: {
-      loader: "tsx",
+    oxcOptions: {
+      lang: "tsx",
     },
     // A minimatch pattern, or array of patterns, which specifies the files in the build the plugin should include.
     include: "**/*.svg?react",
