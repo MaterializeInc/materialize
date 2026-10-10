@@ -750,6 +750,33 @@ impl Fingerprint for &BuiltinSource {
     }
 }
 
+// The fingerprint is the SQL text, so a change to the row shape of a relation
+// the MV reads (for example `mz_indexes` reading `mz_builtin_indexes`) goes
+// unnoticed by the fingerprint check in the adapter's `update_fingerprints`
+// unless the MV's own SQL changes. The ways an upstream change can regress a
+// builtin MV, and what catches each:
+//
+// 1. The upstream relation drops a referenced column: planning the MV fails at
+//    catalog open, which every test that opens a catalog hits.
+// 2. The upstream relation adds a column that the MV is changed to reference:
+//    the SQL changes, so the fingerprint changes, and `update_fingerprints`
+//    panics at upgrade until a `MigrationStep` is added.
+// 3. The upstream relation changes a referenced column's type: the planned
+//    desc changes and `verify_builtin_descs` fails until `desc` is updated. The
+//    fingerprint does not change, so without a `MigrationStep` the upgrade
+//    registers the new desc against the old shard. Persist rejects that when
+//    the Arrow encoding differs (int32 to int64) and cannot tell when it is
+//    shared (timestamp to timestamptz, both the same fixed-size binary).
+// 4. The upstream relation changes a referenced column's nullability: as in 3,
+//    `verify_builtin_descs` fails until `desc` is updated. If the shard keeps a
+//    non-nullable column and the relation emits NULL, the replica panics in
+//    `DatumEncoder::push` on write.
+// 5. The MV is `SELECT *` over the upstream relation, which reorders or swaps
+//    columns: persist matches columns by position, so this is case 3 for each
+//    moved column.
+//
+// `verify_builtin_descs` therefore asks for a `MigrationStep` whenever a
+// shard-backed builtin's `desc` changes.
 impl Fingerprint for &BuiltinMaterializedView {
     fn fingerprint(&self) -> String {
         self.create_sql()
@@ -782,7 +809,7 @@ impl Fingerprint for SqlRelationType {
 
 /// Asserts that `name` is safe to embed unquoted inside a `'...'`-quoted SQL literal
 /// or inside a `"..."`-quoted SQL identifier. Generated builtin relations
-/// (`make_mz_indexes`, `make_mz_object_dependencies_raw`, ...) concatenate builtin names
+/// (`make_builtin_indexes`, `make_mz_object_dependencies_raw`, ...) concatenate builtin names
 /// into SQL fragments, so a quote or backslash would produce malformed SQL. Builtin
 /// names should always be plain ASCII identifiers.
 pub(super) fn assert_safe_builtin_name(name: &str, kind: &str) {
@@ -1164,10 +1191,10 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_DATABASES),
         Builtin::MaterializedView(&MZ_SCHEMAS),
         Builtin::Table(&MZ_COLUMNS),
-        // mz_indexes is generated dynamically below with inlined builtin VALUES.
+        Builtin::MaterializedView(&MZ_INDEXES),
         Builtin::Table(&MZ_INDEX_COLUMNS),
         Builtin::MaterializedView(&MZ_TABLES),
-        // mz_sources is generated dynamically below with inlined builtin VALUES.
+        Builtin::MaterializedView(&MZ_SOURCES),
         Builtin::MaterializedView(&MZ_SOURCE_REFERENCES),
         Builtin::MaterializedView(&MZ_POSTGRES_SOURCES),
         Builtin::MaterializedView(&MZ_POSTGRES_SOURCE_TABLES),
@@ -1521,61 +1548,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
     ];
 
     builtin_items.extend(notice::builtins());
-
-    // Generate mz_sources with builtin source/log entries inlined as VALUES so
-    // that its SQL fingerprint changes whenever a builtin source is added or
-    // removed, forcing an explicit MigrationStep::replacement.
-    //
-    // Must happen BEFORE ontology::generate_views so that mz_sources's ontology
-    // annotation (entity_name = "source") is visible to the ontology index views.
-    // All sources/logs are already present in builtin_items at this point.
-    {
-        let source_iter = builtin_items.iter().filter_map(|b| match b {
-            Builtin::Source(x) => Some(*x),
-            _ => None,
-        });
-        let log_iter = builtin_items.iter().filter_map(|b| match b {
-            Builtin::Log(x) => Some(*x),
-            _ => None,
-        });
-        let mz_sources = builtin::make_mz_sources(source_iter, log_iter);
-        let mz_sources_ref: &'static BuiltinMaterializedView = Box::leak(Box::new(mz_sources));
-        // Insert at the original position of the old static MZ_SOURCES —
-        // right before mz_source_references — to preserve stable IDs for
-        // all items that follow it in the list.
-        let insert_pos = builtin_items
-            .iter()
-            .position(|b| b.name() == "mz_source_references")
-            .expect("mz_source_references must be present in builtin_items");
-        builtin_items.insert(insert_pos, Builtin::MaterializedView(mz_sources_ref));
-    }
-
-    // Generate mz_indexes with builtin index/log entries inlined as VALUES so
-    // that its SQL fingerprint changes whenever a builtin index or log is added or
-    // removed, forcing an explicit MigrationStep::replacement.
-    //
-    // Must happen AFTER all builtin indexes and logs have been pushed into
-    // builtin_items, so that make_mz_indexes sees the complete set. Must happen
-    // BEFORE ontology::generate_views so the ontology generator sees mz_indexes
-    // as a materialized view participating in catalog ontology, rather than
-    // being absent from builtin_items.
-    {
-        let index_iter = builtin_items.iter().filter_map(|b| match b {
-            Builtin::Index(x) => Some(*x),
-            _ => None,
-        });
-        let log_iter = builtin_items.iter().filter_map(|b| match b {
-            Builtin::Log(x) => Some(*x),
-            _ => None,
-        });
-        let mz_indexes = mz_catalog::make_mz_indexes(index_iter, log_iter);
-        let mz_indexes_ref: &'static BuiltinMaterializedView = Box::leak(Box::new(mz_indexes));
-        let insert_pos = builtin_items
-            .iter()
-            .position(|b| matches!(b, Builtin::Table(t) if t.name == "mz_index_columns"))
-            .expect("mz_index_columns must be present in builtin_items");
-        builtin_items.insert(insert_pos, Builtin::MaterializedView(mz_indexes_ref));
-    }
 
     // Generate mz_object_dependencies_raw, which inlines every builtin's
     // dependency edges as VALUES.
@@ -2353,134 +2325,6 @@ mod tests {
                 note: None,
             },
             r#"{"kind":"maps_to","source_column":"id","target_column":"global_id","via":"mz_internal.mz_object_global_ids","from_type":"CatalogItemId","to_type":"GlobalId"}"#,
-        );
-    }
-
-    /// Verifies that the `mz_sources` materialized view fingerprint changes
-    /// whenever a new builtin source or log is added.
-    ///
-    /// This is the correctness property that `make_mz_sources` provides: by
-    /// inlining the full set of builtin sources/logs as VALUES in its SQL, any
-    /// change to those sets is reflected in `fingerprint()`. A stale fingerprint
-    /// would prevent the catalog migration from replacing `mz_sources`, leaving
-    /// it with out-of-date data, silently serving stale builtin source rows.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn test_mz_sources_fingerprint_changes_with_new_builtin_source() {
-        let sources: Vec<&'static BuiltinSource> = BUILTINS_STATIC
-            .iter()
-            .filter_map(|b| match b {
-                Builtin::Source(x) => Some(*x),
-                _ => None,
-            })
-            .collect();
-        let logs: Vec<&'static BuiltinLog> = BUILTINS_STATIC
-            .iter()
-            .filter_map(|b| match b {
-                Builtin::Log(x) => Some(*x),
-                _ => None,
-            })
-            .collect();
-
-        // The fingerprint from make_mz_sources must match the live BUILTINS_STATIC entry.
-        let mv_base = builtin::make_mz_sources(sources.iter().copied(), logs.iter().copied());
-        let fp_base = Fingerprint::fingerprint(&&mv_base);
-
-        let mz_sources_static = BUILTINS_STATIC
-            .iter()
-            .find_map(|b| match b {
-                Builtin::MaterializedView(mv) if mv.name == "mz_sources" => Some(*mv),
-                _ => None,
-            })
-            .expect("mz_sources must be present in BUILTINS_STATIC");
-        assert_eq!(
-            fp_base,
-            Fingerprint::fingerprint(&mz_sources_static),
-            "make_mz_sources fingerprint must match the BUILTINS_STATIC mz_sources fingerprint"
-        );
-
-        // Adding an extra source must change the fingerprint, proving that
-        // make_mz_sources inlines the source list into its SQL.
-        let extra_source = sources[0];
-        let mv_extra = builtin::make_mz_sources(
-            sources.iter().copied().chain(std::iter::once(extra_source)),
-            logs.iter().copied(),
-        );
-        assert_ne!(
-            fp_base,
-            Fingerprint::fingerprint(&&mv_extra),
-            "mz_sources fingerprint must change when a builtin source is added"
-        );
-    }
-
-    /// Verifies that the `mz_indexes` materialized view fingerprint changes
-    /// whenever a new builtin index or log is added.
-    ///
-    /// This is the correctness property that `make_mz_indexes` provides: by
-    /// inlining the full set of builtin indexes/logs as VALUES in its SQL,
-    /// any change to those sets is reflected in `fingerprint()`. A stale
-    /// fingerprint would prevent the catalog migration from replacing
-    /// `mz_indexes`, leaving it with out-of-date data, silently serving
-    /// stale builtin index rows.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn test_mz_indexes_fingerprint_changes_with_new_builtin_index() {
-        let indexes: Vec<&'static BuiltinIndex> = BUILTINS_STATIC
-            .iter()
-            .filter_map(|b| match b {
-                Builtin::Index(x) => Some(*x),
-                _ => None,
-            })
-            .collect();
-        let logs: Vec<&'static BuiltinLog> = BUILTINS_STATIC
-            .iter()
-            .filter_map(|b| match b {
-                Builtin::Log(x) => Some(*x),
-                _ => None,
-            })
-            .collect();
-
-        // The fingerprint from make_mz_indexes must match the live BUILTINS_STATIC entry.
-        let mv_base = mz_catalog::make_mz_indexes(indexes.iter().copied(), logs.iter().copied());
-        let fp_base = Fingerprint::fingerprint(&&mv_base);
-
-        let mz_indexes_static = BUILTINS_STATIC
-            .iter()
-            .find_map(|b| match b {
-                Builtin::MaterializedView(mv) if mv.name == "mz_indexes" => Some(*mv),
-                _ => None,
-            })
-            .expect("mz_indexes must be present in BUILTINS_STATIC");
-        assert_eq!(
-            fp_base,
-            Fingerprint::fingerprint(&mz_indexes_static),
-            "make_mz_indexes fingerprint must match the BUILTINS_STATIC mz_indexes fingerprint"
-        );
-
-        // Adding an extra index must change the fingerprint, proving that
-        // make_mz_indexes inlines the index list into its SQL.
-        let extra_index = indexes[0];
-        let mv_extra_index = mz_catalog::make_mz_indexes(
-            indexes.iter().copied().chain(std::iter::once(extra_index)),
-            logs.iter().copied(),
-        );
-        assert_ne!(
-            fp_base,
-            Fingerprint::fingerprint(&&mv_extra_index),
-            "mz_indexes fingerprint must change when a builtin index is added"
-        );
-
-        // Adding an extra log must also change the fingerprint, because the
-        // log set feeds the introspection-source-indexes CTE.
-        let extra_log = logs[0];
-        let mv_extra_log = mz_catalog::make_mz_indexes(
-            indexes.iter().copied(),
-            logs.iter().copied().chain(std::iter::once(extra_log)),
-        );
-        assert_ne!(
-            fp_base,
-            Fingerprint::fingerprint(&&mv_extra_log),
-            "mz_indexes fingerprint must change when a builtin log is added"
         );
     }
 
