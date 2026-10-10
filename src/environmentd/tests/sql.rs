@@ -4312,3 +4312,186 @@ fn test_grant_all_on_view_suppresses_non_applicable_notice() {
         );
     }
 }
+
+/// Parks `explain` at `failpoint`, runs `drop` on `ddl_client`, and resumes `explain`, returning
+/// its outcome. `failpoint` must run on a blocking thread.
+///
+/// Failpoints are process-global, so callers rely on running in their own process, as nextest runs
+/// them.
+#[allow(clippy::disallowed_methods)]
+async fn explain_with_concurrent_drop(
+    server: &test_util::TestServer,
+    ddl_client: &tokio_postgres::Client,
+    failpoint: &'static str,
+    explain: &'static str,
+    drop: &str,
+) -> Result<Vec<tokio_postgres::Row>, tokio_postgres::Error> {
+    let explainer = server.connect().await.unwrap();
+
+    let parked = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    fail::cfg_callback(failpoint, {
+        let parked = Arc::clone(&parked);
+        let resume = Arc::clone(&resume);
+        move || {
+            parked.wait();
+            resume.wait();
+        }
+    })
+    .unwrap();
+
+    let explain = task::spawn(|| "explainer", async move {
+        explainer.query(explain, &[]).await
+    });
+    task::spawn_blocking(|| "wait_parked", move || parked.wait()).await;
+
+    ddl_client.batch_execute(drop).await.unwrap();
+
+    // Disarm before handing the EXPLAIN back, so that no later statement parks.
+    fail::remove(failpoint);
+    task::spawn_blocking(|| "resume", move || resume.wait()).await;
+
+    explain.await
+}
+
+// An EXPLAIN CREATE INDEX whose indexed relation is dropped while the index is optimized fails
+// with a "was dropped" error, instead of aborting environmentd.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_explain_create_index_after_concurrent_relation_drop() {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    for stmt in ["CREATE TABLE t (a int)", "CREATE VIEW v AS SELECT a FROM t"] {
+        ddl_client.batch_execute(stmt).await.unwrap();
+    }
+
+    let err = explain_with_concurrent_drop(
+        &server,
+        &ddl_client,
+        "create_index_optimize",
+        "EXPLAIN CREATE INDEX i ON v (a)",
+        "DROP VIEW v",
+    )
+    .await
+    .expect_err("EXPLAIN must fail on the dropped view")
+    .unwrap_db_error();
+    assert_contains!(err.message(), "was dropped");
+    ddl_client
+        .batch_execute("SELECT 1")
+        .await
+        .expect("environmentd is still up");
+}
+
+// An EXPLAIN CREATE VIEW whose target schema is dropped while the view is optimized fails with a
+// "was dropped" error, instead of aborting environmentd.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_explain_create_view_after_concurrent_schema_drop() {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    ddl_client.batch_execute("CREATE SCHEMA s").await.unwrap();
+
+    let err = explain_with_concurrent_drop(
+        &server,
+        &ddl_client,
+        "create_view_optimize",
+        "EXPLAIN LOCALLY OPTIMIZED PLAN FOR CREATE VIEW s.v AS SELECT 1",
+        "DROP SCHEMA s",
+    )
+    .await
+    .expect_err("EXPLAIN must fail on the dropped schema")
+    .unwrap_db_error();
+    assert_contains!(err.message(), "was dropped");
+    ddl_client
+        .batch_execute("SELECT 1")
+        .await
+        .expect("environmentd is still up");
+}
+
+// An EXPLAIN CREATE MATERIALIZED VIEW whose target schema is dropped while the materialized view is
+// optimized fails with a "was dropped" error, instead of aborting environmentd.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_explain_create_materialized_view_after_concurrent_schema_drop() {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    ddl_client.batch_execute("CREATE SCHEMA s").await.unwrap();
+
+    let err = explain_with_concurrent_drop(
+        &server,
+        &ddl_client,
+        "create_materialized_view_optimize",
+        "EXPLAIN CREATE MATERIALIZED VIEW s.mv AS SELECT 1",
+        "DROP SCHEMA s",
+    )
+    .await
+    .expect_err("EXPLAIN must fail on the dropped schema")
+    .unwrap_db_error();
+    assert_contains!(err.message(), "was dropped");
+    ddl_client
+        .batch_execute("SELECT 1")
+        .await
+        .expect("environmentd is still up");
+}
+
+/// Creates table `t` with index `t_idx` in the active cluster and view `v` over `t`, so that a
+/// dataflow reading `v` in that cluster imports `t_idx`, which the statement doesn't name.
+#[allow(clippy::disallowed_methods)]
+async fn setup_indexed_table_and_view(client: &tokio_postgres::Client) {
+    for stmt in [
+        "CREATE TABLE t (a int)",
+        "CREATE INDEX t_idx ON t (a)",
+        "CREATE VIEW v AS SELECT a + 1 AS b FROM t",
+    ] {
+        client.batch_execute(stmt).await.unwrap();
+    }
+}
+
+// An EXPLAIN CREATE INDEX whose plan reads an existing index that is dropped while the new index is
+// optimized fails with a "was dropped" error.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_explain_create_index_after_concurrent_imported_index_drop() {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    setup_indexed_table_and_view(&ddl_client).await;
+
+    let err = explain_with_concurrent_drop(
+        &server,
+        &ddl_client,
+        "create_index_optimize",
+        "EXPLAIN CREATE INDEX i ON v (b)",
+        "DROP INDEX t_idx",
+    )
+    .await
+    .expect_err("EXPLAIN must fail on the dropped index")
+    .unwrap_db_error();
+    assert_contains!(err.message(), "was dropped");
+}
+
+// An EXPLAIN CREATE MATERIALIZED VIEW whose plan reads an existing index that is dropped while the
+// materialized view is optimized fails with a "was dropped" error.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_explain_create_materialized_view_after_concurrent_imported_index_drop() {
+    let server = test_util::TestHarness::default().start().await;
+    let ddl_client = server.connect().await.unwrap();
+    setup_indexed_table_and_view(&ddl_client).await;
+
+    let err = explain_with_concurrent_drop(
+        &server,
+        &ddl_client,
+        "create_materialized_view_optimize",
+        "EXPLAIN CREATE MATERIALIZED VIEW mv AS SELECT b FROM v",
+        "DROP INDEX t_idx",
+    )
+    .await
+    .expect_err("EXPLAIN must fail on the dropped index")
+    .unwrap_db_error();
+    assert_contains!(err.message(), "was dropped");
+}

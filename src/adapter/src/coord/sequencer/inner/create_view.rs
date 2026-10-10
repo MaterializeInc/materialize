@@ -310,6 +310,9 @@ impl Coordinator {
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize create view",
             move || {
+                // Test-only synchronization point: parks the optimization, so a
+                // test can drop a dependency before the next stage.
+                fail::fail_point!("create_view_optimize");
                 span.in_scope(|| {
                     let mut pipeline =
                         || -> Result<mz_expr::OptimizedMirRelationExpr, AdapterError> {
@@ -470,7 +473,16 @@ impl Coordinator {
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
         let session_catalog = self.catalog().for_session(session);
         let expr_humanizer = {
-            let full_name = self.catalog().resolve_full_name(&name, None);
+            // The plan's validity doesn't cover the schema the view would be
+            // created in, so a concurrent `DROP SCHEMA` can have removed it
+            // during the off-thread optimization.
+            let full_name = self
+                .catalog()
+                .try_resolve_full_name(&name, None)
+                .ok_or_else(|| AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "schema",
+                    dependency_id: name.qualifiers.schema_spec.to_string(),
+                })?;
             let transient_items = btreemap! {
                 id => TransientItem::new(
                     Some(full_name.into_parts()),
