@@ -12,8 +12,8 @@ use std::num::TryFromIntError;
 use std::time::Duration;
 
 use dec::TryFromDecimalError;
+use mz_ore::temporal::BucketTimestamp;
 use mz_proto::{RustType, TryFromProtoError};
-use mz_timely_util::temporal::BucketTimestamp;
 #[cfg(any(test, feature = "proptest"))]
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};

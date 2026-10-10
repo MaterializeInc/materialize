@@ -407,7 +407,7 @@ where
 impl<D, T, R> Bucket for MergeBatcherWrapper<D, T, R>
 where
     D: MzData + Ord + Clone,
-    T: MzData + Ord + Clone + Default + Lattice + BucketTimestamp,
+    T: MzData + Ord + Clone + Default + Lattice + BucketTimestamp + Timestamp,
     R: MzData + Semigroup + Default + for<'a> Semigroup<columnar::Ref<'a, R>>,
     for<'a> columnar::Ref<'a, R>: Ord,
     for<'a> <D as Columnar>::Container: Push<columnar::Ref<'a, D>>,
