@@ -86,7 +86,8 @@ async fn upper_advance_allows_queued_refresh_after_conflict() {
 
     let target = first.synced_upper().step_forward().step_forward();
     let mut txn = second.transaction().await.expect("open peer transaction");
-    txn.set_config("upper_attempt_test".into(), Some(1))
+    // System configuration has a memory projection, unlike internal Config rows.
+    txn.upsert_system_config("max_tables", "123".into())
         .expect("set peer config");
     let ts = txn.upper();
     txn.commit(ts).await.expect("commit peer config");
@@ -130,7 +131,12 @@ async fn upper_advance_allows_queued_refresh_after_conflict() {
                 .transaction()
                 .await
                 .expect("open refreshed transaction");
-            assert_eq!(txn.get_config("upper_attempt_test".into()), Some(1));
+            assert_eq!(
+                txn.get_system_configurations()
+                    .find(|config| config.name == "max_tables")
+                    .map(|config| config.value),
+                Some("123".into())
+            );
         });
         result.expect("finish upper advancement");
     }
