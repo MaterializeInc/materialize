@@ -175,6 +175,7 @@ use mz_postgres_util::schemas::get_pg_major_version;
 use mz_postgres_util::{Client, Config, PostgresError, Sql, simple_query, simple_query_opt, sql};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_types::connections::ConnectionContext;
+use mz_storage_types::dyncfgs::PG_SOURCE_REPLICATION_SLOT_CREATION_TIMEOUT;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::parameters::PgSourceSnapshotConfig;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
@@ -188,7 +189,6 @@ use timely::dataflow::operators::vec::Broadcast;
 use timely::dataflow::operators::{CapabilitySet, Concat, ConnectLoop, Feedback, Operator};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Timestamp;
-use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{Oid, PgLsn};
 use tracing::trace;
 
@@ -421,6 +421,8 @@ pub(crate) fn render<'scope>(
                 )
                 .await?;
 
+            let slot_creation_timeout =
+                PG_SOURCE_REPLICATION_SLOT_CREATION_TIMEOUT.get(config.config.config_set());
 
             // The snapshot operator is responsible for creating the replication slot(s).
             // This first slot is the permanent slot that will be used for reading the replication
@@ -438,7 +440,7 @@ pub(crate) fn render<'scope>(
                 let main_slot = &connection.publication_details.slot;
 
                 tracing::info!(%id, "ensuring replication slot {main_slot} exists");
-                super::ensure_replication_slot(&client, main_slot).await?;
+                super::ensure_replication_slot(&client, main_slot, slot_creation_timeout).await?;
                 Some(client)
             } else {
                 None
@@ -476,7 +478,7 @@ pub(crate) fn render<'scope>(
                         "timely-{worker_id} (leader) creating temporary replication slot {tmp_slot}"
                     );
                     let (snapshot_id, snapshot_lsn) =
-                        export_snapshot(&client, &tmp_slot, true).await?;
+                        export_snapshot(&client, &tmp_slot, true, slot_creation_timeout).await?;
                     tracing::info!(
                         %id,
                         "timely-{worker_id} (leader) exported snapshot {snapshot_id} \
@@ -590,8 +592,9 @@ pub(crate) fn render<'scope>(
             // Configure statement_timeout based on param. We want to be able to
             // override the server value here in case it's set too low,
             // respective to the size of the data we need to copy.
-            set_statement_timeout(
+            super::set_timeout(
                 &client,
+                "statement_timeout",
                 config
                     .config
                     .parameters
@@ -853,8 +856,9 @@ async fn export_snapshot(
     client: &Client,
     slot: &str,
     temporary: bool,
+    timeout: Duration,
 ) -> Result<(String, MzOffset), TransientError> {
-    match export_snapshot_inner(client, slot, temporary).await {
+    match export_snapshot_inner(client, slot, temporary, timeout).await {
         Ok(ok) => Ok(ok),
         Err(err) => {
             // We don't want to leave the client inside a failed tx
@@ -868,6 +872,7 @@ async fn export_snapshot_inner(
     client: &Client,
     slot: &str,
     temporary: bool,
+    timeout: Duration,
 ) -> Result<(String, MzOffset), TransientError> {
     simple_query(
         client,
@@ -886,13 +891,9 @@ async fn export_snapshot_inner(
             Sql::ident(slot)
         )
     };
-    let row = match simple_query_opt(client, query).await {
-        Ok(row) => Ok(row.unwrap()),
-        Err(PostgresError::Postgres(err)) if err.code() == Some(&SqlState::DUPLICATE_OBJECT) => {
-            return Err(TransientError::ReplicationSlotAlreadyExists);
-        }
-        Err(err) => Err(err),
-    }?;
+    let row = super::create_replication_slot(client, slot, query, timeout)
+        .await?
+        .expect("CREATE_REPLICATION_SLOT returns one row");
 
     // When creating a replication slot postgres returns the LSN of its consistent point, which is
     // the LSN that must be passed to `START_REPLICATION` to cleanly transition from the snapshot
@@ -921,17 +922,6 @@ async fn use_snapshot(client: &Client, snapshot: &str) -> Result<(), TransientEr
     )
     .await?;
     let query = sql!("SET TRANSACTION SNAPSHOT {};", Sql::literal(snapshot));
-    simple_query(client, query).await?;
-    Ok(())
-}
-
-async fn set_statement_timeout(client: &Client, timeout: Duration) -> Result<(), TransientError> {
-    // Value is known to accept milliseconds w/o units.
-    // https://www.postgresql.org/docs/current/runtime-config-client.html
-    let query = sql!(
-        "SET statement_timeout = {}",
-        Sql::literal(&timeout.as_millis().to_string())
-    );
     simple_query(client, query).await?;
     Ok(())
 }

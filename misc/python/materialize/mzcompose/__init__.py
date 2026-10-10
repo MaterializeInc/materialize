@@ -889,6 +889,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mysql_source_snapshot_partition_probed_prefixes_per_billion_rows",
     "postgres_fetch_slot_resume_lsn_interval",
     "pg_schema_validation_interval",
+    "pg_source_replication_slot_creation_timeout",
     "pg_source_validate_timeline",
     "sql_server_source_validate_restore_history",
     "storage_enforce_external_addresses",

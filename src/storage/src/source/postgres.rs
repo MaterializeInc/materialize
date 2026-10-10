@@ -91,7 +91,9 @@ use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::schema_change::SchemaChangeError;
-use mz_postgres_util::{Client, PostgresError, Sql, query_opt, simple_query_opt, sql};
+use mz_postgres_util::{
+    Client, PostgresError, Sql, query_opt, simple_query, simple_query_opt, sql,
+};
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
 use mz_storage_types::sources::casts::StorageScalarExpr;
@@ -107,6 +109,7 @@ use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::vec::{Map, ToStream};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
+use tokio_postgres::SimpleQueryRow;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 
@@ -329,6 +332,11 @@ pub enum TransientError {
     },
     #[error("replication slot already exists")]
     ReplicationSlotAlreadyExists,
+    #[error(
+        "creating replication slot {slot} timed out after {timeout:?}. Slot creation waits for \
+         in-progress upstream transactions to end"
+    )]
+    ReplicationSlotCreationTimeout { slot: String, timeout: Duration },
     #[error("stream ended prematurely")]
     ReplicationEOF,
     #[error("unexpected replication message")]
@@ -439,21 +447,79 @@ impl From<DefiniteError> for DataflowError {
     }
 }
 
-async fn ensure_replication_slot(client: &Client, slot: &str) -> Result<(), TransientError> {
-    let slot = Sql::ident(slot);
+async fn ensure_replication_slot(
+    client: &Client,
+    slot: &str,
+    timeout: Duration,
+) -> Result<(), TransientError> {
     let query = sql!(
         "CREATE_REPLICATION_SLOT {} LOGICAL \"pgoutput\" NOEXPORT_SNAPSHOT",
-        slot.clone()
+        Sql::ident(slot)
     );
-    match simple_query_opt(client, query).await {
+    match create_replication_slot(client, slot, query, timeout).await {
         Ok(_) => Ok(()),
-        // If the slot already exists that's still ok
-        Err(PostgresError::Postgres(err)) if err.code() == Some(&SqlState::DUPLICATE_OBJECT) => {
-            tracing::trace!(slot = %slot, "replication slot already existed");
+        Err(TransientError::ReplicationSlotAlreadyExists) => {
+            tracing::trace!(%slot, "replication slot already existed");
             Ok(())
         }
-        Err(err) => Err(TransientError::PostgresError(err)),
+        Err(err) => Err(err),
     }
+}
+
+/// Runs the `CREATE_REPLICATION_SLOT` command `query` for `slot`, failing with
+/// [`TransientError::ReplicationSlotCreationTimeout`] once the command has waited `timeout` for
+/// in-progress upstream transactions to end.
+///
+/// A failure inside a transaction leaves that transaction aborted.
+async fn create_replication_slot(
+    client: &Client,
+    slot: &str,
+    query: Sql,
+    timeout: Duration,
+) -> Result<Option<SimpleQueryRow>, TransientError> {
+    // Slot creation blocks on the transaction locks of in-progress transactions, which
+    // `lock_timeout` bounds. `statement_timeout` does not apply: the server arms it for SQL
+    // statements only, never for replication commands. Abandoning the command client-side does not
+    // help either: a walsender blocked on a transaction lock does not notice the closed connection
+    // and the `CREATE` command remains on the upstream.
+    //
+    // NOTE: `lock_timeout` only detects locks of concurrent sessions on the same server, not
+    // on upstream servers of physical replicas.
+    set_timeout(client, "lock_timeout", timeout).await?;
+    let result = simple_query_opt(client, query).await;
+    // Inside a transaction a failed command also fails the reset, and rolling the transaction back
+    // reverts the `SET`. The command's error is the one to report.
+    let reset = simple_query(client, sql!("RESET lock_timeout")).await;
+    let row = match result {
+        Ok(row) => row,
+        Err(PostgresError::Postgres(err)) if err.code() == Some(&SqlState::DUPLICATE_OBJECT) => {
+            return Err(TransientError::ReplicationSlotAlreadyExists);
+        }
+        Err(PostgresError::Postgres(err)) if err.code() == Some(&SqlState::LOCK_NOT_AVAILABLE) => {
+            return Err(TransientError::ReplicationSlotCreationTimeout {
+                slot: slot.to_owned(),
+                timeout,
+            });
+        }
+        Err(err) => return Err(err.into()),
+    };
+    reset?;
+    Ok(row)
+}
+
+/// Sets the session's timeout `parameter` (for example `statement_timeout`) to `timeout`.
+async fn set_timeout(
+    client: &Client,
+    parameter: &'static str,
+    timeout: Duration,
+) -> Result<(), TransientError> {
+    // A unitless value is interpreted as milliseconds, and the server rejects values above
+    // `i32::MAX` (about 24.8 days) rather than clamping them.
+    // https://www.postgresql.org/docs/current/runtime-config-client.html
+    let millis = i32::try_from(timeout.as_millis()).unwrap_or(i32::MAX);
+    let query = sql!("SET {} = {}", Sql::new(parameter), Sql::from(millis));
+    simple_query(client, query).await?;
+    Ok(())
 }
 
 /// The state of a replication slot.

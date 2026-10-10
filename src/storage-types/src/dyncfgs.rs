@@ -301,6 +301,18 @@ pub const PG_FETCH_SLOT_RESUME_LSN_INTERVAL: Config<Duration> = Config::new(
     ParameterScope::Replica,
 );
 
+/// Timeout for `CREATE_REPLICATION_SLOT` on the upstream server. Applied as the session's
+/// `lock_timeout`, which bounds the wait for in-progress upstream transactions to end. This has
+/// no effect when the upsteam is a physical standby.
+pub const PG_SOURCE_REPLICATION_SLOT_CREATION_TIMEOUT: Config<Duration> = Config::new(
+    "pg_source_replication_slot_creation_timeout",
+    Duration::from_secs(60),
+    "Timeout for creating a replication slot on the upstream PostgreSQL server. Applied as \
+     `lock_timeout`, which bounds the wait for in-progress upstream transactions to end. \
+     Has no effect with physical standbys.",
+    ParameterScope::Replica,
+);
+
 /// Interval to re-validate the schemas of ingested tables.
 pub const PG_SCHEMA_VALIDATION_INTERVAL: Config<Duration> = Config::new(
     "pg_schema_validation_interval",
@@ -600,6 +612,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ORE_OVERFLOWING_BEHAVIOR)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
         .add(&PG_SCHEMA_VALIDATION_INTERVAL)
+        .add(&PG_SOURCE_REPLICATION_SLOT_CREATION_TIMEOUT)
         .add(&PG_SOURCE_VALIDATE_TIMELINE)
         .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
         .add(&SINK_ENSURE_TOPIC_CONFIG)
