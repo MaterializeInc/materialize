@@ -56,12 +56,22 @@ bound advancement or a contention repair. Keep the publication cadence unchanged
 The failing parallel capture identifies a queued MV whose longest overlapping
 holder repeatedly loses before candidate construction. Refresh/open conflicts and
 delayed continuation dispatch dominate that holder, not candidate computation.
-Inspect that admission boundary before changing scheduling or lock ownership.
 Skipping transaction-open sync was rejected: an invalidated prefix still loses,
 with more work before detection. The bounded upper-advance change releases the
 shared storage mutex between definitive conflicts in its off-coordinator caller.
-It retains the target and pending projection updates. CI verification remains
-pending, and neither SQL nor compaction advancement is established by it.
+It retains the target and pending projection updates. CI138564 passes its boundary
+regression and all 4,282 Cargo tests. CI138548's passing parallel workload captures
+a refresh between attempts, but CI138564 still fails both parallel workloads.
+Its longest measured MV holder spends 105.042s across 205 attempts, with only
+1.712s of candidate work. Aggregate publishers invalidate its prefix during
+catch-up. The publication-cadence/retention tradeoff is awaiting a decision.
+Keep the 1s default and catalog validation unchanged meanwhile. Per-object
+compaction-bound advancement remains unproven.
+Kafka RTR's explicit CREATE SOURCE transaction still loses its planning revision.
+Protection publication overlaps purification but is not a proven invalidator.
+Temporary, fixture-enabled kind/count and revision diagnostics must correlate the
+captured revision, actual committed change and rejecting branch before a repair.
+Remove those diagnostics once the mutation is identified. Keep the transaction guard.
 Zippy's growing hydration wait is accompanied by
 increasing raw catalog decode work across independent imports. These measurements
 are not CPU time or unique replay volume. Preserve historical reads and source

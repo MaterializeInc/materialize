@@ -594,6 +594,8 @@ pub struct TransactionResult {
 struct TransactInnerResult {
     state: Option<CatalogState>,
     planning_changed: bool,
+    planning_update_kinds:
+        Option<BTreeMap<(&'static str, crate::memory::objects::StateDiff), usize>>,
     created_client_incarnations: Vec<u64>,
     creator_read_requirements: BTreeMap<u64, BTreeMap<GlobalId, mz_repr::Timestamp>>,
 }
@@ -995,9 +997,20 @@ impl Catalog {
         let TransactInnerResult {
             state,
             planning_changed,
+            planning_update_kinds,
             created_client_incarnations,
             creator_read_requirements,
         } = new_state;
+        debug!(
+            target: "mz_catalog::planning_revision",
+            catalog = ?std::ptr::from_ref(self),
+            deployment = self.state.deployment_generation,
+            old_revision = self.transient_revision,
+            new_revision = self.transient_revision + u64::from(planning_changed),
+            %upper,
+            ?planning_update_kinds,
+            "catalog commit completes planning classification",
+        );
         if planning_changed {
             self.transient_revision += 1;
             // Publish before any planning-visible effects (responses,
@@ -1563,6 +1576,7 @@ impl Catalog {
         updates.extend(late_updates);
         // Classify raw updates, not parsed implications, which omit
         // planning-visible changes.
+        let planning_update_kinds = Self::planning_update_kinds(&state, &updates);
         let planning_changed = updates
             .iter()
             .any(|update| Self::update_affects_planning(&state, update));
@@ -1598,6 +1612,7 @@ impl Catalog {
                 Cow::Borrowed(_) => None,
             },
             planning_changed,
+            planning_update_kinds,
             created_client_incarnations,
             creator_read_requirements,
         })

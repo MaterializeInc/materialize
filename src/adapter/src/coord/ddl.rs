@@ -555,6 +555,19 @@ impl Coordinator {
         };
 
         if self.catalog().transient_revision() != *txn_revision {
+            tracing::debug!(
+                target: "mz_adapter::ddl_revision",
+                site = "before_dry_run",
+                catalog = ?std::ptr::from_ref(self.catalog()),
+                session_id = %ctx.session().uuid(),
+                conn_id = %ctx.session().conn_id(),
+                transaction_id = ?ctx.session().transaction().inner().map(|txn| txn.id),
+                captured_revision = *txn_revision,
+                live_revision = self.catalog().transient_revision(),
+                planning_position = ?self.catalog().planning_position(),
+                has_snapshot = txn_snapshot.is_some(),
+                "explicit DDL rejected changed planning revision",
+            );
             self.metrics
                 .catalog_transact_seconds
                 .with_label_values(&["catalog_transact_with_ddl_transaction"])
@@ -649,6 +662,18 @@ impl Coordinator {
                 {
                     self.refresh_catalog(None).await?;
                     if self.catalog().transient_revision() != txn_revision {
+                        tracing::debug!(
+                            target: "mz_adapter::ddl_revision",
+                            site = "after_dry_run_refresh",
+                            catalog = ?std::ptr::from_ref(self.catalog()),
+                            session_id = %ctx.session().uuid(),
+                            conn_id = %ctx.session().conn_id(),
+                            transaction_id = ?ctx.session().transaction().inner().map(|txn| txn.id),
+                            captured_revision = txn_revision,
+                            live_revision = self.catalog().transient_revision(),
+                            planning_position = ?self.catalog().planning_position(),
+                            "explicit DDL rejected changed planning revision",
+                        );
                         return Err(AdapterError::DDLTransactionRace);
                     }
                     txn_state_clone = self.catalog().state().clone();

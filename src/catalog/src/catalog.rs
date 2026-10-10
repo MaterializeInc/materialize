@@ -1981,6 +1981,56 @@ impl Catalog {
         }
     }
 
+    // Kind/diff counts are bounded by the enum, and never expose catalog contents.
+    // Retain this diagnostic only while investigating explicit-DDL invalidation.
+    fn planning_update_kinds(
+        state: &CatalogState,
+        updates: &[crate::memory::objects::StateUpdate],
+    ) -> Option<BTreeMap<(&'static str, crate::memory::objects::StateDiff), usize>> {
+        use crate::memory::objects::StateUpdateKind;
+        if !tracing::enabled!(target: "mz_catalog::planning_revision", tracing::Level::DEBUG) {
+            return None;
+        }
+        let mut kinds = BTreeMap::new();
+        for update in updates {
+            if !Self::update_affects_planning(state, update) {
+                continue;
+            }
+            let kind = match &update.kind {
+                StateUpdateKind::ActiveDeploymentGeneration(_) => "ActiveDeploymentGeneration",
+                StateUpdateKind::Role(_) => "Role",
+                StateUpdateKind::RoleAuth(_) => "RoleAuth",
+                StateUpdateKind::Database(_) => "Database",
+                StateUpdateKind::Schema(_) => "Schema",
+                StateUpdateKind::DefaultPrivilege(_) => "DefaultPrivilege",
+                StateUpdateKind::SystemPrivilege(_) => "SystemPrivilege",
+                StateUpdateKind::SystemConfiguration(_) => "SystemConfiguration",
+                StateUpdateKind::Cluster(_) => "Cluster",
+                StateUpdateKind::ClusterSystemConfiguration(_) => "ClusterSystemConfiguration",
+                StateUpdateKind::NetworkPolicy(_) => "NetworkPolicy",
+                StateUpdateKind::IntrospectionSourceIndex(_) => "IntrospectionSourceIndex",
+                StateUpdateKind::ClusterReplicaDeclaration(_) => "ClusterReplicaDeclaration",
+                StateUpdateKind::ClusterRuntime(_) => "ClusterRuntime",
+                StateUpdateKind::ClusterReplica(_) => "ClusterReplica",
+                StateUpdateKind::ReplicaSystemConfiguration(_) => "ReplicaSystemConfiguration",
+                StateUpdateKind::SourceReferences(_) => "SourceReferences",
+                StateUpdateKind::SystemObjectMapping(_) => "SystemObjectMapping",
+                StateUpdateKind::Item(_) => "Item",
+                StateUpdateKind::Comment(_) => "Comment",
+                StateUpdateKind::AuditLog(_) => "AuditLog",
+                StateUpdateKind::WrittenPlan(_) => "WrittenPlan",
+                StateUpdateKind::CollectionCompactionBound(_) => "CollectionCompactionBound",
+                StateUpdateKind::MaintainedReadRequirement(_) => "MaintainedReadRequirement",
+                StateUpdateKind::ClientIncarnation(_) => "ClientIncarnation",
+                StateUpdateKind::ClientReadRequirement(_) => "ClientReadRequirement",
+                StateUpdateKind::StorageCollectionMetadata(_) => "StorageCollectionMetadata",
+                StateUpdateKind::UnfinalizedShard(_) => "UnfinalizedShard",
+            };
+            *kinds.entry((kind, update.diff)).or_default() += 1;
+        }
+        Some(kinds)
+    }
+
     /// Apply this writer's unconsumed committed updates. Downstream owners must
     /// enact the returned implications even when their own transaction failed.
     /// Unapplicable committed state requires process recovery, never continuation
@@ -2073,10 +2123,20 @@ impl Catalog {
                     {
                         planning_upper = Some(ts.step_forward());
                     }
+                    let planning_update_kinds = Self::planning_update_kinds(&self.state, &updates);
                     let (builtin_updates, parsed_updates) = self
                         .state
                         .apply_updates(updates, &mut state::LocalExpressionCache::Closed)
                         .await;
+                    tracing::debug!(
+                        target: "mz_catalog::planning_revision",
+                        catalog = ?std::ptr::from_ref(self),
+                        deployment = self.state.deployment_generation,
+                        revision = self.transient_revision,
+                        %ts,
+                        ?planning_update_kinds,
+                        "applied committed catalog transaction during refresh",
+                    );
                     builtin_table_updates.extend(builtin_updates);
                     catalog_updates.extend(parsed_updates);
                 }
@@ -2089,6 +2149,16 @@ impl Catalog {
             });
         self.advance_positions(upper, planning_upper);
         if planning_upper.is_some() {
+            tracing::debug!(
+                target: "mz_catalog::planning_revision",
+                catalog = ?std::ptr::from_ref(self),
+                deployment = self.state.deployment_generation,
+                old_revision = self.transient_revision,
+                new_revision = self.transient_revision + 1,
+                %upper,
+                ?planning_upper,
+                "catalog refresh advances planning revision",
+            );
             self.transient_revision += 1;
             self.shared_transient_revision
                 .store(self.transient_revision, std::sync::atomic::Ordering::SeqCst);

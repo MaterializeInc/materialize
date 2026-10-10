@@ -1534,6 +1534,17 @@ impl Coordinator {
                     | Statement::CreateSource(_) => {
                         let state = query_catalog.for_session(ctx.session()).state().clone();
                         let transient_revision = query_catalog.transient_revision();
+                        tracing::debug!(
+                            target: "mz_adapter::ddl_revision",
+                            catalog = ?std::ptr::from_ref(self.catalog()),
+                            session_id = %ctx.session().uuid(),
+                            conn_id = %ctx.session().conn_id(),
+                            transaction_id = ?ctx.session().transaction().inner().map(|txn| txn.id),
+                            captured_revision = transient_revision,
+                            live_revision = self.catalog().transient_revision(),
+                            planning_position = ?self.catalog().planning_position(),
+                            "captured explicit DDL planning revision",
+                        );
 
                         // Initialize our transaction with a set of empty ops, or return an error
                         // if we can't run a DDL transaction

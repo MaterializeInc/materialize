@@ -1402,6 +1402,14 @@ impl TransactionStatus {
                             snapshot: new_snapshot,
                         } => {
                             if *og_revision != new_revision {
+                                tracing::debug!(
+                                    target: "mz_adapter::ddl_revision",
+                                    site = "accumulate_ddl_ops",
+                                    captured_revision = *og_revision,
+                                    live_revision = new_revision,
+                                    has_snapshot = og_snapshot.is_some(),
+                                    "explicit DDL rejected changed planning revision",
+                                );
                                 return Err(AdapterError::DDLTransactionRace);
                             }
                             // The old og_ops are overwritten, not extended.
