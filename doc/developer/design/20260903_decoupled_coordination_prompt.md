@@ -104,6 +104,14 @@ failures, but do not make unrelated fixture cleanup a prerequisite for this work
 Batch corrections to shared fixture setup instead of rediscovering the same
 prerequisite per test.
 
+Handle nonstructural frontier conflicts at the existing catalog transaction
+boundary, retaining valid preparation and input holds. This includes moved
+compaction bounds, not just peer grants. Apply committed diffs and their effects,
+then recompute affected timestamp/protection decisions against that prefix.
+Bound immediate retry work and yield with backoff without discarding valid
+preparation. Keep structural validation and the 1s publication default. Do not add
+another retry framework or a general dependency-tracking scheme.
+
 Scope and working rules
 
 The design owns the contracts. Mechanisms and factoring within them are yours

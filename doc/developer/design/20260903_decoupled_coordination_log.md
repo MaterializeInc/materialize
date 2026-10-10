@@ -49,67 +49,41 @@ published advancement. The outage fixture checks physical compaction before repl
 SIGKILLs, without shortening abandoned Persist reader leases or extending deadlines.
 Keep earlier branch-built catalog conversion outside scope.
 
-Parallel failures and SLT/Zippy timeouts remain. SLT's measured first-SELECT delay
-follows completed reset/startup and ends successfully. Its blocking phase remains
-unidentified, requiring statement-correlated timing rather than more publication
-warnings. Replica aggregate-protection publication dominates the
-sampled writes and invalidates short foreground MV candidates even in a passing
-workload. Acquisition also conflicts. SQL progress does not establish compaction
-bound advancement or a contention repair. Keep the publication cadence unchanged.
-The failing parallel capture identifies a queued MV whose longest overlapping
-holder repeatedly loses before candidate construction. Refresh/open conflicts and
-delayed continuation dispatch dominate that holder, not candidate computation.
-Skipping transaction-open sync was rejected: an invalidated prefix still loses,
-with more work before detection. The bounded upper-advance change releases the
-shared storage mutex between definitive conflicts in its off-coordinator caller.
-It retains the target and pending projection updates. CI138564 passes its boundary
-regression and all 4,282 Cargo tests. CI138548's passing parallel workload captures
-a refresh between attempts, but CI138564 still fails both parallel workloads.
-CI138634 identifies `owner_mv3` holding admission for 379.988s across 1,140
-attempts, including 1,016 transaction-open rejections. Candidate work totals only
-6.116s. `privilege_mv2` waits 394.040s in the queue. Keep the 1s publication
-default. Ordinary prepared DDL must release admission during definitive retry
-suspension, retaining its operations, selected
-plans and necessary input holds. Reacquire admission and revalidate before reuse.
-Legacy serialization is not globally removed. This addresses queue amplification,
-not the transaction-open conflict window. Improve that existing attempt boundary
-without blind diff replay or another retry framework. Commit timestamp and MV
-birth are distinct, and fixed REFRESH timestamps cannot slide. Per-object
-compaction-bound advancement remains unproven.
-The four staged commit paths use that admission boundary. Fixed-birth grant
-acquisition and legacy inline retries are unchanged. The common transaction-open
-repair consumes complete peer-grant-only prefixes before constructing the
-candidate, preserving committed bookkeeping on every outcome. Own-map changes,
-sampled bounds and mixed prefixes still return intact to the refresh owner.
-CI138649 passes its boundary test and both Clippy jobs, but both parallel
-workloads still fail. The complete `basic_topk_view1` capture has nine successful
-opens/candidates and nine known-stale upper mismatches, with no submitted CAS.
-Eight retry reacquisitions produce seven structural replans. Admission holds total
-6.836s within a 302.949s execution. Successful open and admission handoff therefore
-do not close the post-candidate conflict window or end-to-end SQL progress.
-Catalog upper movement is not evidence of physical compaction-bound advancement.
-The cancellation regression failed because its peer grants no longer force a
-conflict. Its fixture now replaces the private peer execution, transferring its
-protection while forcing a metadata conflict. Progress, cancellation and retained
-plan/hold assertions remain unchanged. CI138657 passes all 4,283 executed Cargo
-tests, including this correction. Parallel 2 passes, but parallel 1 still has
-CREATE MV timeouts. SLT 3 finishes its SQL workload successfully before deadline
-cancellation during cleanup. Its workload duration remains unexplained, not a
-demonstrated blocked statement or shared cause with MV contention.
-CI138665 verifies the committed-prefix diagnostic. The complete
-`string_bytea_types_view1` capture has 18 failed attempts: four at open and fourteen
-after candidate construction. Eight post-candidate prefixes contain only compatible
-peer grants. Six include compaction bounds or maintained read requirements, and
-none contains the creator's own incarnation. Fifteen structural replans occur.
-This establishes a narrow retry opportunity, not its effectiveness. Strict yielding
-remains unchanged.
+Repair the nonstructural conflict path under
+[cooperating catalog writers](20260903_decoupled_coordination.md#cooperating-catalog-writers).
+Replica grant and permission publications contend on the shared catalog upper,
+outside the adapter's local DDL lock. Those publications do not invalidate SQL
+planning. Requeueing after a failed attempt allows other SQL DDL to change the
+planning revision, amplifying a metadata conflict into queueing and replanning.
+
+Admission yielding and peer-grant catch-up at transaction open are implemented.
+The next boundary is cheap, validated retry across nonstructural changes, including
+compaction bounds and maintained frontiers, both at open and after a lost append.
+Retain selected plans and input holds, apply committed diffs and their effects,
+and recompute affected admission and cleanup decisions. Do not broaden the
+peer-only predicate without handling those effects, or replay a stale candidate.
+Own-grant accounting, execution authority and publication barriers remain binding.
+
+Bounded immediate retry work is permitted within the existing transaction path.
+Avoid treating a single extra peer-grant-only attempt as the complete repair.
+Backoff leaves the coordinator available. The four staged commit paths release
+DDL admission on definitive conflict suspension, then reacquire and revalidate.
+Fixed-birth acquisition and legacy transaction-end admission ownership stay intact.
+Never release admission for an unresolved submitted write. Keep structural validation:
+dependency existence alone does not establish unchanged definitions, configuration,
+authorization or derived operation sets. No blanket removal of legacy serialization,
+new retry framework or general structural read-set machinery is required.
+
+Keep the 1s publication default and use existing workloads to verify SQL completion,
+retry cost and actual compaction-bound advancement separately. Per-object advancement
+under contention remains unproven. Catalog upper movement alone is not evidence of it.
 The diagnostic also samples finite before/after compaction bounds by object ID.
 Verify those witnesses in CI before claiming permission advancement. Initial
 admission, deletion and completion are excluded. Physical Persist since and other
 objects' progress remain separate observations.
-Keep structural revalidation conservative. Existing dependency existence checks
-alone do not establish unchanged definitions, configuration, authorization or
-derived operation sets. Do not remove the revision guard to avoid replanning.
+SLT/Zippy timeouts remain unresolved. Do not assume a shared cause with the MV
+contention without statement-correlated evidence. Detailed captures and verification
+belong in the PR.
 Kafka RTR's intermittent explicit CREATE SOURCE planning-revision loss is unresolved.
 Protection publication overlaps purification but is not a proven invalidator.
 Temporary, fixture-enabled kind/count and revision diagnostics must correlate the
@@ -234,9 +208,9 @@ repair.
 Identify publication owners from actual commits rather than inferring their rate
 or role from update-batch sizes.
 Preserve eager freshness, cancellation, revision checks, transaction-end ownership
-and definitive writes. DDL retry policy, publication cadence and safety checks
-stay unchanged. Beyond the approved protection-lifetime and Kafka changes, no
-broader scheduling or protocol change is approved.
+and definitive writes. Follow the bounded metadata-retry contract above, without
+changing publication cadence or safety checks. No broader scheduling or protocol
+change is approved.
 The frontier INSERT's year-3000 read wait is separate.
 The source-table EXPLAIN timeout remains unlocalized between certification and
 grant acquisition. Keep its protection and deadline unchanged.
@@ -249,7 +223,7 @@ This removes repeated hashing, but aggregate candidate timings do not isolate
 hashing's cost from scans or scheduling delays.
 
 Keep the 1s publication default while making contention cheap and nonblocking.
-Defer the 5s comparison until that repair is measured. Preserve statement deadlines,
+Cadence comparisons are deferred. Preserve statement deadlines,
 commit-before-use, Persist leases and definitive write outcomes. Verify with the
 existing failing workflows, measuring retry work, foreground progress, advancement
 and retained frontiers rather than only job success.
