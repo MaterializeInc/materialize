@@ -13,7 +13,7 @@ from typing import Generic, TypeVar
 
 from materialize.feature_benchmark.benchmark_result import BenchmarkScenarioMetric
 from materialize.feature_benchmark.measurement import MeasurementType
-from materialize.feature_benchmark.scenario import Scenario
+from materialize.feature_benchmark.scenario import RootScenario, Scenario
 from materialize.terminal import (
     COLOR_BAD,
     COLOR_GOOD,
@@ -43,9 +43,13 @@ class BenchmarkResultEvaluator(Generic[T]):
 class RelativeThresholdEvaluator(BenchmarkResultEvaluator[float | None]):
 
     def __init__(self, scenario_class: type[Scenario]) -> None:
-        self.threshold_by_measurement_type: dict[MeasurementType, float] = (
-            scenario_class.RELATIVE_THRESHOLD
-        )
+        # Layer the scenario's overrides on top of the root defaults so
+        # adding a new MeasurementType doesn't require touching every
+        # scenario that customizes only a subset of thresholds.
+        self.threshold_by_measurement_type: dict[MeasurementType, float] = {
+            **RootScenario.RELATIVE_THRESHOLD,
+            **scenario_class.RELATIVE_THRESHOLD,
+        }
 
     def get_threshold(self, metric: BenchmarkScenarioMetric) -> float:
         return self.threshold_by_measurement_type[metric.measurement_type]
