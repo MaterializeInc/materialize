@@ -216,6 +216,26 @@ pub(super) struct Instance {
     replica_rx: mz_ore::channel::InstrumentedUnboundedReceiver<ReplicaResponse, IntCounter>,
 }
 
+/// Clones a read hold on an input of a collection of this instance.
+///
+/// # Panics
+///
+/// Panics if the hold's issuer hung up. The inputs are storage collections, whose issuer is the
+/// `StorageCollections`, and indexes of this instance, whose holds `ComputeController::create_dataflow`
+/// acquires from this instance's task, so that only happens during process shutdown.
+fn clone_input_read_hold(hold: &ReadHold) -> ReadHold {
+    hold.try_clone()
+        .expect("an input read hold's issuer only hangs up during process shutdown")
+}
+
+/// Clones read holds with [`clone_input_read_hold`].
+fn clone_input_read_holds(holds: &BTreeMap<GlobalId, ReadHold>) -> BTreeMap<GlobalId, ReadHold> {
+    holds
+        .iter()
+        .map(|(id, hold)| (*id, clone_input_read_hold(hold)))
+        .collect()
+}
+
 impl Instance {
     /// Acquire a handle to the collection state associated with `id`.
     fn collection(&self, id: GlobalId) -> Result<&CollectionState, CollectionMissing> {
@@ -326,7 +346,11 @@ impl Instance {
             if target_replica.is_some_and(|id| id != replica.id) {
                 continue;
             }
-            replica.add_collection(id, as_of.clone(), replica_input_read_holds.clone());
+            let input_read_holds = replica_input_read_holds
+                .iter()
+                .map(clone_input_read_hold)
+                .collect();
+            replica.add_collection(id, as_of.clone(), input_read_holds);
         }
     }
 
@@ -1462,7 +1486,7 @@ impl Instance {
 
         for &id in dataflow.source_imports.keys() {
             let mut read_hold = import_read_holds.remove(&id).ok_or(ReadHoldMissing(id))?;
-            replica_input_read_holds.push(read_hold.clone());
+            replica_input_read_holds.push(clone_input_read_hold(&read_hold));
 
             read_hold
                 .try_downgrade(as_of.clone())
@@ -1496,9 +1520,12 @@ impl Instance {
                 export_id,
                 as_of.clone(),
                 shared,
-                storage_dependencies.clone(),
-                compute_dependencies.clone(),
-                replica_input_read_holds.clone(),
+                clone_input_read_holds(&storage_dependencies),
+                clone_input_read_holds(&compute_dependencies),
+                replica_input_read_holds
+                    .iter()
+                    .map(clone_input_read_hold)
+                    .collect(),
                 write_only,
                 storage_sink,
                 dataflow.initial_storage_as_of.clone(),

@@ -705,12 +705,16 @@ impl PeekClient {
                 // - Use the transaction's stored timestamp determination.
                 // - Use the (relevant subset of the) transaction's read holds.
 
+                // Test-only synchronization point: parks a statement in a
+                // transaction before it fetches the transaction's read holds, so a
+                // test can drop their cluster in between.
+                fail::fail_point!("txn_read_holds_before_dispatch");
                 let txn_read_holds_opt = self
                     .call_coordinator(|tx| Command::GetTransactionReadHoldsBundle {
                         conn_id: session.conn_id().clone(),
                         tx,
                     })
-                    .await?;
+                    .await??;
 
                 if let Some(txn_read_holds) = txn_read_holds_opt {
                     let allowed_id_bundle = txn_read_holds.id_bundle();
@@ -789,12 +793,13 @@ impl PeekClient {
                 if in_immediate_multi_stmt_txn
                     && determination.timestamp_context.contains_timestamp()
                 {
+                    let txn_read_holds = read_holds.try_clone()?;
                     self.call_coordinator(|tx| Command::StoreTransactionReadHolds {
                         conn_id: session.conn_id().clone(),
-                        read_holds: read_holds.clone(),
+                        read_holds: txn_read_holds,
                         tx,
                     })
-                    .await?;
+                    .await??;
                 }
 
                 (determination, read_holds)
@@ -1002,6 +1007,10 @@ impl PeekClient {
                 mz_ore::task::spawn_blocking(
                     || "optimize peek",
                     move || {
+                        // Test-only synchronization point: parks a SELECT's
+                        // optimization, after it acquired its read holds, so a test
+                        // can drop their cluster in between.
+                        fail::fail_point!("peek_before_optimize");
                         span.in_scope(|| {
                             let _dispatch_guard = explain_ctx.dispatch_guard();
 
@@ -1643,7 +1652,11 @@ impl PeekClient {
             && real_time_recency_ts.is_none()
         {
             // Note down the difference between BoundedStaleness and Serializable into a metric.
-            if let Some(bs_ts) = det.timestamp_context.timestamp() {
+            // The metric isn't worth failing the query over, so skip it if the issuer of a hold
+            // hung up.
+            if let Some(bs_ts) = det.timestamp_context.timestamp()
+                && let Ok(read_holds) = read_holds.try_clone()
+            {
                 let (serializable_det, _tmp_read_holds) =
                     <Coordinator as TimestampProvider>::determine_timestamp_for_inner(
                         session,
@@ -1653,7 +1666,7 @@ impl PeekClient {
                         oracle_read_ts,
                         real_time_recency_ts,
                         &IsolationLevel::Serializable,
-                        read_holds.clone(),
+                        read_holds,
                         upper,
                     )?;
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {

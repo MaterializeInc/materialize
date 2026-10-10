@@ -267,16 +267,19 @@ pub enum Command {
         tx: oneshot::Sender<Result<Option<mz_repr::Timestamp>, AdapterError>>,
     },
 
+    /// Returns a copy of the given connection's stored transaction read holds, or
+    /// fails if the issuer of one of them hung up, see `ReadHolds::try_clone`.
     GetTransactionReadHoldsBundle {
         conn_id: ConnectionId,
-        tx: oneshot::Sender<Option<ReadHolds>>,
+        tx: oneshot::Sender<Result<Option<ReadHolds>, AdapterError>>,
     },
 
-    /// _Merges_ the given read holds into the given connection's stored transaction read holds.
+    /// _Merges_ the given read holds into the given connection's stored transaction read holds,
+    /// failing if the issuer of a merged hold hung up, see `ReadHolds::merge`.
     StoreTransactionReadHolds {
         conn_id: ConnectionId,
         read_holds: ReadHolds,
-        tx: oneshot::Sender<()>,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
     },
 
     ExecuteSlowPathPeek {
