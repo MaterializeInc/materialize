@@ -1500,19 +1500,7 @@ pub fn memoize_expr<E: OptimizableExpr>(
 pub mod util {
     use std::collections::BTreeMap;
 
-    use crate::MirScalarExpr;
     use crate::scalar::columns::Columns;
-
-    #[expect(dead_code)]
-    /// A triple of actions that map from rows to (key, val) pairs and back again.
-    struct KeyValRowMapping {
-        /// Expressions to apply to a row to produce key datums.
-        to_key: Vec<MirScalarExpr>,
-        /// Columns to project from a row to produce residual value datums.
-        to_val: Vec<usize>,
-        /// Columns to project from the concatenation of key and value to reconstruct the row.
-        to_row: Vec<usize>,
-    }
 
     /// Derive supporting logic to support transforming rows to (key, val) pairs,
     /// and back again.

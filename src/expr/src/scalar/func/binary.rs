@@ -93,19 +93,6 @@ pub(crate) trait EagerBinaryFunc {
     /// The output SqlColumnType of this function
     fn output_sql_type(&self, input_types: &[SqlColumnType]) -> SqlColumnType;
 
-    /// The output of this function as a representation type.
-    #[expect(dead_code)]
-    fn output_type(&self, input_types: &[ReprColumnType]) -> ReprColumnType {
-        ReprColumnType::from(
-            &self.output_sql_type(
-                &input_types
-                    .iter()
-                    .map(SqlColumnType::from_repr)
-                    .collect::<Vec<_>>(),
-            ),
-        )
-    }
-
     /// Whether this function will produce NULL on NULL input
     fn propagates_nulls(&self) -> bool {
         // If the inputs are not nullable then nulls are propagated

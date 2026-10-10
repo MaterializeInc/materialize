@@ -21,7 +21,7 @@ use mz_ore::error::ErrorExt;
 use mz_repr::{Diff, GlobalId};
 use mz_sql_server_util::SqlServerError;
 use mz_sql_server_util::cdc::Lsn;
-use mz_sql_server_util::desc::{SqlServerRowDecoder, SqlServerTableDesc};
+use mz_sql_server_util::desc::SqlServerRowDecoder;
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
 use mz_storage_types::sources::{
     SourceExport, SourceExportDetails, SourceTimestamp, SqlServerSourceConnection,
@@ -45,9 +45,6 @@ mod replication;
 struct SourceOutputInfo {
     /// Name of the capture instance in the upstream SQL Server DB.
     capture_instance: Arc<str>,
-    /// Description of the upstream table.
-    #[expect(dead_code)]
-    upstream_desc: Arc<SqlServerTableDesc>,
     /// Type that can decode (and map) SQL Server rows into Materialize rows.
     decoder: Arc<SqlServerRowDecoder>,
     /// Upper to resume replication from.
@@ -152,7 +149,6 @@ impl SourceRender for SqlServerSourceConnection {
                 .table
                 .decoder(&storage_metadata.relation_desc)
                 .expect("TODO handle errors");
-            let upstream_desc = Arc::new(details.table.clone());
             let resume_upper = config
                 .source_resume_uppers
                 .get(id)
@@ -162,7 +158,6 @@ impl SourceRender for SqlServerSourceConnection {
 
             let output_info = SourceOutputInfo {
                 capture_instance: Arc::clone(&details.capture_instance),
-                upstream_desc,
                 decoder: Arc::new(decoder),
                 resume_upper: Antichain::from_iter(resume_upper),
                 partition_index: u64::cast_from(idx),

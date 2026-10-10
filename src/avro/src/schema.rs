@@ -62,11 +62,6 @@ pub fn resolve_schemas(
                     .map(|ridx| ((*ridx, *widx), (*widx, *ridx)))
             })
             .unzip();
-    let reader_fullnames = reader_schema
-        .indices
-        .iter()
-        .map(|(f, i)| (*i, f))
-        .collect::<BTreeMap<_, _>>();
     let mut resolver = SchemaResolver {
         named: Default::default(),
         indices: Default::default(),
@@ -75,7 +70,6 @@ pub fn resolve_schemas(
         writer_to_reader_names,
         reader_to_writer_names,
         reader_to_resolved_names: Default::default(),
-        reader_fullnames,
         reader_schema,
     };
     let writer_node = writer_schema.top_node_or_named();

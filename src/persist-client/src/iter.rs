@@ -668,18 +668,6 @@ where
         Ok(())
     }
 
-    /// Wait until data is available, then return an iterator over the next
-    /// consolidated chunk of output. If this method returns `None`, that all the data has been
-    /// exhausted and the full consolidated dataset has been returned.
-    #[expect(dead_code)]
-    pub(crate) async fn next(
-        &mut self,
-    ) -> anyhow::Result<Option<impl Iterator<Item = (SortKV<'_>, T, D)>>> {
-        self.trim();
-        self.unblock_progress().await?;
-        Ok(self.iter().map(|i| i.map(|(_idx, kv, t, d)| (kv, t, d))))
-    }
-
     fn chunk(&mut self, max_len: usize, max_bytes: usize) -> Option<Part> {
         let Some(mut iter) = self.iter() else {
             return None;
