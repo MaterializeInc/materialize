@@ -665,6 +665,7 @@ pub fn main() {
 
 fn run(mut args: Args) -> Result<(), anyhow::Error> {
     mz_ore::panic::install_enhanced_handler();
+    mz_ore::antithesis::init();
 
     // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK and the
     // Kubernetes client both build their rustls configs from the process-default

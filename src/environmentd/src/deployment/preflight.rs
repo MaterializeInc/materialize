@@ -135,6 +135,9 @@ pub fn spawn_catchup(
                     }
                     () = &mut caught_up_max_wait_fut => {
                         if panic_after_timeout {
+                            // The operator asked for this panic via
+                            // `enable_0dt_deployment_panic_after_timeout`.
+                            mz_ore::antithesis::expect_panic();
                             panic!("not caught up within {:?}", caught_up_max_wait);
                         }
                         info!("not caught up within {:?}, proceeding now", caught_up_max_wait);

@@ -284,6 +284,8 @@ aho-corasick = "1.1.4"
 allocation-counter = "0"
 annotate-snippets = "0.12.15"
 anyhow = "1.0.102"
+antithesis-instrumentation = "0.1.0"
+antithesis_sdk = { version = "0.3.0", default-features = false }
 array-concat = "0.5.5"
 arrayvec = "0.7.6"
 arrow = { version = "58", default-features = false }
