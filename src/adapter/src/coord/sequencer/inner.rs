@@ -4244,6 +4244,34 @@ impl Coordinator {
             .map(|_| ExecuteResponse::ReassignOwned)
     }
 
+    /// Reenter ordinary DDL admission after a definitive failed attempt.
+    /// The continuation owns its preparation and holds, not a submitted write.
+    pub(in crate::coord) fn defer_catalog_retry(
+        &mut self,
+        ctx: ExecuteContext,
+        ps: crate::coord::PlanStatement,
+    ) {
+        let conn_id = ctx.session().conn_id();
+        let Some(conn) = self.active_conns.get(conn_id) else {
+            ctx.retire(Err(AdapterError::Canceled));
+            return;
+        };
+        // Cancellation may have arrived after backoff completed but before the
+        // ready message. Do not park that already-canceled request behind DDL.
+        if self
+            .connection_cancel_watches
+            .get(conn_id)
+            .is_some_and(|(_, rx)| *rx.borrow())
+        {
+            ctx.retire(Err(AdapterError::Canceled));
+            return;
+        }
+        assert!(conn.deferred_lock.is_none(), "retry must release admission");
+        self.serialized_ddl
+            .push_back(DeferredPlanStatement { ctx, ps });
+        let _ = self.internal_cmd_tx.send(Message::DeferredStatementReady);
+    }
+
     #[instrument]
     pub(crate) async fn handle_deferred_statement(&mut self) {
         // It is possible Message::DeferredStatementReady was sent but then a session cancellation
@@ -4261,16 +4289,29 @@ impl Coordinator {
             }
             break (ctx, ps, guard);
         };
+        // Transaction-end plans own their original acquisition/extraction path.
+        // Statements and prepared retries reserve admission through freshness
+        // validation, without repeating transaction setup or statement logging.
+        if matches!(&ps, crate::coord::PlanStatement::Plan { .. }) {
+            drop(guard);
+        } else {
+            let previous = self
+                .active_conns
+                .get_mut(ctx.session().conn_id())
+                .expect("connection checked above")
+                .deferred_lock
+                .replace(guard);
+            assert!(previous.is_none(), "connection already owns the DDL guard");
+            if !matches!(&ps, crate::coord::PlanStatement::Statement { .. }) {
+                tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                    session_id = %ctx.session().uuid(), conn_id = %ctx.session().conn_id(),
+                    transaction_id = ?ctx.session().transaction().inner().map(|txn| txn.id),
+                    "DDL retry lock acquired");
+            }
+        }
         match ps {
             crate::coord::PlanStatement::Statement { stmt, params } => {
                 crate::coord::trace_create_mv_phase(ctx.session(), Some(&stmt), "ddl_lock_dequeue");
-                let previous = self
-                    .active_conns
-                    .get_mut(ctx.session().conn_id())
-                    .expect("connection checked above")
-                    .deferred_lock
-                    .replace(guard);
-                assert!(previous.is_none(), "connection already owns the DDL guard");
                 tracing::debug!(target: "mz_adapter::frontend_read_then_write",
                     session_id = %ctx.session().uuid(), conn_id = %ctx.session().conn_id(),
                     transaction_id = ?ctx.session().transaction().inner().map(|txn| txn.id),
@@ -4289,11 +4330,20 @@ impl Coordinator {
                 resolved_ids,
                 sql_impl_resolved_ids,
             } => {
-                // Transaction end acquires the guard before its first yield.
-                // It also owns transaction extraction and must run that path once.
-                drop(guard);
                 self.sequence_plan(ctx, plan, resolved_ids, sql_impl_resolved_ids)
                     .await;
+            }
+            crate::coord::PlanStatement::CatalogCommit { stage, span } => {
+                self.sequence_staged(ctx, span, *stage).boxed_local().await;
+            }
+            crate::coord::PlanStatement::DropObjects { stage, span } => {
+                self.sequence_staged(ctx, span, *stage).boxed_local().await;
+            }
+            crate::coord::PlanStatement::CreateIndex { stage, span } => {
+                self.sequence_staged(ctx, span, *stage).boxed_local().await;
+            }
+            crate::coord::PlanStatement::CreateMaterializedView { stage, span } => {
+                self.sequence_staged(ctx, span, *stage).boxed_local().await;
             }
         }
     }

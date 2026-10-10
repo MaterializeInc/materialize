@@ -61,6 +61,16 @@ replan releases its DDL guard and wakes queued statements before reacquiring it.
 Queued continuations must reject terminated connections even after their cancel
 watches have been removed.
 
+The staged catalog-commit, DROP, CREATE INDEX and automatic-birth CREATE
+MATERIALIZED VIEW commit paths release DDL admission during definitive retry
+backoff. Their continuations retain preparation and input holds, then join the
+existing DDL queue and reacquire its
+guard before validation. Do not release admission for an unresolved submitted
+write, repeat transaction setup or statement logging on resumption, or apply this
+rule to legacy transaction-end cleanup. Fixed-birth acquisition and inline
+catalog retries retain their own admission paths. Concurrent structural DDL can
+invalidate retained preparation, requiring a replan rather than stale reuse.
+
 Dequeuing serialized DDL reserves its existing guard before asynchronous catalog
 certification. Resume below transaction setup and lock acquisition, but recheck
 freshness and the live revision before name resolution. A wakeup is not an admission

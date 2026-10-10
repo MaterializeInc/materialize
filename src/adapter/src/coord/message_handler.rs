@@ -276,13 +276,36 @@ impl Coordinator {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
             Message::CatalogCommitStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
+                self.defer_catalog_retry(
+                    ctx,
+                    super::PlanStatement::CatalogCommit {
+                        stage: Box::new(stage),
+                        span,
+                    },
+                );
             }
             Message::DropObjectsStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
+                self.defer_catalog_retry(
+                    ctx,
+                    super::PlanStatement::DropObjects {
+                        stage: Box::new(stage),
+                        span,
+                    },
+                );
             }
             Message::CreateIndexStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
+                // Commit Ready messages only come from backoff that released admission.
+                if matches!(stage, super::CreateIndexStage::Commit(_)) {
+                    self.defer_catalog_retry(
+                        ctx,
+                        super::PlanStatement::CreateIndex {
+                            stage: Box::new(stage),
+                            span,
+                        },
+                    );
+                } else {
+                    self.sequence_staged(ctx, span, stage).boxed_local().await;
+                }
             }
             Message::CreateMetricSinkStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
@@ -291,7 +314,18 @@ impl Coordinator {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
             Message::CreateMaterializedViewStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
+                // Commit Ready messages only come from backoff that released admission.
+                if matches!(stage, super::CreateMaterializedViewStage::Commit(_)) {
+                    self.defer_catalog_retry(
+                        ctx,
+                        super::PlanStatement::CreateMaterializedView {
+                            stage: Box::new(stage),
+                            span,
+                        },
+                    );
+                } else {
+                    self.sequence_staged(ctx, span, stage).boxed_local().await;
+                }
             }
             Message::SubscribeStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
