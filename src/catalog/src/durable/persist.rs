@@ -2993,46 +2993,54 @@ impl DurableCatalogState for PersistCatalogState {
 
     #[mz_ore::instrument(level = "debug")]
     async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError> {
-        self.validate_runtime()?;
         loop {
-            if self.upper >= new_upper {
-                // This does not consult Persist. It only revalidates a fence already cached by
-                // this handle, since a sync can advance `upper` while recording the fence.
-                self.fenceable_token.validate()?;
+            if self.try_advance_upper(new_upper).await? {
                 return Ok(());
             }
+        }
+    }
 
-            match self.mode {
-                Mode::Writable => {}
-                Mode::Savepoint => {
-                    self.upper = new_upper;
-                    return Ok(());
-                }
-                Mode::Readonly => {
-                    return Err(DurableCatalogError::NotWritable(
-                        "cannot advance upper of a read-only catalog".into(),
-                    )
-                    .into());
-                }
+    async fn try_advance_upper(&mut self, new_upper: Timestamp) -> Result<bool, CatalogError> {
+        self.validate_runtime()?;
+        if self.upper >= new_upper {
+            // This does not consult Persist. It only revalidates a fence already cached by
+            // this handle, since a sync can advance `upper` while recording the fence.
+            self.fenceable_token.validate()?;
+            return Ok(true);
+        }
+
+        match self.mode {
+            Mode::Writable => {}
+            Mode::Savepoint => {
+                self.upper = new_upper;
+                return Ok(true);
             }
+            Mode::Readonly => {
+                return Err(DurableCatalogError::NotWritable(
+                    "cannot advance upper of a read-only catalog".into(),
+                )
+                .into());
+            }
+        }
 
-            // This only certifies an empty catalog prefix. In particular, a
-            // table writer calls it before its own durable append, so it must
-            // not announce completion of that writer's timestamp.
-            match self
-                .compare_and_append_inner([], new_upper.step_back().expect("advancing upper"), None)
-                .await
-            {
-                Ok(_) => {
-                    self.upper = new_upper;
-                    // No sync needed since no data was written.
-                    return Ok(());
-                }
-                Err(CompareAndAppendError::Durable(error)) => return Err(error.into()),
-                Err(CompareAndAppendError::UpperMismatch { .. }) => {
-                    // Empty progress has no snapshot-dependent decisions. The sync
-                    // retains content updates for the caller's projection.
-                }
+        // This only certifies an empty catalog prefix. In particular, a
+        // table writer calls it before its own durable append, so it must
+        // not announce completion of that writer's timestamp.
+        match self
+            .compare_and_append_inner([], new_upper.step_back().expect("advancing upper"), None)
+            .await
+        {
+            Ok(_) => {
+                self.upper = new_upper;
+                // No sync needed since no data was written.
+                Ok(true)
+            }
+            Err(CompareAndAppendError::Durable(error)) => Err(error.into()),
+            Err(CompareAndAppendError::UpperMismatch { .. }) => {
+                // Empty progress has no snapshot-dependent decisions. The sync
+                // retains content updates for the caller's projection.
+                self.validate_runtime()?;
+                Ok(self.upper >= new_upper)
             }
         }
     }

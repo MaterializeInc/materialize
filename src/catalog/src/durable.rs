@@ -441,6 +441,14 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Empty progress does not allocate or complete an oracle write.
     async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError>;
 
+    /// Makes at most one attempt to advance the catalog upper to `new_upper`.
+    ///
+    /// Returns false after a definitive conflict if the target remains unmet.
+    /// Consumed content remains pending for the caller's projection. Callers may
+    /// release exclusive access before retrying the same target. Fencing, runtime
+    /// identity and future-timestamp checks match [`Self::advance_upper`].
+    async fn try_advance_upper(&mut self, new_upper: Timestamp) -> Result<bool, CatalogError>;
+
     /// Attempts to retire an explicitly identified prewarming deployment.
     ///
     /// Only the serving deployment may call this. Success is durable, includes

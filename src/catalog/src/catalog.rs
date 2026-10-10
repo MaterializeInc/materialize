@@ -185,7 +185,17 @@ impl CatalogUpperHandle {
         &self,
         new_upper: mz_repr::Timestamp,
     ) -> Result<(), crate::durable::CatalogError> {
-        self.storage.lock().await.advance_upper(new_upper).await
+        loop {
+            let complete = {
+                let mut storage = self.storage.lock().await;
+                storage.try_advance_upper(new_upper).await?
+            };
+            if complete {
+                return Ok(());
+            }
+            // A definitive conflict leaves no pending write. Release the shared
+            // handle so queued projection refreshes can run before another attempt.
+        }
     }
 }
 

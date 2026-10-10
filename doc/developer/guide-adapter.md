@@ -519,6 +519,16 @@ might include: reducing oracle round-trip latency, colocating the oracle,
 using the batching oracle's existing mechanism to serve more callers per batch,
 or relaxing the isolation level for queries that opt in.
 
+### Skipping transaction-open synchronization after creator refresh
+
+Creator admission derives protection from a refreshed catalog projection. Skipping
+the subsequent transaction-open sync does not rescue that prefix if peer content
+has already invalidated it. It moves rejection to compare-and-append, after candidate
+construction and oracle allocation, and still requires conflict catch-up. Diagnose
+the refresh-to-commit interval and lock waits rather than treating an early rejection
+as the cause of contention. Pending projection updates must remain a barrier to
+opening a transaction.
+
 ### Session records in the durable catalog
 
 **What:** Write a durable catalog record (`StateUpdateKind::Session`) on every

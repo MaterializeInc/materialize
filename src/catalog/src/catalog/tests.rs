@@ -41,6 +41,85 @@ use crate::catalog::{Catalog, DebugAwsContext, Op};
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
+async fn upper_advance_allows_queued_refresh_after_conflict() {
+    use std::sync::Arc;
+
+    use crate::catalog::CatalogUpperHandle;
+    use crate::durable::{DurableCatalogState, TestCatalogStateBuilder};
+    use mz_ore::now::SYSTEM_TIME;
+
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_default_deploy_generation();
+    let mut first = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    first.sync_to_current_updates().await.unwrap();
+    let mut txn = first.transaction().await.unwrap();
+    txn.set_config("catalog_read_protection_enabled".into(), Some(2))
+        .unwrap();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    let mut second = builder.unwrap_build().await.join().await.unwrap();
+    first.sync_to_current_updates().await.unwrap();
+    second.sync_to_current_updates().await.unwrap();
+
+    let target = first.synced_upper().step_forward().step_forward();
+    let mut txn = second.transaction().await.unwrap();
+    txn.set_config("upper_attempt_test".into(), Some(1))
+        .unwrap();
+    let ts = txn.upper();
+    txn.commit(ts).await.unwrap();
+    let peer_upper = second.synced_upper();
+    assert!(peer_upper < target);
+
+    let storage: Arc<tokio::sync::Mutex<Box<dyn DurableCatalogState>>> =
+        Arc::new(tokio::sync::Mutex::new(first));
+    let handle = CatalogUpperHandle {
+        storage: Arc::clone(&storage),
+    };
+    {
+        let guard = storage.lock().await;
+        let advance = handle.advance_upper(target);
+        tokio::pin!(advance);
+        assert!(futures::poll!(advance.as_mut()).is_pending());
+        let refresh = storage.lock();
+        tokio::pin!(refresh);
+        assert!(futures::poll!(refresh.as_mut()).is_pending());
+        // Queue advancement first, then refresh. The refresh must run between
+        // the losing attempt and its retry, not after reaching the target.
+        drop(guard);
+        let (result, ()) = tokio::join!(advance, async {
+            let mut state = refresh.await;
+            assert_eq!(state.synced_upper(), peer_upper);
+            assert!(matches!(
+                state.transaction().await.unwrap_err(),
+                CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })
+            ));
+            assert!(!state.sync_to_current_updates().await.unwrap().is_empty());
+            let txn = state.transaction().await.unwrap();
+            assert_eq!(txn.get_config("upper_attempt_test".into()), Some(1));
+        });
+        result.unwrap();
+    }
+    assert_eq!(storage.lock().await.current_upper().await, target);
+    // The peer's conflict catch-up can itself satisfy the target without an append.
+    assert!(second.try_advance_upper(target).await.unwrap());
+    assert_eq!(second.current_upper().await, target);
+    drop(handle);
+    Arc::try_unwrap(storage)
+        .expect("no remaining upper handle")
+        .into_inner()
+        .expire()
+        .await;
+    second.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
 async fn replica_reconstruction_context_round_trips() {
     Catalog::with_debug(|catalog| async move {
         let original = catalog.replica_config();

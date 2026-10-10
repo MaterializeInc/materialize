@@ -26,14 +26,14 @@ preserving warmed executions. Kafka uses deployment-local placement and fresh,
 untimed producer admission. Keep the existing retention, restart and outage fixtures
 tied to explicit lifecycle actions, including silence retaining protection.
 
-Implement the approved internal retirement endpoint on the serving deployment,
-using its existing administrative authorization boundary. Retire the explicitly
-identified prewarmer durably before teardown, with idempotent retries and atomic
-exclusion against promotion. Reject retirement of the active deployment, preserve
-other owners and prevent readmission. Orchestratord must retain identity across
-retries of an attempt but allocate a fresh generation after cancellation, rather
-than reuse active_generation + 1. Use existing rollout status, not a new registry.
-Surface disproportionate caller changes.
+The serving retirement endpoint durably excludes the explicit target and retracts
+only its resources, atomically against promotion. It rejects the active deployment,
+preserves raw encodings and fences retired handles before later timestamps.
+Finish the orchestratord caller using existing rollout status: durable cancellation
+intent, retirement before teardown, stable retry identity and a fresh generation
+after cancellation. Do not reuse active_generation + 1. Caller policy remains
+unresolved for older servers without the endpoint and initial/downtime attempts
+without a serving deployment. Do not trap recovery in a permanent retirement wait.
 
 Promotion also retracts retired memberships, runtime configuration, replica settings
 and replica-owned observation selections in its authority CAS. Raw snapshot rows
@@ -46,15 +46,35 @@ published advancement. The outage fixture checks physical compaction before repl
 SIGKILLs, without shortening abandoned Persist reader leases or extending deadlines.
 Keep earlier branch-built catalog conversion outside scope.
 
-Parallel failures and SLT/Zippy timeouts remain. SLT shows broad slowdown, not an
-identified blocking owner. Replica client-protection commits invalidate both MV
-and preceding index candidates. Correlate acquisition versus advancement before
-changing publication behavior. Zippy's growing hydration wait is accompanied by
+Parallel failures and SLT/Zippy timeouts remain. SLT's measured first-SELECT delay
+follows completed reset/startup and ends successfully. Its blocking phase remains
+unidentified, requiring statement-correlated timing rather than more publication
+warnings. Replica aggregate-protection publication dominates the
+sampled writes and invalidates short foreground MV candidates even in a passing
+workload. Acquisition also conflicts. SQL progress does not establish compaction
+bound advancement or a contention repair. Keep the publication cadence unchanged.
+The failing parallel capture identifies a queued MV whose longest overlapping
+holder repeatedly loses before candidate construction. Refresh/open conflicts and
+delayed continuation dispatch dominate that holder, not candidate computation.
+Inspect that admission boundary before changing scheduling or lock ownership.
+Skipping transaction-open sync was rejected: an invalidated prefix still loses,
+with more work before detection. The bounded upper-advance change releases the
+shared storage mutex between definitive conflicts in its off-coordinator caller.
+It retains the target and pending projection updates. CI verification remains
+pending, and neither SQL nor compaction advancement is established by it.
+Zippy's growing hydration wait is accompanied by
 increasing raw catalog decode work across independent imports. These measurements
 are not CPU time or unique replay volume. Preserve historical reads and source
 flow control when assessing a repair at that boundary.
 Do not attribute these to the acknowledgement bug or claim lifecycle changes solve
 them without correlated evidence. Detailed captures and verification are in the PR.
+
+The zero-row OCC fixture can miss its required oracle window. Parking a group
+committer does not freeze independent catalog completion. Preserve the zero-row
+response-ordering promise at its owning boundary, not a larger sleep or a passing
+non-witness assertion. Review found that a small rendezvous replacement can also
+miss the window. Retirement with an explicit coverage gap versus broader test
+control awaits a decision. No fixture or production semantics have changed.
 
 Continue the parallel-workload repairs. Repeated catalog conflicts amplify
 client read-protection publication and ordinary DDL into long coordinator-owned
