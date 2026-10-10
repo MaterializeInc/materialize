@@ -91,7 +91,15 @@ Catalog upper movement is not evidence of physical compaction-bound advancement.
 The cancellation regression failed because its peer grants no longer force a
 conflict. Its fixture now replaces the private peer execution, transferring its
 protection while forcing a metadata conflict. Progress, cancellation and retained
-plan/hold assertions remain unchanged. Verify that correction in CI.
+plan/hold assertions remain unchanged. CI138657 passes all 4,283 executed Cargo
+tests, including this correction. Parallel 2 passes, but parallel 1 still has
+CREATE MV timeouts. SLT 3 finishes its SQL workload successfully before deadline
+cancellation during cleanup. Its workload duration remains unexplained, not a
+demonstrated blocked statement or shared cause with MV contention.
+The committed-prefix diagnostic records all kind/diff counts and a bounded grant
+incarnation sample under the existing workload trace filter. Use it to establish
+whether post-candidate conflicts contain only compatible peer grants. Non-planning
+changes alone do not establish that premise. Strict yielding remains unchanged.
 Keep structural revalidation conservative. Existing dependency existence checks
 alone do not establish unchanged definitions, configuration, authorization or
 derived operation sets. Do not remove the revision guard to avoid replanning.

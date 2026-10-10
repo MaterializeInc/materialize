@@ -1987,15 +1987,20 @@ impl Catalog {
         state: &CatalogState,
         updates: &[crate::memory::objects::StateUpdate],
     ) -> Option<BTreeMap<(&'static str, crate::memory::objects::StateDiff), usize>> {
-        use crate::memory::objects::StateUpdateKind;
         if !tracing::enabled!(target: "mz_catalog::planning_revision", tracing::Level::DEBUG) {
             return None;
         }
+        Some(Self::update_kind_counts(updates.iter().filter(|update| {
+            Self::update_affects_planning(state, update)
+        })))
+    }
+
+    fn update_kind_counts<'a>(
+        updates: impl IntoIterator<Item = &'a crate::memory::objects::StateUpdate>,
+    ) -> BTreeMap<(&'static str, crate::memory::objects::StateDiff), usize> {
+        use crate::memory::objects::StateUpdateKind;
         let mut kinds = BTreeMap::new();
         for update in updates {
-            if !Self::update_affects_planning(state, update) {
-                continue;
-            }
             let kind = match &update.kind {
                 StateUpdateKind::ActiveDeploymentGeneration(_) => "ActiveDeploymentGeneration",
                 StateUpdateKind::Role(_) => "Role",
@@ -2028,7 +2033,7 @@ impl Catalog {
             };
             *kinds.entry((kind, update.diff)).or_default() += 1;
         }
-        Some(kinds)
+        kinds
     }
 
     /// Apply this writer's unconsumed committed updates. Downstream owners must
@@ -2117,6 +2122,30 @@ impl Catalog {
         Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
         Vec<ParsedStateUpdate>,
     ) {
+        // Diagnose complete committed prefixes, not just their planning changes.
+        // Bound identity output and omit catalog values and SQL.
+        let prefix_diagnostic = (!updates.is_empty()
+            && tracing::enabled!(
+                target: "mz_adapter::frontend_read_then_write",
+                tracing::Level::DEBUG
+            ))
+        .then(|| {
+            let incarnations: BTreeSet<_> = updates
+                .iter()
+                .filter_map(|update| match &update.kind {
+                    crate::memory::objects::StateUpdateKind::ClientReadRequirement(req) => {
+                        Some(req.incarnation)
+                    }
+                    _ => None,
+                })
+                .collect();
+            (
+                self.observed_position,
+                Self::update_kind_counts(&updates),
+                incarnations.iter().copied().take(16).collect::<Vec<_>>(),
+                incarnations.len() > 16,
+            )
+        });
         let (builtin_table_updates, catalog_updates, planning_upper) =
             mz_ore::future::OreFutureExt::ore_catch_unwind(std::panic::AssertUnwindSafe(async {
                 let mut builtin_table_updates = Vec::with_capacity(updates.len());
@@ -2160,6 +2189,16 @@ impl Catalog {
                 let cause = mz_ore::panic::downcast_panic_message(&*payload);
                 mz_ore::halt!("cannot apply committed catalog changes, restart required: {cause}")
             });
+        if let Some((from_position, update_kinds, grant_incarnations, identities_truncated)) =
+            prefix_diagnostic
+        {
+            tracing::debug!(
+                target: "mz_adapter::frontend_read_then_write",
+                ?from_position, %upper, ?planning_upper, ?update_kinds,
+                ?grant_incarnations, identities_truncated,
+                "catalog committed prefix applied",
+            );
+        }
         self.advance_positions(upper, planning_upper);
         if planning_upper.is_some() {
             tracing::debug!(
