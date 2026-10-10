@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -77,11 +78,15 @@ impl PeekClient {
     /// `logging` holds the end-of-execution obligation for this statement. The
     /// caller retires it, this function only takes the statement over and, at
     /// the dispatch sites that hand execution off, defuses the slot.
+    ///
+    /// `connection_closed` resolves when the client goes away. Waiting for the optimizer gives up
+    /// then, as it does on a statement timeout.
     pub(crate) async fn try_frontend_peek(
         &mut self,
         portal_name: &str,
         session: &mut Session,
         logging: &mut ExecutionLogging,
+        connection_closed: impl Future<Output = ()> + Send,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         // # From handle_execute
 
@@ -198,7 +203,7 @@ impl PeekClient {
             TakeOver::StatementToRun,
         );
 
-        self.try_frontend_peek_inner(session, catalog, stmt, params, logging)
+        self.try_frontend_peek_inner(session, catalog, stmt, params, logging, connection_closed)
             .await
     }
 
@@ -265,6 +270,8 @@ impl PeekClient {
                 Some(Arc::new(stmt)),
                 Params::empty(),
                 &mut logging,
+                // A background peek has no client connection.
+                futures::future::pending(),
             )
             .await?;
 
@@ -313,6 +320,7 @@ impl PeekClient {
         stmt: Option<Arc<Statement<Raw>>>,
         params: Params,
         logging: &mut ExecutionLogging,
+        connection_closed: impl Future<Output = ()> + Send,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let stmt = match stmt {
             Some(stmt) => stmt,
@@ -1075,6 +1083,7 @@ impl PeekClient {
                 mz_ore::task::spawn_blocking(
                     || "optimize peek",
                     move || {
+                        fail::fail_point!("peek_before_optimize");
                         span.in_scope(|| {
                             let _dispatch_guard = explain_ctx.dispatch_guard();
 
@@ -1305,27 +1314,31 @@ impl PeekClient {
         if optimization_timeout == Duration::ZERO {
             optimization_timeout = Duration::MAX;
         }
-        let optimization_result =
-            // Note: spawn_blocking tasks cannot be cancelled, so on timeout we stop waiting but the
-            // optimization task continues running in the background until completion. See
-            // https://github.com/MaterializeInc/database-issues/issues/8644 for properly cancelling
-            // optimizer runs.
-            match tokio::time::timeout(optimization_timeout, optimization_future).await {
-                Ok(Ok(result)) => result,
-                Ok(Err(AdapterError::Optimizer(err))) => {
-                    return Err(AdapterError::Internal(format!(
-                        "internal error in optimizer: {}",
-                        err
-                    )));
-                }
-                Ok(Err(err)) => {
-                    return Err(err);
-                }
-                Err(_elapsed) => {
-                    warn!("optimize peek timed out after {:?}", optimization_timeout);
-                    return Err(AdapterError::StatementTimeout);
-                }
-            };
+        // Note: spawn_blocking tasks cannot be cancelled, so on timeout or when the client goes away
+        // we stop waiting but the optimization task continues running in the background until
+        // completion. See https://github.com/MaterializeInc/database-issues/issues/8644 for properly
+        // cancelling optimizer runs.
+        let optimization_wait = tokio::time::timeout(optimization_timeout, optimization_future);
+        let optimization_wait = tokio::select! {
+            result = optimization_wait => result,
+            () = connection_closed => return Err(AdapterError::Canceled),
+        };
+        let optimization_result = match optimization_wait {
+            Ok(Ok(result)) => result,
+            Ok(Err(AdapterError::Optimizer(err))) => {
+                return Err(AdapterError::Internal(format!(
+                    "internal error in optimizer: {}",
+                    err
+                )));
+            }
+            Ok(Err(err)) => {
+                return Err(err);
+            }
+            Err(_elapsed) => {
+                warn!("optimize peek timed out after {:?}", optimization_timeout);
+                return Err(AdapterError::StatementTimeout);
+            }
+        };
 
         // Log optimization finished
         if let Some(logging_id) = logging.id() {
