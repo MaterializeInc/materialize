@@ -17,8 +17,10 @@ multiple-versions = "deny"
 # dependencies.
 
 skip = [
-    # kube-client 3.1.0 and reqwest 0.12.28 and 0.13.5 still require 0.6.
-    # Retain it until those upstream dependencies support tower-http 0.7.
+    # Materialize uses tower-http 0.7.1. kube-client and reqwest still require
+    # 0.6, which currently resolves to 0.6.11. Temporarily exempt that exact
+    # version from duplicate checks. Remove this exception once those
+    # dependencies no longer bring in tower-http 0.6.11.
     { name = "tower-http", version = "=0.6.11" },
 
     # arrayvec had a significant API change in 0.7
