@@ -32,13 +32,14 @@ use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::debug::{
     AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
-    ClusterReplicaCollection, ClusterSystemConfigurationCollection, Collection, CollectionTrace,
-    CollectionType, CommentCollection, ConfigCollection, DatabaseCollection, DebugCatalogState,
-    DefaultPrivilegeCollection, IdAllocatorCollection, ItemCollection, NetworkPolicyCollection,
-    ReplicaSystemConfigurationCollection, RoleAuthCollection, RoleCollection, SchemaCollection,
-    SettingCollection, SourceReferencesCollection, StorageCollectionMetadataCollection,
-    SystemConfigurationCollection, SystemItemMappingCollection, SystemPrivilegeCollection, Trace,
-    TxnWalShardCollection, UnfinalizedShardsCollection,
+    ClusterReplicaCollection, ClusterReplicaSizeCollection, ClusterSystemConfigurationCollection,
+    Collection, CollectionTrace, CollectionType, CommentCollection, ConfigCollection,
+    DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection, IdAllocatorCollection,
+    ItemCollection, NetworkPolicyCollection, ReplicaSystemConfigurationCollection,
+    RoleAuthCollection, RoleCollection, SchemaCollection, SettingCollection,
+    SourceReferencesCollection, StorageCollectionMetadataCollection, SystemConfigurationCollection,
+    SystemItemMappingCollection, SystemPrivilegeCollection, Trace, TxnWalShardCollection,
+    UnfinalizedShardsCollection,
 };
 use mz_catalog::durable::{
     BootstrapArgs, OpenableDurableCatalogState, persist_backed_catalog_state,
@@ -300,6 +301,9 @@ macro_rules! for_collection {
             }
             CollectionType::IdAlloc => $fn::<IdAllocatorCollection>($($arg),*).await?,
             CollectionType::Item => $fn::<ItemCollection>($($arg),*).await?,
+            CollectionType::ClusterReplicaSize => {
+                $fn::<ClusterReplicaSizeCollection>($($arg),*).await?
+            }
             CollectionType::NetworkPolicy => $fn::<NetworkPolicyCollection>($($arg),*).await?,
             CollectionType::Role => $fn::<RoleCollection>($($arg),*).await?,
             CollectionType::RoleAuth => $fn::<RoleAuthCollection>($($arg),*).await?,
@@ -456,6 +460,7 @@ async fn dump(
         clusters,
         introspection_sources,
         cluster_replicas,
+        cluster_replica_sizes,
         comments,
         configs,
         databases,
@@ -496,6 +501,13 @@ async fn dump(
     dump_col(
         &mut data,
         cluster_replicas,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
+    dump_col(
+        &mut data,
+        cluster_replica_sizes,
         &ignore,
         stats_only,
         consolidate,

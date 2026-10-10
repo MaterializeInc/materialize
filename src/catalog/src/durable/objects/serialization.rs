@@ -15,12 +15,12 @@ use mz_proto::TryFromProtoError;
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterSystemConfigurationKey,
-    ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, ConfigKey,
-    ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
-    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
-    NetworkPolicyKey, NetworkPolicyValue, ReplicaSystemConfigurationKey,
+    ClusterKey, ClusterReplicaKey, ClusterReplicaSizeKey, ClusterReplicaSizeValue,
+    ClusterReplicaValue, ClusterSystemConfigurationKey, ClusterSystemConfigurationValue,
+    ClusterValue, CommentKey, CommentValue, ConfigKey, ConfigValue, DatabaseKey, DatabaseValue,
+    DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey,
+    IdAllocValue, IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey,
+    ItemValue, NetworkPolicyKey, NetworkPolicyValue, ReplicaSystemConfigurationKey,
     ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
     ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
     SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
@@ -740,6 +740,60 @@ impl RustType<proto::NetworkPolicyValue> for NetworkPolicyValue {
             owner_id: proto.owner_id.into_rust()?,
             privileges: proto.privileges.into_rust()?,
             oid: proto.oid,
+        })
+    }
+}
+
+impl RustType<proto::ClusterReplicaSizeKey> for ClusterReplicaSizeKey {
+    fn into_proto(&self) -> proto::ClusterReplicaSizeKey {
+        proto::ClusterReplicaSizeKey {
+            id: self.id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterReplicaSizeKey) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterReplicaSizeKey {
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ClusterReplicaSizeValue> for ClusterReplicaSizeValue {
+    fn into_proto(&self) -> proto::ClusterReplicaSizeValue {
+        proto::ClusterReplicaSizeValue {
+            name: self.name.clone(),
+            memory_limit: self.memory_limit,
+            cpu_limit: self.cpu_limit,
+            cpu_request: self.cpu_request,
+            disk_limit: self.disk_limit,
+            scale: self.scale,
+            workers: self.workers,
+            credits_per_hour: self.credits_per_hour.clone(),
+            cpu_exclusive: self.cpu_exclusive,
+            is_cc: self.is_cc,
+            family: self.family.clone(),
+            swap_enabled: self.swap_enabled,
+            disabled: self.disabled,
+            selectors: self.selectors.clone(),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterReplicaSizeValue) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterReplicaSizeValue {
+            name: proto.name,
+            memory_limit: proto.memory_limit,
+            cpu_limit: proto.cpu_limit,
+            cpu_request: proto.cpu_request,
+            disk_limit: proto.disk_limit,
+            scale: proto.scale,
+            workers: proto.workers,
+            credits_per_hour: proto.credits_per_hour,
+            cpu_exclusive: proto.cpu_exclusive,
+            is_cc: proto.is_cc,
+            family: proto.family,
+            swap_enabled: proto.swap_enabled,
+            disabled: proto.disabled,
+            selectors: proto.selectors,
         })
     }
 }

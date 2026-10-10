@@ -29,13 +29,13 @@ use mz_catalog::builtin::{
     BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES, BUILTINS, Builtin, Fingerprint,
     MZ_CATALOG_RAW, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
-use mz_catalog::config::StateConfig;
+use mz_catalog::config::{ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::objects::{
     SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
 };
 use mz_catalog::durable::{
-    ClusterReplica, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
-    Transaction, managed_cluster_replica_name,
+    ClusterReplica, ClusterReplicaSize, ClusterVariant, ClusterVariantManaged, ReplicaConfig,
+    ReplicaLocation, Transaction, managed_cluster_replica_name,
 };
 use mz_catalog::expr_cache::{
     ExpressionCacheConfig, ExpressionCacheHandle, GlobalExpressions, LocalExpressions,
@@ -188,7 +188,9 @@ impl Catalog {
                     .map(|c| c.aws_account_id.clone()),
                 helm_chart_version: config.helm_chart_version,
             },
-            cluster_replica_sizes: config.cluster_replica_sizes,
+            // Populated from the durable catalog, which `sync_builtin_cluster_replica_sizes`
+            // reconciles with `config.cluster_replica_sizes`.
+            cluster_replica_sizes: ClusterReplicaSizeMap(BTreeMap::new()),
             availability_zones: config.availability_zones,
             egress_addresses: config.egress_addresses,
             aws_principal_context: config.aws_principal_context,
@@ -239,6 +241,7 @@ impl Catalog {
                 config.boot_ts,
             )?;
             add_new_remove_old_builtin_roles_migration(&mut txn)?;
+            sync_builtin_cluster_replica_sizes(&mut txn, &config.cluster_replica_sizes)?;
             remove_invalid_config_param_role_defaults_migration(&mut txn)?;
             remove_pending_cluster_replicas_migration(&mut txn, config.boot_ts)?;
 
@@ -294,6 +297,7 @@ impl Catalog {
                 | StateUpdateKind::ReplicaSystemConfiguration(_)
                 | StateUpdateKind::Cluster(_)
                 | StateUpdateKind::NetworkPolicy(_)
+                | StateUpdateKind::ClusterReplicaSize(_)
                 | StateUpdateKind::ClusterReplica(_) => pre_item_updates.push(StateUpdate {
                     kind,
                     ts,
@@ -1146,6 +1150,57 @@ fn add_new_remove_old_builtin_roles_migration(
     // Remove old roles.
     let old_roles = durable_roles.values().map(|role| role.id).collect();
     txn.remove_roles(&old_roles)?;
+
+    Ok(())
+}
+
+/// Reconciles the system cluster replica sizes in the durable catalog with the
+/// sizes from `--cluster-replica-sizes`.
+///
+/// A size removed from the flag is deleted, unless a replica still uses it. Then
+/// it is kept but disabled, so the replica can still be scheduled while no new
+/// replica can pick the size.
+fn sync_builtin_cluster_replica_sizes(
+    txn: &mut Transaction<'_>,
+    config_sizes: &ClusterReplicaSizeMap,
+) -> Result<(), AdapterError> {
+    let mut durable_sizes: BTreeMap<_, _> = txn
+        .get_cluster_replica_sizes()
+        .filter(|size| size.id.is_system())
+        .map(|size| (size.name.clone(), size))
+        .collect();
+
+    for (name, allocation) in &config_sizes.0 {
+        match durable_sizes.remove(name) {
+            None => {
+                txn.insert_system_cluster_replica_size(name.clone(), allocation.clone())?;
+            }
+            Some(size) if size.allocation != *allocation => {
+                txn.update_cluster_replica_size(ClusterReplicaSize {
+                    allocation: allocation.clone(),
+                    ..size
+                })?;
+            }
+            Some(_) => {}
+        }
+    }
+
+    let in_use: BTreeSet<_> = txn
+        .get_cluster_replicas()
+        .filter_map(|replica| match replica.config.location {
+            ReplicaLocation::Managed { size, .. } => Some(size),
+            ReplicaLocation::Unmanaged { .. } => None,
+        })
+        .collect();
+    for (name, mut size) in durable_sizes {
+        if !in_use.contains(&name) {
+            txn.remove_cluster_replica_size(size.id)?;
+        } else if !size.allocation.disabled {
+            warn!(%name, "cluster replica size removed from config but still in use, disabling it");
+            size.allocation.disabled = true;
+            txn.update_cluster_replica_size(size)?;
+        }
+    }
 
     Ok(())
 }
