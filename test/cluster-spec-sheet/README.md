@@ -89,13 +89,15 @@ allocation (`1,2,4,8,16,32`, capped by `--max-scale`). Cloud runs use 32
 single-replica `50cc` query clusters; the account's cluster limit must allow this.
 
 Each point has 5 seconds warmup and 20 seconds measurement, totaling 25 minutes
-plus setup. Configure the sweep with `--qps-concurrencies`, `--qps-clusters`,
+plus connection/setup and log-flush overhead. Configure the sweep with `--qps-concurrencies`, `--qps-clusters`,
 `--qps-duration`, `--qps-warmup`, and `--qps-query-timeout`.
 `--qps-protocols=prepared,simple` also tests simple queries and doubles runtime.
 
 CSV results and `qps-logs/` JSON artifacts include latency, replica CPU, and
 load-driver saturation warnings. QPS is uploaded to the existing analytics table;
 latency and qualification details remain in artifacts.
+Plots show throughput, mean, p99, and maximum latency against concurrency, with
+one line per CPU allocation and single-client-latency ideals for throughput.
 Warnings flag possible driver or compute limits, but their absence does not
 prove sufficient headroom. Docker runs share CPU with compute and are suitable
 for functional checks, not isolated scaling measurements.
