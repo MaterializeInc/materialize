@@ -38,6 +38,7 @@ use mz_storage_types::time_dependence::TimeDependence;
 use timely::PartialOrder;
 use timely::progress::Antichain;
 use timely::progress::frontier::MutableAntichain;
+use tracing::Instrument;
 
 use super::{ReplicaEffects, absorb_updates, storage_metadata, time_dependence};
 
@@ -418,7 +419,14 @@ impl ReplicaEnactment {
                 .expand_client_read_requirements(incarnation, requested.clone())?;
             let requirements = self.protection.prepare_publication(extra);
             match self
-                .commit_grants(catalog, effects, cluster, build, requirements)
+                .commit_grants(
+                    catalog,
+                    effects,
+                    cluster,
+                    build,
+                    requirements,
+                    "acquisition",
+                )
                 .await
             {
                 Ok(()) => break,
@@ -902,6 +910,7 @@ impl ReplicaEnactment {
         cluster: ClusterId,
         build: &str,
         requirements: BTreeMap<GlobalId, Timestamp>,
+        purpose: &'static str,
     ) -> anyhow::Result<()> {
         let incarnation = self.protection.incarnation();
         let result = self
@@ -915,6 +924,12 @@ impl ReplicaEnactment {
                     requirements,
                 }],
             )
+            .instrument(tracing::debug_span!(
+                target: "mz_adapter::frontend_read_then_write",
+                "replica_read_protection",
+                purpose,
+                ?incarnation
+            ))
             .await;
         self.protection.finish_publication(result.is_ok());
         result?;
@@ -1146,7 +1161,14 @@ impl ReplicaEnactment {
             && let Some(requirements) = self.protection.prepare_publication_if_needed()
         {
             match self
-                .commit_grants(catalog, effects, cluster, build, requirements)
+                .commit_grants(
+                    catalog,
+                    effects,
+                    cluster,
+                    build,
+                    requirements,
+                    "aggregate_publication",
+                )
                 .await
             {
                 Ok(()) => (),
