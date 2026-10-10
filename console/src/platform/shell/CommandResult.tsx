@@ -20,6 +20,7 @@ import { capitalizeSentence } from "~/util";
 import CommandResultNotice from "./CommandResultNotice";
 import { ERROR_NOTICE_OUTPUT_MAX_WIDTH, TABLE_PAGE_SIZE } from "./constants";
 import ErrorOutput from "./ErrorOutput";
+import { formatExecutionTime } from "./executionTime";
 import formatRows from "./formatRows";
 import SqlSelectTable, { TablePagination } from "./SqlSelectTable";
 import {
@@ -48,6 +49,7 @@ const CommandResult = ({
     rows,
     cols,
     notices,
+    executionTime,
   } = commandResult;
   const isSubscribeManager =
     commandOutput.commandResultsDisplayStates[commandResultIndex]
@@ -112,7 +114,8 @@ const CommandResult = ({
   const timeTaken = calculateCommandDuration(commandResultIndex, commandOutput);
 
   const timeTakenStr = timeTaken
-    ? `Returned in ${formatCommandDuration(timeTaken)}`
+    ? `Returned in ${formatCommandDuration(timeTaken)}` +
+      (executionTime ? ` · ${formatExecutionTime(executionTime)}` : "")
     : null;
 
   // A cancelled query and a dropped connection both surface as errors so that
@@ -169,7 +172,11 @@ const CommandResult = ({
             {timeTakenStr}
           </Code>
           <Tooltip
-            label="The total time to submit, execute, receive, and render the query results over the network."
+            label={
+              executionTime
+                ? "Returned in: the time from sending the statement until its result arrived, including the network. The second number is measured by Materialize: for a query, until its first row was ready, excluding delivering the rows; for other statements, until they completed."
+                : "The time from sending the statement until its result arrived, including the network."
+            }
             placement="right"
             color={colors.foreground.secondary}
             background={colors.background.secondary}

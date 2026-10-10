@@ -32,6 +32,10 @@ import {
   COMMAND_RESULT_MAX_SIZE_BYTES,
   JOTAI_DEBOUNCE_WAIT_MS,
 } from "./constants";
+import {
+  EXECUTION_TIME_SESSION_VARIABLE,
+  isUnsupportedExecutionTimeSetting,
+} from "./executionTime";
 import WebSocketFsm, {
   getLatestCommandOutputClone,
   isCommandProcessing,
@@ -97,6 +101,7 @@ export const ShellWebsocketProvider = ({
     application_name: SHELL_APPLICATION_NAME,
     max_query_result_size: COMMAND_RESULT_MAX_SIZE_BYTES,
     emit_plan_insights_notice: flags["plan-insights-3846"] ? "on" : "off",
+    [EXECUTION_TIME_SESSION_VARIABLE]: "on",
     ...additionalAuthOptions,
   };
 
@@ -283,6 +288,9 @@ export const ShellWebsocketProvider = ({
                 stateMachine.state.matches("readyForQuery") ||
                 stateMachine.state.matches("initialState")
               ) {
+                // An environment that predates the execution time notice
+                // reports the session variable as unknown at startup.
+                if (isUnsupportedExecutionTimeSetting(result.payload)) break;
                 commitToHistory(createDefaultNoticeOutput(result.payload));
               } else {
                 stateMachine.send({

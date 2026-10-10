@@ -11,6 +11,7 @@ import { interpret } from "@xstate/fsm";
 
 import { ErrorCode, MzDataType } from "~/api/materialize/types";
 
+import { EXECUTION_TIME_NOTICE_CODE } from "../executionTime";
 import { createHistoryId } from "../historyId";
 import webSocketFsm, { createInterruptedCommandError } from "./webSocketFsm";
 
@@ -278,6 +279,56 @@ describe("webSocketFsm", () => {
       ).toBeTruthy();
       expect(machine.state.context.latestCommandOutput?.error).toEqual(error);
     });
+  });
+
+  it("attributes each execution time notice to the statement it precedes", () => {
+    const machine = interpret(webSocketFsm);
+    machine.start();
+    machine.send("READY_FOR_QUERY");
+    machine.send({
+      type: "SEND",
+      command: "INSERT INTO t VALUES (1); SELECT 1;",
+      statements: [
+        { query: "INSERT INTO t VALUES (1)" },
+        { query: "SELECT 1" },
+      ],
+    });
+    const timing = (kind: string, durationUs: number) => ({
+      type: "NOTICE" as const,
+      notice: {
+        code: EXECUTION_TIME_NOTICE_CODE,
+        message: "execution time",
+        severity: "Notice" as const,
+        detail: JSON.stringify({
+          duration_us: durationUs,
+          kind,
+          strategy: null,
+        }),
+      },
+    });
+
+    machine.send("COMMAND_STARTING_DEFAULT");
+    machine.send(timing("committed", 20_000));
+    machine.send({
+      type: "COMMAND_COMPLETE",
+      commandCompletePayload: "INSERT 0 1",
+    });
+    machine.send("COMMAND_STARTING_HAS_ROWS");
+    machine.send({ type: "ROWS", rows: { columns: [] } });
+    machine.send({ type: "ROW", row: [1] });
+    machine.send(timing("first_row", 1_000));
+    machine.send({
+      type: "COMMAND_COMPLETE",
+      commandCompletePayload: "SELECT 1",
+    });
+    machine.send("READY_FOR_QUERY");
+
+    const results = machine.state.context.latestCommandOutput?.commandResults;
+    expect(results?.map((result) => result.executionTime)).toEqual([
+      { kind: "committed", durationMs: 20, strategy: null },
+      { kind: "first_row", durationMs: 1, strategy: null },
+    ]);
+    expect(results?.map((result) => result.notices)).toEqual([[], []]);
   });
 
   it("should merge a notice into a command that results in an error", () => {
