@@ -29,7 +29,7 @@ use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{Diff, GlobalId, StableRow, Timestamp};
 use serde::{Deserialize, Serialize};
 
-use crate::dataflows::DataflowDescription;
+use crate::dataflows::{DataflowDescription, LirDataflowDescription};
 use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
 use crate::plan::scalar::LirScalarExpr;
@@ -669,7 +669,7 @@ impl LirRelationExpr {
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         features: &OptimizerFeatures,
         metrics: Option<&LoweringMetrics>,
-    ) -> Result<DataflowDescription<Self>, String> {
+    ) -> Result<LirDataflowDescription, String> {
         fail::fail_point!("finalize_dataflow");
 
         // First, we lower the dataflow description from MIR to LIR. Lowering
@@ -846,7 +846,7 @@ impl LirRelationExpr {
         desc: DataflowDescription<OptimizedMirRelationExpr>,
         features: &OptimizerFeatures,
         metrics: Option<&LoweringMetrics>,
-    ) -> Result<DataflowDescription<Self>, String> {
+    ) -> Result<LirDataflowDescription, String> {
         let context = lowering::Context::new(desc.debug_name.clone(), features, metrics);
         let dataflow = context.lower(desc)?;
 
@@ -864,7 +864,7 @@ impl LirRelationExpr {
         fields(path.segment = "refine_single_time_consolidation")
     )]
     fn refine_single_time_consolidation(
-        dataflow: &mut DataflowDescription<Self>,
+        dataflow: &mut LirDataflowDescription,
         config: &TransformConfig,
     ) -> Result<(), String> {
         // We should only reach here if we have a one-shot SELECT query, i.e.,

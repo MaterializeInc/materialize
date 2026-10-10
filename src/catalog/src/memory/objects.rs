@@ -21,8 +21,7 @@ use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::logging::LogVariant;
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::LirRelationExpr as ComputePlan;
+use mz_compute_types::dataflows::{DataflowDescription, LirDataflowDescription};
 use mz_controller::clusters::{ClusterRole, ClusterStatus, ReplicaConfig, ReplicaLogging};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
@@ -1455,7 +1454,7 @@ pub struct MaterializedView {
     pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
     /// Physical (LIR) plan, set after physical optimization.
     #[serde(skip)]
-    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
+    pub physical_plan: Option<Arc<LirDataflowDescription>>,
     /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
     #[serde(skip)]
     pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
@@ -1599,7 +1598,7 @@ pub struct Index {
     pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
     /// Physical (LIR) plan, set after physical optimization.
     #[serde(skip)]
-    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
+    pub physical_plan: Option<Arc<LirDataflowDescription>>,
     /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
     #[serde(skip)]
     pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
@@ -1633,7 +1632,7 @@ pub struct MetricSink {
     pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
     /// Physical (LIR) plan, set after physical optimization.
     #[serde(skip)]
-    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
+    pub physical_plan: Option<Arc<LirDataflowDescription>>,
     /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
     #[serde(skip)]
     pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
@@ -1833,7 +1832,7 @@ impl CatalogItem {
     }
 
     /// Returns the physical (LIR) plan, if this item has one.
-    pub fn physical_plan(&self) -> Option<&Arc<DataflowDescription<ComputePlan>>> {
+    pub fn physical_plan(&self) -> Option<&Arc<LirDataflowDescription>> {
         match self {
             CatalogItem::Index(idx) => idx.physical_plan.as_ref(),
             CatalogItem::MaterializedView(mv) => mv.physical_plan.as_ref(),
@@ -1870,7 +1869,7 @@ impl CatalogItem {
         &mut self,
     ) -> Option<(
         &mut Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
-        &mut Option<Arc<DataflowDescription<ComputePlan>>>,
+        &mut Option<Arc<LirDataflowDescription>>,
         &mut Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
     )> {
         match self {

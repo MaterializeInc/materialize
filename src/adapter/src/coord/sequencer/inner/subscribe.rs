@@ -13,8 +13,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::SUBSCRIBE_MAX_BUFFERED_BYTES;
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::LirRelationExpr;
+use mz_compute_types::dataflows::LirDataflowDescription;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::GlobalId;
@@ -543,7 +542,7 @@ impl Coordinator {
     pub(crate) async fn implement_subscribe(
         &mut self,
         ctx_extra: &mut ExecuteContextGuard,
-        df_desc: DataflowDescription<LirRelationExpr>,
+        df_desc: LirDataflowDescription,
         dependency_ids: BTreeSet<GlobalId>,
         cluster_id: ComputeInstanceId,
         replica_id: Option<ReplicaId>,

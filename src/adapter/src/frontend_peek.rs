@@ -16,7 +16,6 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::ENABLE_FRONTEND_SUBSCRIBES;
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, ResultSpec, RowSetFinishing};
 use mz_ore::cast::{CastFrom, CastLossy};
@@ -1822,7 +1821,7 @@ enum Execution {
     },
     Subscribe {
         subscribe_plan: SubscribePlan,
-        df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
+        df_desc: mz_compute_types::dataflows::LirDataflowDescription,
         df_meta: DataflowMetainfo,
         optimization_finished_at: EpochMillis,
     },

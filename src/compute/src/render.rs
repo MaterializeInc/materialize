@@ -122,7 +122,7 @@ use differential_dataflow::{AsCollection, Collection, Data, VecCollection};
 use futures::FutureExt;
 use futures::channel::oneshot;
 use itertools::Itertools;
-use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
+use mz_compute_types::dataflows::{IndexDesc, RenderDataflowDescription};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
@@ -211,7 +211,7 @@ impl<T> Drop for PressOnDrop<T> {
 pub fn build_compute_dataflow(
     timely_worker: &mut TimelyWorker,
     compute_state: &mut ComputeState,
-    dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
+    dataflow: RenderDataflowDescription<CollectionMetadata>,
     start_signal: StartSignal,
     until: Antichain<mz_repr::Timestamp>,
     dataflow_expiration: Antichain<mz_repr::Timestamp>,
