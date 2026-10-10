@@ -146,7 +146,7 @@ impl SlotAllocator {
     }
 
     /// Test hook: the number of allocated slots not on a free list.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn in_use(&self) -> usize {
         usize::cast_from(self.high_water) - self.free_warm.len() - self.free_cold.len()
     }
@@ -260,6 +260,15 @@ impl Region {
             .lock()
             .expect("region allocator poisoned")
             .free(slot, warm);
+    }
+
+    /// Test hook: the number of slots currently allocated.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(crate) fn slots_in_use(&self) -> usize {
+        self.slots
+            .lock()
+            .expect("region allocator poisoned")
+            .in_use()
     }
 
     /// Moves warm free slots to the cold list, releasing their physical
