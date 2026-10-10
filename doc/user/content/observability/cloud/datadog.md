@@ -98,15 +98,22 @@ which has been tried and tested in production environments.
         # of type float.
         values:
         - "memory_percent"
+        - "heap_percent"
         # The SQL query that is run unalterted for each job.
         query:  |
                 SELECT
                    name::text AS replica_name,
                    cluster_id::text AS cluster_id,
-                   memory_percent::float AS memory_percent
+                   memory_percent::float AS memory_percent,
+                   heap_percent::float AS heap_percent
                 FROM mz_cluster_replicas r
                 JOIN mz_internal.mz_cluster_replica_utilization u ON r.id=u.replica_id;
    ```
+
+   Each value column becomes its own series of the metric, labeled with `col`.
+   `heap_percent` counts RAM plus swap, and is the value to alert on, as
+   [Alerting](/observability/cloud/alerting/) recommends. `memory_percent`
+   counts RAM only, so it can sit near 100% on a healthy replica that uses swap.
 
 1. Once you are done with the Prometheus SQL Exporter configuration,
    follow the intructions in the [`sql_exporter` repository](https://github.com/justwatchcom/sql_exporter#getting-started)
