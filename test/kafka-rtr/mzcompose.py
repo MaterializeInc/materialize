@@ -12,7 +12,6 @@ Functional test for Kafka with real-time recency enabled. Queries should block
 until results are available instead of returning out of date results.
 """
 
-import os
 import random
 import threading
 import time
@@ -36,10 +35,9 @@ SERVICES = [
     Mz(app_password=""),
     Materialized(
         default_replication_factor=2,
-        environment_extra=[
-            f"MZ_LOG_FILTER={os.getenv('MZ_LOG_FILTER', 'info')},"
-            "mz_catalog::planning_revision=debug,mz_adapter::ddl_revision=debug"
-        ],
+        additional_system_parameter_defaults={
+            "log_filter": "info,mz_catalog::planning_revision=debug,mz_adapter::ddl_revision=debug",
+        },
     ),
     Toxiproxy(),
     Testdrive(no_reset=True, seed=1),
