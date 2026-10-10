@@ -1854,19 +1854,19 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@dagrejs/dagre@npm:^1.1.4":
-  version: 1.1.4
-  resolution: "@dagrejs/dagre@npm:1.1.4"
+"@dagrejs/dagre@npm:^3.1.1":
+  version: 3.1.1
+  resolution: "@dagrejs/dagre@npm:3.1.1"
   dependencies:
-    "@dagrejs/graphlib": "npm:2.2.4"
-  checksum: 10c0/1717ecb1667a70199881871a69990fc2521b9e002e9cc5088cad55ae6fffe349b0bfd8fcb8a7c30e6d19c29dc6a080138bff2e675336bb5f85d5439e12581bf5
+    "@dagrejs/graphlib": "npm:4.0.5"
+  checksum: 10c0/e2607e941e54407d07650c13b7c4c6aca1466e12d56fd7d1e704eab686837b049700f05ca9a723aa34f027ec71bee61914594339a0e74b1f4ad7b69c5fa55242
   languageName: node
   linkType: hard
 
-"@dagrejs/graphlib@npm:2.2.4":
-  version: 2.2.4
-  resolution: "@dagrejs/graphlib@npm:2.2.4"
-  checksum: 10c0/14597ea9294c46b2571aee78bcaad3a24e3e5e0ebcdf198b6eae5b3805f99af727ac54a477dd9152e8b0a576efea0528fb7d4919c74801e9f669c90e5e6f5bd9
+"@dagrejs/graphlib@npm:4.0.5":
+  version: 4.0.5
+  resolution: "@dagrejs/graphlib@npm:4.0.5"
+  checksum: 10c0/698c9ceb996bc1da3a4a141858db57b8380854d412fcd5c9daa48f159f385fc0fb07ef84967409c224d3a82fb8460018d871657c90175bffd9b34ef9c538c1f7
   languageName: node
   linkType: hard
 
@@ -5354,13 +5354,6 @@ __metadata:
     "@types/d3-transition": "npm:*"
     "@types/d3-zoom": "npm:*"
   checksum: 10c0/a9c6d65b13ef3b42c87f2a89ea63a6d5640221869f97d0657b0cb2f1dac96a0f164bf5605643c0794e0de3aa2bf05df198519aaf15d24ca135eb0e8bd8a9d879
-  languageName: node
-  linkType: hard
-
-"@types/dagre@npm:^0.7.54":
-  version: 0.7.54
-  resolution: "@types/dagre@npm:0.7.54"
-  checksum: 10c0/96301c493b01872e7a999fd4eaa3d93d07d973a71e8abbeb098900c7a35d2ed8644112cda7ed7e6a90d3bf4e5c5e52fe5b8328fdacca66640b40fb009f5d9cbf
   languageName: node
   linkType: hard
 
@@ -11661,7 +11654,7 @@ __metadata:
     "@codemirror/language": "npm:^6.12.4"
     "@codemirror/state": "npm:^6.7.6"
     "@codemirror/view": "npm:^6.43.13"
-    "@dagrejs/dagre": "npm:^1.1.4"
+    "@dagrejs/dagre": "npm:^3.1.1"
     "@date-fns/utc": "npm:^2.1.1"
     "@emotion/babel-plugin": "npm:^11.13.5"
     "@emotion/react": "npm:^11.14.0"
@@ -11701,7 +11694,6 @@ __metadata:
     "@types/base32-encoding": "npm:^1.0.2"
     "@types/d3": "npm:^7.4.3"
     "@types/d3-graphviz": "npm:^3.1.0"
-    "@types/dagre": "npm:^0.7.54"
     "@types/debug": "npm:^4.1.13"
     "@types/jsonwebtoken": "npm:^9"
     "@types/lodash.debounce": "npm:^4.0.9"

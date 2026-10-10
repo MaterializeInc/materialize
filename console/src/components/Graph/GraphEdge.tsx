@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { useTheme } from "@chakra-ui/react";
-import { Node as DagreNode } from "@dagrejs/dagre";
+import type { NodeLabel as DagreNode } from "@dagrejs/dagre";
 import React from "react";
 
 import { MaterializeTheme } from "~/theme";

@@ -16,7 +16,6 @@ import {
   Text,
   useTheme,
 } from "@chakra-ui/react";
-import dagre from "@dagrejs/dagre";
 import React from "react";
 
 import { useCamera } from "~/hooks/useCamera";
@@ -26,10 +25,12 @@ import ZoomInIcon from "~/svg/ZoomInIcon";
 import ZoomOutIcon from "~/svg/ZoomOutIcon";
 import { MaterializeTheme } from "~/theme";
 
+import type { DagreLayoutNode } from "./dagreGraphHelpers";
+
 export interface CanvasProps {
   width: number | undefined;
   height: number | undefined;
-  selectedNode: dagre.Node | null;
+  selectedNode: DagreLayoutNode | null;
   /** Right offset for the canvas and controls (e.g., sidebar width). Defaults to 0. */
   rightOffset?: number;
   /** Z-index for the zoom controls. Defaults to 1. */
