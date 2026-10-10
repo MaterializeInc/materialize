@@ -532,13 +532,29 @@ repreparation scale with changes and affected dependencies, rather than rebuildi
 or decoding the whole catalog on each retry. Retry against refreshed, validated
 state, including recomputing compaction proposals when their inputs change.
 
+Catalog upper movement is not itself a planning conflict. Client-hold downgrades,
+maintained-requirement frontier advancement and compaction-bound updates leave
+definitions and selected plans unchanged. Retain valid DDL preparation and input
+holds across these conflicts, recomputing affected admission and cleanup decisions
+against the refreshed prefix rather than replaying stale diffs. Committed catch-up
+and its effects must survive even if the candidate fails.
+
+For ordinary MV creation, frontier movement may change the admissible initial
+`as_of` and corresponding protection, not the optimized plan. Definition, selected
+plan, birth and protection commit consistently. The catalog commit timestamp is
+distinct from the MV's `as_of`, and fixed timestamps, including required REFRESH
+times, cannot slide to make a retry succeed. Structural changes still require
+revalidation, replanning or a conflict, and loss of execution authority is terminal.
+
 Stagger periodic publications across participants, including at startup. Conflicts
-use bounded, randomized backoff. Retry delays and repeated attempts must not
-monopolize the coordinator: pending operations leave it available for other
-requests, cancellation and maintenance. Scheduling and task placement remain
-implementation choices. New protection still commits before use, delayed
-advancement retains committed protection, and submitted writes retain definitive
-outcome handling.
+permit bounded immediate retry work, followed by randomized backoff. Retry delays
+and repeated attempts must not monopolize the coordinator: pending operations
+leave it available for other requests, cancellation and maintenance. Where retry
+suspension releases local DDL admission, retain preparation and reacquire and
+revalidate before resuming. Preserve completion ownership and resolve submitted
+writes before releasing admission. Scheduling and task placement remain
+implementation choices. New protection still commits before use, and delayed
+advancement retains committed protection.
 
 Persist critical since handles follow the committed bound only. Every valid
 read requirement is in that bound, so applying it is monotone and needs no
