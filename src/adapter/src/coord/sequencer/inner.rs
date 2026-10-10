@@ -15,8 +15,8 @@ use std::{future, iter};
 
 use anyhow::anyhow;
 use differential_dataflow::lattice::Lattice;
-use futures::Future;
 use futures::future::BoxFuture;
+use futures::{Future, FutureExt};
 use itertools::Itertools;
 use maplit::btreemap;
 use mz_adapter_types::connection::ConnectionId;
