@@ -178,6 +178,11 @@ pub mod v1alpha1 {
         pub console_resource_requirements: Option<ResourceRequirements>,
         /// Number of balancerd pods to create.
         pub balancerd_replicas: Option<i32>,
+        /// Leave the balancerd Deployment's replica count unset so an external
+        /// autoscaler, such as a HorizontalPodAutoscaler, can own it.
+        /// `balancerd_replicas` is ignored when this is true.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub balancerd_externally_scaled: Option<bool>,
         /// Number of console pods to create.
         pub console_replicas: Option<i32>,
 
@@ -868,6 +873,7 @@ pub mod v1alpha1 {
                     balancerd_configmap_name: value.spec.balancerd_configmap_name,
                     console_resource_requirements: value.spec.console_resource_requirements,
                     balancerd_replicas: value.spec.balancerd_replicas,
+                    balancerd_externally_scaled: value.spec.balancerd_externally_scaled,
                     console_replicas: value.spec.console_replicas,
                     service_account_name: value.spec.service_account_name,
                     service_account_annotations: value.spec.service_account_annotations,
@@ -989,6 +995,12 @@ pub mod v1alpha1 {
             skip_serializing_if = "Option::is_none"
         )]
         pub balancerd_replicas: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub balancerd_externally_scaled: PartialField,
         #[serde(
             default,
             with = "double_option",
@@ -1195,6 +1207,7 @@ pub mod v1alpha1 {
                 balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -1230,6 +1243,7 @@ pub mod v1alpha1 {
                 balancerd_configmap_name: present_opt(balancerd_configmap_name),
                 console_resource_requirements: present_opt(console_resource_requirements),
                 balancerd_replicas: present_opt(balancerd_replicas),
+                balancerd_externally_scaled: present_opt(balancerd_externally_scaled),
                 console_replicas: present_opt(console_replicas),
                 service_account_name: present_opt(service_account_name),
                 service_account_annotations: present_opt(service_account_annotations),
@@ -1316,6 +1330,7 @@ pub mod v1alpha1 {
                 balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -1348,6 +1363,7 @@ pub mod v1alpha1 {
                 balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -1486,6 +1502,11 @@ pub mod v1 {
         ///
         /// This field is excluded from the rollout hash and changes will not trigger a rollout.
         pub balancerd_replicas: Option<i32>,
+        /// Leave the balancerd Deployment's replica count unset so an external
+        /// autoscaler, such as a HorizontalPodAutoscaler, can own it.
+        /// `balancerd_replicas` is ignored when this is true.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub balancerd_externally_scaled: Option<bool>,
         /// Number of console pods to create.
         ///
         /// This field is excluded from the rollout hash and changes will not trigger a rollout.
@@ -1626,6 +1647,7 @@ pub mod v1 {
                 balancerd_configmap_name: None,
                 console_resource_requirements: None,
                 balancerd_replicas: None,
+                balancerd_externally_scaled: None,
                 console_replicas: None,
                 service_account_name: self.spec.service_account_name.clone(),
                 service_account_annotations: self.spec.service_account_annotations.clone(),
@@ -2103,6 +2125,7 @@ pub mod v1 {
                     balancerd_configmap_name: value.spec.balancerd_configmap_name,
                     console_resource_requirements: value.spec.console_resource_requirements,
                     balancerd_replicas: value.spec.balancerd_replicas,
+                    balancerd_externally_scaled: value.spec.balancerd_externally_scaled,
                     console_replicas: value.spec.console_replicas,
                     service_account_name: value.spec.service_account_name,
                     service_account_annotations,
@@ -2247,6 +2270,12 @@ pub mod v1 {
             skip_serializing_if = "Option::is_none"
         )]
         pub balancerd_replicas: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub balancerd_externally_scaled: PartialField,
         #[serde(
             default,
             with = "double_option",
@@ -2434,6 +2463,7 @@ pub mod v1 {
                 balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -2466,6 +2496,7 @@ pub mod v1 {
                 balancerd_configmap_name: present_opt(balancerd_configmap_name),
                 console_resource_requirements: present_opt(console_resource_requirements),
                 balancerd_replicas: present_opt(balancerd_replicas),
+                balancerd_externally_scaled: present_opt(balancerd_externally_scaled),
                 console_replicas: present_opt(console_replicas),
                 service_account_name: present_opt(service_account_name),
                 service_account_annotations: present_opt(service_account_annotations),
@@ -2549,6 +2580,7 @@ pub mod v1 {
                 balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -2592,6 +2624,7 @@ pub mod v1 {
                 balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
