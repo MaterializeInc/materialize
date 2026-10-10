@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/render/persist_sink.rs
-revision: 80e24400e7
+revision: f5217bd2d7
 ---
 
 # mz-storage::render::persist_sink
@@ -12,3 +12,4 @@ The operator has three logical stages: `mint_batch_descriptions` (single worker,
 `write_batches` records the largest timestamp staged in each batch (`data_max_ts`), which `append_batches` uses during `UpperMismatch` recovery: batches whose data lies entirely below a raised append lower are deleted; batches that straddle it are re-appended under the narrowed description, with persist filtering the already-committed portion on read.
 When `validate_part_bounds_on_write` is disabled, `append_batches` may combine multiple consecutive batch descriptions into a single `compare_and_append` call.
 It returns an upper-frontier stream that feeds the resumption frontier calculator and error/token streams for lifecycle management.
+The test suite includes `run_mint_batch_descriptions` and `run_sink_pipeline` harnesses that drive the operators through `Step` scripts. `Step::Retractions(at, count)` delivers negated-diff updates at a given timestamp (as a snapshot rewind does), and `Step::Tick(t)` advances the remap upper input independently of the data frontier. Tests verify that a pinned snapshot frontier, with a lookahead ceiling, collapses all timestamps into one batch regardless of whether snapshot rows arrive before or interleaved with replication rows.

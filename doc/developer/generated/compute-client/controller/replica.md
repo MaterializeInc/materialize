@@ -1,6 +1,6 @@
 ---
 source: src/compute-client/src/controller/replica.rs
-revision: 5a4a36c4fd
+revision: 134006ec86
 ---
 
 # mz-compute-client::controller::replica

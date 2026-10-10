@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/frontend_peek.rs
-revision: 6cef38c018
+revision: 56b1bb68fc
 ---
 
 # adapter::frontend_peek
@@ -15,4 +15,5 @@ The optimizer config is built by layering cluster features, then cluster-coheren
 The private `Execution` enum branches the post-optimization flow among `Peek`, `Subscribe`, `CopyToS3`, `ExplainPlan`, and `ExplainPushdown` variants.
 `frontend_determine_timestamp` mirrors the coordinator's `determine_timestamp`, acquiring read holds and computing a `TimestampDetermination` entirely within the session task. For bounded-staleness queries that do not respond immediately, it records a `timestamp_difference_for_bounded_staleness_ms` session metric comparing the chosen timestamp against what serializable would have produced. No equivalent metric is recorded for strict-serializable queries.
 When the first non-AS OF query in a multi-statement transaction determines the transaction timestamp, its read holds are stored in the coordinator via `Command::StoreTransactionReadHolds`. A timestamp-less determination (e.g. a constant query) does not pin the transaction timestamp, so its holds are not stored: only the statement that establishes the transaction timestamp may define the timedomain.
+`PeekClient::background_peek` executes a coordinator-owned `SELECT` pinned to a specific replica, running as the system role in a session of its own, and returns its rows. It is used by the caught-up check task and other background callers that need to query introspection relations off the coordinator's main loop. Dropping the returned future does not cancel the peek; a peek dropped after its issue retains its read holds until the replica answers or goes away.
 `validate_selection_dependencies` passes `DependencyPolicy::UserDml` to the underlying dependency check, requiring every relation leaf to be a writable user table. Coordinator calls go through `CoordinatorClient`, which returns a `Result` wrapping the response; a dropped response channel propagates as an error rather than panicking.

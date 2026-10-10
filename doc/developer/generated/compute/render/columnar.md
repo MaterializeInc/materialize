@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/render/columnar.rs
-revision: 241f928bf3
+revision: 730a0321c4
 ---
 
 # mz-compute::render::columnar

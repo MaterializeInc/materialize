@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/parameters.rs
-revision: a375623c5b
+revision: 134006ec86
 ---
 
 # storage-types::parameters

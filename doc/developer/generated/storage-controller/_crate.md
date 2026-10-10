@@ -1,6 +1,6 @@
 ---
 source: src/storage-controller/src/lib.rs
-revision: ed7294b842
+revision: 0acf50c576
 ---
 
 # storage-controller
@@ -17,6 +17,8 @@ The controller manages the lifecycle of all sources, sinks, and tables: it maint
 * `persist_handles` — `PersistTableWriteWorker`: serializes table writes through txn-wal; includes read-only mode fallback.
 * `statistics` — Background scrapers that flush source and sink statistics into managed collections. When a replica is dropped, the controller writes a `Status::Paused` update for that replica. `mz_source_statuses` and `mz_sink_statuses` rely on this convention: a per-replica `paused` event means the replica was dropped, and the views retain such events as terminal drop markers.
 * `rtr` — Real-time recency timestamp resolution for external source connections.
+
+`Controller` holds a `replica_dyncfg_overrides: BTreeMap<ReplicaId, ConfigUpdates>` field that records the latest per-replica dyncfg overrides across all instances. The overrides for a replica created by DDL are committed in the same transaction that creates the replica, so they are installed before the replica connects. When `drop_replica` is called, the controller removes that replica's entry from `replica_dyncfg_overrides`; without this, the entry would persist until the next coordinator-driven override map update.
 
 ## Key dependencies
 

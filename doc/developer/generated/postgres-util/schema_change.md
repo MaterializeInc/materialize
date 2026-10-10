@@ -1,6 +1,6 @@
 ---
 source: src/postgres-util/src/schema_change.rs
-revision: 4c45b862e2
+revision: 0c7c2a15c1
 ---
 
 # mz-postgres-util::schema_change

@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/lib.rs
-revision: c56cae1594
+revision: e40e204bdb
 ---
 
 # environmentd
