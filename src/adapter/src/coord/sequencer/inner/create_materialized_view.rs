@@ -1200,6 +1200,7 @@ impl Coordinator {
 
         match transact_result {
             Ok(false) => {
+                self.release_ddl_lock(ctx.session().conn_id());
                 let delay = self.read_protection_conflict_delay();
                 Ok(StageResult::Await(Box::pin(async move {
                     tokio::time::sleep(delay).await;

@@ -6981,6 +6981,24 @@ enum PlanStatement {
         resolved_ids: ResolvedIds,
         sql_impl_resolved_ids: ResolvedIds,
     },
+    // Definitively failed catalog attempts retain their preparation while
+    // yielding admission. These continuations revalidate after reacquiring it.
+    CatalogCommit {
+        stage: Box<CatalogCommitStage>,
+        span: Span,
+    },
+    DropObjects {
+        stage: Box<DropObjectsStage>,
+        span: Span,
+    },
+    CreateIndex {
+        stage: Box<CreateIndexStage>,
+        span: Span,
+    },
+    CreateMaterializedView {
+        stage: Box<CreateMaterializedViewStage>,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Error)]

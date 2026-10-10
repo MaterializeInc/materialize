@@ -51,6 +51,7 @@ impl Staged for DropObjectsStage {
             result => result?,
         };
         if !committed {
+            coord.release_ddl_lock(ctx.session().conn_id());
             let delay = coord.read_protection_conflict_delay();
             return Ok(StageResult::Await(Box::pin(async move {
                 tokio::time::sleep(delay).await;

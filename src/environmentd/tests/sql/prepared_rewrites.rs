@@ -37,7 +37,7 @@ async fn metadata_conflict_preserves_prepared_mv_rewrite() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-async fn repeated_metadata_conflicts_allow_prepared_mv_rewrite_cancellation() {
+async fn repeated_metadata_conflicts_allow_ddl_progress_and_rewrite_cancellation() {
     run(Conflict::Cancellation).await;
 }
 
@@ -215,6 +215,11 @@ async fn run_inner(conflict: Conflict) {
         .await
         .expect("advance the timeline window before preparation");
 
+    let contender = if matches!(conflict, Conflict::Cancellation) {
+        Some(server.connect().await.unwrap())
+    } else {
+        None
+    };
     let observations = Arc::new(Mutex::new(Vec::new()));
     let (prepared_tx, mut prepared_rx) = tokio::sync::mpsc::unbounded_channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -245,8 +250,9 @@ async fn run_inner(conflict: Conflict) {
         }
     });
 
-    // Only DROP runs SQL during this rendezvous. In particular, no SELECT or
-    // open read transaction on the input can mask a missing preparation hold.
+    // No SELECT or open read transaction on the input can mask a missing
+    // preparation hold. The cancellation case also runs an unrelated no-op DDL
+    // to require admission progress while every target commit loses.
     let drop_index = batch_execute(&client, sql!("DROP INDEX rewrite_idx"));
     tokio::pin!(drop_index);
     let prepared = tokio::select! {
@@ -332,10 +338,21 @@ async fn run_inner(conflict: Conflict) {
     let commit_started = std::time::Instant::now();
     release_tx.send(()).expect("release prepared commit");
     let result = if matches!(conflict, Conflict::Cancellation) {
+        let other_ddl = batch_execute(
+            contender.as_ref().expect("cancellation contender"),
+            sql!("DROP INDEX IF EXISTS rewrite_missing"),
+        );
+        tokio::pin!(other_ddl);
+        let mut other_completed = false;
         let mut cancel_queued = false;
         let mut peer_protects_input = true;
         loop {
             tokio::select! {
+                result = &mut other_ddl, if !other_completed => {
+                    result.expect("unrelated DDL must make progress during retries");
+                    other_completed = true;
+                    continue;
+                }
                 prepared = prepared_rx.recv() => {
                     prepared.expect("DROP observer must remain installed");
                 }
@@ -344,7 +361,7 @@ async fn run_inner(conflict: Conflict) {
                     break result;
                 }
             }
-            if !cancel_queued {
+            if other_completed && !cancel_queued {
                 let mut stream = tokio::net::TcpStream::connect(server.sql_local_addr())
                     .await
                     .unwrap();

@@ -29,11 +29,14 @@ tied to explicit lifecycle actions, including silence retaining protection.
 The serving retirement endpoint durably excludes the explicit target and retracts
 only its resources, atomically against promotion. It rejects the active deployment,
 preserves raw encodings and fences retired handles before later timestamps.
-Finish the orchestratord caller using existing rollout status: durable cancellation
-intent, retirement before teardown, stable retry identity and a fresh generation
-after cancellation. Do not reuse active_generation + 1. Caller policy remains
-unresolved for older servers without the endpoint and initial/downtime attempts
-without a serving deployment. Do not trap recovery in a permanent retirement wait.
+M2 cancellation covers fresh protected environments and compatible deployments,
+using the serving administrative endpoint. Retire the explicit prewarming target
+before teardown and use a fresh identity for another attempt. Comprehensive
+orchestratord recovery is deferred, including legacy capability discovery,
+initial/downtime cancellation, different-version rescue and soft-delete/restore.
+Unsupported cancellation must not report success or release protection.
+The unverified caller draft is preserved locally at tag
+`m2-deferred-orchestratord-retirement` (`5bb35005`), outside the M2 landing history.
 
 Promotion also retracts retired memberships, runtime configuration, replica settings
 and replica-owned observation selections in its authority CAS. Raw snapshot rows
@@ -64,13 +67,26 @@ regression and all 4,282 Cargo tests. CI138548's passing parallel workload captu
 a refresh between attempts, but CI138564 still fails both parallel workloads.
 Its longest measured MV holder spends 105.042s across 205 attempts, with only
 1.712s of candidate work. Aggregate publishers invalidate its prefix during
-catch-up. The publication-cadence/retention tradeoff is awaiting a decision.
-Keep the 1s default and catalog validation unchanged meanwhile. Per-object
+catch-up. Keep the 1s publication default. Ordinary prepared DDL must release
+admission during definitive retry suspension, retaining its operations, selected
+plans and necessary input holds. Reacquire admission and revalidate before reuse.
+Legacy serialization is not globally removed. This addresses queue amplification,
+not the transaction-open conflict window. Improve that existing attempt boundary
+without blind diff replay or another retry framework. Commit timestamp and MV
+birth are distinct, and fixed REFRESH timestamps cannot slide. Per-object
 compaction-bound advancement remains unproven.
-Kafka RTR's explicit CREATE SOURCE transaction still loses its planning revision.
+The four staged commit paths now use that admission boundary, with independent
+static review complete and CI verification pending. Fixed-birth grant acquisition
+and legacy inline retries are unchanged. Structural DDL can invalidate retained
+preparation and cause additional replanning, so verify whole-statement progress.
+CI138634, before this admission repair, passes parallel 2 but parallel 1 times out
+on CREATE VIEW and ALTER CLUSTER RENAME. Do not conflate that with advancement.
+Kafka RTR's intermittent explicit CREATE SOURCE planning-revision loss is unresolved.
 Protection publication overlaps purification but is not a proven invalidator.
 Temporary, fixture-enabled kind/count and revision diagnostics must correlate the
 captured revision, actual committed change and rejecting branch before a repair.
+CI138634 passes Kafka RTR and verifies both catalog and adapter diagnostic emission,
+but captures no rejection.
 Remove those diagnostics once the mutation is identified. Keep the transaction guard.
 Zippy's growing hydration wait is accompanied by
 increasing raw catalog decode work across independent imports. These measurements
