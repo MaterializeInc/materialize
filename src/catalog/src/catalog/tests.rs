@@ -89,6 +89,9 @@ async fn upper_advance_allows_queued_refresh_after_conflict() {
     // System configuration has a memory projection, unlike internal Config rows.
     txn.upsert_system_config("max_tables", "123".into())
         .expect("set peer config");
+    // The writer consumes its own projection updates. The other handle must
+    // retain them for its queued refresh.
+    let _ = txn.get_and_commit_op_updates();
     let ts = txn.upper();
     txn.commit(ts).await.expect("commit peer config");
     let peer_upper = second.synced_upper();
