@@ -22,6 +22,8 @@ This workflow needs the Grafana MCP server against `grafana.dev.materialize.com`
 mcp__grafana__list_datasources with type "prometheus"
 ```
 
+If the Grafana MCP server is not available, the `mz-grafana` skill's CLI covers every query this workflow runs: `instant` and `query` for PromQL, `metric-names` for the existence check under *Traps*, and its Python client's `get_dashboard` for the dashboard JSON that Step 4 reads panel expressions from. It needs `GRAFANA_TOKEN` in the environment. Agent runners that pass only an allowlist of variables can leave it unset even when the user's shell has it, so ask the user where the token is kept and load it per command rather than stopping. Say in the report which route was used.
+
 Reading the bot request also needs the Slack MCP server, but a user-pasted dashboard link or version string is enough to proceed without it.
 
 ## Read the panel instructions, then apply this skill
@@ -76,6 +78,10 @@ count(avg_over_time(container_memory_working_set_bytes{pod=~".*cluster-.*-replic
 ```
 
 Use those doubling buckets as the boundary, and exclude them from both the before and after samples. They contain two full fleets and will corrupt any sum.
+
+**When the production canaries have not upgraded yet, wait rather than verify staging alone.** The canaries roll out hours after staging, and the comparison needs a few hours of the new release on each side. If the sweep has to resume later, do not rely on a session-scoped scheduler such as an in-session cron: it dies with the session and nothing resumes. Hand the resume to something that outlives the session, or tell the user the sweep is paused and what it is waiting for.
+
+**Before a deferred or resumed sweep starts, re-read the verify thread and the release state.** The question the sweep answers can change while it waits. A v26.45.0-rc.4 sweep deferred overnight was picked up two days later, by which time three areas had posted LGTM in the bot's thread, the final v26.45.0 had been cut from rc.4, and a v26.45.1 patch was replacing it for Cloud, so a full rc.4 sweep would have measured a version Cloud was not going to deploy. Read the thread's replies, list the version's tags, and check `#release` for a newer patch. If the target has moved, tell the user what changed and ask which version to verify before running anything.
 
 ## Step 2: Choose the namespace set
 
@@ -158,6 +164,8 @@ There are no thresholds, so the discipline is in ruling out the confounders befo
 **Compare at equal post-restart age.** Every upgrade restarts `clusterd`, and a fresh process holds less memory than one that has been running for days. Comparing the pre-upgrade level against the post-upgrade level therefore flatters the new release, and comparing a post-upgrade level against a mid-week pre-upgrade level exaggerates a regression. Sample both sides at a similar age since restart, and treat a monotonic climb within one release as more informative than any level difference across the boundary.
 
 **Read the base level of bimodal metrics.** Arrangement record counts and sizes swing by a factor of three or more as periodic dataflows rebuild. Compare the low state against the low state; spike heights are not comparable.
+
+**Verify what the RC was cut to fix.** A later `rc` usually exists because the earlier one showed a specific regression on the canaries. Measure that signal directly at the new RC, the previous RC and the previous release, at equal post-restart age, before sweeping anything else; the fix landing is the first finding the report states. For v26.45.0-rc.4, cut to undo an allocator page-size regression, that was `jemalloc_active - jemalloc_allocated` per pod: the largest clusterd pod of the us-east-1 Production Sandbox canary went from 209 MB at v26.44.0 to 1736 MB at rc.3 and back to 188 MB at rc.4.
 
 **Discount pre-existing noise.** Some staging environments crashloop or carry permanently erroring dataflows. In August 2026 staging us-east-1 sustained roughly 90 `clusterd` restarts per 6h and staging eu-west-1 carried 50 to 400 dataflow errors continuously, both flat across the boundary. Flat means not release-related. The panel instructions suggest filtering such environments out with the dashboard variables, which is worth doing when they mask everything else.
 
@@ -274,9 +282,11 @@ max by (namespace, pod, container) (avg_over_time(container_memory_working_set_b
 max by (namespace, pod, container) (avg_over_time(container_spec_memory_limit_bytes{...}[6h]))
 ```
 
+On swap-enabled replicas this ratio sits near 1 in steady state, because the kernel keeps resident pages up to the cgroup limit and swaps out the rest. The us-east-1 Production Sandbox upsert replica held 88% to 99% of its limit on every release from v26.43.0-rc.1 to v26.45.0-rc.4, while memory plus swap stayed between 187 and 205 GiB. A high ratio there is not pressure; judge those replicas on the conserved total described in `references/compute.md`.
+
 **An absent series is not the same as a healthy zero.** Error and orphan counters are only exported when non-zero, so an empty result reads as clean when it can also mean the metric was renamed. Confirm the metric exists somewhere in the window before reporting zero.
 
-**Label names are not consistent across metrics.** Most compute metrics carry `instance_id` and `replica_id`, but the arrangement maintenance metric carries `cluster_environmentd_materialize_cloud_cluster_id` and `cluster_environmentd_materialize_cloud_replica_id` instead. Copy selectors from the panel expressions rather than writing them from memory.
+**Label names are not consistent across metrics.** Most compute metrics carry `instance_id` and `replica_id`, but the arrangement maintenance metric carries `cluster_environmentd_materialize_cloud_cluster_id` and `cluster_environmentd_materialize_cloud_replica_id` instead. Copy selectors from the panel expressions rather than writing them from memory. Metrics scraped from the `environmentd` and `clusterd` processes themselves, such as `jemalloc_*`, carry `app="environmentd"` or `app="clusterd"` and no `container` label, so the `container=` selector that is right for `container_*` metrics returns an empty result on them.
 
 **Some panel filters are variable-substitution artifacts.** Several compute panels append `instance_id!="$cluster_id"`, which exists to blank a series when a single cluster is selected and is not a semantic filter. Reproducing it in an aggregate query is unnecessary.
 
