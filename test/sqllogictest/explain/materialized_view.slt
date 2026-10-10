@@ -298,3 +298,27 @@ materialize.public.mv_empty_join:
 Target cluster: quickstart
 
 EOF
+
+# `WITH (schema)` prints the schema of the materialized view.
+statement ok
+CREATE TABLE schema_t (a int4, b text, c numeric)
+
+statement ok
+CREATE MATERIALIZED VIEW mv_schema AS SELECT * FROM schema_t
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions, schema) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv_schema
+----
+materialize.public.mv_schema:
+  ReadStorage materialize.public.schema_t
+
+Source materialize.public.schema_t
+
+Schema of materialize.public.mv_schema:
+  a integer,
+  b text,
+  c numeric
+
+Target cluster: quickstart
+
+EOF
