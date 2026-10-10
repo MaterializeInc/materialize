@@ -944,11 +944,12 @@ fn end_reason(
     result.into()
 }
 
-/// Bumps the per-statement counters `Coordinator::handle_execute` maintains.
+/// Bumps `query_total`, as `Coordinator::handle_execute` does for the statements
+/// it sequences, `subscribe_outputs` for a subscribe, and `as_of_queries` for an
+/// `AS OF` query.
 ///
 /// `stmt` is `None` for an empty portal, which is logged but not counted. The
-/// coordinator skips it the same way, and matching that is the point of this
-/// function.
+/// coordinator skips it the same way.
 fn count_statement(session: &Session, stmt: Option<&Statement<Raw>>) {
     let Some(stmt) = stmt else {
         return;
