@@ -34,7 +34,7 @@ use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::future::OreFutureExt;
 use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{assert_none, instrument};
+use mz_ore::{assert_none, instrument, soft_panic_or_log};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::json::json_string;
@@ -108,10 +108,9 @@ use crate::coord::appends::{BuiltinTableAppendNotify, PendingWriteTxn, UserWrite
 use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
     AlterConnectionValidationReady, AlterMaterializedViewReadyContext, AlterSinkReadyContext,
-    Coordinator, CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext,
-    ExplainContext, Message, NetworkPolicyError, PendingReadTxn, PendingTxn, PendingTxnResponse,
-    PlanValidity, StageResult, Staged, StagedContext, TargetCluster, WatchSetResponse,
-    validate_ip_with_policy_rules,
+    Coordinator, CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext, Message,
+    NetworkPolicyError, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, StageResult,
+    Staged, StagedContext, TargetCluster, WatchSetResponse, validate_ip_with_policy_rules,
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
@@ -2280,54 +2279,13 @@ impl Coordinator {
         Ok(None)
     }
 
-    pub(super) async fn sequence_side_effecting_func(
-        &mut self,
-        ctx: ExecuteContext,
-        plan: SideEffectingFunc,
-    ) {
-        match plan {
-            SideEffectingFunc::PgCancelBackend { connection_id } => {
-                let Some(connection_id) = connection_id else {
-                    // The argument was `NULL`, so, like in PostgreSQL, the
-                    // function returns `NULL`.
-                    ctx.retire(Ok(Self::send_immediate_rows(Row::pack_slice(&[
-                        Datum::Null,
-                    ]))));
-                    return;
-                };
-
-                if ctx.session().conn_id().unhandled() == connection_id {
-                    // As a special case, if we're canceling ourselves, we send
-                    // back a canceled resposne to the client issuing the query,
-                    // and so we need to do no further processing of the cancel.
-                    ctx.retire(Err(AdapterError::Canceled));
-                    return;
-                }
-
-                let res = if let Some((id_handle, _conn_meta)) =
-                    self.active_conns.get_key_value(&connection_id)
-                {
-                    // check_plan already verified role membership.
-                    self.handle_privileged_cancel(id_handle.clone()).await;
-                    Datum::True
-                } else {
-                    Datum::False
-                };
-                ctx.retire(Ok(Self::send_immediate_rows(Row::pack_slice(&[res]))));
-            }
-        }
-    }
-
-    /// Execute a side-effecting function from the frontend peek path.
-    /// This is separate from `sequence_side_effecting_func` because it doesn't have an
-    /// ExecuteContext. RBAC is checked by the caller via `rbac::check_plan` before
-    /// sending `Command::ExecuteSideEffectingFunc`. The caller must hold the target
+    /// Execute a side-effecting function for the frontend peek path.
+    ///
+    /// RBAC is checked by the caller via `rbac::check_plan` before sending
+    /// `Command::ExecuteSideEffectingFunc`. The caller must hold the target
     /// connection's `ConnectionId` handle from its RBAC check until this command
     /// completes, so that the connection found in `active_conns` here (if any) is
     /// the same one the check was performed against.
-    ///
-    /// TODO(peek-seq): Delete `sequence_side_effecting_func` after we delete the old peek
-    /// sequencing.
     pub(crate) async fn execute_side_effecting_func(
         &mut self,
         plan: SideEffectingFunc,
@@ -2482,8 +2440,13 @@ impl Coordinator {
                 plan::ExplaineeStatement::CreateIndex { .. } => {
                     self.explain_create_index(ctx, plan).await;
                 }
-                plan::ExplaineeStatement::Select { .. } => {
-                    self.explain_peek(ctx, plan, target_cluster).await;
+                stmt @ plan::ExplaineeStatement::Select { .. } => {
+                    let msg = format!(
+                        "EXPLAIN of a {} reached the coordinator despite frontend routing",
+                        plan::ExplaineeStatementKind::from(stmt)
+                    );
+                    soft_panic_or_log!("{msg}");
+                    ctx.retire(Err(AdapterError::Internal(msg)));
                 }
                 plan::ExplaineeStatement::Subscribe { .. } => {
                     self.explain_subscribe(ctx, plan, target_cluster).await;
@@ -2514,29 +2477,16 @@ impl Coordinator {
     }
 
     pub(super) async fn sequence_explain_pushdown(
-        &mut self,
+        &self,
         ctx: ExecuteContext,
         plan: plan::ExplainPushdownPlan,
-        target_cluster: TargetCluster,
     ) {
         match plan.explainee {
-            Explainee::Statement(ExplaineeStatement::Select {
-                broken: false,
-                plan,
-                desc: _,
-            }) => {
-                let stage = return_if_err!(
-                    self.peek_validate(
-                        ctx.session(),
-                        plan,
-                        target_cluster,
-                        None,
-                        ExplainContext::Pushdown,
-                        Some(ctx.session().vars().max_query_result_size()),
-                    ),
-                    ctx
-                );
-                self.sequence_staged(ctx, Span::current(), stage).await;
+            Explainee::Statement(ExplaineeStatement::Select { broken: false, .. }) => {
+                let msg = "EXPLAIN FILTER PUSHDOWN of a SELECT reached the coordinator despite \
+                           frontend routing";
+                soft_panic_or_log!("{msg}");
+                ctx.retire(Err(AdapterError::Internal(msg.into())));
             }
             Explainee::MaterializedView(item_id) => {
                 self.explain_pushdown_materialized_view(ctx, item_id).await;
@@ -4459,24 +4409,6 @@ impl Coordinator {
             ))),
             Err(err) => ctx.retire(Err(err)),
         }
-    }
-
-    pub(super) async fn statistics_oracle(
-        &self,
-        session: &Session,
-        source_ids: &BTreeSet<GlobalId>,
-        query_as_of: &Antichain<Timestamp>,
-        is_oneshot: bool,
-    ) -> Result<Box<dyn mz_transform::StatisticsOracle>, AdapterError> {
-        super::statistics_oracle(
-            session,
-            source_ids,
-            query_as_of,
-            is_oneshot,
-            self.catalog().system_config(),
-            self.controller.storage_collections.as_ref(),
-        )
-        .await
     }
 }
 

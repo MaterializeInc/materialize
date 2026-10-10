@@ -5251,13 +5251,7 @@ def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:
         ("DELETE FROM t WHERE a IN (SELECT a FROM v)", [LOCAL, GLOBAL, LIR]),
     ]
 
-    def check(frontend_peek: bool) -> None:
-        c.sql(
-            f"ALTER SYSTEM SET enable_frontend_peek_sequencing = {frontend_peek}",
-            port=6877,
-            user="mz_system",
-        )
-        # The peek flag is read when a connection is set up, so use a fresh one.
+    def check() -> None:
         with c.sql_cursor() as cur:
             # A SUBSCRIBE that unexpectedly succeeds would otherwise wait for
             # rows forever.
@@ -5293,8 +5287,7 @@ def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:
                 INSERT INTO t VALUES (1);
                 CREATE VIEW v AS SELECT a FROM t;
                 """))
-        for frontend_peek in (False, True):
-            check(frontend_peek)
+        check()
 
 
 def workflow_test_refresh_mv_warmup(

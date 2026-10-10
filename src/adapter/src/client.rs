@@ -44,9 +44,7 @@ use mz_sql::plan::{MutationKind, Plan, ReadThenWritePlan};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
-use mz_sql::session::vars::{
-    CLUSTER, ENABLE_FRONTEND_PEEK_SEQUENCING, OwnedVarInput, SystemVars, Var,
-};
+use mz_sql::session::vars::{CLUSTER, OwnedVarInput, SystemVars, Var};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{InsertStatement, StatementKind};
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
@@ -331,7 +329,6 @@ impl Client {
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
             peek_client,
-            enable_frontend_peek_sequencing: false, // initialized below, once we have a ConnCatalog
         };
 
         let session = client.session();
@@ -469,10 +466,6 @@ Issue a SQL query to get started. Need help?
                 session.add_notice(notice);
             }
         }
-
-        client.enable_frontend_peek_sequencing = ENABLE_FRONTEND_PEEK_SEQUENCING
-            .require(catalog.system_vars())
-            .is_ok();
 
         Ok(client)
     }
@@ -655,11 +648,6 @@ pub struct SessionClient {
     environment_id: EnvironmentId,
     /// Client for frontend peek sequencing; populated at connection startup.
     peek_client: PeekClient,
-    /// Whether frontend peek sequencing is enabled; initialized at connection startup.
-    // TODO(peek-seq): Currently, this is initialized only at session startup. We'll be able to
-    // check the actual feature flag value at every peek (without a Coordinator call) once we'll
-    // always have a catalog snapshot at hand.
-    pub enable_frontend_peek_sequencing: bool,
 }
 
 impl SessionClient {
@@ -1449,21 +1437,18 @@ impl SessionClient {
 
     /// Attempt to sequence a peek from the session task.
     ///
-    /// Returns `Ok(Some(response))` if we handled the peek, or `Ok(None)` to fall back to the
-    /// Coordinator's sequencing. If it returns an error, it should be returned to the user.
+    /// Returns `Ok(Some(response))` if we handled the peek, or `Ok(None)` if the statement is
+    /// not one that the frontend peek sequencing handles, in which case the Coordinator sequences
+    /// it. If it returns an error, it should be returned to the user.
     pub(crate) async fn try_frontend_peek(
         &mut self,
         portal_name: &str,
         logging: &mut ExecutionLogging,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        if self.enable_frontend_peek_sequencing {
-            let session = self.session.as_mut().expect("SessionClient invariant");
-            self.peek_client
-                .try_frontend_peek(portal_name, session, logging)
-                .await
-        } else {
-            Ok(None)
-        }
+        let session = self.session.as_mut().expect("SessionClient invariant");
+        self.peek_client
+            .try_frontend_peek(portal_name, session, logging)
+            .await
     }
 
     /// Whether the frontend read-then-write path could take this portal over.
