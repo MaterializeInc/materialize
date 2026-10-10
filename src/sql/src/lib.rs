@@ -157,6 +157,7 @@ pub mod iceberg;
 pub use mz_compute_types::optimizer_metrics;
 pub mod parse;
 pub mod plan;
+pub mod postgres;
 pub mod pure;
 pub mod rbac;
 pub mod session;

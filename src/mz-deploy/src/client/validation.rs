@@ -820,6 +820,13 @@ pub(crate) async fn validate_sink_connections_exist_impl(
                     }
                     ids
                 }
+                CreateSinkConnection::Postgres { connection, .. } => {
+                    vec![ObjectId::from_raw_item_name(
+                        connection,
+                        obj.id.expect_database(),
+                        obj.id.schema(),
+                    )]
+                }
             };
 
             for conn_id in connection_ids {
