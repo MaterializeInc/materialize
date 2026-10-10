@@ -96,10 +96,17 @@ tests, including this correction. Parallel 2 passes, but parallel 1 still has
 CREATE MV timeouts. SLT 3 finishes its SQL workload successfully before deadline
 cancellation during cleanup. Its workload duration remains unexplained, not a
 demonstrated blocked statement or shared cause with MV contention.
-The committed-prefix diagnostic records all kind/diff counts and a bounded grant
-incarnation sample under the existing workload trace filter. Use it to establish
-whether post-candidate conflicts contain only compatible peer grants. Non-planning
-changes alone do not establish that premise. Strict yielding remains unchanged.
+CI138665 verifies the committed-prefix diagnostic. The complete
+`string_bytea_types_view1` capture has 18 failed attempts: four at open and fourteen
+after candidate construction. Eight post-candidate prefixes contain only compatible
+peer grants. Six include compaction bounds or maintained read requirements, and
+none contains the creator's own incarnation. Fifteen structural replans occur.
+This establishes a narrow retry opportunity, not its effectiveness. Strict yielding
+remains unchanged.
+The diagnostic also samples finite before/after compaction bounds by object ID.
+Verify those witnesses in CI before claiming permission advancement. Initial
+admission, deletion and completion are excluded. Physical Persist since and other
+objects' progress remain separate observations.
 Keep structural revalidation conservative. Existing dependency existence checks
 alone do not establish unchanged definitions, configuration, authorization or
 derived operation sets. Do not remove the revision guard to avoid replanning.

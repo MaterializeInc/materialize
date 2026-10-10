@@ -2144,6 +2144,22 @@ impl Catalog {
                 Self::update_kind_counts(&updates),
                 incarnations.iter().copied().take(16).collect::<Vec<_>>(),
                 incarnations.len() > 16,
+                updates
+                    .iter()
+                    .filter_map(|update| {
+                        let crate::memory::objects::StateUpdateKind::CollectionCompactionBound(
+                            bound,
+                        ) = &update.kind
+                        else {
+                            return None;
+                        };
+                        self.state
+                            .collection_compaction_bounds()
+                            .get(&bound.id)
+                            .and_then(|old| old.as_option())
+                            .map(|old| (bound.id, *old))
+                    })
+                    .collect::<BTreeMap<_, _>>(),
             )
         });
         let (builtin_table_updates, catalog_updates, planning_upper) =
@@ -2189,13 +2205,32 @@ impl Catalog {
                 let cause = mz_ore::panic::downcast_panic_message(&*payload);
                 mz_ore::halt!("cannot apply committed catalog changes, restart required: {cause}")
             });
-        if let Some((from_position, update_kinds, grant_incarnations, identities_truncated)) =
-            prefix_diagnostic
+        if let Some((
+            from_position,
+            update_kinds,
+            grant_incarnations,
+            identities_truncated,
+            old_bounds,
+        )) = prefix_diagnostic
         {
+            // A finite before/after pair proves permission advancement, excluding
+            // initial admission, deletion and completion. It says nothing about
+            // the physical Persist since or every other object's progress.
+            let mut advances = old_bounds.into_iter().filter_map(|(id, old)| {
+                let new = self
+                    .state
+                    .collection_compaction_bounds()
+                    .get(&id)?
+                    .as_option()?;
+                (*new > old).then_some((id, old, *new))
+            });
+            let bound_advances: Vec<_> = advances.by_ref().take(4).collect();
+            let advances_truncated = advances.next().is_some();
             tracing::debug!(
                 target: "mz_adapter::frontend_read_then_write",
                 ?from_position, %upper, ?planning_upper, ?update_kinds,
                 ?grant_incarnations, identities_truncated,
+                ?bound_advances, advances_truncated,
                 "catalog committed prefix applied",
             );
         }
