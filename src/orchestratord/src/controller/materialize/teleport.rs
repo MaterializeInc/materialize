@@ -59,7 +59,6 @@ const TELEPORT_REWRITE_HEADER_VALUE: &str = "mz_support";
 /// The settings that the `--teleport-*` flags provide.
 #[derive(Clone)]
 pub struct TeleportConfig {
-    pub endpoint: String,
     pub stack_type: String,
     pub cluster_name: String,
 }
@@ -145,8 +144,9 @@ fn dns1035_label_error(name: &str) -> Option<&'static str> {
 }
 
 /// Adds the Teleport discovery labels and annotations to `service` when
-/// `--teleport-endpoint` is set. A no-op otherwise, which is the rollback
-/// path: absent the flag, this function changes nothing about the Service.
+/// `--enable-teleport-registration` is set. A no-op otherwise, which is the
+/// rollback path: without the flag, this function changes nothing about the
+/// Service.
 ///
 /// A Service the agent would reject is left unannotated rather than annotated
 /// and silently dropped, so the reason reaches our own logs instead of only
@@ -177,12 +177,13 @@ pub(super) fn apply_teleport_registration(
     let labels = service.metadata.labels.get_or_insert_with(BTreeMap::new);
     // NOTE: `materialize.cloud/app` does double duty. It identifies the Service, and
     // it is the only label the agent's discovery matcher selects on, so writing it
-    // only when `--teleport-endpoint` is set is what keeps discovery inert on a
-    // cluster where the matcher is deployed but the flag is not. Moving it to
-    // `ManagedResource::default_labels` would make it unconditional and register
-    // every environmentd Service under a name the agent invents, with no rewrite
-    // header. Change `teleport_discovery_kube_apps` in the cloud repo's
-    // `infra/cluster/environment.py` to select on a dedicated gate label first.
+    // only when `--enable-teleport-registration` is set is what stops the agent
+    // registering anything on a cluster where the matcher is deployed but the flag
+    // is not. Moving it to `ManagedResource::default_labels` would make it
+    // unconditional and register every environmentd Service under a name the agent
+    // invents, with no rewrite header. Change `teleport_discovery_kube_apps` in the
+    // cloud repo's `infra/cluster/environment.py` to select on a dedicated gate
+    // label first.
     labels.insert(
         "materialize.cloud/app".to_string(),
         mz.environmentd_app_name(),
