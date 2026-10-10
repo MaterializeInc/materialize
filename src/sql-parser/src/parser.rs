@@ -5379,7 +5379,7 @@ impl<'a> Parser<'a> {
         &mut self,
     ) -> Result<TableFromSourceOption<Raw>, ParserError> {
         let option = match self
-            .expect_one_of_keywords(&[TEXT, EXCLUDE, IGNORE, DETAILS, PARTITION, RETAIN])?
+            .expect_one_of_keywords(&[TEXT, EXCLUDE, IGNORE, DETAILS, PARTITION, RETAIN, ALL])?
         {
             TEXT => {
                 self.expect_keyword(COLUMNS)?;
@@ -5480,6 +5480,14 @@ impl<'a> Parser<'a> {
                 TableFromSourceOption {
                     name: TableFromSourceOptionName::RetainHistory,
                     value: self.parse_option_retain_history()?,
+                }
+            }
+            ALL => {
+                self.expect_keyword(COLUMNS)?;
+                self.expect_keyword(NULLABLE)?;
+                TableFromSourceOption {
+                    name: TableFromSourceOptionName::AllColumnsNullable,
+                    value: None,
                 }
             }
             _ => unreachable!(),
