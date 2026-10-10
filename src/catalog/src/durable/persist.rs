@@ -2685,7 +2685,7 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
 
     async fn sync_to_current_updates_if(
         &mut self,
-        accept: &(dyn Fn(&memory::objects::StateUpdate) -> bool + Send + Sync),
+        accept: &(dyn for<'a> Fn(&'a memory::objects::StateUpdate) -> bool + Send + Sync),
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
         self.sync_to_current_upper().await?;
         if !self.update_applier.updates.iter().all(accept) {

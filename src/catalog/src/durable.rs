@@ -334,7 +334,7 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     /// any updates. Includes updates buffered by other users of this handle.
     async fn sync_to_current_updates_if(
         &mut self,
-        accept: &(dyn Fn(&memory::objects::StateUpdate) -> bool + Send + Sync),
+        accept: &(dyn for<'a> Fn(&'a memory::objects::StateUpdate) -> bool + Send + Sync),
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
 
     // TODO(jkosh44) The fact that the timestamp argument is an exclusive upper bound makes
