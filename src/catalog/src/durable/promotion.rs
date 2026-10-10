@@ -10,6 +10,7 @@
 //! Admission for native warm handover, before changing durable authority.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::RangeBounds;
 
 use mz_catalog_protos::objects as proto;
 use mz_controller_types::ClusterId;
@@ -89,12 +90,12 @@ pub(super) fn ephemeral_owners<'a>(
     Ok(owners)
 }
 
-/// Selects realization metadata and protection owned by fenced deployments.
-/// Commit these exact rows with the fence derived from the same consolidated
-/// snapshot. Shared identities and warmed or future deployments remain untouched.
+/// Selects realization metadata and protection owned by the given deployments.
+/// Commit these exact rows with retirement authority derived from the same
+/// consolidated snapshot. Shared identities and other owners remain untouched.
 pub(super) fn retired_realizations<'a>(
     snapshot: impl Iterator<Item = &'a StateUpdateKindJson> + Clone,
-    generation: u64,
+    generations: impl RangeBounds<u64>,
 ) -> Result<Vec<StateUpdateKindJson>, CatalogError> {
     #[derive(Deserialize)]
     struct Key<K> {
@@ -150,7 +151,7 @@ pub(super) fn retired_realizations<'a>(
             "ClientIncarnation" => {
                 let key = decode::<Key<proto::ClientIncarnationKey>>(row)?.key;
                 let value = decode::<Value<ClientGeneration>>(row)?.value;
-                if value.deployment_generation < generation {
+                if generations.contains(&value.deployment_generation) {
                     retired_clients.insert(key.id);
                     true
                 } else {
@@ -160,7 +161,7 @@ pub(super) fn retired_realizations<'a>(
             "ClusterReplica" => {
                 let key = decode::<Key<proto::ClusterReplicaKey>>(row)?.key;
                 let value = decode::<Value<Membership>>(row)?.value;
-                if key.deployment_generation < generation {
+                if generations.contains(&key.deployment_generation) {
                     retired_identities.insert(proto::ClusterReplicaId {
                         cluster_id: value.cluster_id,
                         replica_id: key.id,
@@ -177,7 +178,7 @@ pub(super) fn retired_realizations<'a>(
                 false
             }
             "ClusterRuntime" => {
-                decode::<Key<Deployment>>(row)?.key.deployment_generation < generation
+                generations.contains(&decode::<Key<Deployment>>(row)?.key.deployment_generation)
             }
             _ => false,
         };
@@ -191,12 +192,12 @@ pub(super) fn retired_realizations<'a>(
                 retired_clients.contains(&decode::<Key<Requirement>>(row)?.key.incarnation)
             }
             "ReplicaSystemConfiguration" => {
-                decode::<Key<Deployment>>(row)?.key.deployment_generation < generation
+                generations.contains(&decode::<Key<Deployment>>(row)?.key.deployment_generation)
             }
             "WrittenPlan" => decode::<Value<Plan>>(row)?
                 .value
                 .replica_owner
-                .is_some_and(|owner| owner.deployment_generation < generation),
+                .is_some_and(|owner| generations.contains(&owner.deployment_generation)),
             "Comment" => match decode::<Key<Comment>>(row)?.key.object {
                 proto::CommentObject::ClusterReplica(id) => {
                     retired_identities.contains(&id) && !surviving_replicas.contains(&id.replica_id)
@@ -378,7 +379,7 @@ mod tests {
         }
         // Dependents need not follow their owners in the consolidated snapshot.
         snapshot.reverse();
-        let retired = retired_realizations(snapshot.iter(), 2).expect("decode ownership only");
+        let retired = retired_realizations(snapshot.iter(), ..2).expect("decode ownership only");
         assert_eq!(retired.len(), expected.len());
         assert_eq!(retired.into_iter().collect::<BTreeSet<_>>(), expected);
     }
@@ -433,9 +434,19 @@ mod tests {
             json!({"object": {"Table": {"User": 1}}}),
             json!({}),
         ));
-        let retired = retired_realizations(snapshot.iter(), 2).expect("decode stable identities");
+        let retired = retired_realizations(snapshot.iter(), ..2).expect("decode stable identities");
         assert_eq!(retired.len(), expected.len());
         assert_eq!(retired.into_iter().collect::<BTreeSet<_>>(), expected);
+        // Cancelling only the prewarmer preserves the serving memberships and
+        // their shared replica comment, even without a declaration.
+        assert_eq!(
+            retired_realizations(snapshot.iter(), 2..=2).expect("retire one deployment"),
+            vec![retirement_row(
+                "ClusterReplica",
+                json!({"id": {"User": 3}, "deployment_generation": 2}),
+                json!({"cluster_id": {"User": 1}}),
+            )]
+        );
     }
 
     #[mz_ore::test]
@@ -487,7 +498,7 @@ mod tests {
         ];
         for row in malformed {
             assert!(
-                retired_realizations([&row].into_iter(), 2).is_err(),
+                retired_realizations([&row].into_iter(), ..2).is_err(),
                 "{row:?}"
             );
         }

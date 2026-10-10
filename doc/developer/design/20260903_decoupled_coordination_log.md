@@ -26,10 +26,14 @@ preserving warmed executions. Kafka uses deployment-local placement and fresh,
 untimed producer admission. Keep the existing retention, restart and outage fixtures
 tied to explicit lifecycle actions, including silence retaining protection.
 
-Cancelled prewarming still needs an orchestrator entrypoint and durable exclusion
-from readmission. The pending question is whether to add an internal retirement
-endpoint on the serving deployment. Removing a member without preventing its rejoin
-is insufficient. Do not add a process registry or timed cleanup.
+Implement the approved internal retirement endpoint on the serving deployment,
+using its existing administrative authorization boundary. Retire the explicitly
+identified prewarmer durably before teardown, with idempotent retries and atomic
+exclusion against promotion. Reject retirement of the active deployment, preserve
+other owners and prevent readmission. Orchestratord must retain identity across
+retries of an attempt but allocate a fresh generation after cancellation, rather
+than reuse active_generation + 1. Use existing rollout status, not a new registry.
+Surface disproportionate caller changes.
 
 Promotion also retracts retired memberships, runtime configuration, replica settings
 and replica-owned observation selections in its authority CAS. Raw snapshot rows
@@ -43,10 +47,12 @@ SIGKILLs, without shortening abandoned Persist reader leases or extending deadli
 Keep earlier branch-built catalog conversion outside scope.
 
 Parallel failures and SLT/Zippy timeouts remain. SLT shows broad slowdown, not an
-identified blocking owner. Trace the recurring comment fixture's statements and
-reset phases. Zippy's two-slot hydration occupancy grows across deployments, but
-does not establish CPU or replay volume. Correlate scoped decode work/time and
-frontier diagnostics before choosing a repair.
+identified blocking owner. Replica client-protection commits invalidate both MV
+and preceding index candidates. Correlate acquisition versus advancement before
+changing publication behavior. Zippy's growing hydration wait is accompanied by
+increasing raw catalog decode work across independent imports. These measurements
+are not CPU time or unique replay volume. Preserve historical reads and source
+flow control when assessing a repair at that boundary.
 Do not attribute these to the acknowledgement bug or claim lifecycle changes solve
 them without correlated evidence. Detailed captures and verification are in the PR.
 

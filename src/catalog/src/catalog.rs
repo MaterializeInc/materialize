@@ -207,6 +207,22 @@ impl Clone for Catalog {
 }
 
 impl Catalog {
+    /// Attempts durable retirement of a prewarming deployment.
+    ///
+    /// Returns false on contention. Callers must retry outside the coordinator
+    /// loop and preserve the target identity. The durable layer validates serving
+    /// authority and serializes retirement with promotion.
+    pub async fn try_retire_deployment(
+        &self,
+        generation: u64,
+    ) -> Result<bool, crate::durable::CatalogError> {
+        self.storage
+            .lock()
+            .await
+            .retire_deployment(generation)
+            .await
+    }
+
     /// Non-durable environment context needed to reconstruct this catalog in a replica.
     pub fn replica_config(&self) -> crate::config::ReplicaCatalogConfig {
         let mut config = crate::config::ReplicaCatalogConfig::from_state(&self.diagnostic_config);

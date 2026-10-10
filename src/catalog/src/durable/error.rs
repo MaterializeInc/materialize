@@ -139,6 +139,9 @@ impl From<TryFromProtoError> for DurableCatalogError {
 /// The order of this enum indicates the most information to the least information.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, thiserror::Error)]
 pub enum FenceError {
+    /// This deployment identity was explicitly retired.
+    #[error("catalog deployment generation {generation} has been retired")]
+    DeploymentRetired { generation: u64 },
     /// This instance was fenced by a higher deployment generation.
     #[error(
         "current catalog deployment generation {current_generation} fenced by new catalog deployment generation {fence_generation}"

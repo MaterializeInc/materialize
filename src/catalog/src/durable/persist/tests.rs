@@ -19,10 +19,10 @@ use uuid::Uuid;
 use super::UnopenedPersistCatalogState;
 use crate::durable::objects::Snapshot;
 use crate::durable::objects::serialization::RustType;
-use crate::durable::objects::state_update::StateUpdateKindJson;
+use crate::durable::objects::state_update::{StateUpdateKind, StateUpdateKindJson};
 use crate::durable::persist::{CATALOG_SEED, fetch_catalog_shard_version, shard_id};
 use crate::durable::{
-    CatalogError, DurableCatalogError, DurableCatalogState, TestCatalogStateBuilder,
+    CatalogError, DurableCatalogError, DurableCatalogState, FenceError, TestCatalogStateBuilder,
     test_bootstrap_args,
 };
 
@@ -207,7 +207,7 @@ fn legacy_v94_rows() -> Vec<StateUpdateKindJson> {
         .collect()
 }
 
-async fn raw_legacy_catalog(builder: &TestCatalogStateBuilder) -> UnopenedPersistCatalogState {
+async fn raw_catalog(builder: &TestCatalogStateBuilder) -> UnopenedPersistCatalogState {
     UnopenedPersistCatalogState::new(
         builder.persist_client.clone(),
         builder.organization_id,
@@ -231,7 +231,7 @@ async fn seed_legacy_v94() -> TestCatalogStateBuilder {
     let builder = TestCatalogStateBuilder::new(client)
         .with_version(version)
         .with_deploy_generation(43);
-    let mut raw = raw_legacy_catalog(&builder).await;
+    let mut raw = raw_catalog(&builder).await;
     let ts = raw.upper;
     raw.compare_and_append(
         legacy_v94_rows()
@@ -302,7 +302,7 @@ fn assert_legacy_snapshot(snapshot: &Snapshot, generation: u64) {
 #[cfg_attr(miri, ignore)]
 async fn test_legacy_v94_savepoint_is_nondurable() {
     let builder = seed_legacy_v94().await;
-    let before = raw_legacy_catalog(&builder).await;
+    let before = raw_catalog(&builder).await;
     let mut savepoint = builder
         .clone()
         .unwrap_build()
@@ -318,7 +318,7 @@ async fn test_legacy_v94_savepoint_is_nondurable() {
             .expect("inspect savepoint snapshot"),
         42,
     );
-    let after = raw_legacy_catalog(&builder).await;
+    let after = raw_catalog(&builder).await;
     assert_eq!(before.upper, after.upper);
     assert_eq!(before.snapshot, after.snapshot);
     assert!(after.update_applier.deployment_admission.is_none());
@@ -351,7 +351,7 @@ async fn test_legacy_v94_writable_open_defers_admission() {
             .expect("inspect upgraded snapshot"),
         43,
     );
-    let raw = raw_legacy_catalog(&builder).await;
+    let raw = raw_catalog(&builder).await;
     let fence = raw.fenceable_token.token().expect("opened catalog fence");
     assert_eq!(fence.deploy_generation, 43);
     assert_eq!(fence.epoch.get(), 18);
@@ -437,6 +437,101 @@ async fn bootstrap_admission(builder: TestCatalogStateBuilder) -> Box<dyn Durabl
     txn.commit(ts).await.expect("protection latch can commit");
     active.mark_bootstrap_complete().await;
     active
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_retirement_retracts_raw_rows_and_fences_before_unreadable_suffix() {
+    let version = semver::Version::new(26, 1, 0);
+    let organization_id = Uuid::new_v4();
+    let mut cache = PersistClientCache::new_no_metrics();
+    let (_, active_builder) = admission_participant(&mut cache, organization_id, 7, &version).await;
+    let mut active = bootstrap_admission(active_builder.clone()).await;
+    let (_, pending_builder) =
+        admission_participant(&mut cache, organization_id, 8, &version).await;
+    let mut pending = pending_builder
+        .unwrap_build()
+        .await
+        .join_prewarming(&version.to_string())
+        .await
+        .expect("generation 8 can prewarm");
+
+    // Unknown fields participate in Persist row identity even though typed
+    // catalog decoding ignores them.
+    let replica_config = |generation| {
+        StateUpdateKindJson::from_serde(serde_json::json!({
+            "kind": "ReplicaSystemConfiguration",
+            "key": {
+                "replica_id": {"User": 23},
+                "deployment_generation": generation,
+                "name": "max_result_size"
+            },
+            "value": {"value": "1GB", "unknown_extra_field": {"preserve": true}}
+        }))
+    };
+    let target = replica_config(8);
+    let peer = replica_config(9);
+    let mut raw = raw_catalog(&active_builder).await;
+    let ts = raw.upper;
+    raw.compare_and_append(
+        vec![(target.clone(), Diff::ONE), (peer.clone(), Diff::ONE)],
+        ts,
+    )
+    .await
+    .expect("append raw realization metadata");
+    pending
+        .sync_to_current_updates()
+        .await
+        .expect("pending handle can read the realization metadata");
+
+    assert!(
+        active
+            .retire_deployment(8)
+            .await
+            .expect("retire generation 8")
+    );
+    let mut raw = raw_catalog(&active_builder).await;
+    assert!(
+        raw.snapshot.iter().all(|(_, _, diff)| *diff > Diff::ZERO),
+        "retirement must not leave unmatched raw retractions"
+    );
+    assert!(
+        raw.snapshot.iter().all(|(row, _, _)| row != &target),
+        "retirement must retract the exact target row, including unknown fields"
+    );
+    let remaining_configs: Vec<_> = raw
+        .snapshot
+        .iter()
+        .filter(|(row, _, _)| row.kind() == "ReplicaSystemConfiguration")
+        .map(|(row, _, diff)| (row.clone(), *diff))
+        .collect();
+    assert_eq!(remaining_configs, vec![(peer, Diff::ONE)]);
+
+    // Keep the pending handle behind retirement until the unreadable suffix is
+    // durable, so one sync must stop at retirement rather than decode the suffix.
+    let unreadable = StateUpdateKindJson::from_serde(serde_json::json!({
+        "kind": "FutureCatalogRow"
+    }));
+    assert!(StateUpdateKind::try_from(unreadable.clone()).is_err());
+    let ts = raw.upper;
+    raw.compare_and_append(vec![(unreadable, Diff::ONE)], ts)
+        .await
+        .expect("append unreadable row after retirement");
+    let error = pending
+        .sync_to_current_updates()
+        .await
+        .expect_err("retired handle must stop before decoding the unreadable suffix");
+    assert!(
+        matches!(
+            error,
+            CatalogError::Durable(DurableCatalogError::Fence(FenceError::DeploymentRetired {
+                generation: 8
+            }))
+        ),
+        "{error}"
+    );
+    pending.expire().await;
+    active.expire().await;
 }
 
 #[mz_ore::test(tokio::test)]

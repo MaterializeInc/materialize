@@ -2541,6 +2541,50 @@ fn test_internal_http_auth() {
 
     // invalid header returns an error
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{:?}", res.text());
+
+    let retirement_url = format!(
+        "http://{}/api/leader/retire",
+        server.internal_http_local_addr()
+    );
+    let retire = |user: &str, body: serde_json::Value| {
+        Client::new()
+            .post(&retirement_url)
+            .header("x-materialize-user", user)
+            .json(&body)
+            .send()
+            .unwrap()
+    };
+    assert_eq!(
+        retire("invalid value", serde_json::json!({"generation": 1})).status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        retire("mz_system", serde_json::json!({})).status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        retire("mz_system", serde_json::json!({"generation": 0})).status(),
+        StatusCode::CONFLICT,
+        "the serving generation cannot be retired"
+    );
+    // Cancelling before the prewarmer joins must exclude that identity too.
+    Retry::default()
+        .max_duration(Duration::from_secs(10))
+        .retry(|_| {
+            let response = retire("mz_system", serde_json::json!({"generation": 1}));
+            if response.status() == StatusCode::OK {
+                Ok(())
+            } else {
+                Err(response.text().unwrap())
+            }
+        })
+        .unwrap();
+    let response = retire("mz_system", serde_json::json!({"generation": 1}));
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.json::<serde_json::Value>().unwrap(),
+        serde_json::json!({"retired": 1})
+    );
 }
 
 #[mz_ore::test]

@@ -2195,6 +2195,12 @@ pub struct DeploymentAdmission {
         proptest(strategy = "any_semver_string()")
     )]
     pub persist_target: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        any(test, feature = "proptest"),
+        proptest(strategy = "any_retired_deployments()")
+    )]
+    pub retired: Vec<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -2220,6 +2226,13 @@ fn any_deployment_members() -> impl proptest::strategy::Strategy<Value = Vec<Dep
             })
             .collect()
     })
+}
+
+#[cfg(any(test, feature = "proptest"))]
+fn any_retired_deployments() -> impl proptest::strategy::Strategy<Value = Vec<u64>> {
+    use proptest::prelude::*;
+    proptest::collection::btree_set(any::<u64>(), 0..10)
+        .prop_map(|generations| generations.into_iter().collect())
 }
 
 #[cfg(any(test, feature = "proptest"))]

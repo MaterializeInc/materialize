@@ -342,7 +342,7 @@ impl ShouldTerminateGracefully for DurableCatalogError {
 impl ShouldTerminateGracefully for FenceError {
     fn should_terminate_gracefully(&self) -> bool {
         match self {
-            FenceError::DeployGeneration { .. } => true,
+            FenceError::DeploymentRetired { .. } | FenceError::DeployGeneration { .. } => true,
             FenceError::Epoch { .. } | FenceError::MigrationUpper { .. } => false,
         }
     }

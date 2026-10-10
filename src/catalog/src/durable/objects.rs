@@ -1971,6 +1971,8 @@ impl Snapshot {
 pub struct DeploymentAdmission {
     pub members: BTreeMap<u64, semver::Version>,
     pub persist_target: semver::Version,
+    /// Explicitly retired identities that must not be admitted again.
+    pub retired: BTreeSet<u64>,
 }
 
 #[cfg(test)]
@@ -1998,6 +2000,7 @@ impl RustType<proto::DeploymentAdmission> for DeploymentAdmission {
                 })
                 .collect(),
             persist_target: self.persist_target.to_string(),
+            retired: self.retired.iter().copied().collect(),
         }
     }
 
@@ -2024,6 +2027,7 @@ impl RustType<proto::DeploymentAdmission> for DeploymentAdmission {
         Ok(Self {
             members,
             persist_target,
+            retired: proto.retired.into_iter().collect(),
         })
     }
 }

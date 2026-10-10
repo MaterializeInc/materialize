@@ -373,6 +373,9 @@ impl From<UpperMismatch<Timestamp>> for CompareAndAppendError {
 }
 
 pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindJson> {
+    /// Whether explicit retirement forbids this deployment from participating.
+    fn deployment_is_retired(&self, generation: u64) -> bool;
+
     /// Format authorization from the applied catalog prefix, when protected.
     fn persist_target(&self) -> Option<&semver::Version>;
 
@@ -453,11 +456,31 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
 impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     fn validate_runtime(&self) -> Result<(), DurableCatalogError> {
         self.fenceable_token.validate()?;
+        self.validate_deployment_membership()?;
         self.update_applier.validate_runtime()?;
         if let Some(target) = self.update_applier.persist_target() {
             self.persist_client
                 .set_state_version_target(target.clone())
                 .map_err(|error| DurableCatalogError::NotWritable(error.to_string()))?;
+        }
+        Ok(())
+    }
+
+    fn validate_deployment_membership(&self) -> Result<(), DurableCatalogError> {
+        let generation = match &self.fenceable_token {
+            FenceableToken::Initializing {
+                current_deploy_generation,
+                ..
+            } => *current_deploy_generation,
+            _ => self
+                .fenceable_token
+                .token()
+                .map(|token| token.deploy_generation),
+        };
+        if let Some(generation) = generation
+            && self.update_applier.deployment_is_retired(generation)
+        {
+            return Err(FenceError::DeploymentRetired { generation }.into());
         }
         Ok(())
     }
@@ -889,6 +912,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                                 },
                             );
                             self.apply_updates(updates)?;
+                            // A retired build must stop before decoding a later
+                            // timestamp that may use an unsupported format.
+                            self.validate_deployment_membership()?;
                             self.maybe_consolidate();
                         }
                         if terminal && self.upper == target_upper {
@@ -1093,11 +1119,19 @@ impl PersistCatalogState {
     /// The output is consolidated and sorted by timestamp in ascending order.
     #[mz_ore::instrument(level = "debug")]
     async fn persist_snapshot(&self) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
+        self.persist_snapshot_raw()
+            .await
+            .map(|update| update.try_into().expect("kind decoding error"))
+    }
+
+    // Retractions must preserve fields written by compatible builds that this
+    // build does not interpret. A typed round trip can change the Persist key.
+    async fn persist_snapshot_raw(
+        &self,
+    ) -> impl Iterator<Item = StateUpdate<StateUpdateKindJson>> + DoubleEndedIterator {
         let mut read_handle = self.read_handle().await;
         let as_of = as_of(&read_handle, self.upper);
-        let snapshot = snapshot_binary(&mut read_handle, as_of, &self.metrics)
-            .await
-            .map(|update| update.try_into().expect("kind decoding error"));
+        let snapshot = snapshot_binary(&mut read_handle, as_of, &self.metrics).await;
         read_handle.expire().await;
         snapshot
     }
@@ -1124,6 +1158,12 @@ impl UnopenedCatalogStateInner {
 }
 
 impl ApplyUpdate<StateUpdateKindJson> for UnopenedCatalogStateInner {
+    fn deployment_is_retired(&self, generation: u64) -> bool {
+        self.deployment_admission
+            .as_ref()
+            .is_some_and(|admission| admission.retired.contains(&generation))
+    }
+
     fn persist_target(&self) -> Option<&semver::Version> {
         self.configs
             .get(READ_PROTECTION_CONFIG)
@@ -1562,7 +1602,7 @@ impl UnopenedPersistCatalogState {
                 fence_updates.extend(
                     super::promotion::retired_realizations(
                         self.snapshot.iter().map(|(kind, _, _)| kind),
-                        admitted_generation,
+                        ..admitted_generation,
                     )?
                     .into_iter()
                     .map(|row| (row, Diff::MINUS_ONE)),
@@ -2332,6 +2372,12 @@ impl CatalogStateInner {
 }
 
 impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
+    fn deployment_is_retired(&self, generation: u64) -> bool {
+        self.deployment_admission
+            .as_ref()
+            .is_some_and(|admission| admission.retired.contains(&generation))
+    }
+
     fn persist_target(&self) -> Option<&semver::Version> {
         self.protected
             .then_some(self.deployment_admission.as_ref())
@@ -2697,6 +2743,68 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
 #[async_trait]
 #[allow(mismatched_lifetime_syntaxes)]
 impl DurableCatalogState for PersistCatalogState {
+    async fn retire_deployment(&mut self, generation: u64) -> Result<bool, CatalogError> {
+        self.sync_to_current_upper().await?;
+        let own = self
+            .fenceable_token
+            .token()
+            .expect("opened catalog identity");
+        let active = self
+            .fenceable_token
+            .durable_token()
+            .expect("opened catalog authority")
+            .deploy_generation;
+        if self.mode != Mode::Writable
+            || !self.update_applier.protected
+            || own.deploy_generation != active
+        {
+            return Err(DurableCatalogError::NotWritable(
+                "deployment retirement requires the serving protected catalog".into(),
+            )
+            .into());
+        }
+        let previous = self
+            .update_applier
+            .deployment_admission
+            .as_ref()
+            .ok_or_else(|| {
+                DurableCatalogError::NotWritable("missing deployment admission metadata".into())
+            })?
+            .clone();
+        let mut admission = previous.clone();
+        admission.retire(generation, active)?;
+        if admission == previous {
+            return Ok(true);
+        }
+
+        // Retirement is infrequent and uses a consolidated snapshot, including
+        // every build's realization metadata. The CAS below binds cleanup and
+        // admission exclusion to this exact prefix, including against promotion.
+        let snapshot: Vec<StateUpdateKindJson> = self
+            .persist_snapshot_raw()
+            .await
+            .map(|update| update.kind)
+            .collect();
+        let mut updates: Vec<_> =
+            super::promotion::retired_realizations(snapshot.iter(), generation..=generation)?
+                .into_iter()
+                .map(|row| (row, Diff::MINUS_ONE))
+                .collect();
+        updates.push((
+            StateUpdateKind::DeploymentAdmission(previous).into(),
+            Diff::MINUS_ONE,
+        ));
+        updates.push((
+            StateUpdateKind::DeploymentAdmission(admission).into(),
+            Diff::ONE,
+        ));
+        match self.compare_and_append(updates, self.upper).await {
+            Ok(_) => Ok(true),
+            Err(CompareAndAppendError::UpperMismatch { .. }) => Ok(false),
+            Err(CompareAndAppendError::Durable(error)) => Err(error.into()),
+        }
+    }
+
     fn is_read_only(&self) -> bool {
         matches!(self.mode, Mode::Readonly)
     }

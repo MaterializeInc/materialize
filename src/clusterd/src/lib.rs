@@ -689,13 +689,14 @@ fn is_deployment_fence(error: &anyhow::Error) -> bool {
             Some(DurableCatalogError::Fence(error)) => Some(error),
             _ => None,
         });
-        matches!(
-            fence,
-            Some(FenceError::DeployGeneration {
-                current_generation,
-                fence_generation,
-            }) if fence_generation > current_generation
-        )
+        matches!(fence, Some(FenceError::DeploymentRetired { .. }))
+            || matches!(
+                fence,
+                Some(FenceError::DeployGeneration {
+                    current_generation,
+                    fence_generation,
+                }) if fence_generation > current_generation
+            )
     })
 }
 

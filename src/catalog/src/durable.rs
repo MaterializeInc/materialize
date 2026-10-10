@@ -441,6 +441,13 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// Empty progress does not allocate or complete an oracle write.
     async fn advance_upper(&mut self, new_upper: Timestamp) -> Result<(), CatalogError>;
 
+    /// Attempts to retire an explicitly identified prewarming deployment.
+    ///
+    /// Only the serving deployment may call this. Success is durable, includes
+    /// target-owned cleanup and prevents readmission. Returns false on a catalog
+    /// conflict, requiring a fresh attempt after relinquishing the caller's lock.
+    async fn retire_deployment(&mut self, generation: u64) -> Result<bool, CatalogError>;
+
     /// Allocates and returns `amount` IDs of `id_type`.
     ///
     /// Retries content conflicts by allocating from a fresh durable snapshot. Pending

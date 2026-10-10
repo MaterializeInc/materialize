@@ -471,11 +471,16 @@ impl HttpServer {
                 .route("/api/leader/status", routing::get(handle_leader_status))
                 .route("/api/leader/promote", routing::post(handle_leader_promote))
                 .route(
+                    "/api/leader/retire",
+                    routing::post(handle_deployment_retire),
+                )
+                .route(
                     "/api/leader/skip-catchup",
                     routing::post(handle_leader_skip_catchup),
                 )
                 .authorize(internal_roles)
                 .layer(auth_middleware.clone())
+                .layer(Extension(adapter_client_rx.clone()))
                 .with_state(internal_route_config.deployment_state_handle.clone());
             router = router.merge(leader_router);
         }
@@ -736,6 +741,50 @@ pub async fn handle_leader_status(
 ) -> impl IntoResponse {
     let status = deployment_state_handle.status();
     (StatusCode::OK, Json(json!({ "status": status })))
+}
+
+#[derive(Deserialize)]
+struct RetireDeploymentRequest {
+    generation: u64,
+}
+
+async fn handle_deployment_retire(
+    Extension(adapter_client_rx): Extension<Delayed<Client>>,
+    Json(request): Json<RetireDeploymentRequest>,
+) -> Response {
+    // A disconnected HTTP caller must not cancel a submitted durable write.
+    // Retrying the explicit identity resolves an uncertain response idempotently.
+    let result = mz_ore::task::spawn(|| "retire_deployment", async move {
+        let client = adapter_client_rx
+            .await
+            .map_err(|_| anyhow::anyhow!("adapter unavailable"))?;
+        let catalog = client.catalog_snapshot_expensive().await;
+        catalog
+            .try_retire_deployment(request.generation)
+            .await
+            .map_err(anyhow::Error::from)
+    })
+    .await;
+    match result {
+        Ok(Ok(true)) => {
+            (StatusCode::OK, Json(json!({"retired": request.generation}))).into_response()
+        }
+        Ok(Ok(false)) => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "catalog changed; retry retirement of the same generation"})),
+        )
+            .into_response(),
+        Ok(Err(error)) => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": error.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 pub async fn handle_leader_promote(

@@ -225,6 +225,96 @@ async fn warm_promotion_rejects_managed_replica_pins_before_fencing() {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
+async fn cancelled_prewarming_cannot_restore_its_protection() {
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_deploy_generation(7);
+    let bootstrap = test_bootstrap_args();
+    let mut active = builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &bootstrap)
+        .await
+        .unwrap();
+    active.sync_to_current_updates().await.unwrap();
+    let input = GlobalId::User(1000);
+    let mut tx = active.transaction().await.unwrap();
+    tx.set_config("catalog_read_protection_enabled".into(), Some(1))
+        .unwrap();
+    tx.insert_collection_metadata(BTreeMap::from([(input, ShardId::new())]))
+        .unwrap();
+    tx.set_collection_compaction_bound(input, Some(10.into()))
+        .unwrap();
+    let serving_client = tx.create_client_incarnation(None).unwrap();
+    tx.publish_client_read_requirements(serving_client, BTreeMap::from([(input, 30.into())]))
+        .unwrap();
+    commit(tx).await;
+    let serving_snapshot = active.snapshot().await.unwrap();
+
+    let pending_builder = builder.clone().with_deploy_generation(8);
+    let mut pending = pending_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .join_prewarming("0.0.0+pending")
+        .await
+        .unwrap();
+    pending.sync_to_current_updates().await.unwrap();
+    let mut tx = pending.transaction().await.unwrap();
+    let pending_client = tx.create_client_incarnation(None).unwrap();
+    tx.publish_client_read_requirements(pending_client, BTreeMap::from([(input, 10.into())]))
+        .unwrap();
+    commit(tx).await;
+    let promotion = pending_builder.clone().unwrap_build().await;
+
+    assert!(pending.retire_deployment(7).await.is_err());
+    assert!(active.retire_deployment(7).await.is_err());
+    assert!(active.retire_deployment(8).await.unwrap());
+    assert!(active.retire_deployment(8).await.unwrap());
+    let snapshot = active.snapshot().await.unwrap();
+    assert!(
+        snapshot
+            .client_incarnations
+            .values()
+            .all(|client| client.deployment_generation != 8)
+    );
+    assert!(
+        snapshot
+            .client_incarnations
+            .values()
+            .any(|client| client.deployment_generation == 7)
+    );
+    assert_eq!(
+        snapshot.client_read_requirements,
+        serving_snapshot.client_read_requirements
+    );
+    assert!(pending.sync_to_current_updates().await.is_err());
+    let restart = match pending_builder.clone().build().await {
+        Ok(catalog) => catalog.join_prewarming("0.0.0+pending").await,
+        Err(error) => Err(error.into()),
+    };
+    assert!(restart.is_err());
+    assert!(
+        promotion
+            .open_for_promotion(SYSTEM_TIME().into(), &bootstrap)
+            .await
+            .is_err(),
+        "a promotion prepared before retirement cannot revive the deployment"
+    );
+    let fresh = builder
+        .with_deploy_generation(9)
+        .unwrap_build()
+        .await
+        .join_prewarming("0.0.0+pending")
+        .await
+        .unwrap();
+    fresh.expire().await;
+    pending.expire().await;
+    active.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
 async fn prewarming_metadata_authority_survives_restart_and_promotion() {
     use mz_catalog::durable::objects::{
         ClusterReplicaDeclaration, ClusterRuntime, ReconfigurationTarget, ReplicaPlanOwner,
