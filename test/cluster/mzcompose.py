@@ -4736,7 +4736,7 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
     *then* issues `client.peek()`; registration hands ownership of
     end-of-execution logging to the coordinator. If a `DROP CLUSTER` lands in
     that window, the teardown retires the pending peek and logs its end,
-    `client.peek()` fails, and the frontend's `UnregisterFrontendPeek` must be
+    `client.peek()` fails, and the frontend's `UnregisterPeek` must be
     a no-op. Historically the frontend ended the statement itself here, and
     the double end panicked and aborted environmentd.
 
@@ -4801,7 +4801,7 @@ def workflow_test_drop_cluster_during_registered_peeks_fast_path(
             failpoint_armed.set()
             # Give the peeker time to issue its SELECT and park. It stays parked
             # until we turn the failpoint off, so this only has to outlast plan +
-            # `RegisterFrontendPeek`, not race a narrow window.
+            # `RegisterPeek`, not race a narrow window.
             time.sleep(5)
             # Drop the cluster while the peek is parked: the coordinator retires
             # the pending peek and logs its end of execution.

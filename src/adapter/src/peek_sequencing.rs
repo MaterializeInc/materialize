@@ -90,7 +90,7 @@ impl PeekClient {
     ///
     /// `connection_closed` resolves when the client goes away. Waiting for the optimizer gives up
     /// then, as it does on a statement timeout.
-    pub(crate) async fn try_frontend_peek(
+    pub(crate) async fn try_peek(
         &mut self,
         portal_name: &str,
         session: &mut Session,
@@ -112,7 +112,7 @@ impl PeekClient {
             }
         }
 
-        let catalog = self.catalog_snapshot("try_frontend_peek").await;
+        let catalog = self.catalog_snapshot("try_peek").await;
 
         // Extract things from the portal. A failed verification does not begin
         // an entry, mirroring the coordinator: the portal is what statement
@@ -144,7 +144,7 @@ impl PeekClient {
                     // These are always fine, just continue.
                     // Note: EXPLAIN ANALYZE will `plan` to `Plan::Select`.
                     // Note: ShowObjects plans to `Plan::Select`, ShowColumns plans to `Plan::ShowColumns`.
-                    // We handle `Plan::ShowColumns` specially in `try_frontend_peek_inner`.
+                    // We handle `Plan::ShowColumns` specially in `try_peek_inner`.
                 }
                 Statement::ExplainPlan(explain_stmt) => {
                     // Only handle ExplainPlan for SELECT and SUBSCRIBE statements.
@@ -156,7 +156,7 @@ impl PeekClient {
                         | mz_sql_parser::ast::Explainee::Subscribe(..) => {}
                         _ => {
                             debug!(
-                                "Bailing out from try_frontend_peek, because EXPLAIN is not for a SELECT or SUBSCRIBE"
+                                "Bailing out from try_peek, because EXPLAIN is not for a SELECT or SUBSCRIBE"
                             );
                             return Ok(None);
                         }
@@ -168,7 +168,7 @@ impl PeekClient {
                         mz_sql_parser::ast::Explainee::Select(_, false) => {}
                         _ => {
                             debug!(
-                                "Bailing out from try_frontend_peek, because EXPLAIN FILTER PUSHDOWN is not for a SELECT query or is for EXPLAIN BROKEN"
+                                "Bailing out from try_peek, because EXPLAIN FILTER PUSHDOWN is not for a SELECT query or is for EXPLAIN BROKEN"
                             );
                             return Ok(None);
                         }
@@ -180,9 +180,7 @@ impl PeekClient {
                             // This is COPY TO (...), continue
                         }
                         CopyDirection::From => {
-                            debug!(
-                                "Bailing out from try_frontend_peek, because COPY FROM is not supported"
-                            );
+                            debug!("Bailing out from try_peek, because COPY FROM is not supported");
                             return Ok(None);
                         }
                     }
@@ -190,9 +188,7 @@ impl PeekClient {
 
                 Statement::Subscribe(_) | Statement::ExplainTimestamp(_) => {}
                 _ => {
-                    debug!(
-                        "Bailing out from try_frontend_peek, because statement type is not supported"
-                    );
+                    debug!("Bailing out from try_peek, because statement type is not supported");
                     return Ok(None);
                 }
             }
@@ -212,7 +208,7 @@ impl PeekClient {
             TakeOver::StatementToRun,
         );
 
-        self.try_frontend_peek_inner(session, catalog, stmt, params, logging, connection_closed)
+        self.try_peek_inner(session, catalog, stmt, params, logging, connection_closed)
             .await
     }
 
@@ -273,7 +269,7 @@ impl PeekClient {
 
         let mut logging = ExecutionLogging::adopt(None, self);
         let response = self
-            .try_frontend_peek_inner(
+            .try_peek_inner(
                 &mut session,
                 catalog,
                 Some(Arc::new(stmt)),
@@ -322,7 +318,7 @@ impl PeekClient {
     /// else the slot stays armed and `SessionClient::execute` logs the end from
     /// the returned result.
     #[mz_ore::instrument(level = "debug")]
-    async fn try_frontend_peek_inner(
+    async fn try_peek_inner(
         &mut self,
         session: &mut Session,
         catalog: Arc<Catalog>,
@@ -334,7 +330,7 @@ impl PeekClient {
         let stmt = match stmt {
             Some(stmt) => stmt,
             None => {
-                debug!("try_frontend_peek_inner succeeded on an empty query");
+                debug!("try_peek_inner succeeded on an empty query");
                 return Ok(Some(ExecuteResponse::EmptyQuery));
             }
         };
@@ -435,7 +431,7 @@ impl PeekClient {
                     }
                     _ => {
                         // This shouldn't happen because we already checked for this at the AST
-                        // level before calling `try_frontend_peek_inner`. The logging takeover
+                        // level before calling `try_peek_inner`. The logging takeover
                         // has already happened, so falling back to the coordinator would count
                         // the statement twice. Report the inconsistency instead.
                         soft_panic_or_log!(
@@ -535,7 +531,7 @@ impl PeekClient {
             }
             _ => {
                 // This shouldn't happen because we already checked for this at the AST
-                // level before calling `try_frontend_peek_inner`. The logging takeover has
+                // level before calling `try_peek_inner`. The logging takeover has
                 // already happened, so falling back to the coordinator would count the
                 // statement twice. Report the inconsistency instead.
                 soft_panic_or_log!(
@@ -820,7 +816,7 @@ impl PeekClient {
                     &input_id_bundle
                 };
                 let (determination, read_holds) = self
-                    .frontend_determine_timestamp(
+                    .determine_timestamp(
                         session,
                         determine_bundle,
                         when,
@@ -1708,7 +1704,7 @@ impl PeekClient {
     /// The caller is responsible for eventually dropping those read holds.
     ///
     /// Note: self is taken &mut because of the lazy fetching in `get_compute_instance_client`.
-    pub(crate) async fn frontend_determine_timestamp(
+    pub(crate) async fn determine_timestamp(
         &mut self,
         session: &Session,
         id_bundle: &CollectionIdBundle,

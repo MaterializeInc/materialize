@@ -26,7 +26,7 @@
 //! ## Whether the write reads persisted state
 //!
 //! Two predicates answer that one question, and they have to agree. Before
-//! anything runs, `SessionClient::try_frontend_read_then_write` decides it
+//! anything runs, `SessionClient::try_read_then_write` decides it
 //! syntactically, from `depends_on()` on the planned selection, because inside
 //! a transaction a read-dependent write has to be refused while refusing is
 //! still possible. Once the dataflow runs, the subscribe answers it
@@ -74,7 +74,7 @@
 //! committed on its own has no business claiming it.
 //!
 //! Disagreement is caught on both sides, and only one side can still refuse.
-//! `frontend_read_then_write` re-checks the syntactic predicate before running a
+//! `PeekClient::read_then_write` re-checks the syntactic predicate before running a
 //! dataflow, which catches a caller that skipped the gate. If the syntactic
 //! predicate were laxer than the dynamic one, that check would pass and a write
 //! meant for staging would commit on its own, so the loop asserts wherever the
@@ -162,23 +162,23 @@ use crate::{PeekClient, PeekResponseUnary, TimelineContext, optimize};
 
 /// Reason a frontend write attempt is being torn down early.
 #[derive(Clone, Copy)]
-pub(crate) enum FrontendWriteCancellation {
+pub(crate) enum WriteCancellation {
     Canceled,
     StatementTimeout,
 }
 
-impl From<FrontendWriteCancellation> for AdapterError {
-    fn from(cancellation: FrontendWriteCancellation) -> Self {
+impl From<WriteCancellation> for AdapterError {
+    fn from(cancellation: WriteCancellation) -> Self {
         match cancellation {
-            FrontendWriteCancellation::Canceled => AdapterError::Canceled,
-            FrontendWriteCancellation::StatementTimeout => AdapterError::StatementTimeout,
+            WriteCancellation::Canceled => AdapterError::Canceled,
+            WriteCancellation::StatementTimeout => AdapterError::StatementTimeout,
         }
     }
 }
 
 /// State shared between an in-flight frontend write attempt and its
 /// cancellation wrapper,
-/// `SessionClient::try_frontend_read_then_write_with_cancel`.
+/// `SessionClient::try_read_then_write_with_cancel`.
 ///
 /// The contract: `write_submitted` is true from just before the
 /// `AttemptWrite` command is sent until the attempt resolves as definitively
@@ -189,13 +189,13 @@ impl From<FrontendWriteCancellation> for AdapterError {
 /// The wrapper and the attempt it wraps are polled by the same task, so the
 /// mutex and the atomic are here to satisfy `Send`, not to arbitrate between
 /// concurrent writers. There is one writer for each field.
-pub(crate) struct FrontendWriteAttemptState {
+pub(crate) struct WriteAttemptState {
     write_submitted: AtomicBool,
     /// Set at most once, by the cancellation wrapper.
-    cancellation: Mutex<Option<FrontendWriteCancellation>>,
+    cancellation: Mutex<Option<WriteCancellation>>,
 }
 
-impl FrontendWriteAttemptState {
+impl WriteAttemptState {
     pub(crate) fn new() -> Self {
         Self {
             write_submitted: AtomicBool::new(false),
@@ -223,7 +223,7 @@ impl FrontendWriteAttemptState {
 
     /// Records why the attempt is being torn down. The first reason recorded
     /// is the one the attempt reports.
-    pub(crate) fn request(&self, cancellation: FrontendWriteCancellation) {
+    pub(crate) fn request(&self, cancellation: WriteCancellation) {
         self.cancellation
             .lock()
             .expect("cancellation lock poisoned")
@@ -350,7 +350,7 @@ enum WriteOutcome {
 fn classify_write_result(
     result: WriteResult,
     target_id: CatalogItemId,
-    attempt_state: &FrontendWriteAttemptState,
+    attempt_state: &WriteAttemptState,
 ) -> WriteOutcome {
     match result {
         WriteResult::Success { timestamp } => WriteOutcome::Committed(timestamp),
@@ -694,20 +694,20 @@ impl Drop for SubscribeHandle {
 }
 
 impl PeekClient {
-    /// Execute a read-then-write operation using frontend sequencing.
+    /// Executes a read-then-write for a statement of `session`.
     ///
     /// The caller owns the end-of-execution logging for
     /// `statement_logging_id` and verified and planned the portal against
     /// `catalog`, which stays in force through optimization and write-target
     /// generation capture.
-    pub(crate) async fn frontend_read_then_write(
+    pub(crate) async fn session_read_then_write(
         &mut self,
         session: &mut Session,
         plan: plan::ReadThenWritePlan,
         target_cluster: TargetCluster,
         catalog: &Arc<Catalog>,
         statement_logging_id: Option<StatementLoggingId>,
-        attempt_state: Arc<FrontendWriteAttemptState>,
+        attempt_state: Arc<WriteAttemptState>,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.read_then_write(
             session,
@@ -755,7 +755,7 @@ impl PeekClient {
             None,
             // Nothing cancels a background write, so this state only ever
             // records that a write was submitted.
-            Arc::new(FrontendWriteAttemptState::new()),
+            Arc::new(WriteAttemptState::new()),
             RtwCaller::Background { replica_id },
         )
         .await
@@ -769,7 +769,7 @@ impl PeekClient {
         target_cluster: TargetCluster,
         catalog: &Arc<Catalog>,
         statement_logging_id: Option<StatementLoggingId>,
-        attempt_state: Arc<FrontendWriteAttemptState>,
+        attempt_state: Arc<WriteAttemptState>,
         caller: RtwCaller,
     ) -> Result<ExecuteResponse, AdapterError> {
         // The OCC dataflow emits raw diffs and does not apply top-level
@@ -834,7 +834,7 @@ impl PeekClient {
 
         if !stages_rows && in_transaction {
             // Defense in depth for the gate in
-            // `SessionClient::try_frontend_read_then_write`. Rejecting here,
+            // `SessionClient::try_read_then_write`. Rejecting here,
             // before we run a dataflow, is the last point where refusing is
             // still possible: past the OCC loop the write may already be
             // durable.
@@ -870,7 +870,7 @@ impl PeekClient {
             self.optimize_mir_read_then_write(catalog, session, &plan, cluster_id)?;
 
         // Acquire the OCC semaphore permit *before* acquiring read holds in
-        // `frontend_determine_timestamp`. Under contention, waiters will
+        // `determine_timestamp`. Under contention, waiters will
         // otherwise sit on read holds on the RTW's read dependencies for the
         // entire time they are queued, pinning compaction on those
         // collections. Waiting on the permit first keeps queued operations
@@ -881,7 +881,7 @@ impl PeekClient {
         // operation stalls every read-then-write in the process, including ones
         // on unrelated tables. We accept that because the
         // statement timeout in
-        // `SessionClient::try_frontend_read_then_write_with_cancel` covers the
+        // `SessionClient::try_read_then_write_with_cancel` covers the
         // permit wait, so the stall is bounded for everyone but a session that
         // disabled its own timeout.
         //
@@ -931,7 +931,7 @@ impl PeekClient {
 
         let bundle = global_mir_plan.id_bundle(cluster_id);
         let (determination, read_holds) = self
-            .frontend_determine_timestamp(
+            .determine_timestamp(
                 session,
                 &bundle,
                 &QueryWhen::FreshestTableWrite,
@@ -1371,7 +1371,7 @@ impl PeekClient {
         target_global_id: GlobalId,
         diffs: Vec<(Row, Diff)>,
         statement_logging_id: Option<StatementLoggingId>,
-        attempt_state: &FrontendWriteAttemptState,
+        attempt_state: &WriteAttemptState,
     ) -> Result<Timestamp, AdapterError> {
         attempt_state.mark_write_submitted();
         let result = self
@@ -1488,7 +1488,7 @@ impl PeekClient {
         statement_logging_id: Option<StatementLoggingId>,
         as_of: Timestamp,
         write_oracle: Option<Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
-        attempt_state: &FrontendWriteAttemptState,
+        attempt_state: &WriteAttemptState,
     ) -> (usize, Result<OccOutcome, AdapterError>) {
         let mut state = OccState::new();
 
