@@ -265,6 +265,20 @@ macros, and type definitions) should have rustdoc examples. This is a great
 standard for libraries, but total overkill for a fast-moving startup like
 Materialize.</small>
 
+### Dead code
+
+Do not use `#[allow(dead_code)]` or `#[allow(unused)]`. Use
+`#[expect(dead_code)]` instead. An `allow` stays in place after the code it
+covers becomes used, and then it hides dead code that appears later. An
+`expect` triggers the `unfulfilled_lint_expectations` warning as soon as the
+code is used, so CI forces its removal. Where code is dead only in some
+configurations, scope the expectation with `cfg_attr`, for example
+`#[cfg_attr(not(test), expect(dead_code))]`.
+
+The `check-rust-allow-dead-code.sh` lint enforces this. Where an `expect` cannot
+work, for example in a macro whose expansions differ in what they use, keep the
+`allow` and add a `// allow(allow-dead-code)` comment on the same line.
+
 ### Tokio-specific
 
 You should use the `spawn` and `spawn_blocking` functions in the [`ore::task`]

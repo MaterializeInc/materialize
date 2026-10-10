@@ -46,7 +46,7 @@ struct SourceOutputInfo {
     /// Name of the capture instance in the upstream SQL Server DB.
     capture_instance: Arc<str>,
     /// Description of the upstream table.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     upstream_desc: Arc<SqlServerTableDesc>,
     /// Type that can decode (and map) SQL Server rows into Materialize rows.
     decoder: Arc<SqlServerRowDecoder>,

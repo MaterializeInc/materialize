@@ -585,7 +585,6 @@ mod raw_persist_benchmark {
 
     pub struct RawBenchmarkWriter {
         tx: Option<Sender<ColumnarRecords>>,
-        #[allow(dead_code)]
         handles: Vec<JoinHandle<()>>,
     }
 

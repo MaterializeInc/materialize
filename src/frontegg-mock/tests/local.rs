@@ -25,7 +25,7 @@ use reqwest::Client;
 use serde_json::json;
 use uuid::Uuid;
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 struct TestContext {
     server: FronteggMockServer,
     client: Client,

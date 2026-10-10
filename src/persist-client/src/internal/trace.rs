@@ -1905,7 +1905,7 @@ impl<T: Timestamp + Lattice> Spine<T> {
     /// Describes the merge progress of layers in the trace.
     ///
     /// Intended for diagnostics rather than public consumption.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn describe(&self) -> Vec<(usize, usize)> {
         self.merging
             .iter()

@@ -68,7 +68,7 @@ pub struct PersistClientCache {
 }
 
 #[derive(Debug)]
-struct RttLatencyTask(#[allow(dead_code)] AbortOnDropHandle<()>);
+struct RttLatencyTask(#[expect(dead_code)] AbortOnDropHandle<()>);
 
 impl PersistClientCache {
     /// Returns a new [PersistClientCache].

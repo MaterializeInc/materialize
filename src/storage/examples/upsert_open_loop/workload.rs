@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-#![allow(unused)]
+#![expect(dead_code)]
 //! A configurable data generator for benchmarking.
 
 use std::cmp;
@@ -241,7 +241,7 @@ impl DataGenerator {
         }
         // This format `record_idx` as an integer and, if necessary, left-pads
         // it with 0s to be `key_len` chars long.
-        let mut record_key = record_idx % self.num_keys;
+        let record_key = record_idx % self.num_keys;
         write!(&mut self.key_buf, "{:01$}", record_key, key_len)
             .expect("write to Vec is infallible");
         self.key_buf.truncate(key_len);

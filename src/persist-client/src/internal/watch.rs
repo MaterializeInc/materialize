@@ -275,7 +275,6 @@ impl<T> AwaitableState<T> {
         }
     }
 
-    #[allow(dead_code)]
     pub fn read<A>(&self, read_fn: impl FnOnce(&T) -> A) -> A {
         let guard = self.state.read().expect("not poisoned");
         let state = &*guard;

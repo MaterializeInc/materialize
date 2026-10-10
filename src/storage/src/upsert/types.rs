@@ -272,7 +272,6 @@ impl<T, O> StateValue<T, O> {
         })
     }
 
-    #[allow(unused)]
     /// A tombstoned value.
     pub fn tombstone() -> Self {
         Self::Value(Value {

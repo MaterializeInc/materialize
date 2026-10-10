@@ -9,7 +9,8 @@
 
 //! Convience typedefs for differential types.
 
-#![allow(dead_code, missing_docs)]
+#![expect(dead_code)]
+#![allow(missing_docs)]
 
 use columnar::{Container, Ref};
 use differential_dataflow::operators::arrange::Arranged;

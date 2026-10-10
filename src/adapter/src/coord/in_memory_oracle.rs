@@ -33,7 +33,7 @@ pub struct InMemoryTimestampOracle {
     read_ts: Timestamp,
     write_ts: Timestamp,
     #[derivative(Debug = "ignore")]
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     next: NowFn<Timestamp>,
 }
 
@@ -53,7 +53,7 @@ impl InMemoryTimestampOracle {
     ///
     /// This timestamp will be strictly greater than all prior values of
     /// `self.read_ts()` and `self.write_ts()`.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn write_ts(&mut self) -> WriteTimestamp<Timestamp> {
         let mut next = self.next.now();
         if next.less_equal(&self.write_ts) {
@@ -71,7 +71,7 @@ impl InMemoryTimestampOracle {
     }
 
     /// Peek the current write timestamp.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     fn peek_write_ts(&self) -> Timestamp {
         self.write_ts.clone()
     }

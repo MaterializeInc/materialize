@@ -2078,6 +2078,7 @@ where
         Continue(existed)
     }
 
+    #[cfg_attr(not(test), expect(dead_code))]
     pub fn expire_critical_reader(
         &mut self,
         reader_id: &CriticalReaderId,

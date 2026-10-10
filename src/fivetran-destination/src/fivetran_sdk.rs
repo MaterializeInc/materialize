@@ -9,8 +9,8 @@
 
 // Note(parkmycar): We wrap this in a `mod` block solely for the purpose of allowing lints for the
 // generated protobuf code.
+#[expect(dead_code)]
 #[allow(
-    dead_code,
     clippy::enum_variant_names,
     clippy::clone_on_ref_ptr,
     clippy::as_conversions

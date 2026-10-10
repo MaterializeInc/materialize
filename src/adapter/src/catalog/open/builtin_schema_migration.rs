@@ -549,7 +549,6 @@ impl MigrationStep {
 
 /// The mechanism to use to migrate the schema of a builtin collection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-#[allow(dead_code)]
 enum Mechanism {
     /// Persist schema evolution.
     ///

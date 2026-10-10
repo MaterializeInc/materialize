@@ -669,7 +669,9 @@ macro_rules! generate_extracted_config {
             }
 
             impl [<$option_ty Extracted>] {
-                #[allow(unused)]
+                // Only some expansions call `into_values`, so an `expect` is
+                // unfulfilled in the others.
+                #[allow(dead_code)] // allow(allow-dead-code)
                 fn into_values(
                     self,
                     catalog: &dyn crate::catalog::SessionCatalog,

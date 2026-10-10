@@ -69,7 +69,7 @@ macro_rules! ident {
     // Internal helper macro to assert the length of the provided string literal is less than our
     // maximum.
     (@internal_check $max_len:literal, $val:expr) => {{
-        #[allow(dead_code)]
+        #[expect(dead_code)]
         const fn check_len<const MAX: usize, const LEN: usize>() {
             if LEN > MAX {
                 panic!(stringify!(
@@ -79,7 +79,7 @@ macro_rules! ident {
             }
         }
 
-        #[allow(dead_code)]
+        #[expect(dead_code)]
         const fn check_value(val: &str) {
             if equal(val, ".") || equal(val, "..") {
                 panic!(stringify!(provided string literal, $val, is an invalid identifier));

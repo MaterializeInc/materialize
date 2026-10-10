@@ -223,7 +223,7 @@ mod tests {
         );
 
         #[derive(Debug)]
-        #[allow(unused)]
+        #[expect(dead_code)]
         struct ComplexData {
             level: usize,
             msg: &'static str,

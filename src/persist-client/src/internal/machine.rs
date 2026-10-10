@@ -688,7 +688,7 @@ where
         (seqno, maintenance)
     }
 
-    #[allow(dead_code)] // TODO(bkirwi): remove this when since behaviour on expiry has settled
+    #[cfg_attr(not(test), expect(dead_code))] // TODO(bkirwi): remove this when since behaviour on expiry has settled
     pub async fn expire_critical_reader(
         &self,
         reader_id: &CriticalReaderId,

@@ -540,7 +540,6 @@ impl DatumKnowledge {
     }
 
     /// The strictest possible knowledge (the bottom of the complete lattice).
-    #[allow(dead_code)]
     fn bottom() -> Self {
         Self::Nothing
     }
@@ -851,7 +850,7 @@ fn optimize(
     })
 }
 
-#[allow(dead_code)] // keep debugging method around
+#[expect(dead_code)] // keep debugging method around
 fn print_knowledge_map<'a>(
     knowledge: &BTreeMap<mz_expr::Id, Vec<DatumKnowledge>>,
     ids: impl Iterator<Item = &'a mz_expr::LocalId>,
@@ -865,7 +864,7 @@ fn print_knowledge_map<'a>(
     println!("");
 }
 
-#[allow(dead_code)] // keep debugging method around
+#[expect(dead_code)] // keep debugging method around
 fn print_knowledge_vec(knowledge: &Vec<DatumKnowledge>) {
     for (i, k) in knowledge.iter().enumerate() {
         println!("#{i}: {k:?}");

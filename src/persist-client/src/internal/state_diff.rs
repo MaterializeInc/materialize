@@ -302,7 +302,6 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
     }
 
     #[cfg(any(test, debug_assertions))]
-    #[allow(dead_code)]
     pub fn validate_roundtrip<K, V, D>(
         metrics: &Metrics,
         from_state: &crate::internal::state::TypedState<K, V, T, D>,

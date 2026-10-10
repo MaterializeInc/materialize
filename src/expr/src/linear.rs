@@ -1503,7 +1503,7 @@ pub mod util {
     use crate::MirScalarExpr;
     use crate::scalar::columns::Columns;
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     /// A triple of actions that map from rows to (key, val) pairs and back again.
     struct KeyValRowMapping {
         /// Expressions to apply to a row to produce key datums.

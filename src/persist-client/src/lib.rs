@@ -1550,7 +1550,7 @@ mod tests {
 
     // Make sure that the API structs are Sync + Send, so that they can be used in async tasks.
     // NOTE: This is a compile-time only test. If it compiles, we're good.
-    #[allow(unused)]
+    #[expect(dead_code)]
     async fn sync_send(dyncfgs: ConfigUpdates) {
         mz_ore::test::init_logging();
 

@@ -2677,7 +2677,7 @@ enum OnPredicate {
     // An equality predicate between the two sides.
     Eq(MirScalarExpr, MirScalarExpr),
     // a non-equality predicate between the two sides.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     Theta(MirScalarExpr),
 }
 
