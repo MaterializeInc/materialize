@@ -81,6 +81,8 @@ Use those doubling buckets as the boundary, and exclude them from both the befor
 
 **When the production canaries have not upgraded yet, wait rather than verify staging alone.** The canaries roll out hours after staging, and the comparison needs a few hours of the new release on each side. If the sweep has to resume later, do not rely on a session-scoped scheduler such as an in-session cron: it dies with the session and nothing resumes. Hand the resume to something that outlives the session, or tell the user the sweep is paused and what it is waiting for.
 
+**Before a deferred or resumed sweep starts, re-read the verify thread and the release state.** The question the sweep answers can change while it waits. A v26.45.0-rc.4 sweep deferred overnight was picked up two days later, by which time three areas had posted LGTM in the bot's thread, the final v26.45.0 had been cut from rc.4, and a v26.45.1 patch was replacing it for Cloud, so a full rc.4 sweep would have measured a version Cloud was not going to deploy. Read the thread's replies, list the version's tags, and check `#release` for a newer patch. If the target has moved, tell the user what changed and ask which version to verify before running anything.
+
 ## Step 2: Choose the namespace set
 
 The dashboards' `version` variable does not filter panels directly. It narrows the `organization` variable, which narrows `namespace`, and the panels filter on `namespace`. Setting `version` to the new release therefore means "the environments that run the new release now", and the panels then show those same environments on both sides of the boundary. Reproduce that selection explicitly rather than relying on the variable chain.
@@ -279,6 +281,8 @@ max by (namespace, pod, container) (avg_over_time(container_memory_working_set_b
 / on (namespace, pod, container)
 max by (namespace, pod, container) (avg_over_time(container_spec_memory_limit_bytes{...}[6h]))
 ```
+
+On swap-enabled replicas this ratio sits near 1 in steady state, because the kernel keeps resident pages up to the cgroup limit and swaps out the rest. The us-east-1 Production Sandbox upsert replica held 88% to 99% of its limit on every release from v26.43.0-rc.1 to v26.45.0-rc.4, while memory plus swap stayed between 187 and 205 GiB. A high ratio there is not pressure; judge those replicas on the conserved total described in `references/compute.md`.
 
 **An absent series is not the same as a healthy zero.** Error and orphan counters are only exported when non-zero, so an empty result reads as clean when it can also mean the metric was renamed. Confirm the metric exists somewhere in the window before reporting zero.
 
