@@ -337,6 +337,14 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_compute_correction_v2_spill", "true", ["true", "false"]
         ),
+        # On by default so CI exercises the MV sink queueing its updates as
+        # pool-backed chunks, which is off in production while it earns trust.
+        VariableSystemParameter(
+            "compute_correction_v2_columnar_queue", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
+            "compute_correction_v2_queue_depth", "1", ["0", "1", "2"]
+        ),
         VariableSystemParameter(
             "compute_peek_response_stash_threshold_bytes",
             # 1 MiB, an in-between value
