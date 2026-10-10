@@ -31,6 +31,8 @@
 
 pub mod metrics;
 
+pub use mz_ore::pool::ExtentBackend;
+
 /// Process-wide buffer pool shared by every spill consumer in the process.
 ///
 /// Construction reserves virtual address space only: 1 TiB per chunk size
@@ -46,21 +48,13 @@ static GLOBAL_POOL: std::sync::OnceLock<Option<mz_ore::pool::Pool>> = std::sync:
 /// the first config apply budgets the pool.
 static POOL_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Returns the process-wide buffer pool, initializing it on first call.
-/// `None` if the virtual reservation failed at first use.
-pub fn global_pool() -> Option<mz_ore::pool::Pool> {
-    GLOBAL_POOL
-        .get_or_init(|| match mz_ore::pool::Pool::new() {
-            Ok(pool) => Some(pool),
-            Err(err) => {
-                tracing::warn!(
-                    %err,
-                    "buffer pool reservation failed; pool spilling unavailable",
-                );
-                None
-            }
-        })
-        .clone()
+/// Whether the pool was asked for a file backend and installed on swap.
+static FILE_FALLBACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether [`apply_pool_config`] was asked for a file backend and installed
+/// the pool on swap instead.
+pub fn file_backend_fell_back() -> bool {
+    FILE_FALLBACK.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Returns the process-wide buffer pool only if something already
@@ -84,6 +78,40 @@ pub fn active_pool() -> Option<mz_ore::pool::Pool> {
     }
 }
 
+/// Builds the pool for `backend`, creating a file backend's directory. A
+/// file store that cannot be created or opened falls back to swap, which
+/// needs no scratch space. This is the only place that decides the fallback.
+fn build_pool(backend: ExtentBackend) -> Option<mz_ore::pool::Pool> {
+    let built = match &backend {
+        ExtentBackend::Swap => mz_ore::pool::Pool::new(),
+        ExtentBackend::File { dir, .. } => std::fs::create_dir_all(dir)
+            .and_then(|()| mz_ore::pool::Pool::with_backend(backend.clone()))
+            .or_else(|err| {
+                // The error can also come from the pool's own reservation,
+                // which the swap attempt then reports again.
+                tracing::warn!(%err, ?dir, "buffer pool with a file store failed, trying swap");
+                let pool = mz_ore::pool::Pool::new();
+                if pool.is_ok() {
+                    FILE_FALLBACK.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+                pool
+            }),
+    };
+    match built {
+        Ok(pool) => {
+            tracing::info!(backend = ?pool.backend_kind(), "buffer pool installed");
+            Some(pool)
+        }
+        Err(err) => {
+            tracing::warn!(
+                %err,
+                "buffer pool reservation failed; pool spilling unavailable",
+            );
+            None
+        }
+    }
+}
+
 /// Applies a buffer-pool configuration, installing the pool as the process's
 /// spill mechanism. This is the only path that constructs the pool. A process
 /// that never calls it, because the spill gate is off or it is unconfigured,
@@ -91,17 +119,34 @@ pub fn active_pool() -> Option<mz_ore::pool::Pool> {
 /// Returns `false` (and changes nothing) if the pool is unavailable because
 /// its virtual reservation failed.
 ///
+/// The first call installs the pool, and its `backend` fixes the extent store
+/// for the process. Later calls only retune the installed pool, so a changed
+/// backend, or a flag or scratch directory that feeds it, has no effect.
+///
 /// On success the pool becomes reachable through [`active_pool`] and its
 /// resident budget is retuned in place so live handles stay coherent.
-pub fn apply_pool_config(cfg: PoolPagerConfig) -> bool {
-    let Some(pool) = global_pool() else {
+pub fn apply_pool_config(cfg: PoolPagerConfig, backend: ExtentBackend) -> bool {
+    let applied = apply_to(&GLOBAL_POOL, cfg, backend);
+    if applied {
+        POOL_MODE.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    applied
+}
+
+/// [`apply_pool_config`] over an explicit slot, so tests can observe the
+/// install-once behavior without racing on the process-wide pool.
+fn apply_to(
+    slot: &std::sync::OnceLock<Option<mz_ore::pool::Pool>>,
+    cfg: PoolPagerConfig,
+    backend: ExtentBackend,
+) -> bool {
+    let Some(pool) = slot.get_or_init(|| build_pool(backend)) else {
         return false;
     };
     pool.set_budget(cfg.budget_bytes);
     pool.set_rss_target(cfg.rss_target_bytes);
     pool.set_spill_threads(cfg.spill_threads);
     pool.set_eager_backing(cfg.eager_backing);
-    POOL_MODE.store(true, std::sync::atomic::Ordering::Relaxed);
     true
 }
 
@@ -127,21 +172,73 @@ pub struct PoolPagerConfig {
 mod tests {
     use super::*;
 
+    const CONFIG: PoolPagerConfig = PoolPagerConfig {
+        budget_bytes: 1 << 30,
+        spill_threads: 0,
+        eager_backing: false,
+        rss_target_bytes: 0,
+    };
+
     /// `apply_pool_config` installs the pool: `active_pool` resolves to it
-    /// afterwards, and the configured budget is visible on the instance.
-    /// Mutates process-global state, so it is the only test in this module
-    /// that observes `POOL_MODE`.
+    /// afterwards. Mutates process-global state, so it is the only test in
+    /// this module that observes `POOL_MODE`.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (mmap, madvise)
     fn apply_pool_config_installs_pool() {
-        let ok = apply_pool_config(PoolPagerConfig {
-            budget_bytes: 1 << 30,
-            spill_threads: 0,
-            eager_backing: false,
-            rss_target_bytes: 0,
-        });
+        let ok = apply_pool_config(CONFIG, ExtentBackend::Swap);
         assert!(ok, "pool reservation expected to succeed in tests");
         assert!(active_pool().is_some());
         assert!(global_pool_peek().is_some());
+    }
+
+    /// The first apply fixes the backend, and later applies never change
+    /// it or touch the directory they name. Uses its own slot because the
+    /// process-wide pool is installed by whichever test runs first.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (mmap, madvise)
+    fn first_apply_fixes_backend() {
+        let slot = std::sync::OnceLock::new();
+        let ok = apply_to(&slot, CONFIG, ExtentBackend::Swap);
+        assert!(ok, "pool reservation expected to succeed in tests");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pool_dir = dir.path().join("pool");
+        let ok = apply_to(
+            &slot,
+            CONFIG,
+            ExtentBackend::File {
+                dir: pool_dir.clone(),
+                capacity_bytes: None,
+            },
+        );
+        assert!(ok);
+        assert!(!pool_dir.exists(), "a later apply creates no directory");
+        let pool = slot.get().cloned().flatten().expect("installed");
+        assert_eq!(
+            pool.backend_kind(),
+            mz_ore::pool::BackendKind::Swap,
+            "the backend is fixed by the first application",
+        );
+    }
+
+    /// A file backend whose directory cannot be created installs a swap
+    /// pool.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: foreign function calls (mmap, madvise)
+    fn unusable_file_backend_falls_back_to_swap() {
+        let file = tempfile::NamedTempFile::new().expect("tempfile");
+        let slot = std::sync::OnceLock::new();
+        let ok = apply_to(
+            &slot,
+            CONFIG,
+            ExtentBackend::File {
+                dir: file.path().join("pool"),
+                capacity_bytes: None,
+            },
+        );
+        assert!(ok, "the fallback installs a pool");
+        let pool = slot.get().cloned().flatten().expect("installed");
+        assert_eq!(pool.backend_kind(), mz_ore::pool::BackendKind::Swap);
+        assert!(file_backend_fell_back(), "the fallback is reported");
     }
 }
