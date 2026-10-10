@@ -56,23 +56,40 @@ async fn upper_advance_allows_queued_refresh_after_conflict() {
         .await
         .open(SYSTEM_TIME().into(), &test_bootstrap_args())
         .await
-        .unwrap();
-    first.sync_to_current_updates().await.unwrap();
-    let mut txn = first.transaction().await.unwrap();
+        .expect("open serving writer");
+    first
+        .sync_to_current_updates()
+        .await
+        .expect("refresh serving writer");
+    let mut txn = first
+        .transaction()
+        .await
+        .expect("open initialization transaction");
     txn.set_config("catalog_read_protection_enabled".into(), Some(2))
-        .unwrap();
+        .expect("set protection mode");
     let ts = txn.upper();
-    txn.commit(ts).await.unwrap();
-    let mut second = builder.unwrap_build().await.join().await.unwrap();
-    first.sync_to_current_updates().await.unwrap();
-    second.sync_to_current_updates().await.unwrap();
+    txn.commit(ts).await.expect("commit protection mode");
+    let mut second = builder
+        .unwrap_build()
+        .await
+        .join()
+        .await
+        .expect("join peer writer");
+    first
+        .sync_to_current_updates()
+        .await
+        .expect("refresh serving writer");
+    second
+        .sync_to_current_updates()
+        .await
+        .expect("refresh peer writer");
 
     let target = first.synced_upper().step_forward().step_forward();
-    let mut txn = second.transaction().await.unwrap();
+    let mut txn = second.transaction().await.expect("open peer transaction");
     txn.set_config("upper_attempt_test".into(), Some(1))
-        .unwrap();
+        .expect("set peer config");
     let ts = txn.upper();
-    txn.commit(ts).await.unwrap();
+    txn.commit(ts).await.expect("commit peer config");
     let peer_upper = second.synced_upper();
     assert!(peer_upper < target);
 
@@ -96,18 +113,35 @@ async fn upper_advance_allows_queued_refresh_after_conflict() {
             let mut state = refresh.await;
             assert_eq!(state.synced_upper(), peer_upper);
             assert!(matches!(
-                state.transaction().await.unwrap_err(),
+                state
+                    .transaction()
+                    .await
+                    .expect_err("peer content must remain pending"),
                 CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })
             ));
-            assert!(!state.sync_to_current_updates().await.unwrap().is_empty());
-            let txn = state.transaction().await.unwrap();
+            assert!(
+                !state
+                    .sync_to_current_updates()
+                    .await
+                    .expect("consume peer content")
+                    .is_empty()
+            );
+            let txn = state
+                .transaction()
+                .await
+                .expect("open refreshed transaction");
             assert_eq!(txn.get_config("upper_attempt_test".into()), Some(1));
         });
-        result.unwrap();
+        result.expect("finish upper advancement");
     }
     assert_eq!(storage.lock().await.current_upper().await, target);
     // The peer's conflict catch-up can itself satisfy the target without an append.
-    assert!(second.try_advance_upper(target).await.unwrap());
+    assert!(
+        second
+            .try_advance_upper(target)
+            .await
+            .expect("catch up to satisfied target")
+    );
     assert_eq!(second.current_upper().await, target);
     drop(handle);
     Arc::try_unwrap(storage)
