@@ -744,7 +744,7 @@ struct Migration {
     config: BuiltinItemMigrationConfig,
 }
 
-/// Whether `builtin` participates in a forced migration using `mechanism`.
+/// Whether `builtin` participates in a forced or dev-source migration using `mechanism`.
 fn participates_in_forced_migration(
     builtin: &Builtin<NameReference>,
     mechanism: Mechanism,
@@ -757,8 +757,9 @@ fn participates_in_forced_migration(
         // be rebuilt from any other source.
         //
         // Hydration history tables take part in a forced `Evolution`, which
-        // keeps the rows. They have to: dev upgrades force one for every object,
-        // and a table left out of the plan never gets its new schema registered.
+        // keeps the rows. They have to: dev-source migrations plan through this
+        // predicate, and a table left out of the plan never gets its new schema
+        // registered.
         // `update_fingerprints` then panics at open as soon as the desc changes.
         // See the tripwire in `validate_migration_steps` for how to give up the
         // replacement exemption deliberately.
@@ -784,18 +785,12 @@ impl Migration {
 
         self.validate_migration_steps(steps);
 
-        // Version-based migration filter fails for dev versions, see for example
-        // https://github.com/MaterializeInc/database-issues/issues/11335
-        let force_migration = if self.source_version != self.target_version
-            && self.source_version.pre.as_str().starts_with("dev")
-            && self.config.force_migration.is_none()
-        {
-            Some("evolution".to_string())
-        } else {
-            self.config.force_migration.clone()
-        };
+        // Version-based step selection fails for dev versions: dev builds share version strings,
+        // so a dev source's position among the steps is unknown (database-issues#11335).
+        let dev_source = self.source_version.pre.as_str().starts_with("dev");
 
-        let (force, plan) = match force_migration.as_deref() {
+        let (force, plan) = match self.config.force_migration.as_deref() {
+            None if dev_source => (false, self.plan_dev_migration().await?),
             None => (false, self.plan_migration(steps)),
             Some("evolution") => (true, self.plan_forced_migration(Mechanism::Evolution)),
             Some("replacement") => (true, self.plan_forced_migration(Mechanism::Replacement)),
@@ -803,7 +798,7 @@ impl Migration {
         };
         let plan = self.drop_shardless(plan);
 
-        if self.source_version == self.target_version && !force {
+        if self.source_version == self.target_version && !force && plan.is_empty() {
             info!("skipping migration: already at target version");
             return Ok(MigrationRunResult::default());
         } else if self.source_version > self.target_version {
@@ -956,6 +951,67 @@ impl Migration {
         }
 
         plan
+    }
+
+    /// Plan a migration from a dev version.
+    ///
+    /// Migrates exactly the storage-backed builtins whose fingerprint changed: by `Evolution` where
+    /// persist accepts the new schema, by `Replacement` otherwise (unless the builtin is exempt from
+    /// replacement, in which case the evolution fails loudly).
+    async fn plan_dev_migration(&self) -> anyhow::Result<Plan> {
+        let mut plan = Plan::default();
+        for (object, info) in &self.system_objects {
+            if info.builtin.fingerprint() == info.fingerprint
+                || info.builtin.runtime_alterable()
+                || !participates_in_forced_migration(info.builtin, Mechanism::Evolution)
+            {
+                continue;
+            }
+            let replace = !self.evolution_compatible(object, info).await?
+                && participates_in_forced_migration(info.builtin, Mechanism::Replacement);
+            if replace {
+                plan.replace.push(object.clone());
+            } else {
+                plan.evolve.push(object.clone());
+            }
+        }
+        Ok(plan)
+    }
+
+    /// Whether persist accepts the builtin's current desc as an evolution of its shard's schema.
+    async fn evolution_compatible(
+        &self,
+        object: &SystemObjectDescription,
+        info: &ObjectInfo,
+    ) -> anyhow::Result<bool> {
+        let Some(shard_id) = info.shard_id else {
+            return Ok(true);
+        };
+        let target_desc = match info.builtin {
+            Builtin::Table(table) => &table.desc,
+            Builtin::Source(source) => &source.desc,
+            Builtin::MaterializedView(mv) => &mv.desc,
+            _ => bail!("not a storage collection: {object:?}"),
+        };
+        let diagnostics = Diagnostics {
+            shard_name: info.global_id.to_string(),
+            handle_purpose: format!(
+                "builtin schema migration planning @ {}",
+                self.target_version
+            ),
+        };
+        let source_schema = self
+            .config
+            .persist_client
+            .latest_schema::<SourceData, (), Timestamp, StorageDiff>(shard_id, diagnostics)
+            .await
+            .expect("valid usage");
+        let Some((_, source_desc, _)) = source_schema else {
+            return Ok(true);
+        };
+        let old = mz_persist_types::columnar::data_type::<SourceData>(&source_desc)?;
+        let new = mz_persist_types::columnar::data_type::<SourceData>(target_desc)?;
+        Ok(backward_compatible(&old, &new).is_some())
     }
 
     /// Plan a forced migration of all objects using the given mechanism.
@@ -1216,6 +1272,12 @@ impl Migration {
 
         let mut ids_to_replace = ids_to_replace.clone();
         let mut replaced_shards = BTreeMap::new();
+        let current_shards: BTreeMap<_, _> = self
+            .system_objects
+            .values()
+            .filter_map(|o| o.shard_id.map(|shard_id| (o.global_id, shard_id)))
+            .collect();
+        let mut applied_entries = Vec::new();
 
         // Another process might already have done a shard replacement at our version and
         // generation, in which case we can directly reuse the replacement shards.
@@ -1232,6 +1294,13 @@ impl Migration {
             if let Some(entries) = read_migration_shard(persist_read, read_ts, pred).await {
                 for (key, shard_id) in entries {
                     let id = GlobalId::System(key.global_id);
+                    // An entry naming the shard the object already uses was applied by an earlier
+                    // build with the same version and generation, which only dev builds share.
+                    // Reusing it would hand back the old schema, so retract it and allocate anew.
+                    if current_shards.get(&id) == Some(&shard_id) {
+                        applied_entries.push((key, shard_id));
+                        continue;
+                    }
                     if ids_to_replace.remove(&id) {
                         replaced_shards.insert(id, shard_id);
                     }
@@ -1252,6 +1321,11 @@ impl Migration {
         // CaA failure at `write_ts` that means a concurrent process has inserted in the meantime
         // and we need to re-check the migration shard contents.
         let mut updates = Vec::new();
+        for (key, shard_id) in applied_entries {
+            if ids_to_replace.contains(&GlobalId::System(key.global_id)) {
+                updates.push(((key, shard_id), write_ts, -1));
+            }
+        }
         for id in ids_to_replace {
             let shard_id = ShardId::new();
             replaced_shards.insert(id, shard_id);
@@ -1508,6 +1582,12 @@ struct Plan {
     evolve: Vec<SystemObjectDescription>,
     /// Objects to migrate using the `Replacement` mechanism.
     replace: Vec<SystemObjectDescription>,
+}
+
+impl Plan {
+    fn is_empty(&self) -> bool {
+        self.evolve.is_empty() && self.replace.is_empty()
+    }
 }
 
 /// Types and persist codec impls for the migration shard used by the `Replacement` mechanism.
