@@ -960,6 +960,8 @@ impl Catalog {
                 observed_position: position,
                 shared_transient_revision: Arc::new(AtomicU64::new(1)),
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),
+                #[cfg(test)]
+                before_commit: None,
             };
 
             // Operators aren't stored in the catalog, but we would like them in

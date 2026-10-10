@@ -56,13 +56,14 @@ outside the adapter's local DDL lock. Those publications do not invalidate SQL
 planning. Requeueing after a failed attempt allows other SQL DDL to change the
 planning revision, amplifying a metadata conflict into queueing and replanning.
 
-Admission yielding and peer-grant catch-up at transaction open are implemented.
-The next boundary is cheap, validated retry across nonstructural changes, including
-compaction bounds and maintained frontiers, both at open and after a lost append.
-Retain selected plans and input holds, apply committed diffs and their effects,
-and recompute affected admission and cleanup decisions. Do not broaden the
-peer-only predicate without handling those effects, or replay a stale candidate.
-Own-grant accounting, execution authority and publication barriers remain binding.
+Common transaction retries rebuild candidates across frontier-only prefixes,
+including compaction bounds and maintained frontiers, at open and after a lost
+append. Selected plans and input holds remain with their owners. Caught-up effects
+survive failure and merge with successful create/bound/drop effects. Verify the
+combined path in existing workloads, including queue delay and storage-handle
+contention. Own-grant accounting, execution authority, sampled outgoing publications
+and publication barriers remain binding. Config candidates with shared precommit
+effects are excluded from immediate reconstruction.
 
 Bounded immediate retry work is permitted within the existing transaction path.
 Avoid treating a single extra peer-grant-only attempt as the complete repair.
@@ -75,12 +76,10 @@ authorization or derived operation sets. No blanket removal of legacy serializat
 new retry framework or general structural read-set machinery is required.
 
 Keep the 1s publication default and use existing workloads to verify SQL completion,
-retry cost and actual compaction-bound advancement separately. Per-object advancement
-under contention remains unproven. Catalog upper movement alone is not evidence of it.
-The diagnostic also samples finite before/after compaction bounds by object ID.
-Verify those witnesses in CI before claiming permission advancement. Initial
-admission, deletion and completion are excluded. Physical Persist since and other
-objects' progress remain separate observations.
+retry cost and actual compaction-bound advancement separately. Finite before/after
+bounds demonstrate permission advancement only for the observed objects, not
+physical Persist since or progress of other objects. Initial admission, deletion
+and completion are excluded. Catalog upper movement alone proves none of these.
 SLT/Zippy timeouts remain unresolved. Do not assume a shared cause with the MV
 contention without statement-correlated evidence. Detailed captures and verification
 belong in the PR.

@@ -93,7 +93,8 @@ pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
 pub use crate::catalog::state::CatalogState;
 pub use crate::catalog::transact::{
-    DropObjectInfo, InjectedAuditEvent, Op, ReplicaCreateDropReason, TransactionResult,
+    DropObjectInfo, InjectedAuditEvent, Op, ReplicaCreateDropReason, TransactionCatchUp,
+    TransactionResult,
 };
 use crate::memory::implications::ParsedStateUpdate;
 
@@ -161,6 +162,8 @@ pub struct Catalog {
     /// session that has observed any evidence of a planning-visible change is
     /// guaranteed to see the corresponding bump.
     shared_transient_revision: Arc<AtomicU64>,
+    #[cfg(test)]
+    before_commit: Option<tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>>,
 }
 
 /// A handle for advancing the durable catalog upper off the coordinator loop.
@@ -212,6 +215,8 @@ impl Clone for Catalog {
             observed_position: self.observed_position,
             diagnostic_config: Arc::clone(&self.diagnostic_config),
             shared_transient_revision: Arc::clone(&self.shared_transient_revision),
+            #[cfg(test)]
+            before_commit: self.before_commit.clone(),
         }
     }
 }
@@ -1541,6 +1546,8 @@ impl Catalog {
                 observed_position: position,
                 shared_transient_revision: Arc::new(AtomicU64::new(1)),
                 diagnostic_config,
+                #[cfg(test)]
+                before_commit: None,
             },
             initial_updates: catalog_updates,
             expression_cache_shard,

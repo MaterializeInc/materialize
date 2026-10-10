@@ -30,9 +30,10 @@ use timely::progress::Antichain;
 use uuid::Uuid;
 
 use crate::SYSTEM_CONN_ID;
-use crate::catalog::{Catalog, Op, test_support};
-use crate::durable::objects::CollectionCompactionBound;
-use crate::memory::objects::CatalogItem;
+use crate::catalog::{Catalog, DropObjectInfo, Op, TransactionCatchUp, test_support};
+use crate::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
+use crate::memory::implications::ParsedStateUpdateKind;
+use crate::memory::objects::{CatalogItem, StateDiff};
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
@@ -72,14 +73,8 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
         .expect("register independent executions")
         .created_client_incarnations;
     let [writer, peer_incarnation]: [u64; 2] = incarnations.try_into().expect("two executions");
-    let mut peer = crate::durable::TestCatalogStateBuilder::new(f.persist.clone())
-        .with_organization_id(f.catalog.config().environment_id.organization_id())
-        .with_default_deploy_generation()
-        .unwrap_build()
-        .await
-        .join()
-        .await
-        .expect("join publication writer");
+    let mut catch_up = TransactionCatchUp::new(writer);
+    let mut peer = f.peer().await;
     let revision = f.catalog.transient_revision();
     let _ = f.catalog.take_read_protection_changes();
 
@@ -125,7 +120,7 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
         let ts = f.catalog.current_upper().await;
         let result = f
             .catalog
-            .transact(Some(writer), None, ts, None, vec![op])
+            .transact(Some(&mut catch_up), None, ts, None, vec![op])
             .await;
         assert_eq!(
             result.is_err(),
@@ -150,17 +145,19 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
 
     // Own-map changes, sampled proposals and mixed prefixes must return intact
     // to the existing refresh owner instead of being absorbed into this attempt.
-    for (publisher, sampled_bounds, structural) in [
-        (writer, false, false),
-        (peer_incarnation, true, false),
-        (peer_incarnation, false, true),
+    let mut grant = frontier;
+    for (publisher, sampled, structural) in [
+        (writer, None, false),
+        (peer_incarnation, Some("bounds"), false),
+        (peer_incarnation, Some("requirements"), false),
+        (peer_incarnation, None, true),
     ] {
         peer.sync_to_current_updates().await.expect("refresh peer");
         let mut tx = peer
             .transaction()
             .await
             .expect("open conflicting publication");
-        let grant = frontier.step_forward().step_forward();
+        grant = grant.step_forward();
         let requirements = if structural {
             BTreeMap::new()
         } else {
@@ -177,7 +174,7 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
         tx.commit(ts).await.expect("commit conflicting prefix");
 
         let before = f.catalog.state().client_read_requirements().clone();
-        let ops = if sampled_bounds {
+        let ops = if sampled == Some("bounds") {
             vec![Op::SetReadProtection {
                 requirements: vec![],
                 bounds: vec![CollectionCompactionBound {
@@ -185,11 +182,20 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
                     frontier: Some(frontier),
                 }],
             }]
+        } else if sampled == Some("requirements") {
+            vec![Op::SetReadProtection {
+                requirements: vec![f.catalog.state().maintained_read_requirements()[&id].clone()],
+                bounds: vec![],
+            }]
         } else {
             vec![]
         };
         let ts = f.catalog.current_upper().await;
-        let error = match f.catalog.transact(Some(writer), None, ts, None, ops).await {
+        let error = match f
+            .catalog
+            .transact(Some(&mut catch_up), None, ts, None, ops)
+            .await
+        {
             Ok(_) => panic!("ineligible catch-up must reject the attempt"),
             Err(error) => error,
         };
@@ -215,6 +221,321 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
             (!structural).then_some(&grant),
         );
     }
+}
+
+async fn publish_frontier(
+    peer: &mut dyn crate::durable::DurableCatalogState,
+    id: GlobalId,
+    mut requirement: MaintainedReadRequirement,
+    frontier: Timestamp,
+) {
+    peer.sync_to_current_updates()
+        .await
+        .expect("refresh frontier writer");
+    let mut tx = peer.transaction().await.expect("open frontier publication");
+    requirement.frontier = Some(frontier);
+    tx.set_maintained_read_requirement(requirement.id, requirement.inputs, requirement.frontier)
+        .expect("advance recovery requirement");
+    tx.set_collection_compaction_bound(id, Some(frontier))
+        .expect("advance permission");
+    let _ = tx.get_and_commit_op_updates();
+    let ts = tx.upper();
+    tx.commit(ts).await.expect("commit frontier publication");
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn automatic_mv_birth_recomputed_across_frontier_catch_up() {
+    let mut f = Fixture::new().await;
+    let input = f.source("automatic_input").await;
+    let (_, index) = f.create_with_plan(
+        "automatic_index",
+        format!("CREATE INDEX automatic_index IN CLUSTER quickstart ON {}.automatic_input (counter)", f.prefix),
+        Some(BTreeSet::from([input])),
+    ).await;
+    let mut catch_up = f.catch_up().await;
+    let mut peer = f.peer().await;
+    tokio::time::pause();
+
+    // The logical input retains earlier permission than the selected index.
+    // Only reconsidering actual imports can discover the new birth floor.
+    for after_candidate in [false, true] {
+        let name = if after_candidate {
+            "mv_after_candidate"
+        } else {
+            "mv_at_open"
+        };
+        let (item_id, mv_id, mut ops) = f.create_ops(
+            name,
+            format!("CREATE MATERIALIZED VIEW {}.{name} IN CLUSTER quickstart AS SELECT * FROM {}.automatic_input", f.prefix, f.prefix),
+            Some(BTreeSet::from([index])),
+        ).await;
+        let selected_revision = match &ops[1] {
+            Op::SetWrittenPlan { revision, .. } => *revision,
+            _ => unreachable!(),
+        };
+        ops.push(Op::PublishCreatorReadRequirements {
+            incarnation: catch_up.incarnation,
+            requirements: BTreeMap::new(),
+            minimums: BTreeMap::from([(mv_id, Timestamp::MIN)]),
+        });
+        let floor = f.catalog.state().collection_compaction_bounds()[&index]
+            .as_option()
+            .expect("readable index")
+            .step_forward();
+        let requirement = f.catalog.state().maintained_read_requirements()[&input].clone();
+        let planning_revision = f.catalog.transient_revision();
+        if !after_candidate {
+            publish_frontier(&mut *peer, index, requirement.clone(), floor).await;
+        }
+        let (hook, mut candidates) = tokio::sync::mpsc::unbounded_channel();
+        f.catalog.before_commit = Some(hook);
+        let ts = f.catalog.current_upper().await;
+        let transaction = async {
+            let result = f
+                .catalog
+                .transact(Some(&mut catch_up), None, ts, None, ops)
+                .await;
+            f.catalog.before_commit = None;
+            result
+        };
+        let interference = async {
+            let mut attempts = 0;
+            while let Some(resume) = candidates.recv().await {
+                attempts += 1;
+                assert!(attempts <= 2, "one conflict requires at most one retry");
+                if after_candidate && attempts == 1 {
+                    publish_frontier(&mut *peer, index, requirement.clone(), floor).await;
+                }
+                resume.send(()).expect("resume candidate");
+            }
+            attempts
+        };
+        let (result, attempts) = tokio::join!(transaction, interference);
+        let result = result.expect("admit automatic birth at current permission");
+        assert_eq!(attempts, if after_candidate { 2 } else { 1 });
+        assert!(
+            catch_up.updates.is_empty(),
+            "success transfers caught-up effects"
+        );
+        assert_eq!(f.catalog.transient_revision(), planning_revision + 1);
+        let state = f.catalog.state();
+        assert_eq!(
+            state.maintained_read_requirements()[&input],
+            MaintainedReadRequirement {
+                frontier: Some(floor),
+                ..requirement
+            }
+        );
+        assert_eq!(state.written_plan(mv_id, "test-build"), selected_revision);
+        assert_eq!(
+            state.written_plans()[&(mv_id, "test-build".into())].imports,
+            BTreeSet::from([index])
+        );
+        assert_eq!(
+            state
+                .get_entry(&item_id)
+                .materialized_view()
+                .expect("admitted materialized view")
+                .initial_as_of,
+            Some(Antichain::from_elem(floor))
+        );
+        assert_eq!(
+            state.collection_compaction_bounds()[&mv_id],
+            Antichain::from_elem(floor)
+        );
+        assert_eq!(
+            state.maintained_read_requirements()[&mv_id],
+            MaintainedReadRequirement {
+                id: mv_id,
+                inputs: BTreeSet::from([input]),
+                frontier: Some(floor)
+            }
+        );
+        assert_eq!(
+            result.creator_read_requirements,
+            BTreeMap::from([(catch_up.incarnation, BTreeMap::from([(mv_id, floor)]))])
+        );
+        assert_eq!(
+            state.client_read_requirements()[&(catch_up.incarnation, mv_id)],
+            floor
+        );
+        assert!(
+            result
+                .catalog_updates
+                .iter()
+                .any(|update| update.diff == StateDiff::Addition
+                    && matches!(&update.kind,
+                ParsedStateUpdateKind::CollectionCompactionBound(bound)
+                    if bound.id == index && bound.frontier == Some(floor)))
+        );
+
+        // Retire the first MV and its grant so they cannot pin the next import.
+        f.transact(vec![
+            Op::PublishClientReadRequirements {
+                incarnation: catch_up.incarnation,
+                requirements: BTreeMap::new(),
+            },
+            Op::DropObjects(vec![DropObjectInfo::Item(item_id)]),
+        ])
+        .await;
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn caught_up_bound_survives_failure_and_is_superseded_by_drop() {
+    let mut f = Fixture::new().await;
+    let id = f.source("caught_up_input").await;
+    let item_id = f.catalog.state().get_entry_by_global_id(&id).id();
+    let mut catch_up = f.catch_up().await;
+    let mut peer = f.peer().await;
+    let frontier = f.catalog.state().collection_compaction_bounds()[&id]
+        .as_option()
+        .expect("readable source")
+        .step_forward();
+    let requirement = f.catalog.state().maintained_read_requirements()[&id].clone();
+    let revision = f.catalog.transient_revision();
+    let _ = f.catalog.take_read_protection_changes();
+    publish_frontier(&mut *peer, id, requirement, frontier).await;
+    let ts = f.catalog.current_upper().await;
+    let result = f
+        .catalog
+        .transact(
+            Some(&mut catch_up),
+            None,
+            ts,
+            None,
+            vec![Op::CreateClientIncarnation {
+                replica_id: None,
+                expected: None,
+            }],
+        )
+        .await;
+    assert!(
+        matches!(result, Err(crate::catalog::CatalogError::Catalog(error))
+            if matches!(error.kind, crate::memory::error::ErrorKind::Durable(
+                crate::durable::DurableCatalogError::InvalidReadProtection(_)))),
+        "duplicate adapter execution must fail after catch-up"
+    );
+    assert_eq!(f.catalog.transient_revision(), revision);
+    assert_eq!(
+        f.catalog.state().collection_compaction_bounds()[&id],
+        Antichain::from_elem(frontier)
+    );
+    assert!(f.catalog.take_read_protection_changes().contains(&id));
+    assert_eq!(catch_up.updates.len(), 1);
+    let update = &catch_up.updates[&id];
+    assert_eq!(update.diff, StateDiff::Addition);
+    assert!(
+        matches!(&update.kind, ParsedStateUpdateKind::CollectionCompactionBound(bound)
+        if bound.id == id && bound.frontier == Some(frontier))
+    );
+
+    let mut catch_up = TransactionCatchUp::new(catch_up.incarnation);
+    let requirement = f.catalog.state().maintained_read_requirements()[&id].clone();
+    publish_frontier(&mut *peer, id, requirement, frontier.step_forward()).await;
+    let ts = f.catalog.current_upper().await;
+    let result = f
+        .catalog
+        .transact(
+            Some(&mut catch_up),
+            None,
+            ts,
+            None,
+            vec![Op::DropObjects(vec![DropObjectInfo::Item(item_id)])],
+        )
+        .await
+        .expect("drop supersedes undelivered bound");
+    assert!(catch_up.updates.is_empty());
+    assert!(f.catalog.state().try_get_entry(&item_id).is_none());
+    assert!(
+        !result
+            .catalog_updates
+            .iter()
+            .any(|update| update.diff == StateDiff::Addition
+                && matches!(&update.kind,
+            ParsedStateUpdateKind::CollectionCompactionBound(bound) if bound.id == id))
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn frontier_retry_exhaustion_returns_committed_effects() {
+    let mut f = Fixture::new().await;
+    let id = f.source("contended_input").await;
+    let mut catch_up = f.catch_up().await;
+    let (view_id, _, ops) = f
+        .create_ops(
+            "contended_view",
+            format!(
+                "CREATE VIEW {}.contended_view AS SELECT * FROM {}.contended_input",
+                f.prefix, f.prefix
+            ),
+            None,
+        )
+        .await;
+    let mut peer = f.peer().await;
+    let requirement = f.catalog.state().maintained_read_requirements()[&id].clone();
+    let initial = *f.catalog.state().collection_compaction_bounds()[&id]
+        .as_option()
+        .expect("readable source");
+    let revision = f.catalog.transient_revision();
+    tokio::time::pause();
+    let (hook, mut candidates) = tokio::sync::mpsc::unbounded_channel();
+    f.catalog.before_commit = Some(hook);
+    let ts = f.catalog.current_upper().await;
+    let transaction = async {
+        let result = f
+            .catalog
+            .transact(Some(&mut catch_up), None, ts, None, ops)
+            .await;
+        f.catalog.before_commit = None;
+        result
+    };
+    let interference = async {
+        let mut attempts = 0;
+        let mut frontier = initial;
+        while let Some(resume) = candidates.recv().await {
+            attempts += 1;
+            assert!(attempts <= 3, "retry work must be bounded");
+            frontier = frontier.step_forward();
+            publish_frontier(&mut *peer, id, requirement.clone(), frontier).await;
+            resume.send(()).expect("resume losing candidate");
+        }
+        attempts
+    };
+    let (result, attempts) = tokio::join!(transaction, interference);
+    assert_eq!(attempts, 3);
+    assert!(
+        matches!(result, Err(crate::catalog::CatalogError::Catalog(error))
+        if matches!(error.kind, crate::memory::error::ErrorKind::Durable(
+            crate::durable::DurableCatalogError::CatalogOutOfSync { .. })))
+    );
+    assert_eq!(f.catalog.transient_revision(), revision);
+    assert!(f.catalog.state().try_get_entry(&view_id).is_none());
+    let caught_up = initial.step_forward().step_forward();
+    assert_eq!(
+        f.catalog.state().collection_compaction_bounds()[&id],
+        Antichain::from_elem(caught_up)
+    );
+    assert_eq!(
+        catch_up.updates.len(),
+        1,
+        "coalesce repeated bound advancements"
+    );
+    assert!(matches!(&catch_up.updates[&id].kind,
+        ParsedStateUpdateKind::CollectionCompactionBound(bound)
+            if bound.frontier == Some(caught_up)));
+    // The final losing prefix remains with the refresh owner.
+    f.catalog
+        .sync_to_current_updates()
+        .await
+        .expect("owner refreshes after exhaustion");
+    assert_eq!(
+        f.catalog.state().collection_compaction_bounds()[&id],
+        Antichain::from_elem(caught_up.step_forward())
+    );
 }
 
 /// A native durable catalog, with no controller or query client. Source data
@@ -334,6 +655,17 @@ impl Fixture {
         sql: String,
         imports: Option<BTreeSet<GlobalId>>,
     ) -> (CatalogItemId, GlobalId) {
+        let (id, global_id, ops) = self.create_ops(name, sql, imports).await;
+        self.transact(ops).await;
+        (id, global_id)
+    }
+
+    async fn create_ops(
+        &mut self,
+        name: &str,
+        sql: String,
+        imports: Option<BTreeSet<GlobalId>>,
+    ) -> (CatalogItemId, GlobalId, Vec<Op>) {
         let (id, global_id) = self
             .catalog
             .allocate_user_id_for_test()
@@ -354,8 +686,37 @@ impl Fixture {
         if let Some(imports) = imports {
             ops.push(self.select_plan(global_id, "test-build", Some(imports)));
         }
-        self.transact(ops).await;
-        (id, global_id)
+        (id, global_id, ops)
+    }
+
+    async fn catch_up(&mut self) -> TransactionCatchUp {
+        let ts = self.catalog.current_upper().await;
+        let result = self
+            .catalog
+            .transact(
+                None,
+                None,
+                ts,
+                None,
+                vec![Op::CreateClientIncarnation {
+                    replica_id: None,
+                    expected: None,
+                }],
+            )
+            .await
+            .expect("register adapter execution");
+        TransactionCatchUp::new(result.created_client_incarnations[0])
+    }
+
+    async fn peer(&self) -> Box<dyn crate::durable::DurableCatalogState> {
+        crate::durable::TestCatalogStateBuilder::new(self.persist.clone())
+            .with_organization_id(self.catalog.config().environment_id.organization_id())
+            .with_default_deploy_generation()
+            .unwrap_build()
+            .await
+            .join()
+            .await
+            .expect("join frontier writer")
     }
 
     fn select_plan(&self, id: GlobalId, build: &str, imports: Option<BTreeSet<GlobalId>>) -> Op {

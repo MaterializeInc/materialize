@@ -94,7 +94,7 @@ use crate::catalog::{
     system_object_type_to_audit_object_type,
 };
 use crate::config::{ScopedParameters, ScopedParametersScope};
-use crate::memory::implications::ParsedStateUpdate;
+use crate::memory::implications::{ParsedStateUpdate, ParsedStateUpdateKind};
 use crate::role_password::{PreparedPasswordAction, PreparedRoleAttributes};
 
 fn add_to_audit_log(
@@ -590,6 +590,26 @@ pub struct TransactionResult {
     pub creator_read_requirements: BTreeMap<u64, BTreeMap<GlobalId, mz_repr::Timestamp>>,
 }
 
+/// Catch-up authorized by a caller that owns this protection execution.
+///
+/// Start each call with empty `updates` and await its definitive outcome.
+/// On failure, the caller must enact `updates` before returning or suspending.
+/// On success they are included in `TransactionResult::catalog_updates` instead,
+/// so candidate drops and permission changes supersede earlier caught-up bounds.
+pub struct TransactionCatchUp {
+    pub incarnation: u64,
+    pub updates: BTreeMap<GlobalId, ParsedStateUpdate>,
+}
+
+impl TransactionCatchUp {
+    pub fn new(incarnation: u64) -> Self {
+        Self {
+            incarnation,
+            updates: BTreeMap::new(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct TransactInnerResult {
     state: Option<CatalogState>,
@@ -874,17 +894,18 @@ impl Catalog {
 
     /// Commits catalog operations against a synchronized projection.
     ///
-    /// `writer_incarnation`, when provided, must identify the caller's own
-    /// protection execution. It permits catch-up of peer grant-only prefixes,
-    /// not replacement of the caller's captured grants or sampled bounds.
-    /// Without that identity, pending content requires an explicit refresh.
+    /// `catch_up` permits bounded retry across committed frontier changes.
+    /// Its incarnation must identify the caller's protection execution, and the
+    /// caller must enact its returned effects even when the candidate fails.
+    /// Captured own grants and sampled publications still require owner refresh.
+    /// Without this context, pending content requires an explicit refresh.
     #[instrument(name = "catalog::transact")]
     pub async fn transact(
         &mut self,
-        writer_incarnation: Option<u64>,
+        mut catch_up: Option<&mut TransactionCatchUp>,
         // n.b. this is an option to prevent us from needing to build out a
         // dummy impl of `StorageController` for tests.
-        storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
+        mut storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&TransactionContext<'_>>,
         ops: Vec<Op>,
@@ -896,10 +917,47 @@ impl Catalog {
             )))
         });
 
-        let temporary_ids = Self::temporary_ids(&self.state, &ops)?;
-        let mut builtin_table_updates = vec![];
-        let mut catalog_updates = vec![];
-        let mut audit_events = vec![];
+        // Preparation is retained, but every attempt derives a new candidate from
+        // the committed base. Publications sampled outside this boundary must go
+        // back to their owner.
+        let may_catch_up = catch_up.is_some()
+            && !ops.iter().any(|op| {
+                matches!(op,
+                    Op::SetReadProtection { requirements, bounds }
+                        if !requirements.is_empty() || !bounds.is_empty()
+                )
+            });
+        // Config candidates can touch shared dynamic-config handles before commit.
+        // Catch-up precedes those effects, but do not repeat them in this boundary.
+        let may_retry = may_catch_up
+            && !ops.iter().any(|op| {
+                matches!(
+                    op,
+                    Op::UpdateSystemConfiguration { .. }
+                        | Op::ResetSystemConfiguration { .. }
+                        | Op::ResetAllSystemConfiguration
+                )
+            });
+        let mut owned_incarnations = BTreeSet::new();
+        if let Some(context) = &catch_up {
+            owned_incarnations.insert(context.incarnation);
+        }
+        for op in &ops {
+            match op {
+                Op::PublishClientReadRequirements { incarnation, .. }
+                | Op::PublishCreatorReadRequirements { incarnation, .. } => {
+                    owned_incarnations.insert(*incarnation);
+                }
+                _ => {}
+            }
+        }
+        // This is a between-attempt work budget, not cancellation of an in-flight
+        // write. Exhaustion returns a definitive conflict to the existing staged
+        // owner, which releases admission and backs off outside the coordinator.
+        const MAX_IMMEDIATE_RETRIES: usize = 2;
+        const IMMEDIATE_RETRY_BUDGET: Duration = Duration::from_millis(100);
+        let retry_started = tokio::time::Instant::now();
+        let mut retries_remaining = MAX_IMMEDIATE_RETRIES;
         let phase_started = Instant::now();
         debug!(
             target: "mz_adapter::frontend_read_then_write",
@@ -915,177 +973,229 @@ impl Catalog {
             outcome = "ok",
             "catalog phase complete",
         );
-        let phase_started = Instant::now();
-        debug!(
-            target: "mz_adapter::frontend_read_then_write",
-            phase = "transaction_open",
-            "catalog phase start",
-        );
-        // Peer grants do not invalidate retained preparation, but sampled bounds
-        // must return to their owner for resampling. Never absorb an update to a
-        // complete grant map this transaction may replace.
-        let may_catch_up = writer_incarnation.is_some()
-            && !ops
-                .iter()
-                .any(|op| matches!(op, Op::SetReadProtection { bounds, .. } if !bounds.is_empty()));
-        let result = if may_catch_up {
-            let mut owned_incarnations = BTreeSet::from_iter(writer_incarnation);
-            for op in &ops {
-                match op {
-                    Op::PublishClientReadRequirements { incarnation, .. }
-                    | Op::PublishCreatorReadRequirements { incarnation, .. } => {
-                        owned_incarnations.insert(*incarnation);
+        loop {
+            let temporary_ids = Self::temporary_ids(&self.state, &ops)?;
+            let mut builtin_table_updates = vec![];
+            let mut catalog_updates = vec![];
+            let mut audit_events = vec![];
+            let phase_started = Instant::now();
+            debug!(
+                target: "mz_adapter::frontend_read_then_write",
+                phase = "transaction_open",
+                "catalog phase start",
+            );
+            let result = if may_catch_up {
+                let updates = storage
+                    .sync_to_current_updates_if(&|update| match &update.kind {
+                        StateUpdateKind::ClientReadRequirement(requirement) => {
+                            !owned_incarnations.contains(&requirement.incarnation)
+                        }
+                        StateUpdateKind::CollectionCompactionBound(_) => true,
+                        StateUpdateKind::MaintainedReadRequirement(requirement) => self
+                            .state
+                            .maintained_read_requirements()
+                            .get(&requirement.id)
+                            .is_some_and(|old| old.inputs == requirement.inputs),
+                        _ => false,
+                    })
+                    .await;
+                match updates {
+                    Err(
+                        error @ DurableError::Durable(DurableCatalogError::CatalogOutOfSync {
+                            ..
+                        }),
+                    ) => Err(error),
+                    result => {
+                        let updates =
+                            result.unwrap_or_terminate("synchronizing catalog transaction");
+                        let upper = storage.synced_upper();
+                        // Apply to the committed base, not the success-only candidate. This
+                        // also retains dirty compaction bookkeeping if the candidate fails.
+                        let (builtin_updates, implications) =
+                            self.apply_committed_updates(updates, upper).await;
+                        assert!(
+                            builtin_updates.is_empty(),
+                            "frontier catch-up has no builtin rows"
+                        );
+                        let context = catch_up.as_deref_mut().expect("catch-up context");
+                        for update in implications {
+                            let ParsedStateUpdateKind::CollectionCompactionBound(bound) =
+                                &update.kind
+                            else {
+                                unreachable!("frontier catch-up only produces bound implications");
+                            };
+                            match update.diff {
+                                StateDiff::Retraction => {
+                                    context.updates.remove(&bound.id);
+                                }
+                                StateDiff::Addition => {
+                                    context.updates.insert(bound.id, update);
+                                }
+                            }
+                        }
+                        storage.transaction_at_synced_upper().await
                     }
-                    _ => {}
                 }
-            }
-            let updates = storage
-                .sync_to_current_updates_if(&|update| {
-                    matches!(
-                        &update.kind,
-                        StateUpdateKind::ClientReadRequirement(requirement)
-                            if !owned_incarnations.contains(&requirement.incarnation)
-                    )
-                })
-                .await;
-            match updates {
+            } else {
+                storage.transaction().await
+            };
+            debug!(
+                target: "mz_adapter::frontend_read_then_write",
+                phase = "transaction_open",
+                elapsed = ?phase_started.elapsed(),
+                outcome = if result.is_ok() { "ok" } else { "error" },
+                "catalog phase complete",
+            );
+            let mut tx = match result {
                 Err(
                     error @ DurableError::Durable(DurableCatalogError::CatalogOutOfSync { .. }),
-                ) => Err(error),
-                result => {
-                    let updates = result.unwrap_or_terminate("synchronizing catalog transaction");
-                    let upper = storage.synced_upper();
-                    // Apply to the committed base, not the success-only candidate. This
-                    // also retains dirty compaction bookkeeping if the candidate fails.
-                    let (builtin_updates, implications) =
-                        self.apply_committed_updates(updates, upper).await;
-                    assert!(
-                        builtin_updates.is_empty() && implications.is_empty(),
-                        "peer grant catch-up must not defer committed effects"
-                    );
-                    storage.transaction_at_synced_upper().await
+                ) => {
+                    return Err(error.into());
                 }
+                result => result.unwrap_or_terminate("starting catalog transaction"),
+            };
+            // Empty progress may have overtaken the timestamp chosen before opening the transaction.
+            let commit_ts = std::cmp::max(oracle_write_ts, tx.upper());
+
+            let phase_started = Instant::now();
+            debug!(
+                target: "mz_adapter::frontend_read_then_write",
+                phase = "candidate",
+                "catalog phase start",
+            );
+            let new_state = Self::transact_inner(
+                TransactInnerMode::Commit,
+                &self.diagnostic_config.persist_client,
+                storage_collections.as_deref_mut(),
+                commit_ts,
+                session,
+                ops.clone(),
+                temporary_ids,
+                &mut builtin_table_updates,
+                &mut catalog_updates,
+                &mut audit_events,
+                &mut tx,
+                &self.state,
+            )
+            .await;
+            debug!(
+                target: "mz_adapter::frontend_read_then_write",
+                phase = "candidate",
+                elapsed = ?phase_started.elapsed(),
+                outcome = if new_state.is_ok() { "ok" } else { "error" },
+                "catalog phase complete",
+            );
+            let new_state = new_state?;
+
+            #[cfg(test)]
+            if let Some(before_commit) = &self.before_commit {
+                let (resume, ready) = tokio::sync::oneshot::channel();
+                before_commit.send(resume).expect("candidate observer");
+                ready.await.expect("candidate observer completed");
             }
-        } else {
-            storage.transaction().await
-        };
-        debug!(
-            target: "mz_adapter::frontend_read_then_write",
-            phase = "transaction_open",
-            elapsed = ?phase_started.elapsed(),
-            outcome = if result.is_ok() { "ok" } else { "error" },
-            "catalog phase complete",
-        );
-        let mut tx = match result {
-            Err(error @ DurableError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
-                return Err(error.into());
+
+            // Only a definitive conflict permits rebuilding. Submitted writes retain
+            // completion ownership through all other outcomes.
+            let phase_started = Instant::now();
+            debug!(
+                target: "mz_adapter::frontend_read_then_write",
+                phase = "durable_commit",
+                "catalog phase start",
+            );
+            let result = tx.commit_with_upper(commit_ts).await;
+            debug!(
+                target: "mz_adapter::frontend_read_then_write",
+                phase = "durable_commit",
+                elapsed = ?phase_started.elapsed(),
+                outcome = if result.is_ok() { "ok" } else { "error" },
+                "catalog phase complete",
+            );
+            let upper = match result {
+                Err(
+                    error @ DurableError::Durable(DurableCatalogError::CatalogOutOfSync { .. }),
+                ) => {
+                    if may_retry
+                        && retries_remaining > 0
+                        && retry_started.elapsed() < IMMEDIATE_RETRY_BUDGET
+                    {
+                        retries_remaining -= 1;
+                        debug!(
+                            target: "mz_adapter::frontend_read_then_write",
+                            retries_remaining,
+                            elapsed = ?retry_started.elapsed(),
+                            "catalog frontier conflict rebuilding candidate",
+                        );
+                        continue;
+                    }
+                    return Err(error.into());
+                }
+                result => {
+                    result.unwrap_or_terminate("catalog storage transaction commit must succeed")
+                }
+            };
+            // These are this transaction's own effects, parsed before the durable
+            // append could rebase or allocate its final timestamp.
+            for update in &mut catalog_updates {
+                update.ts = upper
+                    .step_back()
+                    .expect("committed upper has a predecessor");
             }
-            result => result.unwrap_or_terminate("starting catalog transaction"),
-        };
-        // Empty progress may have overtaken the timestamp chosen before opening the transaction.
-        let commit_ts = std::cmp::max(oracle_write_ts, tx.upper());
 
-        let phase_started = Instant::now();
-        debug!(
-            target: "mz_adapter::frontend_read_then_write",
-            phase = "candidate",
-            "catalog phase start",
-        );
-        let new_state = Self::transact_inner(
-            TransactInnerMode::Commit,
-            &self.diagnostic_config.persist_client,
-            storage_collections,
-            commit_ts,
-            session,
-            ops,
-            temporary_ids,
-            &mut builtin_table_updates,
-            &mut catalog_updates,
-            &mut audit_events,
-            &mut tx,
-            &self.state,
-        )
-        .await;
-        debug!(
-            target: "mz_adapter::frontend_read_then_write",
-            phase = "candidate",
-            elapsed = ?phase_started.elapsed(),
-            outcome = if new_state.is_ok() { "ok" } else { "error" },
-            "catalog phase complete",
-        );
-        let new_state = new_state?;
-
-        // A definite CAS loss leaves the candidate unpublished. The caller must
-        // refresh its projection and revalidate before retrying. Other failures
-        // can follow a successful append, so they still require recovery.
-        let phase_started = Instant::now();
-        debug!(
-            target: "mz_adapter::frontend_read_then_write",
-            phase = "durable_commit",
-            "catalog phase start",
-        );
-        let result = tx.commit_with_upper(commit_ts).await;
-        debug!(
-            target: "mz_adapter::frontend_read_then_write",
-            phase = "durable_commit",
-            elapsed = ?phase_started.elapsed(),
-            outcome = if result.is_ok() { "ok" } else { "error" },
-            "catalog phase complete",
-        );
-        let upper = match result {
-            Err(error @ DurableError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
-                return Err(error.into());
+            // The candidate becomes live only after its durable commit. Peer catch-up
+            // was already committed and remains applied even when the candidate fails.
+            drop(storage);
+            let TransactInnerResult {
+                state,
+                planning_changed,
+                planning_update_kinds,
+                created_client_incarnations,
+                creator_read_requirements,
+            } = new_state;
+            debug!(
+                target: "mz_catalog::planning_revision",
+                catalog = ?std::ptr::from_ref(self),
+                deployment = self.state.deployment_generation,
+                old_revision = self.transient_revision,
+                new_revision = self.transient_revision + u64::from(planning_changed),
+                %upper,
+                ?planning_update_kinds,
+                "catalog commit completes planning classification",
+            );
+            if planning_changed {
+                self.transient_revision += 1;
+                // Publish before any planning-visible effects (responses,
+                // notices, builtin table writes) can be observed, so sessions
+                // that observe them must refresh their cached catalog snapshot.
+                self.shared_transient_revision
+                    .store(self.transient_revision, atomic::Ordering::SeqCst);
             }
-            result => result.unwrap_or_terminate("catalog storage transaction commit must succeed"),
-        };
-        // These are this transaction's own effects, parsed before the durable
-        // append could rebase or allocate its final timestamp.
-        for update in &mut catalog_updates {
-            update.ts = upper
-                .step_back()
-                .expect("committed upper has a predecessor");
-        }
+            if let Some(state) = state {
+                self.state = state;
+            }
+            self.advance_positions(upper, planning_changed.then_some(upper));
 
-        // The candidate becomes live only after its durable commit. Peer catch-up
-        // was already committed and remains applied even when the candidate fails.
-        drop(storage);
-        let TransactInnerResult {
-            state,
-            planning_changed,
-            planning_update_kinds,
-            created_client_incarnations,
-            creator_read_requirements,
-        } = new_state;
-        debug!(
-            target: "mz_catalog::planning_revision",
-            catalog = ?std::ptr::from_ref(self),
-            deployment = self.state.deployment_generation,
-            old_revision = self.transient_revision,
-            new_revision = self.transient_revision + u64::from(planning_changed),
-            %upper,
-            ?planning_update_kinds,
-            "catalog commit completes planning classification",
-        );
-        if planning_changed {
-            self.transient_revision += 1;
-            // Publish before any planning-visible effects (responses,
-            // notices, builtin table writes) can be observed, so sessions
-            // that observe them must refresh their cached catalog snapshot.
-            self.shared_transient_revision
-                .store(self.transient_revision, atomic::Ordering::SeqCst);
+            if let Some(context) = catch_up {
+                // The successful candidate's effects supersede caught-up permissions
+                // for every bound it changes, including deletion. Enact the remaining
+                // peer bounds with the candidate, not against a partly dropped object.
+                for update in &catalog_updates {
+                    if let ParsedStateUpdateKind::CollectionCompactionBound(bound) = &update.kind {
+                        context.updates.remove(&bound.id);
+                    }
+                }
+                let mut committed_updates: Vec<_> =
+                    std::mem::take(&mut context.updates).into_values().collect();
+                committed_updates.extend(catalog_updates);
+                catalog_updates = committed_updates;
+            }
+            return Ok(TransactionResult {
+                builtin_table_updates,
+                catalog_updates,
+                audit_events,
+                created_client_incarnations,
+                creator_read_requirements,
+            });
         }
-        if let Some(state) = state {
-            self.state = state;
-        }
-        self.advance_positions(upper, planning_changed.then_some(upper));
-
-        Ok(TransactionResult {
-            builtin_table_updates,
-            catalog_updates,
-            audit_events,
-            created_client_incarnations,
-            creator_read_requirements,
-        })
     }
 
     /// Performs an incremental dry-run catalog transaction: processes only the
