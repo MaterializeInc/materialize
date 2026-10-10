@@ -142,7 +142,7 @@ async fn run_inner(conflict: Conflict) {
     }
 
     // Establish private membership before installing the preparation hook.
-    let (input, index, mv, selection, shard, peer_incarnation) = loop {
+    let (input, index, mv, selection, shard, mut peer_execution) = loop {
         peer.sync_to_current_updates().await.unwrap();
         let mut txn = match peer.transaction().await {
             Ok(txn) => txn,
@@ -155,7 +155,7 @@ async fn run_inner(conflict: Conflict) {
         let mv = item("rewrite_mv").global_id;
         let selection = txn.get_written_plans().find(|plan| plan.id == mv).unwrap();
         let shard = txn.get_expression_cache_shard().unwrap();
-        let incarnation = if matches!(conflict, Conflict::Structural) {
+        let execution = if matches!(conflict, Conflict::Structural) {
             None
         } else {
             let replica = txn.get_cluster_replicas().next().unwrap();
@@ -167,15 +167,16 @@ async fn run_inner(conflict: Conflict) {
                 replica.owner_id,
             )
             .unwrap();
-            Some(
+            Some((
+                replica.replica_id,
                 txn.create_client_incarnation(Some(replica.replica_id))
                     .unwrap(),
-            )
+            ))
         };
         let ts = txn.upper();
         let _ = txn.get_and_commit_op_updates();
         match txn.commit(ts).await {
-            Ok(()) => break (input, index, mv, selection, shard, incarnation),
+            Ok(()) => break (input, index, mv, selection, shard, execution),
             Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => continue,
             Err(error) => panic!("create peer incarnation: {error}"),
         }
@@ -308,13 +309,20 @@ async fn run_inner(conflict: Conflict) {
                 .is_none_or(|held| *held > required),
             "unrelated holds must not mask preparation protection at {required}: {prepared:?}"
         );
-        match conflict {
+        let successor = match conflict {
             Conflict::Metadata | Conflict::Cancellation => {
+                // Execution replacement is metadata-only, but cannot be absorbed
+                // as a compatible peer-grant prefix at transaction open.
+                let (replica, incarnation) = peer_execution.unwrap();
+                let successor = txn
+                    .replace_client_incarnation(Some(replica), Some(incarnation))
+                    .unwrap();
                 txn.publish_client_read_requirements(
-                    peer_incarnation.unwrap(),
+                    successor,
                     BTreeMap::from([(input, required)]),
                 )
                 .unwrap();
+                Some((replica, successor))
             }
             Conflict::Structural => {
                 let mut database = txn
@@ -323,12 +331,16 @@ async fn run_inner(conflict: Conflict) {
                     .unwrap();
                 database.name = "rewrite_renamed".into();
                 txn.update_database(database.id, database).unwrap();
+                None
             }
-        }
+        };
         let ts = txn.upper();
         let _ = txn.get_and_commit_op_updates();
         match txn.commit(ts).await {
-            Ok(()) => break required,
+            Ok(()) => {
+                peer_execution = successor;
+                break required;
+            }
             Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync { .. })) => {
                 continue;
             }
@@ -345,7 +357,6 @@ async fn run_inner(conflict: Conflict) {
         tokio::pin!(other_ddl);
         let mut other_completed = false;
         let mut cancel_queued = false;
-        let mut peer_protects_input = true;
         loop {
             tokio::select! {
                 result = &mut other_ddl, if !other_completed => {
@@ -384,28 +395,27 @@ async fn run_inner(conflict: Conflict) {
                     Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
                         ..
                     })) => continue,
-                    Err(error) => panic!("peer grant snapshot: {error}"),
+                    Err(error) => panic!("peer replacement snapshot: {error}"),
                 };
-                // Toggle protection only after preparation has acquired its own
-                // hold. The retained MV requirement makes reacquisition safe.
-                let grants = if peer_protects_input {
-                    BTreeMap::new()
-                } else {
-                    BTreeMap::from([(input, required)])
-                };
-                txn.publish_client_read_requirements(peer_incarnation.unwrap(), grants)
+                // Replacement transfers the peer's protection unchanged while
+                // requiring the DROP to refresh and retry its prepared commit.
+                let (replica, incarnation) = peer_execution.unwrap();
+                let successor = txn
+                    .replace_client_incarnation(Some(replica), Some(incarnation))
                     .unwrap();
                 let ts = txn.upper();
                 let _ = txn.get_and_commit_op_updates();
                 match txn.commit(ts).await {
-                    Ok(()) => break,
+                    Ok(()) => {
+                        peer_execution = Some((replica, successor));
+                        break;
+                    }
                     Err(CatalogError::Durable(DurableCatalogError::CatalogOutOfSync {
                         ..
                     })) => continue,
-                    Err(error) => panic!("peer grant commit: {error}"),
+                    Err(error) => panic!("peer replacement commit: {error}"),
                 }
             }
-            peer_protects_input = !peer_protects_input;
             release_tx.send(()).expect("release prepared retry");
         }
     } else {

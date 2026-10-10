@@ -76,22 +76,25 @@ not the transaction-open conflict window. Improve that existing attempt boundary
 without blind diff replay or another retry framework. Commit timestamp and MV
 birth are distinct, and fixed REFRESH timestamps cannot slide. Per-object
 compaction-bound advancement remains unproven.
-The four staged commit paths now use that admission boundary. CI138638 passes
-the prepared-rewrite regression requiring unrelated DDL progress and cancellation
-under continuing metadata conflicts. Parallel 1 still times out on multiple
-CREATE MV statements. Attribute their remaining waits and replanning before
-claiming end-to-end progress.
-Fixed-birth grant acquisition and legacy inline retries are unchanged.
-Structural DDL can invalidate retained
-preparation and cause additional replanning, so verify whole-statement progress.
-CI138634, before this admission repair, passes parallel 2 but parallel 1 times out
-on CREATE VIEW and ALTER CLUSTER RENAME. Do not conflate that with advancement.
-The common transaction-open repair has completed independent static review:
-consume complete peer-grant-only prefixes before constructing the candidate,
-preserving committed bookkeeping on every outcome. Own-map changes, sampled
-bounds and mixed prefixes still return intact to the existing refresh owner.
-The same rule covers ordinary client-grant publication, not sampled compaction
-bounds. Its boundary coverage awaits CI.
+The four staged commit paths use that admission boundary. Fixed-birth grant
+acquisition and legacy inline retries are unchanged. The common transaction-open
+repair consumes complete peer-grant-only prefixes before constructing the
+candidate, preserving committed bookkeeping on every outcome. Own-map changes,
+sampled bounds and mixed prefixes still return intact to the refresh owner.
+CI138649 passes its boundary test and both Clippy jobs, but both parallel
+workloads still fail. The complete `basic_topk_view1` capture has nine successful
+opens/candidates and nine known-stale upper mismatches, with no submitted CAS.
+Eight retry reacquisitions produce seven structural replans. Admission holds total
+6.836s within a 302.949s execution. Successful open and admission handoff therefore
+do not close the post-candidate conflict window or end-to-end SQL progress.
+Catalog upper movement is not evidence of physical compaction-bound advancement.
+The cancellation regression failed because its peer grants no longer force a
+conflict. Its fixture now replaces the private peer execution, transferring its
+protection while forcing a metadata conflict. Progress, cancellation and retained
+plan/hold assertions remain unchanged. Verify that correction in CI.
+Keep structural revalidation conservative. Existing dependency existence checks
+alone do not establish unchanged definitions, configuration, authorization or
+derived operation sets. Do not remove the revision guard to avoid replanning.
 Kafka RTR's intermittent explicit CREATE SOURCE planning-revision loss is unresolved.
 Protection publication overlaps purification but is not a proven invalidator.
 Temporary, fixture-enabled kind/count and revision diagnostics must correlate the
