@@ -1131,7 +1131,7 @@ impl Catalog {
                     )?;
                 }
 
-                tx.update_item(id, state.durable_item(new_entry)?)?;
+                state.update_durable_item(tx, new_entry)?;
 
                 Self::log_update(state, &id);
             }
@@ -1181,7 +1181,7 @@ impl Catalog {
                     )?;
                 }
 
-                tx.update_item(id, state.durable_item(new_entry)?)?;
+                state.update_durable_item(tx, new_entry)?;
 
                 Self::log_update(state, &id);
             }
@@ -1304,7 +1304,7 @@ impl Catalog {
                     )?;
                 }
 
-                tx.update_item(id, state.durable_item(new_entry)?)?;
+                state.update_durable_item(tx, new_entry)?;
                 storage_collections_to_register.insert(new_global_id, shard_id);
             }
             Op::AlterMaterializedViewApplyReplacement { id, replacement_id } => {
@@ -1753,6 +1753,7 @@ impl Catalog {
 
                     let schema_id = name.qualifiers.schema_spec.clone().into();
                     let item_type = item.typ();
+                    let (columns, index_columns) = state.durable_item_metadata(id, &item);
                     let (create_sql, global_id, versions) = item.to_serialized();
                     tx.insert_user_item(
                         id,
@@ -1765,6 +1766,8 @@ impl Catalog {
                         &temporary_oids,
                         versions,
                         Some(owner_session),
+                        columns,
+                        index_columns,
                     )?;
 
                     info!(
@@ -1799,6 +1802,7 @@ impl Catalog {
                     }
                     let schema_id = name.qualifiers.schema_spec.clone().into();
                     let item_type = item.typ();
+                    let (columns, index_columns) = state.durable_item_metadata(id, &item);
                     let (create_sql, global_id, versions) = item.to_serialized();
                     tx.insert_user_item(
                         id,
@@ -1811,6 +1815,8 @@ impl Catalog {
                         &temporary_oids,
                         versions,
                         None,
+                        columns,
+                        index_columns,
                     )?;
                     info!(
                         "create {} {} ({})",
@@ -2337,7 +2343,7 @@ impl Catalog {
                             let entry = state.get_entry(id);
                             let mut new_entry = entry.clone();
                             update_privilege_fn(&mut new_entry.privileges);
-                            tx.update_item(*id, state.durable_item(new_entry)?)?;
+                            state.update_durable_item(tx, new_entry)?;
                         }
                         ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
                     },
@@ -2570,10 +2576,10 @@ impl Catalog {
                             }))
                         })?;
 
-                    tx.update_item(*id, state.durable_item(to_entry)?)?;
+                    state.update_durable_item(tx, to_entry)?;
                     updates.push(*id);
                 }
-                tx.update_item(id, state.durable_item(new_entry)?)?;
+                state.update_durable_item(tx, new_entry)?;
 
                 updates.push(id);
                 for id in updates {
@@ -2636,7 +2642,9 @@ impl Catalog {
                             }))
                         })?;
 
-                    // Queue updates for Catalog storage and Builtin Tables.
+                    // Queue updates for Catalog storage and Builtin Tables. The
+                    // rename only rewrites references in create_sql, so the
+                    // recorded columns and index keys stay as they are.
                     items_to_update.insert(*id, state.durable_item(new_entry)?);
                     updates.push(*id);
 
@@ -2793,7 +2801,7 @@ impl Catalog {
                             new_owner,
                         );
                         new_entry.owner_id = new_owner;
-                        tx.update_item(*id, state.durable_item(new_entry)?)?;
+                        state.update_durable_item(tx, new_entry)?;
                     }
                     ObjectId::NetworkPolicy(id) => {
                         let mut policy = state.get_network_policy(id).clone();
@@ -2952,7 +2960,7 @@ impl Catalog {
                 let mut entry = state.get_entry(&id).clone();
                 entry.name = name.clone();
                 entry.item = to_item.clone();
-                tx.update_item(id, state.durable_item(entry)?)?;
+                state.update_durable_item(tx, entry)?;
 
                 if Self::should_audit_log_item(&to_item) {
                     let mut full_name = Self::full_name_detail(
@@ -3281,7 +3289,7 @@ fn tx_replace_item(
 
         let mut dependent = dependent.clone();
         dependent.item = dependent.item.replace_item_refs(id, new_id);
-        tx.update_item(*use_id, state.durable_item(dependent)?)?;
+        state.update_durable_item(tx, dependent)?;
     }
 
     // Move comments to the new ID.
@@ -3294,6 +3302,7 @@ fn tx_replace_item(
         }
     }
 
+    let (columns, index_columns) = state.durable_item_metadata(new_id, &new_entry.item);
     let mz_catalog::durable::Item {
         id: _,
         oid,
@@ -3319,6 +3328,8 @@ fn tx_replace_item(
         privileges,
         extra_versions,
         ephemeral_owner_session,
+        columns,
+        index_columns,
     )?;
 
     Ok(())

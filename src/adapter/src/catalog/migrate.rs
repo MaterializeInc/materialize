@@ -118,6 +118,43 @@ where
     Ok(())
 }
 
+/// Rewrites the recorded columns and index keys of every item for which they
+/// differ from what this build's planner produced, see
+/// `mz_catalog::durable::ItemColumn`. This fills the rows in after the catalog
+/// upgrade that added their collections and keeps them current across planner
+/// changes. Items of temporary sessions that are not connected to this process
+/// are not loaded into `state` and are left as they are.
+fn refresh_durable_item_metadata(
+    state: &CatalogState,
+    tx: &mut Transaction<'_>,
+) -> Result<(), anyhow::Error> {
+    let mut recorded_columns: BTreeMap<CatalogItemId, Vec<mz_catalog::durable::ItemColumn>> =
+        BTreeMap::new();
+    for column in tx.get_item_columns() {
+        recorded_columns.entry(column.id).or_default().push(column);
+    }
+    let mut recorded_index_columns: BTreeMap<CatalogItemId, Vec<mz_catalog::durable::IndexColumn>> =
+        BTreeMap::new();
+    for column in tx.get_index_columns() {
+        recorded_index_columns
+            .entry(column.id)
+            .or_default()
+            .push(column);
+    }
+    for item in tx.get_items() {
+        let Some(entry) = state.try_get_entry(&item.id) else {
+            continue;
+        };
+        let (columns, index_columns) = state.durable_item_metadata(item.id, entry.item());
+        let recorded_columns = recorded_columns.remove(&item.id).unwrap_or_default();
+        let recorded_index_columns = recorded_index_columns.remove(&item.id).unwrap_or_default();
+        if recorded_columns != columns || recorded_index_columns != index_columns {
+            tx.set_item_metadata(item.id, columns, index_columns)?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) struct MigrateResult {
     pub(crate) builtin_table_updates: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
     pub(crate) catalog_updates: Vec<ParsedStateUpdate>,
@@ -212,7 +249,7 @@ pub(crate) async fn migrate(
         rewrite_sources_to_tables(tx, &conn_cat)?;
     }
 
-    rewrite_items(tx, &conn_cat, |_tx, _conn_cat, _id, _stmt| {
+    rewrite_items(tx, &conn_cat, |_tx, conn_cat, _id, stmt| {
         let _catalog_version = catalog_version.clone();
         // Add per-item, post-planning AST migrations below. Most
         // migrations should be in the above `rewrite_ast_items` block.
@@ -228,6 +265,7 @@ pub(crate) async fn migrate(
         //
         // Migration functions may also take `tx` as input to stage
         // arbitrary changes to the catalog.
+        ast_rewrite_transform_table_defaults(conn_cat, stmt)?;
         Ok(())
     })?;
 
@@ -242,6 +280,8 @@ pub(crate) async fn migrate(
     //
     // Each migration should be a function that takes `tx` and `conn_cat` as
     // input and stages arbitrary transformations to the catalog on `tx`.
+
+    refresh_durable_item_metadata(state, tx)?;
 
     let op_item_updates = tx.get_and_commit_op_updates();
     let (item_builtin_table_updates, item_catalog_updates) =
@@ -896,6 +936,41 @@ fn migrate_builtin_tables_to_mvs(tx: &mut Transaction) -> Result<(), anyhow::Err
 //
 // Please include the adapter team on any code reviews that add or edit
 // migrations.
+
+/// Stores each table column default in the form planning transforms it to,
+/// which `plan_create_table` writes for new tables (see
+/// `mz_sql::pure::transform_table_defaults`). A default stored before that
+/// would otherwise read back from `create_sql` as written, and `mz_columns`
+/// reports the stored form.
+fn ast_rewrite_transform_table_defaults(
+    conn_cat: &ConnCatalog<'_>,
+    stmt: &mut Statement<Raw>,
+) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::ColumnOption;
+
+    let Statement::CreateTable(table) = &*stmt else {
+        return Ok(());
+    };
+    let has_default = table.columns.iter().any(|column| {
+        column
+            .options
+            .iter()
+            .any(|option| matches!(option.option, ColumnOption::Default(_)))
+    });
+    if !has_default {
+        return Ok(());
+    }
+
+    let (resolved, _) = mz_sql::names::resolve(conn_cat, stmt.clone())?;
+    let Statement::CreateTable(mut resolved) = resolved else {
+        unreachable!("name resolution preserves the statement kind");
+    };
+    if mz_sql::pure::transform_table_defaults(conn_cat, &mut resolved)? {
+        let sql = Statement::CreateTable(resolved).to_ast_string_stable();
+        *stmt = mz_sql::parse::parse(&sql)?.into_element().ast;
+    }
+    Ok(())
+}
 
 // Remove PARTITION STRATEGY from CREATE SINK statements.
 fn ast_rewrite_create_sink_partition_strategy(

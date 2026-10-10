@@ -7,42 +7,533 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+# Behavioural tests for mz_catalog.mz_columns. The relation is a
+# BuiltinMaterializedView over the columns each item's catalog record carries
+# in mz_internal.mz_catalog_raw (planner output recorded with the item, see
+# mz_catalog::durable::Item::columns) and, for builtin relations, over the
+# generated mz_internal.mz_builtin_columns view: see MZ_COLUMNS in
+# src/catalog/src/builtin/mz_catalog.rs.
+
 mode cockroach
 
-statement ok
-CREATE TYPE r AS (a int)
+reset-server
 
-statement ok
-CREATE TYPE l AS LIST (ELEMENT TYPE = int)
-
-statement ok
-CREATE TYPE m AS MAP (KEY TYPE = text, VALUE TYPE = int)
-
-statement ok
-CREATE VIEW v AS SELECT
-    row(1) AS ra,
-    row(1)::r AS rn,
-    list[]::int list AS la,
-    list[]::l AS ln,
-    map[]::map[text=>int] AS ma,
-    '{}'::m AS mn
-
-# We intentionally don't assert on the `c.type_oid` or `t.id` columns, as
-# IDs are not stable. Instead, we ensure that the `c.type_oid` column can be
-# used to look up the type in the `mz_types` table and that the ID is
-# as expected (system or user).
-query TTTIT
-SELECT
-    c.position, c.name, c.type, c.type_mod, left(t.id, 1)
-    FROM mz_columns c
-    JOIN mz_views v ON c.id = v.id
-    JOIN mz_types t ON c.type_oid = t.oid
-    WHERE v.name = 'v'
-    ORDER BY c.position
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_table_add_column = true
 ----
-1  ra  record  -1  s
-2  rn  r       -1  u
-3  la  list    -1  s
-4  ln  l       -1  u
-5  ma  map     -1  s
-6  mn  m       -1  u
+COMPLETE 0
+
+# --- Schema -------------------------------------------------------------------
+
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_columns' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+id  text  false
+name  text  false
+position  uint8  false
+nullable  boolean  false
+type  text  false
+default  text  true
+type_oid  oid  false
+type_mod  integer  false
+
+# --- Exactly the relations have rows ------------------------------------------
+
+query T
+SELECT DISTINCT o.type
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON o.id = c.id
+ORDER BY o.type
+----
+materialized-view
+source
+table
+view
+
+# Every row belongs to a relation.
+query I
+SELECT count(*)
+FROM mz_catalog.mz_columns c
+LEFT JOIN mz_catalog.mz_relations r ON r.id = c.id
+WHERE r.id IS NULL
+----
+0
+
+# Positions are 1-based and contiguous within a relation, and names are unique
+# within it.
+query I
+SELECT count(*)
+FROM (
+    SELECT id, count(*) AS n, min(position) AS lo, max(position) AS hi, count(DISTINCT name) AS names
+    FROM mz_catalog.mz_columns
+    GROUP BY id
+)
+WHERE lo <> 1 OR hi <> n OR names <> n
+----
+0
+
+# Every column type resolves in mz_types.
+query I
+SELECT count(*)
+FROM mz_catalog.mz_columns c
+LEFT JOIN mz_catalog.mz_types t ON t.oid = c.type_oid
+WHERE t.id IS NULL
+----
+0
+
+# --- Builtins -----------------------------------------------------------------
+
+# A builtin table's columns carry the NULL default that every table column has.
+# No other builtin relation has defaults.
+query TT
+SELECT o.type, coalesce(c.default, '<null>')
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON o.id = c.id
+WHERE c.id LIKE 's%'
+GROUP BY 1, 2
+ORDER BY 1, 2
+----
+materialized-view  <null>
+source  <null>
+table  NULL
+view  <null>
+
+query ITTTTII
+SELECT c.position, c.name, c.type, c.nullable, c.default, c.type_oid, c.type_mod
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_tables t ON c.id = t.id
+JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id
+WHERE t.name = 'mz_cluster_replica_sizes' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+1  size  text  false  NULL  25  -1
+2  processes  uint8  false  NULL  16464  -1
+3  workers  uint8  false  NULL  16464  -1
+4  cpu_nano_cores  uint8  false  NULL  16464  -1
+5  memory_bytes  uint8  false  NULL  16464  -1
+6  disk_bytes  uint8  true  NULL  16464  -1
+7  credits_per_hour  numeric  false  NULL  1700  -1
+
+# A log, a source, a materialized view, a view and the generated views that
+# report the builtins, including the one that reports these columns.
+query TTITTTI
+SELECT o.type, o.name, c.position, c.name, c.type, c.nullable, c.type_oid
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON o.id = c.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE
+    (s.name, o.name) IN (
+        ('mz_introspection', 'mz_active_peeks_per_worker'),
+        ('mz_internal', 'mz_catalog_raw'),
+        ('mz_catalog', 'mz_tables'),
+        ('mz_catalog', 'mz_relations'),
+        ('mz_internal', 'mz_builtin_columns'),
+        ('mz_internal', 'mz_builtin_views')
+    )
+ORDER BY o.name, c.position
+----
+source  mz_active_peeks_per_worker  1  id  uuid  false  2950
+source  mz_active_peeks_per_worker  2  worker_id  uint8  false  16464
+source  mz_active_peeks_per_worker  3  object_id  text  false  25
+source  mz_active_peeks_per_worker  4  type  text  false  25
+source  mz_active_peeks_per_worker  5  time  mz_timestamp  false  16552
+view  mz_builtin_columns  1  schema_name  text  false  25
+view  mz_builtin_columns  2  relation_name  text  false  25
+view  mz_builtin_columns  3  name  text  false  25
+view  mz_builtin_columns  4  position  uint8  false  16464
+view  mz_builtin_columns  5  nullable  boolean  false  16
+view  mz_builtin_columns  6  type  text  false  25
+view  mz_builtin_columns  7  default  text  true  25
+view  mz_builtin_columns  8  type_oid  oid  false  26
+view  mz_builtin_columns  9  type_mod  integer  false  23
+view  mz_builtin_views  1  oid  oid  false  26
+view  mz_builtin_views  2  schema_name  text  false  25
+view  mz_builtin_views  3  name  text  false  25
+view  mz_builtin_views  4  definition  text  false  25
+view  mz_builtin_views  5  privileges  mz_aclitem[]  false  16567
+view  mz_builtin_views  6  create_sql  text  false  25
+source  mz_catalog_raw  1  data  jsonb  false  3802
+view  mz_relations  1  id  text  false  25
+view  mz_relations  2  oid  oid  false  26
+view  mz_relations  3  schema_id  text  false  25
+view  mz_relations  4  name  text  false  25
+view  mz_relations  5  type  text  false  25
+view  mz_relations  6  owner_id  text  false  25
+view  mz_relations  7  cluster_id  text  true  25
+view  mz_relations  8  privileges  mz_aclitem[]  false  16567
+materialized-view  mz_tables  1  id  text  false  25
+materialized-view  mz_tables  2  oid  oid  false  26
+materialized-view  mz_tables  3  schema_id  text  false  25
+materialized-view  mz_tables  4  name  text  false  25
+materialized-view  mz_tables  5  owner_id  text  false  25
+materialized-view  mz_tables  6  privileges  mz_aclitem[]  false  16567
+materialized-view  mz_tables  7  create_sql  text  true  25
+materialized-view  mz_tables  8  redacted_create_sql  text  true  25
+materialized-view  mz_tables  9  source_id  text  true  25
+
+# --- User relations: every type spelling ---------------------------------------
+
+statement ok
+CREATE TYPE r AS (a int, b text)
+
+statement ok
+CREATE TYPE l AS LIST (ELEMENT TYPE = int4)
+
+statement ok
+CREATE TYPE m AS MAP (KEY TYPE = text, VALUE TYPE = l)
+
+statement ok
+CREATE TABLE t (
+    a int,
+    b text NOT NULL,
+    c numeric(10, 2) DEFAULT 1.5,
+    d timestamptz DEFAULT now(),
+    e varchar(20) DEFAULT 'x' || 'y',
+    f char(3),
+    g int4[],
+    h int4 list,
+    i l,
+    j m,
+    k r,
+    l2 map[text => int],
+    n timestamp(3),
+    o interval,
+    p uint2,
+    q date DEFAULT date_trunc('day', now())::date,
+    s text DEFAULT coalesce(NULL, 'z'),
+    u int8 DEFAULT CAST(1 AS int8),
+    w numeric,
+    x int4range,
+    y r list,
+    z "char",
+    aa bool,
+    ab bytea,
+    ac float4,
+    ad float8,
+    ae int2,
+    af jsonb,
+    ag oid,
+    ah time,
+    ai uuid,
+    aj uint4,
+    ak uint8,
+    al mz_timestamp,
+    am text[],
+    an l list
+)
+
+statement ok
+ALTER TABLE t ADD COLUMN v text
+
+query ITTTTII
+SELECT c.position, c.name, c.type, c.nullable, c.default, c.type_oid, c.type_mod
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_tables t ON c.id = t.id
+WHERE t.name = 't'
+ORDER BY c.position
+----
+1  a  integer  true  NULL  23  -1
+2  b  text  false  NULL  25  -1
+3  c  numeric  true  1.5  1700  2555910
+4  d  timestamp␠with␠time␠zone  true  "pg_catalog"."now"()  1184  -1
+5  e  character␠varying  true  'x'␠||␠'y'  1043  24
+6  f  character  true  NULL  1042  7
+7  g  integer[]  true  NULL  1007  -1
+8  h  list  true  NULL  16384  -1
+9  i  l  true  NULL  20202  -1
+10  j  m  true  NULL  20203  -1
+11  k  r  true  NULL  20201  -1
+12  l2  map  true  NULL  16385  -1
+13  n  timestamp␠without␠time␠zone  true  NULL  1114  3
+14  o  interval  true  NULL  1186  -1
+15  p  uint2  true  NULL  16460  -1
+16  q  date  true  "pg_catalog"."date_trunc"('day',␠"pg_catalog"."now"())::[s14␠AS␠"pg_catalog"."date"]  1082  -1
+17  s  text  true  COALESCE(NULL,␠'z')  25  -1
+18  u  bigint  true  1::[s22␠AS␠"pg_catalog"."int8"]  20  -1
+19  w  numeric  true  NULL  1700  -1
+20  x  int4range  true  NULL  3904  -1
+21  y  list  true  NULL  16384  -1
+22  z  "char"  true  NULL  18  -1
+23  aa  boolean  true  NULL  16  -1
+24  ab  bytea  true  NULL  17  -1
+25  ac  real  true  NULL  700  -1
+26  ad  double␠precision  true  NULL  701  -1
+27  ae  smallint  true  NULL  21  -1
+28  af  jsonb  true  NULL  3802  -1
+29  ag  oid  true  NULL  26  -1
+30  ah  time  true  NULL  1083  -1
+31  ai  uuid  true  NULL  2950  -1
+32  aj  uint4  true  NULL  16462  -1
+33  ak  uint8  true  NULL  16464  -1
+34  al  mz_timestamp  true  NULL  16552  -1
+35  am  text[]  true  NULL  1009  -1
+36  an  list  true  NULL  16384  -1
+37  v  text  true  NULL  25  -1
+
+# A column of a type defined by CREATE TYPE takes the name and OID of that
+# type's item.
+query TTT
+SELECT c.name, c.type, ty.name
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_tables t ON c.id = t.id
+JOIN mz_catalog.mz_types ty ON ty.oid = c.type_oid
+WHERE t.name = 't' AND ty.id LIKE 'u%'
+ORDER BY c.position
+----
+i  l  l
+j  m  m
+k  r  r
+
+# --- Defaults are the DEFAULT clauses as stored -------------------------------
+
+statement ok
+CREATE TABLE defaults (
+    c1 int DEFAULT nullif(1, 2),
+    c2 bool DEFAULT 1 IN (1, 2),
+    c3 bool DEFAULT 'a' LIKE 'b',
+    c4 timestamptz DEFAULT CURRENT_TIMESTAMP,
+    c5 numeric DEFAULT extract(year FROM now()),
+    c6 text DEFAULT substring('abc' FROM 1 FOR 2),
+    c7 int DEFAULT position('a' IN 'abc'),
+    c8 int DEFAULT CASE WHEN true THEN 1 ELSE 2 END,
+    c9 int[] DEFAULT ARRAY[1, 2],
+    c10 int DEFAULT greatest(1, 2),
+    c11 int DEFAULT mod(5, 2),
+    c12 int DEFAULT 5 % 2,
+    c13 int DEFAULT -1,
+    c14 int8 DEFAULT '1'::int8 + 1,
+    c15 text DEFAULT trim(BOTH 'x' FROM 'xax'),
+    c16 jsonb DEFAULT '{}'::jsonb -> 'a',
+    c17 interval DEFAULT INTERVAL '1 day',
+    c18 date DEFAULT DATE '2020-01-01',
+    c19 int DEFAULT (1 + 2) * 3,
+    c20 bool DEFAULT NOT true,
+    c21 bool DEFAULT 1 BETWEEN 0 AND 2,
+    c22 int DEFAULT coalesce(NULL::int, 1),
+    c23 int list DEFAULT LIST[1, 2],
+    c24 map[text => int] DEFAULT MAP['a' => 1],
+    c25 text DEFAULT lower('ABC'),
+    c26 timestamptz DEFAULT now() - INTERVAL '1 hour',
+    c27 bool DEFAULT 1 IS NULL,
+    c28 float8 DEFAULT 1::float8 / 2,
+    c29 bytea DEFAULT 'abc'::bytea,
+    c31 int DEFAULT CAST('1' AS int4),
+    c32 numeric(5, 2) DEFAULT 1::numeric(5, 2),
+    c33 bool DEFAULT 'x' ~ 'y',
+    c34 bool DEFAULT 'x' ILIKE 'y',
+    c35 date DEFAULT '2020-01-01'::date,
+    c36 text DEFAULT concat('a', 'b'),
+    c37 int DEFAULT abs(-1),
+    c38 text DEFAULT 'it''s',
+    c39 uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid,
+    c40 int2 DEFAULT 1::int2,
+    c41 text DEFAULT NULL,
+    c42 int DEFAULT 1 + (2 - 3),
+    c43 text DEFAULT CASE 1 WHEN 1 THEN 'a' END,
+    c44 timestamp DEFAULT '2020-01-01 00:00:00'::timestamp,
+    c45 int DEFAULT length('abc'),
+    c46 text DEFAULT 'a' || 'b' || 'c',
+    c47 r DEFAULT ROW(1, 'a')::r,
+    c48 int DEFAULT 1 - -1
+)
+
+query TT
+SELECT c.name, c.default
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_tables t ON c.id = t.id
+WHERE t.name = 'defaults'
+ORDER BY c.position
+----
+c1  NULLIF(1,␠2)
+c2  1␠IN␠(1,␠2)
+c3  'a'␠LIKE␠'b'
+c4  [s157␠AS␠"pg_catalog"."current_timestamp"]()
+c5  "pg_catalog"."extract"('year',␠"pg_catalog"."now"())
+c6  "pg_catalog"."substring"('abc',␠1,␠2)
+c7  "pg_catalog"."position"('a',␠'abc')
+c8  CASE␠WHEN␠true␠THEN␠1␠ELSE␠2␠END
+c9  ARRAY[1,␠2]
+c10  GREATEST(1,␠2)
+c11  5␠%␠2
+c12  5␠%␠2
+c13  -1
+c14  '1'::[s22␠AS␠"pg_catalog"."int8"]␠+␠1
+c15  "pg_catalog"."btrim"('xax',␠'x')
+c16  '{}'::[s26␠AS␠"pg_catalog"."jsonb"]␠->␠'a'
+c17  INTERVAL␠'1␠day'
+c18  '2020-01-01'::[s14␠AS␠"pg_catalog"."date"]
+c19  (1␠+␠2)␠*␠3
+c20  NOT␠true
+c21  1␠>=␠0␠AND␠1␠<=␠2
+c22  COALESCE(NULL::[s20␠AS␠"pg_catalog"."int4"],␠1)
+c23  LIST[1,␠2]
+c24  MAP['a'␠=>␠1]
+c25  "pg_catalog"."lower"('ABC')
+c26  "pg_catalog"."now"()␠-␠INTERVAL␠'1␠hour'
+c27  1␠IS␠NULL
+c28  1::[s18␠AS␠"pg_catalog"."float8"]␠/␠2
+c29  'abc'::[s8␠AS␠"pg_catalog"."bytea"]
+c31  '1'::[s20␠AS␠"pg_catalog"."int4"]
+c32  1::[s32␠AS␠"pg_catalog"."numeric"](5,␠2)
+c33  'x'␠~␠'y'
+c34  'x'␠ILIKE␠'y'
+c35  '2020-01-01'::[s14␠AS␠"pg_catalog"."date"]
+c36  "pg_catalog"."concat"('a',␠'b')
+c37  "pg_catalog"."abs"(-1)
+c38  'it''s'
+c39  '00000000-0000-0000-0000-000000000000'::[s54␠AS␠"pg_catalog"."uuid"]
+c40  1::[s44␠AS␠"pg_catalog"."int2"]
+c41  NULL
+c42  1␠+␠(2␠-␠3)
+c43  CASE␠1␠WHEN␠1␠THEN␠'a'␠END
+c44  '2020-01-01␠00:00:00'::[s50␠AS␠"pg_catalog"."timestamp"]
+c45  "pg_catalog"."length"('abc')
+c46  'a'␠||␠'b'␠||␠'c'
+c47  ROW(1,␠'a')::[u1␠AS␠"materialize"."public"."r"]
+c48  1␠-␠-1
+
+# The defaults are stored in the form planning transforms them to, so the
+# stored create_sql spells `mod` and `BETWEEN` the way the rows above do.
+# Catalog ids are not stable across builds, so they are masked.
+query T multiline
+SELECT regexp_replace(create_sql, '\[[su][0-9]+', '[<id>', 'g')
+FROM mz_catalog.mz_tables
+WHERE name = 'defaults'
+----
+CREATE TABLE "materialize"."public"."defaults" ("c1" [<id> AS "pg_catalog"."int4"] DEFAULT NULLIF(1, 2), "c2" [<id> AS "pg_catalog"."bool"] DEFAULT 1 IN (1, 2), "c3" [<id> AS "pg_catalog"."bool"] DEFAULT 'a' LIKE 'b', "c4" [<id> AS "pg_catalog"."timestamptz"] DEFAULT [<id> AS "pg_catalog"."current_timestamp"](), "c5" [<id> AS "pg_catalog"."numeric"] DEFAULT "pg_catalog"."extract"('year', "pg_catalog"."now"()), "c6" [<id> AS "pg_catalog"."text"] DEFAULT "pg_catalog"."substring"('abc', 1, 2), "c7" [<id> AS "pg_catalog"."int4"] DEFAULT "pg_catalog"."position"('a', 'abc'), "c8" [<id> AS "pg_catalog"."int4"] DEFAULT CASE WHEN true THEN 1 ELSE 2 END, "c9" [<id> AS "pg_catalog"."_int4"] DEFAULT ARRAY[1, 2], "c10" [<id> AS "pg_catalog"."int4"] DEFAULT GREATEST(1, 2), "c11" [<id> AS "pg_catalog"."int4"] DEFAULT 5 % 2, "c12" [<id> AS "pg_catalog"."int4"] DEFAULT 5 % 2, "c13" [<id> AS "pg_catalog"."int4"] DEFAULT -1, "c14" [<id> AS "pg_catalog"."int8"] DEFAULT '1'::[<id> AS "pg_catalog"."int8"] + 1, "c15" [<id> AS "pg_catalog"."text"] DEFAULT "pg_catalog"."btrim"('xax', 'x'), "c16" [<id> AS "pg_catalog"."jsonb"] DEFAULT '{}'::[<id> AS "pg_catalog"."jsonb"] -> 'a', "c17" [<id> AS "pg_catalog"."interval"] DEFAULT INTERVAL '1 day', "c18" [<id> AS "pg_catalog"."date"] DEFAULT '2020-01-01'::[<id> AS "pg_catalog"."date"], "c19" [<id> AS "pg_catalog"."int4"] DEFAULT (1 + 2) * 3, "c20" [<id> AS "pg_catalog"."bool"] DEFAULT NOT true, "c21" [<id> AS "pg_catalog"."bool"] DEFAULT 1 >= 0 AND 1 <= 2, "c22" [<id> AS "pg_catalog"."int4"] DEFAULT COALESCE(NULL::[<id> AS "pg_catalog"."int4"], 1), "c23" [<id> AS "pg_catalog"."int4"] list DEFAULT LIST[1, 2], "c24" map[[<id> AS "pg_catalog"."text"]=>[<id> AS "pg_catalog"."int4"]] DEFAULT MAP['a' => 1], "c25" [<id> AS "pg_catalog"."text"] DEFAULT "pg_catalog"."lower"('ABC'), "c26" [<id> AS "pg_catalog"."timestamptz"] DEFAULT "pg_catalog"."now"() - INTERVAL '1 hour', "c27" [<id> AS "pg_catalog"."bool"] DEFAULT 1 IS NULL, "c28" [<id> AS "pg_catalog"."float8"] DEFAULT 1::[<id> AS "pg_catalog"."float8"] / 2, "c29" [<id> AS "pg_catalog"."bytea"] DEFAULT 'abc'::[<id> AS "pg_catalog"."bytea"], "c31" [<id> AS "pg_catalog"."int4"] DEFAULT '1'::[<id> AS "pg_catalog"."int4"], "c32" [<id> AS "pg_catalog"."numeric"](5, 2) DEFAULT 1::[<id> AS "pg_catalog"."numeric"](5, 2), "c33" [<id> AS "pg_catalog"."bool"] DEFAULT 'x' ~ 'y', "c34" [<id> AS "pg_catalog"."bool"] DEFAULT 'x' ILIKE 'y', "c35" [<id> AS "pg_catalog"."date"] DEFAULT '2020-01-01'::[<id> AS "pg_catalog"."date"], "c36" [<id> AS "pg_catalog"."text"] DEFAULT "pg_catalog"."concat"('a', 'b'), "c37" [<id> AS "pg_catalog"."int4"] DEFAULT "pg_catalog"."abs"(-1), "c38" [<id> AS "pg_catalog"."text"] DEFAULT 'it''s', "c39" [<id> AS "pg_catalog"."uuid"] DEFAULT '00000000-0000-0000-0000-000000000000'::[<id> AS "pg_catalog"."uuid"], "c40" [<id> AS "pg_catalog"."int2"] DEFAULT 1::[<id> AS "pg_catalog"."int2"], "c41" [<id> AS "pg_catalog"."text"] DEFAULT NULL, "c42" [<id> AS "pg_catalog"."int4"] DEFAULT 1 + (2 - 3), "c43" [<id> AS "pg_catalog"."text"] DEFAULT CASE 1 WHEN 1 THEN 'a' END, "c44" [<id> AS "pg_catalog"."timestamp"] DEFAULT '2020-01-01 00:00:00'::[<id> AS "pg_catalog"."timestamp"], "c45" [<id> AS "pg_catalog"."int4"] DEFAULT "pg_catalog"."length"('abc'), "c46" [<id> AS "pg_catalog"."text"] DEFAULT 'a' || 'b' || 'c', "c47" [<id> AS "materialize"."public"."r"] DEFAULT ROW(1, 'a')::[<id> AS "materialize"."public"."r"], "c48" [<id> AS "pg_catalog"."int4"] DEFAULT 1 - -1)
+EOF
+
+# --- Views and materialized views take the planned column names and types ----
+
+statement ok
+CREATE VIEW v AS
+    SELECT a, b, a + 1, row(1, 'x') AS ra, list[]::l AS lc, k, i, j, count(*) OVER () AS cnt
+    FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a, b, c FROM t
+
+query TTITTTTII
+SELECT o.type, o.name, c.position, c.name, c.type, c.nullable, c.default, c.type_oid, c.type_mod
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON o.id = c.id
+WHERE o.name IN ('v', 'mv')
+ORDER BY o.name, c.position
+----
+materialized-view  mv  1  a  integer  true  NULL  23  -1
+materialized-view  mv  2  b  text  false  NULL  25  -1
+materialized-view  mv  3  c  numeric  true  NULL  1700  2555910
+view  v  1  a  integer  true  NULL  23  -1
+view  v  2  b  text  true  NULL  25  -1
+view  v  3  ?column?  integer  true  NULL  23  -1
+view  v  4  ra  record  false  NULL  2249  -1
+view  v  5  lc  l  false  NULL  20202  -1
+view  v  6  k  r  true  NULL  20201  -1
+view  v  7  i  l  true  NULL  20202  -1
+view  v  8  j  m  true  NULL  20203  -1
+view  v  9  cnt  bigint  true  NULL  20  -1
+
+# --- Sources, subsources, progress, source tables and webhooks -----------------
+
+statement ok
+CREATE SOURCE lg IN CLUSTER quickstart FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+
+statement ok
+CREATE TABLE lg_bids FROM SOURCE lg (REFERENCE bids)
+
+statement ok
+CREATE SOURCE wh IN CLUSTER quickstart FROM WEBHOOK BODY FORMAT JSON INCLUDE HEADERS
+
+query TTITTTTI
+SELECT o.type, o.name, c.position, c.name, c.type, c.nullable, c.default, c.type_oid
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON o.id = c.id
+WHERE o.id LIKE 'u%' AND o.name IN ('lg', 'lg_progress', 'bids', 'lg_bids', 'wh')
+ORDER BY o.name, c.position
+----
+source  bids  1  id  bigint  false  NULL  20
+source  bids  2  buyer  bigint  false  NULL  20
+source  bids  3  auction_id  bigint  false  NULL  20
+source  bids  4  amount  integer  false  NULL  23
+source  bids  5  bid_time  timestamp␠with␠time␠zone  false  NULL  1184
+table  lg_bids  1  id  bigint  false  NULL  20
+table  lg_bids  2  buyer  bigint  false  NULL  20
+table  lg_bids  3  auction_id  bigint  false  NULL  20
+table  lg_bids  4  amount  integer  false  NULL  23
+table  lg_bids  5  bid_time  timestamp␠with␠time␠zone  false  NULL  1184
+source  lg_progress  1  offset  uint8  true  NULL  16464
+source  wh  1  body  jsonb  false  NULL  3802
+source  wh  2  headers  map  false  NULL  16385
+
+# --- Temporary relations ------------------------------------------------------
+
+statement ok
+CREATE TEMPORARY TABLE tmp (a int DEFAULT 5, b text NOT NULL)
+
+statement ok
+CREATE TEMPORARY VIEW tv AS SELECT * FROM tmp
+
+query TTITTTT
+SELECT o.type, o.name, c.position, c.name, c.type, c.nullable, c.default
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON o.id = c.id
+WHERE o.name IN ('tmp', 'tv')
+ORDER BY o.name, c.position
+----
+table  tmp  1  a  integer  true  5
+table  tmp  2  b  text  false  NULL
+view  tv  1  a  integer  true  NULL
+view  tv  2  b  text  false  NULL
+
+# --- A relation without columns has no rows -----------------------------------
+
+statement ok
+CREATE TABLE empty ()
+
+query I
+SELECT count(*)
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_tables t ON c.id = t.id
+WHERE t.name = 'empty'
+----
+0
+
+# --- Renaming keeps the rows, dropping retracts them -------------------------
+
+statement ok
+ALTER TABLE t RENAME TO t2
+
+query I
+SELECT count(*)
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_tables t ON c.id = t.id
+WHERE t.name = 't2'
+----
+37
+
+statement ok
+DROP TABLE t2 CASCADE
+
+query T
+SELECT DISTINCT o.name
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON o.id = c.id
+WHERE o.id LIKE 'u%'
+ORDER BY o.name
+----
+accounts
+auctions
+bids
+defaults
+lg_bids
+lg_progress
+organizations
+tmp
+tv
+users
+wh

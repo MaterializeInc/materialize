@@ -40,7 +40,7 @@ use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
+use mz_repr::{CatalogItemId, ColumnName, GlobalId, RelationVersion};
 use mz_sql::catalog::{
     CatalogItemType, DefaultPrivilegeAclItem, DefaultPrivilegeObject, ObjectType, RoleAttributes,
     RoleMembership, RoleVars,
@@ -640,6 +640,117 @@ pub struct Item {
 impl Item {
     pub fn item_type(&self) -> CatalogItemType {
         item_type(&self.create_sql)
+    }
+}
+
+/// A column of a relation item, as planning resolved it, by the identity its
+/// type presents as: the OID and type modifier of its PostgreSQL-compatible
+/// type (see `mz_pgrepr::Type`), and the `CREATE TYPE` item of a list, map or
+/// record type that one defines.
+///
+/// Planning derives these from the item's `create_sql`, so they are redundant
+/// with it, but only a planner can do that derivation. Recording them lets
+/// catalog views report columns from the durable catalog alone. Every write
+/// of an item records what its planner produced, in the same transaction, and
+/// bootstrap rewrites the rows of any item whose recorded columns differ from
+/// what the running build's planner produces.
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct ItemColumn {
+    pub id: CatalogItemId,
+    /// The column's 1-based position in the relation, as `mz_columns` reports
+    /// it and column comments are keyed by.
+    pub position: usize,
+    pub name: ColumnName,
+    pub nullable: bool,
+    pub type_oid: u32,
+    pub type_mod: i32,
+    pub custom_type: Option<CatalogItemId>,
+}
+
+impl DurableType for ItemColumn {
+    type Key = ItemColumnKey;
+    type Value = ItemColumnValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            ItemColumnKey {
+                id: self.id,
+                position: self.position,
+            },
+            ItemColumnValue {
+                name: self.name,
+                nullable: self.nullable,
+                type_oid: self.type_oid,
+                type_mod: self.type_mod,
+                custom_type: self.custom_type,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            id: key.id,
+            position: key.position,
+            name: value.name,
+            nullable: value.nullable,
+            type_oid: value.type_oid,
+            type_mod: value.type_mod,
+            custom_type: value.custom_type,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        ItemColumnKey {
+            id: self.id,
+            position: self.position,
+        }
+    }
+}
+
+/// A key of an index, as planning resolved it. Maintained like [`ItemColumn`].
+#[derive(Debug, Clone, Copy, Ord, PartialOrd, PartialEq, Eq)]
+pub struct IndexColumn {
+    pub id: CatalogItemId,
+    /// The key's 1-based position in the index.
+    pub position: usize,
+    /// The 1-based column of the indexed relation when the key is a bare
+    /// column reference, `None` for any other expression.
+    pub column: Option<usize>,
+    /// Whether the key can evaluate to `NULL`.
+    pub nullable: bool,
+}
+
+impl DurableType for IndexColumn {
+    type Key = IndexColumnKey;
+    type Value = IndexColumnValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (
+            IndexColumnKey {
+                id: self.id,
+                position: self.position,
+            },
+            IndexColumnValue {
+                column: self.column,
+                nullable: self.nullable,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        Self {
+            id: key.id,
+            position: key.position,
+            column: value.column,
+            nullable: value.nullable,
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        IndexColumnKey {
+            id: self.id,
+            position: self.position,
+        }
     }
 }
 
@@ -1337,6 +1448,8 @@ pub struct Snapshot {
     pub roles: BTreeMap<proto::RoleKey, proto::RoleValue>,
     pub role_auth: BTreeMap<proto::RoleAuthKey, proto::RoleAuthValue>,
     pub items: BTreeMap<proto::ItemKey, proto::ItemValue>,
+    pub item_columns: BTreeMap<proto::ItemColumnKey, proto::ItemColumnValue>,
+    pub index_columns: BTreeMap<proto::IndexColumnKey, proto::IndexColumnValue>,
     pub comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
     pub clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
     pub network_policies: BTreeMap<proto::NetworkPolicyKey, proto::NetworkPolicyValue>,
@@ -1572,6 +1685,35 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
         Some("CONNECTION") => CatalogItemType::Connection,
         _ => panic!("unexpected create sql: {}", create_sql),
     }
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct ItemColumnKey {
+    pub(crate) id: CatalogItemId,
+    pub(crate) position: usize,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
+pub struct ItemColumnValue {
+    pub(crate) name: ColumnName,
+    pub(crate) nullable: bool,
+    pub(crate) type_oid: u32,
+    pub(crate) type_mod: i32,
+    pub(crate) custom_type: Option<CatalogItemId>,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+pub struct IndexColumnKey {
+    pub(crate) id: CatalogItemId,
+    pub(crate) position: usize,
+}
+
+#[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
+#[cfg_attr(test, derive(Arbitrary))]
+pub struct IndexColumnValue {
+    pub(crate) column: Option<usize>,
+    pub(crate) nullable: bool,
 }
 
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]

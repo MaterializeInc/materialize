@@ -17,10 +17,10 @@ use itertools::Itertools;
 use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
 use mz_catalog::durable::objects::serialization::RustType;
 use mz_catalog::durable::objects::serialization::proto;
-use mz_catalog::durable::objects::{Comment, DurableType, IdAlloc};
+use mz_catalog::durable::objects::{Comment, DurableType, IdAlloc, Snapshot};
 use mz_catalog::durable::{
-    CatalogError, Database, DurableCatalogError, FenceError, Item, Metrics,
-    TestCatalogStateBuilder, USER_ITEM_ALLOC_KEY, test_bootstrap_args,
+    CatalogError, Database, DurableCatalogError, FenceError, IndexColumn, Item, ItemColumn,
+    Metrics, TestCatalogStateBuilder, USER_ITEM_ALLOC_KEY, test_bootstrap_args,
 };
 use mz_ore::assert_ok;
 use mz_ore::collections::HashSet;
@@ -28,7 +28,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::{PersistClient, ShardId};
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
+use mz_repr::{CatalogItemId, ColumnName, GlobalId, RelationVersion};
 use mz_sql::catalog::{RoleAttributesRaw, RoleMembership, RoleVars};
 use mz_sql::names::{CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 use mz_storage_client::controller::StorageTxn;
@@ -495,6 +495,8 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
             item.privileges.clone(),
             item.extra_versions.clone(),
             item.ephemeral_owner_session,
+            Vec::new(),
+            Vec::new(),
         )
         .unwrap();
     }
@@ -573,6 +575,8 @@ async fn test_ephemeral_items(state_builder: TestCatalogStateBuilder) {
             vec![],
             BTreeMap::new(),
             owner_session,
+            Vec::new(),
+            Vec::new(),
         )
     };
 
@@ -593,6 +597,8 @@ async fn test_ephemeral_items(state_builder: TestCatalogStateBuilder) {
         vec![],
         BTreeMap::from([(RelationVersion::root().bump(), GlobalId::User(501))]),
         Some(session_a),
+        Vec::new(),
+        Vec::new(),
     )
     .unwrap();
 
@@ -940,6 +946,8 @@ async fn test_persist_ddl_detection_with_batch_allocated_ids() {
             vec![],
             BTreeMap::new(),
             None,
+            Vec::new(),
+            Vec::new(),
         )
         .unwrap();
     }
@@ -1161,4 +1169,129 @@ async fn test_persist_sync_snapshot_stays_bounded_under_churn() {
 
     Box::new(writer).expire().await;
     Box::new(reader).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+async fn test_persist_item_metadata() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let state_builder = TestCatalogStateBuilder::new(persist_client);
+    test_item_metadata(state_builder).await;
+}
+
+/// The recorded columns and index keys of an item live in their own
+/// collections, keyed by the item and position: written with the item,
+/// replaced as a whole, and dropped with it.
+async fn test_item_metadata(state_builder: TestCatalogStateBuilder) {
+    let state_builder = state_builder.with_default_deploy_generation();
+    let mut state = state_builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    // Drain initial updates.
+    let _ = state
+        .sync_to_current_updates()
+        .await
+        .expect("unable to sync");
+
+    let table = CatalogItemId::User(100);
+    let index = CatalogItemId::User(101);
+    let column = |position, name: &str| ItemColumn {
+        id: table,
+        position,
+        name: ColumnName::from(name),
+        nullable: true,
+        type_oid: 23,
+        type_mod: -1,
+        custom_type: None,
+    };
+    let key = |position, column| IndexColumn {
+        id: index,
+        position,
+        column,
+        nullable: true,
+    };
+    fn recorded(snapshot: Snapshot) -> (Vec<ItemColumn>, Vec<IndexColumn>) {
+        let columns = snapshot
+            .item_columns
+            .into_iter()
+            .map(RustType::from_proto)
+            .map_ok(|(k, v)| ItemColumn::from_key_value(k, v))
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let index_columns = snapshot
+            .index_columns
+            .into_iter()
+            .map(RustType::from_proto)
+            .map_ok(|(k, v)| IndexColumn::from_key_value(k, v))
+            .collect::<Result<_, _>>()
+            .unwrap();
+        (columns, index_columns)
+    }
+
+    let mut txn = state.transaction().await.unwrap();
+    txn.insert_item(
+        table,
+        20_000,
+        GlobalId::User(100),
+        SchemaId::User(1),
+        "t",
+        "CREATE TABLE t (a int, b int)".to_string(),
+        RoleId::User(1),
+        vec![],
+        BTreeMap::new(),
+        None,
+        vec![column(1, "a"), column(2, "b")],
+        vec![],
+    )
+    .unwrap();
+    txn.insert_item(
+        index,
+        20_001,
+        GlobalId::User(101),
+        SchemaId::User(1),
+        "t_idx",
+        "CREATE INDEX t_idx ON t (b)".to_string(),
+        RoleId::User(1),
+        vec![],
+        BTreeMap::new(),
+        None,
+        vec![],
+        vec![key(1, Some(2))],
+    )
+    .unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
+    assert_eq!(
+        recorded(state.snapshot().await.unwrap()),
+        (vec![column(1, "a"), column(2, "b")], vec![key(1, Some(2))])
+    );
+
+    // Replacing an item's metadata retracts the positions it no longer has.
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_item_metadata(table, vec![column(1, "a")], vec![])
+        .unwrap();
+    txn.set_item_metadata(index, vec![], vec![key(1, None), key(2, Some(1))])
+        .unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
+    assert_eq!(
+        recorded(state.snapshot().await.unwrap()),
+        (vec![column(1, "a")], vec![key(1, None), key(2, Some(1))])
+    );
+
+    // Dropping an item drops its rows, by either removal path.
+    let mut txn = state.transaction().await.unwrap();
+    txn.remove_item(index).unwrap();
+    txn.remove_items(&BTreeSet::from([table])).unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
+    assert_eq!(recorded(state.snapshot().await.unwrap()), (vec![], vec![]));
+
+    Box::new(state).expire().await;
 }

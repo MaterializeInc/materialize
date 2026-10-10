@@ -89,6 +89,8 @@ impl Debug for StableSnapshot<'_> {
             roles,
             role_auth,
             items,
+            item_columns,
+            index_columns,
             comments,
             clusters,
             network_policies,
@@ -120,6 +122,8 @@ impl Debug for StableSnapshot<'_> {
             .field("roles", roles)
             .field("role_auth", role_auth)
             .field("items", items)
+            .field("item_columns", item_columns)
+            .field("index_columns", index_columns)
             .field("comments", comments)
             .field("clusters", clusters)
             .field("network_policies", network_policies)
@@ -518,6 +522,8 @@ fn insert_view(
         vec![],
         BTreeMap::new(),
         ephemeral_owner_session,
+        Vec::new(),
+        Vec::new(),
     )
     .unwrap();
 }

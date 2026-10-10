@@ -1,0 +1,273 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_catalog.mz_index_columns. The relation is a
+# BuiltinMaterializedView over the keys each index's catalog record carries in
+# mz_internal.mz_catalog_raw (planner output recorded with the item, see
+# mz_catalog::durable::Item::index_keys) and the key expressions of its
+# create_sql, plus the keys of the builtin and introspection source indexes
+# inlined at build time: see make_mz_index_columns in
+# src/catalog/src/builtin/mz_catalog.rs.
+
+mode cockroach
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_table_add_column = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_index_options = true
+----
+COMPLETE 0
+
+# --- Schema -------------------------------------------------------------------
+
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_index_columns' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+index_id  text  false
+index_position  uint8  false
+on_position  uint8  true
+on_expression  text  true
+nullable  boolean  false
+
+# --- Every index has rows and every row has an index --------------------------
+
+query I
+SELECT count(*)
+FROM mz_catalog.mz_indexes i
+FULL OUTER JOIN (SELECT DISTINCT index_id FROM mz_catalog.mz_index_columns) c ON c.index_id = i.id
+WHERE i.id IS NULL OR c.index_id IS NULL
+----
+0
+
+# Positions are 1-based and contiguous, and a key is either a column or an
+# expression.
+query I
+SELECT count(*)
+FROM (
+    SELECT
+        index_id,
+        count(*) AS n,
+        min(index_position) AS lo,
+        max(index_position) AS hi,
+        count(*) FILTER (WHERE (on_position IS NULL) = (on_expression IS NULL)) AS malformed
+    FROM mz_catalog.mz_index_columns
+    GROUP BY index_id
+)
+WHERE lo <> 1 OR hi <> n OR malformed > 0
+----
+0
+
+# A column key is a column of the indexed relation and has its nullability.
+query I
+SELECT count(*)
+FROM mz_catalog.mz_index_columns ic
+JOIN mz_catalog.mz_indexes i ON i.id = ic.index_id
+LEFT JOIN mz_catalog.mz_columns c ON c.id = i.on_id AND c.position = ic.on_position
+WHERE ic.on_position IS NOT NULL AND (c.id IS NULL OR c.nullable <> ic.nullable)
+----
+0
+
+# --- Builtin indexes and introspection source indexes -------------------------
+
+query TIITT
+SELECT i.name, ic.index_position, ic.on_position, ic.on_expression, ic.nullable
+FROM mz_catalog.mz_index_columns ic
+JOIN mz_catalog.mz_indexes i ON i.id = ic.index_id
+WHERE
+    i.id LIKE 's%' AND
+    i.name IN (
+        'mz_tables_ind',
+        'mz_columns_ind',
+        'mz_cluster_replica_history_ind',
+        'mz_object_dependencies_ind',
+        'mz_source_statistics_with_history_ind'
+    )
+ORDER BY i.name, ic.index_position
+----
+mz_cluster_replica_history_ind  1  7  NULL  true
+mz_columns_ind  1  2  NULL  false
+mz_object_dependencies_ind  1  1  NULL  false
+mz_source_statistics_with_history_ind  1  1  NULL  false
+mz_source_statistics_with_history_ind  2  2  NULL  true
+mz_tables_ind  1  3  NULL  false
+
+query TIITT
+SELECT i.name, ic.index_position, ic.on_position, ic.on_expression, ic.nullable
+FROM mz_catalog.mz_index_columns ic
+JOIN mz_catalog.mz_indexes i ON i.id = ic.index_id
+WHERE
+    i.id LIKE 'si%' AND
+    i.cluster_id = (SELECT id FROM mz_catalog.mz_clusters WHERE name = 'quickstart') AND
+    i.name IN (
+        'mz_active_peeks_per_worker_u1_primary_idx',
+        'mz_arrangement_batches_raw_u1_primary_idx',
+        'mz_compute_error_counts_raw_u1_primary_idx'
+    )
+ORDER BY i.name, ic.index_position
+----
+mz_active_peeks_per_worker_u1_primary_idx  1  1  NULL  false
+mz_active_peeks_per_worker_u1_primary_idx  2  2  NULL  false
+mz_arrangement_batches_raw_u1_primary_idx  1  1  NULL  false
+mz_arrangement_batches_raw_u1_primary_idx  2  2  NULL  false
+mz_compute_error_counts_raw_u1_primary_idx  1  1  NULL  false
+mz_compute_error_counts_raw_u1_primary_idx  2  2  NULL  false
+
+# Every cluster gets the same introspection source index keys.
+query I
+SELECT count(DISTINCT keys)
+FROM (
+    SELECT
+        i.cluster_id,
+        string_agg(s.name || ':' || ic.index_position || ':' || ic.on_position || ':' || ic.nullable, ',' ORDER BY s.name, ic.index_position) AS keys
+    FROM mz_catalog.mz_index_columns ic
+    JOIN mz_catalog.mz_indexes i ON i.id = ic.index_id
+    JOIN mz_catalog.mz_sources s ON s.id = i.on_id
+    WHERE i.id LIKE 'si%'
+    GROUP BY i.cluster_id
+)
+----
+1
+
+# --- User indexes -------------------------------------------------------------
+
+statement ok
+CREATE TABLE t (a int, b text NOT NULL)
+
+statement ok
+CREATE INDEX t_idx ON t (a, b)
+
+# A key that plans to a bare column reference is reported as that column, so a
+# no-op cast, a parenthesized column and a positional reference are columns.
+# Every other key is reported as the expression written, with the nullability
+# planning derived for it.
+statement ok
+CREATE INDEX t_expr_idx ON t (
+    abs(a),
+    a + 1,
+    coalesce(a, 0),
+    a::int4,
+    a::text,
+    upper(b),
+    b || 'x',
+    -a,
+    a IS NULL,
+    CASE WHEN a > 0 THEN a END,
+    2,
+    (a),
+    'x'
+)
+
+statement ok
+CREATE DEFAULT INDEX ON t
+
+statement ok
+CREATE INDEX t_retain_idx ON t (b) WITH (RETAIN HISTORY FOR '1h')
+
+statement ok
+CREATE VIEW v AS SELECT a, b, a + 1 FROM t
+
+statement ok
+CREATE DEFAULT INDEX ON v
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t
+
+statement ok
+CREATE INDEX mv_idx ON mv (b)
+
+statement ok
+CREATE SOURCE lg IN CLUSTER quickstart FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+
+statement ok
+CREATE INDEX bids_idx ON bids (auction_id, amount)
+
+# An index on a builtin relation, which only the system user may create.
+simple conn=mz_system,user=mz_system
+CREATE INDEX mz_tables_name_idx IN CLUSTER quickstart ON mz_catalog.mz_tables (name)
+----
+COMPLETE 0
+
+# An index keeps referring to the version of its table it was created on.
+statement ok
+ALTER TABLE t ADD COLUMN c int
+
+statement ok
+CREATE INDEX t_c_idx ON t (c, a)
+
+query TIITT
+SELECT i.name, ic.index_position, ic.on_position, ic.on_expression, ic.nullable
+FROM mz_catalog.mz_index_columns ic
+JOIN mz_catalog.mz_indexes i ON i.id = ic.index_id
+WHERE i.id LIKE 'u%'
+ORDER BY i.name, ic.index_position
+----
+bids_idx  1  3  NULL  false
+bids_idx  2  4  NULL  false
+mv_idx  1  2  NULL  false
+mz_tables_name_idx  1  4  NULL  false
+t_c_idx  1  3  NULL  true
+t_c_idx  2  1  NULL  true
+t_expr_idx  1  NULL  pg_catalog.abs(a)  true
+t_expr_idx  2  NULL  a␠+␠1  true
+t_expr_idx  3  NULL  COALESCE(a,␠0)  false
+t_expr_idx  4  1  NULL  true
+t_expr_idx  5  NULL  a::[s46␠AS␠pg_catalog.text]  true
+t_expr_idx  6  NULL  pg_catalog.upper(b)  false
+t_expr_idx  7  NULL  b␠||␠'x'  false
+t_expr_idx  8  NULL  -␠a  true
+t_expr_idx  9  NULL  a␠IS␠NULL  false
+t_expr_idx  10  NULL  CASE␠WHEN␠a␠>␠0␠THEN␠a␠END  true
+t_expr_idx  11  2  NULL  false
+t_expr_idx  12  1  NULL  true
+t_expr_idx  13  NULL  'x'  false
+t_idx  1  1  NULL  true
+t_idx  2  2  NULL  false
+t_primary_idx  1  1  NULL  true
+t_primary_idx  2  2  NULL  false
+t_retain_idx  1  2  NULL  false
+v_primary_idx  1  1  NULL  true
+v_primary_idx  2  2  NULL  false
+v_primary_idx  3  3  NULL  true
+
+# The expressions are read back from the stored create_sql. Catalog ids are
+# not stable across builds, so they are masked.
+query T
+SELECT regexp_replace(create_sql, '\[[su][0-9]+', '[<id>', 'g')
+FROM mz_catalog.mz_indexes
+WHERE name = 't_expr_idx'
+----
+CREATE INDEX "t_expr_idx" IN CLUSTER [<id>] ON [<id> AS "materialize"."public"."t" VERSION 0] ("pg_catalog"."abs"("a"), "a" + 1, COALESCE("a", 0), "a"::[<id> AS "pg_catalog"."int4"], "a"::[<id> AS "pg_catalog"."text"], "pg_catalog"."upper"("b"), "b" || 'x', - "a", "a" IS NULL, CASE WHEN "a" > 0 THEN "a" END, 2, ("a"), 'x')
+
+# --- Retraction ---------------------------------------------------------------
+
+statement ok
+DROP INDEX t_expr_idx
+
+statement ok
+DROP TABLE t CASCADE
+
+query T
+SELECT DISTINCT i.name
+FROM mz_catalog.mz_index_columns ic
+JOIN mz_catalog.mz_indexes i ON i.id = ic.index_id
+WHERE i.id LIKE 'u%'
+ORDER BY i.name
+----
+bids_idx
+mz_tables_name_idx

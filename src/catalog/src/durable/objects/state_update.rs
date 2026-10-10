@@ -135,6 +135,8 @@ impl StateUpdate {
             databases,
             schemas,
             items,
+            item_columns,
+            index_columns,
             comments,
             roles,
             role_auth,
@@ -162,6 +164,8 @@ impl StateUpdate {
         let databases = from_batch(databases, StateUpdateKind::Database);
         let schemas = from_batch(schemas, StateUpdateKind::Schema);
         let items = from_batch(items, StateUpdateKind::Item);
+        let item_columns = from_batch(item_columns, StateUpdateKind::ItemColumn);
+        let index_columns = from_batch(index_columns, StateUpdateKind::IndexColumn);
         let comments = from_batch(comments, StateUpdateKind::Comment);
         let roles = from_batch(roles, StateUpdateKind::Role);
         let role_auth = from_batch(role_auth, StateUpdateKind::RoleAuth);
@@ -201,6 +205,8 @@ impl StateUpdate {
         databases
             .chain(schemas)
             .chain(items)
+            .chain(item_columns)
+            .chain(index_columns)
             .chain(comments)
             .chain(roles)
             .chain(role_auth)
@@ -241,11 +247,13 @@ pub enum StateUpdateKind {
     DefaultPrivilege(proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue),
     FenceToken(FenceToken),
     IdAllocator(proto::IdAllocKey, proto::IdAllocValue),
+    IndexColumn(proto::IndexColumnKey, proto::IndexColumnValue),
     IntrospectionSourceIndex(
         proto::ClusterIntrospectionSourceIndexKey,
         proto::ClusterIntrospectionSourceIndexValue,
     ),
     Item(proto::ItemKey, proto::ItemValue),
+    ItemColumn(proto::ItemColumnKey, proto::ItemColumnValue),
     NetworkPolicy(proto::NetworkPolicyKey, proto::NetworkPolicyValue),
     Role(proto::RoleKey, proto::RoleValue),
     RoleAuth(proto::RoleAuthKey, proto::RoleAuthValue),
@@ -286,10 +294,12 @@ impl StateUpdateKind {
             StateUpdateKind::DefaultPrivilege(_, _) => Some(CollectionType::DefaultPrivileges),
             StateUpdateKind::FenceToken(_) => None,
             StateUpdateKind::IdAllocator(_, _) => Some(CollectionType::IdAlloc),
+            StateUpdateKind::IndexColumn(_, _) => Some(CollectionType::IndexColumn),
             StateUpdateKind::IntrospectionSourceIndex(_, _) => {
                 Some(CollectionType::ComputeIntrospectionSourceIndex)
             }
             StateUpdateKind::Item(_, _) => Some(CollectionType::Item),
+            StateUpdateKind::ItemColumn(_, _) => Some(CollectionType::ItemColumn),
             StateUpdateKind::NetworkPolicy(_, _) => Some(CollectionType::NetworkPolicy),
             StateUpdateKind::Role(_, _) => Some(CollectionType::Role),
             StateUpdateKind::RoleAuth(_, _) => Some(CollectionType::RoleAuth),
@@ -559,10 +569,14 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     unfinalized_shard,
                 ))
             }
-            // Not exposed to higher layers.
+            // Not exposed to higher layers. The in-memory catalog plans every
+            // item's columns and index keys itself, so the recorded ones only
+            // serve `mz_catalog_raw`.
             StateUpdateKind::Config(_, _)
             | StateUpdateKind::FenceToken(_)
             | StateUpdateKind::IdAllocator(_, _)
+            | StateUpdateKind::IndexColumn(_, _)
+            | StateUpdateKind::ItemColumn(_, _)
             | StateUpdateKind::Setting(_, _)
             | StateUpdateKind::TxnWalShard(_, _) => None,
         })
@@ -628,6 +642,12 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             }
             StateUpdateKind::Comment(key, value) => {
                 proto::StateUpdateKind::Comment(proto::Comment { key, value })
+            }
+            StateUpdateKind::IndexColumn(key, value) => {
+                proto::StateUpdateKind::IndexColumn(proto::IndexColumn { key, value })
+            }
+            StateUpdateKind::ItemColumn(key, value) => {
+                proto::StateUpdateKind::ItemColumn(proto::ItemColumn { key, value })
             }
             StateUpdateKind::Config(key, value) => {
                 proto::StateUpdateKind::Config(proto::Config { key, value })
@@ -722,6 +742,12 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             }
             proto::StateUpdateKind::Comment(proto::Comment { key, value }) => {
                 StateUpdateKind::Comment(key, value)
+            }
+            proto::StateUpdateKind::IndexColumn(proto::IndexColumn { key, value }) => {
+                StateUpdateKind::IndexColumn(key, value)
+            }
+            proto::StateUpdateKind::ItemColumn(proto::ItemColumn { key, value }) => {
+                StateUpdateKind::ItemColumn(key, value)
             }
             proto::StateUpdateKind::Config(proto::Config { key, value }) => {
                 StateUpdateKind::Config(key, value)
