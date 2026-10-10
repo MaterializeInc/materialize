@@ -102,7 +102,6 @@ impl Coordinator {
                     .boxed_local()
                     .await
             }
-            Message::DeferredPlanReady { conn_id } => self.sequence_deferred_plan(conn_id).await,
             Message::GroupCommitInitiate(span, permit) => {
                 // Add an OpenTelemetry link to our current span.
                 tracing::Span::current().add_link(span.context().span().span_context().clone());
@@ -225,9 +224,6 @@ impl Coordinator {
             }
             Message::MetricSinkStageReady { span, stage } => {
                 self.sequence_staged((), span, stage).boxed_local().await;
-            }
-            Message::ExplainTimestampStageReady { ctx, span, stage } => {
-                self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
             Message::SecretStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;

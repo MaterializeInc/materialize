@@ -23,6 +23,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::task::JoinHandle;
 use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
+use mz_repr::explain::ExplainFormat;
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::{Datum, GlobalId, IntoRowIterator, Row, RowIterator, Timestamp};
 use mz_sql::ast::Raw;
@@ -59,7 +60,7 @@ use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::Optimize;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
 use crate::peek_client::{ExecutionLogging, TakeOver};
-use crate::session::{Session, TransactionOps, TransactionStatus};
+use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
 use crate::statement_logging::WatchSetCreation;
 use crate::{
@@ -173,7 +174,7 @@ impl PeekClient {
                     }
                 }
 
-                Statement::Subscribe(_) => {}
+                Statement::Subscribe(_) | Statement::ExplainTimestamp(_) => {}
                 _ => {
                     debug!(
                         "Bailing out from try_frontend_peek, because statement type is not supported"
@@ -337,6 +338,7 @@ impl PeekClient {
             Select(&'a SelectPlan),
             CopyTo(&'a SelectPlan, CopyToContext),
             Subscribe(&'a SubscribePlan),
+            ExplainTimestamp(&'a plan::ExplainTimestampPlan),
         }
 
         let (query_plan, explain_ctx) = match &plan {
@@ -484,6 +486,15 @@ impl PeekClient {
                 return Ok(Some(response));
             }
             Plan::Subscribe(subscribe) => (QueryPlan::Subscribe(subscribe), ExplainContext::None),
+            Plan::ExplainTimestamp(explain_timestamp_plan) => {
+                if explain_timestamp_plan.format == ExplainFormat::Dot {
+                    return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
+                }
+                (
+                    QueryPlan::ExplainTimestamp(explain_timestamp_plan),
+                    ExplainContext::None,
+                )
+            }
             Plan::ExplainPlan(plan::ExplainPlanPlan {
                 stage,
                 format,
@@ -520,23 +531,16 @@ impl PeekClient {
             }
         };
 
-        let when = match query_plan {
+        let when = match &query_plan {
             QueryPlan::Select(s) => &s.when,
             QueryPlan::CopyTo(s, _) => &s.when,
             QueryPlan::Subscribe(s) => &s.when,
+            QueryPlan::ExplainTimestamp(p) => &p.when,
         };
 
-        let depends_on = match query_plan {
-            QueryPlan::Select(s) => s.source.depends_on(),
-            QueryPlan::CopyTo(s, _) => s.source.depends_on(),
-            QueryPlan::Subscribe(s) => s.from.depends_on(),
-        };
-
-        let contains_temporal = match query_plan {
-            QueryPlan::Select(s) => s.source.contains_temporal(),
-            QueryPlan::CopyTo(s, _) => s.source.contains_temporal(),
-            QueryPlan::Subscribe(s) => s.from.contains_temporal(),
-        };
+        // `EXPLAIN TIMESTAMP` only determines a timestamp, so it neither needs a replica nor
+        // checks introspection reads.
+        let is_explain_timestamp = matches!(query_plan, QueryPlan::ExplainTimestamp(..));
 
         // # From sequence_plan
 
@@ -581,11 +585,34 @@ impl PeekClient {
             &sql_impl_ids,
         )?;
 
-        if let Some((_, wait_future)) =
+        if let Some(wait_future) =
             coord::appends::waiting_on_startup_appends(&*catalog, session, &plan)
         {
             wait_future.await;
         }
+
+        let (depends_on, contains_temporal) = match &query_plan {
+            QueryPlan::Select(s) | QueryPlan::CopyTo(s, _) => {
+                (s.source.depends_on(), s.source.contains_temporal())
+            }
+            QueryPlan::Subscribe(s) => (s.from.depends_on(), s.from.contains_temporal()),
+            QueryPlan::ExplainTimestamp(p) => {
+                // The timestamp depends on what the locally optimized query reads: folding can
+                // remove dependencies that the unoptimized query has.
+                let mut optimizer = optimize::view::Optimizer::new(
+                    optimize::OptimizerConfig::from(catalog.system_config()),
+                    None,
+                );
+                let raw_plan = p.raw_plan.clone();
+                // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local)
+                let optimized = mz_ore::task::spawn_blocking(
+                    || "optimize explain timestamp",
+                    move || optimizer.catch_unwind_optimize(raw_plan),
+                )
+                .await?;
+                (optimized.depends_on(), optimized.contains_temporal())
+            }
+        };
 
         let max_query_result_size = Some(session.vars().max_query_result_size());
 
@@ -602,7 +629,10 @@ impl PeekClient {
             )
             .override_from(&explain_ctx);
 
-        if cluster.replicas().next().is_none() && explain_ctx.needs_cluster() {
+        if cluster.replicas().next().is_none()
+            && explain_ctx.needs_cluster()
+            && !is_explain_timestamp
+        {
             return Err(AdapterError::NoClusterReplicasAvailable {
                 name: cluster.name.clone(),
                 is_managed: cluster.is_managed(),
@@ -636,14 +666,16 @@ impl PeekClient {
             timeline_context = TimelineContext::TimestampDependent;
         }
 
-        let notices = coord::sequencer::check_log_reads(
-            &catalog,
-            cluster,
-            &source_ids,
-            &mut target_replica,
-            session.vars(),
-        )?;
-        session.add_notices(notices);
+        if !is_explain_timestamp {
+            let notices = coord::sequencer::check_log_reads(
+                &catalog,
+                cluster,
+                &source_ids,
+                &mut target_replica,
+                session.vars(),
+            )?;
+            session.add_notices(notices);
+        }
 
         let isolation_level = session.vars().transaction_isolation().clone();
         let timeline = Coordinator::get_timeline(&timeline_context);
@@ -678,8 +710,6 @@ impl PeekClient {
         let dataflow_builder =
             DataflowBuilder::new(catalog.state(), compute_instance_snapshot.clone());
         let input_id_bundle = dataflow_builder.sufficient_collections(source_ids.clone());
-
-        // ## From sequence_peek_timestamp
 
         // Warning: This will be false for AS OF queries, even if we are otherwise inside a
         // multi-statement transaction. (It's also false for FreshestTableWrite, which is currently
@@ -861,15 +891,19 @@ impl PeekClient {
         // OF or we're inside an explicit transaction. The latter case is
         // necessary to support PG's `BEGIN` semantics, whose behavior can
         // depend on whether or not reads have occurred in the txn.
-        let requires_linearization = (&explain_ctx).into();
+        let requires_linearization = if is_explain_timestamp {
+            RequireLinearization::NotRequired
+        } else {
+            (&explain_ctx).into()
+        };
         let mut transaction_determination = determination.clone();
-        match query_plan {
+        match &query_plan {
             QueryPlan::Subscribe { .. } => {
                 if when.is_transactional() && explain_ctx.needs_cluster() {
                     session.add_transaction_ops(TransactionOps::Subscribe)?;
                 }
             }
-            QueryPlan::Select(..) | QueryPlan::CopyTo(..) => {
+            QueryPlan::Select(..) | QueryPlan::CopyTo(..) | QueryPlan::ExplainTimestamp(..) => {
                 if when.is_transactional() {
                     session.add_transaction_ops(TransactionOps::Peeks {
                         determination: transaction_determination,
@@ -886,6 +920,26 @@ impl PeekClient {
                     })?;
                 }
             }
+        }
+
+        if let QueryPlan::ExplainTimestamp(explain_timestamp_plan) = &query_plan {
+            let explanation = self
+                .call_coordinator(|tx| Command::ExplainTimestamp {
+                    conn_id: session.conn_id().clone(),
+                    session_wall_time: session.pcx().wall_time,
+                    cluster_id: target_cluster_id,
+                    id_bundle: input_id_bundle.clone(),
+                    determination,
+                    tx,
+                })
+                .await?;
+            let s = match explain_timestamp_plan.format {
+                ExplainFormat::Json => serde_json::to_string_pretty(&explanation)
+                    .expect("failed to serialize explanation"),
+                _ => explanation.to_string(),
+            };
+            let rows = vec![Row::pack_slice(&[Datum::from(s.as_str())])];
+            return Ok(Some(Coordinator::send_immediate_rows(rows)));
         }
 
         let stats = statistics_oracle(
@@ -933,6 +987,7 @@ impl PeekClient {
         let source_ids_for_closure = source_ids.clone();
 
         let optimization_future: JoinHandle<Result<_, AdapterError>> = match query_plan {
+            QueryPlan::ExplainTimestamp(..) => unreachable!("returned above"),
             QueryPlan::CopyTo(select_plan, mut copy_to_ctx) => {
                 let raw_expr = select_plan.source.clone();
 
@@ -1635,7 +1690,6 @@ impl PeekClient {
         }
     }
 
-    /// (Similar to Coordinator::determine_timestamp)
     /// Determines the timestamp for a query, acquires read holds that ensure the
     /// query remains executable at that time, and returns those.
     /// The caller is responsible for eventually dropping those read holds.
@@ -1651,8 +1705,6 @@ impl PeekClient {
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<Timestamp>,
     ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
-        // this is copy-pasted from Coordinator
-
         let isolation_level = session.vars().transaction_isolation();
 
         let (read_holds, upper) = self
