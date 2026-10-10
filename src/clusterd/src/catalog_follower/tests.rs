@@ -168,7 +168,7 @@ pub(super) fn name(catalog: &Catalog, item: &str) -> QualifiedItemName {
 pub(super) async fn transact(catalog: &mut Catalog, ops: Vec<Op>) -> Vec<ParsedStateUpdate> {
     let ts = catalog.current_upper().await;
     catalog
-        .transact(None, ts, None, ops)
+        .transact(None, None, ts, None, ops)
         .await
         .expect("native catalog transaction")
         .catalog_updates

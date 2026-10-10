@@ -75,7 +75,7 @@ async fn prepare(
 async fn commit(catalog: &mut Catalog, ops: Vec<Op>) {
     let ts = catalog.current_upper().await;
     catalog
-        .transact(None, ts, None, ops)
+        .transact(None, None, ts, None, ops)
         .await
         .expect("commit catalog operations");
 }

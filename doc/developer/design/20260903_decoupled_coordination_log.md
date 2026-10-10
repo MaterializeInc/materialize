@@ -65,22 +65,33 @@ shared storage mutex between definitive conflicts in its off-coordinator caller.
 It retains the target and pending projection updates. CI138564 passes its boundary
 regression and all 4,282 Cargo tests. CI138548's passing parallel workload captures
 a refresh between attempts, but CI138564 still fails both parallel workloads.
-Its longest measured MV holder spends 105.042s across 205 attempts, with only
-1.712s of candidate work. Aggregate publishers invalidate its prefix during
-catch-up. Keep the 1s publication default. Ordinary prepared DDL must release
-admission during definitive retry suspension, retaining its operations, selected
+CI138634 identifies `owner_mv3` holding admission for 379.988s across 1,140
+attempts, including 1,016 transaction-open rejections. Candidate work totals only
+6.116s. `privilege_mv2` waits 394.040s in the queue. Keep the 1s publication
+default. Ordinary prepared DDL must release admission during definitive retry
+suspension, retaining its operations, selected
 plans and necessary input holds. Reacquire admission and revalidate before reuse.
 Legacy serialization is not globally removed. This addresses queue amplification,
 not the transaction-open conflict window. Improve that existing attempt boundary
 without blind diff replay or another retry framework. Commit timestamp and MV
 birth are distinct, and fixed REFRESH timestamps cannot slide. Per-object
 compaction-bound advancement remains unproven.
-The four staged commit paths now use that admission boundary, with independent
-static review complete and CI verification pending. Fixed-birth grant acquisition
-and legacy inline retries are unchanged. Structural DDL can invalidate retained
+The four staged commit paths now use that admission boundary. CI138638 passes
+the prepared-rewrite regression requiring unrelated DDL progress and cancellation
+under continuing metadata conflicts. Parallel 1 still times out on multiple
+CREATE MV statements. Attribute their remaining waits and replanning before
+claiming end-to-end progress.
+Fixed-birth grant acquisition and legacy inline retries are unchanged.
+Structural DDL can invalidate retained
 preparation and cause additional replanning, so verify whole-statement progress.
 CI138634, before this admission repair, passes parallel 2 but parallel 1 times out
 on CREATE VIEW and ALTER CLUSTER RENAME. Do not conflate that with advancement.
+The common transaction-open repair has completed independent static review:
+consume complete peer-grant-only prefixes before constructing the candidate,
+preserving committed bookkeeping on every outcome. Own-map changes, sampled
+bounds and mixed prefixes still return intact to the existing refresh owner.
+The same rule covers ordinary client-grant publication, not sampled compaction
+bounds. Its boundary coverage awaits CI.
 Kafka RTR's intermittent explicit CREATE SOURCE planning-revision loss is unresolved.
 Protection publication overlaps purification but is not a proven invalidator.
 Temporary, fixture-enabled kind/count and revision diagnostics must correlate the

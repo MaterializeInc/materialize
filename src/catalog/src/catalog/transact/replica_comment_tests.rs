@@ -21,7 +21,7 @@ use crate::memory::objects::{ClusterConfig, ClusterVariant};
 
 async fn commit(catalog: &mut Catalog, ops: Vec<Op>) {
     catalog
-        .transact(None, catalog.current_upper().await, None, ops)
+        .transact(None, None, catalog.current_upper().await, None, ops)
         .await
         .expect("commit replica comment operation");
     catalog

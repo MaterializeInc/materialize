@@ -1378,6 +1378,7 @@ mod tests {
         catalog
             .transact(
                 None,
+                None,
                 ts,
                 None,
                 vec![Op::PublishClientReadRequirements {
@@ -1594,6 +1595,7 @@ mod tests {
             catalog
                 .transact(
                     None,
+                    None,
                     ts,
                     None,
                     vec![Op::CreateClientIncarnation {
@@ -1712,7 +1714,7 @@ mod tests {
             };
             let ts = catalog.current_upper().await;
             let conflict = catalog
-                .transact(None, ts, None, vec![op.clone()])
+                .transact(None, None, ts, None, vec![op.clone()])
                 .await
                 .err()
                 .expect("peer publication invalidates the catalog snapshot");
@@ -1730,7 +1732,7 @@ mod tests {
             // original operation. Acquisition must rebuild after its rejection.
             let ts = catalog.current_upper().await;
             let error = catalog
-                .transact(None, ts, None, vec![op])
+                .transact(None, None, ts, None, vec![op])
                 .await
                 .err()
                 .expect("stale acquisition must not grant compactable history");
@@ -1767,6 +1769,7 @@ mod tests {
             catalog
                 .transact(
                     None,
+                    None,
                     ts,
                     None,
                     vec![Op::PublishClientReadRequirements {
@@ -1793,6 +1796,7 @@ mod tests {
             let ts = catalog.current_upper().await;
             catalog
                 .transact(
+                    None,
                     None,
                     ts,
                     None,
@@ -1838,6 +1842,7 @@ mod tests {
         let ts = catalog.current_upper().await;
         catalog
             .transact(
+                None,
                 None,
                 ts,
                 None,
@@ -1975,6 +1980,7 @@ mod tests {
         catalog
             .transact(
                 None,
+                None,
                 ts,
                 None,
                 vec![Op::PublishClientReadRequirements {
@@ -2065,6 +2071,7 @@ mod tests {
         let ts = catalog.current_upper().await;
         catalog
             .transact(
+                None,
                 None,
                 ts,
                 None,

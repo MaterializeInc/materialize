@@ -1671,6 +1671,10 @@ impl Coordinator {
                         .unwrap_or_default(),
                 });
             }
+            let writer_incarnation = self
+                .query_client
+                .as_ref()
+                .map(|client| client.protection.incarnation());
             let result = {
                 let Coordinator {
                     catalog,
@@ -1685,6 +1689,7 @@ impl Coordinator {
                     "catalog_transact",
                     Arc::make_mut(catalog)
                         .transact(
+                            writer_incarnation,
                             Some(&mut controller.storage_collections),
                             oracle_write_ts,
                             conn,

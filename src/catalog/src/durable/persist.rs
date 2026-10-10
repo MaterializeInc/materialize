@@ -2680,7 +2680,21 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
     async fn sync_to_current_updates(
         &mut self,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
+        self.sync_to_current_updates_if(&|_| true).await
+    }
+
+    async fn sync_to_current_updates_if(
+        &mut self,
+        accept: &(dyn Fn(&memory::objects::StateUpdate) -> bool + Send + Sync),
+    ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
         self.sync_to_current_upper().await?;
+        if !self.update_applier.updates.iter().all(accept) {
+            return Err(DurableCatalogError::CatalogOutOfSync {
+                update_count: self.update_applier.updates.len(),
+                upper: self.upper,
+            }
+            .into());
+        }
         // Listen can overshoot its target. Drain the whole synchronized prefix
         // so callers can pair these updates with `synced_upper`.
         Ok(self.update_applier.updates.drain(..).collect())
@@ -2832,6 +2846,12 @@ impl DurableCatalogState for PersistCatalogState {
         self.metrics.transactions_started.inc();
         self.sync_to_current_upper().await?;
         // Reject a stale projection before opening a transaction from the shared snapshot.
+        self.ensure_not_out_of_sync(self.upper).await?;
+        self.transaction_from_synced_snapshot()
+    }
+
+    async fn transaction_at_synced_upper(&mut self) -> Result<Transaction, CatalogError> {
+        self.metrics.transactions_started.inc();
         self.ensure_not_out_of_sync(self.upper).await?;
         self.transaction_from_synced_snapshot()
     }

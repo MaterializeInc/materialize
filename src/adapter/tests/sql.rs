@@ -79,6 +79,7 @@ async fn datadriven() {
                             catalog
                                 .transact(
                                     None,
+                                    None,
                                     commit_ts,
                                     None,
                                     vec![Op::CreateItem {

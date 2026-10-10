@@ -155,6 +155,7 @@ impl Catalog {
     }
     pub async fn transact(
         &mut self,
+        writer_incarnation: Option<u64>,
         storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
         oracle_write_ts: Timestamp,
         session: Option<&ConnMeta>,
@@ -163,7 +164,13 @@ impl Catalog {
         let session = session.map(transaction_context);
         Ok(self
             .0
-            .transact(storage_collections, oracle_write_ts, session.as_ref(), ops)
+            .transact(
+                writer_incarnation,
+                storage_collections,
+                oracle_write_ts,
+                session.as_ref(),
+                ops,
+            )
             .await?)
     }
     pub async fn transact_incremental_dry_run(

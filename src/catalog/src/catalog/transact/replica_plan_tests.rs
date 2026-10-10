@@ -270,6 +270,7 @@ async fn catalog_positions_use_actual_commit_upper() {
     let result = catalog
         .transact(
             None,
+            None,
             candidate,
             None,
             vec![Op::UpdateSystemConfiguration {
@@ -323,6 +324,7 @@ async fn catalog_positions_use_actual_commit_upper() {
         let ts = catalog.current_upper().await;
         catalog
             .transact(
+                None,
                 None,
                 ts,
                 None,
@@ -662,6 +664,7 @@ async fn savepoint_catalog_has_no_position_certificate() {
     savepoint
         .transact(
             None,
+            None,
             ts,
             None,
             vec![Op::UpdateSystemConfiguration {
@@ -976,6 +979,7 @@ async fn exercise_dry_run_contention() {
     let revision = catalog.transient_revision();
     peer.transact(
         None,
+        None,
         peer.current_upper().await,
         None,
         vec![Op::CreateClientIncarnation {
@@ -1071,6 +1075,7 @@ async fn staged_materialized_view_rejects_renamed_replica_binding() {
     catalog
         .transact(
             None,
+            None,
             catalog.current_upper().await,
             None,
             vec![Op::CreateCluster {
@@ -1100,6 +1105,7 @@ async fn staged_materialized_view_rejects_renamed_replica_binding() {
     };
     catalog
         .transact(
+            None,
             None,
             catalog.current_upper().await,
             None,
@@ -1160,12 +1166,19 @@ async fn staged_materialized_view_rejects_renamed_replica_binding() {
         .expect("existing MV identity");
     let existing = plan_mv(&catalog, existing_id, existing_gid, "existing_pin", "r1");
     catalog
-        .transact(None, catalog.current_upper().await, None, vec![existing])
+        .transact(
+            None,
+            None,
+            catalog.current_upper().await,
+            None,
+            vec![existing],
+        )
         .await
         .expect("commit existing pinned MV");
     let existing_shard = catalog.state().storage_metadata().collection_metadata[&existing_gid];
     catalog
         .transact(
+            None,
             None,
             catalog.current_upper().await,
             None,
@@ -1191,6 +1204,7 @@ async fn staged_materialized_view_rejects_renamed_replica_binding() {
     );
     catalog
         .transact(
+            None,
             None,
             catalog.current_upper().await,
             None,
@@ -1221,6 +1235,7 @@ async fn staged_materialized_view_rejects_renamed_replica_binding() {
     catalog
         .transact(
             None,
+            None,
             catalog.current_upper().await,
             None,
             vec![Op::RenameClusterReplica {
@@ -1241,6 +1256,7 @@ async fn staged_materialized_view_rejects_renamed_replica_binding() {
             catalog
                 .transact(
                     None,
+                    None,
                     catalog.current_upper().await,
                     None,
                     vec![create_replica(replica_ids[1])],
@@ -1256,6 +1272,7 @@ async fn staged_materialized_view_rejects_renamed_replica_binding() {
         }
         let result = catalog
             .transact(
+                None,
                 None,
                 catalog.current_upper().await,
                 None,
@@ -1283,7 +1300,7 @@ async fn staged_materialized_view_rejects_renamed_replica_binding() {
         .expect("fresh MV identity");
     let fresh = plan_mv(&catalog, fresh_id, fresh_gid, "fresh_pin", "r2");
     catalog
-        .transact(None, catalog.current_upper().await, None, vec![fresh])
+        .transact(None, None, catalog.current_upper().await, None, vec![fresh])
         .await
         .expect("fresh plan uses renamed declaration");
     let bootstrap = crate::catalog::test_bootstrap_args();
@@ -1377,6 +1394,7 @@ async fn replica_plan_scope_survives_reopen_and_drop_is_build_local() {
         catalog
             .transact(
                 None,
+                None,
                 ts,
                 None,
                 vec![
@@ -1441,7 +1459,7 @@ async fn replica_plan_scope_survives_reopen_and_drop_is_build_local() {
         }
         let ts = catalog.current_upper().await;
         catalog
-            .transact(None, ts, None, vec![Op::DropObjects(objects)])
+            .transact(None, None, ts, None, vec![Op::DropObjects(objects)])
             .await
             .expect("drop observer owner");
         let follower = Catalog::open_debug_read_only_catalog(persist, organization, &bootstrap)

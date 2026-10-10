@@ -356,6 +356,7 @@ async fn create_reader(catalog: &mut Catalog) -> u64 {
             match catalog
                 .transact(
                     None,
+                    None,
                     ts,
                     None,
                     vec![Op::CreateClientIncarnation {

@@ -2104,6 +2104,19 @@ impl Catalog {
                 mz_ore::halt!("cannot decode committed catalog changes, restart required: {cause}")
             }
         };
+        Ok(self.apply_committed_updates(updates, upper).await)
+    }
+
+    /// Applies a drained durable prefix independently of any candidate transaction.
+    /// Its protection bookkeeping must survive candidate rejection or CAS loss.
+    async fn apply_committed_updates(
+        &mut self,
+        updates: Vec<crate::memory::objects::StateUpdate>,
+        upper: mz_repr::Timestamp,
+    ) -> (
+        Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+        Vec<ParsedStateUpdate>,
+    ) {
         let (builtin_table_updates, catalog_updates, planning_upper) =
             mz_ore::future::OreFutureExt::ore_catch_unwind(std::panic::AssertUnwindSafe(async {
                 let mut builtin_table_updates = Vec::with_capacity(updates.len());
@@ -2163,7 +2176,7 @@ impl Catalog {
             self.shared_transient_revision
                 .store(self.transient_revision, std::sync::atomic::Ordering::SeqCst);
         }
-        Ok((builtin_table_updates, catalog_updates))
+        (builtin_table_updates, catalog_updates)
     }
 }
 

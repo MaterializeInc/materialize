@@ -34,6 +34,189 @@ use crate::catalog::{Catalog, Op, test_support};
 use crate::durable::objects::CollectionCompactionBound;
 use crate::memory::objects::CatalogItem;
 
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn transaction_open_applies_only_compatible_peer_grants() {
+    let mut f = Fixture::new().await;
+    let id = f.source("peer_grant_input").await;
+    let frontier = *f.catalog.state().collection_compaction_bounds()[&id]
+        .as_option()
+        .expect("readable source");
+    let replica_id = f
+        .catalog
+        .clusters()
+        .flat_map(|cluster| cluster.replicas())
+        .next()
+        .expect("builtin replica")
+        .replica_id;
+    let ts = f.catalog.current_upper().await;
+    let incarnations = f
+        .catalog
+        .transact(
+            None,
+            None,
+            ts,
+            None,
+            vec![
+                Op::CreateClientIncarnation {
+                    replica_id: None,
+                    expected: None,
+                },
+                Op::CreateClientIncarnation {
+                    replica_id: Some(replica_id),
+                    expected: None,
+                },
+            ],
+        )
+        .await
+        .expect("register independent executions")
+        .created_client_incarnations;
+    let [writer, peer_incarnation]: [u64; 2] = incarnations.try_into().expect("two executions");
+    let mut peer = crate::durable::TestCatalogStateBuilder::new(f.persist.clone())
+        .with_organization_id(f.catalog.config().environment_id.organization_id())
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .join()
+        .await
+        .expect("join publication writer");
+    let revision = f.catalog.transient_revision();
+    let _ = f.catalog.take_read_protection_changes();
+
+    for reject_candidate in [true, false] {
+        peer.sync_to_current_updates().await.expect("refresh peer");
+        let mut tx = peer.transaction().await.expect("open peer publication");
+        let requirements = if reject_candidate {
+            BTreeMap::from([(id, frontier)])
+        } else {
+            BTreeMap::new()
+        };
+        tx.publish_client_read_requirements(peer_incarnation, requirements)
+            .expect("publish peer grants");
+        let _ = tx.get_and_commit_op_updates();
+        let ts = tx.upper();
+        tx.commit(ts).await.expect("commit peer publication");
+
+        if reject_candidate {
+            // Another handle user can synchronize without draining the prefix.
+            // Transaction open must include these already-buffered rows too.
+            let mut storage = f.catalog.storage().await;
+            assert!(matches!(
+                storage.ensure_not_out_of_sync(peer.synced_upper()).await,
+                Err(crate::durable::CatalogError::Durable(
+                    crate::durable::DurableCatalogError::CatalogOutOfSync { .. }
+                ))
+            ));
+        }
+
+        let op = if reject_candidate {
+            // The adapter execution already exists. Failure must not undo the
+            // committed peer prefix or its incremental compaction bookkeeping.
+            Op::CreateClientIncarnation {
+                replica_id: None,
+                expected: None,
+            }
+        } else {
+            Op::PublishClientReadRequirements {
+                incarnation: writer,
+                requirements: BTreeMap::from([(id, frontier)]),
+            }
+        };
+        let ts = f.catalog.current_upper().await;
+        let result = f
+            .catalog
+            .transact(Some(writer), None, ts, None, vec![op])
+            .await;
+        assert_eq!(
+            result.is_err(),
+            reject_candidate,
+            "{:?}",
+            result.as_ref().err()
+        );
+        assert_eq!(
+            f.catalog
+                .state()
+                .client_read_requirements()
+                .get(&(peer_incarnation, id)),
+            reject_candidate.then_some(&frontier),
+        );
+        assert!(f.catalog.take_read_protection_changes().contains(&id));
+        assert_eq!(f.catalog.transient_revision(), revision);
+    }
+    assert_eq!(
+        f.catalog.state().client_read_requirements()[&(writer, id)],
+        frontier
+    );
+
+    // Own-map changes, sampled proposals and mixed prefixes must return intact
+    // to the existing refresh owner instead of being absorbed into this attempt.
+    for (publisher, sampled_bounds, structural) in [
+        (writer, false, false),
+        (peer_incarnation, true, false),
+        (peer_incarnation, false, true),
+    ] {
+        peer.sync_to_current_updates().await.expect("refresh peer");
+        let mut tx = peer
+            .transaction()
+            .await
+            .expect("open conflicting publication");
+        let grant = frontier.step_forward().step_forward();
+        let requirements = if structural {
+            BTreeMap::new()
+        } else {
+            BTreeMap::from([(id, grant)])
+        };
+        tx.publish_client_read_requirements(publisher, requirements)
+            .expect("stage conflicting grant");
+        if structural {
+            tx.upsert_system_config("max_tables", "777".into())
+                .expect("stage structural change");
+        }
+        let _ = tx.get_and_commit_op_updates();
+        let ts = tx.upper();
+        tx.commit(ts).await.expect("commit conflicting prefix");
+
+        let before = f.catalog.state().client_read_requirements().clone();
+        let ops = if sampled_bounds {
+            vec![Op::SetReadProtection {
+                requirements: vec![],
+                bounds: vec![CollectionCompactionBound {
+                    id,
+                    frontier: Some(frontier),
+                }],
+            }]
+        } else {
+            vec![]
+        };
+        let ts = f.catalog.current_upper().await;
+        let error = match f.catalog.transact(Some(writer), None, ts, None, ops).await {
+            Ok(_) => panic!("ineligible catch-up must reject the attempt"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            crate::catalog::CatalogError::Catalog(error) if matches!(
+                error.kind,
+                crate::memory::error::ErrorKind::Durable(
+                    crate::durable::DurableCatalogError::CatalogOutOfSync { .. }
+                )
+            )
+        ));
+        assert_eq!(f.catalog.state().client_read_requirements(), &before);
+        f.catalog
+            .sync_to_current_updates()
+            .await
+            .expect("refresh rejected prefix");
+        assert_eq!(
+            f.catalog
+                .state()
+                .client_read_requirements()
+                .get(&(publisher, id)),
+            (!structural).then_some(&grant),
+        );
+    }
+}
+
 /// A native durable catalog, with no controller or query client. Source data
 /// advances only through explicit Persist writes, never a running generator.
 struct Fixture {
@@ -109,7 +292,7 @@ impl Fixture {
     async fn transact(&mut self, ops: Vec<Op>) {
         let ts = self.catalog.current_upper().await;
         self.catalog
-            .transact(None, ts, None, ops)
+            .transact(None, None, ts, None, ops)
             .await
             .expect("catalog transaction");
     }
@@ -408,7 +591,7 @@ async fn index_plan_selection_atomically_protects_actual_imports() {
     let ts = f.catalog.current_upper().await;
     assert!(
         f.catalog
-            .transact(None, ts, None, vec![invalid])
+            .transact(None, None, ts, None, vec![invalid])
             .await
             .is_err(),
         "a selected import must still be readable at the owner's bound",
@@ -471,6 +654,7 @@ async fn replacing_client_preserves_index_object_retention() {
         .catalog
         .transact(
             None,
+            None,
             ts,
             None,
             vec![Op::CreateClientIncarnation {
@@ -492,6 +676,7 @@ async fn replacing_client_preserves_index_object_retention() {
     let successor = f
         .catalog
         .transact(
+            None,
             None,
             ts,
             None,
