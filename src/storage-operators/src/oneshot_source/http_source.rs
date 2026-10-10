@@ -200,6 +200,70 @@ mod tests {
             }
         }
     }
+
+    /// DNS rebinding: `01010101.a9fea9fe.rbndr.us` answers each query with
+    /// either 1.1.1.1 or 169.254.169.254 at random. The resolver both checks
+    /// and supplies the dialed addresses, so every request must either be
+    /// rejected as private or land on 1.1.1.1. A dial that re-resolved would
+    /// eventually hit 169.254.169.254 and time out (or reach IMDS on EC2).
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    #[ignore = "requires public DNS and internet access, runs in nightly"]
+    async fn build_http_client_pins_checked_address_under_dns_rebinding() {
+        const HOST: &str = "01010101.a9fea9fe.rbndr.us";
+        let public: std::net::IpAddr = "1.1.1.1".parse().unwrap();
+        // NOTE: Resolvers with rebinding protection (some home routers, some
+        // VPN DNS) drop these answers. Fail on that here so a DNS stall isn't
+        // misread below as a dial to an unchecked address.
+        let preflight = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            mz_ore::netio::resolve_address(HOST, false),
+        )
+        .await;
+        assert!(
+            matches!(preflight, Ok(Ok(_))),
+            "this environment's resolver can't resolve {HOST}: {preflight:?}"
+        );
+        // NOTE: The OS resolver may cache the 1s-TTL answer for several
+        // seconds, so attempts are spaced out until both answers were seen.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        let (mut rejected, mut allowed) = (0, 0);
+        while (rejected < 3 || allowed < 3) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            // A fresh client per attempt so a pooled connection can't skip DNS.
+            let client = build_http_client(true).expect("build client");
+            let result = client
+                .get(format!("http://{HOST}/"))
+                .timeout(std::time::Duration::from_secs(5))
+                .send()
+                .await;
+            match result {
+                Ok(response) => {
+                    let remote = response.remote_addr().map(|a| a.ip());
+                    assert_eq!(remote, Some(public), "dialed an unchecked address");
+                    allowed += 1;
+                }
+                Err(err) => {
+                    let mut current: &dyn std::error::Error = &err;
+                    loop {
+                        if current.to_string().to_lowercase().contains("private") {
+                            break;
+                        }
+                        match current.source() {
+                            Some(src) => current = src,
+                            None => panic!("expected private-address rejection, got: {err:?}"),
+                        }
+                    }
+                    rejected += 1;
+                }
+            }
+        }
+        println!("rebinding attempts: {allowed} allowed to {public}, {rejected} rejected");
+        assert!(
+            rejected > 0 && allowed > 0,
+            "DNS never flipped between answers, so rebinding was not exercised"
+        );
+    }
 }
 
 impl OneshotSource for HttpOneshotSource {
