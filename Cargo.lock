@@ -9185,7 +9185,6 @@ dependencies = [
  "mz-expr-parser",
  "mz-ore",
  "mz-repr",
- "mz-sql",
  "mz-transform",
  "ordered-float 5.5.0",
  "paste",
