@@ -333,6 +333,7 @@ pub(crate) async fn run(
             match catalog
                 .transact(
                     None,
+                    None,
                     ts,
                     None,
                     vec![Op::CreateClientIncarnation {

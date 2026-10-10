@@ -368,7 +368,10 @@ impl ReplicaEnactment {
         ops: Vec<Op>,
     ) -> anyhow::Result<()> {
         let ts = self.io.wait(catalog.current_upper()).await;
-        let result = self.io.wait(catalog.transact(None, ts, None, ops)).await?;
+        let result = self
+            .io
+            .wait(catalog.transact(None, None, ts, None, ops))
+            .await?;
         absorb_updates(effects, catalog, cluster, build, result.catalog_updates);
         Ok(())
     }

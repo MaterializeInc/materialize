@@ -55,6 +55,7 @@ async fn replica_replacement_survives_catalog_reopen() {
     let created = catalog
         .transact(
             None,
+            None,
             ts,
             None,
             vec![
@@ -78,6 +79,7 @@ async fn replica_replacement_survives_catalog_reopen() {
     let restarted = catalog
         .transact(
             None,
+            None,
             ts,
             None,
             vec![Op::CreateClientIncarnation {
@@ -93,6 +95,7 @@ async fn replica_replacement_survives_catalog_reopen() {
     assert!(
         catalog
             .transact(
+                None,
                 None,
                 ts,
                 None,
@@ -118,6 +121,7 @@ async fn replica_replacement_survives_catalog_reopen() {
     assert!(
         catalog
             .transact(
+                None,
                 None,
                 ts,
                 None,

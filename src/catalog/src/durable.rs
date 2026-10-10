@@ -329,6 +329,14 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
         &mut self,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
 
+    /// Synchronizes once and drains the complete pending prefix only if every
+    /// update is accepted. Otherwise returns `CatalogOutOfSync` without consuming
+    /// any updates. Includes updates buffered by other users of this handle.
+    async fn sync_to_current_updates_if(
+        &mut self,
+        accept: &(dyn for<'a> Fn(&'a memory::objects::StateUpdate) -> bool + Send + Sync),
+    ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError>;
+
     // TODO(jkosh44) The fact that the timestamp argument is an exclusive upper bound makes
     // it difficult to use for readers. For now it's correct and easy to implement, but we should
     // consider a better API.
@@ -403,6 +411,11 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     ///
     /// Empty upper progress is accepted.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;
+
+    /// Opens at the already synchronized prefix without another upper fetch.
+    /// The caller must have applied all drained updates to its projection and
+    /// retained exclusive handle ownership. Pending updates still reject open.
+    async fn transaction_at_synced_upper(&mut self) -> Result<Transaction, CatalogError>;
 
     /// Creates a non-committable dry-run transaction from the given [`Snapshot`].
     ///

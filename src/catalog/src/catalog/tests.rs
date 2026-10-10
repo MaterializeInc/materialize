@@ -208,6 +208,7 @@ async fn test_catalog_revision() {
         catalog
             .transact(
                 None,
+                None,
                 commit_ts,
                 None,
                 vec![Op::CreateDatabase {
@@ -258,6 +259,7 @@ async fn owned_catalog_reconstruction_preserves_pending_replica() {
         let ts = catalog.current_upper().await;
         catalog
             .transact(
+                None,
                 None,
                 ts,
                 None,
@@ -721,6 +723,7 @@ async fn prewarming_denied_configuration_preserves_live_dyncfg() {
     let error = pending
         .transact(
             None,
+            None,
             ts,
             None,
             vec![Op::UpdateSystemConfiguration {
@@ -817,6 +820,7 @@ async fn owned_catalog_reconstruction_preserves_protection_snapshot() {
     let ts = writer.current_upper().await;
     writer
         .transact(
+            None,
             None,
             ts,
             None,
@@ -1028,6 +1032,7 @@ async fn test_large_catalog_item() {
         let commit_ts = catalog.current_upper().await;
         catalog
             .transact(
+                None,
                 None,
                 commit_ts,
                 None,
@@ -1940,6 +1945,7 @@ async fn test_multi_subscriber_catalog() {
     writer_catalog
         .transact(
             None,
+            None,
             commit_ts,
             None,
             vec![Op::CreateDatabase {
@@ -2037,7 +2043,7 @@ async fn test_multi_subscriber_catalog() {
         let foreign_snapshot = foreign_catalog.clone();
         let ts = writer_catalog.current_upper().await;
         writer_catalog
-            .transact(None, ts, None, vec![op])
+            .transact(None, None, ts, None, vec![op])
             .await
             .expect(case);
         assert!(!writer_snapshot.transient_revision_is_current(), "{case}");
@@ -2060,6 +2066,7 @@ async fn test_multi_subscriber_catalog() {
     let commit_ts = writer_catalog.current_upper().await;
     writer_catalog
         .transact(
+            None,
             None,
             commit_ts,
             None,
@@ -2097,6 +2104,7 @@ async fn test_multi_subscriber_catalog() {
     let ts = writer_catalog.current_upper().await;
     writer_catalog
         .transact(
+            None,
             None,
             ts,
             None,
@@ -2176,6 +2184,7 @@ async fn test_multi_subscriber_catalog() {
     let ts = writer_catalog.current_upper().await;
     writer_catalog
         .transact(
+            None,
             None,
             ts,
             None,

@@ -517,6 +517,7 @@ impl Coordinator {
             let ts = catalog.current_upper().await;
             match catalog
                 .transact(
+                    None,
                     Some(&mut self.controller.storage_collections),
                     ts,
                     None,

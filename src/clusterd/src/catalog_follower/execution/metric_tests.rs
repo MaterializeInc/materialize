@@ -354,7 +354,7 @@ async fn commit(catalog: &mut Catalog, ops: Vec<Op>) {
         loop {
             catalog.sync_to_current_updates().await.unwrap();
             let ts = catalog.current_upper().await;
-            match catalog.transact(None, ts, None, ops.clone()).await {
+            match catalog.transact(None, None, ts, None, ops.clone()).await {
                 Err(CatalogError::Catalog(error))
                     if matches!(
                         error.kind,

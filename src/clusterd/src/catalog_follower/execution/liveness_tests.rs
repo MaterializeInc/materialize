@@ -110,6 +110,7 @@ async fn exercise_liveness() {
     let created = catalog
         .transact(
             None,
+            None,
             ts,
             None,
             vec![Op::CreateClientIncarnation {
@@ -124,6 +125,7 @@ async fn exercise_liveness() {
     catalog
         .transact(
             None,
+            None,
             ts,
             None,
             vec![Op::PublishClientReadRequirements {
@@ -136,6 +138,7 @@ async fn exercise_liveness() {
     let ts = catalog.current_upper().await;
     let created = catalog
         .transact(
+            None,
             None,
             ts,
             None,
@@ -383,6 +386,7 @@ async fn exercise_liveness() {
         .writer
         .transact(
             None,
+            None,
             ts,
             None,
             vec![Op::CreateClientIncarnation {
@@ -448,6 +452,7 @@ async fn exercise_liveness() {
     fixture
         .writer
         .transact(
+            None,
             None,
             ts,
             None,
@@ -529,6 +534,7 @@ async fn exercise_liveness() {
         .writer
         .transact(
             None,
+            None,
             ts,
             None,
             vec![Op::PublishClientReadRequirements {
@@ -557,6 +563,7 @@ async fn exercise_liveness() {
     fixture
         .writer
         .transact(
+            None,
             None,
             ts,
             None,

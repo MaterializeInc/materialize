@@ -47,7 +47,10 @@ fn bench_transact(c: &mut Criterion) {
                     owner_id: MZ_SYSTEM_ROLE_ID,
                 }];
                 let commit_ts = catalog.current_upper().await;
-                catalog.transact(None, commit_ts, None, ops).await.unwrap();
+                catalog
+                    .transact(None, None, commit_ts, None, ops)
+                    .await
+                    .unwrap();
             })
         });
         runtime.block_on(async {
@@ -137,7 +140,7 @@ fn bench_read_protection(c: &mut Criterion) {
                         }];
                         let commit_ts = catalog.current_upper().await;
                         let start = Instant::now();
-                        let result = catalog.transact(None, commit_ts, None, ops).await;
+                        let result = catalog.transact(None, None, commit_ts, None, ops).await;
                         elapsed += start.elapsed();
                         result.unwrap();
                     }

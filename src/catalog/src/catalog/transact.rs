@@ -872,9 +872,16 @@ impl Catalog {
         Ok(temporary_ids)
     }
 
+    /// Commits catalog operations against a synchronized projection.
+    ///
+    /// `writer_incarnation`, when provided, must identify the caller's own
+    /// protection execution. It permits catch-up of peer grant-only prefixes,
+    /// not replacement of the caller's captured grants or sampled bounds.
+    /// Without that identity, pending content requires an explicit refresh.
     #[instrument(name = "catalog::transact")]
     pub async fn transact(
         &mut self,
+        writer_incarnation: Option<u64>,
         // n.b. this is an option to prevent us from needing to build out a
         // dummy impl of `StorageController` for tests.
         storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
@@ -899,7 +906,8 @@ impl Catalog {
             phase = "storage_handle",
             "catalog phase start",
         );
-        let mut storage = self.storage().await;
+        let storage_handle = Arc::clone(&self.storage);
+        let mut storage = storage_handle.lock().await;
         debug!(
             target: "mz_adapter::frontend_read_then_write",
             phase = "storage_handle",
@@ -913,7 +921,54 @@ impl Catalog {
             phase = "transaction_open",
             "catalog phase start",
         );
-        let result = storage.transaction().await;
+        // Peer grants do not invalidate retained preparation, but sampled bounds
+        // must return to their owner for resampling. Never absorb an update to a
+        // complete grant map this transaction may replace.
+        let may_catch_up = writer_incarnation.is_some()
+            && !ops
+                .iter()
+                .any(|op| matches!(op, Op::SetReadProtection { bounds, .. } if !bounds.is_empty()));
+        let result = if may_catch_up {
+            let mut owned_incarnations = BTreeSet::from_iter(writer_incarnation);
+            for op in &ops {
+                match op {
+                    Op::PublishClientReadRequirements { incarnation, .. }
+                    | Op::PublishCreatorReadRequirements { incarnation, .. } => {
+                        owned_incarnations.insert(*incarnation);
+                    }
+                    _ => {}
+                }
+            }
+            let updates = storage
+                .sync_to_current_updates_if(&|update| {
+                    matches!(
+                        &update.kind,
+                        StateUpdateKind::ClientReadRequirement(requirement)
+                            if !owned_incarnations.contains(&requirement.incarnation)
+                    )
+                })
+                .await;
+            match updates {
+                Err(
+                    error @ DurableError::Durable(DurableCatalogError::CatalogOutOfSync { .. }),
+                ) => Err(error),
+                result => {
+                    let updates = result.unwrap_or_terminate("synchronizing catalog transaction");
+                    let upper = storage.synced_upper();
+                    // Apply to the committed base, not the success-only candidate. This
+                    // also retains dirty compaction bookkeeping if the candidate fails.
+                    let (builtin_updates, implications) =
+                        self.apply_committed_updates(updates, upper).await;
+                    assert!(
+                        builtin_updates.is_empty() && implications.is_empty(),
+                        "peer grant catch-up must not defer committed effects"
+                    );
+                    storage.transaction_at_synced_upper().await
+                }
+            }
+        } else {
+            storage.transaction().await
+        };
         debug!(
             target: "mz_adapter::frontend_read_then_write",
             phase = "transaction_open",
@@ -991,8 +1046,8 @@ impl Catalog {
                 .expect("committed upper has a predecessor");
         }
 
-        // Dropping here keeps the mutable borrow on self, preventing us accidentally
-        // mutating anything until after f is executed.
+        // The candidate becomes live only after its durable commit. Peer catch-up
+        // was already committed and remains applied even when the candidate fails.
         drop(storage);
         let TransactInnerResult {
             state,
@@ -5168,6 +5223,7 @@ mod tests {
         catalog
             .transact(
                 None,
+                None,
                 birth,
                 None,
                 vec![Op::CreateItem {
@@ -5193,6 +5249,7 @@ mod tests {
         catalog
             .transact(
                 None,
+                None,
                 ts,
                 None,
                 vec![Op::AlterAddColumn {
@@ -5214,6 +5271,7 @@ mod tests {
         let incarnation = catalog
             .transact(
                 None,
+                None,
                 ts,
                 None,
                 vec![Op::CreateClientIncarnation {
@@ -5228,6 +5286,7 @@ mod tests {
         catalog
             .transact(
                 None,
+                None,
                 ts,
                 None,
                 vec![Op::PublishClientReadRequirements {
@@ -5241,6 +5300,7 @@ mod tests {
         let ts = catalog.current_upper().await;
         let unchanged = catalog
             .transact(
+                None,
                 None,
                 ts,
                 None,
@@ -5264,6 +5324,7 @@ mod tests {
         let ts = catalog.current_upper().await;
         catalog
             .transact(
+                None,
                 None,
                 ts,
                 None,
@@ -5293,6 +5354,7 @@ mod tests {
         let ts = catalog.current_upper().await;
         catalog
             .transact(
+                None,
                 None,
                 ts,
                 None,
@@ -5377,7 +5439,7 @@ mod tests {
         assert_eq!(catalog.planning_position(), snapshot.planning_position());
         assert!(
             catalog
-                .transact(None, progress, None, vec![])
+                .transact(None, None, progress, None, vec![])
                 .await
                 .expect("no-op commit")
                 .catalog_updates
@@ -5577,6 +5639,7 @@ mod tests {
         let clients = catalog
             .transact(
                 None,
+                None,
                 ts,
                 None,
                 vec![
@@ -5632,6 +5695,7 @@ mod tests {
             catalog
                 .transact(
                     None,
+                    None,
                     ts,
                     None,
                     vec![Op::CreateItem {
@@ -5656,6 +5720,7 @@ mod tests {
         let ts = catalog.current_upper().await;
         catalog
             .transact(
+                None,
                 None,
                 ts,
                 None,
@@ -5759,7 +5824,7 @@ mod tests {
         });
         let ts = catalog.current_upper().await;
         let result = catalog
-            .transact(None, ts, None, ops)
+            .transact(None, None, ts, None, ops)
             .await
             .expect("commit admission and creator grants");
         let expected = BTreeMap::from([(input, input_birth), (index, minimum), (mv, input_birth)]);
@@ -5813,6 +5878,7 @@ mod tests {
         catalog
             .transact(
                 None,
+                None,
                 ts,
                 None,
                 vec![Op::PublishClientReadRequirements {
@@ -5828,6 +5894,7 @@ mod tests {
         let ts = catalog.current_upper().await;
         let skipped = catalog
             .transact(
+                None,
                 None,
                 ts,
                 None,
@@ -5859,6 +5926,7 @@ mod tests {
         catalog
             .transact(
                 None,
+                None,
                 ts,
                 None,
                 vec![Op::CreateClientIncarnation {
@@ -5872,6 +5940,7 @@ mod tests {
         assert!(
             catalog
                 .transact(
+                    None,
                     None,
                     ts,
                     None,
@@ -6634,6 +6703,7 @@ mod tests {
                     catalog
                         .transact(
                             None,
+                            None,
                             oracle_write_ts,
                             None,
                             vec![
@@ -6661,7 +6731,7 @@ mod tests {
                     // Final DDL commit replays ops, not the dry-run state or snapshot.
                     let oracle_write_ts = catalog.current_upper().await;
                     catalog
-                        .transact(None, oracle_write_ts, None, vec![op])
+                        .transact(None, None, oracle_write_ts, None, vec![op])
                         .await
                         .expect("DDL replay should use current birth permission");
                     assert_eq!(catalog.transient_revision(), revision + 1);
@@ -6681,7 +6751,7 @@ mod tests {
                 } else {
                     let oracle_write_ts = catalog.current_upper().await;
                     catalog
-                        .transact(None, oracle_write_ts, None, vec![op])
+                        .transact(None, None, oracle_write_ts, None, vec![op])
                         .await
                         .expect("source birth should commit");
                     source_id = Some(global_id);
@@ -6769,7 +6839,13 @@ mod tests {
             let before = catalog.state().collection_compaction_bounds().clone();
             let oracle_write_ts = catalog.current_upper().await;
             let result = catalog
-                .transact(None, oracle_write_ts, None, vec![requirement(Some(ts(9)))])
+                .transact(
+                    None,
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![requirement(Some(ts(9)))],
+                )
                 .await;
             assert!(
                 result.is_err(),
@@ -6791,7 +6867,7 @@ mod tests {
             );
 
             catalog
-                .transact(None, oracle_write_ts, None, vec![bound(Some(ts(15)))])
+                .transact(None, None, oracle_write_ts, None, vec![bound(Some(ts(15)))])
                 .await
                 .expect("bound-only publication should commit");
             assert_eq!(catalog.transient_revision(), revision);
@@ -6808,7 +6884,13 @@ mod tests {
 
             let oracle_write_ts = catalog.current_upper().await;
             catalog
-                .transact(None, oracle_write_ts, None, vec![requirement(Some(ts(19)))])
+                .transact(
+                    None,
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![requirement(Some(ts(19)))],
+                )
                 .await
                 .expect("requirement-only publication should commit");
             assert_eq!(catalog.transient_revision(), revision);
@@ -6845,7 +6927,7 @@ mod tests {
             let before = catalog.state().clone();
             assert!(
                 catalog
-                    .transact(None, oracle_write_ts, None, vec![publication(19)])
+                    .transact(None, None, oracle_write_ts, None, vec![publication(19)])
                     .await
                     .is_err()
             );
@@ -6892,7 +6974,7 @@ mod tests {
                 .await
                 .expect("publication replay should be idempotent");
             let result = catalog
-                .transact(None, oracle_write_ts, None, vec![publication(20)])
+                .transact(None, None, oracle_write_ts, None, vec![publication(20)])
                 .await
                 .expect("matching compaction bound and read requirement should commit");
             for state in [&speculative, &replayed] {
@@ -6942,7 +7024,7 @@ mod tests {
 
             let oracle_write_ts = catalog.current_upper().await;
             let unchanged = catalog
-                .transact(None, oracle_write_ts, None, vec![publication(20)])
+                .transact(None, None, oracle_write_ts, None, vec![publication(20)])
                 .await
                 .expect("unchanged publication should commit without implications");
             assert!(unchanged.catalog_updates.is_empty());
@@ -6955,6 +7037,7 @@ mod tests {
             let oracle_write_ts = catalog.current_upper().await;
             let error = catalog
                 .transact(
+                    None,
                     None,
                     oracle_write_ts,
                     None,
@@ -6972,6 +7055,7 @@ mod tests {
             let oracle_write_ts = catalog.current_upper().await;
             catalog
                 .transact(
+                    None,
                     None,
                     oracle_write_ts,
                     None,
@@ -6996,6 +7080,7 @@ mod tests {
             catalog
                 .transact(
                     None,
+                    None,
                     oracle_write_ts,
                     None,
                     vec![Op::ResetSystemConfiguration {
@@ -7018,7 +7103,7 @@ mod tests {
             let oracle_write_ts = catalog.current_upper().await;
             assert!(
                 catalog
-                    .transact(None, oracle_write_ts, None, vec![bound(Some(ts(21)))])
+                    .transact(None, None, oracle_write_ts, None, vec![bound(Some(ts(21)))])
                     .await
                     .is_err()
             );
@@ -7030,6 +7115,7 @@ mod tests {
             );
             catalog
                 .transact(
+                    None,
                     None,
                     oracle_write_ts,
                     None,
@@ -7873,6 +7959,7 @@ mod tests {
             catalog
                 .transact(
                     None,
+                    None,
                     oracle_write_ts,
                     None,
                     vec![
@@ -7916,6 +8003,7 @@ mod tests {
             catalog
                 .transact(
                     None,
+                    None,
                     oracle_write_ts,
                     None,
                     vec![Op::UpdateScopedSystemParameters {
@@ -7937,6 +8025,7 @@ mod tests {
             let oracle_write_ts = catalog.current_upper().await;
             catalog
                 .transact(
+                    None,
                     None,
                     oracle_write_ts,
                     None,
@@ -7961,6 +8050,7 @@ mod tests {
             catalog
                 .transact(
                     None,
+                    None,
                     oracle_write_ts,
                     None,
                     vec![Op::UpdateScopedSystemParameters {
@@ -7982,6 +8072,7 @@ mod tests {
             let oracle_write_ts = catalog.current_upper().await;
             catalog
                 .transact(
+                    None,
                     None,
                     oracle_write_ts,
                     None,
@@ -8008,6 +8099,7 @@ mod tests {
             catalog
                 .transact(
                     None,
+                    None,
                     oracle_write_ts,
                     None,
                     vec![Op::UpdateScopedSystemParameters {
@@ -8028,6 +8120,7 @@ mod tests {
             catalog
                 .transact(
                     None,
+                    None,
                     oracle_write_ts,
                     None,
                     vec![Op::DropObjects(vec![DropObjectInfo::Cluster(cluster_a)])],
@@ -8040,6 +8133,7 @@ mod tests {
             let oracle_write_ts = catalog.current_upper().await;
             catalog
                 .transact(
+                    None,
                     None,
                     oracle_write_ts,
                     None,
@@ -8148,6 +8242,7 @@ mod tests {
             let oracle_write_ts = catalog.current_upper().await;
             let result = catalog
                 .transact(
+                    None,
                     None,
                     oracle_write_ts,
                     None,

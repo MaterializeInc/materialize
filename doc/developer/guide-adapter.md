@@ -86,6 +86,14 @@ Creator admission also catches up after allocation and before preparing its gran
 Recheck the revision, incarnation and resource limits after catch-up. A builtin
 index admitted by a peer already has a committed window, not a new creator birth.
 Transaction open and compare-and-append still enforce subsequent freshness.
+Common transaction open can absorb a complete prefix of peer client grants while
+retaining the durable handle. The caller supplies its own protection incarnation.
+Updates to that incarnation or any map the operations publish remain conflicts,
+as do mixed prefixes and sampled compaction proposals. Apply accepted grants to
+the committed projection, including dirty compaction bookkeeping, before building
+the candidate. Their effects survive candidate failure. Open at that synchronized
+prefix without another upper fetch, retaining the pending-content check and final
+CAS. Other updates return intact to the existing refresh owner for enactment.
 Ordinary DDL derives the creator grant inside the real admission candidate, at
 the maximum of the admitted bound and the client's oracle minimum. The pending
 local barrier retains committed grants until the definitive outcome. Successful
@@ -535,8 +543,10 @@ the subsequent transaction-open sync does not rescue that prefix if peer content
 has already invalidated it. It moves rejection to compare-and-append, after candidate
 construction and oracle allocation, and still requires conflict catch-up. Diagnose
 the refresh-to-commit interval and lock waits rather than treating an early rejection
-as the cause of contention. Pending projection updates must remain a barrier to
-opening a transaction.
+as the cause of contention. Pending updates remain a barrier until their complete
+prefix is applied to the matching projection. Peer-grant catch-up satisfies that
+condition under the durable handle before constructing a fresh candidate. It does
+not reuse a candidate or skip synchronization.
 
 ### Session records in the durable catalog
 

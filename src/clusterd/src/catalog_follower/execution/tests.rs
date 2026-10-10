@@ -143,6 +143,7 @@ async fn written_index_survives_writer_and_query_disconnect() {
     let reader = writer
         .transact(
             None,
+            None,
             ts,
             None,
             vec![Op::CreateClientIncarnation {
@@ -681,6 +682,7 @@ pub(super) async fn publish(
             let ts = catalog.current_upper().await;
             match catalog
                 .transact(
+                    None,
                     None,
                     ts,
                     None,

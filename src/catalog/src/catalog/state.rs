@@ -4380,6 +4380,7 @@ mod tests {
         catalog
             .transact(
                 None,
+                None,
                 commit_ts,
                 None,
                 vec![crate::catalog::Op::CreateItem {

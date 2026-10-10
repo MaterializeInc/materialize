@@ -2709,7 +2709,7 @@ impl Coordinator {
             let write_ts = self.get_catalog_write_ts().await;
             match self
                 .catalog_mut()
-                .transact(None, write_ts, None, ops.clone())
+                .transact(None, None, write_ts, None, ops.clone())
                 .await
             {
                 Ok(mut result) => {

@@ -118,6 +118,7 @@ async fn catalog_counter_ingests_after_writer_and_query_drop() {
     let reader = writer
         .transact(
             None,
+            None,
             ts,
             None,
             vec![Op::CreateClientIncarnation {
