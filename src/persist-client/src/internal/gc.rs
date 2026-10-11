@@ -257,13 +257,9 @@ where
         let mut gc_results = GcResults::default();
 
         if rollups_to_remove_from_state.is_empty() {
-            // If there are no rollups to remove from state (either the work has already
-            // been done, or the there aren't enough rollups <= seqno_since to have any
-            // to delete), we can safely exit. We still call remove_rollups to clear
-            // active_gc if it was set, so the next GC isn't suppressed.
-            let (_removed, maintenance) = machine.remove_rollups(&[]).await;
-            machine.applier.metrics.gc.noop.inc();
-            return (maintenance, gc_results);
+            // Either the work has already been done, or there aren't enough rollups
+            // <= seqno_since to have any to delete.
+            return Self::skip_gc(machine, gc_results).await;
         }
 
         debug!(
@@ -281,7 +277,16 @@ where
                 .fetch_live_diffs_through(&req.shard_id, req.new_seqno_since)
                 .await;
 
-            let initial_seqno = diffs.first().expect("state is initialized").seqno;
+            // An empty result means Consensus holds no diff at or below `new_seqno_since`.
+            // Some other process has already truncated past this request, so the request's
+            // goal is met and there are no diffs left from which to derive blob deletions.
+            let Some(initial_seqno) = diffs.first().map(|x| x.seqno) else {
+                debug!(
+                    ?req,
+                    "skipping gc - consensus already truncated past seqno_since. concurrent GC?"
+                );
+                return Self::skip_gc(machine, gc_results).await;
+            };
 
             let Some(initial_rollup) = gc_rollups.get(initial_seqno) else {
                 // The latest state is always expected to have a reference to a rollup for the
@@ -296,7 +301,7 @@ where
                     ?gc_rollups,
                     "skipping gc - no rollup at initial seqno. concurrent GC?"
                 );
-                return (RoutineMaintenance::default(), gc_results);
+                return Self::skip_gc(machine, gc_results).await;
             };
 
             let Some(state) = machine
@@ -310,7 +315,7 @@ where
                     ?gc_rollups,
                     "skipping gc - deleted rollup at initial seqno. concurrent GC?"
                 );
-                return (RoutineMaintenance::default(), gc_results);
+                return Self::skip_gc(machine, gc_results).await;
             };
 
             UntypedStateVersionsIter::new(
@@ -445,6 +450,17 @@ where
                 .post_gc_calculations_seconds,
         );
 
+        (maintenance, gc_results)
+    }
+
+    /// Finishes a GC pass that turned out to have no work to do, either because
+    /// another process already did it or because there was never any to begin with.
+    async fn skip_gc(
+        machine: &Machine<K, V, T, D>,
+        gc_results: GcResults,
+    ) -> (RoutineMaintenance, GcResults) {
+        let (_removed, maintenance) = machine.remove_rollups(&[]).await;
+        machine.applier.metrics.gc.noop.inc();
         (maintenance, gc_results)
     }
 
