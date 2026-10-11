@@ -177,7 +177,7 @@
     "module-alias": "^2.3.4",
     "msw": "^2.6.4",
     "openapi-typescript": "^7.13.0",
-    "p-retry": "^4.6.1",
+    "p-retry": "^8.0.1",
     "pg": "^8.23.1",
     "picocolors": "^1.1.1",
     "prettier": "^3.9.9",
