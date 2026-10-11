@@ -56,10 +56,10 @@ An errored export's ok updates are invisible to SQL, so "no ok data after the
 terminal error" is checked through `updates_committed` in
 `mz_internal.mz_source_statistics`, a never-resetting counter.
 
-Every per-export oracle has two messages, chosen by `terminal_before_restart`:
-whether a TRUNCATE or DROP of the table was followed by an ingestion restart.
-A known unfixed bug class lives entirely in the first bucket, so the second
-stays a clean signal for other mechanisms. Timelines where `first_configure`
+Every per-export oracle has three messages, chosen by `terminal_before_restart`:
+whether a TRUNCATE of the table, a DROP of it, or neither was followed by an
+ingestion restart. Each of the first two holds a known unfixed bug, so the
+third stays a clean signal for other mechanisms. Timelines where `first_configure`
 set `pg_terminal_upstream_ops` to `off` issue no terminal ops at all.
 """
 
@@ -486,65 +486,71 @@ def terminal_before_restart(
     export_name: str,
     export_id: str,
     src: str,
-) -> bool:
-    """Whether a terminal op on `tbl` after the export bound to it (seq above
-    `s1`) was followed by an ingestion restart.
+) -> str | None:
+    """The kind of terminal op on `tbl` after the export bound to it (seq
+    above `s1`) that was followed by an ingestion restart, or None.
 
-    That is the precondition of the known terminal-error-resurrection bug
-    class, so oracles report it under separate messages and keep the
-    general messages for other mechanisms. Restarts count as in
+    Each kind is the precondition of a known unfixed bug, so oracles report
+    it under its own messages and keep the general messages for other
+    mechanisms: `truncate` resurrects the export (INC-1272), `drop` lets a
+    replayed schema check drop the export's error and its later changes
+    (SS-510). `truncate` wins when both happened. Restarts count as in
     `_check_terminal_permanence`: status events after the op, or a sibling
     export created after it (which reissues the ingestion).
     """
-    row = db.execute(
-        "SELECT min(t.started_epoch) FROM ops o JOIN txns t ON o.txn_id = t.txn_id"
-        " WHERE o.tbl = ? AND o.seq > ? AND o.kind IN ('truncate', 'drop')"
-        " AND t.status != 'aborted'",
-        (tbl, s1),
-    ).fetchone()
-    if row is None or row[0] is None:
-        return False
-    first = float(row[0])
-    if (
-        db.execute(
-            "SELECT 1 FROM exports WHERE slot = ? AND name != ? AND created_epoch > ?",
-            (slot, export_name, first),
+    for kind in ("truncate", "drop"):
+        row = db.execute(
+            "SELECT min(t.started_epoch) FROM ops o JOIN txns t ON o.txn_id = t.txn_id"
+            " WHERE o.tbl = ? AND o.seq > ? AND o.kind = ? AND t.status != 'aborted'",
+            (tbl, s1, kind),
         ).fetchone()
-        is not None
-    ):
-        return True
-    return restart_events_since(conn, [export_id, src], first) > 0
+        if row is None or row[0] is None:
+            continue
+        first = float(row[0])
+        if (
+            db.execute(
+                "SELECT 1 FROM exports WHERE slot = ? AND name != ? AND created_epoch > ?",
+                (slot, export_name, first),
+            ).fetchone()
+            is not None
+            or restart_events_since(conn, [export_id, src], first) > 0
+        ):
+            return kind
+    return None
+
+
+UNKNOWN_TERMINAL_HISTORY = "unknown"
 
 
 def export_terminal_history(
     conn: psycopg.Connection, export_name: str, export_id: str
-) -> bool | None:
+) -> str | None:
     """`terminal_before_restart` for an export by name, reading this driver's
-    state database without writing it. None if the export is not one of
-    this driver's, or its state cannot be read.
+    state database without writing it. `UNKNOWN_TERMINAL_HISTORY` if the
+    export is not one of this driver's, or its state cannot be read.
     """
     path = Endpoints.from_env().state_dir / f"{STATE_DB}.sqlite"
     if not path.exists():
-        return None
+        return UNKNOWN_TERMINAL_HISTORY
     try:
         db = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=60)
     except sqlite3.Error:
-        return None
+        return UNKNOWN_TERMINAL_HISTORY
     try:
         row = db.execute(
             "SELECT slot, j, s1 FROM exports WHERE name = ?", (export_name,)
         ).fetchone()
         if row is None:
-            return None
+            return UNKNOWN_TERMINAL_HISTORY
         slot, j, s1 = int(row[0]), int(row[1]), int(row[2])
         src = lookup_ids(conn, [_source(slot)]).get(_source(slot))
         if src is None:
-            return None
+            return UNKNOWN_TERMINAL_HISTORY
         return terminal_before_restart(
             db, conn, _tbl(slot, j), s1, slot, export_name, export_id, src
         )
     except sqlite3.Error:
-        return None
+        return UNKNOWN_TERMINAL_HISTORY
     finally:
         db.close()
 
@@ -1290,12 +1296,10 @@ def _check_export(
             _report_query_error(err, details)
             return
     details["errored"] = errored
-    tagged = terminal_before_restart(
-        db, conn, e.tbl, e.s1, e.slot, e.name, export_id, src
-    )
-    details["terminal_before_restart"] = tagged
+    tag = terminal_before_restart(db, conn, e.tbl, e.s1, e.slot, e.name, export_id, src)
+    details["terminal_before_restart"] = tag
 
-    _check_terminal_permanence(db, conn, e, export_id, src, t, errored, tagged, details)
+    _check_terminal_permanence(db, conn, e, export_id, src, t, errored, tag, details)
 
     if errored is None:
         try:
@@ -1307,10 +1311,16 @@ def _check_export(
             _report_query_error(err, details)
             dups = []
         dup_details = {**details, "duplicates": [list(r) for r in dups]}
-        if tagged:
+        if tag == "truncate":
             always_or_unreachable(
                 not dups,
-                "postgres source: an export holds at most one row per upstream primary key, ingestion restarted after a terminal upstream op",
+                "postgres source: an export holds at most one row per upstream primary key, ingestion restarted after an upstream TRUNCATE",
+                dup_details,
+            )
+        elif tag == "drop":
+            always_or_unreachable(
+                not dups,
+                "postgres source: an export holds at most one row per upstream primary key, ingestion restarted after an upstream DROP",
                 dup_details,
             )
         else:
@@ -1331,10 +1341,16 @@ def _check_export(
     )
     details["terminal"] = terminal
     if terminal is None:
-        if tagged:
+        if tag == "truncate":
             always_or_unreachable(
                 errored is None,
-                "postgres source: an export is errored only if a terminal upstream op precedes the mapped LSN, ingestion restarted after a terminal upstream op",
+                "postgres source: an export is errored only if a terminal upstream op precedes the mapped LSN, ingestion restarted after an upstream TRUNCATE",
+                details,
+            )
+        elif tag == "drop":
+            always_or_unreachable(
+                errored is None,
+                "postgres source: an export is errored only if a terminal upstream op precedes the mapped LSN, ingestion restarted after an upstream DROP",
                 details,
             )
         else:
@@ -1344,10 +1360,16 @@ def _check_export(
                 details,
             )
     elif terminal[1] == "truncate":
-        if tagged:
+        if tag == "truncate":
             always_or_unreachable(
                 errored is not None,
-                "postgres source: an export whose TRUNCATE precedes the mapped LSN is errored, ingestion restarted after a terminal upstream op",
+                "postgres source: an export whose TRUNCATE precedes the mapped LSN is errored, ingestion restarted after an upstream TRUNCATE",
+                details,
+            )
+        elif tag == "drop":
+            always_or_unreachable(
+                errored is not None,
+                "postgres source: an export whose TRUNCATE precedes the mapped LSN is errored, ingestion restarted after an upstream DROP",
                 details,
             )
         else:
@@ -1384,10 +1406,16 @@ def _check_export(
         "postgres source: a check compared an export with a non-empty replayed upstream table",
         {**details, "replayed_txns": len(replayed), "expected_rows": len(expected)},
     )
-    if tagged:
+    if tag == "truncate":
         always_or_unreachable(
             matched,
-            "postgres source: an export equals its upstream table replayed to the mapped LSN, ingestion restarted after a terminal upstream op",
+            "postgres source: an export equals its upstream table replayed to the mapped LSN, ingestion restarted after an upstream TRUNCATE",
+            {**details, **diff},
+        )
+    elif tag == "drop":
+        always_or_unreachable(
+            matched,
+            "postgres source: an export equals its upstream table replayed to the mapped LSN, ingestion restarted after an upstream DROP",
             {**details, **diff},
         )
     else:
@@ -1416,7 +1444,7 @@ def _check_terminal_permanence(
     src: str,
     t: int,
     errored: str | None,
-    tagged: bool,
+    tag: str | None,
     details: dict[str, Any],
 ) -> None:
     row = db.execute(
@@ -1424,10 +1452,16 @@ def _check_terminal_permanence(
     ).fetchone()
     if errored is None:
         retract_details = {**details, "first_errored_t": row[0] if row else None}
-        if tagged:
+        if tag == "truncate":
             always_or_unreachable(
                 row is None or t < row[0],
-                "postgres source: a terminal export error is never retracted at a later time, ingestion restarted after a terminal upstream op",
+                "postgres source: a terminal export error is never retracted at a later time, ingestion restarted after an upstream TRUNCATE",
+                retract_details,
+            )
+        elif tag == "drop":
+            always_or_unreachable(
+                row is None or t < row[0],
+                "postgres source: a terminal export error is never retracted at a later time, ingestion restarted after an upstream DROP",
                 retract_details,
             )
         else:
@@ -1466,10 +1500,16 @@ def _check_terminal_permanence(
                 "baseline": int(baseline),
                 "updates_committed": committed,
             }
-            if tagged:
+            if tag == "truncate":
                 always_or_unreachable(
                     committed <= int(baseline),
-                    "postgres source: an export with a terminal error commits no further updates, ingestion restarted after a terminal upstream op",
+                    "postgres source: an export with a terminal error commits no further updates, ingestion restarted after an upstream TRUNCATE",
+                    stats_details,
+                )
+            elif tag == "drop":
+                always_or_unreachable(
+                    committed <= int(baseline),
+                    "postgres source: an export with a terminal error commits no further updates, ingestion restarted after an upstream DROP",
                     stats_details,
                 )
             else:

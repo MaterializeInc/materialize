@@ -46,7 +46,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     unreachable,
 )
 
-from materialize.antithesis import sql, state
+from materialize.antithesis import ddl_hold, sql, state
 from materialize.antithesis.drivers.history import (
     WATCHDOG_GRACE_S,
     current_generation,
@@ -214,7 +214,10 @@ def _generation(
     gen = current_generation(db)
     if gen is not None and not force_rotate:
         row = db.execute("SELECT count(*) FROM ops WHERE gen = ?", (gen,)).fetchone()
-        if int(row[0]) < GEN_MAX_OPS:
+        ops = int(row[0])
+        # Rotation is discretionary DDL; a generation may grow to twice its
+        # size while a hold lasts.
+        if ops < GEN_MAX_OPS or (ops < 2 * GEN_MAX_OPS and ddl_hold.active()):
             return gen, int(generation_params(db, gen))
     keys = rng.choice(KEY_COUNTS)
     gen = rotate_generation(
