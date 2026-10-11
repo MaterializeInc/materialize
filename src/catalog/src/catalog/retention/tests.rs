@@ -336,7 +336,7 @@ async fn automatic_mv_birth_recomputed_across_frontier_catch_up() {
             state
                 .get_entry(&item_id)
                 .materialized_view()
-                .unwrap()
+                .expect("admitted materialized view")
                 .initial_as_of,
             Some(Antichain::from_elem(floor))
         );
@@ -392,7 +392,7 @@ async fn caught_up_bound_survives_failure_and_is_superseded_by_drop() {
     let mut peer = f.peer().await;
     let frontier = f.catalog.state().collection_compaction_bounds()[&id]
         .as_option()
-        .unwrap()
+        .expect("readable source")
         .step_forward();
     let requirement = f.catalog.state().maintained_read_requirements()[&id].clone();
     let revision = f.catalog.transient_revision();
@@ -479,7 +479,7 @@ async fn frontier_retry_exhaustion_returns_committed_effects() {
     let requirement = f.catalog.state().maintained_read_requirements()[&id].clone();
     let initial = *f.catalog.state().collection_compaction_bounds()[&id]
         .as_option()
-        .unwrap();
+        .expect("readable source");
     let revision = f.catalog.transient_revision();
     tokio::time::pause();
     let (hook, mut candidates) = tokio::sync::mpsc::unbounded_channel();
