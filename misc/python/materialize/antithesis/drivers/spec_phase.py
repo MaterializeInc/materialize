@@ -337,7 +337,12 @@ def run_cell(ctx: Ctx, cell: spec_model.Cell) -> None:
     if final is None:
         log(f"{cell}: did not settle; phases {phases}")
         return
-    judge_claim(ctx, rollouts.observer_db(ctx.env), promoting, details)
+    observer = rollouts.observer_db(ctx.env)
+    # Generation numbers are reused when a candidate is torn down, so only a
+    # generation seen active after the patch is attributed.
+    if promoting is not None and final.active == promoting[0] + 1:
+        rollouts.mark_promoted_across_spec_change(observer, promoting[0] + 1)
+    judge_claim(ctx, observer, promoting, details)
 
 
 def acquire_lease(lease: CrLease) -> bool:
