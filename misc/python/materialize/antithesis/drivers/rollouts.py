@@ -1685,7 +1685,11 @@ def driver_main() -> int:
             )
             log(f"action {action}{' holding discretionary DDL' if hold else ''}")
             try:
-                with ddl_hold.held(f"rollouts:{action}") if hold else nullcontext():
+                with (
+                    ddl_hold.held(f"rollouts:{action}", strict=action == "paced_ddl")
+                    if hold
+                    else nullcontext()
+                ):
                     ACTION_FNS[action](ctx)
             except TRANSIENT_ERRORS as e:
                 log(f"action {action} interrupted: {e}")
@@ -2120,8 +2124,30 @@ def track_promotion(db: sqlite3.Connection, snap: Snapshot) -> None:
 
 
 def promoted_across_spec_change(db: sqlite3.Connection) -> list[int]:
-    """Generations `track_promotion` saw promoted across a rendered spec change."""
+    """Generations promoted across a rendered spec change, recorded by
+    `track_promotion` or `mark_promoted_across_spec_change`."""
     return list(kv_get(db, "promoted_across_spec_change") or [])
+
+
+def mark_promoted_across_spec_change(db: sqlite3.Connection, generation: int) -> None:
+    """Records `generation` as promoted across a rendered spec change.
+
+    For a driver that changed a rendered field while the CR was `Promoting`
+    and then saw `generation` become active. `track_promotion` can miss such a
+    promotion: when orchestratord restarts mid-promotion, the `Promoting`
+    status it compares against may never be observed at the patched spec
+    generation. Later status claims about `generation` then keep the CLO-339
+    attribution.
+    """
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        tainted = set(promoted_across_spec_change(db))
+        tainted.add(generation)
+        kv_set(db, "promoted_across_spec_change", sorted(tainted))
+        db.execute("COMMIT")
+    except BaseException:
+        db.execute("ROLLBACK")
+        raise
 
 
 # A status claim is asserted violated only when a second evaluation at least

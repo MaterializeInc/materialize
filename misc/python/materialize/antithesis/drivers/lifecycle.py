@@ -78,7 +78,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
 from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
 
-from materialize.antithesis import sql, state
+from materialize.antithesis import ddl_hold, sql, state
 from materialize.antithesis.drivers import configure
 from materialize.antithesis.endpoints import INTERNAL_HTTP_PORT
 from materialize.antithesis.environment import Environment
@@ -1404,6 +1404,9 @@ def run(s: Session, weights: dict[str, float]) -> None:
 
 
 def main() -> int:
+    if ddl_hold.strict_active():
+        log("DDL is strictly held; skipping")
+        return 0
     db = open_state()
     weights = knobs(db)
     try:

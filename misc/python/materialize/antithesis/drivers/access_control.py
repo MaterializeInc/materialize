@@ -52,7 +52,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     sometimes,
 )
 
-from materialize.antithesis import sql, state
+from materialize.antithesis import ddl_hold, sql, state
 from materialize.antithesis.drivers import rollouts
 from materialize.antithesis.environment import Environment
 from materialize.antithesis.isolation import AclModel, Key
@@ -338,6 +338,9 @@ class Driver:
 
 
 def driver_main() -> int:
+    if ddl_hold.strict_active():
+        log("DDL is strictly held; skipping")
+        return 0
     env = Environment()
     lock = str(env.endpoints.state_dir / LOCK_FILE)
     env.endpoints.state_dir.mkdir(parents=True, exist_ok=True)

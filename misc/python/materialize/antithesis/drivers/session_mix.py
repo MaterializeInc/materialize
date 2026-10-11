@@ -52,7 +52,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     unreachable,
 )
 
-from materialize.antithesis import sql, state
+from materialize.antithesis import ddl_hold, sql, state
 from materialize.antithesis.drivers import configure, history
 from materialize.antithesis.endpoints import Endpoints
 from materialize.antithesis.environment import Environment
@@ -753,6 +753,9 @@ def ddl_racer(host: str, races: RaceLog, end: float, stop: threading.Event) -> N
 
 
 def main() -> int:
+    if ddl_hold.strict_active():
+        log("DDL is strictly held; skipping")
+        return 0
     budget = rng.uniform(*BUDGET_S)
     history.start_watchdog(budget + CLIENT_DEADLINE_S + WATCHDOG_GRACE_S)
     env = Environment()

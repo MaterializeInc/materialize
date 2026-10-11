@@ -47,8 +47,8 @@ reported under its own `sometimes`: drops are finalized asynchronously, so it
 is an observation for triage, not a failure.
 
 Negative multiplicities are reported under two messages, split by whether the
-shard belongs to a Postgres source export whose table had a terminal upstream
-op followed by an ingestion restart (`postgres_sources.terminal_before_restart`,
+shard belongs to a Postgres source export whose table had an upstream
+TRUNCATE followed by an ingestion restart (`postgres_sources.terminal_before_restart`,
 read from that driver's state). That bucket holds a known unfixed bug class.
 
 Fault handling: a persistcli failure (non-zero exit, timeout, unparsable
@@ -439,18 +439,19 @@ class Auditor:
         return 0
 
     def terminal_tag(self, name: str | None, object_id: str | None) -> bool:
-        """Whether the shard's Postgres export had a terminal upstream op
-        followed by an ingestion restart. Unknown history counts as tagged,
-        so it never pollutes the clean message."""
+        """Whether the shard's Postgres export had an upstream TRUNCATE
+        followed by an ingestion restart, the precondition of the known
+        negative-multiplicity bug (INC-1272). Unknown history counts as
+        tagged, so it never pollutes the clean message."""
         if name is None or object_id is None or not PG_EXPORT_NAME.match(name):
             return False
         try:
             with sql.connection(self.host) as conn:
-                tagged = postgres_sources.export_terminal_history(conn, name, object_id)
+                kind = postgres_sources.export_terminal_history(conn, name, object_id)
         except (psycopg.Error, OSError) as e:
             log(f"cannot read terminal history of {name}: {e}")
             return True
-        return True if tagged is None else tagged
+        return kind in ("truncate", postgres_sources.UNKNOWN_TERMINAL_HISTORY)
 
     def audit_unmapped(self, shard_id: str) -> None:
         """Audit a consensus shard that no live collection maps."""
@@ -676,13 +677,13 @@ class Auditor:
         if tagged:
             always_or_unreachable(
                 clean,
-                "shard audit: no (key, val) in a persist shard accumulates to a negative count at any retained time, ingestion restarted after a terminal upstream op",
+                "shard audit: no (key, val) in a persist shard accumulates to a negative count at any retained time, ingestion restarted after an upstream TRUNCATE",
                 report,
             )
         else:
             always(
                 clean,
-                "shard audit: no (key, val) in a persist shard accumulates to a negative count at any retained time, with no terminal upstream op before the last ingestion restart",
+                "shard audit: no (key, val) in a persist shard accumulates to a negative count at any retained time, with no upstream TRUNCATE before the last ingestion restart",
                 report,
             )
 
