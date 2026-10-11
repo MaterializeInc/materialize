@@ -4573,8 +4573,9 @@ mod tests {
             )
             .await
             .expect("open sink progress");
+        let updates: Vec<((SourceData, ()), Timestamp, StorageDiff)> = Vec::new();
         sink_writer
-            .compare_and_append(&[], frontier(0), frontier(10))
+            .compare_and_append(&updates, frontier(0), frontier(10))
             .await
             .expect("sink progress write")
             .expect("uncontended sink progress");
