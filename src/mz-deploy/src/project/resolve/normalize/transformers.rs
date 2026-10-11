@@ -106,8 +106,8 @@ impl<'a> NameTransformer for FullyQualifyingTransformer<'a> {
             3 => {
                 // Already fully qualified — optionally rewrite database name
                 if let Some(map) = &self.database_name_map {
-                    let db_str = name.0[0].to_string();
-                    if let Some(new_db) = map.get(&db_str) {
+                    let db_str = name.0[0].as_str();
+                    if let Some(new_db) = map.get(db_str) {
                         let database = Ident::new(new_db).expect("valid identifier");
                         return UnresolvedItemName(vec![
                             database,
