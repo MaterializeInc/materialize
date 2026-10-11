@@ -415,6 +415,7 @@ where
     T: Timestamp + Lattice + Codec64 + Sync,
     D: Monoid + Codec64 + Send + Sync,
 {
+    let started = Instant::now();
     let fetch_config = FetchConfig::from_persist_config(cfg);
     let encoded_part = match EncodedPart::fetch(
         &fetch_config,
@@ -442,7 +443,9 @@ where
             panic!("could not fetch batch part {}: {}", blob_key, diagnostics)
         }
     };
+    let encoded_elapsed = started.elapsed();
     let part_cfg = BatchFetcherConfig::new(cfg);
+    let migration_started = Instant::now();
     let migration = PartMigration::new(&part.part, read_schemas, schema_cache)
         .await
         .unwrap_or_else(|read_schemas| {
@@ -452,7 +455,9 @@ where
                 read_schemas
             )
         });
-    FetchedPart::new(
+    let migration_elapsed = migration_started.elapsed();
+    let construction_started = Instant::now();
+    let fetched = FetchedPart::new(
         metrics,
         encoded_part,
         migration,
@@ -460,7 +465,25 @@ where
         part.filter_pushdown_audit,
         part_cfg.part_decode_format(),
         part.part.stats(),
-    )
+    );
+    let construction_elapsed = construction_started.elapsed();
+    let elapsed = started.elapsed();
+    if elapsed >= Duration::from_millis(20) {
+        let (part_kind, part_key) = match &part.part {
+            BatchPart::Hollow(part) => ("hollow", Some(&part.key)),
+            BatchPart::Inline { .. } => ("inline", None),
+        };
+        // These are elapsed intervals, including scheduling, not CPU or I/O time.
+        tracing::debug!(
+            target: "mz_persist_client::listen_diagnostics",
+            shard = %part.shard_id,
+            reader = ?reader_id,
+            part_kind, ?part_key,
+            ?elapsed, ?encoded_elapsed, ?migration_elapsed, ?construction_elapsed,
+            "slow leased part fetch returned"
+        );
+    }
+    fetched
 }
 
 pub(crate) async fn fetch_batch_part_blob<T>(
@@ -538,9 +561,12 @@ pub(crate) async fn fetch_batch_part<T>(
 where
     T: Timestamp + Lattice + Codec64,
 {
+    let started = Instant::now();
     let buf =
         fetch_batch_part_blob(shard_id, blob, metrics, shard_metrics, read_metrics, part).await?;
-    let part = decode_batch_part_blob(
+    let blob_elapsed = started.elapsed();
+    let decode_started = Instant::now();
+    let decoded = decode_batch_part_blob(
         cfg,
         metrics,
         read_metrics,
@@ -548,7 +574,19 @@ where
         part,
         &buf,
     );
-    Ok(part)
+    let decode_elapsed = decode_started.elapsed();
+    let elapsed = started.elapsed();
+    if elapsed >= Duration::from_millis(20) {
+        tracing::debug!(
+            target: "mz_persist_client::listen_diagnostics",
+            shard = %shard_id,
+            part_key = ?part.key,
+            bytes = buf.len(),
+            ?elapsed, ?blob_elapsed, ?decode_elapsed,
+            "slow hollow part fetch returned"
+        );
+    }
+    Ok(decoded)
 }
 
 /// This represents the lease of a seqno. It's generally paired with some external state,
