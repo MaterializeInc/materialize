@@ -52,7 +52,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     unreachable,
 )
 
-from materialize.antithesis import quiet, sql, state
+from materialize.antithesis import ddl_hold, quiet, sql, state
 from materialize.antithesis.drivers import counters, history
 from materialize.antithesis.drivers.sources_common import (
     SOURCE_ERROR_MARKERS,
@@ -169,6 +169,8 @@ def _p4(conn: psycopg.Connection) -> dict[str, Any]:
 
 
 def _p5(conn: psycopg.Connection) -> dict[str, Any]:
+    if ddl_hold.strict_active():
+        raise Skip("DDL is strictly held")
     name = f"{DDL_PREFIX}{rng.getrandbits(48):012x}"
     conn.execute(f"CREATE TABLE {name} (a int)".encode())
     conn.execute(f"DROP TABLE {name}".encode())

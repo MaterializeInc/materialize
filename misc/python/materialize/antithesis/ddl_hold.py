@@ -7,18 +7,25 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-"""Workload-wide holds on discretionary DDL.
+"""Workload-wide holds on DDL.
 
 A 0dt candidate reboots whenever DDL lands that it has to react to, so a
 steady stream of DDL keeps a rollout in `Applying`. The rollout driver holds
-DDL for some rollouts so they can complete; drivers whose DDL is discretionary
-(a rotation, a re-creation, a race they start themselves) check `active()` and
-defer it while a hold covers the present. Drivers whose DDL exists to overlap
-rollouts do not check, so DDL during rollouts stays covered.
+DDL for some rollouts so they can complete. There are two strengths:
+
+* Any hold defers discretionary DDL: drivers whose DDL is a rotation, a
+  re-creation, or a race they start themselves check `active()`.
+* A strict hold also stops drivers whose DDL exists to overlap rollouts. They
+  check `strict_active()` and skip the invocation, so a rollout under a strict
+  hold sees only its own DDL. Outside strict holds those drivers keep running
+  DDL during rollouts.
+
+A command already past its check when a hold starts may still issue DDL, so a
+hold reduces foreign DDL but does not guarantee its absence.
 
 Holds are recorded in state database `ddl_hold`, table
-`holds(id, requested_at_monotonic, seconds, requester)`. `time.monotonic()` is
-comparable across processes in the workload container.
+`holds(id, requested_at_monotonic, seconds, requester, strict)`.
+`time.monotonic()` is comparable across processes in the workload container.
 """
 
 from __future__ import annotations
@@ -40,35 +47,35 @@ def _open() -> sqlite3.Connection:
         "CREATE TABLE IF NOT EXISTS holds ("
         " id INTEGER PRIMARY KEY AUTOINCREMENT,"
         " requested_at_monotonic REAL NOT NULL, seconds REAL NOT NULL,"
-        " requester TEXT NOT NULL)"
+        " requester TEXT NOT NULL, strict INTEGER NOT NULL)"
     )
     db.commit()
     return db
 
 
-def _request(seconds: float, requester: str) -> None:
+def _request(seconds: float, requester: str, strict: bool) -> None:
     db = _open()
     try:
         with db:
             db.execute(
-                "INSERT INTO holds (requested_at_monotonic, seconds, requester)"
-                " VALUES (?, ?, ?)",
-                (time.monotonic(), seconds, requester),
+                "INSERT INTO holds (requested_at_monotonic, seconds, requester, strict)"
+                " VALUES (?, ?, ?, ?)",
+                (time.monotonic(), seconds, requester, int(strict)),
             )
     finally:
         db.close()
 
 
-def active() -> bool:
-    """Whether a recorded hold covers the present. False if the state is unreadable."""
+def _covered(strict_only: bool) -> bool:
     try:
         db = _open()
     except (sqlite3.Error, OSError):
         return False
     try:
         row = db.execute(
-            "SELECT 1 FROM holds WHERE requested_at_monotonic + seconds > ? LIMIT 1",
-            (time.monotonic(),),
+            "SELECT 1 FROM holds WHERE requested_at_monotonic + seconds > ?"
+            " AND strict >= ? LIMIT 1",
+            (time.monotonic(), int(strict_only)),
         ).fetchone()
     except sqlite3.Error:
         return False
@@ -77,20 +84,30 @@ def active() -> bool:
     return row is not None
 
 
+def active() -> bool:
+    """Whether any hold covers the present. False if the state is unreadable."""
+    return _covered(strict_only=False)
+
+
+def strict_active() -> bool:
+    """Whether a strict hold covers the present. False if the state is unreadable."""
+    return _covered(strict_only=True)
+
+
 @contextmanager
-def held(requester: str, chunk_s: float = 60.0) -> Iterator[None]:
-    """Hold discretionary DDL while the block runs, in renewable chunks.
+def held(requester: str, strict: bool = False, chunk_s: float = 60.0) -> Iterator[None]:
+    """Hold DDL while the block runs, in renewable chunks.
 
     The hold lapses at most `chunk_s` after the block exits, including when
     the process dies inside it.
     """
-    _request(chunk_s, requester)
+    _request(chunk_s, requester, strict)
     done = threading.Event()
 
     def renew() -> None:
         while not done.wait(chunk_s / 2):
             try:
-                _request(chunk_s, requester)
+                _request(chunk_s, requester, strict)
             except (sqlite3.Error, OSError) as e:
                 print(f"ddl_hold: renewing for {requester} failed: {e}", flush=True)
 
