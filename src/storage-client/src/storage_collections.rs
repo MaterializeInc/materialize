@@ -2272,7 +2272,7 @@ impl StorageCollections for StorageCollectionsImpl {
             let data_shard_since = since_handle.since().clone();
 
             // Determine if this collection has any dependencies.
-            let storage_dependencies =
+            let mut storage_dependencies =
                 Self::determine_collection_dependencies(&*self_collections, id, &description)?;
 
             // Determine the initial since of the collection.
@@ -2290,9 +2290,9 @@ impl StorageCollections for StorageCollectionsImpl {
                         .frontier()
                         .to_owned();
 
-                    // If an item has a dependency, its initial since must be
-                    // advanced as far as its dependency, i.e. a dependency's
-                    // since may never be in advance of its dependents.
+                    // Legacy dependency holds require a dependent's initial since
+                    // to be at least its dependency's since. Same-shard aliases
+                    // retain that accounting in protected environments too.
                     //
                     // We have to do this every time we initialize the
                     // collection, though––the invariant might have been upheld
@@ -2311,10 +2311,9 @@ impl StorageCollections for StorageCollectionsImpl {
                         // backing persist shard and updates that have yet to be
                         // written. We would write duplicate updates.
                         //
-                        // If this check fails, it means that the read hold
-                        // installed on the dependency was probably not upheld
-                        // –– if it were, the dependency's since could not have
-                        // advanced as far the dependent's upper.
+                        // A failure means recovery protection was not upheld:
+                        // committed permission in protected environments, or
+                        // the dependency read hold in legacy environments.
                         //
                         // We don't care about the dependency since when the
                         // write frontier is empty. In that case, no-one can
@@ -2336,13 +2335,29 @@ impl StorageCollections for StorageCollectionsImpl {
                             );
                         }
 
-                        dependency_since
+                        if self.catalog_read_protection_enabled && description.primary.is_none() {
+                            // Persisted output history is independent of the
+                            // input history needed to resume its writer. Catalog
+                            // recovery requirements protect that input directly.
+                            // A lagging sink can therefore keep export history
+                            // readable before the remap's recovery frontier.
+                            data_shard_since
+                        } else {
+                            dependency_since
+                        }
                     } else {
                         data_shard_since
                     }
                 }
                 None => data_shard_since,
             };
+
+            if self.catalog_read_protection_enabled {
+                // Do not propagate output read capabilities into cross-shard
+                // recovery inputs. The catalog owns those requirements, including
+                // during read-only bootstrap. Keep same-shard alias holds.
+                storage_dependencies.retain(|dependency| Some(*dependency) == description.primary);
+            }
 
             // Determine the time dependence of the collection.
             let time_dependence = {
@@ -3171,7 +3186,8 @@ struct CollectionState {
     /// This is not authority to advance the critical handle.
     permission_capability: Option<Antichain<Timestamp>>,
 
-    /// Storage identifiers on which this collection depends.
+    /// Dependencies whose local read capabilities follow this collection.
+    /// Protected environments retain only same-shard primary alias edges.
     pub storage_dependencies: Vec<GlobalId>,
 
     /// Reported write frontier.
@@ -4455,15 +4471,6 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn test_dependency_creation_uses_held_readability() {
-        check_creation_uses_held_readability(false).await;
-    }
-
-    #[mz_ore::test(tokio::test)]
-    async fn test_sink_creation_uses_held_readability() {
-        check_creation_uses_held_readability(true).await;
-    }
-
-    async fn check_creation_uses_held_readability(sink: bool) {
         let (controller, _persist) = bound_test_controller().await;
         let input = GlobalId::User(1);
         let dependent = GlobalId::User(2);
@@ -4495,16 +4502,10 @@ mod tests {
             Some(frontier(5))
         );
 
-        metadata
-            .collection_metadata
-            .insert(dependent, if sink { ShardId::new() } else { shard });
+        metadata.collection_metadata.insert(dependent, shard);
         metadata.compaction_bounds.insert(dependent, frontier(5));
         let mut description = CollectionDescription::for_other(RelationDesc::empty(), None);
-        if sink {
-            description.data_source = held_readability_sink(input);
-        } else {
-            description.primary = Some(input);
-        }
+        description.primary = Some(input);
         controller
             .create_collections_for_bootstrap(
                 &metadata,
@@ -4520,9 +4521,124 @@ mod tests {
                 .unwrap()
                 .read_capabilities,
             frontier(5),
-            "creation must use held readability, sink={sink}"
+            "alias creation must use held readability"
         );
         drop(holds);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_protected_recovery_preserves_export_history_for_lagging_sink() {
+        use mz_storage_types::sources::envelope::{KeyEnvelope, NoneEnvelope};
+        use mz_storage_types::sources::load_generator::{
+            LoadGenerator, LoadGeneratorOutput, LoadGeneratorSourceExportDetails,
+        };
+        use mz_storage_types::sources::{
+            IngestionDescription, LoadGeneratorSourceConnection, SourceDesc,
+            SourceExportDataConfig, SourceExportDetails,
+        };
+
+        let (controller, persist) = bound_test_controller().await;
+        let source = GlobalId::User(1);
+        let export = GlobalId::User(2);
+        let sink = GlobalId::User(3);
+        let remap_shard = ShardId::new();
+        let export_shard = ShardId::new();
+        let sink_shard = ShardId::new();
+        let metadata = StorageMetadata {
+            collection_metadata: [
+                (source, remap_shard),
+                (export, export_shard),
+                (sink, sink_shard),
+            ]
+            .into_iter()
+            .collect(),
+            compaction_bounds: [
+                (source, frontier(20)),
+                (export, frontier(5)),
+                (sink, frontier(5)),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        // The export has advanced beyond the remap's recovery requirement, but
+        // the sink still needs persisted export history before that frontier.
+        write_retained_history(&persist, export_shard).await;
+        let mut sink_writer = persist
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                sink_shard,
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("open sink progress");
+        let updates: Vec<((SourceData, ()), Timestamp, StorageDiff)> = Vec::new();
+        sink_writer
+            .compare_and_append(&updates, frontier(0), frontier(10))
+            .await
+            .expect("sink progress write")
+            .expect("uncontended sink progress");
+        sink_writer.expire().await;
+
+        let mut source_desc = CollectionDescription::for_other(RelationDesc::empty(), None);
+        source_desc.data_source = DataSource::Ingestion(IngestionDescription {
+            desc: SourceDesc {
+                connection: GenericSourceConnection::LoadGenerator(LoadGeneratorSourceConnection {
+                    load_generator: LoadGenerator::Counter {
+                        max_cardinality: None,
+                    },
+                    tick_micros: None,
+                    as_of: 0,
+                    up_to: 0,
+                }),
+                timestamp_interval: Duration::from_secs(1),
+            },
+            remap_metadata: (),
+            source_exports: BTreeMap::new(),
+            instance_id: mz_storage_types::instances::StorageInstanceId::system(1)
+                .expect("storage instance"),
+            remap_collection_id: source,
+        });
+        let mut export_desc = CollectionDescription::for_other(RelationDesc::empty(), None);
+        export_desc.data_source = DataSource::IngestionExport {
+            ingestion_id: source,
+            details: SourceExportDetails::LoadGenerator(LoadGeneratorSourceExportDetails {
+                output: LoadGeneratorOutput::Default,
+            }),
+            data_config: SourceExportDataConfig {
+                encoding: None,
+                envelope: SourceEnvelope::None(NoneEnvelope {
+                    key_envelope: KeyEnvelope::None,
+                    key_arity: 0,
+                }),
+            },
+        };
+        let mut sink_desc = CollectionDescription::for_other(RelationDesc::empty(), None);
+        sink_desc.data_source = held_readability_sink(export);
+        controller
+            .create_collections_for_bootstrap(
+                &metadata,
+                None,
+                vec![
+                    (source, source_desc),
+                    (export, export_desc),
+                    (sink, sink_desc),
+                ],
+                &BTreeSet::new(),
+            )
+            .await
+            .expect("recover independent persisted history and writer inputs");
+        for (id, expected) in [(source, 20), (export, 5), (sink, 5)] {
+            assert_eq!(
+                controller
+                    .collection_frontiers(id)
+                    .expect("recovered collection")
+                    .read_capabilities,
+                frontier(expected),
+            );
+        }
+        assert_retained_history(&persist, export_shard).await;
     }
 
     fn held_readability_sink(from: GlobalId) -> DataSource {

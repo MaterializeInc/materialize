@@ -83,6 +83,10 @@ and completion are excluded. Catalog upper movement alone proves none of these.
 SLT/Zippy timeouts remain unresolved. Do not assume a shared cause with the MV
 contention without statement-correlated evidence. Detailed captures and verification
 belong in the PR.
+Protected storage bootstrap must preserve persisted output history independently
+of writer recovery inputs. Retain same-shard alias accounting and recovery checks,
+but do not impose legacy cross-shard since joins or dependency holds. Verify the
+lagging export-to-sink recovery case in the existing persistence workflow.
 Kafka RTR's intermittent explicit CREATE SOURCE planning-revision loss is unresolved.
 Protection publication overlaps purification but is not a proven invalidator.
 Temporary, fixture-enabled kind/count and revision diagnostics must correlate the
