@@ -945,4 +945,37 @@ mod tests {
         let operators = &lowered.source_imports[&UNREAD].desc.arguments.operators;
         assert_eq!(operators.as_ref(), Some(&planned));
     }
+
+    /// MIR predicate pushdown copies `mz_now() <= #0` into the source's operators and keeps it in
+    /// the `Filter` above the read. Hoisting the read's copy into the source must not leave the
+    /// source evaluating the same bound twice.
+    #[mz_ore::test]
+    fn lowering_merges_pushed_down_temporal_predicate() {
+        let mz_now = || MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
+        let cast = || MirScalarExpr::column(0).call_unary(func::CastInt64ToMzTimestamp);
+        let le = || mz_now().call_binary(cast(), func::Lte);
+
+        let mut df = dataflow(
+            MirRelationExpr::Get {
+                id: Id::Global(READ),
+                typ: typ(),
+                access_strategy: AccessStrategy::Persist,
+            }
+            .filter([le()]),
+        );
+        let read = df.source_imports.get_mut(&READ).expect("imported");
+        read.desc.arguments.operators = Some(MapFilterProject::new(1).filter([le()]));
+
+        let lowered = LirRelationExpr::finalize_dataflow(df, &OptimizerFeatures::default(), None)
+            .expect("lowers");
+        let operators = lowered.source_imports[&READ]
+            .desc
+            .arguments
+            .operators
+            .as_ref()
+            .expect("planned operators");
+        let (_safe, lower, upper) = operators.as_parts();
+        assert!(lower.is_empty(), "{operators:?}");
+        assert_eq!(upper.len(), 1, "{operators:?}");
+    }
 }
