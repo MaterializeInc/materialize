@@ -63,6 +63,20 @@ def version_tuple(text: str | None) -> tuple[int, int, int] | None:
 
 # `PersistClient::CONTROLLER_CRITICAL_SINCE`.
 CONTROLLER_CRITICAL_SINCE = "c00000000-1111-2222-3333-444444444444"
+# `CATALOG_CRITICAL_SINCE` in `mz_catalog::durable::persist`.
+CATALOG_CRITICAL_SINCE = "c55555555-6666-7777-8888-999999999999"
+
+# Critical readers with a fixed id that every environmentd registers on open,
+# read-only included, keyed by (reader id, handle purpose). Registering an
+# existing reader stamps its hostname without moving its since:
+# `StorageCollections::new` opens a `TxnsHandle` on the txns shard, and
+# opening the durable catalog opens its critical since handle.
+SHARED_CRITICAL_READERS = frozenset(
+    {
+        (CONTROLLER_CRITICAL_SINCE, "commit txns"),
+        (CATALOG_CRITICAL_SINCE, "durable catalog state critical since"),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -92,11 +106,9 @@ def foreign_handles(state: dict[str, Any], ceiling: int) -> list[dict[str, Any]]
     `state` is `persistcli inspect state` output. A writer enters persist state
     only through a successful `compare_and_append`, and a critical reader only
     by registering a critical since handle, so either from a never-promoted
-    generation is a write by a read-only process. Leased readers are left out:
-    a read-only process registers them by design, as is the controller's
-    critical reader on the txns shard: `StorageCollections::new` opens a
-    `TxnsHandle` in read-only mode too, which re-registers that reader and
-    stamps its hostname, then drops the handle without moving its since.
+    generation is a write by a read-only process. Leased readers and
+    `SHARED_CRITICAL_READERS` are left out: a read-only process registers
+    them by design.
     """
     found = []
     for kind in ("writers", "critical_readers"):
@@ -104,8 +116,7 @@ def foreign_handles(state: dict[str, Any], ceiling: int) -> list[dict[str, Any]]
             debug = handle.get("debug") or {}
             if (
                 kind == "critical_readers"
-                and handle_id == CONTROLLER_CRITICAL_SINCE
-                and debug.get("purpose") == "commit txns"
+                and (handle_id, debug.get("purpose")) in SHARED_CRITICAL_READERS
             ):
                 continue
             hostname = str(debug.get("hostname") or "")
