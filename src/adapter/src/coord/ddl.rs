@@ -834,7 +834,8 @@ impl Coordinator {
                 Op::DropObjects(objects) => objects.iter().any(|object| {
                     // Written-plan and notice dependencies are indexes or items used by
                     // a plan owner. An unused view cannot affect either, and
-                    // owns no selection itself. Keep all other drops conservative.
+                    // owns no selection itself. Roles and network policies cannot
+                    // remove dataflow inputs. Their validation remains in commit.
                     match object {
                         catalog::DropObjectInfo::Item(id) => {
                             !self.catalog().try_get_entry(id).is_some_and(|entry| {
@@ -842,7 +843,12 @@ impl Coordinator {
                                     && entry.used_by().is_empty()
                             })
                         }
-                        _ => true,
+                        catalog::DropObjectInfo::Role(_)
+                        | catalog::DropObjectInfo::NetworkPolicy(_) => false,
+                        catalog::DropObjectInfo::Cluster(_)
+                        | catalog::DropObjectInfo::ClusterReplica(_)
+                        | catalog::DropObjectInfo::Database(_)
+                        | catalog::DropObjectInfo::Schema(_) => true,
                     }
                 }),
                 Op::AlterMaterializedViewApplyReplacement { .. } => true,
