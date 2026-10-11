@@ -4740,7 +4740,7 @@ fn dependency_compaction_bound(
     state: &CatalogState,
     id: GlobalId,
 ) -> Result<Option<mz_repr::Timestamp>, CatalogError> {
-    // Storage initializes a dependent at least as far as its dependency's since.
+    // A new writer's birth must respect its input's compaction permission.
     // Governance proves since <= bound without making physical readability the
     // authority. The preliminary state includes permissions from preceding ops,
     // even before their shard metadata is allocated.
