@@ -423,7 +423,7 @@ where
         self.frontier = new_frontier;
 
         let elapsed = started.elapsed();
-        if elapsed >= Duration::from_secs(1) {
+        if elapsed >= Duration::from_millis(20) {
             tracing::debug!(
                 target: "mz_persist_client::listen_diagnostics",
                 shard = %self.handle.machine.shard_id(),
@@ -483,7 +483,7 @@ where
         }
         ret.push(ListenEvent::Progress(progress));
         let elapsed = started.elapsed();
-        if elapsed >= Duration::from_secs(1) {
+        if elapsed >= Duration::from_millis(20) {
             tracing::debug!(
                 target: "mz_persist_client::listen_diagnostics",
                 shard = %self.handle.machine.shard_id(),
