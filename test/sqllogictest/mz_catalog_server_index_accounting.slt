@@ -997,6 +997,7 @@ pg_class_all_databases  relnatts
 pg_class_all_databases  reloftype
 pg_class_all_databases  reloptions
 pg_class_all_databases  relowner
+pg_class_all_databases  relpages
 pg_class_all_databases  relpersistence
 pg_class_all_databases  relreplident
 pg_class_all_databases  relrowsecurity
