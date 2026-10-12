@@ -121,8 +121,11 @@ When a subscribe's backlog in `environmentd` exceeds
 `environmentd` also collects every update between two progress messages before
 passing them on, and fails the subscribe with "total result exceeds max size"
 once that collection exceeds `max_result_size`, a system setting with a default
-of 1 GB (`PendingSubscribe::stash` in `src/compute-client/src/service.rs:537-556`,
-which also runs in each `clusterd` process).
+of 1 GB and a minimum of 1 MB (`PendingSubscribe::stash` in
+`src/compute-client/src/service.rs`). Each replica checks the batch it sends
+against the same limit and fails with "result exceeds max size", without
+"total" (`SubscribeBatch::to_error_if_exceeds` in
+`src/compute-client/src/protocol/response.rs`).
 An initial snapshot is one timestamp, so the whole snapshot must fit. A resume
 after long downtime can hit the same limit when the frontier advances in one
 step. The failure is deterministic, so a retry repeats it, and nothing the client
@@ -377,34 +380,49 @@ targets that need it.
 A frontier advance with no data will yield an empty batch with a fresh token,
 so checkpoints keep moving through quiet hours.
 
-`UP TO` will be supported. On server versions without the SQL-528 fix, the SDK
-will release everything below `UP TO` once a bounded stream has ended, so no
-closed data is lost. An empty `FETCH` with a timeout does not prove the end,
-because a timeout and an exhausted cursor return the same empty result
-(`src/pgwire/src/protocol.rs:2607-2624`). So after an empty timed fetch on a
-bounded stream, the SDK will issue a `FETCH` without a timeout, which waits for
-data or the end of the stream (`src/sql/src/plan/statement/scl.rs:262`), and
-only an empty result there counts as the end. Gating on the server version
-switches the workaround off once the fix ships.
+`UP TO` will be supported. A bounded stream can end without a progress row at
+`UP TO` (SQL-528), so once it has ended the SDK will release everything below
+`UP TO`, and no closed data is lost. That release does nothing when a progress
+row already reached `UP TO`, so it needs no gate on the server version.
+
+An empty `FETCH` with a timeout does not prove the end, because a timeout and an
+exhausted cursor return the same empty result (`src/pgwire/src/protocol.rs`).
+So after any empty timed fetch the SDK will issue a `FETCH` without a timeout,
+which returns with the next rows, normally the next progress row, or with
+nothing once the stream has ended (`src/sql/src/plan/statement/scl.rs`). Only an
+empty result there counts as the end. This also detects an unbounded stream
+that ends, such as a materialized view past its last refresh, whose upper
+becomes empty with no progress row. While the frontier stands still, as on a
+`REFRESH EVERY` view between refreshes, that `FETCH` keeps waiting, so the
+transport cancels it when it must stop sooner.
 
 ### Checkpoints and fencing
 
-A checkpoint store will have `load(sink_id)` and
-`commit(sink_id, epoch, expected, frontier)`. The target is the recommended store,
+A checkpoint store will have `load(sink_id)` and one write operation, a
+compare-and-set. The checkpoint records the owner's epoch, a generation, the
+frontier, and the subscriptions' fingerprints, and it encodes to the same text
+every time. So every write replaces exactly the text the writer read, and fails
+if the stored text changed or no checkpoint exists. Only creating a sink's
+first checkpoint writes where none exists. The target is the recommended store,
 because writing data and checkpoint in one transaction gives exactly-once state
 (R1, R5). A Materialize-table store and a local file store will ship for targets
 with no transaction. Neither commits atomically with the target, so both give
 `at_least_once` only.
 
-Each worker start will take the next epoch. A commit will succeed only if the
-stored epoch equals the worker's and the stored frontier equals `expected`, the
-frontier the batch started from. A stale worker gets a typed `Fenced` error.
-Without the fence, a second instance of one sink would overwrite the first one's
-progress. Under `transactional`, this check runs in the same transaction as the
-data, so a batch whose frontier is already committed rolls back as a whole. That
-matters when a commit succeeds but its response is lost: the retry finds the
-stored frontier already past `expected`, rolls back, and the SDK reads the
-checkpoint and treats the batch as committed instead of applying it twice.
+Each worker start will take the next epoch. A commit carries the worker's epoch
+and generation and `lower`, the frontier the batch started from, and applies
+only if the stored epoch and generation are the worker's and the stored frontier
+is `lower`. A stale worker gets a typed `Fenced` error, and a write for a
+snapshot the owner has since restarted is refused too. Without the fence, a
+second instance of one sink would overwrite the first one's progress. A
+take-over is a compare-and-set as well, so a commit by the old owner between
+the new owner's read and its write makes the take-over fail and read again,
+instead of being overwritten. Under `transactional`, the compare-and-set runs in
+the same transaction as the data, so a batch whose frontier is already
+committed rolls back as a whole. That matters when a commit succeeds but its
+response is lost: the retry finds the stored frontier already at the batch's
+upper, rolls back, and the SDK reads the checkpoint and treats the batch as
+committed instead of applying it twice.
 
 Every durable subscription will require an explicit `sink_id`, which is its
 checkpoint identity. It is chosen by the user and stays stable across restarts,
@@ -500,8 +518,8 @@ or an id that no longer exists, fails with `XX000`
 (`src/adapter/src/error.rs:1001`) at either point, the same code a dataflow
 error has, and changed columns fail at the first `FETCH` with `0A000`
 (`ChangedPlan`, `src/adapter/src/error.rs:942`). So an `XX000` other than the
-result-size error, or a `0A000`, before the cursor's first progress row is a
-start error: the SDK repeats the name lookup and classifies the change through
+result-size error, or the `ChangedPlan` `0A000` ("cached plan must not change
+result type"), before the cursor's first progress row is a start error: the SDK repeats the name lookup and classifies the change through
 the table above. If the object is unchanged, the original error keeps its own
 classification. Every other error before the first progress row, such as a
 dropped connection, a cancel, expired credentials, or `HistoryLost`, is
@@ -623,10 +641,10 @@ itself, so the spread between `t_i` values does not arise.
 | `CredentialsExpired` | `28000` | one reconnect through the connection factory, then `Fatal` |
 | `Canceled` | `57014` (a cancel or a timeout) | stop |
 | `FellBehind` | `53200` | resume from the last commit with backoff, report a metric |
-| `ResultTooLarge` | `XX000` plus the "exceeds max size" message | stop with remedy |
+| `ResultTooLarge` | `XX000` plus the "result exceeds max size" message, from `environmentd` or a replica | stop with remedy |
 | `HistoryLost` | `22000` plus the timestamp-selection message, after the index re-check | history-loss policy |
 | `ObjectDropped` | `42704` | see "Object identity" |
-| `SchemaMismatch` | checkpoint fingerprint, or `0A000` before the first progress row | see "Object identity" |
+| `SchemaMismatch` | checkpoint fingerprint, or the `ChangedPlan` `0A000` before the first progress row | see "Object identity" |
 | `StreamPoisoned` | `XX000` after the first progress row with any other message, which includes genuine internal errors | stop |
 | `Fenced` | checkpoint commit | stop |
 | `IndexedTarget` | startup check, and the re-check before `HistoryLost` | stop with remedy |
@@ -649,8 +667,11 @@ retrying it would make a sink impossible to stop. During
 a subscribe, `53200` means `FellBehind`, because the subscribe's own size error
 takes the `XX000` path. Until dedicated SQLSTATEs exist, two errors need message
 text: `HistoryLost` and `ResultTooLarge`. All message matching will live in one
-function, gated on server version, with conformance vectors pinned to each
-message. The workstream asks for dedicated codes so this can go away.
+function, with conformance vectors pinned to each message. The SDK supports
+Materialize v26.39 and later, the first release that retires a subscribe whose
+client fell behind (#37905), so it carries no rules for older messages. Other
+`0A000` errors at the start, such as a cluster with no replicas, are `Fatal`.
+The workstream asks for dedicated codes so message matching can go away.
 
 Durable subscriptions add three failures: attaching to an expired subscription
 and an `AS OF` outside its window both map to `HistoryLost`, and an attach by a
@@ -805,16 +826,15 @@ so the sweep loops.
 The checkpoint will live in a separate checkpoint namespace, one document per
 sink, created once when the sink is set up. Workers will change it only with
 patches, which never create a document, so a stale worker cannot recreate a
-deleted checkpoint. A worker will take the next epoch with a patch conditional
-on the stored epoch being strictly lower than its own, so of two workers starting
-at once only one wins. A commit follows the general contract (see "Checkpoints
-and fencing"): a patch conditional on the stored epoch being equal to its own and
-the stored frontier being equal to `expected`. So a delayed retry of an older
-commit cannot move the frontier back, which matters because the tombstone sweep
-reads that frontier. On a patch count of zero the worker reads the checkpoint
-back: a different epoch means `Fenced`, the same epoch with a frontier at or past
-the requested one means the commit already happened, and anything else is a
-conflict that sends the worker back to the stored checkpoint. The data
+deleted checkpoint. Every patch, to take the next epoch or to commit, follows
+the general contract (see "Checkpoints and fencing"): it is conditional on the
+stored checkpoint being the one the worker read, so of two workers starting at
+once only one wins, and a delayed retry of an older commit cannot move the
+frontier back, which matters because the tombstone sweep reads that frontier.
+On a patch count of zero the worker reads the checkpoint back: a newer epoch
+means `Fenced`, a frontier equal to the requested one means the commit already
+happened, and anything else is a conflict that sends the worker back to the
+stored checkpoint. The data
 namespaces hold no reserved documents.
 
 Only one write request is atomic, and turbopuffer keeps one version of each
