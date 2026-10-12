@@ -55,6 +55,29 @@ pub const MAX_CONNECTIONS: Config<u32> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Number of open connections at which balancerd leaves load balancer rotation.
+pub const CONNECTION_HIGH_WATERMARK: Config<Option<usize>> = Config::new(
+    "balancerd_connection_high_watermark",
+    None,
+    "Number of open connections at which balancerd reports not ready on /api/readyz, so \
+    load balancers stop sending it new connections while existing connections continue. \
+    Takes effect only when balancerd_connection_low_watermark is also set, the low \
+    watermark is below the high watermark, and the high watermark is below a non-zero \
+    balancerd_max_connections. Unset disables the watermarks.",
+    ParameterScope::Environment,
+);
+
+/// Number of open connections below which balancerd returns to load balancer rotation.
+pub const CONNECTION_LOW_WATERMARK: Config<Option<usize>> = Config::new(
+    "balancerd_connection_low_watermark",
+    None,
+    "Number of open connections below which balancerd reports ready again after reaching \
+    balancerd_connection_high_watermark. Must be below the high watermark. The gap \
+    between the two keeps a balancer near the threshold from repeatedly entering and \
+    leaving load balancer rotation. Unset disables the watermarks.",
+    ParameterScope::Environment,
+);
+
 /// How long a client has to reach a resolved backend before the connection is closed.
 ///
 /// Zero disables the deadline. The default allows for authentication's roughly 35-second
@@ -128,6 +151,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SIGTERM_LISTEN_WAIT)
         .add(&INJECT_PROXY_PROTOCOL_HEADER_HTTP)
         .add(&MAX_CONNECTIONS)
+        .add(&CONNECTION_HIGH_WATERMARK)
+        .add(&CONNECTION_LOW_WATERMARK)
         .add(&PRE_RESOLVED_TIMEOUT)
         .add(&LOGGING_FILTER)
         .add(&OPENTELEMETRY_FILTER)
@@ -159,6 +184,16 @@ pub(crate) fn set_defaults(
             config_updates.add_dynamic(
                 MAX_CONNECTIONS.name(),
                 mz_dyncfg::ConfigVal::U32(u32::from_str(v)?),
+            )
+        } else if k.as_str() == CONNECTION_HIGH_WATERMARK.name() {
+            config_updates.add_dynamic(
+                CONNECTION_HIGH_WATERMARK.name(),
+                mz_dyncfg::ConfigVal::OptUsize(Some(usize::from_str(v)?)),
+            )
+        } else if k.as_str() == CONNECTION_LOW_WATERMARK.name() {
+            config_updates.add_dynamic(
+                CONNECTION_LOW_WATERMARK.name(),
+                mz_dyncfg::ConfigVal::OptUsize(Some(usize::from_str(v)?)),
             )
         } else if k.as_str() == PRE_RESOLVED_TIMEOUT.name() {
             config_updates.add_dynamic(
