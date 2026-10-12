@@ -821,6 +821,10 @@ curl -X POST <baseURL>/api/mcp/agent \
   }'
 ```
 
+This example uses MCP protocol version 2025-11-25. For the headers and
+`params._meta` that a 2026-07-28 request adds, see [Protocol
+versions](/developer-tools/mcp-server/#protocol-versions).
+
 {{< /tab >}}
 
 {{< /tabs >}}
