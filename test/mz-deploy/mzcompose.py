@@ -3042,6 +3042,11 @@ def workflow_version_check(c: Composition, parser: WorkflowArgumentParser) -> No
         result = run_mz_deploy(c, "basic/v1", "debug")
         assert result.returncode == 0, f"debug failed: {result.stderr}"
         combined = result.stdout + result.stderr
+        # `debug` exits 0 even when it cannot connect, and the skew check only
+        # runs on a successful connection.
+        assert (
+            "Environment" in combined
+        ), f"debug did not connect to materialized:\n{combined}"
         assert (
             "than the server" not in combined
         ), f"matching versions must not draw a skew notice:\n{combined}"
