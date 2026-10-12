@@ -401,7 +401,13 @@ def create_clusterd_service(
     unified_cluster = (additional_system_parameter_defaults or {}).get(
         "enable_unified_cluster", "false"
     ) == "true"
-    return Clusterd(image=clusterd_image, unified_cluster=unified_cluster)
+    # A tagged instance runs the standalone `clusterd` image. Run the same
+    # binary when building from source: the unified `materialized` binary
+    # has a different code layout, which shifted FastPathFilterNoIndex by
+    # 11% between otherwise identical builds.
+    return Clusterd(
+        image=clusterd_image, mzbuild="clusterd", unified_cluster=unified_cluster
+    )
 
 
 def start_overridden_mz_clusterd_and_cockroach(
