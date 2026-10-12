@@ -3853,7 +3853,7 @@ impl From<durable::ReconfigurationTarget> for ReconfigurationTarget {
 pub struct BurstState {
     pub burst_size: String,
     pub linger_duration: Duration,
-    pub steady_hydrated_at: Option<Timestamp>,
+    pub steady_ready_at: Option<Timestamp>,
 }
 
 impl From<BurstState> for durable::BurstState {
@@ -3863,12 +3863,12 @@ impl From<BurstState> for durable::BurstState {
         let BurstState {
             burst_size,
             linger_duration,
-            steady_hydrated_at,
+            steady_ready_at,
         } = burst;
         Self {
             burst_size,
             linger_duration,
-            steady_hydrated_at,
+            steady_ready_at,
         }
     }
 }
@@ -3880,12 +3880,12 @@ impl From<durable::BurstState> for BurstState {
         let durable::BurstState {
             burst_size,
             linger_duration,
-            steady_hydrated_at,
+            steady_ready_at,
         } = burst;
         Self {
             burst_size,
             linger_duration,
-            steady_hydrated_at,
+            steady_ready_at,
         }
     }
 }

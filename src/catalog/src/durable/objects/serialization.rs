@@ -196,7 +196,7 @@ impl RustType<proto::BurstState> for BurstState {
         proto::BurstState {
             burst_size: self.burst_size.clone(),
             linger_duration: self.linger_duration.into_proto(),
-            steady_hydrated_at: self.steady_hydrated_at.map(Into::into),
+            steady_ready_at: self.steady_ready_at.map(Into::into),
         }
     }
 
@@ -204,7 +204,7 @@ impl RustType<proto::BurstState> for BurstState {
         Ok(Self {
             burst_size: proto.burst_size,
             linger_duration: proto.linger_duration.into_rust()?,
-            steady_hydrated_at: proto.steady_hydrated_at.map(mz_repr::Timestamp::new),
+            steady_ready_at: proto.steady_ready_at.map(mz_repr::Timestamp::new),
         })
     }
 }

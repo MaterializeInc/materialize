@@ -781,7 +781,7 @@ impl Strategy for HydrationBurstStrategy {
                             record: Some(BurstRecord {
                                 burst_size: policy.hydration_size.clone(),
                                 linger_duration,
-                                steady_hydrated_at: None,
+                                steady_ready_at: None,
                             }),
                             audit: Some(BurstAudit::Started),
                         }),
@@ -791,7 +791,7 @@ impl Strategy for HydrationBurstStrategy {
             }
             // Record present: drive the linger/teardown/re-arm lifecycle.
             Some(record) => {
-                match (record.steady_hydrated_at, steady_hydrated) {
+                match (record.steady_ready_at, steady_hydrated) {
                     // Steady set hydrated and the linger has elapsed: tear down.
                     // A linger that overflows the timestamp space reads as
                     // never-elapsed.
@@ -811,7 +811,7 @@ impl Strategy for HydrationBurstStrategy {
                     (None, true) => StateWrite {
                         burst: Some(BurstWrite {
                             record: Some(BurstRecord {
-                                steady_hydrated_at: Some(now),
+                                steady_ready_at: Some(now),
                                 ..record.clone()
                             }),
                             audit: None,
@@ -825,7 +825,7 @@ impl Strategy for HydrationBurstStrategy {
                     (Some(_), false) => StateWrite {
                         burst: Some(BurstWrite {
                             record: Some(BurstRecord {
-                                steady_hydrated_at: None,
+                                steady_ready_at: None,
                                 ..record.clone()
                             }),
                             audit: None,

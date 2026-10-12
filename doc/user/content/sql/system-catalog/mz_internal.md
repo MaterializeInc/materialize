@@ -202,7 +202,7 @@ an autoscaling action is running.
 |----------------|-----------|----------------------------------------------------------------|
 | `cluster_id`   | [`text`]  | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters). |
 | `strategy`     | [`jsonb`] | **Unstable** The configured autoscaling policy, as JSON. Currently an `on_hydration` sub-policy carrying its `hydration_size` and optional `linger_duration`. |
-| `state`        | [`jsonb`] | **Unstable** The in-flight autoscaling runtime state, as JSON keyed by strategy, or `NULL` when nothing is running. Currently a `burst` key carrying the active hydration burst: its `burst_size`, `linger_duration`, and `steady_hydrated_at`. |
+| `state`        | [`jsonb`] | **Unstable** The in-flight autoscaling runtime state, as JSON keyed by strategy, or `NULL` when nothing is running. Currently a `burst` key carrying the active hydration burst: its `burst_size`, `linger_duration`, and `steady_ready_at`. |
 
 ## `mz_cluster_replica_metrics`
 

@@ -360,7 +360,7 @@ impl Coordinator {
                 tx,
             } => {
                 // Hydration only: this signal drives the burst strategy's
-                // linger, whose durable `steady_hydrated_at` stamp means exactly
+                // linger, whose durable `steady_ready_at` stamp means exactly
                 // "hydration was observed". The cut-over gate is `ReadyReplicas`.
                 let checks =
                     self.start_readiness_checks(cluster_id, replicas, None, &BTreeSet::new());
@@ -1117,12 +1117,12 @@ fn memory_burst(
     let mz_cluster_controller::ctx::BurstRecord {
         burst_size,
         linger_duration,
-        steady_hydrated_at,
+        steady_ready_at,
     } = record;
     mz_catalog::memory::objects::BurstState {
         burst_size: burst_size.clone(),
         linger_duration: *linger_duration,
-        steady_hydrated_at: *steady_hydrated_at,
+        steady_ready_at: *steady_ready_at,
     }
 }
 

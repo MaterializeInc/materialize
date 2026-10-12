@@ -2419,7 +2419,7 @@ async fn forced_cutover_swap_preserves_the_burst_replica() {
     state.burst = Some(BurstRecord {
         burst_size: "400cc".to_string(),
         linger_duration: Duration::from_secs(60),
-        steady_hydrated_at: None,
+        steady_ready_at: None,
     });
 
     let mut ctx = FakeCtx::new(vec![state]);
@@ -2473,7 +2473,7 @@ async fn resource_exhaustion_leaves_an_unaffordable_burst_armed() {
     state.burst = Some(BurstRecord {
         burst_size: "400cc".to_string(),
         linger_duration: Duration::from_secs(60),
-        steady_hydrated_at: None,
+        steady_ready_at: None,
     });
 
     let mut ctx = FakeCtx::new(vec![state]);
@@ -3238,7 +3238,7 @@ mod hydration_burst {
         BurstRecord {
             burst_size: burst_size.to_string(),
             linger_duration: linger,
-            steady_hydrated_at: stamped.map(Timestamp::from),
+            steady_ready_at: stamped.map(Timestamp::from),
         }
     }
 
@@ -3262,7 +3262,7 @@ mod hydration_burst {
         let burst = written_burst_record(&write).expect("a burst record is written");
         assert_eq!(burst.burst_size, "400cc");
         assert_eq!(burst.linger_duration, Duration::from_millis(10));
-        assert_eq!(burst.steady_hydrated_at, None);
+        assert_eq!(burst.steady_ready_at, None);
         assert_eq!(
             written_burst_audit(&write),
             Some(BurstAudit::Started),
@@ -3439,7 +3439,7 @@ mod hydration_burst {
         signals.hydrated_replicas.insert(replica(1));
         let write = HydrationBurstStrategy.update_state(&s, &signals, &config(), now(1000));
         let burst = written_burst_record(&write).expect("stamped");
-        assert_eq!(burst.steady_hydrated_at, Some(now(1000)));
+        assert_eq!(burst.steady_ready_at, Some(now(1000)));
         assert_eq!(
             written_burst_audit(&write),
             None,
@@ -3484,7 +3484,7 @@ mod hydration_burst {
         // hydrated_replicas is empty: the steady replica went un-hydrated.
         let write = HydrationBurstStrategy.update_state(&s, &signals, &config(), now(1050));
         let burst = written_burst_record(&write).expect("rewritten");
-        assert_eq!(burst.steady_hydrated_at, None, "stamp reset on re-arm");
+        assert_eq!(burst.steady_ready_at, None, "stamp reset on re-arm");
         assert_eq!(
             written_burst_audit(&write),
             None,
@@ -3674,7 +3674,7 @@ mod hydration_burst {
         ctx.hydrated.insert(replica(1));
         ctx.now = Timestamp::from(2000u64);
         controller.reconcile(&mut ctx).await;
-        // First post-hydration tick stamps `steady_hydrated_at`.
+        // First post-hydration tick stamps `steady_ready_at`.
         ctx.now = Timestamp::from(3000u64);
         controller.reconcile(&mut ctx).await;
         assert!(

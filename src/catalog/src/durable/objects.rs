@@ -445,9 +445,9 @@ pub struct ReconfigurationTarget {
 pub struct BurstState {
     pub burst_size: String,
     pub linger_duration: Duration,
-    /// When the steady-state replicas were first observed hydrated. Absent
-    /// until that observation; the linger countdown runs from this point.
-    pub steady_hydrated_at: Option<mz_repr::Timestamp>,
+    /// When the steady-state replicas were first observed caught up. Absent
+    /// until that observation. The linger countdown runs from this point.
+    pub steady_ready_at: Option<mz_repr::Timestamp>,
 }
 
 #[derive(Clone, Debug, Ord, PartialOrd, PartialEq, Eq)]

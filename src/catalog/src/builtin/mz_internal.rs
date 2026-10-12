@@ -957,7 +957,7 @@ pub static MZ_CLUSTER_AUTO_SCALING_STRATEGIES: LazyLock<BuiltinMaterializedView>
                 ),
                 (
                     "state",
-                    "**Unstable** The in-flight autoscaling runtime state, as JSON keyed by strategy, or `NULL` when nothing is running. Currently a `burst` key carrying the active hydration burst: its `burst_size`, `linger_duration`, and `steady_hydrated_at`.",
+                    "**Unstable** The in-flight autoscaling runtime state, as JSON keyed by strategy, or `NULL` when nothing is running. Currently a `burst` key carrying the active hydration burst: its `burst_size`, `linger_duration`, and `steady_ready_at`.",
                 ),
             ]),
             // One row per managed cluster with a strategy configured or a burst

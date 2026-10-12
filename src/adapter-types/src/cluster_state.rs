@@ -218,7 +218,7 @@ impl ReconfigurationTarget {
 pub struct BurstRecord {
     pub burst_size: String,
     pub linger_duration: Duration,
-    pub steady_hydrated_at: Option<Timestamp>,
+    pub steady_ready_at: Option<Timestamp>,
 }
 
 /// The single definition of when an in-flight burst record of `record_size` is
