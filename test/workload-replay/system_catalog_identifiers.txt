@@ -74,6 +74,7 @@ aggtransspace
 aggtranstype
 aligned_to
 allocations
+amcanorder
 amhandler
 amname
 amtype
