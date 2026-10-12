@@ -107,6 +107,16 @@ Escaping note: write `-rc[.]` rather than `-rc\\.` so the expression survives JS
 
 **Never read `v2_mz_compute_cluster_status` at an instant. Wrap every use of it in `max_over_time` over the window it is being read across.** For the two range queries that is the step; for Step 2's one-shot derivation it is the analysis window. It comes from the promsql exporter, so one missed scrape leaves a namespace with no series at that timestamp, and each of the three places this workflow reads it then fails silently and in the direction of health: the staging join drops every pod of that namespace from the aggregate, Step 2's derivation drops it from the pinned production selector, and Step 1's boundary query reports its version as having disappeared. On the v26.40.0-rc.3 run the staging working-set sum read 161 GB instead of 229 GB and swap read 0 instead of 57 GB at one bucket, because a single customer environment had no status sample at that instant. Widening the lookback closes all three. Dropping the staging join instead is not an option, since development environments run at roughly a quarter of staging clusterd CPU.
 
+### Sweeping the full production fleet
+
+After a production rollout, the release under test is the final version on every customer environment, not an rc on the canaries. The Step 2 derivation then selects every environment on the new version, with three adjustments learned on the v26.43.0 production US sweep in September 2026:
+
+* **Require a minimum number of samples.** Short-lived test environments can pick up the new version for an hour and then disappear. A plain `max_over_time` derivation counted 23 namespaces in us-west-2 where 15 were steadily on the release. Keep namespaces present for most of the after-window.
+* **Exclude environments that did not upgrade**, such as one whose rollout was cancelled, and treat the canaries separately, since they ran rc builds before the boundary.
+* **Compare equal-length windows at equal post-restart age.** The after-window is only as long as the time since each region cut over, often a few hours. Compare it against the same clock window after the previous weekly upgrade and against the same window on each of the prior days. A multi-day `sum(avg_over_time(...))` before-window counts every pod that existed during it: one counted 1847 clusterd pods against about 200 live.
+
+Grafana aligns a one-day step to 00:00 UTC, so a daily series of windows ending at a chosen time needs an `offset`.
+
 ## Step 3: Choose the time window
 
 The bot's links default to roughly `now-2d`, resolved to an absolute timestamp at post time. That is too short. The window must contain a clean stretch of the previous release, the boundary, and a clean stretch of the new release, which in practice means seven days or more. Look back far enough to include the previous upgrade, so that the previous boundary is available as a calibration reference.
