@@ -1503,9 +1503,21 @@ pub type AccountedChunkBatcher<D, T, R, G> =
         AccountedChunkMerger<D, T, R, G>,
     >;
 
+/// An [`AccountedChunkBatcher`] that commits the readied side of a seal, so
+/// readied bodies large enough to spill go to the pool.
+///
+/// For a caller that holds sealed output instead of loading it right away.
+pub type CommittingChunkBatcher<D, T, R, G> =
+    differential_dataflow::trace::implementations::merge_batcher::MergeBatcher<
+        AccountedChunkMerger<D, T, R, G, true>,
+    >;
+
 /// The chunk merger of [`AccountedChunkBatcher`]: differential's merger with
 /// a resident readied side, plus the [`Merger::allocation`] figures the
 /// `mz_arrangement_batcher_*_raw` introspection tables are assembled from.
+///
+/// `COMMIT_READIED` commits the readied side like the kept side. See
+/// [`CommittingChunkBatcher`].
 ///
 /// A chunk reports the bytes of the body it holds whether that body sits on
 /// the heap or in the pool. A spilled body is not free: the pool keeps it in
@@ -1515,12 +1527,18 @@ pub type AccountedChunkBatcher<D, T, R, G> =
 /// to the operator that owns it is what keeps these tables whole.
 ///
 /// [`Merger::allocation`]: differential_dataflow::trace::implementations::merge_batcher::Merger::allocation
-pub struct AccountedChunkMerger<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> {
+pub struct AccountedChunkMerger<
+    D: Columnar,
+    T: Columnar,
+    R: Columnar,
+    G: SpillGate,
+    const COMMIT_READIED: bool = false,
+> {
     inner: differential_dataflow::trace::chunk::ChunkMerger<ColumnChunk<D, T, R, G>>,
 }
 
-impl<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> Default
-    for AccountedChunkMerger<D, T, R, G>
+impl<D: Columnar, T: Columnar, R: Columnar, G: SpillGate, const COMMIT_READIED: bool> Default
+    for AccountedChunkMerger<D, T, R, G, COMMIT_READIED>
 {
     fn default() -> Self {
         Self {
@@ -1529,8 +1547,9 @@ impl<D: Columnar, T: Columnar, R: Columnar, G: SpillGate> Default
     }
 }
 
-impl<D, T, R, G> differential_dataflow::trace::implementations::merge_batcher::Merger
-    for AccountedChunkMerger<D, T, R, G>
+impl<D, T, R, G, const COMMIT_READIED: bool>
+    differential_dataflow::trace::implementations::merge_batcher::Merger
+    for AccountedChunkMerger<D, T, R, G, COMMIT_READIED>
 where
     D: Columnar + 'static,
     T: Columnar + Timestamp + 'static,
@@ -1569,17 +1588,18 @@ where
         // again, and charges the pool's budget for them in between. Drive
         // the loop here instead and grade that side resident. The kept side
         // stays committed: it is the side that lives on, and spilling it is
-        // the point.
+        // the point. A caller that holds the readied side sets
+        // `COMMIT_READIED`, else that side stays on the heap until it loads it.
         let mut input: VecDeque<Self::Chunk> = merged.into();
         let (mut keep, mut shipped) = (VecDeque::new(), VecDeque::new());
         let (mut kept_q, mut shipped_q) = (VecDeque::new(), VecDeque::new());
         while !input.is_empty() {
             Chunk::extract(&mut input, upper, frontier, &mut keep, &mut shipped);
             Chunk::settle(&mut keep, false, &mut kept_q);
-            ColumnChunk::settle_graded(&mut shipped, false, &mut shipped_q, false);
+            ColumnChunk::settle_graded(&mut shipped, false, &mut shipped_q, COMMIT_READIED);
         }
         Chunk::settle(&mut keep, true, &mut kept_q);
-        ColumnChunk::settle_graded(&mut shipped, true, &mut shipped_q, false);
+        ColumnChunk::settle_graded(&mut shipped, true, &mut shipped_q, COMMIT_READIED);
         Extend::extend(kept, kept_q);
         Extend::extend(readied, shipped_q);
     }
@@ -1805,6 +1825,41 @@ mod tests {
             chain.iter().all(|chunk| !chunk.is_spilled()),
             "a chunk that arrived resident is readied resident"
         );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn committing_seal_readies_spilled_chunks() {
+        use differential_dataflow::trace::Batcher;
+
+        // Times on both sides of the seal frontier, so the seal partitions the
+        // chunk and both sides go through a settle.
+        let data: Vec<Tuple> = (0..40_000u64).map(|i| ((i, i), i % 2, 1)).collect();
+
+        set_spill_override(Some(test_pool()));
+        let mut batcher =
+            CommittingChunkBatcher::<(u64, u64), u64, i64, ComputeSpill>::new(None, 0);
+        batcher.push_into(TestChunk::from_body(build_column(&data)));
+        let (chain, _description) = batcher.seal(Antichain::from_elem(1));
+        let (rest, _description) = batcher.seal(Antichain::new());
+        set_spill_override(None);
+
+        assert!(
+            !chain.is_empty(),
+            "the seal ships the times below its frontier"
+        );
+        assert!(chain.iter().any(|chunk| chunk.is_spilled()));
+        assert!(
+            chain.iter().all(|chunk| match chunk {
+                ColumnChunk::Spilled(..) => true,
+                ColumnChunk::Resident(body, _) => body.length_in_bytes() < SPILL_MIN_BYTES,
+            }),
+            "a committing seal spills every readied chunk past the spill floor"
+        );
+        let shipped = collect_chunks(chain);
+        assert!(shipped.iter().all(|(_, t, _)| *t == 0));
+        assert_eq!(shipped.len(), 20_000);
+        assert_eq!(collect_chunks(rest).len(), 20_000);
     }
 
     /// A single pool shared by every test in the module. A pool reserves a

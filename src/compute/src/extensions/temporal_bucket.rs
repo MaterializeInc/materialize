@@ -18,7 +18,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Batcher;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ChunkChunker, ComputeSpill};
+use mz_timely_util::columnar::chunk::{ChunkChunker, CommittingChunkBatcher, ComputeSpill};
 use mz_timely_util::columnar::columnar_exchange_data;
 use mz_timely_util::temporal::{Bucket, BucketChain, BucketRange, BucketTimestamp};
 use timely::Accountable;
@@ -324,12 +324,18 @@ where
     }
 }
 
-/// A wrapper around [`AccountedChunkBatcher`] that implements the bucketing API.
+/// A wrapper around [`CommittingChunkBatcher`] that implements the bucketing API.
 ///
-/// This is the same merge batcher the arrange sites' chunked arm uses, so the
+/// This is the merge batcher the arrange sites' chunked arm uses, so the
 /// bucket chain and those arrangements share one merge-batcher implementation.
 /// The choice is unconditional here: the bucket chain does not consult the
 /// arrange batcher selector.
+///
+/// The arrange sites load a seal's readied side right away, so they keep it
+/// resident. A split here readies the lower half of a bucket and holds it in
+/// the lower bucket, and a peel readies whole buckets before the operator
+/// emits them. Committing that side lets it spill, else every readied byte
+/// sits on the heap at once.
 ///
 /// The batcher consumes sorted, consolidated chunks, so this
 /// wrapper carries a [`ChunkChunker`] that sorts and consolidates the input
@@ -352,7 +358,7 @@ where
     logger: Option<differential_dataflow::logging::Logger>,
     operator_id: usize,
     chunker: ChunkChunker<(T, D), T, R, ComputeSpill>,
-    inner: AccountedChunkBatcher<(T, D), T, R, ComputeSpill>,
+    inner: CommittingChunkBatcher<(T, D), T, R, ComputeSpill>,
 }
 
 impl<D, T, R> MergeBatcherWrapper<D, T, R>
@@ -371,7 +377,7 @@ where
             logger: logger.clone(),
             operator_id,
             chunker: ChunkChunker::default(),
-            inner: AccountedChunkBatcher::new(logger, operator_id),
+            inner: CommittingChunkBatcher::new(logger, operator_id),
         }
     }
 
