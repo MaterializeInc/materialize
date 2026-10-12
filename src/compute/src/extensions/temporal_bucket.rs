@@ -351,8 +351,6 @@ where
 {
     logger: Option<differential_dataflow::logging::Logger>,
     operator_id: usize,
-    /// Time-major copy of the updates on their way into the chunker.
-    staging: Column<((T, D), T, R)>,
     chunker: ChunkChunker<(T, D), T, R, ComputeSpill>,
     inner: AccountedChunkBatcher<(T, D), T, R, ComputeSpill>,
 }
@@ -372,7 +370,6 @@ where
         Self {
             logger: logger.clone(),
             operator_id,
-            staging: Column::default(),
             chunker: ChunkChunker::default(),
             inner: AccountedChunkBatcher::new(logger, operator_id),
         }
@@ -386,18 +383,17 @@ where
         if buffer.is_empty() {
             return;
         }
-        // `staging` is only ever cleared, which keeps it typed.
-        let Column::Typed(staging) = &mut self.staging else {
-            unreachable!("staging column is typed");
-        };
+        // A fresh time-major copy per push. Retaining it would keep a
+        // push-sized allocation in every bucket of the chain, outside the
+        // pool and the batcher's size accounting.
+        let mut staging = <((T, D), T, R) as Columnar>::Container::default();
         let (data, time, diff) = buffer.borrow();
         staging.0.0.extend_from_self(time, 0..time.len());
         staging.0.1.extend_from_self(data, 0..data.len());
         staging.1.extend_from_self(time, 0..time.len());
         staging.2.extend_from_self(diff, 0..diff.len());
         buffer.clear();
-        self.chunker.push_into(&mut self.staging);
-        self.staging.clear();
+        self.chunker.push_into(&mut Column::Typed(staging));
         while let Some(chunk) = self.chunker.extract() {
             self.inner.push_into(std::mem::take(chunk));
         }
