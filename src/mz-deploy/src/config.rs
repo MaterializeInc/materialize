@@ -41,9 +41,9 @@ const LATEST_TAG: &str = "latest";
 /// The Docker image used when no `mz_version` is configured.
 ///
 /// Pins the sandbox to this build, so `test` and `explain` run against the same
-/// server version the project deploys against. Releases publish a `v{version}`
-/// tag; a pre-release build has no such image, so it falls back to the newest
-/// release.
+/// server version the project deploys against. Every release tag, including a
+/// release candidate, publishes a matching `v{version}` image. A dev build has
+/// none, so it falls back to the newest release.
 pub fn default_docker_image() -> String {
     if crate::BUILD_INFO.is_dev() {
         format!("{DOCKER_IMAGE_BASE}:{LATEST_TAG}")
