@@ -11,4 +11,7 @@
 
 pub(crate) mod arrange;
 pub(crate) mod reduce;
+#[cfg(feature = "bench")]
+pub mod temporal_bucket;
+#[cfg(not(feature = "bench"))]
 pub(crate) mod temporal_bucket;
