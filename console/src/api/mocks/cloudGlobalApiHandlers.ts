@@ -17,6 +17,7 @@ import {
   Region,
   Regions,
 } from "~/api/cloudGlobalApi";
+import { ApiError } from "~/api/openApiUtils";
 
 export const buildCloudRegionsReponse = (
   options: {
@@ -50,6 +51,21 @@ export const buildDailyCostBreakdownResponse = (
   http.get("*/api/costs/breakdown/daily", () => {
     const payload: DailyCostBreakdown = options.payload ?? { days: [] };
     return HttpResponse.json(payload, { status: options.status ?? 200 });
+  });
+
+/** A structured `ApiError` error response (SAS-172), e.g. for asserting the
+ * console renders the real message/request id instead of a generic fallback. */
+export const buildDailyCostBreakdownErrorResponse = (
+  options: { apiError?: Partial<ApiError>; status?: number } = {},
+) =>
+  http.get("*/api/costs/breakdown/daily", () => {
+    const payload: ApiError = {
+      reason: "internal_error",
+      message: "There was an error servicing this request.",
+      requestId: "11111111-1111-1111-1111-111111111111",
+      ...options.apiError,
+    };
+    return HttpResponse.json(payload, { status: options.status ?? 500 });
   });
 
 export const buildInvoicesResponse = (

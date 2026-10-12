@@ -275,6 +275,29 @@ export interface components {
             /** @description Storage resource costs. */
             storage: components["schemas"]["Cost_StoragePrice"];
         };
+        /**
+         * @description A structured JSON error response.
+         *
+         *     `reason` is a closed, safe-by-construction category (see [`ErrorReason`]).
+         *     `message` is curated text safe to show a customer: for `Validation`, it
+         *     may describe the problem specifically, since it only concerns the
+         *     caller's own request; for every other reason it is a fixed, generic
+         *     string, chosen by the constructor, never raw upstream or internal error
+         *     text. `request_id` correlates this response to the full, unredacted
+         *     error in server-side logs.
+         *
+         *     Construct via the `ApiError::validation`/`forbidden`/`not_found`/
+         *     `upstream_error`/`upstream_limit_exceeded`/`internal` functions, not by
+         *     hand, so every call site logs the real cause exactly once (except
+         *     `validation`, which has no separate "real cause": the message *is* the
+         *     cause) and gets a request id for free.
+         */
+        ApiError: {
+            reason: components["schemas"]["ErrorReason"];
+            message: string;
+            /** Format: uuid */
+            requestId: string;
+        };
         Card: {
             /** @description The last 4 digits of the card number. */
             last4: string;
@@ -494,6 +517,14 @@ export interface components {
         DetachPaymentMethodRequest: {
             paymentMethodId: string;
         };
+        /**
+         * @description A small, closed set of safe-to-expose error categories. Never add a
+         *     variant, or a call site, that could put upstream (Orb, Stripe, ...) error
+         *     text, internal service/host names, or infra topology into a response —
+         *     see `ApiError`.
+         * @enum {string}
+         */
+        ErrorReason: "validation" | "forbidden" | "not_found" | "upstream_error" | "upstream_limit_exceeded" | "internal_error";
         GetSelfManagedSubscriptionResponse: {
             /** Format: date-time */
             endDate: string;
@@ -823,14 +854,18 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
             };
             /** @description Insufficient permissions */
             403: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
             };
         };
     };
