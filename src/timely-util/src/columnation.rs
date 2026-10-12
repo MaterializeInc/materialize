@@ -26,8 +26,9 @@ use columnation::{Columnation, Region};
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::implementations::merge_batcher::Merger;
-use differential_dataflow::trace::implementations::{BatchContainer, BuilderInput};
+use differential_dataflow::trace::implementations::BatchContainer;
+use differential_dataflow::trace::implementations::merge_batcher::{Extractor, Merger};
+use differential_dataflow::trace::implementations::ord_neu::BuilderInput;
 use timely::container::{ContainerBuilder, DrainContainer, PushInto, SizableContainer};
 use timely::progress::Timestamp;
 use timely::progress::frontier::{Antichain, AntichainRef};
@@ -648,7 +649,6 @@ where
     R: Default + Semigroup + Columnation + Clone + 'static,
 {
     type Chunk = ColumnationStack<(D, T, R)>;
-    type Time = T;
 
     fn merge(
         &mut self,
@@ -734,6 +734,29 @@ where
         }
     }
 
+    fn len(chunk: &Self::Chunk) -> usize {
+        chunk[..].len()
+    }
+
+    fn allocation(chunk: &Self::Chunk) -> (usize, usize, usize) {
+        let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+        chunk.heap_size(|siz, cap| {
+            size += siz;
+            capacity += cap;
+            allocations += 1;
+        });
+        (size, capacity, allocations)
+    }
+}
+
+impl<D, T, R> Extractor for ColInternalMerger<D, T, R>
+where
+    D: Ord + Columnation + Clone + 'static,
+    T: Ord + Columnation + Clone + PartialOrder + 'static,
+    R: Default + Semigroup + Columnation + Clone + 'static,
+{
+    type Time = T;
+
     fn extract(
         &mut self,
         merged: Vec<Self::Chunk>,
@@ -773,19 +796,5 @@ where
         if !ready.is_empty() {
             readied.push(ready);
         }
-    }
-
-    fn len(chunk: &Self::Chunk) -> usize {
-        chunk[..].len()
-    }
-
-    fn allocation(chunk: &Self::Chunk) -> (usize, usize, usize) {
-        let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-        chunk.heap_size(|siz, cap| {
-            size += siz;
-            capacity += cap;
-            allocations += 1;
-        });
-        (size, capacity, allocations)
     }
 }
