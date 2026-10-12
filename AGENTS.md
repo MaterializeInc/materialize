@@ -143,6 +143,18 @@ Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].all
   `get_variable_system_parameters`), which `bin/sqllogictest` and mzcompose's
   `Materialized` service pass to environmentd as system parameter defaults.
   Rust integration tests use `TestHarness::with_system_parameter_default`.
+  A value listed there overrides the compiled-in default in CI, so changing a
+  default means changing both. `bin/lint-test-flags` fails unless every new
+  dyncfg is registered for parallel workload and mzcompose (see the mz-debug-ci
+  skill). A compiled-in default is not evidence of the production value: check
+  whether `test/launchdarkly-flag-consistency/mzcompose.py` lists the flag in
+  `INTENTIONAL_LD_OVERRIDES` or `KNOWN_CROSS_ENV_DIVERGENCES`. A session
+  variable takes a system default only if `SESSION_SYSTEM_VARS` in
+  `src/sql/src/session/vars.rs` lists it. Otherwise `--system-parameter-default`
+  for it only logs a warning at startup. Observed: the LaunchDarkly MCP
+  `create-flag` tool creates boolean flags that serve true in every environment,
+  including production. A human must set each environment's off variation and
+  fallthrough to false.
 
 ## Code comments
 
