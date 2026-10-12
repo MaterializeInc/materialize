@@ -33,7 +33,7 @@ use crate::ast::{
     Ident, IntervalValue, KeyConstraint, MaterializedViewOption, Query, SelectItem, SinkEnvelope,
     SourceEnvelope, SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint,
     TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value,
+    UnresolvedSchemaName, Value, ViewOption,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -1513,6 +1513,7 @@ pub struct ViewDefinition<T: AstInfo> {
     /// View name
     pub name: UnresolvedItemName,
     pub columns: Vec<Ident>,
+    pub with_options: Vec<ViewOption<T>>,
     pub query: Query<T>,
 }
 
@@ -1523,6 +1524,12 @@ impl<T: AstInfo> AstDisplay for ViewDefinition<T> {
         if !self.columns.is_empty() {
             f.write_str(" (");
             f.write_node(&display::comma_separated(&self.columns));
+            f.write_str(")");
+        }
+
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
             f.write_str(")");
         }
 

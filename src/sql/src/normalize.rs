@@ -411,6 +411,7 @@ pub fn create_statement(
                     name,
                     query,
                     columns: _,
+                    with_options: _,
                 },
         }) => {
             *name = if *temporary {

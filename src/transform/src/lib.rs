@@ -21,7 +21,7 @@
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
@@ -128,6 +128,12 @@ pub struct TransformCtx<'a> {
     pub typechecking_ctx: &'a SharedTypecheckingContext,
     /// Transforms can use this field to communicate information outside the result plans.
     pub df_meta: &'a mut DataflowMetainfo,
+    /// Objects in this dataflow that are security barriers.
+    ///
+    /// A barrier's plan is never merged into a consumer's, and only leakproof
+    /// predicates from a consumer are pushed into it. See
+    /// `doc/developer/design/20260828_security_barrier_views.md`.
+    pub security_barriers: &'a BTreeSet<GlobalId>,
     /// Metrics for the optimizer.
     pub metrics: Option<&'a mut OptimizerMetrics>,
     /// The last hash of the query, if known.
@@ -135,6 +141,9 @@ pub struct TransformCtx<'a> {
 }
 
 const FOLD_CONSTANTS_LIMIT: usize = 10000;
+
+/// The empty barrier set, for contexts that cannot contain a barrier.
+static NO_SECURITY_BARRIERS: BTreeSet<GlobalId> = BTreeSet::new();
 
 impl<'a> TransformCtx<'a> {
     /// Generates a [`TransformCtx`] instance for the local MIR optimization
@@ -158,6 +167,9 @@ impl<'a> TransformCtx<'a> {
             typechecking_ctx: typecheck_ctx,
             df_meta,
             metrics,
+            // Local optimization sees a single expression with no cross-object
+            // boundaries, so there is nothing for a barrier to protect.
+            security_barriers: &NO_SECURITY_BARRIERS,
             last_hash: Default::default(),
         }
     }
@@ -173,6 +185,7 @@ impl<'a> TransformCtx<'a> {
         typecheck_ctx: &'a SharedTypecheckingContext,
         df_meta: &'a mut DataflowMetainfo,
         metrics: Option<&'a mut OptimizerMetrics>,
+        security_barriers: &'a BTreeSet<GlobalId>,
     ) -> Self {
         Self {
             indexes,
@@ -182,6 +195,7 @@ impl<'a> TransformCtx<'a> {
             df_meta,
             typechecking_ctx: typecheck_ctx,
             metrics,
+            security_barriers,
             last_hash: Default::default(),
         }
     }

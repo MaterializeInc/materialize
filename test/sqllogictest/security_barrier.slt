@@ -1,0 +1,93 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Security barrier views.
+# See doc/developer/design/20260828_security_barrier_views.md
+
+mode cockroach
+
+statement ok
+CREATE TABLE orders (tenant text, secret text, amount int)
+
+statement ok
+CREATE VIEW plain_orders AS SELECT * FROM orders WHERE tenant = 'alice'
+
+statement ok
+CREATE VIEW barrier_orders WITH (SECURITY BARRIER) AS SELECT * FROM orders WHERE tenant = 'alice'
+
+# The option round-trips through `create_sql`.
+query TT
+SHOW CREATE VIEW barrier_orders
+----
+materialize.public.barrier_orders  CREATE␠VIEW⏎␠␠␠␠materialize.public.barrier_orders⏎␠␠␠␠WITH␠(SECURITY␠BARRIER)⏎␠␠␠␠AS␠SELECT␠*␠FROM␠materialize.public.orders␠WHERE␠tenant␠=␠'alice';
+
+# `= false` is accepted and is the default.
+statement ok
+CREATE VIEW explicit_false WITH (SECURITY BARRIER = false) AS SELECT * FROM orders
+
+statement error Expected SECURITY, found identifier "nonsense"
+CREATE VIEW bad_option WITH (NONSENSE) AS SELECT * FROM orders
+
+# Without a barrier, a fallible reader predicate is pushed below the view's own
+# filter and reaches the base collection.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM plain_orders WHERE amount / (length(secret) - 3) > 0
+----
+Explained Query:
+  Filter (#0{tenant} = "alice") AND ((#2{amount} / (char_length(#1{secret}) - 3)) > 0)
+    ReadStorage materialize.public.orders
+
+Source materialize.public.orders
+  filter=((#0{tenant} = "alice") AND ((#2{amount} / (char_length(#1{secret}) - 3)) > 0))
+
+Target cluster: quickstart
+
+EOF
+
+# With a barrier, the fallible predicate stays above the view, which is read
+# through a separate object, and only the tenant filter reaches `orders`.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM barrier_orders WHERE amount / (length(secret) - 3) > 0
+----
+Explained Query:
+  Filter ((#2{amount} / (char_length(#1{secret}) - 3)) > 0)
+    ReadGlobalFromSameDataflow materialize.public.barrier_orders
+
+materialize.public.barrier_orders:
+  Filter (#0{tenant} = "alice")
+    ReadStorage materialize.public.orders
+
+Source materialize.public.orders
+  filter=((#0{tenant} = "alice"))
+
+Target cluster: quickstart
+
+EOF
+
+# A leakproof predicate still crosses the barrier.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR
+SELECT * FROM barrier_orders WHERE amount = 42
+----
+Explained Query:
+  Filter (#2{amount} = 42)
+    ReadGlobalFromSameDataflow materialize.public.barrier_orders
+
+materialize.public.barrier_orders:
+  Filter (#0{tenant} = "alice") AND (#2{amount} = 42)
+    ReadStorage materialize.public.orders
+
+Source materialize.public.orders
+  filter=((#0{tenant} = "alice") AND (#2{amount} = 42))
+
+Target cluster: quickstart
+
+EOF

@@ -799,6 +799,7 @@ fn create_target_view_sql(stmt: &Statement, fqn: &FullyQualifiedName) -> Result<
             definition: ViewDefinition {
                 name: mv.name,
                 columns: mv.columns,
+                with_options: vec![],
                 query: mv.query,
             },
         },

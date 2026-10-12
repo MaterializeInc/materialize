@@ -330,6 +330,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             &self.typecheck_ctx,
             &mut df_meta,
             Some(&mut self.metrics),
+            df_builder.security_barriers(),
         );
 
         // Let's already try creating a fast path plan. If successful, we don't need to run the

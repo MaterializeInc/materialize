@@ -220,14 +220,14 @@ EXPLAIN LOCALLY OPTIMIZED PLAN FOR CREATE VIEW mv AS SELECT 665
 ----
 EXPLAIN LOCALLY OPTIMIZED PLAN FOR CREATE VIEW mv AS SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: Some(LocalPlan), with_options: [], format: None, explainee: CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("mv")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } } }, false) })
+ExplainPlan(ExplainPlanStatement { stage: Some(LocalPlan), with_options: [], format: None, explainee: CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("mv")]), columns: [], with_options: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } } }, false) })
 
 parse-statement
 EXPLAIN LOCALLY OPTIMIZED PLAN FOR CREATE OR REPLACE VIEW mv AS SELECT 665
 ----
 EXPLAIN LOCALLY OPTIMIZED PLAN FOR CREATE OR REPLACE VIEW mv AS SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: Some(LocalPlan), with_options: [], format: None, explainee: CreateView(CreateViewStatement { if_exists: Replace, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("mv")]), columns: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } } }, false) })
+ExplainPlan(ExplainPlanStatement { stage: Some(LocalPlan), with_options: [], format: None, explainee: CreateView(CreateViewStatement { if_exists: Replace, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("mv")]), columns: [], with_options: [], query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None } } }, false) })
 
 parse-statement
 EXPLAIN CREATE VIEW mv AS SELECT 665
