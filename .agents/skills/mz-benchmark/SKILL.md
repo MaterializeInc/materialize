@@ -107,9 +107,11 @@ so the verdict can rest on 3 values and one outlier can flip it. Read the raw
 per-iteration values before trusting a regression or improvement.
 
 The measured cluster `cluster_default` is an unmanaged replica on the
-`clusterd` container. Parameters that shape replica creation, such as
-`enable_unified_cluster`, do not reach it through system parameters. Configure
-it via the `Clusterd(...)` service in `create_clusterd_service`.
+`clusterd` container, configured by the `Clusterd(...)` service in
+`create_clusterd_service`. That function maps `enable_unified_cluster` onto
+the service, but other parameters that shape the replica process do not reach
+it. For example, `enable_timely_zero_copy` has no effect because `Clusterd`
+hardcodes its timely config.
 
 ### Helpers
 

@@ -53,8 +53,9 @@ including those of other sessions' instances.
 process group, and the Python parent kills that group when it exits normally.
 SIGTERM to the Python parent (e.g. from `timeout`) skips that cleanup and leaks
 the program and its `clusterd` processes. To stop or restart an instance, kill
-the program's own PID (`pgrep -f '[m]zbuild/bin/environmentd'`, where the brackets keep the
-pattern from matching the calling shell), so the parent
+the program's own PID (`pgrep -f "$(git rev-parse --show-toplevel)/[m]zbuild/bin/environmentd"`,
+which scopes the match to this checkout, while the brackets keep the pattern
+from matching the calling shell), so the parent
 exits and cleans up. Before restarting, wait until ports 6875 (SQL) and 6879
 (persist pubsub) are free. `mzbuild/bin/environmentd` is a symlink into
 `target/`, so a `/proc/<pid>/exe` ending in `(deleted)` means the process
@@ -66,7 +67,9 @@ The compute memory limiter is off locally and in mzcompose. clusterd gets
 `cluster_replica_size_map()` sets `swap_enabled`. To test the limiter, pass
 `bin/environmentd -- --cluster-replica-sizes='<json>'` with such a size. The
 last occurrence of the flag wins, so the map must contain every size you need,
-including `bootstrap`.
+including `bootstrap` and `scale=1,workers=1`, the default size of the
+builtin clusters. Without the latter, environmentd panics at boot because
+`mz_system` references an unknown replica size.
 
 Access Materialize using psql:
 * `psql -p 6875 -h localhost -U materialize` for regular access.
