@@ -278,18 +278,13 @@ Target cluster: quickstart
 EOF
 
 # -----------------------------------------------------------------------------
-# Runtime tests. These turn `enable_compute_temporal_bucketing` on and assert
-# that the bucketed dataflows still produce the correct logical results. There
-# is one fixture per site that applies bucketing, because each site hands the
-# bucketer a differently shaped stream: the keyed `(key, val)` stream in
-# `render_reduce`, the TopK input, a consolidating `Union` whose legs carry
-# different strategies, and the arrangement loop in `ensure_collections`.
+# Runtime tests. These assert that the bucketed dataflows still produce the
+# correct logical results. There is one fixture per site that applies
+# bucketing, because each site hands the bucketer a differently shaped stream:
+# the keyed `(key, val)` stream in `render_reduce`, the TopK input, a
+# consolidating `Union` whose legs carry different strategies, and the
+# arrangement loop in `ensure_collections`.
 # -----------------------------------------------------------------------------
-
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_compute_temporal_bucketing = true
-----
-COMPLETE 0
 
 statement ok
 CREATE TABLE rt_events (k INT NOT NULL, event_time TIMESTAMP NOT NULL)
