@@ -2090,6 +2090,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 KafkaMatchingBrokerRule(self.fold_kafka_matching_broker_rule(x))
             }
             RetainHistoryFor(value) => RetainHistoryFor(self.fold_value(value)),
+            RetainHistoryPinAt(value) => RetainHistoryPinAt(self.fold_value(value)),
             Refresh(refresh) => Refresh(self.fold_refresh_option_value(refresh)),
             ClusterScheduleOptionValue(value) => ClusterScheduleOptionValue(value),
             ClusterAutoScalingStrategyOptionValue(value) => {
