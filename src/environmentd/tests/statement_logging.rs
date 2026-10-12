@@ -9,10 +9,14 @@
 
 //! Integration tests for statement logging.
 
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::thread;
 use std::time::Duration;
 
+use bytes::{BufMut, BytesMut};
 use chrono::{DateTime, Utc};
+use fallible_iterator::FallibleIterator;
 use mz_environmentd::test_util;
 use mz_ore::assert_contains;
 use mz_ore::assert_none;
@@ -56,6 +60,12 @@ impl TestServerWithStatementLoggingChecks {
     /// can connect as a role other than the default one.
     pub fn pg_config(&self) -> postgres::Config {
         self.server.pg_config()
+    }
+
+    /// Returns the address of the __public__ SQL port, for a test that speaks
+    /// the protocol directly.
+    pub fn sql_local_addr(&self) -> SocketAddr {
+        self.server.sql_local_addr()
     }
 }
 
@@ -1534,6 +1544,113 @@ fn test_statement_logging_frontend_read_then_write_transaction_error() {
     assert_none!(outcome.rows_returned);
     assert_none!(outcome.result_size);
     assert_none!(outcome.execution_strategy);
+}
+
+// A read-dependent write with another statement behind it in its batch, the
+// statements before one `Sync`, is refused before it executes. pgwire reads
+// ahead, and the frontend refuses after taking the statement over, so it is
+// logged like the other refusals there.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_statement_logging_frontend_read_then_write_not_last_before_sync() {
+    use postgres_protocol::message::backend::Message;
+    use postgres_protocol::message::frontend;
+
+    fn put_message(buf: &mut BytesMut, typ: u8, body: impl FnOnce(&mut BytesMut)) {
+        buf.put_u8(typ);
+        let base = buf.len();
+        buf.put_u32(0);
+        body(buf);
+        let len = u32::try_from(buf.len() - base).unwrap();
+        buf[base..base + 4].copy_from_slice(&len.to_be_bytes());
+    }
+
+    fn read_until_ready(stream: &mut TcpStream) -> Vec<Message> {
+        let mut buf = BytesMut::new();
+        let mut chunk = [0; 1 << 13];
+        let mut msgs = Vec::new();
+        loop {
+            if let Some(msg) = Message::parse(&mut buf).unwrap() {
+                let ready = matches!(msg, Message::ReadyForQuery(_));
+                msgs.push(msg);
+                if ready {
+                    return msgs;
+                }
+            } else {
+                let n = stream.read(&mut chunk).unwrap();
+                assert!(n > 0, "connection closed after {} messages", msgs.len());
+                buf.extend_from_slice(&chunk[..n]);
+            }
+        }
+    }
+
+    let harness = test_util::TestHarness::default();
+    let (server, mut client) = setup_statement_logging_core(1.0, 1.0, "", harness);
+    client
+        .batch_execute("CREATE TABLE batch_t (x INT)")
+        .unwrap();
+
+    let mut stream = TcpStream::connect(server.sql_local_addr()).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(120)))
+        .unwrap();
+    let mut buf = BytesMut::new();
+    frontend::startup_message(
+        vec![
+            ("user", "materialize"),
+            ("options", "--welcome_message=off"),
+        ],
+        &mut buf,
+    )
+    .unwrap();
+    stream.write_all(&buf).unwrap();
+    read_until_ready(&mut stream);
+
+    // One batch with unnamed statements and portals: the DELETE, a SELECT, Sync.
+    buf.clear();
+    for sql in ["DELETE FROM batch_t", "SELECT 1"] {
+        put_message(&mut buf, b'P', |buf| {
+            buf.put_u8(0);
+            buf.put_slice(sql.as_bytes());
+            buf.put_u8(0);
+            buf.put_u16(0);
+        });
+        put_message(&mut buf, b'B', |buf| {
+            buf.put_u8(0);
+            buf.put_u8(0);
+            buf.put_u16(0);
+            buf.put_u16(0);
+            buf.put_u16(0);
+        });
+        put_message(&mut buf, b'E', |buf| {
+            buf.put_u8(0);
+            buf.put_i32(0);
+        });
+    }
+    frontend::sync(&mut buf);
+    stream.write_all(&buf).unwrap();
+    let codes: Vec<_> = read_until_ready(&mut stream)
+        .into_iter()
+        .filter_map(|msg| match msg {
+            Message::ErrorResponse(body) => body
+                .fields()
+                .find(|f| Ok(f.type_() == b'C'))
+                .unwrap()
+                .map(|f| String::from_utf8_lossy(f.value_bytes()).into_owned()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(codes, ["25001"]);
+
+    let mut mz_client = server.connect_internal(postgres::NoTls).unwrap();
+    let outcomes = read_statement_outcomes(&mut mz_client, "DELETE FROM batch_t");
+    assert_eq!(outcomes.len(), 1, "unexpected log rows: {outcomes:?}");
+    let outcome = &outcomes[0];
+    assert_eq!(outcome.finished_status, "error", "{outcome:?}");
+    assert_contains!(
+        outcome.error_message.as_deref().unwrap_or_default(),
+        "DELETE FROM batch_t must be the last statement before Sync"
+    );
 }
 
 // An RBAC denial is another exit that happens after the frontend takes the

@@ -30,8 +30,8 @@ import requests
 import websocket
 from psycopg import Cursor, sql
 from psycopg.errors import (
+    ActiveSqlTransaction,
     DatabaseError,
-    DivisionByZero,
     InternalError_,
     OperationalError,
     QueryCanceled,
@@ -5131,51 +5131,52 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
 
 
 def workflow_test_occ_sealed_input_write_stands_alone(c: Composition) -> None:
-    """A read-then-write whose selection reads persisted state must commit as
-    its own transaction, including when its subscribe ends on its own.
+    """A read-then-write whose selection reads persisted state runs only as the
+    last statement before Sync, including when its subscribe ends on its own.
 
-    The OCC path stages a mutation's diffs only when the selection reads
-    nothing, because only then is the statement one that may belong to a
-    transaction. A selection that reads persisted state commits inside the OCC
-    loop and ends the implicit transaction it opened instead of spanning the
-    rest of an extended-protocol pipeline, so a later failure there cannot undo
-    it.
+    Such a statement commits inside the OCC loop, so it cannot share the
+    implicit transaction of an extended-protocol pipeline with other
+    statements. pgwire refuses it before it runs unless the next statement
+    message is Sync.
 
-    Which of the two happens is decided twice, and the answers differ. Before
-    the dataflow runs it is `depends_on()` on the selection. Once it runs it is
-    whether the subscribe closed on its own, which it also does for a sealed
-    persisted input: a `REFRESH AT` materialized view past its last refresh has
-    an empty write frontier, so the sink's output frontier reaches the empty
-    antichain. An `INSERT ... SELECT` over such a view reads persisted state and
-    still takes the closed-channel exit. Only the syntactic answer may decide
-    transaction membership, or whether a statement's rows survive would turn on
-    an input passing its last refresh rather than on the statement.
+    Whether a selection reads persisted state is decided twice, and the answers
+    differ. Before the dataflow runs it is `depends_on()` on the selection. Once
+    it runs it is whether the subscribe closed on its own, which it also does
+    for a sealed persisted input: a `REFRESH AT` materialized view past its last
+    refresh has an empty write frontier, so the sink's output frontier reaches
+    the empty antichain. An `INSERT ... SELECT` over such a view reads persisted
+    state and still takes the closed-channel exit. Only the syntactic answer may
+    decide, so the statement over the sealed view must be refused and run
+    exactly like the one over a live table.
     """
 
-    def rows_surviving(write: str) -> int:
-        """Rows left in `dst` once `write` has succeeded and the pipeline behind
-        it has failed. Leaves `dst` empty again.
-
-        `write` is sent as one extended-protocol pipeline with a failing
-        statement behind it and no `Sync` between them. A pipeline is an
-        implicit transaction, so rows going missing here is exactly `write`
-        having joined that transaction instead of committing on its own.
-        """
+    def outcome(statements: list[str]) -> tuple[type[DatabaseError] | None, int]:
+        """Sends `statements` as one extended-protocol pipeline and returns the
+        error it raised, if any, and the rows then in `dst`. Leaves `dst` empty
+        again."""
+        error = None
         with c.sql_connection() as conn:
             try:
                 # psycopg pipelines the extended protocol only, and syncs when
                 # the block ends. Autocommit keeps a `BEGIN` off the front,
                 # which the OCC path would refuse outright.
                 with conn.cursor() as cur, conn.pipeline():
-                    cur.execute(write.encode())
-                    cur.execute(b"SELECT 1 / 0")
-            except DivisionByZero:
-                pass
-            else:
-                raise AssertionError(f"the statement behind {write!r} succeeded")
+                    for statement in statements:
+                        cur.execute(statement.encode())
+            except DatabaseError as e:
+                error = type(e)
         rows = c.sql_query("SELECT count(*) FROM dst")[0][0]
         c.sql("DELETE FROM dst")
-        return rows
+        return error, rows
+
+    def check(write: str) -> None:
+        result = outcome([write, "SELECT 1"])
+        assert result == (
+            ActiveSqlTransaction,
+            0,
+        ), f"{write} with a statement behind it: {result}"
+        result = outcome([write])
+        assert result == (None, 3), f"{write} alone before Sync: {result}"
 
     with c.override(Materialized()):
         c.up("materialized")
@@ -5201,12 +5202,9 @@ def workflow_test_occ_sealed_input_write_stands_alone(c: Composition) -> None:
             ), "the REFRESH AT CREATION materialized view never sealed"
             time.sleep(0.1)
 
-        # Control: the same pipeline over `src`, whose subscribe never ends on
-        # its own. It pins the harness, since rows lost here would mean the
-        # pipeline was never an open transaction to begin with.
-        write = "INSERT INTO dst SELECT a FROM src"
-        rows = rows_surviving(write)
-        assert rows == 3, f"{write} succeeded, then lost {3 - rows} of its 3 rows"
+        # Control: the same statement over `src`, whose subscribe never ends on
+        # its own.
+        check("INSERT INTO dst SELECT a FROM src")
 
         metrics = c.exec(
             "materialized", "curl", "localhost:6878/metrics", capture=True
@@ -5219,9 +5217,7 @@ def workflow_test_occ_sealed_input_write_stands_alone(c: Composition) -> None:
             for line in metrics.splitlines()
         ), "persisted-input writes did not reach OCC"
 
-        write = "INSERT INTO dst SELECT a FROM sealed"
-        rows = rows_surviving(write)
-        assert rows == 3, f"{write} succeeded, then lost {3 - rows} of its 3 rows"
+        check("INSERT INTO dst SELECT a FROM sealed")
 
 
 def workflow_test_optimizer_panics_are_errors(c: Composition) -> None:

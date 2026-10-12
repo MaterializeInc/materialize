@@ -35,9 +35,8 @@ use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId, SqlScalarType, Timestamp};
 use mz_sql::ast::{
-    AlterConnectionAction, AlterConnectionStatement, AlterSourceAction, AstInfo, ConstantVisitor,
-    CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement, StatementKind,
-    SubscribeStatement,
+    AlterConnectionAction, AlterConnectionStatement, AlterSourceAction, AstInfo, CopyRelation,
+    CopyStatement, CreateSourceOptionName, Raw, Statement, StatementKind, SubscribeStatement,
 };
 use mz_sql::catalog::RoleAttributesRaw;
 use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
@@ -57,8 +56,7 @@ use mz_sql::session::vars::{
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    CreateMaterializedViewStatement, ExplainPlanStatement, Explainee, InsertStatement,
-    WithOptionValue,
+    CreateMaterializedViewStatement, ExplainPlanStatement, Explainee, WithOptionValue,
 };
 use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
@@ -67,7 +65,7 @@ use tracing::{Instrument, debug_span, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
-use crate::client::truncate_sql_for_logging;
+use crate::client::{is_read_dependent_write, truncate_sql_for_logging};
 use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, Response, SASLChallengeResponse,
     SASLVerifyProofResponse, StartupResponse, SuperuserAttribute,
@@ -1408,9 +1406,7 @@ impl Coordinator {
                         // Always safe.
                     }
 
-                    Statement::Insert(InsertStatement { source, .. })
-                        if ConstantVisitor::insert_source(source) =>
-                    {
+                    Statement::Insert(_) if !is_read_dependent_write(&stmt) => {
                         // Inserting constant values reads nothing and needs no cluster, also with
                         // RETURNING, which is evaluated over those values. So it is always safe.
                     }

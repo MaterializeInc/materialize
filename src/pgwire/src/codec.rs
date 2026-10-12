@@ -14,11 +14,12 @@
 //!
 //! [1]: https://www.postgresql.org/docs/11/protocol-message-formats.html
 
+use std::collections::VecDeque;
 use std::net::IpAddr;
 
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, BytesMut};
-use futures::{SinkExt, TryStreamExt, sink};
+use futures::{FutureExt, SinkExt, TryStreamExt, sink};
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
 use mz_ore::future::OreSinkExt;
@@ -40,6 +41,19 @@ pub struct FramedConn<A> {
     conn_id: ConnectionId,
     peer_addr: Option<IpAddr>,
     inner: sink::Buffer<Framed<Conn<A>, Codec>, BackendMessage>,
+    /// Messages read by [`FramedConn::peek`] that [`FramedConn::recv`] has not
+    /// returned yet, oldest first.
+    read_ahead: VecDeque<FrontendMessage>,
+}
+
+/// A message returned by [`FramedConn::peek`].
+#[derive(Debug)]
+pub enum Peeked<'a> {
+    Message(&'a FrontendMessage),
+    /// The client closed the connection before sending the message.
+    Eof,
+    /// The message has not fully arrived, and the caller asked not to wait.
+    NotArrived,
 }
 
 impl<A> FramedConn<A>
@@ -59,6 +73,7 @@ where
             conn_id,
             peer_addr,
             inner: Framed::new(inner, Codec::new()).buffer(32),
+            read_ahead: VecDeque::new(),
         }
     }
 
@@ -76,12 +91,49 @@ where
     ///
     /// <https://docs.rs/tokio-stream/latest/tokio_stream/trait.StreamExt.html#cancel-safety-1>
     pub async fn recv(&mut self) -> Result<Option<FrontendMessage>, io::Error> {
-        let message = self.inner.try_next().await?;
+        let message = match self.read_ahead.pop_front() {
+            Some(message) => Some(message),
+            None => self.inner.try_next().await?,
+        };
         match &message {
             Some(message) => trace!("cid={} recv_name={}", self.conn_id, message.name()),
             None => trace!("cid={} recv=<eof>", self.conn_id),
         }
         Ok(message)
+    }
+
+    /// Returns the message that [`FramedConn::recv`] will return after `n`
+    /// others, reading it and the ones before it from the client if needed.
+    /// They stay queued for `recv`.
+    ///
+    /// With `wait` false, a message that has not fully arrived is reported as
+    /// [`Peeked::NotArrived`] instead of awaited.
+    ///
+    /// # Cancel safety
+    ///
+    /// This method is cancel safe, for the same reason as `recv`.
+    pub async fn peek(&mut self, n: usize, wait: bool) -> Result<Peeked<'_>, io::Error> {
+        while self.read_ahead.len() <= n {
+            let next = if wait {
+                self.inner.try_next().await?
+            } else {
+                // Unconstrained, because tokio's I/O resources return `Pending`
+                // once the task's coop budget is used up, even for bytes that
+                // have arrived (see `tokio::task::coop`).
+                match tokio::task::unconstrained(self.inner.try_next()).now_or_never() {
+                    Some(next) => next?,
+                    None => return Ok(Peeked::NotArrived),
+                }
+            };
+            match next {
+                Some(message) => {
+                    trace!("cid={} peek_name={}", self.conn_id, message.name());
+                    self.read_ahead.push_back(message);
+                }
+                None => return Ok(Peeked::Eof),
+            }
+        }
+        Ok(Peeked::Message(&self.read_ahead[n]))
     }
 
     /// Encodes and sends one backend message to the client.

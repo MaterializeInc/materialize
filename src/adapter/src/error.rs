@@ -163,6 +163,12 @@ pub enum AdapterError {
     },
     /// The named operation cannot be run in a transaction.
     OperationProhibitsTransaction(String),
+    /// The named write, whose rows depend on a read, was not the last statement
+    /// before `Sync`. `before_flush` says that a `Flush` came first.
+    NotLastBeforeSync {
+        op: String,
+        before_flush: bool,
+    },
     /// The named operation requires an active transaction.
     OperationRequiresTransaction(String),
     /// An error occurred while planning the statement.
@@ -909,6 +915,10 @@ impl AdapterError {
             AdapterError::CollectionUnreadable { .. } => Some(
                 "This could be because the collection has recently been dropped.".into()
             ),
+            AdapterError::NotLastBeforeSync { .. } => Some(
+                "Materialize cannot run UPDATE, DELETE, or INSERT ... SELECT atomically with \
+                 other statements. Send a Sync directly after it.".into()
+            ),
             _ => None,
         }
     }
@@ -980,6 +990,7 @@ impl AdapterError {
             AdapterError::CollectionUnreadable { .. } => SqlState::NO_DATA_FOUND,
             AdapterError::NoClusterReplicasAvailable { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
+            AdapterError::NotLastBeforeSync { .. } => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
             AdapterError::ParseError(_) => SqlState::SYNTAX_ERROR,
             AdapterError::PlanError(PlanError::InvalidSchemaName) => SqlState::INVALID_SCHEMA_NAME,
@@ -1382,6 +1393,14 @@ impl fmt::Display for AdapterError {
             AdapterError::OperationProhibitsTransaction(op) => {
                 write!(f, "{} cannot be run inside a transaction block", op)
             }
+            AdapterError::NotLastBeforeSync {
+                op,
+                before_flush: false,
+            } => write!(f, "{} must be the last statement before Sync", op),
+            AdapterError::NotLastBeforeSync {
+                op,
+                before_flush: true,
+            } => write!(f, "{} must be followed by Sync, not Flush", op),
             AdapterError::OperationRequiresTransaction(op) => {
                 write!(f, "{} can only be used in transaction blocks", op)
             }
