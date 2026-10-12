@@ -158,10 +158,7 @@ where
                 let peeled = chain.peel(upper.borrow());
                 if let Some(cap) = cap.as_ref() {
                     let mut session = output.session_with_builder(cap);
-                    // The chain hands back chunks whose bodies go back onto the
-                    // edge container as a move, so each one ships as a container.
-                    for chunk in peeled.into_iter().flat_map(|x| x.done()) {
-                        let mut column = Column::from(chunk.into_body());
+                    for mut column in peeled.into_iter().flat_map(|x| x.done()) {
                         session.give_container(&mut column);
                     }
                 } else {
@@ -170,7 +167,7 @@ where
                         peeled
                             .into_iter()
                             .flat_map(|x| x.done())
-                            .all(|chunk| chunk.record_count() == 0),
+                            .all(|column| column.record_count() == 0),
                         "Unexpected data revealed without a cap."
                     );
                 }
@@ -288,10 +285,10 @@ where
                     let peeled = chain.peel(upper.borrow());
                     if let Some(cap) = cap.as_ref() {
                         let mut session = output.session_with_builder(cap);
-                        for chunk in peeled.into_iter().flat_map(|x| x.done()) {
-                            let body = chunk.into_body();
+                        for column in peeled.into_iter().flat_map(|x| x.done()) {
                             session.give_iterator(
-                                body.borrow()
+                                column
+                                    .borrow()
                                     .into_index_iter()
                                     .map(<(D, T, mz_repr::Diff)>::into_owned),
                             );
@@ -302,7 +299,7 @@ where
                             peeled
                                 .into_iter()
                                 .flat_map(|x| x.done())
-                                .all(|chunk| chunk.record_count() == 0),
+                                .all(|column| column.record_count() == 0),
                             "Unexpected data revealed without a cap."
                         );
                     }
@@ -338,6 +335,14 @@ where
 /// The batcher consumes sorted, consolidated [`ColumnChunk`] input, so this
 /// wrapper carries a [`ColumnChunker`] that sorts and consolidates the input
 /// columns into the [`Column`]s it wraps as chunks.
+///
+/// Updates are stored time-major, as `((time, data), time, diff)`, so each
+/// chunk covers a narrow range of times. Splitting at a time then loads only
+/// the chunks whose time bounds straddle it, and moves every other chunk
+/// whole, spilled or not. With data-major chunks every chunk spans the
+/// bucket's times, and each split loads and rewrites the whole bucket. The
+/// leading copy of the time orders the chunks, and the trailing copy is the
+/// batcher's time, which `seal` partitions by.
 struct MergeBatcherWrapper<D, T, R>
 where
     D: MzData,
@@ -347,8 +352,10 @@ where
 {
     logger: Option<differential_dataflow::logging::Logger>,
     operator_id: usize,
-    chunker: ColumnChunker<(D, T, R)>,
-    inner: AccountedChunkBatcher<D, T, R, ComputeSpill>,
+    /// Time-major copy of the updates on their way into the chunker.
+    staging: Column<((T, D), T, R)>,
+    chunker: ColumnChunker<((T, D), T, R)>,
+    inner: AccountedChunkBatcher<(T, D), T, R, ComputeSpill>,
 }
 
 impl<D, T, R> MergeBatcherWrapper<D, T, R>
@@ -360,13 +367,13 @@ where
     for<'a> <D as Columnar>::Container: Push<columnar::Ref<'a, D>>,
     for<'a> <T as Columnar>::Container: Push<columnar::Ref<'a, T>>,
     for<'a> <R as Columnar>::Container: Push<&'a R>,
-    for<'a> <(D, T, R) as Columnar>::Container: Push<&'a (D, T, R)>,
 {
     /// Construct a new `MergeBatcherWrapper` with the given logger and operator ID.
     fn new(logger: Option<differential_dataflow::logging::Logger>, operator_id: usize) -> Self {
         Self {
             logger: logger.clone(),
             operator_id,
+            staging: Column::default(),
             chunker: ColumnChunker::default(),
             inner: AccountedChunkBatcher::new(logger, operator_id),
         }
@@ -379,8 +386,12 @@ where
         if buffer.is_empty() {
             return;
         }
-        self.chunker.push_into(buffer);
+        for (data, time, diff) in buffer.borrow().into_index_iter() {
+            self.staging.push_into(((time, data), time, diff));
+        }
         buffer.clear();
+        self.chunker.push_into(&mut self.staging);
+        self.staging.clear();
         while let Some(chunk) = self.chunker.extract() {
             self.inner
                 .push_into(ColumnChunk::from_body(std::mem::take(chunk)));
@@ -396,11 +407,22 @@ where
         }
     }
 
-    /// Reveal the contents of the merge batcher, returning a vector of chunks.
-    fn done(mut self) -> Vec<ColumnChunk<D, T, R, ComputeSpill>> {
+    /// Reveal the contents of the merge batcher, as one column per chunk.
+    ///
+    /// A spilled chunk loads when the iterator reaches it.
+    fn done(mut self) -> impl Iterator<Item = Column<(D, T, R)>> {
+        use columnar::Container as _;
         self.flush();
         let (chain, _description) = self.inner.seal(Antichain::new());
-        chain
+        chain.into_iter().map(|chunk| {
+            let body = chunk.into_body();
+            let ((_, data), time, diff) = body.borrow();
+            let mut column = <(D, T, R) as Columnar>::Container::default();
+            column.0.extend_from_self(data, 0..data.len());
+            column.1.extend_from_self(time, 0..time.len());
+            column.2.extend_from_self(diff, 0..diff.len());
+            Column::Typed(column)
+        })
     }
 }
 
@@ -413,7 +435,6 @@ where
     for<'a> <D as Columnar>::Container: Push<columnar::Ref<'a, D>>,
     for<'a> <T as Columnar>::Container: Push<columnar::Ref<'a, T>>,
     for<'a> <R as Columnar>::Container: Push<&'a R>,
-    for<'a> <(D, T, R) as Columnar>::Container: Push<&'a (D, T, R)>,
 {
     type Timestamp = T;
 
@@ -432,5 +453,138 @@ where
             lower.inner.push_into(chunk);
         }
         (lower, self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use mz_ore::pool::Pool;
+    use mz_repr::{Diff, Timestamp};
+    use mz_timely_util::columnar::chunk::set_spill_override;
+
+    use super::*;
+
+    type Wrapper = MergeBatcherWrapper<u64, Timestamp, Diff>;
+    type Update = (u64, Timestamp, Diff);
+
+    /// Updates with colliding `(data, time)` pairs and retractions, spread
+    /// over times `[1_000, 101_000)`.
+    fn updates(round: u64) -> Vec<Update> {
+        (0..20_000u64)
+            .map(|i| {
+                let x = (i + round * 20_000).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                let data = (x >> 8) % 5_000;
+                let time = Timestamp::from(1_000 + (x >> 24) % 100_000);
+                let diff = if x & (1 << 40) == 0 {
+                    Diff::ONE
+                } else {
+                    Diff::MINUS_ONE
+                };
+                (data, time, diff)
+            })
+            .collect()
+    }
+
+    /// Push `updates` into the buckets of `chain` that hold their times, the
+    /// way the operator does.
+    fn insert(chain: &mut BucketChain<Wrapper>, mut updates: Vec<Update>) {
+        updates.sort_by_key(|(_, time, _)| *time);
+        let mut buffer = Column::default();
+        let mut range: Option<BucketRange<Timestamp>> = None;
+        for update in &updates {
+            if !range
+                .as_ref()
+                .is_some_and(|range| range.contains(&update.1))
+            {
+                if let Some(range) = range.take() {
+                    let bucket = chain.find_mut(&range.start).expect("must exist");
+                    bucket.push_container(&mut buffer);
+                }
+                range = Some(chain.range_of(&update.1).expect("must exist"));
+            }
+            buffer.push_into(update);
+        }
+        if let Some(range) = range {
+            let bucket = chain.find_mut(&range.start).expect("must exist");
+            bucket.push_container(&mut buffer);
+        }
+    }
+
+    fn accumulate(
+        map: &mut BTreeMap<(u64, Timestamp), Diff>,
+        updates: impl Iterator<Item = Update>,
+    ) {
+        for (data, time, diff) in updates {
+            *map.entry((data, time)).or_default() += diff;
+        }
+        map.retain(|_, diff| !diff.is_zero());
+    }
+
+    /// Peels at a sequence of frontiers, with updates arriving between peels
+    /// for times in buckets that earlier peels split, and compares each
+    /// peel's output with the reference accumulation of the times it covers.
+    fn peel_matches_reference() {
+        let mut chain = BucketChain::new(Wrapper::new(None, 0));
+        let mut reference = BTreeMap::new();
+        let mut lower = Timestamp::MIN;
+        for round in 0..6u64 {
+            let fresh: Vec<_> = updates(round)
+                .into_iter()
+                .filter(|(_, time, _)| lower <= *time)
+                .collect();
+            accumulate(&mut reference, fresh.iter().copied());
+            insert(&mut chain, fresh);
+
+            let upper = (round < 5).then(|| Timestamp::from(1_000 + (round + 1) * 17_000));
+            let frontier = Antichain::from_iter(upper);
+            let mut revealed = BTreeMap::new();
+            for column in chain
+                .peel(frontier.borrow())
+                .into_iter()
+                .flat_map(|x| x.done())
+            {
+                accumulate(
+                    &mut revealed,
+                    column.borrow().into_index_iter().map(Update::into_owned),
+                );
+            }
+            let mut expected = BTreeMap::new();
+            reference.retain(|(data, time), diff| {
+                if frontier.less_equal(time) {
+                    true
+                } else {
+                    expected.insert((*data, *time), *diff);
+                    false
+                }
+            });
+            assert!(!expected.is_empty(), "round {round} reveals nothing");
+            assert_eq!(revealed, expected, "round {round}");
+
+            let mut fuel = 0;
+            while fuel <= 0 {
+                fuel = 1_000_000;
+                chain.restore(&mut fuel);
+            }
+            lower = upper.unwrap_or(Timestamp::MAX);
+        }
+        assert!(reference.is_empty());
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn peel_matches_reference_resident() {
+        peel_matches_reference();
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn peel_matches_reference_spilled() {
+        let pool = Pool::new().expect("pool creation");
+        set_spill_override(Some(pool.clone()));
+        peel_matches_reference();
+        set_spill_override(None);
+        assert!(pool.stats().inserts > 0, "nothing spilled");
     }
 }
