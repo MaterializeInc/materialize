@@ -3,7 +3,7 @@
 This directory is a Lake project for Lean 4 models of Materialize.
 Each model lives under `Mz/`, and `lake build` checks every module there, whether or not `Mz.lean` imports it.
 The `lean` CI step runs that build, and `warningAsError` in `lakefile.toml` makes any `sorry` or warning fail it.
-`Mz/Collection.lean` is a sample: it models collections of `(record, diff)` updates and proves that consolidation preserves multiplicities.
+`Mz/Collection.lean` is a sample: it models collections of `(record, diff)` updates and proves that consolidation preserves multiplicities, leaves no zero diffs, and leaves at most one update per record.
 
 ## Running
 
