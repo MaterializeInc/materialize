@@ -9,6 +9,7 @@
 
 import {
   Box,
+  Button,
   Code,
   Flex,
   Grid,
@@ -24,7 +25,7 @@ import {
 import React from "react";
 import { useParams } from "react-router-dom";
 
-import { MZ_PROBE_CLUSTER } from "~/api/materialize";
+import { isSystemCluster, MZ_PROBE_CLUSTER } from "~/api/materialize";
 import { Cluster } from "~/api/materialize/cluster/clusterList";
 import Alert from "~/components/Alert";
 import ErrorBox from "~/components/ErrorBox";
@@ -46,6 +47,7 @@ import {
   TOTAL_GRAPH_HEIGHT_PX,
   UtilizationGraph,
 } from "./ClusterOverview/UtilizationGraph";
+import { WorkerSkewDrawer } from "./ClusterOverview/WorkerSkewDrawer";
 import { ClusterParams } from "./ClusterRoutes";
 import {
   CLUSTER_METRICS_UNAVAILABLE_MESSAGE,
@@ -76,6 +78,7 @@ const ClusterOverview = () => {
     localStorageKey: "mz-cluster-graph-time-period",
   });
   const [selectedReplica, setSelectedReplica] = React.useState("all");
+  const [isWorkerSkewOpen, setIsWorkerSkewOpen] = React.useState(false);
 
   const bucketSizeMs = React.useMemo(
     () => Math.max(timePeriodMinutes * 1000, MIN_BUCKET_SIZE_MS),
@@ -168,6 +171,17 @@ const ClusterOverview = () => {
               {isRefreshing && (
                 <Spinner size="sm" data-testid="refreshing-spinner" />
               )}
+              {cluster &&
+                !isSystemCluster(cluster.id) &&
+                cluster.replicas.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setIsWorkerSkewOpen(true)}
+                  >
+                    Where is CPU going?
+                  </Button>
+                )}
               {cluster && (
                 <LabeledSelect
                   label="Replicas"
@@ -273,6 +287,13 @@ const ClusterOverview = () => {
           <ClusterFreshness clusterId={clusterId} />
         )}
       </VStack>
+      {cluster && (
+        <WorkerSkewDrawer
+          isOpen={isWorkerSkewOpen}
+          onClose={() => setIsWorkerSkewOpen(false)}
+          cluster={cluster}
+        />
+      )}
     </MainContentContainer>
   );
 };
