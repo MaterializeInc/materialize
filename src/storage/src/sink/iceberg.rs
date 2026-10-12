@@ -92,8 +92,9 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 use anyhow::{Context, anyhow};
 use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
-use differential_dataflow::trace::BatchReader;
+use differential_dataflow::trace::Span;
 use differential_dataflow::trace::implementations::ord_neu::OrdValBatch;
+use differential_dataflow::trace::implementations::spine_fueled::SpineBatch;
 use differential_dataflow::trace::implementations::{BatchContainer, Layout};
 use differential_dataflow::{Hashable, VecCollection};
 use futures::StreamExt;
@@ -1756,7 +1757,8 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                 // Rows can arrive before their batch description due to dataflow parallelism.
                 // Stash them until we know which batch they belong to.
                 // Keyed by the lower bound (per arrangement batch) of the rows.
-                let mut stashed_rows: VecDeque<ArcBatch<OrdValBatch<_>>> = VecDeque::new();
+                let mut stashed_rows: VecDeque<Span<Timestamp, ArcBatch<OrdValBatch<_>>>> =
+                    VecDeque::new();
 
                 // Track batches currently being written. When a row arrives, we check if it belongs
                 // to an in-flight batch. When frontiers advance to a batch's upper, we close the
@@ -1860,7 +1862,10 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                     }
 
                     metrics.stashed_rows.set(u64::cast_from(
-                        stashed_rows.iter().map(|rows| rows.len()).sum::<usize>(),
+                        stashed_rows
+                            .iter()
+                            .map(|rows| rows.inner.as_ref().map_or(0, |b| b.len()))
+                            .sum::<usize>(),
                     ));
 
                     // Operator Recipe Steps 2-4: Consult frontiers. Plan work. Do all the work.
@@ -1870,10 +1875,14 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                     let mut staged_messages_since_flush: u64 = 0;
 
                     // How to write rows from a(n arrangement) batch into a(n Iceberg) batch.
-                    let write_rows = async |rows: &OrdValBatch<_>,
+                    let write_rows = async |rows: &Span<Timestamp, ArcBatch<OrdValBatch<_>>>,
                                             (lower, upper): BatchDescription,
                                             batch_writer: &mut Box<dyn IcebergWriter>|
                            -> Result<(), anyhow::Error> {
+                        // A span with no updates has no rows to write.
+                        let Some(rows) = &rows.inner else {
+                            return Ok(());
+                        };
                         for_each_diff_pair_async(
                             rows,
                             Some(lower),
@@ -1966,7 +1975,10 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                         statistics.inc_messages_staged_by(staged_messages_since_flush);
                     }
                     metrics.stashed_rows.set(u64::cast_from(
-                        stashed_rows.iter().map(|rows| rows.len()).sum::<usize>(),
+                        stashed_rows
+                            .iter()
+                            .map(|rows| rows.inner.as_ref().map_or(0, |b| b.len()))
+                            .sum::<usize>(),
                     ));
                 }
                 Ok(())
@@ -1997,7 +2009,7 @@ type BatchDescription = (Antichain<Timestamp>, Antichain<Timestamp>);
 /// are in order and non-overlapping.
 async fn with_ready_batches<L: Layout, W, Write, Close>(
     input_frontier: Antichain<Timestamp>,
-    input_batches: &mut VecDeque<ArcBatch<OrdValBatch<L>>>,
+    input_batches: &mut VecDeque<Span<Timestamp, ArcBatch<OrdValBatch<L>>>>,
     output_frontier: Antichain<Timestamp>,
     output_batches: &mut VecDeque<(BatchDescription, W)>,
     mut write_rows: Write,
@@ -2005,7 +2017,11 @@ async fn with_ready_batches<L: Layout, W, Write, Close>(
 ) -> Result<(), anyhow::Error>
 where
     L::TimeContainer: BatchContainer<Owned = Timestamp>,
-    Write: AsyncFnMut(&OrdValBatch<L>, BatchDescription, &mut W) -> Result<(), anyhow::Error>,
+    Write: AsyncFnMut(
+        &Span<Timestamp, ArcBatch<OrdValBatch<L>>>,
+        BatchDescription,
+        &mut W,
+    ) -> Result<(), anyhow::Error>,
     Close: AsyncFnMut(BatchDescription, &mut W) -> Result<(), anyhow::Error>,
 {
     loop {
@@ -2677,7 +2693,7 @@ mod tests {
     }
 
     mod with_ready_batches {
-        use differential_dataflow::trace::Batch;
+        use differential_dataflow::trace::Description;
         use differential_dataflow::trace::implementations::Vector;
 
         use super::*;
@@ -2694,11 +2710,12 @@ mod tests {
             (frontier(Some(lower)), frontier(upper))
         }
 
-        /// An input batch with the given bounds. The pairing logic under test
-        /// only looks at bounds, so the batch holds no data.
-        fn input(lower: u64, upper: Option<u64>) -> ArcBatch<TestBatch> {
+        /// An input span with the given bounds. The pairing logic under test
+        /// only looks at bounds, so the span holds no data.
+        fn input(lower: u64, upper: Option<u64>) -> Span<Timestamp, ArcBatch<TestBatch>> {
             let (lower, upper) = span(lower, upper);
-            ArcBatch(Arc::new(TestBatch::empty(lower, upper)))
+            let since = Antichain::from_elem(Timestamp::MIN);
+            Span::new(Description::new(lower, upper, since), None)
         }
 
         #[derive(Debug, PartialEq)]
@@ -2712,7 +2729,7 @@ mod tests {
         /// sequence of calls it made.
         async fn run(
             input_frontier: Antichain<Timestamp>,
-            input_batches: &mut VecDeque<ArcBatch<TestBatch>>,
+            input_batches: &mut VecDeque<Span<Timestamp, ArcBatch<TestBatch>>>,
             output_frontier: Antichain<Timestamp>,
             output_batches: &mut VecDeque<(BatchDescription, ())>,
         ) -> Vec<Call> {
@@ -2722,7 +2739,7 @@ mod tests {
                 input_batches,
                 output_frontier,
                 output_batches,
-                async |rows: &TestBatch, desc, _writer: &mut ()| {
+                async |rows: &Span<Timestamp, ArcBatch<TestBatch>>, desc, _writer: &mut ()| {
                     let bounds = (rows.lower().clone(), rows.upper().clone());
                     calls.borrow_mut().push(Call::Write(bounds, desc));
                     Ok(())
