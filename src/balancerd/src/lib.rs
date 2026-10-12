@@ -713,7 +713,7 @@ impl ConnectionLimiter {
         let unlimited = limit == 0;
         match self
             .active
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |active| {
                 (unlimited || active < limit).then(|| active + 1)
             }) {
             Ok(prev) => {

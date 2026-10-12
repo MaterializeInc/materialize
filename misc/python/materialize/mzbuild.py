@@ -714,7 +714,7 @@ class CargoBuild(CargoPreImage):
             else {}
         )
 
-        # clang/lld `-22` suffixes must match the LLVM version of the rustc in
+        # clang/lld `-23` suffixes must match the LLVM version of the rustc in
         # rust-version (root Cargo.toml) and the apt.llvm.org release in
         # ci/builder/Dockerfile.
         if (
@@ -726,10 +726,10 @@ class CargoBuild(CargoPreImage):
                 "-Clinker-plugin-lto",
             ]
             extra_env = {
-                "CC": "clang-22",
-                "CXX": "clang++-22",
-                "AR": "llvm-ar-22",
-                "RANLIB": "llvm-ranlib-22",
+                "CC": "clang-23",
+                "CXX": "clang++-23",
+                "AR": "llvm-ar-23",
+                "RANLIB": "llvm-ranlib-23",
                 "CFLAGS": "-flto=thin",
                 "CXXFLAGS": "-flto=thin",
                 # `-static-libstdc++` is unused when clang links a C program,
@@ -737,9 +737,9 @@ class CargoBuild(CargoPreImage):
                 # with `-Werror`. Without `-Wno-unused-command-line-argument`
                 # both checks fail and configure aborts with "cannot determine
                 # return type of strerror_r".
-                "LDFLAGS": "--ld-path=/usr/bin/ld.lld-22 -static-libstdc++ -Wno-unused-command-line-argument",
-                "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
-                "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
+                "LDFLAGS": "--ld-path=/usr/bin/ld.lld-23 -static-libstdc++ -Wno-unused-command-line-argument",
+                "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-23",
+                "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-23",
             }
 
         cargo_build = rd.build(
