@@ -180,6 +180,23 @@ class SmokeTest {
         stmt.close();
     }
 
+    @Test
+    void testPgJDBCgetIndexInfo() throws SQLException, ClassNotFoundException {
+        Statement stmt = conn.createStatement();
+        stmt.execute("CREATE TABLE materialize.public.getidx (a INT, b STRING)");
+        stmt.execute("CREATE INDEX getidx_a ON materialize.public.getidx (a)");
+        stmt.close();
+
+        // `pg_am` has no rows and pgjdbc inner-joins on it, so the index is not reported.
+        ResultSet indexes = conn.getMetaData().getIndexInfo("materialize", "public", "getidx", false, true);
+        Assertions.assertFalse(indexes.next());
+        indexes.close();
+
+        stmt = conn.createStatement();
+        stmt.execute("DROP TABLE materialize.public.getidx");
+        stmt.close();
+    }
+
     // We test for getCatalog due to a regression caused by (database-issues#9530)
     @Test
     void testPgJDBCgetCatalog() throws SQLException, ClassNotFoundException {
