@@ -396,6 +396,9 @@ enum McpMethod {
     Ping(#[allow(dead_code)] Option<serde_json::Value>),
     #[serde(rename = "notifications/initialized")]
     NotificationsInitialized(#[allow(dead_code)] Option<serde_json::Value>),
+    /// `params` is accepted and ignored, as on `tools/list`.
+    #[serde(rename = "server/discover")]
+    ServerDiscover(#[allow(dead_code)] Option<serde_json::Value>),
     /// Catch-all for unrecognized methods.
     #[serde(other)]
     Unknown,
@@ -409,6 +412,7 @@ impl std::fmt::Display for McpMethod {
             McpMethod::ToolsCall(_) => write!(f, "tools/call"),
             McpMethod::Ping(_) => write!(f, "ping"),
             McpMethod::NotificationsInitialized(_) => write!(f, "notifications/initialized"),
+            McpMethod::ServerDiscover(_) => write!(f, "server/discover"),
             McpMethod::Unknown => write!(f, "unknown"),
         }
     }
@@ -562,6 +566,7 @@ impl McpResponse {
 #[serde(untagged)]
 enum McpResult {
     Initialize(InitializeResult),
+    Discover(DiscoverResult),
     ToolsList(ToolsListResult),
     ToolContent(ToolContentResult),
 }
@@ -585,7 +590,7 @@ impl McpResult {
         match self {
             // `private` so a shared cache never serves it to a caller who
             // cannot authenticate to this environment.
-            McpResult::ToolsList(_) => Some(CacheHints {
+            McpResult::Discover(_) | McpResult::ToolsList(_) => Some(CacheHints {
                 ttl_ms: CACHE_TTL_MS,
                 cache_scope: "private",
             }),
@@ -640,6 +645,15 @@ struct InitializeResult {
     capabilities: Capabilities,
     #[serde(rename = "serverInfo")]
     server_info: ServerInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instructions: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DiscoverResult {
+    #[serde(rename = "supportedVersions")]
+    supported_versions: [&'static str; 2],
+    capabilities: Capabilities,
     #[serde(skip_serializing_if = "Option::is_none")]
     instructions: Option<String>,
 }
@@ -1236,7 +1250,18 @@ async fn handle_mcp_method(
             )
             .await
         }
+        // Dual-era clients probe with `server/discover` and fall back to
+        // `initialize` when 2025-11-25 answers it with -32601.
+        McpMethod::ServerDiscover(_) if protocol.is_modern() => {
+            debug!(endpoint = %endpoint_type, "Processing server/discover");
+            handle_discover(
+                endpoint_type,
+                query_tool_enabled,
+                read_data_product_tool_enabled,
+            )
+        }
         McpMethod::Initialize(_)
+        | McpMethod::ServerDiscover(_)
         | McpMethod::Ping(_)
         | McpMethod::NotificationsInitialized(_)
         | McpMethod::Unknown => Err(McpRequestError::MethodNotFound(
@@ -1245,7 +1270,8 @@ async fn handle_mcp_method(
     }
 }
 
-/// Instructions returned in the `initialize` response for each endpoint type.
+/// Instructions returned by `initialize` and `server/discover` for each
+/// endpoint type.
 /// These guide the AI agent on how to use the server correctly.
 fn endpoint_instructions(
     endpoint_type: McpEndpointType,
@@ -1350,6 +1376,25 @@ fn handle_initialize(
         protocol_version: MCP_PROTOCOL_VERSION.to_string(),
         capabilities: Capabilities { tools: json!({}) },
         server_info: server_info(endpoint_type),
+        instructions: endpoint_instructions(
+            endpoint_type,
+            query_tool_enabled,
+            read_data_product_tool_enabled,
+        ),
+    }))
+}
+
+fn handle_discover(
+    endpoint_type: McpEndpointType,
+    query_tool_enabled: bool,
+    read_data_product_tool_enabled: bool,
+) -> Result<McpResult, McpRequestError> {
+    Ok(McpResult::Discover(DiscoverResult {
+        supported_versions: [
+            ProtocolVersion::V2026_07_28.as_str(),
+            ProtocolVersion::V2025_11_25.as_str(),
+        ],
+        capabilities: Capabilities { tools: json!({}) },
         instructions: endpoint_instructions(
             endpoint_type,
             query_tool_enabled,
@@ -2905,7 +2950,7 @@ mod tests {
     fn test_parse_mcp_request_unknown_method_with_params() {
         let req = parse_mcp_request(
             &json_headers(),
-            br#"{"jsonrpc":"2.0","id":7,"method":"server/discover","params":{"_meta":{}}}"#,
+            br#"{"jsonrpc":"2.0","id":7,"method":"server/other","params":{"_meta":{}}}"#,
         )
         .expect("unknown method with params must parse");
         assert!(matches!(req.method, McpMethod::Unknown));

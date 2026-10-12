@@ -5471,6 +5471,19 @@ fn test_mcp_agent_disabled() {
     run_mcp_datadriven("tests/testdata/mcp/agent_disabled", harness);
 }
 
+/// Tests the MCP agent endpoint on protocol 2026-07-28.
+#[mz_ore::test]
+fn test_mcp_agent_protocol_2026_07_28() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "enable_mcp_protocol_2026_07_28".to_string(),
+            "true".to_string(),
+        );
+    run_mcp_datadriven("tests/testdata/mcp/agent_2026_07_28", harness);
+}
+
 /// Tests the 2026-07-28 request headers on the MCP developer endpoint.
 #[mz_ore::test]
 fn test_mcp_developer_protocol_2026_07_28() {
