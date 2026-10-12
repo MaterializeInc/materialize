@@ -17,9 +17,8 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Batcher;
 use mz_timely_util::columnar::Column;
-use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ColumnChunk, ComputeSpill};
+use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ChunkChunker, ComputeSpill};
 use mz_timely_util::columnar::columnar_exchange_data;
 use mz_timely_util::temporal::{Bucket, BucketChain, BucketRange, BucketTimestamp};
 use timely::Accountable;
@@ -332,9 +331,9 @@ where
 /// The choice is unconditional here: the bucket chain does not consult the
 /// arrange batcher selector.
 ///
-/// The batcher consumes sorted, consolidated [`ColumnChunk`] input, so this
-/// wrapper carries a [`ColumnChunker`] that sorts and consolidates the input
-/// columns into the [`Column`]s it wraps as chunks.
+/// The batcher consumes sorted, consolidated chunks, so this
+/// wrapper carries a [`ChunkChunker`] that sorts and consolidates the input
+/// columns into chunks within the batcher's byte bound.
 ///
 /// Updates are stored time-major, as `((time, data), time, diff)`, so each
 /// chunk covers a narrow range of times. Splitting at a time then loads only
@@ -354,7 +353,7 @@ where
     operator_id: usize,
     /// Time-major copy of the updates on their way into the chunker.
     staging: Column<((T, D), T, R)>,
-    chunker: ColumnChunker<((T, D), T, R)>,
+    chunker: ChunkChunker<(T, D), T, R, ComputeSpill>,
     inner: AccountedChunkBatcher<(T, D), T, R, ComputeSpill>,
 }
 
@@ -374,7 +373,7 @@ where
             logger: logger.clone(),
             operator_id,
             staging: Column::default(),
-            chunker: ColumnChunker::default(),
+            chunker: ChunkChunker::default(),
             inner: AccountedChunkBatcher::new(logger, operator_id),
         }
     }
@@ -400,8 +399,7 @@ where
         self.chunker.push_into(&mut self.staging);
         self.staging.clear();
         while let Some(chunk) = self.chunker.extract() {
-            self.inner
-                .push_into(ColumnChunk::from_body(std::mem::take(chunk)));
+            self.inner.push_into(std::mem::take(chunk));
         }
     }
 
@@ -409,8 +407,7 @@ where
     fn flush(&mut self) {
         use timely::container::{ContainerBuilder as _, PushInto as _};
         while let Some(chunk) = self.chunker.finish() {
-            self.inner
-                .push_into(ColumnChunk::from_body(std::mem::take(chunk)));
+            self.inner.push_into(std::mem::take(chunk));
         }
     }
 
