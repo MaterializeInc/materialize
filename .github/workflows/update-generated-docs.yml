@@ -82,7 +82,7 @@ jobs:
 
             IMPORTANT: You may ONLY create or modify files under doc/developer/generated/.
             Do NOT modify any other files.
-          claude_args: '--allowedTools Edit Read Glob Grep Bash(git log:*) Bash(git diff:*) Bash(find:*) Bash(wc:*) Bash(head:*)'
+          claude_args: '--allowedTools Edit Read Glob Grep "Bash(git log:*)" "Bash(git diff:*)" Bash(find:*) Bash(wc:*) Bash(head:*)'
 
       - name: Check for changes
         id: changes
