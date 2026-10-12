@@ -210,6 +210,12 @@ def get_minimal_system_parameters(
     if version < MzVersion.parse_mz("v26.42.0-dev"):
         config["enable_zero_downtime_cluster_reconfiguration"] = "true"
 
+    # Temporal bucketing is unconditional from v26.47 on. Older binaries still
+    # read this flag and default it off, so pin it on for them to keep benchmark
+    # baselines and mixed-version runs bucketing like current versions.
+    if version < MzVersion.parse_mz("v26.47.0-dev"):
+        config["enable_compute_temporal_bucketing"] = "true"
+
     return config
 
 
