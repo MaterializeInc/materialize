@@ -502,6 +502,16 @@ fn internal_tls_connector() -> Result<SslConnector, ErrorStack> {
     Ok(builder.build())
 }
 
+/// Opens a TCP connection to environmentd with `TCP_NODELAY` set.
+async fn connect_to_envd(addr: SocketAddr) -> Result<TcpStream, io::Error> {
+    let stream = TcpStream::connect(addr).await?;
+    // Without this, Nagle's algorithm holds the tail of an extended-protocol batch that arrives
+    // in several reads until environmentd's delayed ACK (at least 40 ms on Linux), because
+    // environmentd responds only at `Sync`.
+    stream.set_nodelay(true)?;
+    Ok(stream)
+}
+
 /// Wraps an IntGauge and automatically `inc`s on init and `drop`s on drop. Callers should not call
 /// `inc().`. Useful for handling multiple task exit points, for example in the case of a panic.
 struct GaugeGuard {
@@ -1072,7 +1082,7 @@ impl PgwireBalancer {
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
-        let mut mz_stream = TcpStream::connect(envd_addr).await?;
+        let mut mz_stream = connect_to_envd(envd_addr).await?;
         let mut buf = BytesMut::new();
 
         let mut mz_stream = if let Some(internal_tls) = internal_tls {
@@ -1538,7 +1548,7 @@ impl mz_server_core::Server for HttpsBalancer {
                     .tenant
                     .as_ref()
                     .map(|tenant| inner_metrics.tenant_connections(tenant));
-                let mut mz_stream = match TcpStream::connect(resolved.addr).await {
+                let mut mz_stream = match connect_to_envd(resolved.addr).await {
                     Ok(stream) => stream,
                     Err(e) => {
                         error!("failed to connect to upstream server: {e}");
