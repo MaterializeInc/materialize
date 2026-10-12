@@ -370,8 +370,8 @@ impl Coordinator {
                 reference,
                 tx,
             } => {
-                // Tests hold cut-over while arranging a hydrated but lagging
-                // replacement, then release this to exercise the real probe.
+                // Tests hold readiness checks while arranging hydrated but
+                // lagging replicas, then release this to exercise the real probe.
                 fail::fail_point!("cluster_controller_hold_readiness", |_| ());
                 let checks = self.start_readiness_checks(
                     cluster_id,

@@ -1049,8 +1049,8 @@ pub struct ReconfigurationTarget {
 pub struct BurstState {
     pub burst_size: String,
     pub linger_duration: Duration,
-    /// When the steady-state replicas were first observed caught up, as an
-    /// `mz_repr::Timestamp`. Absent until that observation.
+    /// Start of the current observed readiness period for the steady set, as an
+    /// `mz_repr::Timestamp`. Cleared after a failed readiness check.
     pub steady_ready_at: Option<u64>,
 }
 

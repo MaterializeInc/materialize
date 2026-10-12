@@ -62,7 +62,7 @@ steady-size replicas, query
 [`mz_internal.mz_hydration_statuses`](/sql/system-catalog/mz_internal/#mz_hydration_statuses)
 for the cluster's steady-size replica IDs. Retirement starts once at least one
 steady-size replica is hydrated and caught up to the burst replica (within the
-allowed lag), then waits for `LINGER DURATION`. A failed readiness check
+lag allowance, 60 seconds by default), then waits for `LINGER DURATION`. A failed readiness check
 restarts linger.
 
 The [audit log](/sql/system-catalog/mz_catalog/#mz_audit_events) records when a
