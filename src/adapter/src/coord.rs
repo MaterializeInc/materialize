@@ -760,6 +760,9 @@ pub enum ExplainContext {
     PlanInsightsNotice(OptimizerTrace),
     /// `EXPLAIN FILTER PUSHDOWN`
     Pushdown,
+    /// `EXPLAIN TIMESTAMP`, which explains the timestamp the statement would read at without
+    /// optimizing it into a dataflow.
+    Timestamp,
 }
 
 impl ExplainContext {
@@ -770,7 +773,7 @@ impl ExplainContext {
         let optimizer_trace = match self {
             ExplainContext::Plan(explain_ctx) => Some(&explain_ctx.optimizer_trace),
             ExplainContext::PlanInsightsNotice(optimizer_trace) => Some(optimizer_trace),
-            _ => None,
+            ExplainContext::None | ExplainContext::Pushdown | ExplainContext::Timestamp => None,
         };
         optimizer_trace.map(|optimizer_trace| optimizer_trace.as_guard())
     }
@@ -781,6 +784,20 @@ impl ExplainContext {
             ExplainContext::Plan(..) => false,
             ExplainContext::PlanInsightsNotice(..) => true,
             ExplainContext::Pushdown => false,
+            ExplainContext::Timestamp => false,
+        }
+    }
+
+    /// Whether the statement's reads of per-replica introspection sources are checked, see
+    /// `check_log_reads`.
+    pub(crate) fn checks_log_reads(&self) -> bool {
+        match self {
+            ExplainContext::None
+            | ExplainContext::Plan(..)
+            | ExplainContext::PlanInsightsNotice(..)
+            | ExplainContext::Pushdown => true,
+            // It only determines a timestamp, and reads nothing on a replica.
+            ExplainContext::Timestamp => false,
         }
     }
 
