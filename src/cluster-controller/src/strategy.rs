@@ -711,9 +711,10 @@ impl HydrationBurstStrategy {
             return BTreeSet::new();
         };
         let shape = self.burst_shape(state, record);
-        // If another strategy also desires the burst shape, withdrawing its
-        // one slot cannot drop a replica: desired counts combine by maximum.
-        // Comparing against that surviving shape can only delay record cleanup.
+        // Conservatively include all burst-shaped replicas, even if another
+        // strategy also needs them. Ending the burst withdraws only our demand.
+        // Reconciliation keeps replicas still needed by another strategy, so
+        // waiting for catch-up in that case only delays clearing the burst record.
         state
             .replicas
             .iter()
@@ -722,8 +723,12 @@ impl HydrationBurstStrategy {
             .collect()
     }
 
-    /// Whether the observed set contains a steady-state replica.
-    fn steady_has_replica(&self, state: &ClusterState, replicas: &BTreeSet<ReplicaId>) -> bool {
+    /// Whether `replicas` contains a steady-shaped replica.
+    fn contains_steady_replica(
+        &self,
+        state: &ClusterState,
+        replicas: &BTreeSet<ReplicaId>,
+    ) -> bool {
         let steady_shape = state.realized_shape();
         state
             .replicas
@@ -790,7 +795,7 @@ impl Strategy for HydrationBurstStrategy {
             // mid-burst, the steady set reads hydrated and the linger clears
             // the record.
             None => {
-                if self.steady_has_replica(state, &signals.hydrated_replicas)
+                if self.contains_steady_replica(state, &signals.hydrated_replicas)
                     || !signals.has_hydratable_objects
                 {
                     StateWrite::default()
@@ -816,7 +821,7 @@ impl Strategy for HydrationBurstStrategy {
                 let steady_ready = signals
                     .ready_replicas
                     .get(&self.reference_replicas(state))
-                    .is_some_and(|ready| self.steady_has_replica(state, ready));
+                    .is_some_and(|ready| self.contains_steady_replica(state, ready));
                 match (record.steady_ready_at, steady_ready) {
                     // Steady set ready and the linger has elapsed: tear down.
                     // A linger that overflows the timestamp space reads as
