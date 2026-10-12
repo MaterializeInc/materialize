@@ -115,7 +115,9 @@ use mz_ore::cli::{self, CliConfig};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task;
 use mz_persist::indexed::columnar::ColumnarRecords;
-use mz_timely_util::builder_async::{Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder};
+use mz_timely_util::builder_async::{
+    Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, sole_capability,
+};
 use mz_timely_util::probe::{Handle, ProbeNotify};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
@@ -929,6 +931,7 @@ fn upsert_core_pre_reduce<'scope, M: Map + 'static>(
         while let Some(event) = input.next().await {
             match event {
                 AsyncEvent::Data(cap, buffer) => {
+                    let cap = sole_capability(&cap);
                     for (k, v) in buffer {
                         let time = *cap.time();
                         let map = &mut pending_values
