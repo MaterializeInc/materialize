@@ -599,12 +599,21 @@ impl Coordinator {
 
         // Validate the replacement target, if one is given.
         if let Some(target_id) = replacement_target {
-            let Some(target) = self.catalog().get_entry(&target_id).materialized_view() else {
+            let target_entry = self.catalog().get_entry(&target_id);
+            let Some(target) = target_entry.materialized_view() else {
                 return Err(AdapterError::internal(
                     "create materialized view",
                     "replacement target not a materialized view",
                 ));
             };
+
+            // Best-effort: the target can still seal after this check, so `APPLY REPLACEMENT`
+            // checks again.
+            if self.materialized_view_sealed(target_entry) {
+                return Err(AdapterError::ReplaceMaterializedViewSealed {
+                    name: target_entry.name().item.clone(),
+                });
+            }
 
             // For now, we don't support schema evolution for materialized views.
             let schema_diff = target.desc.latest().diff(global_lir_plan.desc());
