@@ -25,6 +25,7 @@ use mz_sql::plan::{self, QueryWhen, SubscribeFrom};
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
+use timely::PartialOrder;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -32,7 +33,8 @@ use tracing::{Instrument, Span};
 use uuid::Uuid;
 
 use crate::active_compute_sink::{
-    ActiveComputeSink, ActiveSubscribe, ActiveSubscribeOwner, SubscribeBacklogAccounting,
+    ActiveComputeSink, ActiveComputeSinkRetireReason, ActiveSubscribe, ActiveSubscribeOwner,
+    SubscribeBacklogAccounting,
 };
 use crate::command::ExecuteResponse;
 use crate::coord::appends::BuiltinTableAppendNotify;
@@ -587,31 +589,50 @@ impl Coordinator {
         };
         active_subscribe.initialize();
 
-        // Register bookkeeping for the new SUBSCRIBE and ship its dataflow. The
-        // `mz_subscriptions` write is deferred to a group commit (see
-        // `add_active_compute_sink`) rather than committed inline, so it does not block
-        // the coordinator loop on a timestamp-oracle round trip. We hand the notify back
-        // so the caller can wait before returning the `SUBSCRIBE` response to the
-        // subscribing session.
-        let write_notify =
-            self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe));
+        // A subscribe whose `up_to` is not beyond its `as_of` covers an empty range and
+        // produces no data beyond the progress row `initialize` already emitted. It must
+        // not install a sink: the sink only finishes once its input frontier reaches
+        // `up_to`, which a live input never does at `MAX`, so `AS OF MAX UP TO MAX` would
+        // never complete. Retiring `active_subscribe` drops its channel sender, which
+        // completes the subscribe for the client.
+        let is_empty = df_desc
+            .as_of
+            .as_ref()
+            .is_some_and(|as_of| PartialOrder::less_equal(&df_desc.until, as_of));
+        let write_notify: BuiltinTableAppendNotify = if is_empty {
+            active_subscribe.retire(ActiveComputeSinkRetireReason::Finished);
+            // No `mz_subscriptions` bookkeeping was deferred.
+            Box::pin(std::future::ready(()))
+        } else {
+            // Register bookkeeping for the new SUBSCRIBE and ship its dataflow. The
+            // `mz_subscriptions` write is deferred to a group commit (see
+            // `add_active_compute_sink`) rather than committed inline, so it does not block
+            // the coordinator loop on a timestamp-oracle round trip. We hand the notify back
+            // so the caller can wait before returning the `SUBSCRIBE` response to the
+            // subscribing session.
+            let write_notify = self
+                .add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe));
 
-        // Ship the dataflow, handling errors gracefully. With the frontend subscribe
-        // sequencing, a dependency can be dropped between sequencing (on the session
-        // task) and here. The read holds acquired during sequencing don't prevent that:
-        // they hold back compaction, not drops.
-        if let Err(e) = self
-            .try_ship_dataflow(df_desc, cluster_id, replica_id)
-            .await
-        {
-            // Clean up the active compute sink that was added above, since the dataflow
-            // was never created. If we don't do this, the sink_id remains in
-            // `drop_sinks` but no collection exists in the compute controller, causing
-            // a panic when the connection terminates. This also retracts the deferred
-            // `mz_subscriptions` write, so `write_notify` can be dropped.
-            self.remove_active_compute_sink(sink_id).await;
-            return Err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error(e));
-        }
+            // Ship the dataflow, handling errors gracefully. With the frontend subscribe
+            // sequencing, a dependency can be dropped between sequencing (on the session
+            // task) and here. The read holds acquired during sequencing don't prevent that:
+            // they hold back compaction, not drops.
+            if let Err(e) = self
+                .try_ship_dataflow(df_desc, cluster_id, replica_id)
+                .await
+            {
+                // Clean up the active compute sink that was added above, since the dataflow
+                // was never created. If we don't do this, the sink_id remains in
+                // `drop_sinks` but no collection exists in the compute controller, causing
+                // a panic when the connection terminates. This also retracts the deferred
+                // `mz_subscriptions` write, so `write_notify` can be dropped.
+                self.remove_active_compute_sink(sink_id).await;
+                return Err(
+                    AdapterError::concurrent_dependency_drop_from_dataflow_creation_error(e),
+                );
+            }
+            write_notify
+        };
 
         // Explicitly drop read holds, just to make it obvious what's happening.
         drop(read_holds);
