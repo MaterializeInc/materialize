@@ -110,16 +110,31 @@ steps:
     agents:
       queue: linux-aarch64-small
 
-  - id: cluster-spec-sheet-staging
-    label: "Cluster spec sheet: envd Scalability + Cluster Object Count Limits (against Staging)"
+  - id: cluster-spec-sheet-qps
+    label: "Cluster spec sheet: QPS concurrency sweep (against Staging)"
     timeout_in_minutes: 3600
     depends_on: devel-docker-tags
-    parallelism: 7
+    concurrency: 1
+    concurrency_group: "cluster-spec-sheet-account-$$CI_CONCURRENCY_POOL_SLOT"
+    concurrency_pool: 20
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster-spec-sheet
+          run: default
+          args: [--cleanup, --target=cloud-staging, qps_envd_strong_scaling]
+    agents:
+      queue: linux-aarch64-medium
+
+  - id: cluster-spec-sheet-staging
+    label: "Cluster spec sheet: COPY + Object Scalability + Cluster Object Count Limits (against Staging)"
+    timeout_in_minutes: 3600
+    depends_on: devel-docker-tags
+    parallelism: 6
     concurrency: 1
     # Each slot is one dedicated staging account from the e2e pool of 20
     # (see staging_credentials in the composition). mkpipeline rotates the
-    # 7-shard window over the pool per build, so concurrent builds use
-    # disjoint accounts instead of queueing on the previous build's shards.
+    # shard window over the pool per build. The QPS step shares these locks
+    # so it cannot use an account concurrently with an object-count test.
     concurrency_group: "cluster-spec-sheet-account-$$CI_CONCURRENCY_POOL_SLOT"
     concurrency_pool: 20
     plugins:
@@ -129,8 +144,8 @@ steps:
           args:
             - --cleanup
             - --target=cloud-staging
-            - envd_qps_scalability
+            - copy_from_stdin_envd_strong_scaling
             - envd_objects_scalability
             - cluster_object_limits
     agents:
-      queue: linux-aarch64-medium
+      queue: linux-aarch64-small
