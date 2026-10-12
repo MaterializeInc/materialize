@@ -28,6 +28,13 @@ cloud-style sizes (`25cc`, `50cc`, ...).
 Run unit tests with `cargo test`.
 If available, use `cargo nextest` instead.
 If these complain about `METADATA_BACKEND_URL`, then use `bin/cargo-test` instead.
+`bin/cargo-test` sets `METADATA_BACKEND_URL` from its `--postgres` argument,
+which defaults to `MZDEV_POSTGRES` or else the local CockroachDB, and
+overwrites any value already in the environment. To run against another
+metadata store, pass `--postgres` or set `MZDEV_POSTGRES`. It also sets
+`RUST_MIN_STACK=8388608`, which some tests need to avoid stack overflows.
+CI's cargo-test step sets 4194304. A bare `cargo test` or `cargo nextest run`
+sets neither, so export it yourself.
 When using `-p`, our packages typically have an `mz-` suffix, e.g., `mz-adapter`.
 Rewrite datadriven test expectations with `REWRITE=1 cargo test ...`.
 Do not manually update `*.snap` files.
