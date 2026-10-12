@@ -105,22 +105,28 @@ pub(crate) fn validate_database_mod_statements(
                             ));
                         }
 
-                        // Check that it targets this specific database
+                        // Check that it targets this specific database. A
+                        // `GRANT ... ON DATABASE x` parses the target as a
+                        // `Database` name, not an `Item`.
                         if let GrantTargetSpecificationInner::Objects { names } = object_spec_inner
                         {
                             for name in names {
-                                if let UnresolvedObjectName::Item(item_name) = name {
-                                    let target_db = item_name.to_string();
-                                    if target_db != database_name {
-                                        errors.push(ValidationError::with_file_and_sql(
-                                            ValidationErrorKind::DatabaseModGrantTargetMismatch {
-                                                target: format!("DATABASE {}", target_db),
-                                                database_name: database_name.to_string(),
-                                            },
-                                            database_path.to_path_buf(),
-                                            stmt_sql.clone(),
-                                        ));
+                                let target_db = match name {
+                                    UnresolvedObjectName::Database(db_name) => {
+                                        db_name.0.as_str().to_string()
                                     }
+                                    UnresolvedObjectName::Item(item_name) => item_name.to_string(),
+                                    _ => continue,
+                                };
+                                if target_db != database_name {
+                                    errors.push(ValidationError::with_file_and_sql(
+                                        ValidationErrorKind::DatabaseModGrantTargetMismatch {
+                                            target: format!("DATABASE {}", target_db),
+                                            database_name: database_name.to_string(),
+                                        },
+                                        database_path.to_path_buf(),
+                                        stmt_sql.clone(),
+                                    ));
                                 }
                             }
                         }
@@ -438,4 +444,48 @@ pub(crate) fn validate_schema_mod_statements(
 /// Returns true if `target` matches `schema_name` either unqualified or as `database.schema`.
 fn schema_name_matches(target: &str, database_name: &str, schema_name: &str) -> bool {
     target == schema_name || target == format!("{}.{}", database_name, schema_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_sql_parser::parser::parse_statements;
+    use std::path::PathBuf;
+
+    fn parse(sql: &str) -> Vec<Statement<Raw>> {
+        parse_statements(sql)
+            .expect("valid SQL")
+            .into_iter()
+            .map(|s| s.ast)
+            .collect()
+    }
+
+    #[mz_ore::test]
+    fn database_grant_targeting_other_database_is_rejected() {
+        let stmts = parse("GRANT USAGE ON DATABASE other_db TO some_role");
+        let mut errors = Vec::new();
+        validate_database_mod_statements(
+            "app",
+            &PathBuf::from("app/database.sql"),
+            &stmts,
+            &mut errors,
+        );
+        assert!(
+            errors.iter().any(|e| format!("{e}").contains("other_db")),
+            "expected a mismatch naming other_db, got: {errors:?}",
+        );
+    }
+
+    #[mz_ore::test]
+    fn database_grant_targeting_own_database_passes() {
+        let stmts = parse("GRANT USAGE ON DATABASE app TO some_role");
+        let mut errors = Vec::new();
+        validate_database_mod_statements(
+            "app",
+            &PathBuf::from("app/database.sql"),
+            &stmts,
+            &mut errors,
+        );
+        assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
+    }
 }
