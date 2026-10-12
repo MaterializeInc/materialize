@@ -717,9 +717,18 @@ fn eval_unmaterializable_func(
             pack_1d_array(names.iter().map(|n| Datum::from(n.as_str())).collect())
         }
         UnmaterializableFunc::MzUptime => {
-            let uptime = state.config().start_instant.elapsed();
-            let uptime = chrono::Duration::from_std(uptime).map_or(Datum::Null, Datum::from);
-            pack(uptime)
+            // Derived from the statement's wall time so that every occurrence in
+            // a plan folds to the same literal. Rewrites that duplicate a
+            // subtree, such as the `INTERSECT` lowering, rely on the copies
+            // being identical, and differing literals there produce negative
+            // multiplicities. Clamped at zero because the wall clock can step
+            // backwards.
+            let uptime = session
+                .pcx()
+                .wall_time
+                .signed_duration_since(state.config().start_time)
+                .max(chrono::Duration::zero());
+            pack(Datum::from(uptime))
         }
         UnmaterializableFunc::MzVersion => pack(Datum::from(
             &*state
