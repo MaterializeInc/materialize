@@ -166,6 +166,15 @@ class SmokeTest {
     }
 
     @Test
+    void testPgJDBCgetMaxNameLength() throws SQLException {
+        // pgjdbc derives these from `pg_type.typlen` of `name`. Trino rejects
+        // joins and table creation when they are not positive.
+        DatabaseMetaData meta = conn.getMetaData();
+        Assertions.assertEquals(63, meta.getMaxColumnNameLength());
+        Assertions.assertEquals(63, meta.getMaxTableNameLength());
+    }
+
+    @Test
     void testPgJDBCgetPrimaryKeys() throws SQLException, ClassNotFoundException {
         Statement stmt = conn.createStatement();
         stmt.execute("CREATE TABLE materialize.public.getpks (a INT, b STRING)");
