@@ -57,11 +57,25 @@ A new `ClusterReplicaSizeId` type in `mz-repr` with `User(u64)` and
 `System(u64)` variants, matching `NetworkPolicyId`, `ClusterId`,
 `RoleId`, etc. Two allocator keys track the next ID in each namespace.
 Builtin sizes synced from the env var get `System` IDs; user-defined
-sizes created via SQL get `User` IDs.
+sizes created via SQL get `User` IDs. A `System` ID is what marks a size
+as builtin; there is no separate flag.
 
-Replicas still reference sizes by name (`ManagedLocation.size` remains
-a `String`). The ID is catalog-internal identity only; the name is the
-user-facing reference. This avoids migrating the replica storage format.
+#### References
+
+The first step keeps replicas referencing sizes by name
+(`ManagedLocation.size` and `ClusterVariantManaged.size` remain
+`String`s). A follow-up, which must land before the SQL surface, switches
+replicas and managed cluster configs to store `ClusterReplicaSizeId`.
+Names then serve only display and SQL lookup, and in-use checks become
+ordinary dependency checks.
+
+The name-to-ID rewrite cannot be a durable catalog migration. Migrations
+cannot read `--cluster-replica-sizes`, and `upgrade()` runs all pending
+migrations back to back before the builtin sync has populated the size
+collection, so a migration would find no size records to point at. The
+rewrite runs at catalog open instead, after the sync. System views such
+as `mz_cluster_replicas` then resolve the size name through a join
+rather than reading it from the replica's stored location.
 
 #### Proto definitions
 
@@ -80,7 +94,6 @@ pub enum ClusterReplicaSizeId {
 pub struct ClusterReplicaSizeValue {
     pub name: String,
     pub memory_limit: Option<u64>,      // bytes
-    pub memory_request: Option<u64>,
     pub cpu_limit: Option<u64>,         // nanocpus
     pub cpu_request: Option<u64>,
     pub disk_limit: Option<u64>,        // bytes
@@ -89,10 +102,10 @@ pub struct ClusterReplicaSizeValue {
     pub credits_per_hour: String,       // Numeric as string
     pub cpu_exclusive: bool,
     pub is_cc: bool,
+    pub family: Option<String>,
     pub swap_enabled: bool,
     pub disabled: bool,
     pub selectors: BTreeMap<String, String>,
-    pub builtin: bool,
 }
 ```
 
@@ -103,7 +116,6 @@ pub struct ClusterReplicaSize {
     pub id: ClusterReplicaSizeId,
     pub name: String,
     pub allocation: ReplicaAllocation,
-    pub builtin: bool,
 }
 ```
 
@@ -115,17 +127,56 @@ trait on `ClusterReplicaSizeValue`.
 On every catalog open, `sync_builtin_cluster_replica_sizes()` reconciles
 the env-var `ClusterReplicaSizeMap` with durable state:
 
-* **New sizes** in the env var are inserted with `builtin: true`.
-* **Changed allocations** are retracted and reinserted.
+* **New sizes** in the env var are inserted with a `System` ID.
+* **Changed allocations** are updated in place, keeping the size's ID.
 * **Removed sizes** are handled based on usage:
-  * If no replica references the size, it is deleted.
-  * If a replica still uses it, it is marked `disabled: true` with a
+  * If nothing uses the size, it is deleted.
+  * If something still uses it, it is marked `disabled: true` with a
     warning log, preventing new replicas from using it while avoiding
     panics in `concretize_replica_location`.
+
+A size is in use if any of these name it:
+
+* a managed replica's location;
+* a managed cluster's configured size;
+* a managed cluster's in-flight graceful reconfiguration target;
+* a managed cluster's in-flight hydration burst size.
+
+The cluster references matter because a managed cluster can depend on a
+size without having a replica on it, for example a cluster with
+`SCHEDULE = ON REFRESH` between refreshes, or one at replication factor
+0. Counting only replicas would delete such a size, and the next replica
+creation would fail, so a scheduled materialized view would stop
+refreshing.
+
+A disabled size keeps existing replicas running, but the cluster
+controller still refuses disabled sizes when it creates replicas
+(`allow_disabled = false`), so a scheduled cluster pinned to a disabled
+size cannot bring its replicas back. Letting the controller use a
+disabled size that matches the cluster's configured size is a
+follow-up.
 
 `CatalogState.cluster_replica_sizes` is initialized empty and populated
 from durable state updates (via `apply_cluster_replica_size_update`)
 rather than directly from config.
+
+#### Editing a size
+
+A size definition and the replicas using it can disagree only until the
+replica is next provisioned. The contract:
+
+* **Builtin sizes.** Editing a size in `--cluster-replica-sizes` and
+  rolling out environmentd resizes every replica on that size. This is
+  current behavior, not new: at boot, replica locations are re-derived
+  from the size map. Creating a new `System` ID per edit instead would
+  leave existing replicas on the old allocation indefinitely, which
+  breaks how cloud tunes sizes today.
+* **User-defined sizes.** Immutable once created; see "Immutability"
+  below.
+* **Goal.** A size change should apply only when a replica is recreated,
+  not to replicas that are already running. Today an environmentd
+  rollout re-provisions every replica, so for builtin sizes a rollout
+  counts as recreation.
 
 ### SQL DDL
 
@@ -156,7 +207,10 @@ DROP CLUSTER REPLICA SIZE <name>;
   (default off).
 * `mz_system` bypasses the feature flag.
 * RBAC requires superuser for both CREATE and DROP.
-* Cannot drop builtin sizes or sizes in use by existing replicas.
+* Cannot drop builtin sizes. Dropping a size that anything uses (see
+  "Builtin sync" for the full list of references) is refused as a
+  dependency check at the `DROP`, consistent with other catalog objects,
+  not only at boot.
 * Cannot create a size with a name that already exists.
 
 **Credit enforcement:** In self-managed deployments, `credits_per_hour`
@@ -218,6 +272,22 @@ by `TableTransaction`. Storing raw `u64`/`String` fields and
 converting in `DurableType::from_key_value` avoids this constraint.
 
 ## Open Questions
+
+* **Name collisions between builtin and user sizes.** Size names are
+  unique across `System` and `User` IDs. If a user creates `foo` and a
+  later `--cluster-replica-sizes` adds `foo`, the sync's insert fails and
+  so does catalog open, blocking the rollout. Self-managed customers
+  already define their own sizes in the Helm chart, so sizes we add to
+  the chart can overlap with theirs too. Options:
+  * Fail catalog open. Simple and loud. With zero-downtime upgrades the
+    new environmentd fails in read-only mode and the old one keeps
+    serving, but other rollout strategies cause an outage.
+  * Skip the conflicting builtin size, log a warning, and keep booting.
+    Once references are by ID, a name collision cannot change what any
+    existing replica runs on; the user's size keeps the name.
+  * Reserve builtin name patterns (for example `\d+cc` and `M.\d+-*`)
+    and reject user sizes matching them, or require a prefix for user
+    sizes.
 
 * Should we actually provide this to self-managed customers?
 * Adding new replica sizes in cloud is tricky and requires input from finance.
