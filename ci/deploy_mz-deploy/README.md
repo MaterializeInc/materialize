@@ -2,8 +2,10 @@
 
 mz-deploy ships on the Materialize release train. It carries the same version as
 `environmentd` (`src/mz-deploy/Cargo.toml` is bumped by `bin/bump-version`), and
-its release tarballs are built and uploaded by the `deploy` pipeline
-(`ci/deploy/pipeline.template.yml`) whenever a `vX.Y.Z` tag is pushed.
+its release tarballs are built and uploaded by the `deploy-mz-deploy` pipeline
+(`ci/deploy_mz-deploy/pipeline.template.yml`). The `deploy` pipeline triggers it
+asynchronously whenever a `vX.Y.Z` tag is pushed, so a slow or failing tarball
+build never holds up release qualification.
 
 **There is nothing to do to cut an mz-deploy release.** It goes out with the
 database.
