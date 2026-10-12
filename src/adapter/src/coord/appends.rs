@@ -1247,7 +1247,7 @@ pub(crate) fn waiting_on_startup_appends(
     //
     // TODO(parkmycar): As an optimization we should add a `Notify` type to
     // `mz_ore` that allows peeking. If the builtin table writes have already
-    // completed then there is no need to defer this plan.
+    // completed then there is no need to wait on them.
     match session.clear_builtin_table_updates() {
         Some(wait_future) => Some(wait_future.boxed()),
         None => None,

@@ -997,6 +997,10 @@ impl PeekClient {
         }
 
         if let QueryPlan::ExplainTimestamp(explain_timestamp_plan) = &query_plan {
+            // Test-only synchronization point: parks the statement before the coordinator looks
+            // up the frontiers of `input_id_bundle`, so a test can drop one of its collections in
+            // between.
+            fail::fail_point!("explain_timestamp_before_dispatch");
             let explanation = self
                 .call_coordinator(|tx| Command::ExplainTimestamp {
                     conn_id: session.conn_id().clone(),
@@ -1010,7 +1014,8 @@ impl PeekClient {
             let s = match explain_timestamp_plan.format {
                 ExplainFormat::Json => serde_json::to_string_pretty(&explanation)
                     .expect("failed to serialize explanation"),
-                _ => explanation.to_string(),
+                // `AS DOT` is rejected before any work, when the plan is matched.
+                ExplainFormat::Text | ExplainFormat::Dot => explanation.to_string(),
             };
             let rows = vec![Row::pack_slice(&[Datum::from(s.as_str())])];
             return Ok(Some(Coordinator::send_immediate_rows(rows)));
