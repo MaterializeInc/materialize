@@ -10,20 +10,24 @@
 //! The upsert-v2 source stash: the consolidating diff, the stash batcher
 //! types, and the per-flavor [`UpsertStashArm`]s.
 
+use differential_dataflow::batcher::Extract;
 use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
-use differential_dataflow::trace::chunk::ChunkBatcher;
-use differential_dataflow::trace::{Batcher, TraceReader};
+use differential_dataflow::trace::TraceReader;
+use differential_dataflow::trace::chunk::ChunkMerger;
+use differential_dataflow::trace::implementations::spine_fueled::SpineBatch;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_row_spine::FundedValRowSpine;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher::ColumnChunker;
-use mz_timely_util::columnar::chunk::{ColumnChunk, StorageSpill};
-use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
+use mz_timely_util::columnar::chunk::{ChunkChunker, ColumnChunk, StorageSpill};
+use mz_timely_util::columnar::merge_batcher::{ColumnMergeBatcher, PagedChunker};
+use mz_timely_util::operator::ConsolidatingBatcher;
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::operators::Capability;
 use timely::order::TotalOrder;
+use timely::progress::frontier::AntichainRef;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
@@ -121,13 +125,17 @@ type UpsertChunk<T, O> = ColumnChunk<(T, UpsertKey), T, UpsertDiff<O>, StorageSp
 /// process buffer pool (see `mz_timely_util::columnar::chunk`), so the
 /// not-yet-eligible backlog (the snapshot / persist-lag window) pages out of
 /// RSS instead of growing it.
-type UpsertChunkBatcher<T, O> = ChunkBatcher<UpsertChunk<T, O>>;
+type UpsertChunkBatcher<T, O> = ConsolidatingBatcher<
+    ChunkChunker<(T, UpsertKey), T, UpsertDiff<O>, StorageSpill>,
+    ChunkMerger<UpsertChunk<T, O>>,
+>;
 
 /// The paged flavor's stash: the paged columnar merge batcher, consolidating
 /// like [`UpsertChunkBatcher`] but storing each chain entry as a `Column`
 /// routed through the storage-owned pager, which pages cold chains out of
 /// RSS.
-type UpsertPagedBatcher<T, O> = ColumnMergeBatcher<UpsertKey, T, UpsertDiff<O>>;
+type UpsertPagedBatcher<T, O> =
+    ColumnMergeBatcher<PagedChunker<UpsertUpdate<T, O>>, UpsertKey, T, UpsertDiff<O>, ()>;
 
 /// The chunker that sorts and consolidates raw input into the `Column` chunks
 /// the paged stash batcher consumes.
@@ -178,16 +186,28 @@ where
 {
     /// The feedback arrangement's spine. `'static` because the operator
     /// future owns a trace agent for it.
-    type Spine: TraceReader<Time = T> + 'static;
+    type Spine: TraceReader<Time = T, Batch: SpineBatch> + 'static;
     /// The source-stash batcher. `'static` because the operator future owns
     /// it.
-    type Batcher: Batcher<Time = T> + 'static;
+    type Batcher: 'static;
+    /// The chunk representation the stash batcher accumulates into.
+    type Chunk;
 
     /// Sorts and consolidates raw updates into the batcher's chunks.
     type Chunker: Default + 'static;
 
     /// A new stash batcher for one source dataflow.
     fn new_batcher() -> Self::Batcher;
+
+    /// Carve the chain of updates `upper` unblocks out of the stash.
+    ///
+    /// Returns the chunks and a lower bound on the times of what stays behind. The stash keeps
+    /// the chunks as they are: a caller that wanted a trace batch would have to take it apart
+    /// again.
+    fn extract(
+        batcher: &mut Self::Batcher,
+        upper: AntichainRef<T>,
+    ) -> (Vec<Self::Chunk>, Antichain<T>);
 
     /// Consolidate `updates` through `chunker` into chunks and push them into
     /// `batcher`, emptying `updates` (keeping its capacity). The chunker
@@ -202,7 +222,7 @@ where
     /// Classify one sealed stash against `persist_upper` and emit eligible
     /// output; see [`DrainStats`].
     async fn drain(
-        sealed: Vec<<Self::Batcher as Batcher>::Output>,
+        sealed: Vec<Self::Chunk>,
         ineligible: &mut Vec<UpsertUpdate<T, O>>,
         output_handle: &UpsertOutputHandle<T>,
         output_cap: &Capability<T>,
@@ -265,10 +285,19 @@ where
 {
     type Spine = FeedbackSpine<T>;
     type Batcher = UpsertChunkBatcher<T, O>;
+    type Chunk = UpsertChunk<T, O>;
     type Chunker = TimeMajorChunker<T, O>;
 
     fn new_batcher() -> Self::Batcher {
-        Batcher::new(None, 0)
+        ConsolidatingBatcher::new(None, 0)
+    }
+
+    fn extract(
+        batcher: &mut Self::Batcher,
+        upper: AntichainRef<T>,
+    ) -> (Vec<Self::Chunk>, Antichain<T>) {
+        let (chain, frontier) = batcher.extract(upper);
+        (chain.unwrap_or_default(), frontier.to_owned())
     }
 
     fn flush(
@@ -280,7 +309,7 @@ where
             updates,
             chunker,
             |(key, ts, diff), raw| raw.push_into(&((ts.clone(), key), ts, diff)),
-            |chunk| batcher.push_into(ColumnChunk::from_body(chunk)),
+            |chunk| batcher.push_chunk(ColumnChunk::from_body(chunk)),
         );
     }
 
@@ -323,12 +352,21 @@ where
 {
     type Spine = FundedValRowSpine<UpsertKey, T, Diff>;
     type Batcher = UpsertPagedBatcher<T, O>;
+    type Chunk = Column<UpsertUpdate<T, O>>;
     type Chunker = UpsertChunker<T, O>;
 
     fn new_batcher() -> Self::Batcher {
-        let mut batcher: UpsertPagedBatcher<T, O> = Batcher::new(None, 0);
+        let mut batcher = UpsertPagedBatcher::<T, O>::new(None, 0);
         batcher.set_pager(crate::upsert::upsert_stash_pager::pager());
         batcher
+    }
+
+    fn extract(
+        batcher: &mut Self::Batcher,
+        upper: AntichainRef<T>,
+    ) -> (Vec<Self::Chunk>, Antichain<T>) {
+        let (chain, frontier) = batcher.extract_chain(upper);
+        (chain, frontier.to_owned())
     }
 
     fn flush(
@@ -342,7 +380,7 @@ where
             |update, raw| raw.push_into(&update),
             // The pager's chains are edge containers, so the body goes back
             // onto one.
-            |chunk| batcher.push_into(Column::from(chunk)),
+            |chunk| batcher.push_chunk(Column::from(chunk)),
         );
     }
 

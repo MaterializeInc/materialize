@@ -12,7 +12,7 @@ use std::pin::Pin;
 
 use mysql_async::BinlogStream;
 use mz_storage_types::errors::DataflowError;
-use timely::dataflow::operators::{Capability, CapabilitySet};
+use timely::dataflow::operators::CapabilitySet;
 use timely::progress::Antichain;
 use tracing::trace;
 
@@ -40,7 +40,7 @@ pub(super) struct ReplContext<'a> {
     >,
     pub(super) data_cap_set: &'a mut CapabilitySet<GtidPartition>,
     // Owned values:
-    pub(super) rewinds: BTreeMap<usize, (Capability<GtidPartition>, RewindRequest)>,
+    pub(super) rewinds: BTreeMap<usize, (CapabilitySet<GtidPartition>, RewindRequest)>,
     pub(super) errored_outputs: BTreeSet<usize>,
 }
 
@@ -56,7 +56,7 @@ impl<'a> ReplContext<'a> {
             (usize, Result<SourceMessage, DataflowError>),
         >,
         data_cap_set: &'a mut CapabilitySet<GtidPartition>,
-        rewinds: BTreeMap<usize, (Capability<GtidPartition>, RewindRequest)>,
+        rewinds: BTreeMap<usize, (CapabilitySet<GtidPartition>, RewindRequest)>,
     ) -> Self {
         Self {
             config,

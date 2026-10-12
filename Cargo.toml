@@ -354,8 +354,8 @@ deadpool = { version = "0.13.1", default-features = false, features = ["managed"
 deadpool-postgres = "0.14.2"
 dec = "0.4.9"
 derivative = "2.2.0"
-differential-dataflow = "0.25.0"
-differential-dogs3 = "0.25.0"
+differential-dataflow = "0.26.0"
+differential-dogs3 = "0.26.0"
 digest = "0.11.3"
 dirs = "7.0.0"
 duckdb = { version = "1.10506.1", default-features = false }
@@ -553,7 +553,7 @@ tiberius = { version = "0.12", default-features = false, features = ["chrono", "
 tikv-jemalloc-ctl = { version = "0.7", features = ["stats", "use_std"] }
 tikv-jemallocator = { version = "0.7", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 time = "0.3.17"
-timely = "0.31.0"
+timely = "0.32.0"
 tokio = { version = "1.52.3", features = ["full", "test-util"] }
 tokio-metrics = "0.5.0"
 tokio-native-tls = "0.3.1"

@@ -729,9 +729,8 @@ fn spilled_tail_drains_across_split_chunks() {
 /// consolidation keeps. Every seal must extract exactly the model's
 /// entries below the upper, and the least time held, the batcher's
 /// frontier plus the pushed-back entries, must match the model's.
-fn stash_matches_model<A>(
-    decode: impl Fn(Vec<<A::Batcher as Batcher>::Output>) -> Vec<(UpsertKey, Ts, i32)>,
-) where
+fn stash_matches_model<A>(decode: impl Fn(Vec<A::Chunk>) -> Vec<(UpsertKey, Ts, i32)>)
+where
     A: UpsertStashArm<Ts, i32>,
 {
     use std::collections::BTreeMap;
@@ -771,8 +770,8 @@ fn stash_matches_model<A>(
             _ => {
                 let outer = u64::from(upper.0) + next(5);
                 upper = std::cmp::max(sub_ts(outer, next(3)), upper);
-                let (sealed, _description) = batcher.seal(Antichain::from_elem(upper));
-                let mut least = batcher.frontier().to_owned();
+                let (sealed, mut least) =
+                    A::extract(&mut batcher, Antichain::from_elem(upper).borrow());
                 let mut extracted: Vec<_> = decode(sealed)
                     .into_iter()
                     .map(|(k, ts, order)| (ts, k, order))

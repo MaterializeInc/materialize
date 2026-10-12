@@ -223,20 +223,18 @@ $ s3-verify-data bucket=copytos3 key=test/2 sort-rows=true
 1
 2
 
-# The double `a` here is a result of the header being written once per file.
+# The header is written once per file. Worker 0 always writes a file for
+# batch 0, so a second header appears only if the row hashes to another batch.
 $ s3-verify-data bucket=copytos3 key=test/2_5 sort-rows=true
-a
 a
 1
 
 $ s3-verify-data bucket=copytos3 key=test/3 sort-rows=true
 "{1,2}",f,Infinity,"{""s"":""abc""}",1,32767,2147483647,9223372036854775807,12345678901234567890123.4567890123456789,2010-10-10,10:10:10,2010-10-10 10:10:10,2010-10-10 08:10:10+00,00:00:00,aaaa,\x5c7841414141,това е,\xd182d0b5d0bad181d182
 
-# The double `array;int4;jsonb;timestamp` here is a result of the header being
-# written once per file and the rows being exchanged to separate timely
-# workers, and each workers writes each own file with each own header.
+# As for test/2_5, the row hashes to batch 0, so worker 0's file holds both
+# the header and the row.
 $ s3-verify-data bucket=copytos3 key=test/4_5 sort-rows=true
-array;int4;jsonb;timestamp
 array;int4;jsonb;timestamp
 {1,2};83647;`{"s":"ab``c"}`;2010-10-10 10:10:10
 
