@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import React, { useRef } from "react";
-import useResizeObserver from "use-resize-observer";
+import { useResizeObserver } from "use-resize-observer";
 
 import { clamp } from "~/util";
 import {
