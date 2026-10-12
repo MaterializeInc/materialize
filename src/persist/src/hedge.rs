@@ -162,7 +162,7 @@ impl HedgeBudget {
     fn try_acquire(&self, max_concurrent: usize) -> Result<HedgeGuard<'_>, HedgeRefused> {
         let got_slot = self
             .concurrent
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
                 (c < max_concurrent).then_some(c + 1)
             })
             .is_ok();
@@ -174,7 +174,7 @@ impl HedgeBudget {
         let guard = HedgeGuard(self);
         let took_token = self
             .micro_tokens
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |t| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |t| {
                 t.checked_sub(HEDGE_COST_MICRO_TOKENS)
             })
             .is_ok();
@@ -194,7 +194,7 @@ impl HedgeBudget {
         }
         let _ = self
             .micro_tokens
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |t| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |t| {
                 Some((t + add).min(BUDGET_BURST_MICRO_TOKENS))
             });
     }

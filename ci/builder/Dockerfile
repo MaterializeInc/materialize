@@ -168,25 +168,25 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
 
-# The `-22` here must match the LLVM version of the rustc in rust-version (root
+# The `-23` here must match the LLVM version of the rustc in rust-version (root
 # Cargo.toml). Bump both together, or cross-language LTO fails to link (the
 # linker cannot read newer bitcode).
 COPY apt-llvm.asc .
 
 RUN gpg --dearmor < apt-llvm.asc > /etc/apt/keyrings/apt-llvm.gpg \
     && rm apt-llvm.asc \
-    && echo "deb [signed-by=/etc/apt/keyrings/apt-llvm.gpg] http://apt.llvm.org/trixie/ llvm-toolchain-trixie-22 main" > /etc/apt/sources.list.d/apt-llvm.list \
+    && echo "deb [signed-by=/etc/apt/keyrings/apt-llvm.gpg] http://apt.llvm.org/trixie/ llvm-toolchain-trixie-23 main" > /etc/apt/sources.list.d/apt-llvm.list \
     && apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    clang-22 \
-    lld-22 \
-    llvm-22 \
+    clang-23 \
+    lld-23 \
+    llvm-23 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
 
-RUN printf '#!/bin/sh\nexec /usr/bin/clang-22 --ld-path=/usr/bin/ld.lld-22 "$@"\n' > /usr/local/bin/clang-lld-22 \
-    && chmod +x /usr/local/bin/clang-lld-22
+RUN printf '#!/bin/sh\nexec /usr/bin/clang-23 --ld-path=/usr/bin/ld.lld-23 "$@"\n' > /usr/local/bin/clang-lld-23 \
+    && chmod +x /usr/local/bin/clang-lld-23
 
 # Install Node.js LTS, for our Python typechecker. This is up here because we don't
 # expect it to change often.
