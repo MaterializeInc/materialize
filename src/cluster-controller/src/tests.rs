@@ -156,6 +156,7 @@ struct FakeCtx {
     /// separately from `hydrated` rather than derived from it, so a test can
     /// pose the state this gate exists for: hydrated but still behind.
     ready: BTreeSet<ReplicaId>,
+    ready_by_reference: BTreeMap<BTreeSet<ReplicaId>, BTreeSet<ReplicaId>>,
     /// How many times the controller probed hydration, for asserting that an
     /// object-less cluster is never probed.
     hydration_probes: usize,
@@ -188,6 +189,7 @@ impl FakeCtx {
             concurrent_schedule_alter: BTreeMap::new(),
             hydrated: BTreeSet::new(),
             ready: BTreeSet::new(),
+            ready_by_reference: BTreeMap::new(),
             hydration_probes: 0,
             readiness_references: Vec::new(),
             has_hydratable_objects: BTreeMap::new(),
@@ -277,10 +279,14 @@ impl ClusterControllerCtx for FakeCtx {
         reference: &BTreeSet<ReplicaId>,
     ) -> BTreeSet<ReplicaId> {
         self.readiness_references.push(reference.clone());
+        let ready = self
+            .ready_by_reference
+            .get(reference)
+            .unwrap_or(&self.ready);
         replicas
             .iter()
             .copied()
-            .filter(|r| self.ready.contains(r))
+            .filter(|r| ready.contains(r))
             .collect()
     }
 
@@ -1318,7 +1324,15 @@ fn reconfiguring_state(
         replicas,
     };
     let signals = LiveSignals {
-        ready_replicas: ready,
+        ready_replicas: BTreeMap::from([(
+            state
+                .replicas
+                .iter()
+                .filter(|r| r.shape.as_ref().is_some_and(|s| s.size == size))
+                .map(|r| r.replica_id)
+                .collect(),
+            ready,
+        )]),
         ..Default::default()
     };
     (state, signals)
@@ -1401,7 +1415,7 @@ fn graceful_readiness_reference_is_the_realized_set() {
     let request = g.signal_request(&state, &config());
     assert_eq!(
         request.readiness,
-        Some(BTreeSet::from([replica(1), replica(2)])),
+        BTreeSet::from([BTreeSet::from([replica(1), replica(2)])]),
         "reference is exactly the realized-shape replicas",
     );
     assert!(
@@ -1411,7 +1425,7 @@ fn graceful_readiness_reference_is_the_realized_set() {
 
     // No record in flight: nothing requested.
     state.reconfiguration = None;
-    assert_eq!(g.signal_request(&state, &config()).readiness, None);
+    assert!(g.signal_request(&state, &config()).readiness.is_empty());
 }
 
 #[mz_ore::test]
@@ -1450,7 +1464,10 @@ fn graceful_holds_when_target_is_hydrated_but_lagging() {
     assert!(desired.iter().all(|d| d.shape.size == "200cc"));
 
     // Once they catch up, the same state cuts over.
-    signals.ready_replicas = BTreeSet::from([replica(3), replica(4)]);
+    signals.ready_replicas.insert(
+        BTreeSet::from([replica(1), replica(2)]),
+        BTreeSet::from([replica(3), replica(4)]),
+    );
     let write = g.update_state(&state, &signals, &config(), now);
     assert_eq!(write.new_size.as_deref(), Some("200cc"));
     assert_eq!(
@@ -1918,7 +1935,9 @@ fn graceful_az_only_reconfiguration_is_a_shape_change() {
 
     // Mark the realized replica ready: it is NOT a target replica (wrong AZ),
     // so this must not trigger a cut-over.
-    signals.ready_replicas.insert(replica(1));
+    signals
+        .ready_replicas
+        .insert(BTreeSet::from([replica(1)]), BTreeSet::from([replica(1)]));
     assert!(g.update_state(&state, &signals, &config(), now).is_empty());
 }
 
@@ -3191,6 +3210,7 @@ async fn on_refresh_graceful_record_settles_then_normalizes() {
 }
 
 mod hydration_burst {
+    use std::collections::BTreeSet;
     use std::time::Duration;
 
     use mz_compute_types::config::ComputeReplicaLogging;
@@ -3425,38 +3445,51 @@ mod hydration_burst {
     }
 
     #[mz_ore::test]
-    fn burst_stamps_then_lingers_then_tears_down() {
-        // Record present, steady replica hydrated for the first time: stamp the
+    fn burst_starts_linger_only_when_ready() {
+        // Record present, steady replica ready for the first time: stamp the
         // linger start.
         let (s, mut signals) = burst_state(
             "100cc",
-            1,
+            2,
             "400cc",
             Duration::from_millis(100),
-            vec![observed(replica(1), "r0", "100cc")],
+            vec![
+                observed(replica(1), "r0", "100cc"),
+                observed(replica(2), "r1", "100cc"),
+                observed(replica(3), "burst", "400cc"),
+            ],
             Some(record("400cc", Duration::from_millis(100), None)),
         );
         signals.hydrated_replicas.insert(replica(1));
-        let write = HydrationBurstStrategy.update_state(&s, &signals, &config(), now(1000));
+        assert!(
+            HydrationBurstStrategy
+                .update_state(&s, &signals, &config(), now(1000))
+                .is_empty(),
+            "hydration alone must not start linger"
+        );
+        signals
+            .ready_replicas
+            .insert(BTreeSet::from([replica(3)]), BTreeSet::from([replica(1)]));
+        let write = HydrationBurstStrategy.update_state(&s, &signals, &config(), now(2000));
         let burst = written_burst_record(&write).expect("stamped");
-        assert_eq!(burst.steady_ready_at, Some(now(1000)));
+        assert_eq!(burst.steady_ready_at, Some(now(2000)));
         assert_eq!(
             written_burst_audit(&write),
             None,
             "the linger stamp is bookkeeping, not a lifecycle transition"
         );
 
-        // Stamped, linger not yet elapsed (now=1050, stamped=1000, linger=100): hold.
+        // Stamped, linger not yet elapsed (now=2050, stamped=2000, linger=100): hold.
         let mut s = s.clone();
-        s.burst = Some(record("400cc", Duration::from_millis(100), Some(1000)));
+        s.burst = Some(record("400cc", Duration::from_millis(100), Some(2000)));
         assert!(
             HydrationBurstStrategy
-                .update_state(&s, &signals, &config(), now(1050))
+                .update_state(&s, &signals, &config(), now(2050))
                 .is_empty()
         );
 
-        // Stamped, linger elapsed (now=1101 > 1000+100): tear down.
-        let write = HydrationBurstStrategy.update_state(&s, &signals, &config(), now(1101));
+        // Stamped, linger elapsed (now=2101 > 2000+100): tear down.
+        let write = HydrationBurstStrategy.update_state(&s, &signals, &config(), now(2101));
         assert_eq!(
             write.burst,
             Some(BurstWrite {
@@ -3470,10 +3503,10 @@ mod hydration_burst {
     }
 
     #[mz_ore::test]
-    fn burst_re_arms_when_steady_unhydrates() {
+    fn burst_restarts_linger_when_steady_loses_readiness() {
         // Record present, previously stamped, but the steady set is no longer
-        // hydrated: reset the stamp so the linger restarts after the next hydration.
-        let (s, signals) = burst_state(
+        // ready: reset the stamp so linger restarts after the next catch-up.
+        let (s, mut signals) = burst_state(
             "100cc",
             1,
             "400cc",
@@ -3481,7 +3514,8 @@ mod hydration_burst {
             vec![observed(replica(1), "r0", "100cc")],
             Some(record("400cc", Duration::from_millis(100), Some(1000))),
         );
-        // hydrated_replicas is empty: the steady replica went un-hydrated.
+        signals.hydrated_replicas.insert(replica(1));
+        // Still hydrated, but no longer caught up.
         let write = HydrationBurstStrategy.update_state(&s, &signals, &config(), now(1050));
         let burst = written_burst_record(&write).expect("rewritten");
         assert_eq!(burst.steady_ready_at, None, "stamp reset on re-arm");
@@ -3672,6 +3706,7 @@ mod hydration_burst {
         // Now mark the steady replica hydrated; with a zero linger the next tick
         // (advancing `now`) stamps and then tears down the burst.
         ctx.hydrated.insert(replica(1));
+        ctx.ready.insert(replica(1));
         ctx.now = Timestamp::from(2000u64);
         controller.reconcile(&mut ctx).await;
         // First post-hydration tick stamps `steady_ready_at`.
@@ -3687,6 +3722,241 @@ mod hydration_burst {
                 .iter()
                 .any(|r| r.shape.as_ref().is_some_and(|s| s.size == "400cc")),
             "the burst replica is torn down"
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn burst_and_reconfiguration_keep_readiness_references_separate() {
+        use super::{FakeCtx, record_on_timeout as reconfiguration};
+        use crate::ctx::OnTimeout;
+
+        let (mut s, _) = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(100),
+            vec![
+                observed(replica(1), "steady", "100cc"),
+                observed(replica(2), "target", "200cc"),
+                observed(replica(3), "helper", "400cc"),
+            ],
+            Some(record("400cc", Duration::from_millis(100), None)),
+        );
+        s.reconfiguration = Some(reconfiguration("200cc", 1, 5000, OnTimeout::Rollback));
+        let mut ctx = FakeCtx::new(vec![s.clone()]);
+        ctx.ready_by_reference
+            .insert(BTreeSet::from([replica(3)]), BTreeSet::from([replica(1)]));
+        ctx.ready_by_reference
+            .insert(BTreeSet::from([replica(1)]), BTreeSet::new());
+        let controller = controller();
+        controller.reconcile(&mut ctx).await;
+        let state = &ctx.states[&cluster(1)];
+        assert_eq!(
+            state.size, "100cc",
+            "burst readiness must not authorize graceful cutover"
+        );
+        assert_eq!(
+            state.burst.as_ref().unwrap().steady_ready_at,
+            Some(now(1000))
+        );
+        assert!(
+            ctx.readiness_references
+                .contains(&BTreeSet::from([replica(1)]))
+        );
+        assert!(
+            ctx.readiness_references
+                .contains(&BTreeSet::from([replica(3)]))
+        );
+        assert!(
+            !ctx.readiness_references
+                .contains(&BTreeSet::from([replica(1), replica(3)]))
+        );
+
+        // Only the target catches up. Graceful cutover may proceed while the
+        // burst resets its linger instead of borrowing the target's verdict.
+        ctx.ready_by_reference
+            .insert(BTreeSet::from([replica(3)]), BTreeSet::new());
+        ctx.ready_by_reference
+            .insert(BTreeSet::from([replica(1)]), BTreeSet::from([replica(2)]));
+        ctx.now = now(1050);
+        controller.reconcile(&mut ctx).await;
+        let state = &ctx.states[&cluster(1)];
+        assert_eq!(state.size, "200cc");
+        assert_eq!(state.burst.as_ref().unwrap().steady_ready_at, None);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn graceful_cutover_restarts_burst_linger_for_the_new_steady_set() {
+        use super::{FakeCtx, record_on_timeout as reconfiguration};
+        use crate::ctx::OnTimeout;
+
+        for forced in [false, true] {
+            let (mut s, _) = burst_state(
+                "100cc",
+                1,
+                "400cc",
+                Duration::from_millis(100),
+                vec![
+                    observed(replica(1), "steady", "100cc"),
+                    observed(replica(2), "target", "200cc"),
+                    observed(replica(3), "helper", "400cc"),
+                ],
+                Some(record("400cc", Duration::from_millis(100), Some(0))),
+            );
+            s.reconfiguration = Some(reconfiguration(
+                "200cc",
+                1,
+                if forced { 1000 } else { 5000 },
+                if forced {
+                    OnTimeout::Commit
+                } else {
+                    OnTimeout::Rollback
+                },
+            ));
+            let mut ctx = FakeCtx::new(vec![s]);
+            // Lag allowances are not transitive: target within lag of old steady,
+            // and old steady within lag of helper, need not put target within lag
+            // of helper. Both strategies would otherwise retire in this tick.
+            ctx.ready_by_reference.insert(
+                BTreeSet::from([replica(1)]),
+                if forced {
+                    BTreeSet::new()
+                } else {
+                    BTreeSet::from([replica(2)])
+                },
+            );
+            ctx.ready_by_reference
+                .insert(BTreeSet::from([replica(3)]), BTreeSet::from([replica(1)]));
+            let controller = controller();
+            controller.reconcile(&mut ctx).await;
+            let state = &ctx.states[&cluster(1)];
+            assert_eq!(state.size, "200cc");
+            assert_eq!(state.burst.as_ref().unwrap().steady_ready_at, None);
+            assert!(
+                state.replicas.iter().any(|r| r.replica_id == replica(3)),
+                "helper must survive cutover"
+            );
+
+            ctx.now = now(2000);
+            controller.reconcile(&mut ctx).await;
+            assert_eq!(
+                ctx.states[&cluster(1)]
+                    .burst
+                    .as_ref()
+                    .unwrap()
+                    .steady_ready_at,
+                None,
+                "the new steady replica must catch up directly with the helper"
+            );
+            ctx.ready_by_reference
+                .insert(BTreeSet::from([replica(3)]), BTreeSet::from([replica(2)]));
+            ctx.now = now(3000);
+            controller.reconcile(&mut ctx).await;
+            assert_eq!(
+                ctx.states[&cluster(1)]
+                    .burst
+                    .as_ref()
+                    .unwrap()
+                    .steady_ready_at,
+                Some(now(3000))
+            );
+            ctx.now = now(3100);
+            controller.reconcile(&mut ctx).await;
+            assert!(ctx.states[&cluster(1)].burst.is_some());
+            ctx.now = now(3101);
+            controller.reconcile(&mut ctx).await;
+            assert!(ctx.states[&cluster(1)].burst.is_none());
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn burst_retirement_is_independent_of_pending_or_rolled_back_reconfiguration() {
+        use super::{FakeCtx, record_on_timeout as reconfiguration};
+        use crate::ctx::{OnTimeout, ReconfigurationStatus};
+        for rollback in [false, true] {
+            let (mut s, _) = burst_state(
+                "100cc",
+                1,
+                "400cc",
+                Duration::from_millis(100),
+                vec![
+                    observed(replica(1), "steady", "100cc"),
+                    observed(replica(2), "target", "200cc"),
+                    observed(replica(3), "helper", "400cc"),
+                ],
+                Some(record("400cc", Duration::from_millis(100), Some(0))),
+            );
+            s.reconfiguration = Some(reconfiguration(
+                "200cc",
+                1,
+                if rollback { 1000 } else { 5000 },
+                OnTimeout::Rollback,
+            ));
+            let mut ctx = FakeCtx::new(vec![s]);
+            ctx.ready_by_reference
+                .insert(BTreeSet::from([replica(3)]), BTreeSet::from([replica(1)]));
+            ctx.ready_by_reference
+                .insert(BTreeSet::from([replica(1)]), BTreeSet::new());
+            controller().reconcile(&mut ctx).await;
+            let state = &ctx.states[&cluster(1)];
+            assert_eq!(state.size, "100cc");
+            assert!(state.burst.is_none());
+            assert!(!state.replicas.iter().any(|r| r.replica_id == replica(3)));
+            assert_eq!(
+                state.reconfiguration.as_ref().unwrap().status,
+                if rollback {
+                    ReconfigurationStatus::TimedOut
+                } else {
+                    ReconfigurationStatus::InProgress
+                }
+            );
+            assert_eq!(
+                state.replicas.iter().any(|r| r.replica_id == replica(2)),
+                !rollback
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn explicit_burst_cleanup_is_not_undone_by_graceful_cutover() {
+        use super::{reconfiguring_state, record as reconfiguration};
+        let (mut state, signals) = reconfiguring_state(
+            cluster(1),
+            "100cc",
+            1,
+            vec![
+                observed(replica(1), "steady", "100cc"),
+                observed(replica(2), "target", "200cc"),
+                observed(replica(3), "helper", "400cc"),
+            ],
+            reconfiguration("200cc", 1, 5000),
+            BTreeSet::from([replica(2)]),
+        );
+        state.burst = Some(record("400cc", Duration::from_millis(100), Some(0)));
+        state.auto_scaling_policy = Some(AutoScalingPolicy {
+            on_hydration: Some(OnHydrationPolicy {
+                hydration_size: "400cc".into(),
+                linger_duration: Some(Duration::from_millis(100)),
+            }),
+        });
+        let write = controller().merge_state_writes(
+            &state,
+            &signals,
+            &ConfigSignals {
+                burst_enabled: false,
+                ..config()
+            },
+            now(1000),
+        );
+        assert_eq!(write.new_size.as_deref(), Some("200cc"));
+        assert_eq!(
+            write.burst,
+            Some(BurstWrite {
+                record: None,
+                audit: Some(BurstAudit::Finished {
+                    cause: BurstFinishCause::NoLongerWarranted
+                })
+            })
         );
     }
 

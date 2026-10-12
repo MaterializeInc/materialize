@@ -359,9 +359,7 @@ impl Coordinator {
                 replicas,
                 tx,
             } => {
-                // Hydration only: this signal drives the burst strategy's
-                // linger, whose durable `steady_ready_at` stamp means exactly
-                // "hydration was observed". The cut-over gate is `ReadyReplicas`.
+                // A burst is created for unhydrated objects, not for replay lag.
                 let checks =
                     self.start_readiness_checks(cluster_id, replicas, None, &BTreeSet::new());
                 Self::finish_readiness_checks(checks, tx);

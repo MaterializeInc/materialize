@@ -60,15 +60,16 @@ replica itself, at its larger size, in `replicas`:
 To check whether the objects driving the burst have finished hydrating on the
 steady-size replicas, query
 [`mz_internal.mz_hydration_statuses`](/sql/system-catalog/mz_internal/#mz_hydration_statuses)
-for the cluster's steady-size replica IDs. Once every object is hydrated on a
-steady-size replica, the burst replica lingers for the configured `LINGER
-DURATION` and is then removed.
+for the cluster's steady-size replica IDs. Hydration alone does not start
+retirement. At least one steady-size replica must also catch up within the
+configured compute lag allowance of the burst replica, then stay ready for the
+`LINGER DURATION`. Losing readiness restarts the linger period.
 
 The [audit log](/sql/system-catalog/mz_catalog/#mz_audit_events) records when a
 burst replica is created and dropped, so you can look back at past autoscaling
 events after the fact.
 
-## If the steady-size replica never hydrates
+## If the steady-size replica never catches up
 
 The burst replica has no maximum lifetime: if a steady-size replica never
 catches up (for example, it's undersized and runs out of memory during

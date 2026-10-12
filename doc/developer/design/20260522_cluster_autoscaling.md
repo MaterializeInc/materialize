@@ -297,3 +297,35 @@ to restore hydration-only cutover. Timeout behavior is unchanged: `ROLLBACK`
 preserves the current configuration, while `COMMIT` forces cutover once the
 target set exists. A downsize that cannot meet the lag allowance waits until
 the deadline and follows that timeout policy.
+
+## Amendment: Burst retirement readiness
+
+Automatic burst retirement uses the same compute readiness classifier and lag
+allowance as graceful reconfiguration. Activation remains hydration-based. An
+active burst starts linger once at least one realized-shape replica is online,
+storage-hydrated and compute-hydrated, with output progress within the allowance
+of the burst-shape replicas. Linger resets when no steady replica passes that
+check. The persisted `steady_ready_at` records the beginning of that observed
+readiness period. Catalog migration clears hydration-based timestamps.
+
+Readiness results are keyed by reference replica set so concurrent strategies
+cannot borrow each other's verdicts. Policy-driven cleanup is unconditional,
+and no maximum burst lifetime is introduced. A steady replica that hydrates but
+cannot sustain the input rate can leave the burst running indefinitely.
+
+Graceful reconfiguration and burst retirement use independent reference sets.
+The old steady replicas can finish burst linger while the target is still
+catching up. A successful or forced graceful cutover resets burst linger for
+the new steady set, including when both transitions would finish in one tick.
+Rollback leaves the old steady set and its burst linger unchanged. Explicit
+policy cleanup bypasses readiness.
+
+Readiness is sampled on controller ticks. At least one steady replica must pass
+each observed check, but it need not be the same replica across checks. The
+linger timestamp survives controller restarts. A failed subsequent check resets
+it. This is not evidence of uninterrupted readiness between ticks.
+
+A burst helper's shape includes the realized cluster's logging, availability
+zones and compression. A cutover changing those settings can recreate the
+helper, even while the burst record remains active. Resetting linger does not
+preserve the old helper's progress across that shape change.

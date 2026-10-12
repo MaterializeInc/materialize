@@ -6572,6 +6572,135 @@ def workflow_test_reconfiguration_lag_gate(c: Composition) -> None:
     assert c.sql_query(replicas) == [(target,)]
 
 
+def workflow_test_burst_retirement_lag_gate(c: Composition) -> None:
+    c.up("materialized")
+    c.sql(
+        """
+        ALTER SYSTEM SET enable_auto_scaling_strategy = true;
+        ALTER SYSTEM SET enable_hydration_burst = true;
+        ALTER SYSTEM SET enable_cluster_reconfiguration_lag_gate = true;
+        ALTER SYSTEM SET cluster_reconfiguration_allowed_lag = '0s';
+        ALTER SYSTEM SET cluster_controller_tick_interval = '100ms';
+        SET statement_timeout = '120s';
+        SET failpoints = 'cluster_controller_hold_readiness=return';
+        """,
+        user="mz_system",
+        port=6877,
+    )
+    c.sql("SET statement_timeout = '120s'")
+    c.sql("""
+        CREATE CLUSTER burst_lag (
+            SIZE 'scale=1,workers=1',
+            AUTO SCALING STRATEGY = (ON HYDRATION (
+                HYDRATION SIZE = 'scale=1,workers=2', LINGER DURATION = '5s')));
+        CREATE TABLE burst_lag_table (a int);
+        INSERT INTO burst_lag_table VALUES (1);
+        """)
+
+    def wait_for(query: str) -> None:
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            if c.sql_query(query) == [(True,)]:
+                return
+            time.sleep(0.1)
+        raise AssertionError(f"condition did not become true: {query}")
+
+    replicas = """
+        SELECT r.id FROM mz_cluster_replicas r
+        JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'burst_lag'
+        """
+    burst_state = """
+        SELECT s.state->'burst'->>'steady_ready_at'
+        FROM mz_internal.mz_cluster_auto_scaling_strategies s
+        JOIN mz_clusters c ON c.id = s.cluster_id WHERE c.name = 'burst_lag'
+        """
+    wait_for(f"SELECT count(*) = 1 FROM ({replicas})")
+    steady = c.sql_query(replicas)[0][0]
+    pid_files = c.exec(
+        "materialized",
+        "find",
+        "/tmp",
+        "-path",
+        f"*/cluster-*-replica-{steady}-gen-*/0.pid",
+        capture=True,
+    ).stdout.splitlines()
+    assert len(pid_files) == 1, pid_files
+    pid = c.exec(
+        "materialized", "head", "-n", "1", pid_files[0], capture=True
+    ).stdout.strip()
+    assert pid.isdigit(), pid
+    # Pause only the steady process. Catalog compute keeps running, while the
+    # index cannot hydrate on the steady replica and deterministically arms burst.
+    c.exec("materialized", "kill", "-STOP", pid)
+    try:
+        c.sql("CREATE DEFAULT INDEX IN CLUSTER burst_lag ON burst_lag_table")
+        wait_for(f"SELECT count(*) = 2 FROM ({replicas})")
+        burst = next(row[0] for row in c.sql_query(replicas) if row[0] != steady)
+    finally:
+        c.exec("materialized", "kill", "-CONT", pid)
+
+    index_id = c.sql_query("""
+        SELECT i.id FROM mz_indexes i JOIN mz_tables t ON i.on_id = t.id
+        WHERE t.name = 'burst_lag_table'
+        """)[0][0]
+    wait_for(f"""
+        SELECT count(*) = 2 AND bool_and(hydrated)
+        FROM mz_internal.mz_compute_hydration_statuses
+        WHERE object_id = '{index_id}' AND replica_id IN ('{steady}', '{burst}')
+        """)
+    c.exec("materialized", "kill", "-STOP", pid)
+    try:
+        c.sql("INSERT INTO burst_lag_table VALUES (2)")
+        wait_for(f"""
+            SELECT helper.write_frontier > steady.write_frontier
+            FROM mz_catalog.mz_cluster_replica_frontiers helper
+            JOIN mz_catalog.mz_cluster_replica_frontiers steady USING (object_id)
+            WHERE helper.object_id = '{index_id}'
+              AND helper.replica_id = '{burst}' AND steady.replica_id = '{steady}'
+            """)
+        c.sql(
+            "SET failpoints = 'cluster_controller_hold_readiness=off'",
+            user="mz_system",
+            port=6877,
+        )
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            assert (
+                len(c.sql_query(replicas)) == 2
+            ), "retired burst while steady replica lagged"
+            logs = c.invoke("logs", "materialized", capture=True).stdout
+            if any(
+                "collections are not ready" in line
+                and re.search(
+                    rf"lagging_ticks=\{{[^}}]*User\({index_id[1:]}\): [1-9][0-9]*", line
+                )
+                for line in logs.splitlines()
+            ):
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("no lagging steady-replica readiness probe observed")
+        assert c.sql_query(burst_state) == [(None,)], "hydration alone started linger"
+    finally:
+        c.exec("materialized", "kill", "-CONT", pid)
+        c.sql(
+            "SET failpoints = 'cluster_controller_hold_readiness=off'",
+            user="mz_system",
+            port=6877,
+        )
+
+    wait_for(f"SELECT ready_at IS NOT NULL FROM ({burst_state}) AS s(ready_at)")
+    ready_at = int(c.sql_query(burst_state)[0][0])
+    wait_for(f"SELECT count(*) = 1 FROM ({replicas})")
+    assert c.sql_query(replicas) == [(steady,)]
+    wait_for(f"""
+        SELECT count(*) = 1 AND bool_and(extract(epoch FROM occurred_at) * 1000 > {ready_at} + 5000)
+        FROM mz_catalog.mz_audit_events
+        WHERE object_type = 'cluster' AND details->>'cluster_name' = 'burst_lag'
+          AND details->>'transition' = 'finished' AND details->>'finish_cause' = 'linger-elapsed'
+        """)
+
+
 def workflow_test_zero_downtime_reconfigure(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:

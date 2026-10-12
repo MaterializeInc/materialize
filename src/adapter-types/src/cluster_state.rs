@@ -169,7 +169,7 @@ pub enum BurstAudit {
 /// decided the teardown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BurstFinishCause {
-    /// The steady replica set hydrated and the linger duration elapsed.
+    /// A steady replica stayed ready for the linger duration.
     LingerElapsed,
     /// The burst is no longer warranted by current config: the auto-scaling
     /// policy was removed or its hydration size changed, the cluster was
@@ -263,8 +263,7 @@ pub struct AutoScalingPolicy {
 
 /// The `ON HYDRATION` burst sub-policy: while some object on the cluster is not
 /// hydrated on a steady replica, run one extra replica at `hydration_size` to
-/// accelerate hydration, lingering for `linger_duration` after the steady set
-/// hydrates.
+/// accelerate hydration, lingering for `linger_duration` after a steady replica catches up.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OnHydrationPolicy {
     pub hydration_size: String,
