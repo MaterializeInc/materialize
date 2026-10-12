@@ -1145,9 +1145,10 @@ pub(crate) fn create_peek_response_stream(
                     .expect("invalid usage");
 
                 // NOTE: Using the cursor creates Futures that are not Sync,
-                // so we can't drive them on the main Coordinator loop.
-                // Spawning a task has the additional benefit that we get to
-                // delete batches once we're done.
+                // while `ExecuteResponse::SendingRowsStreaming` needs a Sync
+                // stream, so a spawned task drives them. The task has the
+                // additional benefit that we get to delete batches once we're
+                // done.
                 //
                 // Batch deletion is best-effort, though, and there are
                 // multiple known ways in which they can leak, among them:
