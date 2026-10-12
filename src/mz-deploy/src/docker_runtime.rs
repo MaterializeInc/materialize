@@ -149,6 +149,23 @@ impl DockerRuntime {
         Client::connect_sandbox(Self::make_profile()).await.is_ok()
     }
 
+    /// Whether the existing sandbox was created from `self.image`.
+    ///
+    /// Returns `true` when `docker inspect` fails, so a transient Docker error
+    /// does not discard a sandbox that may well be correct.
+    async fn container_runs_configured_image(&self) -> bool {
+        let output = Command::new("docker")
+            .args(["inspect", "--format", "{{.Config.Image}}", CONTAINER_NAME])
+            .output()
+            .await;
+        match output {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).trim() == self.image
+            }
+            _ => true,
+        }
+    }
+
     async fn remove_container(&self) -> Result<(), DockerRuntimeError> {
         verbose!("Removing existing container: {}", CONTAINER_NAME);
         let output = Command::new("docker")
@@ -235,7 +252,18 @@ impl DockerRuntime {
     }
 
     async fn ensure_container(&self) -> Result<(), DockerRuntimeError> {
-        let exists = self.container_exists().await?;
+        let mut exists = self.container_exists().await?;
+        // The sandbox is reused by name across CLI upgrades, so a container
+        // created from an older default image would otherwise keep serving it.
+        if exists && !self.container_runs_configured_image().await {
+            verbose!(
+                "Container {} does not run {}, recreating it",
+                CONTAINER_NAME,
+                self.image
+            );
+            self.remove_container().await?;
+            exists = false;
+        }
         let is_running = if exists {
             self.container_is_running().await?
         } else {
