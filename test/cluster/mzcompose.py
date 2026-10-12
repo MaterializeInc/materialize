@@ -6616,19 +6616,24 @@ def workflow_test_burst_retirement_lag_gate(c: Composition) -> None:
         """
     wait_for(f"SELECT count(*) = 1 FROM ({replicas})")
     steady = c.sql_query(replicas)[0][0]
-    pid_files = c.exec(
-        "materialized",
-        "find",
-        "/tmp",
-        "-path",
-        f"*/cluster-*-replica-{steady}-gen-*/0.pid",
-        capture=True,
-    ).stdout.splitlines()
-    assert len(pid_files) == 1, pid_files
-    pid = c.exec(
-        "materialized", "head", "-n", "1", pid_files[0], capture=True
-    ).stdout.strip()
-    assert pid.isdigit(), pid
+
+    def replica_pid(replica_id: str) -> str:
+        pid_files = c.exec(
+            "materialized",
+            "find",
+            "/tmp",
+            "-path",
+            f"*/cluster-*-replica-{replica_id}-gen-*/0.pid",
+            capture=True,
+        ).stdout.splitlines()
+        assert len(pid_files) == 1, pid_files
+        pid = c.exec(
+            "materialized", "head", "-n", "1", pid_files[0], capture=True
+        ).stdout.strip()
+        assert pid.isdigit(), pid
+        return pid
+
+    pid = replica_pid(steady)
     # Pause only the steady process. Catalog compute keeps running, while the
     # index cannot hydrate on the steady replica and deterministically arms burst.
     c.exec("materialized", "kill", "-STOP", pid)
@@ -6689,16 +6694,26 @@ def workflow_test_burst_retirement_lag_gate(c: Composition) -> None:
             port=6877,
         )
 
-    wait_for(f"SELECT ready_at IS NOT NULL FROM ({burst_state}) AS s(ready_at)")
-    ready_at = int(c.sql_query(burst_state)[0][0])
-    wait_for(f"SELECT count(*) = 1 FROM ({replicas})")
-    assert c.sql_query(replicas) == [(steady,)]
-    wait_for(f"""
-        SELECT count(*) = 1 AND bool_and(extract(epoch FROM occurred_at) * 1000 > {ready_at} + 5000)
-        FROM mz_catalog.mz_audit_events
-        WHERE object_type = 'cluster' AND details->>'cluster_name' = 'burst_lag'
-          AND details->>'transition' = 'finished' AND details->>'finish_cause' = 'linger-elapsed'
-        """)
+    # Replica-local introspection advances independently. Freeze the helper so
+    # steady can catch up to a stable reference and sustain zero lag through linger.
+    helper_pid = replica_pid(burst)
+    c.exec("materialized", "kill", "-STOP", helper_pid)
+    try:
+        wait_for(f"SELECT ready_at IS NOT NULL FROM ({burst_state}) AS s(ready_at)")
+        ready_at = int(c.sql_query(burst_state)[0][0])
+        wait_for(f"SELECT count(*) = 1 FROM ({replicas})")
+        assert c.sql_query(replicas) == [(steady,)]
+        wait_for(f"""
+            SELECT count(*) = 1 AND bool_and(extract(epoch FROM occurred_at) * 1000 > {ready_at} + 5000)
+            FROM mz_catalog.mz_audit_events
+            WHERE object_type = 'cluster' AND details->>'cluster_name' = 'burst_lag'
+              AND details->>'transition' = 'finished' AND details->>'finish_cause' = 'linger-elapsed'
+            """)
+    finally:
+        # Retirement can already have removed the helper process.
+        c.exec(
+            "materialized", "sh", "-c", f"kill -CONT {helper_pid} 2>/dev/null || true"
+        )
 
 
 def workflow_test_zero_downtime_reconfigure(
