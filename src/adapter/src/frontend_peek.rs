@@ -341,6 +341,25 @@ impl PeekClient {
             ExplainTimestamp(&'a plan::ExplainTimestampPlan),
         }
 
+        impl QueryPlan<'_> {
+            /// Whether statement logging records the timestamp the statement executes at as
+            /// soon as it is determined. EXPLAIN only determines a timestamp, and COPY TO does
+            /// not log one.
+            fn logs_execution_timestamp(&self, explain_ctx: &ExplainContext) -> bool {
+                let executes = match explain_ctx {
+                    ExplainContext::None | ExplainContext::PlanInsightsNotice(_) => true,
+                    ExplainContext::Plan(_)
+                    | ExplainContext::Pushdown
+                    | ExplainContext::Timestamp => false,
+                };
+                executes
+                    && match self {
+                        QueryPlan::Select(_) | QueryPlan::Subscribe(_) => true,
+                        QueryPlan::CopyTo(..) | QueryPlan::ExplainTimestamp(_) => false,
+                    }
+            }
+        }
+
         /// A [`QueryPlan`] that goes on to be optimized.
         enum OptimizerInput<'a> {
             Select(&'a SelectPlan),
@@ -953,17 +972,10 @@ impl PeekClient {
             }
         }
 
-        // Log the timestamp a peek or SUBSCRIBE executes at as soon as it is known. EXPLAIN only
-        // determines a timestamp, and COPY TO does not log one.
-        let executes_at_timestamp =
-            matches!(
-                explain_ctx,
-                ExplainContext::None | ExplainContext::PlanInsightsNotice(_)
-            ) && matches!(query_plan, QueryPlan::Select(_) | QueryPlan::Subscribe(_));
         if let (Some(logging_id), Some(timestamp), true) = (
             logging.id(),
             determination.timestamp_context.timestamp(),
-            executes_at_timestamp,
+            query_plan.logs_execution_timestamp(&explain_ctx),
         ) {
             self.log_set_timestamp(logging_id, *timestamp);
         }
