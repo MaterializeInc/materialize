@@ -19,11 +19,13 @@ use chrono::DateTime;
 use columnar::{Columnar, Index, Ref};
 use differential_dataflow::VecCollection;
 use differential_dataflow::collection::AsCollection;
-use differential_dataflow::trace::{BatchReader, Cursor, Navigable};
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
+use differential_dataflow::trace::{Cursor, Navigable, Span};
 use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
+use mz_row_spine::RowRowBuilder;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
@@ -44,7 +46,6 @@ use crate::logging::{
     SharedLoggingState, Update,
 };
 use crate::typedefs::RowRowSpine;
-use mz_row_spine::RowRowBuilder;
 
 /// Type alias for a logger of compute events.
 pub type Logger = timely::logging_core::Logger<ComputeEventBuilder>;
@@ -447,11 +448,9 @@ pub(super) fn construct<'scope>(
                 let trace = stream
                     .mz_arrange_core::<
                         _,
-                        batcher::Chunker<_>,
-                        Col2ValBatcher<_, _, _, _>,
-                        RowRowBuilder<_, _>,
+                        Col2ValBatcher<_, _, _, _, batcher::Chunker<_>, RowRowBuilder<_, _>>,
                         RowRowSpine<_, _>,
-                    >(exchange, &format!("Arrange {variant:?}"))
+                    >(exchange, &format!("Arrange {variant:?}"), MergeBatcher::new)
                     .trace;
                 let collection = LogCollection {
                     trace,
@@ -1600,17 +1599,21 @@ where
     }
 }
 
-impl<'scope, T, B> LogDataflowErrors for StreamVec<'scope, T, B>
+impl<'scope, T, B> LogDataflowErrors for StreamVec<'scope, T, Span<T, B>>
 where
     T: timely::progress::Timestamp,
-    B: BatchReader + Navigable + Clone + 'static,
+    B: Navigable + Clone + 'static,
     for<'a> B::Cursor: Cursor<DiffGat<'a> = &'a Diff>,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
         self.unary(Pipeline, "LogDataflowErrorsStream", |_cap, _info| {
             move |input, output| {
                 input.for_each(|cap, data| {
-                    let diff = data.iter().map(sum_batch_diffs).sum::<Diff>();
+                    let diff = data
+                        .iter()
+                        .filter_map(|span| span.inner.as_ref())
+                        .map(sum_batch_diffs)
+                        .sum::<Diff>();
                     logger.log(&ComputeEvent::ErrorCount(ErrorCount { export_id, diff }));
 
                     output.session(&cap).give_container(data);
@@ -1628,7 +1631,7 @@ where
 /// batches might become large.
 fn sum_batch_diffs<B>(batch: &B) -> Diff
 where
-    B: BatchReader + Navigable,
+    B: Navigable,
     for<'a> B::Cursor: Cursor<DiffGat<'a> = &'a Diff>,
 {
     let mut sum = Diff::ZERO;

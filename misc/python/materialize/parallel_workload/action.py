@@ -3280,7 +3280,6 @@ class FlipFlagsAction(Action):
             "persist_blob_hedged_get_budget_ratio",
             "persist_blob_hedged_get_max_concurrent",
             "persist_blob_hedged_get_warm_interval",
-            "enable_compute_half_join2",
             "enable_mz_join_core",
             "enable_compute_correction_v2",
             "linear_join_yielding",
