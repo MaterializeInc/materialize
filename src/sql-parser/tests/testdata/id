@@ -87,3 +87,42 @@ SELECT * FROM [ü1 AS materialize.public.foo]
 SELECT * FROM ["ü1" AS materialize.public.foo]
 =>
 Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Id("ü1", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("foo")]), None), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+# An id that is a keyword must stay quoted when displayed: `[<id> AS …]` only
+# accepts an identifier token, so a bare keyword id fails to reparse
+# (SQL-769). Applies to every position that takes a raw item name, including a
+# cast's type.
+parse-statement
+SELECT * FROM ["row" AS materialize.public.foo]
+----
+SELECT * FROM ["row" AS materialize.public.foo]
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Wildcard], from: [TableWithJoins { relation: Table { name: Id("row", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("foo")]), None), alias: None }, joins: [] }], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement
+SELECT x::["row" AS materialize.public.foo]
+----
+SELECT x::["row" AS materialize.public.foo]
+=>
+Select(SelectStatement { query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Cast { expr: Identifier([Ident("x")]), data_type: Other { name: Id("row", UnresolvedItemName([Ident("materialize"), Ident("public"), Ident("foo")]), None), typ_mod: [] } }, alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None })
+
+parse-statement roundtrip
+SELECT listbar::["row" AS linger.over]::[aabortkafka AS linger.over] = cte
+----
+SELECT listbar::["row" AS linger.over]::[aabortkafka AS linger.over] = cte
+
+# The same applies to the `[<id>]` resolved cluster and network policy names,
+# which accept an identifier or a number token. A numeric id stays bare.
+parse-statement
+CREATE INDEX i IN CLUSTER ["row"] ON t (a)
+----
+CREATE INDEX i IN CLUSTER ["row"] ON t (a)
+=>
+CreateIndex(CreateIndexStatement { name: Some(Ident("i")), in_cluster: Some(Resolved("row")), on_name: Name(UnresolvedItemName([Ident("t")])), key_parts: Some([Identifier([Ident("a")])]), with_options: [], if_not_exists: false })
+
+parse-statement
+COMMENT ON NETWORK POLICY ["row"] IS 'x'
+----
+COMMENT ON NETWORK POLICY ["row"] IS 'x'
+=>
+Comment(CommentStatement { object: NetworkPolicy { name: Resolved("row") }, comment: Some("x") })
