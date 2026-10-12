@@ -19,6 +19,7 @@ pub mod activator;
 pub mod antichain;
 pub mod builder_async;
 pub mod capture;
+pub mod co_reduce;
 pub mod column_pager;
 pub mod columnar;
 pub mod columnation;
