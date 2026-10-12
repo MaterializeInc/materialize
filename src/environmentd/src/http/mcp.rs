@@ -118,6 +118,7 @@ impl ProtocolVersion {
 #[derive(Debug, Default, Deserialize)]
 struct RawRequest {
     jsonrpc: Option<serde_json::Value>,
+    #[serde(default, deserialize_with = "present_id")]
     id: Option<serde_json::Value>,
     method: Option<serde_json::Value>,
     params: Option<serde_json::Value>,
@@ -371,9 +372,32 @@ impl McpRequestError {
 #[derive(Debug, Deserialize)]
 pub(crate) struct McpRequest {
     jsonrpc: String,
+    #[serde(default, deserialize_with = "present_id")]
     id: Option<serde_json::Value>,
     #[serde(flatten)]
     method: McpMethod,
+}
+
+/// Reads a present `id` as `Some`, `null` included. JSON-RPC makes only a
+/// missing `id` a notification, and `Option` alone would read `null` as `None`.
+fn present_id<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    serde_json::Value::deserialize(deserializer).map(Some)
+}
+
+/// MCP request ids are strings or numbers. Any other id, `null` included, gets
+/// `-32600` with no id in the reply.
+fn is_valid_request_id(id: &serde_json::Value) -> bool {
+    matches!(
+        id,
+        serde_json::Value::String(_) | serde_json::Value::Number(_)
+    )
+}
+
+fn invalid_id() -> McpRequestError {
+    McpRequestError::InvalidRequest("id must be a string or a number".into())
 }
 
 /// MCP method variants with their associated parameters.
@@ -868,6 +892,7 @@ fn as_unknown_method(body: &[u8]) -> Option<McpRequest> {
     #[derive(Deserialize)]
     struct Envelope {
         jsonrpc: String,
+        #[serde(default, deserialize_with = "present_id")]
         id: Option<serde_json::Value>,
         method: String,
     }
@@ -1036,6 +1061,17 @@ async fn handle_mcp_request(
         return StatusCode::ACCEPTED.into_response();
     }
 
+    if !request.id.as_ref().is_some_and(is_valid_request_id) {
+        let err = invalid_id();
+        record_request(McpCallStatus::Error(err.error_type()));
+        let status = if protocol.is_modern() {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::OK
+        };
+        return (status, Json(McpResponse::error(None, err.into()))).into_response();
+    }
+
     let request_id = request.id.clone().unwrap_or(serde_json::Value::Null);
 
     // The transport leaves header rules for notification POSTs undefined, so
@@ -1122,6 +1158,11 @@ fn answer_parse_failure(
             StatusCode::BAD_REQUEST,
             McpRequestError::ParseError(rejection.body_text()),
         ),
+        JsonRejection::JsonDataError(_)
+            if raw.id.as_ref().is_some_and(|id| !is_valid_request_id(id)) =>
+        {
+            (StatusCode::BAD_REQUEST, invalid_id())
+        }
         JsonRejection::JsonDataError(rejection) => {
             let message = rejection.body_text();
             match (raw.id.is_some(), check_modern_request(headers, &raw)) {
@@ -1153,7 +1194,8 @@ fn answer_parse_failure(
         rejection => return rejection.into_response(),
     };
     record_request(McpCallStatus::Error(err.error_type()));
-    (status, Json(McpResponse::error(raw.id, err.into()))).into_response()
+    let id = raw.id.filter(is_valid_request_id);
+    (status, Json(McpResponse::error(id, err.into()))).into_response()
 }
 
 async fn handle_mcp_request_inner(
