@@ -833,7 +833,7 @@ mod tests {
 
         // `as_of = MAX` with `until = {MAX}` is an empty range, produced by
         // `SUBSCRIBE ... AS OF MAX UP TO MAX`. It must not be classified as single
-        // time, and it must not trip an invariant assertion (see CLU-169).
+        // time, and it must not trip an invariant assertion (see CPU-169).
         assert!(
             !desc_with_bounds(
                 Antichain::from_elem(Timestamp::MAX),

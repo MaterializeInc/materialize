@@ -62,18 +62,22 @@ contains:imestamp
 
 > COMMIT
 
-# Regression test for CLU-169. `AS OF MAX UP TO MAX` describes an empty range
+# Regression test for CPU-169. `AS OF MAX UP TO MAX` describes an empty range
 # (`as_of` equals the exclusive `up_to`), so the subscribe is guaranteed empty.
 # Optimization used to trip the `is_single_time` invariant assertion, which
 # expected an empty `until` whenever `as_of` was `MAX`, and surfaced as an
 # internal optimizer error. The empty subscribe is now short-circuited without
-# installing a dataflow.
+# installing a dataflow. Without the short-circuit it never completes, which the
+# FETCH timeout hides, so check that no subscription is left running.
 > BEGIN
 
 > DECLARE c CURSOR FOR SUBSCRIBE t1 AS OF 18446744073709551615 UP TO 18446744073709551615;
 
 # No rows expected.
 > FETCH ALL c WITH (timeout = '5s');
+
+> SELECT count(*) FROM mz_internal.mz_subscriptions
+0
 
 > COMMIT
 
@@ -86,5 +90,8 @@ contains:imestamp
 
 > FETCH ALL c WITH (timeout = '5s');
 <TIMESTAMP> true <null> <null>
+
+> SELECT count(*) FROM mz_internal.mz_subscriptions
+0
 
 > COMMIT
