@@ -8530,7 +8530,6 @@ dependencies = [
  "mz-storage-types",
  "mz-tracing",
  "paste",
- "prometheus",
  "proptest",
  "proptest-derive",
  "prost",
