@@ -79,6 +79,19 @@ across files instead of paying it per file. It also matches how CI drives the
 suite, so goldens generated one-file-per-process can diverge from CI's batched
 context.
 Rewrite expected results with `bin/sqllogictest -- --rewrite-results PATH`.
+Override one system parameter with
+`bin/sqllogictest -- --system-parameter-default=NAME=VALUE PATH`. The wrapper
+passes its own defaults first and the last value per name wins.
+After `timeout N bin/sqllogictest ...` expires, sqllogictest and its clusterd
+processes keep running. The mz-run skill explains why and how to stop them.
+
+Before blaming a change for a golden failure, run the same file on
+upstream/main in a detached worktree. Not every file runs on PRs:
+`compileFastSltConfig` in `test/sqllogictest/mzcompose.py` excludes some (e.g.
+`distinct_arrangements.slt`), which then only run in Nightly, so their goldens
+can be stale on main. `test/sqllogictest/introspection/relations.slt` pins
+dataflow channel container type names, so changing an operator's output
+container needs `--rewrite-results` on it.
 
 When a plan changes only because of nondeterministic IDs in the output,
 normalize it with sqllogictest's `replace` directive rather than running files
@@ -186,6 +199,11 @@ Other useful commands:
 
 Many tests expect to start with fresh state.
 Run `bin/mzcompose --find NAME down` between test runs, not just at the end of a session.
+
+The Docker Compose project name defaults to the composition directory name, so
+every worktree and concurrent session running the same composition shares
+containers, and one session's `down` kills another's run. Pass
+`bin/mzcompose --project-name <unique> --find NAME` on both `run` and `down`.
 
 Instead of manually building with `cargo build`, use `bin/mzcompose` directly.
 It implicitly builds in the `target-xcompile` directory when no prebuilt image

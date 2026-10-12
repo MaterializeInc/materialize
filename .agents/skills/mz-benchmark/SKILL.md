@@ -23,6 +23,16 @@ Materialize has some benchmark frameworks targetting local Docker, each suited t
 | SQL throughput under concurrency | **Scalability Test** | "How many QPS can we sustain at 1/4/16/64/256 concurrent clients?" |
 | Sustained performance over time | **Parallel Benchmark** | "Does latency degrade over a 2-minute mixed workload?" |
 
+A Rust `cargo bench` target must reference the production allocator with a
+`mz-alloc-default` dev-dependency and `use mz_alloc_default as _;` (see
+`src/repr/benches/row.rs`). Without it the bench runs on the system allocator,
+not jemalloc.
+
+Scalability Test and Parallel Benchmark connect with psycopg 3 and leave
+`prepare_threshold` at its default of 5, so a query switches to a prepared
+statement on its sixth execution per connection. Set it explicitly and warm
+connections up when per-query latency matters.
+
 ---
 
 ## 1. Feature Benchmark (Micro-benchmarks)
@@ -88,7 +98,18 @@ class MySpecificBenchmark(MyCategory):
 1. **`shared()`** - Runs once for BOTH instances (e.g., create Kafka topics)
 2. **`init()`** - Runs once per instance (create tables, populate data)
 3. **`before()`** - Runs before EACH iteration (restart, cleanup)
-4. **`benchmark()`** - Runs repeatedly (10-50 times), measured
+4. **`benchmark()`** - Runs repeatedly, measured
+
+The result is the minimum (`MinAggregation`) after discarding the first 3
+measurements. `ProbForMin(threshold=0.90)` in
+`test/feature-benchmark/mzcompose.py` can end a scenario after 6 measurements,
+so the verdict can rest on 3 values and one outlier can flip it. Read the raw
+per-iteration values before trusting a regression or improvement.
+
+The measured cluster `cluster_default` is an unmanaged replica on the
+`clusterd` container. Parameters that shape replica creation, such as
+`enable_unified_cluster`, do not reach it through system parameters. Configure
+it via the `Clusterd(...)` service in `create_clusterd_service`.
 
 ### Helpers
 
@@ -117,7 +138,13 @@ bin/mzcompose --find feature-benchmark run default --root-scenario=MySpecificBen
 
 ## 2. Scalability Test (SQL Throughput Under Concurrency)
 
-Measures TPS (transactions per second) at increasing concurrency levels (1, 2, 4, 8, ..., 256 clients). Open-loop benchmark that identifies scaling bottlenecks. Compares Materialize against Postgres.
+Measures TPS (transactions per second) at increasing concurrency levels (1, 2, 4, 8, ..., 256 clients). Compares Materialize against Postgres.
+
+The load is closed-loop: `concurrency` threads each issue the next operation
+when the previous one completes (`benchmark_executor.py`). TPS is therefore
+capped at concurrency divided by mean latency, and a flattening curve can be
+the client cap rather than a server knee. Use Parallel Benchmark's `OpenLoop`
+to measure behavior at a fixed offered load, and report p99 and max with it.
 
 ### How to Add a Workload
 

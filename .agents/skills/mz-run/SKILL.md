@@ -45,6 +45,28 @@ yourself, or a shared-but-different Postgres/CockroachDB you and others already
 point at deliberately, which avoids both the reset hazard and the cost of
 spinning up a fresh CRDB per instance. Prefer unit tests or `bin/mzcompose` (own
 containerized CRDB) over a second bare-metal instance when neither applies.
+`--reset` also kills every `clusterd` process owned by your user
+(`_handle_lingering_services` in `misc/python/materialize/cli/run.py`),
+including those of other sessions' instances.
+
+`bin/environmentd` and `bin/sqllogictest` run the program in a forked child
+process group, and the Python parent kills that group when it exits normally.
+SIGTERM to the Python parent (e.g. from `timeout`) skips that cleanup and leaks
+the program and its `clusterd` processes. To stop or restart an instance, kill
+the program's own PID (`pgrep -f '[m]zbuild/bin/environmentd'`, where the brackets keep the
+pattern from matching the calling shell), so the parent
+exits and cleans up. Before restarting, wait until ports 6875 (SQL) and 6879
+(persist pubsub) are free. `mzbuild/bin/environmentd` is a symlink into
+`target/`, so a `/proc/<pid>/exe` ending in `(deleted)` means the process
+still runs a binary that has since been rebuilt.
+
+The compute memory limiter is off locally and in mzcompose. clusterd gets
+`--heap-limit` only for replica sizes with `swap_enabled` and a non-zero
+`disk_limit` (`src/controller/src/clusters.rs`), and no size in
+`cluster_replica_size_map()` sets `swap_enabled`. To test the limiter, pass
+`bin/environmentd -- --cluster-replica-sizes='<json>'` with such a size. The
+last occurrence of the flag wins, so the map must contain every size you need,
+including `bootstrap`.
 
 Access Materialize using psql:
 * `psql -p 6875 -h localhost -U materialize` for regular access.
