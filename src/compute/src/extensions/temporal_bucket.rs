@@ -382,13 +382,20 @@ where
     /// Consolidate `buffer` through the chunker and feed any complete chunks to
     /// the batcher. Leaves `buffer` empty, retaining its allocation.
     fn push_container(&mut self, buffer: &mut Column<(D, T, R)>) {
+        use columnar::Container as _;
         use timely::container::{ContainerBuilder as _, PushInto as _};
         if buffer.is_empty() {
             return;
         }
-        for (data, time, diff) in buffer.borrow().into_index_iter() {
-            self.staging.push_into(((time, data), time, diff));
-        }
+        // `staging` is only ever cleared, which keeps it typed.
+        let Column::Typed(staging) = &mut self.staging else {
+            unreachable!("staging column is typed");
+        };
+        let (data, time, diff) = buffer.borrow();
+        staging.0.0.extend_from_self(time, 0..time.len());
+        staging.0.1.extend_from_self(data, 0..data.len());
+        staging.1.extend_from_self(time, 0..time.len());
+        staging.2.extend_from_self(diff, 0..diff.len());
         buffer.clear();
         self.chunker.push_into(&mut self.staging);
         self.staging.clear();
