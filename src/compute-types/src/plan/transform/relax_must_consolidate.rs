@@ -18,7 +18,8 @@ use crate::plan::{ArrangementStrategy, LirRelationExpr, LirRelationNode, ReduceP
 
 /// A transformation that takes the result of single-time physical monotonicity
 /// analysis and refines, as appropriate, the setting of the `must_consolidate`
-/// flag in monotonic `LirRelationExpr` nodes with forced consolidation.
+/// flag in monotonic `LirRelationExpr` nodes with forced consolidation. Where it
+/// clears the flag, it also sets the node's temporal bucketing strategy to `Direct`.
 #[derive(Debug)]
 pub struct RelaxMustConsolidate;
 
@@ -36,7 +37,8 @@ impl BottomUpTransform for RelaxMustConsolidate {
     }
 
     fn action(plan: &mut LirRelationExpr, _plan_info: &Self::Info, input_infos: &[Self::Info]) {
-        // Look at `input_infos` and type of `LirRelationExpr` node and refine the `must_consolidate` flag.
+        // Look at `input_infos` and type of `LirRelationExpr` node and refine the `must_consolidate`
+        // flag and the temporal bucketing strategy.
         // Note that the LIR nodes we care about have a single input.
         match (&mut plan.node, input_infos) {
             (
