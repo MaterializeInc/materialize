@@ -2278,7 +2278,7 @@ impl Coordinator {
         if let Some(ws) = watch_set {
             if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), ws) {
                 let _ = tx.send(Err(
-                    AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e),
+                    AdapterError::concurrent_dependency_drop_from_compute_lookup_error(e),
                 ));
                 return;
             }
