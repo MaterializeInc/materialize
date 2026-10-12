@@ -14,7 +14,7 @@ use crate::plan::interpret::{PhysicallyMonotonic, SingleTimeMonotonic};
 use crate::plan::reduce::{HierarchicalPlan, MonotonicPlan};
 use crate::plan::top_k::{MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan};
 use crate::plan::transform::{BottomUpTransform, TransformConfig};
-use crate::plan::{LirRelationExpr, LirRelationNode, ReducePlan};
+use crate::plan::{ArrangementStrategy, LirRelationExpr, LirRelationNode, ReducePlan};
 
 /// A transformation that takes the result of single-time physical monotonicity
 /// analysis and refines, as appropriate, the setting of the `must_consolidate`
@@ -46,6 +46,7 @@ impl BottomUpTransform for RelaxMustConsolidate {
                             must_consolidate,
                             ..
                         })),
+                    temporal_bucketing_strategy,
                     ..
                 }
                 | LirRelationNode::TopK {
@@ -53,6 +54,7 @@ impl BottomUpTransform for RelaxMustConsolidate {
                         TopKPlan::MonotonicTop1(MonotonicTop1Plan {
                             must_consolidate, ..
                         }),
+                    temporal_bucketing_strategy,
                     ..
                 }
                 | LirRelationNode::TopK {
@@ -60,10 +62,16 @@ impl BottomUpTransform for RelaxMustConsolidate {
                         TopKPlan::MonotonicTopK(MonotonicTopKPlan {
                             must_consolidate, ..
                         }),
+                    temporal_bucketing_strategy,
                     ..
                 },
                 [PhysicallyMonotonic(true)],
-            ) => *must_consolidate = false,
+            ) => {
+                *must_consolidate = false;
+                // A single-time dataflow holds no updates past `until`, because temporal MFPs
+                // drop them, so a temporal bucket has nothing to delay.
+                *temporal_bucketing_strategy = ArrangementStrategy::Direct;
+            }
             _ => (),
         }
     }

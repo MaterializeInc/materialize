@@ -436,3 +436,27 @@ SELECT k FROM rt_indexed
 1
 2
 3
+
+# A single-time SUBSCRIBE (`AS OF` the maximum timestamp, no `UP TO`) keeps `mz_now()`
+# symbolic. Over a monotonic source, its TopK turns monotonic with consolidation relaxed,
+# so it must not also keep `TemporalBucketing`, or `render_topk` trips a soft assertion.
+
+statement ok
+CREATE SOURCE rt_counter FROM LOAD GENERATOR COUNTER (TICK INTERVAL '20ms', UP TO 5)
+
+statement ok
+CREATE TABLE rt_counter_tbl FROM SOURCE rt_counter
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE rt_c CURSOR FOR SUBSCRIBE (
+  SELECT counter FROM rt_counter_tbl WHERE mz_now() < counter LIMIT 5
+) AS OF 18446744073709551615
+
+statement ok
+FETCH ALL rt_c WITH (timeout = '5s')
+
+statement ok
+COMMIT
