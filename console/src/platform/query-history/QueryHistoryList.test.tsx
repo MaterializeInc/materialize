@@ -324,18 +324,16 @@ describe("QueryHistoryList", () => {
 
     await user.click(await screen.findByLabelText("Filter menu"));
     await waitFor(() => expect(screen.getByText("Filters")).toBeVisible());
-    await user.click(screen.getByLabelText("Duration (ms)"));
+    await user.click(screen.getByRole("button", { name: "Duration (ms)" }));
     await user.type(screen.getByPlaceholderText("10"), "10");
     await user.type(screen.getByPlaceholderText("1000"), "5");
     await user.click(screen.getByText("Apply filters"));
 
-    // jsdom never reports the accordion panel as visible, so check that the
-    // message renders instead.
     expect(
       await screen.findByText(
         "The lower bound must be less than or equal to the upper bound.",
       ),
-    ).toBeInTheDocument();
+    ).toBeVisible();
   });
 
   it("Should show an unauthorized state when a user lacks privileges", async () => {
@@ -673,16 +671,16 @@ describe("QueryHistoryList", () => {
 
     // Set statement filter
     await user.click(screen.getByLabelText("Filter menu")); // Open accordion item
-    await user.click(screen.getByLabelText("Statement type"));
+    await user.click(screen.getByRole("button", { name: "Statement type" }));
     await user.click(screen.getByLabelText(expectedFilters.statementTypes[0]));
 
-    await user.click(screen.getByLabelText("Status"));
+    await user.click(screen.getByRole("button", { name: "Status" }));
     await user.click(
       screen.getByLabelText(expectedFilters.finishedStatuses[0]),
     );
 
     // Set duration filter
-    await user.click(screen.getByLabelText("Duration (ms)")); // Open accordion item
+    await user.click(screen.getByRole("button", { name: "Duration (ms)" })); // Open accordion item
     const minDurationTextInput = screen.getByPlaceholderText("10");
     await user.type(
       minDurationTextInput,
@@ -690,24 +688,24 @@ describe("QueryHistoryList", () => {
     );
 
     // Set session ID filter
-    await user.click(screen.getByLabelText("Session ID")); // Open accordion item
+    await user.click(screen.getByRole("button", { name: "Session ID" })); // Open accordion item
     const sessionIdTextInput = screen.getByPlaceholderText("Enter session ID");
     await user.type(sessionIdTextInput, expectedFilters.sessionId!);
 
     // Set application name filter
-    await user.click(screen.getByLabelText("Application name")); // Open accordion item
+    await user.click(screen.getByRole("button", { name: "Application name" })); // Open accordion item
     const applicationNameTextInput = screen.getByPlaceholderText(
       "Enter application name",
     );
     await user.type(applicationNameTextInput, expectedFilters.applicationName!);
 
     // Set SQL text filter
-    await user.click(screen.getByLabelText("SQL text")); // Open accordion item
+    await user.click(screen.getByRole("button", { name: "SQL text" })); // Open accordion item
     const sqlTextInput = screen.getByPlaceholderText("Enter SQL text");
     await user.type(sqlTextInput, expectedFilters.sqlText!);
 
     // Set query ID filter
-    await user.click(screen.getByLabelText("Query ID")); // Open accordion item
+    await user.click(screen.getByRole("button", { name: "Query ID" })); // Open accordion item
     const executionIdInput = screen.getByPlaceholderText("Enter query ID");
 
     await user.type(executionIdInput, expectedFilters.executionId!);
