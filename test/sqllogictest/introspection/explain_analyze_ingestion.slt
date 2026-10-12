@@ -1,0 +1,284 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# EXPLAIN ANALYZE INGESTION for sources, tables from sources, and subsources.
+# The statistics it reports arrive over time, so runtime output is covered in
+# testdrive (explain-analyze-ingestion.td), which retries.
+
+mode cockroach
+
+reset-server
+
+statement ok
+CREATE SOURCE auction FROM LOAD GENERATOR AUCTION (TICK INTERVAL '100ms') FOR ALL TABLES;
+
+statement ok
+CREATE TABLE bids_tbl FROM SOURCE auction (REFERENCE "auction"."bids");
+
+statement ok
+CREATE TABLE plain (x int);
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT count(*) FROM plain;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_explain_analyze_storage_objects = false
+----
+COMPLETE 0
+
+simple
+EXPLAIN ANALYZE INGESTION FOR SOURCE auction
+----
+db error: ERROR: EXPLAIN ANALYZE for sources, tables from sources, and sinks is not available
+DETAIL: The requested feature (enable_explain_analyze_storage_objects) is in private preview.
+HINT: Contact support to discuss enabling the feature in your Materialize region.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_explain_analyze_storage_objects = true
+----
+COMPLETE 0
+
+# Explainee validation.
+
+query error db error: ERROR: EXPLAIN ANALYZE \.\.\. FOR TABLE requires a table created from a source or a subsource, but materialize\.public\.plain is not
+EXPLAIN ANALYZE INGESTION FOR TABLE plain
+
+query error db error: ERROR: materialize\.public\.bids is a subsource
+EXPLAIN ANALYZE INGESTION FOR SOURCE bids
+
+query error db error: ERROR: materialize\.public\.auction_progress is a progress source, which has no dataflow of its own
+EXPLAIN ANALYZE INGESTION FOR SOURCE auction_progress
+
+query error db error: ERROR: table materialize\.public\.plain is not a source
+EXPLAIN ANALYZE INGESTION FOR SOURCE plain
+
+query error db error: ERROR: EXPLAIN ANALYZE HINTS is only supported for indexes and materialized views
+EXPLAIN ANALYZE HINTS FOR SOURCE auction
+
+query error db error: ERROR: EXPLAIN ANALYZE INGESTION is only supported for sources and tables created from sources
+EXPLAIN ANALYZE INGESTION FOR MATERIALIZED VIEW mv
+
+# The subsource error carries a hint.
+simple
+EXPLAIN ANALYZE INGESTION FOR SOURCE bids
+----
+db error: ERROR: materialize.public.bids is a subsource
+HINT: Use EXPLAIN ANALYZE ... FOR TABLE materialize.public.bids to explain it.
+
+# INGESTION reads catalog-server relations and works from any cluster.
+
+query T multiline
+EXPLAIN ANALYZE INGESTION FOR SOURCE auction AS SQL
+----
+WITH
+    objects AS
+    (
+        SELECT src.id AS id, true AS is_source
+        FROM mz_catalog.mz_sources AS src
+        WHERE src.id = 'u2'
+        UNION ALL
+            SELECT dep.object_id AS id, false AS is_source
+            FROM
+                mz_internal.mz_object_dependencies AS dep
+                    JOIN
+                        mz_catalog.mz_sources AS sub
+                        ON (dep.object_id = sub.id)
+            WHERE dep.referenced_object_id = 'u2' AND sub.type = 'subsource'
+        UNION ALL
+            SELECT sub.id AS id, false AS is_source
+            FROM mz_catalog.mz_tables AS sub
+            WHERE sub.source_id = 'u2'
+    ),
+    statistics AS
+    (
+        SELECT DISTINCT ON (ss.id) ss.*
+        FROM
+            mz_internal.mz_source_statistics AS ss
+                JOIN objects AS o ON (ss.id = o.id)
+        ORDER BY ss.id, ss.updates_committed DESC
+    )
+SELECT
+    ms.name || '.' || mo.name AS object,
+    mss.status AS status,
+    CASE
+            WHEN ss.snapshot_committed THEN 1.00
+                WHEN
+                        ss.snapshot_records_known IS NULL
+                            OR
+                        ss.snapshot_records_known = 0
+                    THEN NULL
+                ELSE
+                    round(
+                        ss.snapshot_records_staged::numeric
+                        / ss.snapshot_records_known::numeric,
+                        2
+                    )
+        END
+        AS snapshot_progress,
+    CASE
+            WHEN o.is_source
+                    THEN
+                        GREATEST(
+                            ss.offset_known::numeric
+                            - ss.offset_committed::numeric,
+                            0
+                        )
+                ELSE NULL
+        END
+        AS offset_lag,
+    ss.messages_received AS messages_received,
+    pg_size_pretty(ss.bytes_received::numeric) AS bytes_received,
+    ss.updates_committed AS updates_committed,
+    pg_size_pretty(ss.bytes_indexed::numeric) AS state_bytes,
+    ss.records_indexed AS state_records,
+    ss.rehydration_latency AS rehydration_latency,
+    wgl.lag AS wallclock_lag
+FROM
+    objects AS o
+        JOIN mz_catalog.mz_objects AS mo ON (o.id = mo.id)
+        JOIN mz_catalog.mz_schemas AS ms ON (mo.schema_id = ms.id)
+        LEFT JOIN mz_internal.mz_source_statuses AS mss ON (o.id = mss.id)
+        LEFT JOIN statistics AS ss ON (o.id = ss.id)
+        LEFT JOIN
+            mz_internal.mz_wallclock_global_lag AS wgl
+            ON (o.id = wgl.object_id)
+ORDER BY o.is_source DESC, object;
+EOF
+
+query T multiline
+EXPLAIN ANALYZE INGESTION FOR TABLE bids_tbl AS SQL
+----
+WITH
+    objects AS
+    (SELECT 'u8' AS id, false AS is_source),
+    statistics AS
+    (
+        SELECT DISTINCT ON (ss.id) ss.*
+        FROM
+            mz_internal.mz_source_statistics AS ss
+                JOIN objects AS o ON (ss.id = o.id)
+        ORDER BY ss.id, ss.updates_committed DESC
+    )
+SELECT
+    ms.name || '.' || mo.name AS object,
+    mss.status AS status,
+    CASE
+            WHEN ss.snapshot_committed THEN 1.00
+                WHEN
+                        ss.snapshot_records_known IS NULL
+                            OR
+                        ss.snapshot_records_known = 0
+                    THEN NULL
+                ELSE
+                    round(
+                        ss.snapshot_records_staged::numeric
+                        / ss.snapshot_records_known::numeric,
+                        2
+                    )
+        END
+        AS snapshot_progress,
+    CASE
+            WHEN o.is_source
+                    THEN
+                        GREATEST(
+                            ss.offset_known::numeric
+                            - ss.offset_committed::numeric,
+                            0
+                        )
+                ELSE NULL
+        END
+        AS offset_lag,
+    ss.messages_received AS messages_received,
+    pg_size_pretty(ss.bytes_received::numeric) AS bytes_received,
+    ss.updates_committed AS updates_committed,
+    pg_size_pretty(ss.bytes_indexed::numeric) AS state_bytes,
+    ss.records_indexed AS state_records,
+    ss.rehydration_latency AS rehydration_latency,
+    wgl.lag AS wallclock_lag
+FROM
+    objects AS o
+        JOIN mz_catalog.mz_objects AS mo ON (o.id = mo.id)
+        JOIN mz_catalog.mz_schemas AS ms ON (mo.schema_id = ms.id)
+        LEFT JOIN mz_internal.mz_source_statuses AS mss ON (o.id = mss.id)
+        LEFT JOIN statistics AS ss ON (o.id = ss.id)
+        LEFT JOIN
+            mz_internal.mz_wallclock_global_lag AS wgl
+            ON (o.id = wgl.object_id)
+ORDER BY o.is_source DESC, object;
+EOF
+
+query T multiline
+EXPLAIN ANALYZE INGESTION FOR TABLE bids AS SQL
+----
+WITH
+    objects AS
+    (SELECT 'u5' AS id, false AS is_source),
+    statistics AS
+    (
+        SELECT DISTINCT ON (ss.id) ss.*
+        FROM
+            mz_internal.mz_source_statistics AS ss
+                JOIN objects AS o ON (ss.id = o.id)
+        ORDER BY ss.id, ss.updates_committed DESC
+    )
+SELECT
+    ms.name || '.' || mo.name AS object,
+    mss.status AS status,
+    CASE
+            WHEN ss.snapshot_committed THEN 1.00
+                WHEN
+                        ss.snapshot_records_known IS NULL
+                            OR
+                        ss.snapshot_records_known = 0
+                    THEN NULL
+                ELSE
+                    round(
+                        ss.snapshot_records_staged::numeric
+                        / ss.snapshot_records_known::numeric,
+                        2
+                    )
+        END
+        AS snapshot_progress,
+    CASE
+            WHEN o.is_source
+                    THEN
+                        GREATEST(
+                            ss.offset_known::numeric
+                            - ss.offset_committed::numeric,
+                            0
+                        )
+                ELSE NULL
+        END
+        AS offset_lag,
+    ss.messages_received AS messages_received,
+    pg_size_pretty(ss.bytes_received::numeric) AS bytes_received,
+    ss.updates_committed AS updates_committed,
+    pg_size_pretty(ss.bytes_indexed::numeric) AS state_bytes,
+    ss.records_indexed AS state_records,
+    ss.rehydration_latency AS rehydration_latency,
+    wgl.lag AS wallclock_lag
+FROM
+    objects AS o
+        JOIN mz_catalog.mz_objects AS mo ON (o.id = mo.id)
+        JOIN mz_catalog.mz_schemas AS ms ON (mo.schema_id = ms.id)
+        LEFT JOIN mz_internal.mz_source_statuses AS mss ON (o.id = mss.id)
+        LEFT JOIN statistics AS ss ON (o.id = ss.id)
+        LEFT JOIN
+            mz_internal.mz_wallclock_global_lag AS wgl
+            ON (o.id = wgl.object_id)
+ORDER BY o.is_source DESC, object;
+EOF
+
+statement ok
+DROP SOURCE auction CASCADE
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_explain_analyze_storage_objects
+----
+COMPLETE 0

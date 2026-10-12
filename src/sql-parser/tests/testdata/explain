@@ -365,16 +365,58 @@ EXPLAIN ANALYZE MEMORY, CPU, CPU WITH SKEW FOR MATERIALIZED VIEW w
 parse-statement
 EXPLAIN ANALYZE HINTS FOR SELECT 1
 ----
-error: Expected one of INDEX or MATERIALIZED, found SELECT
+error: Expected one of INDEX or MATERIALIZED or SOURCE or TABLE, found SELECT
 EXPLAIN ANALYZE HINTS FOR SELECT 1
                           ^
 
 parse-statement
 EXPLAIN ANALYZE HINTS FOR idx_top_buyers
 ----
-error: Expected one of INDEX or MATERIALIZED, found identifier "idx_top_buyers"
+error: Expected one of INDEX or MATERIALIZED or SOURCE or TABLE, found identifier "idx_top_buyers"
 EXPLAIN ANALYZE HINTS FOR idx_top_buyers
                           ^
+
+parse-statement
+EXPLAIN ANALYZE CPU, MEMORY FOR SOURCE s
+----
+EXPLAIN ANALYZE CPU, MEMORY FOR SOURCE s
+=>
+ExplainAnalyzeObject(ExplainAnalyzeObjectStatement { properties: Computation(ExplainAnalyzeComputationProperties { properties: [Cpu, Memory], skew: false }), explainee: Source(Name(UnresolvedItemName([Ident("s")]))), as_sql: false })
+
+parse-statement
+EXPLAIN ANALYZE MEMORY WITH SKEW FOR TABLE db.sch.t AS SQL
+----
+EXPLAIN ANALYZE MEMORY WITH SKEW FOR TABLE db.sch.t AS SQL
+=>
+ExplainAnalyzeObject(ExplainAnalyzeObjectStatement { properties: Computation(ExplainAnalyzeComputationProperties { properties: [Memory], skew: true }), explainee: Table(Name(UnresolvedItemName([Ident("db"), Ident("sch"), Ident("t")]))), as_sql: true })
+
+parse-statement
+EXPLAIN ANALYZE INGESTION FOR SOURCE s
+----
+EXPLAIN ANALYZE INGESTION FOR SOURCE s
+=>
+ExplainAnalyzeObject(ExplainAnalyzeObjectStatement { properties: Ingestion, explainee: Source(Name(UnresolvedItemName([Ident("s")]))), as_sql: false })
+
+parse-statement
+EXPLAIN ANALYZE INGESTION FOR TABLE t AS SQL
+----
+EXPLAIN ANALYZE INGESTION FOR TABLE t AS SQL
+=>
+ExplainAnalyzeObject(ExplainAnalyzeObjectStatement { properties: Ingestion, explainee: Table(Name(UnresolvedItemName([Ident("t")]))), as_sql: true })
+
+parse-statement
+EXPLAIN ANALYZE INGESTION WITH SKEW FOR SOURCE s
+----
+error: Expected FOR, found WITH
+EXPLAIN ANALYZE INGESTION WITH SKEW FOR SOURCE s
+                          ^
+
+parse-statement
+EXPLAIN ANALYZE INGESTION FOR SOURCE
+----
+error: Expected identifier, found EOF
+EXPLAIN ANALYZE INGESTION FOR SOURCE
+                                    ^
 
 # EXPLAIN SUBSCRIBE tests
 

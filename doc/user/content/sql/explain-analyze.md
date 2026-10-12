@@ -31,6 +31,11 @@ FOR INDEX <name> | MATERIALIZED VIEW <name>
 [ AS SQL ]
 ;
 
+EXPLAIN ANALYZE INGESTION
+FOR SOURCE <name> | TABLE <name>
+[ AS SQL ]
+;
+
 EXPLAIN ANALYZE CLUSTER
       CPU [, MEMORY] [WITH SKEW]
     | MEMORY [, CPU] [WITH SKEW]
@@ -42,12 +47,17 @@ If you want to specify both `CPU` or `MEMORY`, they may be listed in any order;
 however, each may appear only once.
 {{</ tip >}}
 
+{{< private-preview >}}
+`EXPLAIN ANALYZE INGESTION`
+{{< /private-preview >}}
+
 Parameter    | Description
 -------------|-----
 **CPU**      | Reports consumed CPU time information `total_elapsed` for each operator (not inclusive of its child operators; `FOR INDEX`, `FOR MATERIALIZED VIEW`) or for each object in the current cluster (`CLUSTER`).
 **MEMORY**   | Reports consumed memory information `total_memory` and number of records `total_records` for each operator (not including child operators; `FOR INDEX`, `FOR MATERIALIZED VIEW`) or for each object in the current cluster (`CLUSTER`).
 **WITH SKEW** | *Optional.* If specified, includes additional information about average and per-worker consumption and ratios (of `CPU` and/or `MEMORY`).
-**HINTS**    | Annotates the LIR plan with [TopK hints] (`FOR INDEX`, `FOR MATERIALIZED VIEW`).
+**HINTS**    | Annotates the LIR plan with [TopK hints]. Only `FOR INDEX` and `FOR MATERIALIZED VIEW` support it.
+**INGESTION** | Reports ingestion progress for a source and each of its subsources and tables (`FOR SOURCE`), or for one table created from a source or one subsource (`FOR TABLE`): status, snapshot progress, upstream offset lag (source row only), received and committed counts, envelope state size, rehydration latency, and wallclock lag. Regular tables do not ingest, so `FOR TABLE` does not accept them.
 **AS SQL**   | *Optional.* If specified, returns the SQL associated with the specified `EXPLAIN ANALYZE` command without executing it. You can modify this SQL as a starting point to create customized queries.
 
 ## Privileges
