@@ -505,9 +505,84 @@ impl PeekClient {
                 });
                 (QueryPlan::Subscribe(plan), explain_ctx)
             }
-            _ => {
-                // This shouldn't happen because we already checked for this at the AST
-                // level before calling `try_frontend_peek_inner`. The logging takeover has
+            Plan::CreateConnection(_)
+            | Plan::CreateDatabase(_)
+            | Plan::CreateSchema(_)
+            | Plan::CreateRole(_)
+            | Plan::CreateCluster(_)
+            | Plan::CreateClusterReplica(_)
+            | Plan::CreateSource(_)
+            | Plan::CreateSources(_)
+            | Plan::CreateSecret(_)
+            | Plan::CreateSink(_)
+            | Plan::CreateTable(_)
+            | Plan::CreateView(_)
+            | Plan::CreateMaterializedView(_)
+            | Plan::CreateNetworkPolicy(_)
+            | Plan::CreateIndex(_)
+            | Plan::CreateMetricSink(_)
+            | Plan::CreateType(_)
+            | Plan::Comment(_)
+            | Plan::DiscardTemp
+            | Plan::DiscardAll
+            | Plan::DropObjects(_)
+            | Plan::DropOwned(_)
+            | Plan::EmptyQuery
+            | Plan::ShowAllVariables
+            | Plan::ShowCreate(_)
+            | Plan::ShowVariable(_)
+            | Plan::InspectShard(_)
+            | Plan::SetVariable(_)
+            | Plan::ResetVariable(_)
+            | Plan::SetTransaction(_)
+            | Plan::StartTransaction(_)
+            | Plan::CommitTransaction(_)
+            | Plan::AbortTransaction(_)
+            | Plan::CopyFrom(_)
+            | Plan::ExplainPlan(_)
+            | Plan::ExplainTimestamp(_)
+            | Plan::ExplainSinkSchema(_)
+            | Plan::Insert(_)
+            | Plan::AlterCluster(_)
+            | Plan::AlterClusterSwap(_)
+            | Plan::AlterNoop(_)
+            | Plan::AlterSetCluster(_)
+            | Plan::AlterConnection(_)
+            | Plan::AlterSource(_)
+            | Plan::AlterClusterRename(_)
+            | Plan::AlterClusterReplicaRename(_)
+            | Plan::AlterItemRename(_)
+            | Plan::AlterSchemaRename(_)
+            | Plan::AlterSchemaSwap(_)
+            | Plan::AlterSecret(_)
+            | Plan::AlterSink(_)
+            | Plan::AlterSystemSet(_)
+            | Plan::AlterSystemReset(_)
+            | Plan::AlterSystemResetAll(_)
+            | Plan::AlterRole(_)
+            | Plan::AlterOwner(_)
+            | Plan::AlterTableAddColumn(_)
+            | Plan::AlterMaterializedViewApplyReplacement(_)
+            | Plan::AlterNetworkPolicy(_)
+            | Plan::Declare(_)
+            | Plan::Fetch(_)
+            | Plan::Close(_)
+            | Plan::ReadThenWrite(_)
+            | Plan::Prepare(_)
+            | Plan::Execute(_)
+            | Plan::Deallocate(_)
+            | Plan::Raise(_)
+            | Plan::GrantRole(_)
+            | Plan::RevokeRole(_)
+            | Plan::GrantPrivileges(_)
+            | Plan::RevokePrivileges(_)
+            | Plan::AlterDefaultPrivileges(_)
+            | Plan::ReassignOwned(_)
+            | Plan::ValidateConnection(_)
+            | Plan::AlterRetainHistory(_)
+            | Plan::AlterSourceTimestampInterval(_) => {
+                // The other `EXPLAIN` explainees and every other plan kind are excluded at the
+                // AST level before calling `try_frontend_peek_inner`. The logging takeover has
                 // already happened, so falling back to the coordinator would count the
                 // statement twice. Report the inconsistency instead.
                 soft_panic_or_log!(
@@ -1159,7 +1234,6 @@ impl PeekClient {
                 let plan = plan.clone();
                 let catalog: Arc<Catalog> = Arc::clone(&catalog);
                 let debug_name = format!("subscribe-{}", index_id);
-                let features = optimizer_config.features.clone();
                 let mut optimizer = optimize::subscribe::Optimizer::new(
                     catalog,
                     compute_instance_snapshot.clone(),
@@ -1210,7 +1284,7 @@ impl PeekClient {
                                     explain_ctx,
                                     sink_id: optimizer.sink_id(),
                                     cluster_id: optimizer.cluster_id(),
-                                    features,
+                                    features: optimizer.config().features.clone(),
                                     equal_bounds: optimizer.up_to().filter(|up_to| *up_to == as_of),
                                 });
                             }
@@ -1887,7 +1961,6 @@ enum Execution {
         sink_id: GlobalId,
         cluster_id: ComputeInstanceId,
         features: OptimizerFeatures,
-        /// The `UP TO` bound, when it equals the `AS OF`.
         equal_bounds: Option<Timestamp>,
     },
     ExplainPushdown {
