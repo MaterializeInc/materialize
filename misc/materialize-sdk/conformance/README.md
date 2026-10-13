@@ -123,3 +123,21 @@ apply the operation:
   that failed or whose result is unknown, with `stored` as the checkpoint read
   back after it. It yields `{"settlement": ...}`, with a `conflict` for
   `"conflict"`.
+
+### `catalog.json`
+
+Input: one operation:
+
+- `{"lookup_sql": {"name"}}`, `{"indexes_sql": {"object_id", "cluster"}}`, and
+  `{"read_frontier_sql": {"object_id"}}` yield `{"sql": ...}`.
+- `{"parse_lookup": {"columns", "rows"}}` yields `{"object": ...}`, with
+  `null` when the name resolves to nothing.
+- `{"parse_indexes": {"columns", "rows"}}` yields `{"indexes": [...]}`, and
+  `{"parse_read_frontier": {"columns", "rows"}}` yields
+  `{"read_frontier": ...}`.
+- `{"resume_margin": {"frontier", "read_frontier"}}` yields
+  `{"margin_ms": ...}`, with `null` when history is lost.
+- `{"fingerprint": {"object", "envelope"}}` yields `{"fingerprint": ...}` for
+  an object a durable subscription can read, or `{"error": "usage"}`.
+
+A query's result that the query cannot return yields `{"error": "protocol"}`.
