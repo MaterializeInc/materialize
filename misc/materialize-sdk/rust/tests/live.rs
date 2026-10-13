@@ -15,104 +15,28 @@
 
 //! Live subscriptions against a running Materialize, at the libpq connection
 //! string in `MATERIALIZE_URL`. The tests that need a server are ignored, so
-//! run them with `cargo test -- --ignored`.
+//! run them with `cargo test --test live -- --ignored`.
 
 // The repository's clippy rules ask for wrappers a standalone SDK cannot use.
 #![allow(clippy::disallowed_methods)]
+
+mod common;
 
 use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::time::Duration;
 
-use materialize_sdk::core::ObjectKind;
-use materialize_sdk::core::catalog::{self, ObjectName};
+use common::{STEP, admin, config, execute, lookup, rows, table};
 use materialize_sdk::{
     Change, Classification, Error, ErrorKind, Event, Frontier, LiveOptions, LiveSubscription,
-    ObjectRef, Subscribe,
+    Subscribe,
 };
-use tokio_postgres::{Client, Config, NoTls, SimpleQueryMessage};
-
-/// The longest any one step may take before a test fails instead of hanging.
-const STEP: Duration = Duration::from_secs(60);
-
-fn config() -> Config {
-    std::env::var("MATERIALIZE_URL")
-        .expect("MATERIALIZE_URL is set")
-        .parse()
-        .unwrap()
-}
-
-async fn admin() -> Client {
-    let (client, connection) = config().connect(NoTls).await.unwrap();
-    tokio::spawn(connection);
-    client
-}
-
-async fn execute(client: &Client, sql: &str) {
-    tokio::time::timeout(STEP, client.batch_execute(sql))
-        .await
-        .unwrap_or_else(|_| panic!("timed out: {sql}"))
-        .unwrap_or_else(|e| panic!("{sql}: {e}"));
-}
-
-async fn rows(client: &Client, sql: &str) -> (Vec<String>, Vec<Vec<Option<String>>>) {
-    let messages = tokio::time::timeout(STEP, client.simple_query(sql))
-        .await
-        .unwrap_or_else(|_| panic!("timed out: {sql}"))
-        .unwrap_or_else(|e| panic!("{sql}: {e}"));
-    let mut columns = Vec::new();
-    let mut rows = Vec::new();
-    for message in messages {
-        if let SimpleQueryMessage::Row(row) = message {
-            columns = row.columns().iter().map(|c| c.name().to_string()).collect();
-            rows.push(
-                (0..row.len())
-                    .map(|i| row.get(i).map(str::to_string))
-                    .collect(),
-            );
-        }
-    }
-    (columns, rows)
-}
+use tokio_postgres::{Client, Config, NoTls};
 
 async fn next(live: &mut LiveSubscription) -> Option<Result<Event, Error>> {
     tokio::time::timeout(STEP, live.next())
         .await
         .expect("an event within the step limit")
-}
-
-/// Creates the table `materialize.public.{name}` with `columns`, after
-/// dropping any table of that name a failed run left behind.
-async fn table(client: &Client, name: &str, columns: &str) -> ObjectRef {
-    execute(
-        client,
-        &format!("DROP TABLE IF EXISTS materialize.public.{name} CASCADE"),
-    )
-    .await;
-    execute(
-        client,
-        &format!("CREATE TABLE materialize.public.{name} ({columns})"),
-    )
-    .await;
-    lookup(client, name).await
-}
-
-async fn lookup(client: &Client, name: &str) -> ObjectRef {
-    let sql = catalog::lookup_sql(&ObjectName {
-        database: Some("materialize".into()),
-        schema: "public".into(),
-        name: name.into(),
-    });
-    let (columns, found) = rows(client, &sql).await;
-    let object = catalog::parse_lookup(&columns, found).unwrap().unwrap();
-    assert!(
-        matches!(
-            object.kind,
-            ObjectKind::Table | ObjectKind::MaterializedView
-        ),
-        "{object:?}"
-    );
-    object.object
 }
 
 #[tokio::test]
@@ -261,7 +185,7 @@ async fn a_snapshot_over_the_timestamp_limit_fails_the_subscription() {
 #[ignore = "needs a running Materialize at MATERIALIZE_URL"]
 async fn a_table_streams_its_snapshot_then_its_changes() {
     let admin = admin().await;
-    let object = table(&admin, "live_stream", "id int, v text").await;
+    let object = table(&admin, "live_stream", "(id int, v text)").await;
     execute(
         &admin,
         "INSERT INTO materialize.public.live_stream VALUES (1, 'a')",
@@ -270,7 +194,7 @@ async fn a_table_streams_its_snapshot_then_its_changes() {
     let mut live = LiveSubscription::connect(
         &config(),
         NoTls,
-        Subscribe::object(object),
+        Subscribe::object(object.object),
         LiveOptions::default(),
     )
     .await
@@ -334,7 +258,7 @@ async fn a_missing_table_fails_at_start() {
 #[ignore = "needs a running Materialize at MATERIALIZE_URL"]
 async fn a_dataflow_error_after_the_snapshot_fails_the_subscription() {
     let admin = admin().await;
-    table(&admin, "live_poisoned", "id int").await;
+    table(&admin, "live_poisoned", "(id int)").await;
     execute(
         &admin,
         "INSERT INTO materialize.public.live_poisoned VALUES (1)",
@@ -385,7 +309,7 @@ async fn a_dataflow_error_after_the_snapshot_fails_the_subscription() {
 /// A table whose snapshot of `rows` ids arrives as one chunk per id, all from
 /// one `FETCH`, because the memory limit of zero releases each update alone.
 async fn chunked_snapshot(admin: &Client, name: &str, rows: u32) -> (Subscribe, LiveOptions) {
-    let object = table(admin, name, "id int").await;
+    let object = table(admin, name, "(id int)").await;
     execute(
         admin,
         &format!("INSERT INTO materialize.public.{name} SELECT generate_series(1, {rows})"),
@@ -395,7 +319,7 @@ async fn chunked_snapshot(admin: &Client, name: &str, rows: u32) -> (Subscribe, 
         .buffer(1)
         .max_pending_bytes(Some(0))
         .max_rows(u64::from(rows) + 10);
-    (Subscribe::object(object), options)
+    (Subscribe::object(object.object), options)
 }
 
 fn ids(event: Event) -> Vec<String> {
@@ -491,14 +415,17 @@ async fn dropping_ends_the_subscribe_while_a_fetch_waits() {
         )
         .await;
     }
-    table(&admin, "live_stall_base", "id int").await;
+    table(&admin, "live_stall_base", "(id int)").await;
     execute(
         &admin,
         "CREATE MATERIALIZED VIEW materialize.public.live_stalled IN CLUSTER live_stall \
          AS SELECT * FROM materialize.public.live_stall_base",
     )
     .await;
-    let object = lookup(&admin, "live_stalled").await;
+    let object = lookup(&admin, "public", "live_stalled")
+        .await
+        .unwrap()
+        .object;
     // Without replicas the view stops writing, so the subscribe's snapshot
     // never completes: after the first progress row a FETCH waits.
     execute(
