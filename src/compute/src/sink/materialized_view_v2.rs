@@ -59,12 +59,7 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::write::WriteHandle;
-use mz_persist_client::{PersistClient, Schemas};
-use mz_persist_types::ShardId;
-use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::part::PartBuilder;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
-use mz_storage_operators::persist::SharedBatches;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use timely::PartialOrder;
@@ -86,6 +81,7 @@ use crate::sink::materialized_view::{
     BatchDescription, BatchesStream, DescsStream, DesiredStreams, OkErr, PersistApi,
     PersistStreams, SharedSinkFrontier, advance, operator_name, persist_source,
 };
+use crate::sink::shared_batch::SharedBatchWriter;
 
 /// Renders an MV sink writing the given desired collection into the `target` persist collection.
 ///
@@ -853,50 +849,25 @@ mod write {
     /// batch builder. Together with [`READ_BACK_CHUNK`] this bounds the handoff to a few thousand
     /// buffered updates.
     const READ_BACK_CHUNKS_IN_FLIGHT: usize = 4;
-    /// How many updates a worker accumulates before handing a part to the shared batch.
-    ///
-    /// The shared batch concatenates the parts it receives until they reach persist's blob target
-    /// size, so this only sets the granularity at which a worker's updates become visible to that
-    /// coalescing, not the size of the parts persist writes. Keeping it near [`READ_BACK_CHUNK`]
-    /// costs one part per read-back chunk.
-    const SHARED_PART_LEN: usize = 1024;
-
     /// The batch-writing context owned by the Tokio write task.
     ///
-    /// Batches are built through the process-global [`SharedBatches`], so that the workers running
-    /// in one process coalesce their parts for a given batch interval into a single, larger batch
-    /// instead of each writing its own small batch. The `writer` is retained only to clean up a
-    /// finished batch when the response channel has already gone away.
+    /// With `shared` set, batches are built through the process-global shared batches. The
+    /// `writer` then serves only to clean up a finished batch when the response channel has
+    /// already gone away.
     struct BatchWriter {
-        persist_client: PersistClient,
-        shard_id: ShardId,
-        shard_name: String,
-        schemas: Schemas<SourceData, ()>,
-        shared_batches: SharedBatches,
-        shared_batches_enabled: bool,
         writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+        shared: Option<SharedBatchWriter>,
     }
 
     impl BatchWriter {
         async fn new(persist_api: &PersistApi, shared_batches_enabled: bool) -> Self {
             let writer = persist_api.open_writer().await;
-            Self {
-                persist_client: persist_api.open_client().await,
-                shard_id: persist_api.collection.data_shard,
-                shard_name: persist_api.shard_name.clone(),
-                // Parts carry the id of the schema they were written under, and a part written
-                // under none cannot be decoded through the shard's schema registry. The handle
-                // resolves the registered id for this sink's schema, so take it from there rather
-                // than assembling an unregistered `Schemas`.
-                schemas: Schemas {
-                    id: writer.schema_id(),
-                    key: Arc::new(persist_api.collection.relation_desc.clone()),
-                    val: Arc::new(UnitSchema),
-                },
-                shared_batches: persist_api.persist_batches.clone(),
-                shared_batches_enabled,
-                writer,
-            }
+            let shared = if shared_batches_enabled {
+                Some(SharedBatchWriter::new(persist_api, &writer).await)
+            } else {
+                None
+            };
+            Self { writer, shared }
         }
     }
 
@@ -972,8 +943,14 @@ mod write {
                         },
                     );
 
-                let proto_batch = if batch_writer.shared_batches_enabled {
-                    write_shared_batch(batch_writer, &desc, &mut updates_rx).await
+                let proto_batch = if let Some(shared) = &batch_writer.shared {
+                    let mut write = shared.start(&desc);
+                    while let Some(chunk) = updates_rx.recv().await {
+                        for (kv, t, d) in &chunk {
+                            write.push(kv, *t, *d).await;
+                        }
+                    }
+                    write.finish().await
                 } else {
                     // Per-worker path: each worker writes its own batch for the interval. Create
                     // the builder lazily: an idle sink's descriptions find no corrections.
@@ -1063,47 +1040,6 @@ mod write {
             },
         )
         .await
-    }
-
-    /// Build the batch for `desc` through the process-global [`SharedBatches`], coalescing this
-    /// worker's parts with those of the other workers in the process that build the same interval.
-    ///
-    /// All workers building an interval share `desc.shared_id` (the `mint` operator broadcasts one
-    /// description), so their parts land in a single shared batch. Only the last worker to `finish`
-    /// receives that batch; the rest get `None`, which maps to the empty-batch response the write
-    /// operator already handles. Every worker must `finish` even when it pushed nothing, since any
-    /// one of them may be the last holder and thus responsible for delivering all workers' data.
-    async fn write_shared_batch(
-        batch_writer: &BatchWriter,
-        desc: &BatchDescription,
-        updates_rx: &mut mpsc::Receiver<Vec<((SourceData, ()), Timestamp, StorageDiff)>>,
-    ) -> Option<ProtoBatch> {
-        let schemas = &batch_writer.schemas;
-        let shared = batch_writer.shared_batches.builder(
-            desc.shared_id,
-            batch_writer.persist_client.clone(),
-            batch_writer.shard_id,
-            batch_writer.shard_name.clone(),
-            schemas.clone(),
-            desc.lower.clone(),
-            desc.upper.clone(),
-        );
-
-        let mut builder = PartBuilder::new(&*schemas.key, &*schemas.val);
-        while let Some(chunk) = updates_rx.recv().await {
-            for ((k, v), t, d) in &chunk {
-                builder.push(k, v, *t, *d);
-                if builder.len() >= SHARED_PART_LEN {
-                    let part = builder.finish_and_replace(&*schemas.key, &*schemas.val);
-                    shared.push(part).await;
-                }
-            }
-        }
-        let part = builder.finish();
-        shared.push(part).await;
-
-        let batch = shared.finish().await;
-        batch.map(|batch| batch.into_transmittable_batch())
     }
 
     /// State maintained by the `write` operator on the Timely thread.

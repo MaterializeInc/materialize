@@ -10,7 +10,9 @@
 # Coalesced ("shared") batch writing in the MV sink must produce results that
 # are identical to the per-worker path. Exercise it across multiple workers in
 # a single process, with churn (retractions and inserts), and assert that the
-# materialized view always equals the equivalent one-shot aggregation.
+# materialized view always equals the equivalent one-shot aggregation. `mv_v1`
+# renders the async sink and `mv_v2` the sync sink, since the sink
+# implementation is picked when the sink renders.
 
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
@@ -26,21 +28,43 @@ ALTER SYSTEM SET enable_compute_sync_mv_sink_shared_batches = true
 
 > INSERT INTO t SELECT x, x * 10 FROM generate_series(1, 20000) x
 
-> CREATE MATERIALIZED VIEW mv AS
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_compute_sync_mv_sink = false
+
+> CREATE MATERIALIZED VIEW mv_v1 AS
   SELECT k % 256 AS bucket, count(*) AS cnt, sum(v) AS s
   FROM t
   GROUP BY k % 256
 
-> SELECT count(*) FROM mv
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_compute_sync_mv_sink = true
+
+> CREATE MATERIALIZED VIEW mv_v2 AS
+  SELECT k % 256 AS bucket, count(*) AS cnt, sum(v) AS s
+  FROM t
+  GROUP BY k % 256
+
+> SELECT count(*) FROM mv_v1
+256
+
+> SELECT count(*) FROM mv_v2
 256
 
 # The view must equal the one-shot aggregation. Both directions of the
 # difference must be empty.
 > (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
   EXCEPT ALL
-  (SELECT bucket, cnt, s FROM mv)
+  (SELECT bucket, cnt, s FROM mv_v1)
 
-> (SELECT bucket, cnt, s FROM mv)
+> (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
+  EXCEPT ALL
+  (SELECT bucket, cnt, s FROM mv_v2)
+
+> (SELECT bucket, cnt, s FROM mv_v1)
+  EXCEPT ALL
+  (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
+
+> (SELECT bucket, cnt, s FROM mv_v2)
   EXCEPT ALL
   (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
 
@@ -53,14 +77,25 @@ ALTER SYSTEM SET enable_compute_sync_mv_sink_shared_batches = true
 
 > (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
   EXCEPT ALL
-  (SELECT bucket, cnt, s FROM mv)
+  (SELECT bucket, cnt, s FROM mv_v1)
 
-> (SELECT bucket, cnt, s FROM mv)
+> (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
+  EXCEPT ALL
+  (SELECT bucket, cnt, s FROM mv_v2)
+
+> (SELECT bucket, cnt, s FROM mv_v1)
+  EXCEPT ALL
+  (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
+
+> (SELECT bucket, cnt, s FROM mv_v2)
   EXCEPT ALL
   (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
 
 # Odd k in 1..20000 (10000 rows) plus 20001..35000 (15000 rows).
-> SELECT sum(cnt) FROM mv
+> SELECT sum(cnt) FROM mv_v1
+25000
+
+> SELECT sum(cnt) FROM mv_v2
 25000
 
 # A write with no net change must not corrupt the view. Workers that end up
@@ -68,14 +103,20 @@ ALTER SYSTEM SET enable_compute_sync_mv_sink_shared_batches = true
 # one of them may be the last holder responsible for delivering the batch.
 > DELETE FROM t WHERE false
 
-> (SELECT bucket, cnt, s FROM mv)
+> (SELECT bucket, cnt, s FROM mv_v1)
   EXCEPT ALL
   (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
 
-> DROP MATERIALIZED VIEW mv
+> (SELECT bucket, cnt, s FROM mv_v2)
+  EXCEPT ALL
+  (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
+
+> DROP MATERIALIZED VIEW mv_v1
+> DROP MATERIALIZED VIEW mv_v2
 > DROP TABLE t
 > SET cluster = quickstart
 > DROP CLUSTER shared_batches
 
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET enable_compute_sync_mv_sink_shared_batches
+ALTER SYSTEM RESET enable_compute_sync_mv_sink

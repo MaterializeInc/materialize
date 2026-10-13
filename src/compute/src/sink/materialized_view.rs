@@ -122,7 +122,9 @@ use std::sync::Arc;
 
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
-use mz_compute_types::dyncfgs::MV_SINK_ADVANCE_PERSIST_FRONTIERS;
+use mz_compute_types::dyncfgs::{
+    ENABLE_SYNC_MV_SINK_SHARED_BATCHES, MV_SINK_ADVANCE_PERSIST_FRONTIERS,
+};
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
@@ -159,6 +161,7 @@ use crate::render::sinks::SinkRender;
 use crate::sink::correction::{ChannelLogging, Correction, CorrectionLogger};
 use crate::sink::materialized_view_v2;
 use crate::sink::refresh::apply_refresh;
+use crate::sink::shared_batch::SharedBatchWriter;
 
 impl<'scope> SinkRender<'scope> for MaterializedViewSinkConnection<CollectionMetadata> {
     fn render_sink(
@@ -841,12 +844,18 @@ mod write {
             drop(capabilities);
 
             let writer = persist_api.open_writer().await;
+            let shared_batch_writer = if ENABLE_SYNC_MV_SINK_SHARED_BATCHES.get(&worker_config) {
+                Some(SharedBatchWriter::new(&persist_api, &writer).await)
+            } else {
+                None
+            };
             let sink_metrics = persist_api.open_metrics().await;
             let read_only = *read_only_rx.borrow_and_update();
             let mut state = State::new(
                 sink_id,
                 worker_id,
                 writer,
+                shared_batch_writer,
                 sink_metrics,
                 channel_logging,
                 as_of,
@@ -951,6 +960,8 @@ mod write {
         sink_id: GlobalId,
         worker_id: usize,
         persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+        /// Set when batches are coalesced across the workers in this process.
+        shared_batch_writer: Option<SharedBatchWriter>,
         /// Contains `desired - persist`, reflecting the updates we would like to commit to
         /// `persist` in order to "correct" it to track `desired`. This collection is only modified
         /// by updates received from either the `desired` or `persist` inputs.
@@ -987,6 +998,7 @@ mod write {
             sink_id: GlobalId,
             worker_id: usize,
             persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+            shared_batch_writer: Option<SharedBatchWriter>,
             metrics: SinkMetrics,
             logging: Option<ChannelLogging>,
             as_of: Antichain<Timestamp>,
@@ -1003,6 +1015,7 @@ mod write {
                 sink_id,
                 worker_id,
                 persist_writer,
+                shared_batch_writer,
                 corrections: OkErr::new(
                     Correction::new(
                         metrics.clone(),
@@ -1179,12 +1192,25 @@ mod write {
                 return None;
             }
 
-            let batch = self
-                .persist_writer
-                .batch(updates, desc.lower.clone(), desc.upper.clone())
-                .await
-                .expect("valid usage")
-                .into_transmittable_batch();
+            let batch = match &self.shared_batch_writer {
+                Some(shared) => {
+                    let mut write = shared.start(&desc);
+                    for (kv, t, d) in updates {
+                        write.push(&kv, t, d).await;
+                    }
+                    let Some(batch) = write.finish().await else {
+                        self.trace("contributed to a shared batch");
+                        return None;
+                    };
+                    batch
+                }
+                None => self
+                    .persist_writer
+                    .batch(updates, desc.lower.clone(), desc.upper.clone())
+                    .await
+                    .expect("valid usage")
+                    .into_transmittable_batch(),
+            };
 
             self.trace("wrote a batch");
             Some((desc, batch, cap))
