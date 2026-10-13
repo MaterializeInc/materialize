@@ -345,12 +345,17 @@ fn render_simple_generator<'scope>(
 
             let mut committed_uppers = std::pin::pin!(committed_uppers);
 
-            // Each export's `offset_committed`. If we are just starting up, report 0.
-            let mut offsets_committed: BTreeMap<_, _> = if resume_offset.offset == 0 {
-                source_statistics.keys().map(|id| (*id, 0)).collect()
-            } else {
-                BTreeMap::new()
-            };
+            // Each export's `offset_committed`, seeded from its own resume upper. The generator
+            // replays from the least resume upper, which is 0 whenever an export was just
+            // added, while every other export keeps reporting from where it resumes.
+            let mut offsets_committed: BTreeMap<_, _> = source_statistics
+                .keys()
+                .filter_map(|id| {
+                    let upper = source_resume_uppers.get(id)?;
+                    let upper = Antichain::from_iter(upper.iter().map(MzOffset::decode_row));
+                    Some((*id, upper.into_option()?.offset))
+                })
+                .collect();
 
             while let Some((output_type, event)) = rows.next() {
                 match event {
