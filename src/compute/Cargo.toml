@@ -81,6 +81,11 @@ harness = false
 required-features = ["bench"]
 
 [[bench]]
+name = "temporal_bucket"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
 name = "columnar_merger_row"
 harness = false
 

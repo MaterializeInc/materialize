@@ -338,7 +338,7 @@ where
 /// The batcher consumes sorted, consolidated [`ColumnChunk`] input, so this
 /// wrapper carries a [`ColumnChunker`] that sorts and consolidates the input
 /// columns into the [`Column`]s it wraps as chunks.
-struct MergeBatcherWrapper<D, T, R>
+pub struct MergeBatcherWrapper<D, T, R>
 where
     D: MzData,
     T: MzData + Ord + Default + Timestamp + Lattice,
@@ -363,7 +363,7 @@ where
     for<'a> <(D, T, R) as Columnar>::Container: Push<&'a (D, T, R)>,
 {
     /// Construct a new `MergeBatcherWrapper` with the given logger and operator ID.
-    fn new(logger: Option<differential_dataflow::logging::Logger>, operator_id: usize) -> Self {
+    pub fn new(logger: Option<differential_dataflow::logging::Logger>, operator_id: usize) -> Self {
         Self {
             logger: logger.clone(),
             operator_id,
@@ -374,7 +374,7 @@ where
 
     /// Consolidate `buffer` through the chunker and feed any complete chunks to
     /// the batcher. Leaves `buffer` empty, retaining its allocation.
-    fn push_container(&mut self, buffer: &mut Column<(D, T, R)>) {
+    pub fn push_container(&mut self, buffer: &mut Column<(D, T, R)>) {
         use timely::container::{ContainerBuilder as _, PushInto as _};
         if buffer.is_empty() {
             return;
@@ -397,7 +397,7 @@ where
     }
 
     /// Reveal the contents of the merge batcher, returning a vector of chunks.
-    fn done(mut self) -> Vec<ColumnChunk<D, T, R, ComputeSpill>> {
+    pub fn done(mut self) -> Vec<ColumnChunk<D, T, R, ComputeSpill>> {
         self.flush();
         let (chain, _description) = self.inner.seal(Antichain::new());
         chain

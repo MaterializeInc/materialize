@@ -17,6 +17,10 @@ pub mod server;
 mod arrangement;
 mod command_channel;
 mod compute_state;
+/// Operator extensions, exposed for benchmarks.
+#[cfg(feature = "bench")]
+pub mod extensions;
+#[cfg(not(feature = "bench"))]
 mod extensions;
 mod logging;
 mod metrics;
