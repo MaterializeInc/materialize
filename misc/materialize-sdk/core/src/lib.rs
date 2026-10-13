@@ -40,7 +40,7 @@ pub mod error;
 pub mod frontier;
 mod wire;
 
-pub use batch::{Batch, Batcher, Event, Start};
+pub use batch::{Batch, BatchError, Batcher, Event, Start};
 pub use decode::{Change, Datum, Decoder, Envelope, Message, Row, Update};
-pub use error::ProtocolError;
+pub use error::{ProtocolError, TimestampTooLarge};
 pub use frontier::Frontier;

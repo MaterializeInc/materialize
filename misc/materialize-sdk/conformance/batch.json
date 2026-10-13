@@ -295,6 +295,628 @@
         "up_to": "15"
       },
       "expect": {"outputs": [[], {"error": "protocol"}], "finished": false}
+    },
+    {
+      "name": "the end of a bounded stream releases up to UP TO without a final progress row (SQL-528)",
+      "input": {
+        "start": {"kind": "resume", "frontier": "10"},
+        "steps": [
+          {"message": "progress", "frontier": "9"},
+          {"message": "update", "timestamp": "15", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "progress", "frontier": "16"},
+          {"message": "update", "timestamp": "19", "op": "diff", "row": ["b"], "diff": "1"},
+          "finish"
+        ],
+        "up_to": "20"
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": "10",
+              "upper": "16",
+              "snapshot": false,
+              "updates": [{"timestamp": "15", "op": "diff", "row": ["a"], "diff": "1"}]
+            }
+          ],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": "16",
+              "upper": "20",
+              "snapshot": false,
+              "updates": [{"timestamp": "19", "op": "diff", "row": ["b"], "diff": "1"}]
+            }
+          ]
+        ],
+        "finished": true
+      }
+    },
+    {
+      "name": "the end of an unbounded stream releases every update",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "13", "op": "diff", "row": ["b"], "diff": "1"},
+          "finish"
+        ]
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": null,
+              "upper": "14",
+              "snapshot": true,
+              "updates": [
+                {"timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+                {"timestamp": "13", "op": "diff", "row": ["b"], "diff": "1"}
+              ]
+            }
+          ]
+        ],
+        "finished": true
+      }
+    },
+    {
+      "name": "the end of an unbounded stream closes the latest progress row's timestamp too",
+      "input": {
+        "start": {"kind": "resume", "frontier": "10"},
+        "steps": [{"message": "progress", "frontier": "9"}, {"message": "progress", "frontier": "12"}, "finish"]
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [{"event": "batch", "lower": "10", "upper": "12", "snapshot": false, "updates": []}],
+          [{"event": "batch", "lower": "12", "upper": "13", "snapshot": false, "updates": []}]
+        ],
+        "finished": true
+      }
+    },
+    {
+      "name": "a constant query completes past the largest timestamp",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "18446744073709551615"},
+          {"message": "update", "timestamp": "18446744073709551615", "op": "diff", "row": ["a"], "diff": "1"},
+          "finish"
+        ]
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": null,
+              "upper": "18446744073709551616",
+              "snapshot": true,
+              "updates": [{"timestamp": "18446744073709551615", "op": "diff", "row": ["a"], "diff": "1"}]
+            }
+          ]
+        ],
+        "finished": true
+      }
+    },
+    {
+      "name": "a constant query with an earlier AS OF completes past the largest timestamp",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "42"},
+          {"message": "update", "timestamp": "18446744073709551615", "op": "diff", "row": ["a"], "diff": "1"},
+          "finish"
+        ]
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": null,
+              "upper": "18446744073709551616",
+              "snapshot": true,
+              "updates": [{"timestamp": "18446744073709551615", "op": "diff", "row": ["a"], "diff": "1"}]
+            }
+          ]
+        ],
+        "finished": true
+      }
+    },
+    {
+      "name": "an empty constant query completes with an empty snapshot",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [{"message": "progress", "frontier": "18446744073709551615"}, "finish"]
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": null,
+              "upper": "18446744073709551616",
+              "snapshot": true,
+              "updates": []
+            }
+          ]
+        ],
+        "finished": true
+      }
+    },
+    {
+      "name": "a stream that ends before any progress row is refused",
+      "input": {"start": {"kind": "snapshot"}, "steps": ["finish"]},
+      "expect": {"outputs": [{"error": "protocol"}], "finished": false}
+    },
+    {
+      "name": "UP TO at the AS OF ends with nothing to release",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [{"message": "progress", "frontier": "10"}, "finish"],
+        "up_to": "10"
+      },
+      "expect": {"outputs": [[], []], "finished": true}
+    },
+    {
+      "name": "the end after an early release continues from it",
+      "input": {
+        "start": {"kind": "resume", "frontier": "10"},
+        "steps": [
+          {"message": "progress", "frontier": "9"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "11", "op": "diff", "row": ["b"], "diff": "1"},
+          {"message": "update", "timestamp": "12", "op": "diff", "row": ["c"], "diff": "1"},
+          "finish"
+        ],
+        "up_to": "20",
+        "max_pending_bytes": "178"
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": "10",
+              "upper": "12",
+              "snapshot": false,
+              "updates": [
+                {"timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+                {"timestamp": "11", "op": "diff", "row": ["b"], "diff": "1"}
+              ]
+            }
+          ],
+          [
+            {
+              "event": "batch",
+              "lower": "12",
+              "upper": "20",
+              "snapshot": false,
+              "updates": [{"timestamp": "12", "op": "diff", "row": ["c"], "diff": "1"}]
+            }
+          ]
+        ],
+        "finished": true
+      }
+    },
+    {
+      "name": "the memory limit releases complete timestamps early",
+      "input": {
+        "start": {"kind": "resume", "frontier": "10"},
+        "steps": [
+          {"message": "progress", "frontier": "9"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "11", "op": "diff", "row": ["b"], "diff": "1"},
+          {"message": "update", "timestamp": "12", "op": "diff", "row": ["c"], "diff": "1"},
+          {"message": "progress", "frontier": "13"}
+        ],
+        "max_pending_bytes": "178"
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": "10",
+              "upper": "12",
+              "snapshot": false,
+              "updates": [
+                {"timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+                {"timestamp": "11", "op": "diff", "row": ["b"], "diff": "1"}
+              ]
+            }
+          ],
+          [
+            {
+              "event": "batch",
+              "lower": "12",
+              "upper": "13",
+              "snapshot": false,
+              "updates": [{"timestamp": "12", "op": "diff", "row": ["c"], "diff": "1"}]
+            }
+          ]
+        ],
+        "finished": false
+      }
+    },
+    {
+      "name": "the memory limit charges updates without text",
+      "input": {
+        "start": {"kind": "resume", "frontier": "10"},
+        "steps": [
+          {"message": "progress", "frontier": "9"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": [null], "diff": "1"},
+          {"message": "update", "timestamp": "11", "op": "diff", "row": [null], "diff": "1"}
+        ],
+        "max_pending_bytes": "1"
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": "10",
+              "upper": "11",
+              "snapshot": false,
+              "updates": [{"timestamp": "10", "op": "diff", "row": [null], "diff": "1"}]
+            }
+          ]
+        ],
+        "finished": false
+      }
+    },
+    {
+      "name": "the memory limit releases the snapshot in chunks",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["b"], "diff": "1"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["c"], "diff": "1"},
+          {"message": "progress", "frontier": "11"}
+        ],
+        "max_pending_bytes": "89"
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [
+            {
+              "event": "snapshot_chunk",
+              "updates": [
+                {"timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+                {"timestamp": "10", "op": "diff", "row": ["b"], "diff": "1"}
+              ]
+            }
+          ],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": null,
+              "upper": "11",
+              "snapshot": true,
+              "updates": [{"timestamp": "10", "op": "diff", "row": ["c"], "diff": "1"}]
+            }
+          ]
+        ],
+        "finished": false
+      }
+    },
+    {
+      "name": "a chunked snapshot completes with an early release at a later timestamp",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["b"], "diff": "1"},
+          {"message": "update", "timestamp": "12", "op": "diff", "row": ["c"], "diff": "1"},
+          {"message": "update", "timestamp": "13", "op": "diff", "row": ["d"], "diff": "1"}
+        ],
+        "max_pending_bytes": "89"
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [
+            {
+              "event": "snapshot_chunk",
+              "updates": [
+                {"timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+                {"timestamp": "10", "op": "diff", "row": ["b"], "diff": "1"}
+              ]
+            }
+          ],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": null,
+              "upper": "13",
+              "snapshot": true,
+              "updates": [{"timestamp": "12", "op": "diff", "row": ["c"], "diff": "1"}]
+            }
+          ]
+        ],
+        "finished": false
+      }
+    },
+    {
+      "name": "a chunked snapshot completes at the end of the stream",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["b"], "diff": "1"},
+          "finish"
+        ],
+        "max_pending_bytes": "89"
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [
+            {
+              "event": "snapshot_chunk",
+              "updates": [
+                {"timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+                {"timestamp": "10", "op": "diff", "row": ["b"], "diff": "1"}
+              ]
+            }
+          ],
+          [{"event": "batch", "lower": null, "upper": "11", "snapshot": true, "updates": []}]
+        ],
+        "finished": true
+      }
+    },
+    {
+      "name": "the memory limit never splits a timestamp after the snapshot",
+      "input": {
+        "start": {"kind": "resume", "frontier": "10"},
+        "steps": [
+          {"message": "progress", "frontier": "9"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["b"], "diff": "1"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["c"], "diff": "1"},
+          {"message": "progress", "frontier": "11"}
+        ],
+        "max_pending_bytes": "1"
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": "10",
+              "upper": "11",
+              "snapshot": false,
+              "updates": [
+                {"timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+                {"timestamp": "10", "op": "diff", "row": ["b"], "diff": "1"},
+                {"timestamp": "10", "op": "diff", "row": ["c"], "diff": "1"}
+              ]
+            }
+          ]
+        ],
+        "finished": false
+      }
+    },
+    {
+      "name": "the memory limit does not chunk a timestamp after an empty snapshot",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "update", "timestamp": "11", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "11", "op": "diff", "row": ["b"], "diff": "1"},
+          {"message": "progress", "frontier": "12"}
+        ],
+        "max_pending_bytes": "1"
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": null,
+              "upper": "12",
+              "snapshot": true,
+              "updates": [
+                {"timestamp": "11", "op": "diff", "row": ["a"], "diff": "1"},
+                {"timestamp": "11", "op": "diff", "row": ["b"], "diff": "1"}
+              ]
+            }
+          ]
+        ],
+        "finished": false
+      }
+    },
+    {
+      "name": "one timestamp over the hard limit fails the stream when it passes",
+      "input": {
+        "start": {"kind": "resume", "frontier": "10"},
+        "steps": [
+          {"message": "progress", "frontier": "9"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["b"], "diff": "1"},
+          {"message": "progress", "frontier": "11"}
+        ],
+        "max_timestamp_bytes": "100"
+      },
+      "expect": {
+        "outputs": [[], [], {"error": "timestamp_too_large"}, {"error": "timestamp_too_large"}],
+        "finished": false
+      }
+    },
+    {
+      "name": "the hard limit counts one timestamp, not every pending update",
+      "input": {
+        "start": {"kind": "resume", "frontier": "10"},
+        "steps": [
+          {"message": "progress", "frontier": "9"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "11", "op": "diff", "row": ["b"], "diff": "1"},
+          {"message": "update", "timestamp": "12", "op": "diff", "row": ["c"], "diff": "1"},
+          {"message": "progress", "frontier": "13"}
+        ],
+        "max_timestamp_bytes": "100"
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": "10",
+              "upper": "13",
+              "snapshot": false,
+              "updates": [
+                {"timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+                {"timestamp": "11", "op": "diff", "row": ["b"], "diff": "1"},
+                {"timestamp": "12", "op": "diff", "row": ["c"], "diff": "1"}
+              ]
+            }
+          ]
+        ],
+        "finished": false
+      }
+    },
+    {
+      "name": "a snapshot stays below the hard limit when a chunk plus one update fits",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["b"], "diff": "1"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["c"], "diff": "1"},
+          {"message": "progress", "frontier": "11"}
+        ],
+        "max_pending_bytes": "100",
+        "max_timestamp_bytes": "200"
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [
+            {
+              "event": "snapshot_chunk",
+              "updates": [
+                {"timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+                {"timestamp": "10", "op": "diff", "row": ["b"], "diff": "1"}
+              ]
+            }
+          ],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": null,
+              "upper": "11",
+              "snapshot": true,
+              "updates": [{"timestamp": "10", "op": "diff", "row": ["c"], "diff": "1"}]
+            }
+          ]
+        ],
+        "finished": false
+      }
+    },
+    {
+      "name": "one update over the hard limit fails even when chunks would release it",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"}
+        ],
+        "max_pending_bytes": "1",
+        "max_timestamp_bytes": "50"
+      },
+      "expect": {"outputs": [[], {"error": "timestamp_too_large"}], "finished": false}
+    },
+    {
+      "name": "a snapshot without a chunk limit counts against the hard limit as one timestamp",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["b"], "diff": "1"}
+        ],
+        "max_timestamp_bytes": "100"
+      },
+      "expect": {"outputs": [[], [], {"error": "timestamp_too_large"}], "finished": false}
+    },
+    {
+      "name": "an early release keeps counting the timestamp it holds back",
+      "input": {
+        "start": {"kind": "resume", "frontier": "10"},
+        "steps": [
+          {"message": "progress", "frontier": "9"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "11", "op": "diff", "row": ["b"], "diff": "1"},
+          {"message": "update", "timestamp": "11", "op": "diff", "row": ["c"], "diff": "1"}
+        ],
+        "max_pending_bytes": "100",
+        "max_timestamp_bytes": "150"
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": "10",
+              "upper": "11",
+              "snapshot": false,
+              "updates": [{"timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"}]
+            }
+          ],
+          {"error": "timestamp_too_large"}
+        ],
+        "finished": false
+      }
     }
   ]
 }

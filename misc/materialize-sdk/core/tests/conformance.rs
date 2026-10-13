@@ -20,8 +20,9 @@
 use std::fs;
 use std::path::Path;
 
-use materialize_sdk_core::batch::{Batcher, Start};
-use materialize_sdk_core::decode::{Decoder, Envelope, Message, Row};
+use materialize_sdk_core::Frontier;
+use materialize_sdk_core::batch::{BatchError, Batcher, Event, Start};
+use materialize_sdk_core::decode::{Decoder, Envelope, Message, Row, Update};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -83,6 +84,7 @@ fn run(function: &str, input: Value) -> Value {
     match function {
         "decode" => decode(input),
         "batch" => batch(input),
+        "latest_by_key" => latest_by_key(input),
         other => panic!("unknown function {other:?}"),
     }
 }
@@ -140,33 +142,79 @@ fn decode(value: Value) -> Value {
     json!({ "messages": results })
 }
 
-/// Feeds messages to a batcher.
+/// Feeds steps to a batcher. A step is a message, or `"finish"`.
 fn batch(value: Value) -> Value {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Input {
         start: Start,
         up_to: Option<String>,
+        max_pending_bytes: Option<String>,
+        max_timestamp_bytes: Option<String>,
         steps: Vec<Value>,
     }
     let Input {
         start,
         up_to,
+        max_pending_bytes,
+        max_timestamp_bytes,
         steps,
     } = input(value);
     let mut batcher = Batcher::new(start, up_to.as_deref().map(u64_of));
+    if let Some(limit) = max_pending_bytes {
+        batcher = batcher.with_max_pending_bytes(canonical(&limit));
+    }
+    if let Some(limit) = max_timestamp_bytes {
+        batcher = batcher.with_max_timestamp_bytes(canonical(&limit));
+    }
     let outputs: Vec<Value> = steps
         .into_iter()
         .map(|step| {
-            let message: Message = serde_json::from_value(step.clone()).unwrap();
-            // Reading the step back refuses unknown keys and other spellings.
-            assert_eq!(json!(message), step, "a step in the core's JSON form");
-            let result = batcher.push(message);
+            let result = if step == "finish" {
+                batcher.finish().map(|batch| batch.map(Event::Batch))
+            } else {
+                let message: Message = serde_json::from_value(step.clone()).unwrap();
+                // Reading the step back refuses unknown keys and other spellings.
+                assert_eq!(json!(message), step, "a step in the core's JSON form");
+                batcher.push(message)
+            };
             match result {
                 Ok(event) => json!(event.into_iter().collect::<Vec<_>>()),
-                Err(_) => error("protocol"),
+                Err(BatchError::Protocol(_)) => error("protocol"),
+                Err(BatchError::TimestampTooLarge(_)) => error("timestamp_too_large"),
             }
         })
         .collect();
     json!({ "outputs": outputs, "finished": batcher.is_finished() })
+}
+
+/// Releases `updates`, at timestamps of one or more and in order, as one batch
+/// and keeps the latest change per key.
+fn latest_by_key(value: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        updates: Vec<Value>,
+    }
+    let Input { updates } = input(value);
+    let updates: Vec<Update> = updates
+        .into_iter()
+        .map(|value| {
+            let update: Update = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(json!(update), value, "an update in the core's JSON form");
+            update
+        })
+        .collect();
+    let mut batcher = Batcher::new(
+        Start::Resume {
+            frontier: Frontier::new(1).unwrap(),
+        },
+        None,
+    );
+    batcher.push(Message::Progress { frontier: 0 }).unwrap();
+    for update in updates {
+        batcher.push(Message::Update(update)).unwrap();
+    }
+    let batch = batcher.finish().unwrap().unwrap();
+    json!(batch.into_latest_by_key())
 }
