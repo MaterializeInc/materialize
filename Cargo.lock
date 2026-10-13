@@ -9447,9 +9447,14 @@ dependencies = [
 name = "mz-wasm-udf"
 version = "0.1.0"
 dependencies = [
+ "arrow 58.4.0",
+ "arrow-ipc",
+ "chrono",
+ "flatbuffers",
  "itertools 0.15.0",
  "mz-expr",
  "mz-ore",
+ "mz-repr",
  "mz-wasm-udf-abi",
  "stacker",
  "thiserror 2.0.21",

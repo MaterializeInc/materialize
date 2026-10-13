@@ -10,9 +10,14 @@ publish = false
 workspace = true
 
 [dependencies]
+arrow.workspace = true
+arrow-ipc.workspace = true
+chrono.workspace = true
+flatbuffers.workspace = true
 itertools.workspace = true
 mz-expr = { path = "../expr" }
-mz-ore = { path = "../ore", features = ["process", "tracing"] }
+mz-ore = { path = "../ore", features = ["panic", "process", "tracing"] }
+mz-repr = { path = "../repr" }
 mz-wasm-udf-abi = { path = "../wasm-udf-abi" }
 stacker.workspace = true
 thiserror.workspace = true
