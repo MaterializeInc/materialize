@@ -1,0 +1,141 @@
+{
+  "function": "classify",
+  "cases": [
+    {
+      "name": "a failure without a server error is transient",
+      "input": {"sqlstate": null, "message": "connection closed", "phase": "streaming"},
+      "expect": {"action": "kind", "kind": "transient"}
+    },
+    {
+      "name": "connection exceptions are transient",
+      "input": {"sqlstate": "08006", "message": "connection failure", "phase": "streaming"},
+      "expect": {"action": "kind", "kind": "transient"}
+    },
+    {
+      "name": "a generic connection exception is transient",
+      "input": {"sqlstate": "08000", "message": "connection exception", "phase": "streaming"},
+      "expect": {"action": "kind", "kind": "transient"}
+    },
+    {
+      "name": "a client that cannot establish the connection is transient",
+      "input": {"sqlstate": "08001", "message": "could not connect", "phase": "starting"},
+      "expect": {"action": "kind", "kind": "transient"}
+    },
+    {
+      "name": "a connection that does not exist is transient",
+      "input": {"sqlstate": "08003", "message": "connection does not exist", "phase": "streaming"},
+      "expect": {"action": "kind", "kind": "transient"}
+    },
+    {
+      "name": "balancerd refusing connections during a restart is transient",
+      "input": {"sqlstate": "08004", "message": "upstream server not available", "phase": "starting"},
+      "expect": {"action": "kind", "kind": "transient"}
+    },
+    {
+      "name": "an idle-in-transaction timeout is transient",
+      "input": {
+        "sqlstate": "25P03",
+        "message": "terminating connection due to idle-in-transaction timeout",
+        "phase": "streaming"
+      },
+      "expect": {"action": "kind", "kind": "transient"}
+    },
+    {
+      "name": "a protocol violation is fatal",
+      "input": {"sqlstate": "08P01", "message": "invalid frontend message", "phase": "streaming"},
+      "expect": {"action": "kind", "kind": "fatal"}
+    },
+    {
+      "name": "refused credentials",
+      "input": {"sqlstate": "28000", "message": "authentication expired", "phase": "streaming"},
+      "expect": {"action": "kind", "kind": "credentials_expired"}
+    },
+    {
+      "name": "a wrong password",
+      "input": {"sqlstate": "28P01", "message": "invalid password", "phase": "starting"},
+      "expect": {"action": "kind", "kind": "credentials_expired"}
+    },
+    {
+      "name": "a cancel or statement timeout",
+      "input": {"sqlstate": "57014", "message": "canceling statement due to user request", "phase": "streaming"},
+      "expect": {"action": "kind", "kind": "canceled"}
+    },
+    {
+      "name": "a client that fell behind",
+      "input": {
+        "sqlstate": "53200",
+        "message": "SUBSCRIBE fell behind: the client did not read results fast enough, so its backlog reached 60.2 KiB, exceeding the 9.8 KiB budget",
+        "phase": "streaming"
+      },
+      "expect": {"action": "kind", "kind": "fell_behind"}
+    },
+    {
+      "name": "history loss needs an index check",
+      "input": {"sqlstate": "22000", "message": "could not find a valid timestamp for the query", "phase": "starting"},
+      "expect": {"action": "check_index"}
+    },
+    {
+      "name": "bounds the server refuses share the SQLSTATE of history loss and are fatal",
+      "input": {
+        "sqlstate": "22000",
+        "message": "subscription lower bound (`AS OF`) is greater than its upper bound (`UP TO`): 1791824664200 > 1791824663200",
+        "phase": "starting"
+      },
+      "expect": {"action": "kind", "kind": "fatal"}
+    },
+    {
+      "name": "a result over max_result_size, while starting",
+      "input": {"sqlstate": "XX000", "message": "total result exceeds max size of 1073.7 MB", "phase": "starting"},
+      "expect": {"action": "kind", "kind": "result_too_large"}
+    },
+    {
+      "name": "a result over max_result_size, while streaming",
+      "input": {"sqlstate": "XX000", "message": "total result exceeds max size of 1073.7 MB", "phase": "streaming"},
+      "expect": {"action": "kind", "kind": "result_too_large"}
+    },
+    {
+      "name": "a replica's result over max_result_size",
+      "input": {"sqlstate": "XX000", "message": "result exceeds max size of 1.0 MiB", "phase": "streaming"},
+      "expect": {"action": "kind", "kind": "result_too_large"}
+    },
+    {
+      "name": "a dropped object or cluster needs an object check",
+      "input": {"sqlstate": "42704", "message": "relation 'materialize.public.gone' was dropped", "phase": "streaming"},
+      "expect": {"action": "check_object", "otherwise": "object_dropped"}
+    },
+    {
+      "name": "a changed plan at the first FETCH needs an object check",
+      "input": {"sqlstate": "0A000", "message": "cached plan must not change result type", "phase": "starting"},
+      "expect": {"action": "check_object", "otherwise": "schema_mismatch"}
+    },
+    {
+      "name": "a cluster without replicas is transient, as while it is scaled down",
+      "input": {
+        "sqlstate": "0A000",
+        "message": "CLUSTER \"c\" has no replicas available to service request",
+        "phase": "starting"
+      },
+      "expect": {"action": "kind", "kind": "transient"}
+    },
+    {
+      "name": "an unsupported feature while streaming is fatal",
+      "input": {"sqlstate": "0A000", "message": "cached plan must not change result type", "phase": "streaming"},
+      "expect": {"action": "kind", "kind": "fatal"}
+    },
+    {
+      "name": "an internal error while starting needs an object check",
+      "input": {"sqlstate": "XX000", "message": "invalid id u12", "phase": "starting"},
+      "expect": {"action": "check_object", "otherwise": "fatal"}
+    },
+    {
+      "name": "an internal error while streaming poisons the stream",
+      "input": {"sqlstate": "XX000", "message": "division by zero", "phase": "streaming"},
+      "expect": {"action": "kind", "kind": "stream_poisoned"}
+    },
+    {
+      "name": "a syntax error is fatal",
+      "input": {"sqlstate": "42601", "message": "syntax error", "phase": "starting"},
+      "expect": {"action": "kind", "kind": "fatal"}
+    }
+  ]
+}

@@ -35,14 +35,21 @@
 )]
 
 pub mod batch;
+pub mod classify;
 pub mod decode;
 pub mod error;
 pub mod frontier;
+pub mod identity;
 pub mod statement;
 mod wire;
 
 pub use batch::{Batch, BatchError, Batcher, Event, Start};
+pub use classify::{
+    Classification, ErrorKind, ObjectOutcome, Phase, classify, resolve_index_check,
+    resolve_object_check,
+};
 pub use decode::{Change, Datum, Decoder, Envelope, Message, Row, Update};
 pub use error::{ProtocolError, TimestampTooLarge, UsageError};
 pub use frontier::Frontier;
+pub use identity::{Column, Fingerprint, IdentityChange, compare};
 pub use statement::{ObjectRef, Subscribe, Target};

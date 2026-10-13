@@ -1,0 +1,189 @@
+{
+  "function": "compare_identity",
+  "cases": [
+    {
+      "name": "the same object",
+      "input": {
+        "stored": {
+          "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+          "shard": "s1",
+          "envelope": {"kind": "upsert", "key": ["id"]},
+          "columns": [
+            {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+            {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+          ]
+        },
+        "current": {
+          "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+          "shard": "s1",
+          "envelope": {"kind": "upsert", "key": ["id"]},
+          "columns": [
+            {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+            {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+          ]
+        }
+      },
+      "expect": "unchanged"
+    },
+    {
+      "name": "a name that resolves to nothing",
+      "input": {
+        "stored": {
+          "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+          "shard": "s1",
+          "envelope": {"kind": "upsert", "key": ["id"]},
+          "columns": [
+            {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+            {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+          ]
+        },
+        "current": null
+      },
+      "expect": "dropped"
+    },
+    {
+      "name": "a replacement keeps the shard and changes the id",
+      "input": {
+        "stored": {
+          "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+          "shard": "s1",
+          "envelope": {"kind": "upsert", "key": ["id"]},
+          "columns": [
+            {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+            {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+          ]
+        },
+        "current": {
+          "object": {"id": "u8", "database": "db", "schema": "public", "name": "orders"},
+          "shard": "s1",
+          "envelope": {"kind": "upsert", "key": ["id"]},
+          "columns": [
+            {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+            {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+          ]
+        }
+      },
+      "expect": "replaced"
+    },
+    {
+      "name": "a swap changes the shard",
+      "input": {
+        "stored": {
+          "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+          "shard": "s1",
+          "envelope": {"kind": "upsert", "key": ["id"]},
+          "columns": [
+            {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+            {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+          ]
+        },
+        "current": {
+          "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+          "shard": "s2",
+          "envelope": {"kind": "upsert", "key": ["id"]},
+          "columns": [
+            {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+            {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+          ]
+        }
+      },
+      "expect": "swapped"
+    },
+    {
+      "name": "a swap to an object with another id is still a swap",
+      "input": {
+        "stored": {
+          "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+          "shard": "s1",
+          "envelope": {"kind": "upsert", "key": ["id"]},
+          "columns": [
+            {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+            {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+          ]
+        },
+        "current": {
+          "object": {"id": "u9", "database": "db", "schema": "public", "name": "orders"},
+          "shard": "s2",
+          "envelope": {"kind": "upsert", "key": ["id"]},
+          "columns": [
+            {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+            {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+          ]
+        }
+      },
+      "expect": "swapped"
+    },
+    {
+      "name": "a changed column type is a schema change, even with a new shard",
+      "input": {
+        "stored": {
+          "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+          "shard": "s1",
+          "envelope": {"kind": "upsert", "key": ["id"]},
+          "columns": [
+            {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+            {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+          ]
+        },
+        "current": {
+          "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+          "shard": "s2",
+          "envelope": {"kind": "upsert", "key": ["id"]},
+          "columns": [
+            {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+            {"name": "total", "type_oid": 1700, "type_mod": 655368, "nullable": true}
+          ]
+        }
+      },
+      "expect": "schema_changed"
+    },
+    {
+      "name": "a column that became nullable is a schema change",
+      "input": {
+        "stored": {
+          "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+          "shard": "s1",
+          "envelope": {"kind": "upsert", "key": ["id"]},
+          "columns": [
+            {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+            {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+          ]
+        },
+        "current": {
+          "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+          "shard": "s1",
+          "envelope": {"kind": "upsert", "key": ["id"]},
+          "columns": [
+            {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": true},
+            {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+          ]
+        }
+      },
+      "expect": "schema_changed"
+    },
+    {
+      "name": "a changed envelope is a schema change",
+      "input": {
+        "stored": {
+          "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+          "shard": "s1",
+          "envelope": {"kind": "upsert", "key": ["id"]},
+          "columns": [
+            {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+            {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+          ]
+        },
+        "current": {
+          "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+          "shard": "s1",
+          "envelope": {"kind": "diff"},
+          "columns": [
+            {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+            {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+          ]
+        }
+      },
+      "expect": "schema_changed"
+    }
+  ]
+}

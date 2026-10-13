@@ -23,7 +23,11 @@ use std::time::Duration;
 
 use materialize_sdk_core::Frontier;
 use materialize_sdk_core::batch::{BatchError, Batcher, Event, Start};
+use materialize_sdk_core::classify::{
+    ErrorKind, Phase, classify, resolve_index_check, resolve_object_check,
+};
 use materialize_sdk_core::decode::{Decoder, Envelope, Message, Row, Update};
+use materialize_sdk_core::identity::{Fingerprint, IdentityChange, compare};
 use materialize_sdk_core::statement::{Subscribe, fetch_sql};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -89,6 +93,10 @@ fn run(function: &str, input: Value) -> Value {
         "latest_by_key" => latest_by_key(input),
         "subscribe_sql" => subscribe_sql(input),
         "fetch_sql" => fetch(input),
+        "classify" => classify_error(input),
+        "compare_identity" => compare_identity(input),
+        "resolve_object_check" => resolve(input),
+        "resolve_index_check" => resolve_index(input),
         other => panic!("unknown function {other:?}"),
     }
 }
@@ -273,4 +281,52 @@ fn fetch(value: Value) -> Value {
         Ok(sql) => json!({ "sql": sql }),
         Err(_) => error("usage"),
     }
+}
+
+fn classify_error(value: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        sqlstate: Option<String>,
+        message: String,
+        phase: Phase,
+    }
+    let Input {
+        sqlstate,
+        message,
+        phase,
+    } = input(value);
+    json!(classify(sqlstate.as_deref(), &message, phase))
+}
+
+fn compare_identity(value: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        stored: Fingerprint,
+        current: Option<Fingerprint>,
+    }
+    let Input { stored, current } = input(value);
+    json!(compare(&stored, current.as_ref()))
+}
+
+fn resolve(value: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        otherwise: ErrorKind,
+        change: IdentityChange,
+    }
+    let Input { otherwise, change } = input(value);
+    json!(resolve_object_check(otherwise, change))
+}
+
+fn resolve_index(value: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        indexes: Vec<String>,
+    }
+    let Input { indexes } = input(value);
+    json!({ "kind": resolve_index_check(&indexes) })
 }
