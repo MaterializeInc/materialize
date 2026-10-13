@@ -18,6 +18,7 @@ use crate::{MirRelationExpr, MirScalarExpr};
 
 pub mod batch;
 pub mod columns;
+mod wasm;
 
 /// A compound operator that can be applied row-by-row.
 ///
@@ -1580,6 +1581,7 @@ pub mod util {
 pub mod plan {
     use std::iter;
 
+    use itertools::Itertools;
     use mz_repr::{Datum, Diff, Row, RowArena};
     use serde::{Deserialize, Serialize};
 
@@ -1735,6 +1737,24 @@ pub mod plan {
             I: BatchInput<'a> + ?Sized,
             F: FnMut(usize, Result<bool, EvalError>, &[Datum<'a>]),
         {
+            // Calls into WebAssembly are batched across rows, since each call
+            // has a fixed cost. Replaying their results needs every row's
+            // datums at once.
+            if self.calls_wasm() {
+                let mut rows: Vec<Vec<Datum<'a>>> = (0..input.len())
+                    .map(|index| {
+                        let mut datums = Vec::new();
+                        input.read(index, &mut datums);
+                        datums
+                    })
+                    .collect();
+                let mut outcomes = Vec::with_capacity(rows.len());
+                super::wasm::evaluate_batch(&self.mfp, &mut rows, arena, &mut outcomes);
+                for (index, (datums, outcome)) in rows.iter().zip_eq(outcomes).enumerate() {
+                    each(index, outcome, datums);
+                }
+                return;
+            }
             each = match super::columns::evaluate(&self.mfp, input, each) {
                 Ok(()) => return,
                 Err(each) => each,
@@ -1745,6 +1765,13 @@ pub mod plan {
                 let outcome = self.evaluate_inner(&mut datums, arena);
                 each(index, outcome, &datums);
             }
+        }
+
+        /// Whether the plan calls a WebAssembly function. Such a plan should
+        /// be evaluated in batches wherever possible, since one guest call per
+        /// row is expensive.
+        pub fn calls_wasm(&self) -> bool {
+            super::wasm::calls_wasm(&self.mfp)
         }
 
         /// Returns true if evaluation could introduce an error on non-error inputs.
@@ -1979,6 +2006,13 @@ pub mod plan {
             F: FnMut(usize, Result<bool, EvalError>, &[Datum<'a>]),
         {
             self.mfp.evaluate_batch(input, arena, each)
+        }
+
+        /// Whether the plan's maps or filters call a WebAssembly function. See
+        /// [`SafeMfpPlan::calls_wasm`]. Temporal bounds are evaluated per row
+        /// regardless.
+        pub fn calls_wasm(&self) -> bool {
+            self.mfp.calls_wasm()
         }
 
         /// Completes one row of a batch from its outcome in

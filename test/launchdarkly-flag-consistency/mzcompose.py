@@ -464,6 +464,8 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     wallclock_global_lag_histogram_retention_interval
     wallclock_lag_histogram_period_interval
     wallclock_lag_history_retention_interval
+    wasm_udf_batch_max_bytes
+    wasm_udf_batch_max_rows
     webhooks_secrets_caching_ttl_secs
     with_0dt_caught_up_check_allowed_lag
     with_0dt_caught_up_check_cutoff

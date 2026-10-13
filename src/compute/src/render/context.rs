@@ -927,6 +927,11 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     }
 }
 
+/// The number of rows to evaluate an MFP that calls WebAssembly functions over
+/// at once, when batched MFP evaluation is otherwise off. The invoker splits
+/// each guest call further by its own row and byte limits.
+const WASM_MFP_BATCH_ROWS: usize = 16 * 1024;
+
 /// The number of rows to evaluate MFPs over at once, or `None` to evaluate
 /// them one row at a time.
 pub(crate) fn mfp_batch_rows(config_set: &ConfigSet) -> Option<usize> {
@@ -1056,6 +1061,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             (plan, max_demand)
         };
 
+        // An MFP that calls WebAssembly functions is always batched.
+        let mfp_batch_rows =
+            mfp_batch_rows.or_else(|| mfp_plan.calls_wasm().then_some(WASM_MFP_BATCH_ROWS));
         // Seeking to a row needs the fused arrangement path below, which is
         // per row.
         if let Some(batch_rows) = mfp_batch_rows

@@ -580,6 +580,9 @@ where
     let name = name.to_owned();
     // Extract the MFP if it exists; leave behind an identity MFP in that case.
     let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
+    let calls_wasm = map_filter_project
+        .as_ref()
+        .is_some_and(|mfp| mfp.calls_wasm());
 
     builder.build(move |_caps| {
         // Acquire an activator to reschedule the operator when it has unfinished work.
@@ -605,7 +608,8 @@ where
 
             // Get dyncfg values once per schedule to amortize the cost of loading the atomics.
             let yield_fuel = cfg.storage_source_decode_fuel();
-            let batched_mfp = STORAGE_SOURCE_BATCHED_MFP.get(&cfg);
+            // An MFP that calls WebAssembly functions is always batched.
+            let batched_mfp = calls_wasm || STORAGE_SOURCE_BATCHED_MFP.get(&cfg);
             let mut work = 0;
             let mut ok_output = ok_output.activate();
             let mut err_output = err_output.activate();

@@ -758,6 +758,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "copy_to_s3_multipart_part_size_bytes",
     "enable_replica_targeted_materialized_views",
     "compute_mv_sink_advance_persist_frontiers",
+    "wasm_udf_batch_max_rows",
+    "wasm_udf_batch_max_bytes",
     "compute_prometheus_introspection_scrape_interval",
     "enable_compute_replica_expiration",
     "compute_logical_backpressure_max_retained_capabilities",
