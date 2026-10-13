@@ -331,7 +331,8 @@ ignore = [
     # `launchdarkly-server-sdk` requires `lru ^0.16.3` in its latest release.
     "RUSTSEC-2026-0253",
     # `unsafe-libyaml` is unmaintained. Pulled in by `serde_yaml`, which
-    # `kube-client` depends on. No safe upgrade is available.
+    # `mz-debug` and `mz-metrics-catalog` use directly and `kube-client` 3.x
+    # requires. kube-client 4 uses `serde-saphyr` instead.
     "RUSTSEC-2024-0449",
 ]
 
