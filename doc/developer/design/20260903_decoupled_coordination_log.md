@@ -21,6 +21,9 @@ Use the dedicated x86_64 scratch worker for focused builds, tests and
 interactive debugging. The parallel-check workflow requires SQL Server, which
 does not run natively on ARM. Keep the 16-vCPU, 64-GiB, 500-GiB configuration,
 one worker and the default 36-hour lifetime.
+Current worker: `i-05170dbf0b3194844` (`m8i.4xlarge`), expiring
+2026-10-14 22:03:16 UTC. Scratch evidence is copied off-worker under
+`~/.local/share/aj/m2-evidence/scratch/`.
 Launch with `bin/scratch create decoupled-coordination
 --git-rev <commit>`, then reuse that worker and its caches. The shared editing VM
 must not host heavy workloads. CI remains the broad integration check, not the
@@ -84,6 +87,14 @@ contention. Own-grant accounting, execution authority, sampled outgoing publicat
 and publication barriers remain binding. Config candidates with shared precommit
 effects are excluded from immediate reconstruction.
 
+The adapter carries its operation-scoped oracle allocation through catalog
+admission instead of allocating again after candidate construction. Lower-bound-only
+writers retain durable allocation. Preserve future-jump checks and completion of
+the actual commit timestamp before acknowledgement. Verify the reduced
+refresh-to-commit window in the existing workloads. Oracle retries include
+concurrent-update serialization failures, but successful query-await latency and
+other coordinator waits still need separate attribution.
+
 Bounded immediate retry work is permitted within the existing transaction path.
 Avoid treating a single extra peer-grant-only attempt as the complete repair.
 Backoff leaves the coordinator available. The four staged commit paths release
@@ -102,10 +113,10 @@ and completion are excluded. Catalog upper movement alone proves none of these.
 SLT/Zippy timeouts remain unresolved. Do not assume a shared cause with the MV
 contention without statement-correlated evidence. Detailed captures and verification
 belong in the PR.
-Protected storage bootstrap must preserve persisted output history independently
+Protected storage bootstrap preserves persisted output history independently
 of writer recovery inputs. Retain same-shard alias accounting and recovery checks,
-but do not impose legacy cross-shard since joins or dependency holds. Verify the
-lagging export-to-sink recovery case in the existing persistence workflow.
+without legacy cross-shard since joins or dependency holds. The existing persistence
+workflow verifies lagging export-to-sink recovery across repeated restarts.
 Kafka RTR's intermittent explicit CREATE SOURCE planning-revision loss is unresolved.
 Protection publication overlaps purification but is not a proven invalidator.
 Temporary, fixture-enabled kind/count and revision diagnostics must correlate the

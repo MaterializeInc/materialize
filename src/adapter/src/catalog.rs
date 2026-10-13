@@ -157,7 +157,7 @@ impl Catalog {
         &mut self,
         catch_up: Option<&mut TransactionCatchUp>,
         storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
-        oracle_write_ts: Timestamp,
+        oracle_write_ts: impl Into<mz_catalog::durable::CatalogCommitTimestamp> + std::fmt::Debug,
         session: Option<&ConnMeta>,
         ops: Vec<Op>,
     ) -> Result<TransactionResult, AdapterError> {

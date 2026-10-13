@@ -88,6 +88,49 @@ pub struct BootstrapArgs {
 
 pub type Epoch = NonZeroI64;
 
+/// A catalog commit's lower bound and optional operation-scoped oracle allocation.
+///
+/// A plain timestamp is only a lower bound and requires a durable-layer allocation.
+/// A [`mz_timestamp_oracle::WriteTimestamp`] must come from the shared
+/// EpochMilliseconds oracle after this operation starts. Its allocation may be
+/// retained across this operation's frontier-only retries, but not cached for
+/// another operation. In particular, an oracle peek is not an allocation.
+#[derive(Clone, Copy, Debug)]
+pub struct CatalogCommitTimestamp {
+    lower_bound: Timestamp,
+    // At or below the lower bound, and unchanged by rebasing.
+    allocation: Option<Timestamp>,
+}
+
+impl CatalogCommitTimestamp {
+    pub fn lower_bound(self) -> Timestamp {
+        self.lower_bound
+    }
+
+    pub(crate) fn advance_to(mut self, lower_bound: Timestamp) -> Self {
+        self.lower_bound = self.lower_bound.max(lower_bound);
+        self
+    }
+}
+
+impl From<Timestamp> for CatalogCommitTimestamp {
+    fn from(lower_bound: Timestamp) -> Self {
+        Self {
+            lower_bound,
+            allocation: None,
+        }
+    }
+}
+
+impl From<mz_timestamp_oracle::WriteTimestamp> for CatalogCommitTimestamp {
+    fn from(allocated: mz_timestamp_oracle::WriteTimestamp) -> Self {
+        Self {
+            lower_bound: allocated.timestamp,
+            allocation: Some(allocated.timestamp),
+        }
+    }
+}
+
 /// The shared EpochMilliseconds oracle and clock used by a durable catalog writer.
 /// Every production writer supplies this before opening, including generation
 /// admission and independent replica publication.
@@ -432,8 +475,9 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     /// current catalog upper.
     ///
     /// Returns what the upper was directly after the transaction committed.
-    /// A production writer allocates through the shared oracle and acknowledges
-    /// only after oracle completion covers the actual durable timestamp. The
+    /// A production writer supplies an operation-scoped shared-oracle allocation
+    /// or obtains one in the durable layer. Acknowledgement waits until oracle
+    /// completion covers the actual durable timestamp. The
     /// future-timestamp bound is enforced before each durable attempt.
     ///
     /// Empty concurrent progress is retried. Concurrent content returns
@@ -443,7 +487,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     async fn commit_transaction(
         &mut self,
         txn_batch: TransactionBatch,
-        commit_ts: Timestamp,
+        commit_ts: CatalogCommitTimestamp,
     ) -> Result<Timestamp, CatalogError>;
 
     /// Advances the catalog upper to at least `new_upper`.

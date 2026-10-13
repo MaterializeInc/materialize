@@ -4075,7 +4075,7 @@ impl<'a> Transaction<'a> {
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn commit_internal(
         self,
-        commit_ts: mz_repr::Timestamp,
+        commit_ts: impl Into<crate::durable::CatalogCommitTimestamp> + std::fmt::Debug,
     ) -> Result<(&'a mut dyn DurableCatalogState, mz_repr::Timestamp), CatalogError> {
         self.ensure_committable()?;
         let (mut txn_batch, durable_catalog) = self.into_parts()?;
@@ -4149,7 +4149,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
 
         let upper = durable_catalog
-            .commit_transaction(txn_batch, commit_ts)
+            .commit_transaction(txn_batch, commit_ts.into())
             .await?;
         Ok((durable_catalog, upper))
     }
@@ -4188,12 +4188,15 @@ impl<'a> Transaction<'a> {
     /// The caller's timestamp is a lower bound. Empty progress and timestamp
     /// allocation can move the successful batch above it. The same update
     /// consumption and error contracts as [`Self::commit`] apply.
+    /// An operation-scoped oracle allocation can be supplied as a
+    /// [`crate::durable::CatalogCommitTimestamp`] to avoid allocating again.
     /// Read-only empty transactions return their synchronized prefix's upper.
     /// Savepoint commits return a local upper, not a durable certificate.
     pub async fn commit_with_upper(
         mut self,
-        commit_ts: mz_repr::Timestamp,
+        commit_ts: impl Into<crate::durable::CatalogCommitTimestamp> + std::fmt::Debug,
     ) -> Result<mz_repr::Timestamp, CatalogError> {
+        let commit_ts = commit_ts.into();
         self.ensure_committable()?;
         self.finalize_index_compaction_bounds();
         let op_updates = self.get_op_updates();
@@ -4217,7 +4220,7 @@ impl<'a> Transaction<'a> {
             durable_storage.is_read_only()
                 || updates
                     .iter()
-                    .all(|update| update.ts >= commit_ts && update.ts < upper),
+                    .all(|update| update.ts >= commit_ts.lower_bound() && update.ts < upper),
             "unconsumed updates existed before transaction commit: commit_ts={commit_ts:?}, upper={upper:?}, updates:{updates:?}"
         );
         Ok(upper)

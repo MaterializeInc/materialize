@@ -73,7 +73,7 @@ pub(super) struct CatalogTransactionState {
     _protection: Vec<crate::ReadHolds>,
     revision: u64,
     incarnation: Option<u64>,
-    initial_write_ts: Option<mz_repr::Timestamp>,
+    initial_write_ts: Option<mz_catalog::durable::CatalogCommitTimestamp>,
     rewritten_objects: Vec<String>,
     webhook_sources_to_restart: BTreeSet<CatalogItemId>,
     observer: Option<(
@@ -1361,10 +1361,14 @@ impl Coordinator {
                     (observer, baseline)
                 });
         let revision = self.catalog().transient_revision();
-        let rewrites = Box::pin(self.begin_written_plan_rewrites(conn_id, &ops, oracle_write_ts))
-            .wall_time()
-            .observe(phase_seconds.with_label_values(&["written_plan_preparation"]))
-            .await?;
+        let rewrites = Box::pin(self.begin_written_plan_rewrites(
+            conn_id,
+            &ops,
+            oracle_write_ts.lower_bound(),
+        ))
+        .wall_time()
+        .observe(phase_seconds.with_label_values(&["written_plan_preparation"]))
+        .await?;
 
         Ok(CatalogTransactionState {
             preparation: CatalogPreparation::Rewrites(rewrites),
@@ -1452,7 +1456,8 @@ impl Coordinator {
                 &mut prepared.ops,
                 prepared
                     .initial_write_ts
-                    .expect("preparation precedes commit"),
+                    .expect("preparation precedes commit")
+                    .lower_bound(),
             ),
         )
         .wall_time()

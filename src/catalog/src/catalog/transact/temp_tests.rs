@@ -116,7 +116,13 @@ async fn temporary_view_replacement_dry_run() {
             let replacement = create_view(&mut fixture, 1_000_001 + offset, name, "mz_columns");
             let (base, snapshot) = if committed {
                 catalog
-                    .transact(None, None, 1.into(), Some(&session), vec![original.clone()])
+                    .transact(
+                        None,
+                        None,
+                        mz_repr::Timestamp::from(1_u64),
+                        Some(&session),
+                        vec![original.clone()],
+                    )
                     .await
                     .expect("commit original temporary view");
                 (catalog.state().clone(), None)
@@ -183,12 +189,24 @@ async fn temporary_view_replacement_dry_run() {
             // Replay the same statement boundaries through the commit path.
             if !committed {
                 catalog
-                    .transact(None, None, 1.into(), Some(&session), vec![original.clone()])
+                    .transact(
+                        None,
+                        None,
+                        mz_repr::Timestamp::from(1_u64),
+                        Some(&session),
+                        vec![original.clone()],
+                    )
                     .await
                     .expect("commit provisional creation");
             }
             catalog
-                .transact(None, None, 1.into(), Some(&session), ops)
+                .transact(
+                    None,
+                    None,
+                    mz_repr::Timestamp::from(1_u64),
+                    Some(&session),
+                    ops,
+                )
                 .await
                 .expect("commit temporary replacement");
             assert_eq!(namespace(catalog.state()), namespace(&candidate));

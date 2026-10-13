@@ -3097,7 +3097,7 @@ impl Coordinator {
                     // plans, so rebuild the preview after the same checked
                     // refresh used by the commit path.
                     let (candidate, _) = loop {
-                        let write_ts = self.get_catalog_write_ts().await;
+                        let write_ts = self.get_catalog_write_ts().await.lower_bound();
                         let result = self
                             .catalog()
                             .transact_incremental_dry_run(
@@ -5366,7 +5366,7 @@ impl Coordinator {
     async fn refill_user_id_pool(&mut self, min_count: u64) -> Result<(), AdapterError> {
         let batch_size = USER_ID_POOL_BATCH_SIZE.get(self.catalog().system_config().dyncfgs());
         let to_allocate = min_count.max(u64::from(batch_size));
-        let id_ts = self.get_catalog_write_ts().await;
+        let id_ts = self.get_catalog_write_ts().await.lower_bound();
         let ids = self.catalog().allocate_user_ids(to_allocate, id_ts).await?;
         if let (Some((first_id, _)), Some((last_id, _))) = (ids.first(), ids.last()) {
             let start = match first_id {

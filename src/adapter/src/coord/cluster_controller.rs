@@ -1011,7 +1011,7 @@ impl Coordinator {
             let Decision::CreateReplica { cluster_id, .. } = decision else {
                 continue;
             };
-            let id_ts = self.get_catalog_write_ts().await;
+            let id_ts = self.get_catalog_write_ts().await.lower_bound();
             let result = self
                 .catalog()
                 .allocate_replica_ids(*cluster_id, 1, id_ts)
