@@ -39,6 +39,7 @@ from materialize.mzcompose.services.sql_server import (
 )
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.parallel_workload.catalog_transactions import hammer, independent_ddl
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
 from materialize.parallel_workload.settings import (
     ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
@@ -173,6 +174,32 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         #     # Don't fail the entire run. We ran into a crash,
         #     # ci-annotate-errors will handle this if it's an unknown failure.
         #     return
+
+
+def workflow_catalog_transactions(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Require independent DDL transactions to commit during catalog churn."""
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--rounds", type=int, default=25)
+    args = parser.parse_args()
+    if args.workers < 2 or args.rounds < 1:
+        parser.error("at least two workers and one round are required")
+
+    with c.override(Materialized()):
+        c.up("materialized")
+        cases = [
+            (before_commit, same_schema)
+            for before_commit in (False, True)
+            for same_schema in (False, True)
+        ]
+
+        def process(case: tuple[bool, bool] | None) -> None:
+            with c.test_case(f"catalog-transactions-{case}"):
+                if case is None:
+                    hammer(c, args.workers, args.rounds)
+                else:
+                    independent_ddl(c, *case)
+
+        c.test_parts([*cases, None], process)
 
 
 def toxiproxy_start(c: Composition, external: bool) -> None:

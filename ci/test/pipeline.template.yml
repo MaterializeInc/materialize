@@ -303,6 +303,19 @@ steps:
     agents:
       queue: hetzner-aarch64-8cpu-16gb
 
+  - id: catalog-transactions
+    label: Catalog transaction isolation
+    depends_on: build-aarch64
+    timeout_in_minutes: 15
+    if: build.env("CI_CATALOG_TRANSACTIONS") == "1"
+    inputs: [test/parallel-workload, misc/python/materialize/parallel_workload]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: parallel-workload
+          run: catalog-transactions
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+
   - id: cluster-tests
     topics: [kafka, kafka-sink, postgres]
     label: Cluster
