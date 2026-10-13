@@ -38,6 +38,7 @@ from kubernetes.client.rest import ApiException  # type: ignore
 
 from materialize.antithesis import quiet
 from materialize.antithesis.drivers import (
+    kafka_sources,
     lifecycle,
     postgres_sources,
     recovery,
@@ -69,7 +70,14 @@ TRIGGERS = (
     "schema_evo_alter",
     "rollout_applying",
     "rollout_promoting",
+    "source_created",
+    "source_created_applying",
 )
+# A source or source export created this recently is still in the window
+# where its shards' frontiers start at the minimum and the controller has yet
+# to install and persist the export's hold on the remap shard (SS-346).
+# Needs calibration on one simulated core.
+SOURCE_CREATED_WINDOW_SECONDS = 30.0
 # How long an invocation waits for its trigger before giving up without a
 # kill. Needs calibration on one simulated core.
 TRIGGER_WAIT_SECONDS = 120.0
@@ -184,17 +192,40 @@ def quiet_period_active(endpoints: Endpoints) -> bool:
         return False
 
 
-def _count(endpoints: Endpoints, name: str, query: str) -> int:
+def _count(endpoints: Endpoints, name: str, query: str, params: tuple = ()) -> int:
     conn = peek_db(name, endpoints)
     if conn is None:
         return 0
     try:
-        row = conn.execute(query).fetchone()
+        row = conn.execute(query, params).fetchone()
         return int(row[0]) if row else 0
     except sqlite3.Error:
         return 0
     finally:
         conn.close()
+
+
+def source_created_recently(endpoints: Endpoints) -> bool:
+    """Whether the Postgres or Kafka source driver issued a source or export
+    creation within `SOURCE_CREATED_WINDOW_SECONDS`. Both record wall-clock
+    times in this container."""
+    since = (time.time() - SOURCE_CREATED_WINDOW_SECONDS,)
+    return (
+        _count(
+            endpoints,
+            postgres_sources.STATE_DB,
+            postgres_sources.RECENT_EXPORTS_QUERY,
+            since,
+        )
+        > 0
+        or _count(
+            endpoints,
+            kafka_sources.STATE_DB,
+            kafka_sources.RECENT_GENERATIONS_QUERY,
+            since,
+        )
+        > 0
+    )
 
 
 def trigger_met(trigger: str, endpoints: Endpoints, snap: Snapshot | None) -> bool:
@@ -225,10 +256,14 @@ def trigger_met(trigger: str, endpoints: Endpoints, snap: Snapshot | None) -> bo
             return False
         finally:
             conn.close()
+    if trigger == "source_created":
+        return source_created_recently(endpoints)
     if snap is None:
         return False
     if trigger == "rollout_applying":
         return snap.reason == "Applying"
+    if trigger == "source_created_applying":
+        return snap.reason == "Applying" and source_created_recently(endpoints)
     assert trigger == "rollout_promoting", trigger
     return snap.reason == "Promoting"
 
@@ -320,7 +355,7 @@ def wait_for_trigger(
     trigger drawn up front rarely ends in a kill.
     """
     deadline = time.monotonic() + TRIGGER_WAIT_SECONDS
-    needs_cr = any(t.startswith("rollout_") for t in weights)
+    needs_cr = any(t.startswith("rollout_") or t.endswith("_applying") for t in weights)
     while True:
         snap = kube.try_snapshot() if needs_cr else None
         met = []
@@ -376,6 +411,16 @@ def note_trigger(trigger: str, details: dict[str, Any]) -> None:
     elif trigger == "rollout_promoting":
         reachable(
             "Pod restart driver deleted a pod while a rollout was Promoting", details
+        )
+    elif trigger == "source_created":
+        reachable(
+            "Pod restart driver deleted a pod shortly after a source or source export was created",
+            details,
+        )
+    elif trigger == "source_created_applying":
+        reachable(
+            "Pod restart driver deleted a pod shortly after a source or source export was created while a rollout was Applying",
+            details,
         )
 
 

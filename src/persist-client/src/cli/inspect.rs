@@ -98,6 +98,9 @@ pub(crate) enum Command {
     /// Reports updates whose accumulated diff goes negative, as JSON
     AuditMultiplicities(AuditMultiplicitiesArgs),
 
+    /// Prints the shard's since, upper, and each reader's since from one state version, as JSON
+    AuditFrontiers(StateArgs),
+
     /// Prints each consensus state change as JSON. Output includes the full consensus state
     /// before and after each state transitions:
     ///
@@ -192,6 +195,11 @@ pub async fn run(command: InspectArgs) -> Result<(), anyhow::Error> {
             let versions = args.state.open().await?;
             let report =
                 audit_multiplicities(&versions, args.state.shard_id(), args.max_reported).await?;
+            println!("{}", json!(report));
+        }
+        Command::AuditFrontiers(args) => {
+            let versions = args.open().await?;
+            let report = audit_frontiers(&versions, args.shard_id()).await?;
             println!("{}", json!(report));
         }
     }
@@ -1010,6 +1018,62 @@ pub(crate) async fn audit_blobs(
     Ok(report)
 }
 
+/// Output of `persistcli inspect audit-frontiers`.
+#[derive(Debug, Default, serde::Serialize)]
+pub struct FrontierAuditReport {
+    shard_id: String,
+    initialized: bool,
+    tombstone: Option<bool>,
+    seqno: Option<u64>,
+    /// The meet of every reader's since.
+    since: Option<Vec<u64>>,
+    upper: Option<Vec<u64>>,
+    /// The since of [PersistClient::CONTROLLER_CRITICAL_SINCE], if registered.
+    /// A read-write storage controller bootstraps a collection from this since.
+    controller_critical_since: Option<Vec<u64>>,
+    critical_sinces: BTreeMap<String, Vec<u64>>,
+    leased_sinces: BTreeMap<String, Vec<u64>>,
+}
+
+/// Reports the frontiers of the shard's latest state version. Every value
+/// comes from that one version, so they are mutually consistent. Writes
+/// nothing and registers no reader.
+pub(crate) async fn audit_frontiers(
+    versions: &StateVersions,
+    shard_id: ShardId,
+) -> Result<FrontierAuditReport, anyhow::Error> {
+    let mut report = FrontierAuditReport {
+        shard_id: shard_id.to_string(),
+        ..Default::default()
+    };
+    let diffs = versions.fetch_recent_live_diffs::<u64>(&shard_id).await;
+    if diffs.0.is_empty() {
+        return Ok(report);
+    }
+    let state = versions
+        .fetch_current_state::<u64>(&shard_id, diffs.0)
+        .await
+        .check_ts_codec(&shard_id)?;
+    report.initialized = true;
+    report.tombstone = Some(state.collections.is_tombstone());
+    report.seqno = Some(state.seqno.0);
+    report.since = Some(state.collections.trace.since().elements().to_vec());
+    report.upper = Some(state.collections.trace.upper().elements().to_vec());
+    for (id, reader) in &state.collections.critical_readers {
+        let since = reader.since.elements().to_vec();
+        if *id == PersistClient::CONTROLLER_CRITICAL_SINCE {
+            report.controller_critical_since = Some(since.clone());
+        }
+        report.critical_sinces.insert(id.to_string(), since);
+    }
+    for (id, reader) in &state.collections.leased_readers {
+        report
+            .leased_sinces
+            .insert(id.to_string(), reader.since.elements().to_vec());
+    }
+    Ok(report)
+}
+
 /// Arguments for `persistcli inspect audit-multiplicities`.
 #[derive(Debug, Clone, clap::Parser)]
 pub struct AuditMultiplicitiesArgs {
@@ -1425,7 +1489,9 @@ impl Codec64 for O {
 mod tests {
     use mz_dyncfg::ConfigUpdates;
 
+    use crate::Diagnostics;
     use crate::batch::{INLINE_WRITES_SINGLE_MAX_BYTES, INLINE_WRITES_TOTAL_MAX_BYTES};
+    use crate::critical::Opaque;
     use crate::tests::new_test_client;
 
     use super::*;
@@ -1559,6 +1625,52 @@ mod tests {
 
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn audit_frontiers_reports_reader_sinces(dyncfgs: ConfigUpdates) {
+        let client = new_test_client(&dyncfgs).await;
+        let shard_id = ShardId::new();
+        let (mut write, read) = client
+            .expect_open::<String, String, u64, i64>(shard_id)
+            .await;
+        write
+            .expect_compare_and_append(&[(kv("a", "1"), 0, 1)], 0, 3)
+            .await;
+        let mut critical = client
+            .open_critical_since::<String, String, u64, i64>(
+                shard_id,
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Opaque::encode(&0i64),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("codec match");
+        critical
+            .compare_and_downgrade_since(
+                &Opaque::encode(&0i64),
+                (&Opaque::encode(&0i64), &Antichain::from_elem(2)),
+            )
+            .await
+            .expect("opaque matches");
+
+        let report = audit_frontiers(&state_versions(&client), shard_id)
+            .await
+            .expect("audit succeeds");
+        assert!(report.initialized);
+        assert_eq!(report.tombstone, Some(false));
+        assert_eq!(report.upper, Some(vec![3]));
+        // The leased reader still holds the shard since back.
+        assert_eq!(report.since, Some(vec![0]), "{report:?}");
+        assert_eq!(
+            report.controller_critical_since,
+            Some(vec![2]),
+            "{report:?}"
+        );
+        assert_eq!(report.critical_sinces.len(), 1, "{report:?}");
+        assert_eq!(report.leased_sinces.len(), 1, "{report:?}");
+        drop(read);
+    }
+
+    #[mz_persist_proc::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn audits_report_uninitialized_shard(dyncfgs: ConfigUpdates) {
         let client = new_test_client(&dyncfgs).await;
         let versions = state_versions(&client);
@@ -1566,6 +1678,12 @@ mod tests {
         assert!(!audit_blobs(&versions, shard_id).await.unwrap().initialized);
         assert!(
             !audit_multiplicities(&versions, shard_id, 10)
+                .await
+                .unwrap()
+                .initialized
+        );
+        assert!(
+            !audit_frontiers(&versions, shard_id)
                 .await
                 .unwrap()
                 .initialized

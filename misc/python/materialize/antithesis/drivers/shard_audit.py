@@ -51,6 +51,17 @@ shard belongs to a Postgres source export whose table had an upstream
 TRUNCATE followed by an ingestion restart (`postgres_sources.terminal_before_restart`,
 read from that driver's state). That bucket holds a known unfixed bug class.
 
+Remap pairs: each audit also samples live (source remap shard, export shard)
+pairs and runs `audit-frontiers` on both, checking the invariant stated in
+`materialize.antithesis.remap_frontiers` (SS-346, SQL-603). A violation on a
+pair live before and after the check is recorded in that module's ledger, which
+the source oracles read to file duplicate symptoms under their own messages.
+The SS-346 shape (export since behind the remap since, the condition under
+which the storage-collections bootstrap check fires) and the SQL-603 shape
+(empty remap since) are `always_or_unreachable` under messages naming the
+issue. The remaining shape, which only the storage controller's unconditional
+check would catch, is a plain `always`, so an open known bug does not mask it.
+
 Fault handling: a persistcli failure (non-zero exit, timeout, unparsable
 output) means consensus or blob was unreachable or the shard moved under the
 read, and the audit is skipped. Violations are asserted only from parsed
@@ -84,7 +95,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
 )
 from kubernetes.client.rest import ApiException  # type: ignore
 
-from materialize.antithesis import sql, state
+from materialize.antithesis import remap_frontiers, sql, state
 from materialize.antithesis.drivers import lifecycle, postgres_sources
 from materialize.antithesis.endpoints import Endpoints
 from materialize.antithesis.environment import Environment
@@ -106,6 +117,8 @@ FINALLY_USER_SHARDS = 25
 FINALLY_SYSTEM_SHARDS = 5
 FINALLY_UNMAPPED_SHARDS = 10
 FINALLY_TIMEOUT_S = 300
+ANYTIME_REMAP_PAIRS = 2
+FINALLY_REMAP_PAIRS = 20
 # Calibration: a dropped collection's shard is finalized by the storage
 # controller's background task; ten minutes covers several retries of it
 # under faults on one simulated core. Not yet measured.
@@ -170,6 +183,18 @@ def live_shards(host: str) -> dict[str, LiveShard] | None:
         )
         for row in rows
     }
+
+
+def remap_pairs(host: str) -> list[remap_frontiers.Pair] | None:
+    """Every live (remap, export) shard pair, or None if it cannot be read right now."""
+    try:
+        with sql.connection(host, internal=True) as conn:
+            rows = conn.execute(remap_frontiers.PAIRS_SQL).fetchall()
+    except (psycopg.Error, OSError) as e:
+        c = sql.classify(e)
+        log(f"cannot read remap pairs ({c.outcome.value}, {c.sqlstate}): {c.template}")
+        return None
+    return [remap_frontiers.Pair(*row) for row in rows]
 
 
 def txns_shard(host: str) -> str | None:
@@ -413,7 +438,9 @@ class Auditor:
                 ),
             )
 
-    def run(self, user_count: int, system_count: int, unmapped_count: int) -> int:
+    def run(
+        self, user_count: int, system_count: int, unmapped_count: int, remap_count: int
+    ) -> int:
         live = live_shards(self.host)
         if live is None:
             return 0
@@ -423,6 +450,8 @@ class Auditor:
         log(f"{self.origin}: auditing {len(targets)} of {len(live)} live shards")
         for shard in targets:
             self.audit(shard, signature)
+
+        self.audit_remaps(remap_count)
 
         shards = consensus_shards(self.env.endpoints)
         if shards is None:
@@ -522,6 +551,106 @@ class Auditor:
         if blobs is None and mult is None:
             outcome = "skipped"
         self.record(shard_id, outcome, blobs, mult)
+
+    def audit_remaps(self, count: int) -> None:
+        """Check a sample of live (remap, export) pairs against the invariant
+        stated in `remap_frontiers`."""
+        pairs = remap_pairs(self.host)
+        if not pairs:
+            return
+        picked = rng.sample(pairs, min(count, len(pairs)))
+        log(f"{self.origin}: checking {len(picked)} of {len(pairs)} remap/export pairs")
+        for pair in picked:
+            self.audit_remap(pair)
+
+    def audit_remap(self, pair: remap_frontiers.Pair) -> None:
+        endpoints = self.env.endpoints
+        # Remap first, export second: `remap_frontiers` owns why only this
+        # order makes a single observation sound.
+        remap_report = run_persistcli(
+            "audit-frontiers", pair.remap_shard, endpoints, self.timeout_s, []
+        )
+        if remap_report is None:
+            return
+        data_report = run_persistcli(
+            "audit-frontiers", pair.data_shard, endpoints, self.timeout_s, []
+        )
+        if data_report is None:
+            return
+        remap = remap_frontiers.Frontiers.parse(remap_report)
+        data = remap_frontiers.Frontiers.parse(data_report)
+        if remap is None or data is None:
+            log(f"{pair.data_name}: malformed audit-frontiers output, skipping")
+            return
+        check = remap_frontiers.classify(remap, data)
+        if check.verdict is remap_frontiers.Verdict.SKIP:
+            return
+        details: dict[str, Any] = {
+            "origin": self.origin,
+            "export_id": pair.data_id,
+            "export_name": pair.data_name,
+            "source_id": pair.remap_id,
+            "source_name": pair.remap_name,
+            "export_shard": pair.data_shard,
+            "remap_shard": pair.remap_shard,
+            "verdict": check.verdict.value,
+            "remap_since": list(check.remap_since),
+            "remap_shard_since": remap_report.get("since"),
+            "remap_controller_since": remap_report.get("controller_critical_since"),
+            "remap_seqno": remap_report.get("seqno"),
+            "export_since": list(check.data_since),
+            "export_upper": list(check.data_upper),
+            "export_seqno": data_report.get("seqno"),
+            "headroom_ms": check.headroom_ms,
+        }
+        if check.violated:
+            # Dropping the export or its source releases the hold, so only a
+            # pair live before and after the reads is a violation.
+            after = remap_pairs(self.host)
+            if after is None:
+                log(
+                    f"{pair.data_name}: {check.verdict.value}, cannot re-read pairs, skipping"
+                )
+                return
+            if pair not in after:
+                log(
+                    f"{pair.data_name}: {check.verdict.value}, dropped during the check"
+                )
+                return
+            log(f"{pair.data_name}: remap since past export upper: {details}")
+            ledger = remap_frontiers.open_ledger(endpoints)
+            try:
+                remap_frontiers.record_violation(ledger, pair, check)
+            finally:
+                ledger.close()
+
+        always_or_unreachable(
+            check.verdict is not remap_frontiers.Verdict.EMPTY_SINCE,
+            "remap audit: a live source's remap since is not empty while an export reading it can still be written (SQL-603)",
+            details,
+        )
+        if check.export_since_behind:
+            always_or_unreachable(
+                check.verdict is not remap_frontiers.Verdict.PAST_UPPER_BEHIND,
+                "remap audit: a source's remap since stays below the upper of each export reading it, export since behind the remap since (SS-346)",
+                details,
+            )
+            sometimes(
+                check.verdict is remap_frontiers.Verdict.OK,
+                "remap audit: checked an export whose since is behind its remap since",
+                details,
+            )
+        else:
+            always(
+                check.verdict is not remap_frontiers.Verdict.PAST_UPPER_AHEAD,
+                "remap audit: a source's remap since stays below the upper of each export reading it, export since at or past the remap since",
+                details,
+            )
+        sometimes(
+            check.headroom_ms is not None and 0 < check.headroom_ms <= 1000,
+            "remap audit: checked an export whose upper was within one second of its remap since",
+            details,
+        )
 
     def report_unfinalized(
         self,
@@ -694,13 +823,14 @@ def _main(
     user_count: int,
     system_count: int,
     unmapped_count: int,
+    remap_count: int,
 ) -> int:
     try:
         auditor = Auditor(origin, timeout_s)
     except (ApiException, OSError, RuntimeError) as e:
         log(f"cannot locate the environment: {e}")
         return 0
-    return auditor.run(user_count, system_count, unmapped_count)
+    return auditor.run(user_count, system_count, unmapped_count, remap_count)
 
 
 def anytime_main() -> int:
@@ -712,16 +842,19 @@ def anytime_main() -> int:
         user,
         ANYTIME_SHARDS - user,
         ANYTIME_UNMAPPED_SHARDS,
+        ANYTIME_REMAP_PAIRS,
     )
 
 
 def finally_main() -> int:
     """Audit up to `FINALLY_USER_SHARDS` user shards, a sample of system
-    shards, and a sample of unmapped consensus shards."""
+    shards, a sample of unmapped consensus shards, and up to
+    `FINALLY_REMAP_PAIRS` remap/export pairs."""
     return _main(
         "finally",
         FINALLY_TIMEOUT_S,
         FINALLY_USER_SHARDS,
         FINALLY_SYSTEM_SHARDS,
         FINALLY_UNMAPPED_SHARDS,
+        FINALLY_REMAP_PAIRS,
     )
