@@ -14,7 +14,6 @@
 //! Materialize instance.
 
 use crate::client::{Client, ConnectionError, Profile};
-use crate::config::default_docker_image;
 use crate::verbose;
 use thiserror::Error;
 use tokio::process::Command;
@@ -40,6 +39,9 @@ pub(crate) enum DockerStatus {
 /// Name of the persistent Docker container used by `test` and `explain`.
 const CONTAINER_NAME: &str = "mz-deploy-sandbox";
 
+/// Container label recording the image the sandbox was created from.
+const IMAGE_LABEL: &str = "mz-deploy.image";
+
 /// Host port to bind for the persistent container.
 const CONTAINER_PORT: u16 = 16875;
 
@@ -64,32 +66,38 @@ impl DockerRuntime {
         }
     }
 
-    pub(crate) fn new() -> Self {
-        Self {
-            image: default_docker_image(),
+    /// Prepares the sandbox for `image`, removing an existing sandbox that was
+    /// created from a different image. Call once per command, then
+    /// `get_client` once per connection.
+    pub(crate) async fn start(image: impl Into<String>) -> Self {
+        let runtime = Self {
+            image: image.into(),
+        };
+        // Nothing stops the sandbox, so it is usually still running from an
+        // earlier invocation, possibly of an older CLI, and `get_client` would
+        // reuse it.
+        if !runtime.container_runs_configured_image().await {
+            verbose!(
+                "Container {} does not run {}, recreating it",
+                CONTAINER_NAME,
+                runtime.image
+            );
+            if let Err(e) = runtime.remove_container().await {
+                verbose!("Keeping the existing container: {}", e);
+            }
         }
-    }
-
-    pub(crate) fn with_image(mut self, image: impl Into<String>) -> Self {
-        self.image = image.into();
-        self
+        runtime
     }
 
     pub(crate) async fn get_client(&self) -> Result<Client, DockerRuntimeError> {
-        // The image check in `ensure_container` must also gate the fast path.
-        // Nothing stops the sandbox, so it is usually still running from an
-        // earlier invocation and `ensure_container` would never be reached.
-        if self.container_runs_configured_image().await {
-            // The ephemeral Docker container has no `_mz_deploy_server`
-            // cluster, so bypass the usual session-cluster pin and use the
-            // server default.
-            match Client::connect_sandbox(Self::make_profile()).await {
-                Ok(client) => {
-                    verbose!("Fast-path connect succeeded");
-                    return Ok(client);
-                }
-                Err(_) => verbose!("Fast-path connect failed, falling back to Docker CLI"),
+        // The ephemeral Docker container has no `_mz_deploy_server` cluster,
+        // so bypass the usual session-cluster pin and use the server default.
+        match Client::connect_sandbox(Self::make_profile()).await {
+            Ok(client) => {
+                verbose!("Fast-path connect succeeded");
+                return Ok(client);
             }
+            Err(_) => verbose!("Fast-path connect failed, falling back to Docker CLI"),
         }
 
         self.ensure_container().await?;
@@ -150,13 +158,17 @@ impl DockerRuntime {
         Client::connect_sandbox(Self::make_profile()).await.is_ok()
     }
 
-    /// Whether the existing sandbox was created from `self.image`.
+    /// Whether the existing sandbox was created from `self.image`, or there is
+    /// no sandbox.
     ///
-    /// Returns `true` when `docker inspect` fails, so a transient Docker error
-    /// does not discard a sandbox that may well be correct.
+    /// Compares the label set by `create_container`, not the container's image
+    /// name, which Podman reports fully qualified (`docker.io/...`). A failure
+    /// to inspect counts as a match, so a transient Docker error does not
+    /// discard a sandbox that may be correct.
     async fn container_runs_configured_image(&self) -> bool {
+        let format = format!("{{{{index .Config.Labels \"{IMAGE_LABEL}\"}}}}");
         let output = Command::new("docker")
-            .args(["inspect", "--format", "{{.Config.Image}}", CONTAINER_NAME])
+            .args(["inspect", "--format", &format, CONTAINER_NAME])
             .output()
             .await;
         match output {
@@ -201,6 +213,8 @@ impl DockerRuntime {
                 "MZ_EAT_MY_DATA=1",
                 "-p",
                 &format!("{}:6875", CONTAINER_PORT),
+                "--label",
+                &format!("{IMAGE_LABEL}={}", self.image),
                 &self.image,
                 "--system-parameter-default=max_tables=10000",
                 "--system-parameter-default=max_objects_per_schema=10000",
@@ -253,18 +267,7 @@ impl DockerRuntime {
     }
 
     async fn ensure_container(&self) -> Result<(), DockerRuntimeError> {
-        let mut exists = self.container_exists().await?;
-        // The sandbox is reused by name across CLI upgrades, so a container
-        // created from an older default image would otherwise keep serving it.
-        if exists && !self.container_runs_configured_image().await {
-            verbose!(
-                "Container {} does not run {}, recreating it",
-                CONTAINER_NAME,
-                self.image
-            );
-            self.remove_container().await?;
-            exists = false;
-        }
+        let exists = self.container_exists().await?;
         let is_running = if exists {
             self.container_is_running().await?
         } else {
@@ -297,11 +300,5 @@ impl DockerRuntime {
         self.create_container().await?;
         self.wait_for_container().await?;
         Ok(())
-    }
-}
-
-impl Default for DockerRuntime {
-    fn default() -> Self {
-        Self::new()
     }
 }

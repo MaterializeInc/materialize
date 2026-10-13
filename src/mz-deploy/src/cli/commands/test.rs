@@ -410,7 +410,6 @@ async fn run_tests(
     )
     .await?;
     let empty_types = Types::default();
-    let runtime = DockerRuntime::new().with_image(&settings.docker_image);
     // With `--no-docker`, each test runs against the profile's region instead of
     // an ephemeral container. Like the Docker path, every test gets its own
     // connection (see `TestTarget`), so a test's temporary objects and any
@@ -420,6 +419,12 @@ async fn run_tests(
     if planned_project.tests.is_empty() {
         return Ok(None);
     }
+
+    let runtime = if no_docker {
+        None
+    } else {
+        Some(DockerRuntime::start(&settings.docker_image).await)
+    };
 
     let types_lock = types::load_types_lock(directory).unwrap_or_default();
     let types_cache = load_or_generate_types_cache(settings, &planned_project)?;
@@ -432,10 +437,9 @@ async fn run_tests(
                 continue;
             }
         }
-        let target = if no_docker {
-            TestTarget::Profile(settings)
-        } else {
-            TestTarget::Docker(&runtime)
+        let target = match &runtime {
+            Some(runtime) => TestTarget::Docker(runtime),
+            None => TestTarget::Profile(settings),
         };
         let start_time = Instant::now();
         let outcome = run_single_test(
