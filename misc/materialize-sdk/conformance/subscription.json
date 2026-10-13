@@ -1,0 +1,491 @@
+{
+  "function": "subscription",
+  "cases": [
+    {
+      "name": "a snapshot, then a quiet stream probed after an empty timed FETCH",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"}
+        },
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {
+            "push": {
+              "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"],
+              "rows": [["5", "t", null, null], ["5", "f", "1", "a"], ["6", "t", null, null]]
+            }
+          },
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {"push": {"columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"], "rows": []}},
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {
+            "push": {"columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"], "rows": [["7", "t", null, null]]}
+          },
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}}
+        ]
+      },
+      "expect": [
+        {
+          "declare": "DECLARE \"materialize_sdk\" CURSOR FOR SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = true)"
+        },
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {
+          "events": [
+            {
+              "event": "batch",
+              "lower": null,
+              "upper": "6",
+              "snapshot": true,
+              "updates": [{"timestamp": "5", "op": "diff", "row": ["a"], "diff": "1"}]
+            }
+          ],
+          "finished": false
+        },
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {"events": [], "finished": false},
+        {"sql": "FETCH 100 \"materialize_sdk\"", "timeout_ms": null},
+        {
+          "events": [{"event": "batch", "lower": "6", "upper": "7", "snapshot": false, "updates": []}],
+          "finished": false
+        },
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"}
+      ]
+    },
+    {
+      "name": "an empty probe ends a bounded stream at UP TO",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"},
+          "up_to": "20"
+        },
+        "start": {"kind": "resume", "frontier": "10"},
+        "steps": [
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {
+            "push": {
+              "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"],
+              "rows": [["9", "t", null, null], ["12", "f", "1", "a"]]
+            }
+          },
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {"push": {"columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"], "rows": []}},
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {"push": {"columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"], "rows": []}},
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}}
+        ]
+      },
+      "expect": [
+        {
+          "declare": "DECLARE \"materialize_sdk\" CURSOR FOR SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = false) AS OF 9 UP TO 20"
+        },
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {"events": [], "finished": false},
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {"events": [], "finished": false},
+        {"sql": "FETCH 100 \"materialize_sdk\"", "timeout_ms": null},
+        {
+          "events": [
+            {
+              "event": "batch",
+              "lower": "10",
+              "upper": "20",
+              "snapshot": false,
+              "updates": [{"timestamp": "12", "op": "diff", "row": ["a"], "diff": "1"}]
+            }
+          ],
+          "finished": true
+        },
+        {"error": "usage"}
+      ]
+    },
+    {
+      "name": "an empty probe ends an unbounded stream, as when a view's last refresh has passed",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"}
+        },
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {
+            "push": {
+              "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"],
+              "rows": [["5", "t", null, null], ["5", "f", "1", "a"]]
+            }
+          },
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {"push": {"columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"], "rows": []}},
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {"push": {"columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"], "rows": []}}
+        ]
+      },
+      "expect": [
+        {
+          "declare": "DECLARE \"materialize_sdk\" CURSOR FOR SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = true)"
+        },
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {"events": [], "finished": false},
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {"events": [], "finished": false},
+        {"sql": "FETCH 100 \"materialize_sdk\"", "timeout_ms": null},
+        {
+          "events": [
+            {
+              "event": "batch",
+              "lower": null,
+              "upper": "6",
+              "snapshot": true,
+              "updates": [{"timestamp": "5", "op": "diff", "row": ["a"], "diff": "1"}]
+            }
+          ],
+          "finished": true
+        }
+      ]
+    },
+    {
+      "name": "a constant query completes past the largest timestamp",
+      "input": {
+        "subscribe": {"target": {"kind": "query", "sql": "SELECT 1"}, "envelope": {"kind": "diff"}},
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {
+            "push": {
+              "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "?column?"],
+              "rows": [["18446744073709551615", "t", null, null], ["18446744073709551615", "f", "1", "1"]]
+            }
+          },
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {"push": {"columns": [], "rows": []}},
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {"push": {"columns": [], "rows": []}}
+        ]
+      },
+      "expect": [
+        {
+          "declare": "DECLARE \"materialize_sdk\" CURSOR FOR SUBSCRIBE (\nSELECT 1\n) WITH (PROGRESS, SNAPSHOT = true)"
+        },
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {"events": [], "finished": false},
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {"events": [], "finished": false},
+        {"sql": "FETCH 100 \"materialize_sdk\"", "timeout_ms": null},
+        {
+          "events": [
+            {
+              "event": "batch",
+              "lower": null,
+              "upper": "18446744073709551616",
+              "snapshot": true,
+              "updates": [{"timestamp": "18446744073709551615", "op": "diff", "row": ["1"], "diff": "1"}]
+            }
+          ],
+          "finished": true
+        }
+      ]
+    },
+    {
+      "name": "FETCHes without a timeout end any stream on an empty result",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"}
+        },
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"fetch": {"max_rows": "100"}},
+          {
+            "push": {
+              "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"],
+              "rows": [["5", "t", null, null], ["5", "f", "1", "a"]]
+            }
+          },
+          {"fetch": {"max_rows": "100"}},
+          {"push": {"columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"], "rows": []}}
+        ]
+      },
+      "expect": [
+        {
+          "declare": "DECLARE \"materialize_sdk\" CURSOR FOR SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = true)"
+        },
+        {"sql": "FETCH 100 \"materialize_sdk\"", "timeout_ms": null},
+        {"events": [], "finished": false},
+        {"sql": "FETCH 100 \"materialize_sdk\"", "timeout_ms": null},
+        {
+          "events": [
+            {
+              "event": "batch",
+              "lower": null,
+              "upper": "6",
+              "snapshot": true,
+              "updates": [{"timestamp": "5", "op": "diff", "row": ["a"], "diff": "1"}]
+            }
+          ],
+          "finished": true
+        }
+      ]
+    },
+    {
+      "name": "a snapshot split across FETCHes is released once its timestamp closes",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"}
+        },
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {
+            "push": {
+              "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"],
+              "rows": [["5", "t", null, null], ["5", "f", "1", "a"]]
+            }
+          },
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {
+            "push": {"columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"], "rows": [["5", "f", "1", "b"]]}
+          },
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {
+            "push": {"columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"], "rows": [["6", "t", null, null]]}
+          }
+        ]
+      },
+      "expect": [
+        {
+          "declare": "DECLARE \"materialize_sdk\" CURSOR FOR SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = true)"
+        },
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {"events": [], "finished": false},
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {"events": [], "finished": false},
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {
+          "events": [
+            {
+              "event": "batch",
+              "lower": null,
+              "upper": "6",
+              "snapshot": true,
+              "updates": [
+                {"timestamp": "5", "op": "diff", "row": ["a"], "diff": "1"},
+                {"timestamp": "5", "op": "diff", "row": ["b"], "diff": "1"}
+              ]
+            }
+          ],
+          "finished": false
+        }
+      ]
+    },
+    {
+      "name": "a stream that ends before its first progress row is refused",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"}
+        },
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"fetch": {"max_rows": "100"}},
+          {"push": {"columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"], "rows": []}},
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}}
+        ]
+      },
+      "expect": [
+        {
+          "declare": "DECLARE \"materialize_sdk\" CURSOR FOR SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = true)"
+        },
+        {"sql": "FETCH 100 \"materialize_sdk\"", "timeout_ms": null},
+        {"error": "protocol"},
+        {"error": "usage"}
+      ]
+    },
+    {
+      "name": "only one FETCH is outstanding at a time",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"}
+        },
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {
+            "push": {"columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"], "rows": [["5", "t", null, null]]}
+          }
+        ]
+      },
+      "expect": [
+        {
+          "declare": "DECLARE \"materialize_sdk\" CURSOR FOR SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = true)"
+        },
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {"error": "usage"},
+        {"events": [], "finished": false}
+      ]
+    },
+    {
+      "name": "after an error every call fails, because batches released before it were lost",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"}
+        },
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {
+            "push": {
+              "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"],
+              "rows": [["5", "t", null, null], ["5", "f", "1", "a"], ["6", "t", null, null], ["6", "f", "0", "b"]]
+            }
+          },
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}}
+        ]
+      },
+      "expect": [
+        {
+          "declare": "DECLARE \"materialize_sdk\" CURSOR FOR SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = true)"
+        },
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {"error": "protocol"},
+        {"error": "usage"}
+      ]
+    },
+    {
+      "name": "columns that change between FETCHes are refused",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"}
+        },
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {
+            "push": {"columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"], "rows": [["5", "t", null, null]]}
+          },
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {
+            "push": {
+              "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "other"],
+              "rows": [["6", "t", null, null]]
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "declare": "DECLARE \"materialize_sdk\" CURSOR FOR SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = true)"
+        },
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {"events": [], "finished": false},
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {"error": "protocol"}
+      ]
+    },
+    {
+      "name": "a query cannot resume",
+      "input": {
+        "subscribe": {"target": {"kind": "query", "sql": "SELECT 1"}, "envelope": {"kind": "diff"}},
+        "start": {"kind": "resume", "frontier": "5"},
+        "steps": []
+      },
+      "expect": {"error": "usage"}
+    },
+    {
+      "name": "a timestamp over the hard limit fails the subscription and every later call",
+      "input": {
+        "subscribe": {"target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"}, "envelope": {"kind": "diff"}},
+        "start": {"kind": "snapshot"},
+        "max_timestamp_bytes": "100",
+        "steps": [
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {"push": {"columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"], "rows": [["5", "t", null, null], ["6", "f", "1", "a"], ["6", "f", "1", "b"], ["7", "t", null, null]]}},
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}}
+        ]
+      },
+      "expect": [
+        {"declare": "DECLARE \"materialize_sdk\" CURSOR FOR SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = true)"},
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {"error": "timestamp_too_large"},
+        {"error": "usage"}
+      ]
+    },
+    {
+      "name": "an internal error before the first progress row checks the object, and after it poisons the stream",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"}
+        },
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"classify": {"sqlstate": "XX000", "message": "internal error"}},
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {"push": {"columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"], "rows": [["5", "t", null, null]]}},
+          {"classify": {"sqlstate": "XX000", "message": "internal error"}}
+        ]
+      },
+      "expect": [
+        {
+          "declare": "DECLARE \"materialize_sdk\" CURSOR FOR SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = true)"
+        },
+        {"action": "check_object", "otherwise": "fatal"},
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {"events": [], "finished": false},
+        {"action": "kind", "kind": "stream_poisoned"}
+      ]
+    },
+    {
+      "name": "a snapshot over the memory limit is released in chunks at its timestamp",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"}
+        },
+        "start": {"kind": "snapshot"},
+        "max_pending_bytes": "1",
+        "steps": [
+          {"fetch": {"max_rows": "100", "timeout_ms": "1000"}},
+          {
+            "push": {
+              "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"],
+              "rows": [["5", "t", null, null], ["5", "f", "1", "a"], ["5", "f", "1", "b"], ["6", "t", null, null]]
+            }
+          }
+        ]
+      },
+      "expect": [
+        {
+          "declare": "DECLARE \"materialize_sdk\" CURSOR FOR SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = true)"
+        },
+        {"sql": "FETCH 100 \"materialize_sdk\" WITH (TIMEOUT = '1000 milliseconds')", "timeout_ms": "1000"},
+        {
+          "events": [
+            {"event": "snapshot_chunk", "updates": [{"timestamp": "5", "op": "diff", "row": ["a"], "diff": "1"}]},
+            {"event": "snapshot_chunk", "updates": [{"timestamp": "5", "op": "diff", "row": ["b"], "diff": "1"}]},
+            {"event": "batch", "lower": null, "upper": "6", "snapshot": true, "updates": []}
+          ],
+          "finished": false
+        }
+      ]
+    },
+    {
+      "name": "a pending limit at the timestamp limit is refused, since the snapshot could not pass in chunks",
+      "input": {
+        "subscribe": {"target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"}, "envelope": {"kind": "diff"}},
+        "start": {"kind": "snapshot"},
+        "max_pending_bytes": "100",
+        "max_timestamp_bytes": "100",
+        "steps": []
+      },
+      "expect": {"error": "usage"}
+    }
+  ]
+}

@@ -22,13 +22,14 @@ use std::path::Path;
 use std::time::Duration;
 
 use materialize_sdk_core::Frontier;
-use materialize_sdk_core::batch::{BatchError, Batcher, Event, Start};
+use materialize_sdk_core::batch::{BatchError, Batcher, Event, Start, check_limits};
 use materialize_sdk_core::classify::{
     ErrorKind, Phase, classify, resolve_index_check, resolve_object_check,
 };
 use materialize_sdk_core::decode::{Decoder, Envelope, Message, Row, Update};
 use materialize_sdk_core::identity::{Fingerprint, IdentityChange, compare};
 use materialize_sdk_core::statement::{Subscribe, fetch_sql};
+use materialize_sdk_core::subscription::{Fetch, PushError, Subscription};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -93,6 +94,7 @@ fn run(function: &str, input: Value) -> Value {
         "latest_by_key" => latest_by_key(input),
         "subscribe_sql" => subscribe_sql(input),
         "fetch_sql" => fetch(input),
+        "subscription" => subscription(input),
         "classify" => classify_error(input),
         "compare_identity" => compare_identity(input),
         "resolve_object_check" => resolve(input),
@@ -281,6 +283,88 @@ fn fetch(value: Value) -> Value {
         Ok(sql) => json!({ "sql": sql }),
         Err(_) => error("usage"),
     }
+}
+
+/// Drives a subscription: declares its cursor, then runs the steps. A step
+/// `{"fetch": {"max_rows", "timeout_ms"}}` yields the statement and its
+/// timeout. A step `{"push": {"columns", "rows"}}` passes those to the latest
+/// fetch and yields the events and whether the stream has finished.
+fn subscription(value: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        subscribe: Subscribe,
+        start: Start,
+        max_pending_bytes: Option<String>,
+        max_timestamp_bytes: Option<String>,
+        steps: Vec<Step>,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "snake_case")]
+    enum Step {
+        Fetch(FetchInput),
+        Push {
+            columns: Vec<String>,
+            rows: Vec<Row>,
+        },
+        Classify {
+            sqlstate: Option<String>,
+            message: String,
+        },
+    }
+    let Input {
+        subscribe,
+        start,
+        max_pending_bytes,
+        max_timestamp_bytes,
+        steps,
+    } = input(value);
+    let max_pending_bytes = max_pending_bytes.map(|limit| canonical(&limit));
+    let max_timestamp_bytes = max_timestamp_bytes.map(|limit| canonical(&limit));
+    if check_limits(max_pending_bytes, max_timestamp_bytes).is_err() {
+        return error("usage");
+    }
+    let mut sub = match Subscription::new(subscribe, start) {
+        Ok(sub) => sub,
+        Err(_) => return error("usage"),
+    };
+    if let Some(limit) = max_pending_bytes {
+        sub = sub.with_max_pending_bytes(limit);
+    }
+    if let Some(limit) = max_timestamp_bytes {
+        sub = sub.with_max_timestamp_bytes(limit);
+    }
+    let mut outputs = vec![json!({ "declare": sub.declare_sql().unwrap() })];
+    let mut pending: Option<Fetch> = None;
+    for step in steps {
+        let output = match step {
+            Step::Fetch(fetch) => match sub.fetch(u64_of(&fetch.max_rows), fetch.timeout()) {
+                Ok(fetch) => {
+                    let output = json!({
+                        "sql": fetch.sql(),
+                        "timeout_ms": fetch.timeout().map(|t| t.as_millis().to_string()),
+                    });
+                    pending = Some(fetch);
+                    output
+                }
+                Err(_) => error("usage"),
+            },
+            Step::Push { columns, rows } => {
+                let fetch = pending.take().expect("a push follows a fetch");
+                match sub.push(fetch, &columns, rows) {
+                    Ok(events) => json!({ "events": events, "finished": sub.is_finished() }),
+                    Err(PushError::Protocol(_)) => error("protocol"),
+                    Err(PushError::TimestampTooLarge(_)) => error("timestamp_too_large"),
+                    Err(PushError::Usage(_)) => error("usage"),
+                }
+            }
+            Step::Classify { sqlstate, message } => {
+                json!(sub.classify(sqlstate.as_deref(), &message))
+            }
+        };
+        outputs.push(output);
+    }
+    json!(outputs)
 }
 
 fn classify_error(value: Value) -> Value {

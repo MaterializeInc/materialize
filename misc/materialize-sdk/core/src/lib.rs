@@ -41,6 +41,7 @@ pub mod error;
 pub mod frontier;
 pub mod identity;
 pub mod statement;
+pub mod subscription;
 mod wire;
 
 pub use batch::{Batch, BatchError, Batcher, Event, Start};
@@ -53,3 +54,4 @@ pub use error::{ProtocolError, TimestampTooLarge, UsageError};
 pub use frontier::Frontier;
 pub use identity::{Column, Fingerprint, IdentityChange, compare};
 pub use statement::{ObjectRef, Subscribe, Target};
+pub use subscription::{Fetch, PushError, Subscription};

@@ -36,7 +36,7 @@ use std::mem;
 use serde::{Deserialize, Serialize};
 
 use crate::decode::{Change, Message, Row, Update};
-use crate::error::{ProtocolError, TimestampTooLarge};
+use crate::error::{ProtocolError, TimestampTooLarge, UsageError};
 use crate::frontier::Frontier;
 use crate::wire;
 
@@ -60,6 +60,21 @@ pub enum Start {
         /// The frontier to continue from.
         frontier: Frontier,
     },
+}
+
+/// Refuses a pending limit at or above the timestamp limit. The snapshot counts
+/// as one timestamp, and one larger than the timestamp limit passes only in
+/// the chunks that the pending limit releases.
+pub fn check_limits(
+    max_pending_bytes: Option<usize>,
+    max_timestamp_bytes: Option<usize>,
+) -> Result<(), UsageError> {
+    match (max_pending_bytes, max_timestamp_bytes) {
+        (Some(pending), Some(timestamp)) if pending >= timestamp => Err(UsageError::new(
+            "max_pending_bytes must be below max_timestamp_bytes",
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// What the batcher hands to the consumer.
