@@ -24,6 +24,10 @@ use std::time::Duration;
 
 use materialize_sdk_core::Frontier;
 use materialize_sdk_core::batch::{BatchError, Batcher, Event, Start};
+use materialize_sdk_core::catalog::{
+    CatalogObject, ObjectName, indexes_sql, lookup_sql, parse_indexes, parse_lookup,
+    parse_read_frontier, read_frontier_sql, resume_margin,
+};
 use materialize_sdk_core::checkpoint::{Checkpoint, CheckpointError};
 use materialize_sdk_core::classify::{
     ErrorKind, Phase, classify, resolve_index_check, resolve_object_check,
@@ -102,6 +106,7 @@ fn run(function: &str, input: Value) -> Value {
         "resolve_object_check" => resolve(input),
         "resolve_index_check" => resolve_index(input),
         "checkpoint" => checkpoint(input),
+        "catalog" => catalog(input),
         other => panic!("unknown function {other:?}"),
     }
 }
@@ -505,6 +510,81 @@ fn checkpoint(value: Value) -> Value {
                 Err(conflict) => json!(conflict),
             },
             Err(_) => error("checkpoint"),
+        },
+    }
+}
+
+/// Runs one catalog operation: build a query, read a query's result, or
+/// compute the resume margin.
+fn catalog(value: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "snake_case")]
+    enum Operation {
+        LookupSql {
+            name: ObjectName,
+        },
+        ParseLookup {
+            columns: Vec<String>,
+            rows: Vec<Row>,
+        },
+        IndexesSql {
+            object_id: String,
+            cluster: String,
+        },
+        ParseIndexes {
+            columns: Vec<String>,
+            rows: Vec<Row>,
+        },
+        ReadFrontierSql {
+            object_id: String,
+        },
+        ParseReadFrontier {
+            columns: Vec<String>,
+            rows: Vec<Row>,
+        },
+        ResumeMargin {
+            frontier: Frontier,
+            read_frontier: String,
+        },
+        Fingerprint {
+            object: CatalogObject,
+            envelope: Envelope,
+        },
+    }
+    match input(value) {
+        Operation::LookupSql { name } => json!({ "sql": lookup_sql(&name) }),
+        Operation::ParseLookup { columns, rows } => match parse_lookup(&columns, rows) {
+            Ok(object) => json!({ "object": object }),
+            Err(_) => error("protocol"),
+        },
+        Operation::IndexesSql { object_id, cluster } => {
+            json!({ "sql": indexes_sql(&object_id, &cluster) })
+        }
+        Operation::ParseIndexes { columns, rows } => match parse_indexes(&columns, rows) {
+            Ok(indexes) => json!({ "indexes": indexes }),
+            Err(_) => error("protocol"),
+        },
+        Operation::ReadFrontierSql { object_id } => {
+            json!({ "sql": read_frontier_sql(&object_id) })
+        }
+        Operation::ParseReadFrontier { columns, rows } => {
+            match parse_read_frontier(&columns, rows) {
+                Ok(read_frontier) => {
+                    json!({ "read_frontier": read_frontier.map(|t| t.to_string()) })
+                }
+                Err(_) => error("protocol"),
+            }
+        }
+        Operation::ResumeMargin {
+            frontier,
+            read_frontier,
+        } => json!({
+            "margin_ms": resume_margin(frontier, u64_of(&read_frontier))
+                .map(|margin| margin.as_millis().to_string()),
+        }),
+        Operation::Fingerprint { object, envelope } => match object.fingerprint(envelope) {
+            Ok(fingerprint) => json!({ "fingerprint": fingerprint }),
+            Err(_) => error("usage"),
         },
     }
 }
