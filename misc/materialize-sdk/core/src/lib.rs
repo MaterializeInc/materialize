@@ -35,6 +35,7 @@
 )]
 
 pub mod batch;
+pub mod catalog;
 pub mod checkpoint;
 pub mod classify;
 pub mod decode;
@@ -46,6 +47,7 @@ pub mod subscription;
 mod wire;
 
 pub use batch::{Batch, BatchError, Batcher, Event, Start};
+pub use catalog::{CatalogObject, ObjectKind, ObjectName};
 pub use checkpoint::{
     Checkpoint, CheckpointError, CommitCheck, CommitConflict, Settlement, Writer,
 };

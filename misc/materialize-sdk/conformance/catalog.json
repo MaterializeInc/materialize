@@ -1,0 +1,497 @@
+{
+  "function": "catalog",
+  "cases": [
+    {
+      "name": "the lookup names every part, with quotes doubled",
+      "input": {"lookup_sql": {"name": {"database": "materialize", "schema": "public", "name": "it's"}}},
+      "expect": {
+        "sql": "SELECT o.id, o.type, d.name AS database, s.name AS schema, o.name, (SELECT count(DISTINCT sh.shard_id) FROM mz_internal.mz_object_global_ids AS g JOIN mz_internal.mz_storage_shards AS sh ON sh.object_id = g.global_id WHERE g.id = o.id) AS shards, (SELECT min(sh.shard_id) FROM mz_internal.mz_object_global_ids AS g JOIN mz_internal.mz_storage_shards AS sh ON sh.object_id = g.global_id WHERE g.id = o.id) AS shard, (SELECT r.value::text FROM mz_internal.mz_history_retention_strategies AS r WHERE r.id = o.id AND r.strategy = 'FOR') AS retention_ms, c.name AS column, c.type_oid, c.type_mod, c.nullable FROM mz_catalog.mz_objects AS o JOIN mz_catalog.mz_schemas AS s ON s.id = o.schema_id LEFT JOIN mz_catalog.mz_databases AS d ON d.id = s.database_id LEFT JOIN mz_catalog.mz_columns AS c ON c.id = o.id WHERE o.type IN ('table', 'source', 'view', 'materialized-view') AND o.name = 'it''s' AND s.name = 'public' AND d.name = 'materialize' ORDER BY c.position"
+      }
+    },
+    {
+      "name": "an ambient schema has no database",
+      "input": {"lookup_sql": {"name": {"database": null, "schema": "mz_catalog", "name": "mz_tables"}}},
+      "expect": {
+        "sql": "SELECT o.id, o.type, d.name AS database, s.name AS schema, o.name, (SELECT count(DISTINCT sh.shard_id) FROM mz_internal.mz_object_global_ids AS g JOIN mz_internal.mz_storage_shards AS sh ON sh.object_id = g.global_id WHERE g.id = o.id) AS shards, (SELECT min(sh.shard_id) FROM mz_internal.mz_object_global_ids AS g JOIN mz_internal.mz_storage_shards AS sh ON sh.object_id = g.global_id WHERE g.id = o.id) AS shard, (SELECT r.value::text FROM mz_internal.mz_history_retention_strategies AS r WHERE r.id = o.id AND r.strategy = 'FOR') AS retention_ms, c.name AS column, c.type_oid, c.type_mod, c.nullable FROM mz_catalog.mz_objects AS o JOIN mz_catalog.mz_schemas AS s ON s.id = o.schema_id LEFT JOIN mz_catalog.mz_databases AS d ON d.id = s.database_id LEFT JOIN mz_catalog.mz_columns AS c ON c.id = o.id WHERE o.type IN ('table', 'source', 'view', 'materialized-view') AND o.name = 'mz_tables' AND s.name = 'mz_catalog' AND s.database_id IS NULL ORDER BY c.position"
+      }
+    },
+    {
+      "name": "a table after ADD COLUMN: one shard, columns in order",
+      "input": {
+        "parse_lookup": {
+          "columns": [
+            "id",
+            "type",
+            "database",
+            "schema",
+            "name",
+            "shards",
+            "shard",
+            "retention_ms",
+            "column",
+            "type_oid",
+            "type_mod",
+            "nullable"
+          ],
+          "rows": [
+            [
+              "u1",
+              "table",
+              "materialize",
+              "public",
+              "ct",
+              "1",
+              "s852e621d-b0d7-4dff-a3af-6a13305eb76a",
+              "1000",
+              "a",
+              "23",
+              "-1",
+              "t"
+            ],
+            [
+              "u1",
+              "table",
+              "materialize",
+              "public",
+              "ct",
+              "1",
+              "s852e621d-b0d7-4dff-a3af-6a13305eb76a",
+              "1000",
+              "b",
+              "25",
+              "-1",
+              "t"
+            ]
+          ]
+        }
+      },
+      "expect": {
+        "object": {
+          "object": {"id": "u1", "database": "materialize", "schema": "public", "name": "ct"},
+          "kind": "table",
+          "shard": "s852e621d-b0d7-4dff-a3af-6a13305eb76a",
+          "retention_ms": "1000",
+          "columns": [
+            {"name": "a", "type_oid": 23, "type_mod": -1, "nullable": true},
+            {"name": "b", "type_oid": 25, "type_mod": -1, "nullable": true}
+          ]
+        }
+      }
+    },
+    {
+      "name": "a materialized view with RETAIN HISTORY",
+      "input": {
+        "parse_lookup": {
+          "columns": [
+            "id",
+            "type",
+            "database",
+            "schema",
+            "name",
+            "shards",
+            "shard",
+            "retention_ms",
+            "column",
+            "type_oid",
+            "type_mod",
+            "nullable"
+          ],
+          "rows": [
+            [
+              "u4",
+              "materialized-view",
+              "materialize",
+              "public",
+              "keep",
+              "1",
+              "s5",
+              "3600000",
+              "a",
+              "23",
+              "-1",
+              "t"
+            ]
+          ]
+        }
+      },
+      "expect": {
+        "object": {
+          "object": {"id": "u4", "database": "materialize", "schema": "public", "name": "keep"},
+          "kind": "materialized_view",
+          "shard": "s5",
+          "retention_ms": "3600000",
+          "columns": [{"name": "a", "type_oid": 23, "type_mod": -1, "nullable": true}]
+        }
+      }
+    },
+    {
+      "name": "a view has no shard and no retention",
+      "input": {
+        "parse_lookup": {
+          "columns": [
+            "id",
+            "type",
+            "database",
+            "schema",
+            "name",
+            "shards",
+            "shard",
+            "retention_ms",
+            "column",
+            "type_oid",
+            "type_mod",
+            "nullable"
+          ],
+          "rows": [["u5", "view", "materialize", "public", "v", "0", null, null, "?column?", "23", "-1", "f"]]
+        }
+      },
+      "expect": {
+        "object": {
+          "object": {"id": "u5", "database": "materialize", "schema": "public", "name": "v"},
+          "kind": {"other": "view"},
+          "shard": null,
+          "retention_ms": null,
+          "columns": [{"name": "?column?", "type_oid": 23, "type_mod": -1, "nullable": false}]
+        }
+      }
+    },
+    {
+      "name": "an object in an ambient schema",
+      "input": {
+        "parse_lookup": {
+          "columns": [
+            "id",
+            "type",
+            "database",
+            "schema",
+            "name",
+            "shards",
+            "shard",
+            "retention_ms",
+            "column",
+            "type_oid",
+            "type_mod",
+            "nullable"
+          ],
+          "rows": [
+            [
+              "s493",
+              "materialized-view",
+              null,
+              "mz_catalog",
+              "mz_tables",
+              "1",
+              "s6",
+              "1000",
+              "id",
+              "25",
+              "-1",
+              "f"
+            ]
+          ]
+        }
+      },
+      "expect": {
+        "object": {
+          "object": {"id": "s493", "database": null, "schema": "mz_catalog", "name": "mz_tables"},
+          "kind": "materialized_view",
+          "shard": "s6",
+          "retention_ms": "1000",
+          "columns": [{"name": "id", "type_oid": 25, "type_mod": -1, "nullable": false}]
+        }
+      }
+    },
+    {
+      "name": "a table without columns comes back as one row with no column",
+      "input": {
+        "parse_lookup": {
+          "columns": [
+            "id",
+            "type",
+            "database",
+            "schema",
+            "name",
+            "shards",
+            "shard",
+            "retention_ms",
+            "column",
+            "type_oid",
+            "type_mod",
+            "nullable"
+          ],
+          "rows": [["u7", "table", "materialize", "public", "empty", "1", "s7", "1000", null, null, null, null]]
+        }
+      },
+      "expect": {
+        "object": {
+          "object": {"id": "u7", "database": "materialize", "schema": "public", "name": "empty"},
+          "kind": "table",
+          "shard": "s7",
+          "retention_ms": "1000",
+          "columns": []
+        }
+      }
+    },
+    {
+      "name": "a name that resolves to nothing",
+      "input": {
+        "parse_lookup": {
+          "columns": [
+            "id",
+            "type",
+            "database",
+            "schema",
+            "name",
+            "shards",
+            "shard",
+            "retention_ms",
+            "column",
+            "type_oid",
+            "type_mod",
+            "nullable"
+          ],
+          "rows": []
+        }
+      },
+      "expect": {"object": null}
+    },
+    {
+      "name": "a name that resolves to two objects is refused",
+      "input": {
+        "parse_lookup": {
+          "columns": [
+            "id",
+            "type",
+            "database",
+            "schema",
+            "name",
+            "shards",
+            "shard",
+            "retention_ms",
+            "column",
+            "type_oid",
+            "type_mod",
+            "nullable"
+          ],
+          "rows": [
+            [
+              "u1",
+              "table",
+              "materialize",
+              "public",
+              "ct",
+              "1",
+              "s852e621d-b0d7-4dff-a3af-6a13305eb76a",
+              "1000",
+              "a",
+              "23",
+              "-1",
+              "t"
+            ],
+            [
+              "u2",
+              "table",
+              "materialize",
+              "public",
+              "ct",
+              "1",
+              "s852e621d-b0d7-4dff-a3af-6a13305eb76a",
+              "1000",
+              "a",
+              "23",
+              "-1",
+              "t"
+            ]
+          ]
+        }
+      },
+      "expect": {"error": "protocol"}
+    },
+    {
+      "name": "two storage shards are refused",
+      "input": {
+        "parse_lookup": {
+          "columns": [
+            "id",
+            "type",
+            "database",
+            "schema",
+            "name",
+            "shards",
+            "shard",
+            "retention_ms",
+            "column",
+            "type_oid",
+            "type_mod",
+            "nullable"
+          ],
+          "rows": [
+            [
+              "u1",
+              "table",
+              "materialize",
+              "public",
+              "ct",
+              "2",
+              "s852e621d-b0d7-4dff-a3af-6a13305eb76a",
+              "1000",
+              null,
+              null,
+              null,
+              null
+            ]
+          ]
+        }
+      },
+      "expect": {"error": "protocol"}
+    },
+    {
+      "name": "other columns are refused",
+      "input": {"parse_lookup": {"columns": ["id"], "rows": []}},
+      "expect": {"error": "protocol"}
+    },
+    {
+      "name": "the index query names the object and the cluster",
+      "input": {"indexes_sql": {"object_id": "u1", "cluster": "quickstart"}},
+      "expect": {
+        "sql": "SELECT i.name FROM mz_catalog.mz_indexes AS i JOIN mz_catalog.mz_clusters AS c ON c.id = i.cluster_id WHERE i.on_id = 'u1' AND c.name = 'quickstart' ORDER BY i.name"
+      }
+    },
+    {
+      "name": "an index on the subscribing cluster",
+      "input": {"parse_indexes": {"columns": ["name"], "rows": [["ct_idx"]]}},
+      "expect": {"indexes": ["ct_idx"]}
+    },
+    {
+      "name": "no index",
+      "input": {"parse_indexes": {"columns": ["name"], "rows": []}},
+      "expect": {"indexes": []}
+    },
+    {
+      "name": "the read frontier query takes the highest frontier of the object's versions",
+      "input": {"read_frontier_sql": {"object_id": "u4"}},
+      "expect": {
+        "sql": "SELECT max(f.read_frontier) AS read_frontier FROM mz_internal.mz_object_global_ids AS g JOIN mz_internal.mz_frontiers AS f ON f.object_id = g.global_id WHERE g.id = 'u4'"
+      }
+    },
+    {
+      "name": "a read frontier",
+      "input": {"parse_read_frontier": {"columns": ["read_frontier"], "rows": [["1791907896000"]]}},
+      "expect": {"read_frontier": "1791907896000"}
+    },
+    {
+      "name": "an object with no readable time",
+      "input": {"parse_read_frontier": {"columns": ["read_frontier"], "rows": [[null]]}},
+      "expect": {"read_frontier": null}
+    },
+    {
+      "name": "the margin is how far AS OF F - 1 is above the read frontier",
+      "input": {"resume_margin": {"frontier": "1791907900001", "read_frontier": "1791907896000"}},
+      "expect": {"margin_ms": "4000"}
+    },
+    {
+      "name": "AS OF at the read frontier has no margin left",
+      "input": {"resume_margin": {"frontier": "1001", "read_frontier": "1000"}},
+      "expect": {"margin_ms": "0"}
+    },
+    {
+      "name": "AS OF below the read frontier has lost history",
+      "input": {"resume_margin": {"frontier": "1001", "read_frontier": "1001"}},
+      "expect": {"margin_ms": null}
+    },
+    {
+      "name": "a table's fingerprint",
+      "input": {
+        "fingerprint": {
+          "object": {
+            "object": {"id": "u1", "database": "materialize", "schema": "public", "name": "o"},
+            "kind": "table",
+            "shard": "s1",
+            "retention_ms": "1000",
+            "columns": [{"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false}]
+          },
+          "envelope": {"kind": "diff"}
+        }
+      },
+      "expect": {
+        "fingerprint": {
+          "object": {"id": "u1", "database": "materialize", "schema": "public", "name": "o"},
+          "shard": "s1",
+          "envelope": {"kind": "diff"},
+          "columns": [{"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false}]
+        }
+      }
+    },
+    {
+      "name": "a view is not durable",
+      "input": {
+        "fingerprint": {
+          "object": {
+            "object": {"id": "u5", "database": "materialize", "schema": "public", "name": "o"},
+            "kind": {"other": "view"},
+            "shard": null,
+            "retention_ms": "1000",
+            "columns": [{"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false}]
+          },
+          "envelope": {"kind": "diff"}
+        }
+      },
+      "expect": {"error": "usage"}
+    },
+    {
+      "name": "a system object is not durable",
+      "input": {
+        "fingerprint": {
+          "object": {
+            "object": {"id": "s493", "database": "materialize", "schema": "public", "name": "o"},
+            "kind": "materialized_view",
+            "shard": "s1",
+            "retention_ms": "1000",
+            "columns": [{"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false}]
+          },
+          "envelope": {"kind": "diff"}
+        }
+      },
+      "expect": {"error": "usage"}
+    },
+    {
+      "name": "a source without columns, a primary object that emits no data, is not durable",
+      "input": {
+        "fingerprint": {
+          "object": {
+            "object": {"id": "u9", "database": "materialize", "schema": "public", "name": "o"},
+            "kind": "source",
+            "shard": "s1",
+            "retention_ms": "1000",
+            "columns": []
+          },
+          "envelope": {"kind": "diff"}
+        }
+      },
+      "expect": {"error": "usage"}
+    },
+    {
+      "name": "a table without columns is durable",
+      "input": {
+        "fingerprint": {
+          "object": {
+            "object": {"id": "u7", "database": "materialize", "schema": "public", "name": "o"},
+            "kind": "table",
+            "shard": "s1",
+            "retention_ms": "1000",
+            "columns": []
+          },
+          "envelope": {"kind": "diff"}
+        }
+      },
+      "expect": {
+        "fingerprint": {
+          "object": {"id": "u7", "database": "materialize", "schema": "public", "name": "o"},
+          "shard": "s1",
+          "envelope": {"kind": "diff"},
+          "columns": []
+        }
+      }
+    }
+  ]
+}
