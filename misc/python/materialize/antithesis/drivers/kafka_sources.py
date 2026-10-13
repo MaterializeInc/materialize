@@ -38,11 +38,17 @@ source is dropped and its topic deleted.
 
 `first_configure` sets up and seeds every slot through `setup_main`; the
 driver and the check repair a missing slot within a bounded retry budget.
+
+The duplicate-key and topic-equality oracles have a second message for an
+export the shard auditor saw with its remap since past its upper
+(`remap_frontiers.seen_past_upper`, SS-346), the state from which a restarted
+ingestion may write updates twice.
 """
 
 from __future__ import annotations
 
 import sqlite3
+import time
 import zlib
 from dataclasses import dataclass
 from decimal import Decimal
@@ -63,7 +69,7 @@ from confluent_kafka.cimpl import (
     TopicPartition,
 )
 
-from materialize.antithesis import sql, state
+from materialize.antithesis import remap_frontiers, sql, state
 from materialize.antithesis.drivers.source_status import Export, observe
 from materialize.antithesis.drivers.sources_common import (
     LAZY_SETUP_BUDGET_S,
@@ -89,6 +95,9 @@ from materialize.antithesis.endpoints import Endpoints
 from materialize.antithesis.rng import rng
 
 STATE_DB = "kafka_sources"
+RECENT_GENERATIONS_QUERY = "SELECT count(*) FROM generations WHERE started_epoch >= ?"
+"""Generations (a source and its tables) whose setup began at or after the
+given wall-clock time. Read-only, for other drivers' triggers."""
 KAFKA_CONNECTION = "antithesis_kafka"
 SLOTS = 2
 
@@ -169,6 +178,11 @@ def open_state() -> sqlite3.Connection:
         db.execute(
             "CREATE TABLE IF NOT EXISTS ready (slot INTEGER, gen INTEGER,"
             " PRIMARY KEY (slot, gen))"
+        )
+        # Wall-clock time of the first setup attempt of each generation.
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS generations (slot INTEGER, gen INTEGER,"
+            " started_epoch REAL NOT NULL, PRIMARY KEY (slot, gen))"
         )
         # Acknowledged produces only; a lost delivery report leaves no row.
         db.execute(
@@ -259,6 +273,11 @@ def ensure_slot(
     if _is_ready(db, s):
         _drop_old_generations(db, endpoints, host, s)
         return s
+    with db:
+        db.execute(
+            "INSERT OR IGNORE INTO generations VALUES (?, ?, ?)",
+            (s.slot, s.gen, time.time()),
+        )
     failure = with_retry(
         "kafka sources",
         f"setup of slot {slot} gen {s.gen}",
@@ -748,7 +767,14 @@ def _check(
     if t is None:
         log(f"{s.topic}: check skipped, no readable time in {fronts}")
         return
-    details: dict[str, Any] = {"topic": s.topic, "as_of": t}
+    up_remap_past = remap_frontiers.seen_past_upper(up)
+    none_remap_past = remap_frontiers.seen_past_upper(none)
+    details: dict[str, Any] = {
+        "topic": s.topic,
+        "as_of": t,
+        "upsert_remap_since_seen_past_upper": up_remap_past,
+        "none_remap_since_seen_past_upper": none_remap_past,
+    }
 
     try:
         progress = conn.execute(
@@ -780,11 +806,19 @@ def _check(
         return
     details["frontier"] = frontier
 
-    always(
-        not dup_keys,
-        "kafka source: the upsert export holds at most one row per key",
-        {**details, "duplicates": [[k, int(c)] for k, c in dup_keys]},
-    )
+    dup_details = {**details, "duplicates": [[k, int(c)] for k, c in dup_keys]}
+    if up_remap_past:
+        always_or_unreachable(
+            not dup_keys,
+            "kafka source: the upsert export holds at most one row per key, after its remap since was seen past its upper (SS-346)",
+            dup_details,
+        )
+    else:
+        always(
+            not dup_keys,
+            "kafka source: the upsert export holds at most one row per key",
+            dup_details,
+        )
 
     regressions = record_progress_observation(db, s.topic, t, frontier)
     always(
@@ -837,11 +871,18 @@ def _check(
     observed_none = [(text, int(p), int(o)) for text, p, o in none_rows]
     none_diff = bag_diff(expected_none, observed_none)
     none_ok = none_diff["missing_count"] == 0 and none_diff["extra_count"] == 0
-    always(
-        none_ok,
-        "kafka source: the none-envelope export equals the topic records below the mapped offsets",
-        {**details, **none_diff},
-    )
+    if none_remap_past:
+        always_or_unreachable(
+            none_ok,
+            "kafka source: the none-envelope export equals the topic records below the mapped offsets, after its remap since was seen past its upper (SS-346)",
+            {**details, **none_diff},
+        )
+    else:
+        always(
+            none_ok,
+            "kafka source: the none-envelope export equals the topic records below the mapped offsets",
+            {**details, **none_diff},
+        )
 
     upsert_ok = True
     if not split_keys:
@@ -850,11 +891,18 @@ def _check(
         upsert_ok = (
             upsert_diff["missing_count"] == 0 and upsert_diff["extra_count"] == 0
         )
-        always(
-            upsert_ok,
-            "kafka source: the upsert export equals the latest value per key below the mapped offsets",
-            {**details, **upsert_diff},
-        )
+        if up_remap_past:
+            always_or_unreachable(
+                upsert_ok,
+                "kafka source: the upsert export equals the latest value per key below the mapped offsets, after its remap since was seen past its upper (SS-346)",
+                {**details, **upsert_diff},
+            )
+        else:
+            always(
+                upsert_ok,
+                "kafka source: the upsert export equals the latest value per key below the mapped offsets",
+                {**details, **upsert_diff},
+            )
         sometimes(
             any(v is None for v in latest.values()),
             "kafka source: an upsert check covered a key whose latest record is a tombstone",
