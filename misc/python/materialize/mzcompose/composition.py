@@ -152,6 +152,7 @@ class Composition:
         self.is_sanity_restart_mz = sanity_restart_mz
         self.current_test_case_name_override: str | None = None
         self.host_network = host_network
+        self.cgroup_parent = os.environ.get("MZCOMPOSE_CGROUP_PARENT")
         self.resolve_image_specs = resolve_image_specs
 
         if name in self.repo.compositions:
@@ -409,9 +410,23 @@ class Composition:
         gen = self._compose_gen
         cached = getattr(self._tls, "file_and_gen", None)
         if cached is None or cached[1] is not gen:
+            compose = self.compose
+            if self.cgroup_parent:
+                services = {}
+                for name, config in compose["services"].items():
+                    parent = config.get("cgroup_parent")
+                    if parent is not None and parent != self.cgroup_parent:
+                        raise UIError(
+                            f"service {name!r} has cgroup_parent {parent!r}, "
+                            f"conflicting with MZCOMPOSE_CGROUP_PARENT={self.cgroup_parent!r}"
+                        )
+                    services[name] = {**config, "cgroup_parent": self.cgroup_parent}
+                # Apply at emission so companions and workflow replacements share
+                # the fixture budget. Image builds do not use this configuration.
+                compose = {**compose, "services": services}
             file = TemporaryFile(mode="w")
             os.set_inheritable(file.fileno(), True)
-            yaml.dump(self.compose, file)
+            yaml.dump(compose, file)
             os.fsync(file.fileno())
             self._tls.file_and_gen = (file, gen)
         else:

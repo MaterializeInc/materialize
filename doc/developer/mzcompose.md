@@ -149,6 +149,15 @@ In the example above, we are calling the [`up`](https://dev.materialize.com/api/
 
 ## Starting services
 
+For a shared resource budget across a fixture, set `MZCOMPOSE_CGROUP_PARENT` to
+an existing parent cgroup understood by the Docker daemon. With Docker's systemd
+driver, this is a slice name, for example `mzrepro.slice`. mzcompose applies it to
+every emitted service, including companions and workflow replacements, and rejects
+conflicting service-level parents. It does not create the parent or set limits.
+Image builds stay outside this setting. Use fresh containers, since existing
+containers retain their original parent. Without the variable, parenting is
+unchanged.
+
 In the past, starting a service with `Composition.up` did not wait for the
 service to become healthy. We had a variety of helper methods (e.g.,
 `Composition.start_and_wait_for_tcp`) that would perform additional health
