@@ -19,7 +19,7 @@ use fail::fail_point;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use tokio::fs::{self, File};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 use crate::error::Error;
 use crate::location::{Blob, BlobMetadata, Determinate, ExternalError};
@@ -87,13 +87,11 @@ impl FileBlob {
 impl Blob for FileBlob {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
-        let mut file = match File::open(file_path).await {
-            Ok(file) => file,
+        let buf = match fs::read(file_path).await {
+            Ok(buf) => buf,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err.into()),
         };
-        let mut buf = Vec::new();
-        file.read_to_end(&mut buf).await?;
         Ok(Some(SegmentedBytes::from(buf)))
     }
 
