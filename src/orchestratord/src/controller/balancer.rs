@@ -27,7 +27,7 @@ use k8s_openapi::{
 };
 use kube::{
     Api, Client, Resource, ResourceExt,
-    api::{DeleteParams, ObjectMeta, PostParams},
+    api::{DeleteParams, ObjectMeta, Patch, PatchParams, PostParams},
     runtime::{conditions::is_deployment_completed, controller::Action, wait::await_condition},
 };
 use maplit::btreemap;
@@ -35,7 +35,7 @@ use tracing::{trace, warn};
 
 use crate::{
     Error,
-    k8s::{apply_resource, get_resource, recommended_k8s_labels, replace_resource},
+    k8s::{FIELD_MANAGER, apply_resource, get_resource, recommended_k8s_labels, replace_resource},
     tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
@@ -482,6 +482,40 @@ impl Context {
         }
     }
 
+    /// Hands `spec.replicas` to [`REPLICAS_HANDOVER_MANAGER`] at its live value
+    /// while [`FIELD_MANAGER`] still owns it.
+    ///
+    /// NOTE: Dropping a field from an apply when no other manager owns it
+    /// deletes it, which defaults the Deployment to 1 replica. An autoscaler
+    /// cannot become a co-owner first, because each of its writes triggers a
+    /// reconcile whose forced apply reclaims the field.
+    async fn release_replicas(
+        &self,
+        deployment_api: &Api<Deployment>,
+        name: &str,
+    ) -> Result<(), Error> {
+        let Some(existing) = get_resource(deployment_api, name).await? else {
+            return Ok(());
+        };
+        if !owns_replicas(&existing) {
+            return Ok(());
+        }
+        let replicas = existing.spec.and_then(|spec| spec.replicas);
+        deployment_api
+            .patch(
+                name,
+                &PatchParams::apply(REPLICAS_HANDOVER_MANAGER),
+                &Patch::Apply(serde_json::json!({
+                    "apiVersion": "apps/v1",
+                    "kind": "Deployment",
+                    "metadata": { "name": name },
+                    "spec": { "replicas": replicas },
+                })),
+            )
+            .await?;
+        Ok(())
+    }
+
     // TODO: remove this once everyone is upgraded to an orchestratord
     // version with the separate balancer operator
     async fn fix_deployment(
@@ -629,6 +663,10 @@ impl k8s_controller::Context for Context {
         let step = metadata.step("deployment");
         let deployment = self.create_deployment_object(balancer)?;
         self.fix_deployment(&deployment_api, &deployment).await?;
+        if balancer.replicas().is_none() {
+            self.release_replicas(&deployment_api, &deployment.name_unchecked())
+                .await?;
+        }
         trace!("creating new balancerd deployment");
         apply_resource(&deployment_api, &deployment).await?;
         step.finish(Outcome::Completed);
@@ -645,6 +683,19 @@ impl k8s_controller::Context for Context {
 
         Ok(None)
     }
+}
+
+const REPLICAS_HANDOVER_MANAGER: &str = "orchestratord.materialize.cloud/replicas-handover";
+
+fn owns_replicas(deployment: &Deployment) -> bool {
+    deployment
+        .metadata
+        .managed_fields
+        .iter()
+        .flatten()
+        .filter(|entry| entry.manager.as_deref() == Some(FIELD_MANAGER))
+        .filter_map(|entry| entry.fields_v1.as_ref())
+        .any(|fields| fields.0.pointer("/f:spec/f:replicas").is_some())
 }
 
 #[cfg(test)]
@@ -700,6 +751,27 @@ mod tests {
             let deployment = context.create_deployment_object(&balancer).unwrap();
             assert_eq!(deployment.spec.unwrap().replicas, expected);
         }
+    }
+
+    #[mz_ore::test]
+    fn owns_replicas_reads_managed_fields() {
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::{FieldsV1, ManagedFieldsEntry};
+        let deployment = |manager: &str| Deployment {
+            metadata: ObjectMeta {
+                managed_fields: Some(vec![ManagedFieldsEntry {
+                    manager: Some(manager.to_owned()),
+                    fields_v1: Some(FieldsV1(
+                        serde_json::json!({ "f:spec": { "f:replicas": {} } }),
+                    )),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(owns_replicas(&deployment(FIELD_MANAGER)));
+        assert!(!owns_replicas(&deployment(REPLICAS_HANDOVER_MANAGER)));
+        assert!(!owns_replicas(&Deployment::default()));
     }
 
     #[mz_ore::test]

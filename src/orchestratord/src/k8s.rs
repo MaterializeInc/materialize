@@ -28,7 +28,7 @@ use tracing::info;
 
 use mz_cloud_resources::crd::{self, VersionedCrd, register_versioned_crds};
 
-const FIELD_MANAGER: &str = "orchestratord.materialize.cloud";
+pub(crate) const FIELD_MANAGER: &str = "orchestratord.materialize.cloud";
 
 pub async fn get_resource<K>(api: &Api<K>, name: &str) -> Result<Option<K>, anyhow::Error>
 where
