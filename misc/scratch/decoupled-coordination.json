@@ -1,7 +1,7 @@
 {
     "name": "decoupled-coordination",
     "launch_script": "true",
-    "instance_type": "m8g.4xlarge",
+    "instance_type": "m8i.4xlarge",
     "size_gb": 500,
     "tags": {
         "reason": "Decoupled coordination compilation and debugging"
