@@ -541,7 +541,7 @@ fn validate_read_then_write(
 ///
 /// This runs before the write, so the result-size checks in here reject the
 /// statement without having written anything.
-fn build_success_response(
+pub(crate) fn build_success_response(
     kind: &MutationKind,
     returning: &[MirScalarExpr],
     diffs: &[(Row, Diff)],
