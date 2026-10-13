@@ -23,7 +23,7 @@
 use columnar::{Borrow, Columnar, Container, Index, Len, Push};
 use differential_dataflow::dynamic::pointstamp::{PointStamp, PointStampSummary};
 use differential_dataflow::{AsCollection, Collection, VecCollection};
-use mz_expr::BatchInput;
+use mz_expr::{BatchInput, MfpBatchSizer};
 use mz_repr::{Datum, DatumVec, DatumVecBorrow, Diff, Row, RowRef};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
@@ -33,6 +33,7 @@ use mz_timely_util::operator::consolidate_pact;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, NoopBuilder, PushInto};
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
+use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{Operator, OutputBuilder};
 use timely::dataflow::{Scope, Stream, StreamVec};
@@ -152,14 +153,19 @@ impl<'a> BatchInput<'a> for BatchRows<'a> {
     }
 }
 
-/// Like [`flat_map_datums`], but hands `logic` up to `batch_rows` rows at a
-/// time, with their times and diffs, so it can evaluate them together.
+/// Like [`flat_map_datums`], but hands `logic` batches of up to `batch_rows`
+/// rows at a time, with their times and diffs, so it can evaluate them
+/// together.
 ///
-/// Batches span every container that arrives in one activation. The operator
-/// keeps those containers and lends their rows to `logic`, so batching copies
+/// Batches span the containers that arrive in one activation. The operator
+/// holds those containers and lends their rows to `logic`, so batching copies
 /// no input. `logic` appends its outputs tagged with the index of the input
-/// row within the batch, in row order, and each output is emitted at the
-/// capability of the container its input row came from.
+/// row within the batch, in row order, and returns the bytes its evaluation
+/// held. Those, with the batch's input and output rows, size later batches
+/// ([`MfpBatchSizer`]), and input rows alone end a batch early once they reach
+/// its target. Each batch's outputs are emitted as soon as it is evaluated, at
+/// the capability of the container each input row came from, and the operator
+/// releases its containers once it holds a batch's worth of rows.
 pub fn flat_map_rows_batched<'scope, T, DCB, L>(
     edge: ColCollection<'scope, T>,
     name: &str,
@@ -173,7 +179,7 @@ pub fn flat_map_rows_batched<'scope, T, DCB, L>(
 where
     T: RenderTimestamp,
     DCB: ContainerBuilder + PushInto<(Row, T, Diff)>,
-    L: for<'a> FnMut(&BatchRows<'a>, &[(T, Diff)], &mut Vec<(usize, BatchedOutput<T>)>)
+    L: for<'a> FnMut(&BatchRows<'a>, &[(T, Diff)], &mut Vec<(usize, BatchedOutput<T>)>) -> usize
         + 'static,
 {
     let scope = edge.inner.scope();
@@ -183,59 +189,101 @@ where
     let (err_output, err_stream) = builder.new_output();
     let mut err_output = OutputBuilder::<_, ECB<T>>::from(err_output);
     let mut input = builder.new_input(edge.inner, Pipeline);
-    let batch_rows = batch_rows.max(1);
     builder.build(move |_capabilities| {
-        let mut containers = Vec::new();
+        let mut sizer = MfpBatchSizer::new(batch_rows);
+        let mut containers: Vec<(Capability<T>, Capability<T>, Column<(Row, T, Diff)>)> =
+            Vec::new();
         let mut updates = Vec::new();
         let mut outputs = Vec::new();
         move |_frontiers| {
-            // The input containers of this activation, with their
-            // capabilities.
-            input.for_each(|time, data| {
-                containers.push((time.retain(0), time.retain(1), std::mem::take(data)));
-            });
-            // Each container's capabilities, the end of its rows in `rows`,
-            // and its outputs.
-            let mut segments = Vec::with_capacity(containers.len());
-            let mut rows = Vec::new();
-            for (ok_cap, err_cap, container) in containers.iter() {
-                for (v, t, d) in container.borrow().into_index_iter() {
-                    rows.push(v);
-                    updates.push((Columnar::into_owned(t), Columnar::into_owned(d)));
-                }
-                segments.push((ok_cap, err_cap, rows.len(), Vec::new()));
-            }
-
-            let mut segment = 0;
-            for start in (0..rows.len()).step_by(batch_rows) {
-                let end = (start + batch_rows).min(rows.len());
-                let batch = BatchRows {
-                    rows: &rows[start..end],
-                    max_demand,
-                };
-                logic(&batch, &updates[start..end], &mut outputs);
-                for (i, output) in outputs.drain(..) {
-                    while segments[segment].2 <= start + i {
-                        segment += 1;
-                    }
-                    segments[segment].3.push(output);
-                }
-            }
-            updates.clear();
-
             let mut ok_output = ok_output.activate();
             let mut err_output = err_output.activate();
-            for (ok_cap, err_cap, _end, segment_outputs) in segments {
-                let mut ok_session = ok_output.session_with_builder(ok_cap);
-                let mut err_session = err_output.session_with_builder(err_cap);
-                for output in segment_outputs {
-                    match output {
-                        Ok(update) => ok_session.give(update),
-                        Err(error) => err_session.give(error),
+            let mut limit = sizer.rows();
+            // Evaluates the held containers' rows in batches, emits their
+            // outputs, releases the containers, and returns the size of the
+            // next batch.
+            let mut flush =
+                |containers: &mut Vec<(Capability<T>, Capability<T>, Column<(Row, T, Diff)>)>| {
+                    let mut rows: Vec<&RowRef> = Vec::new();
+                    // The index in `rows` of each container's first row.
+                    let mut starts = Vec::with_capacity(containers.len());
+                    for (_, _, container) in containers.iter() {
+                        starts.push(rows.len());
+                        for (v, t, d) in container.borrow().into_index_iter() {
+                            rows.push(v);
+                            updates.push((Columnar::into_owned(t), Columnar::into_owned(d)));
+                        }
                     }
+                    let mut start = 0;
+                    let mut segment = 0;
+                    while start < rows.len() {
+                        // Wide rows end a batch early, before its evaluation adds
+                        // to them.
+                        let limit = sizer.rows();
+                        let mut end = start;
+                        let mut input_bytes = 0;
+                        while end < rows.len()
+                            && end - start < limit
+                            && input_bytes < MfpBatchSizer::TARGET_BYTES
+                        {
+                            input_bytes += rows[end].byte_len();
+                            end += 1;
+                        }
+                        let batch = BatchRows {
+                            rows: &rows[start..end],
+                            max_demand,
+                        };
+                        let evaluation_bytes = logic(&batch, &updates[start..end], &mut outputs);
+                        let output_bytes: usize = outputs
+                            .iter()
+                            .map(|(_, output)| match output {
+                                Ok((row, _, _)) => row.byte_len(),
+                                Err(_) => 0,
+                            })
+                            .sum();
+                        sizer.observe(end - start, evaluation_bytes + input_bytes + output_bytes);
+                        // Outputs come in row order, so each container's outputs
+                        // are contiguous.
+                        let mut batch_outputs = outputs.drain(..).peekable();
+                        while let Some((i, _)) = batch_outputs.peek() {
+                            while <[usize]>::get(&starts, segment + 1)
+                                .is_some_and(|next| *next <= start + i)
+                            {
+                                segment += 1;
+                            }
+                            let segment_end = <[usize]>::get(&starts, segment + 1)
+                                .copied()
+                                .unwrap_or(rows.len());
+                            let (ok_cap, err_cap, _) = &containers[segment];
+                            let mut ok_session = ok_output.session_with_builder(ok_cap);
+                            let mut err_session = err_output.session_with_builder(err_cap);
+                            while let Some((_, output)) =
+                                batch_outputs.next_if(|(i, _)| start + i < segment_end)
+                            {
+                                match output {
+                                    Ok(update) => ok_session.give(update),
+                                    Err(error) => err_session.give(error),
+                                }
+                            }
+                        }
+                        start = end;
+                    }
+                    updates.clear();
+                    drop(rows);
+                    containers.clear();
+                    sizer.rows()
+                };
+            let mut held_rows = 0;
+            input.for_each(|time, data| {
+                let container = std::mem::take(data);
+                held_rows += container.borrow().len();
+                containers.push((time.retain(0), time.retain(1), container));
+                if held_rows >= limit {
+                    limit = flush(&mut containers);
+                    held_rows = 0;
                 }
-            }
-            containers.clear();
+            });
+            flush(&mut containers);
         }
     });
     (ok_stream, err_stream)
