@@ -194,8 +194,8 @@ single query and is the only mechanism whose cost appears in a customer's dashbo
   scale bounded by collection size rather than by result size. And unlike a peek it
   cannot be moved. A dataflow renders on the interactive runtime only when its
   `DataflowClass` is `OneShotRead`, the adapter sets that class only on peek dataflows,
-  and the compute controller soft-asserts that a `OneShotRead` dataflow carries no
-  subscribe sink. So **subscribes are maintained work by construction and the second
+  and the compute controller installs a `OneShotRead` dataflow that carries a subscribe
+  sink as `Maintained`. So **subscribes are maintained work by construction and the second
   runtime cannot reach this at all.** The recorded reason is that a subscribe never
   stops, while the interactive runtime's imports of maintained indexes end one step past
   the dataflow's `as_of`. See [The one-shot-read boundary](#the-one-shot-read-boundary).
@@ -280,10 +280,10 @@ document.
 
 **S5 does not reach M2, and measurably makes it worse.** The worker loop is
 `step_or_park`, then `handle_pending_commands`, then `process_peeks`
-(`src/compute/src/server.rs:513-543`). An offloaded walk is *dispatched* inside
-`process_peek` (`src/compute/src/compute_state.rs:1467`), reachable only from
+(`Worker::run_client` in `src/compute/src/server.rs`). An offloaded walk is *dispatched*
+inside `walk_index_peek` (`src/compute/src/compute_state.rs`), reachable only from
 `process_peeks`, and its result is *sent* by the worker when it polls the oneshot
-(`:1600`), with the blocking task only firing an activator. So a peek arriving
+(`poll_pending_peek`), with the blocking task only firing an activator. So a peek arriving
 while a long operator activation is in progress inside `step_or_park` cannot even
 begin its offloaded walk until that activation finishes. Offloaded latency under M2
 is the residual activation plus the walk plus one step, against inline's residual
@@ -873,7 +873,8 @@ is the trace's freedom to compact ahead of the reading runtime.
 
 **What it needs from the runtimes.** A runtime accepts every command for a peer.
 `AllowCompaction` moves the peer's hold, an empty frontier forgets the peer, and `Schedule`
-and `AllowWrites` change nothing, since the peer's work happens on the other runtime. A peer
+and `AllowWrites` leave the peer as it is, since its work happens on the other runtime.
+`AllowWrites` still enables persist compaction, which is process-wide and idempotent. A peer
 never enters `collections`, which drives frontier reporting, so a collection's frontiers
 come only from the runtime that renders it. A peer is keyed by its collection and carries no
 dataflow identity.
@@ -956,9 +957,11 @@ a reconnection.
 The interactive runtime renders a dataflow only when the compute controller has tagged it
 `DataflowClass::OneShotRead`. The adapter sets that class on one kind of dataflow, a peek
 dataflow, together with an `until` one step past its `as_of` (`optimize/peek.rs`). Every
-other dataflow keeps the default, `Maintained`. The controller soft-asserts the shape a
+other dataflow keeps the default, `Maintained`. The controller checks the shape a
 `OneShotRead` dataflow must have (`DataflowDescription::class_fits_shape`): transient exports,
-a single-time read, and no subscribe or copy-to sink.
+a single-time read, and no subscribe or copy-to sink. A dataflow that fails the check trips a
+soft assertion and is installed as `Maintained`, so a misclassified dataflow renders where
+every dataflow can.
 
 Each condition has a reason. A single time, because the interactive runtime's imports of
 maintained indexes end one step past the `as_of`, so they cannot feed a dataflow that runs
@@ -972,7 +975,7 @@ reconnect must not rebuild a dataflow a runtime already renders, so each runtime
 placement it acted on.
 
 With `enable_compute_interactive_dataflows` off, the controller installs a `OneShotRead`
-dataflow as `Maintained`, after the shape assertion. The maintenance runtime renders it and
+dataflow as `Maintained`, after the shape check. The maintenance runtime renders it and
 publishes its index exports, the interactive runtime records them as peers, and since every
 peek still goes to the interactive runtime, it serves the result peek from the published
 index.
@@ -1053,10 +1056,11 @@ which would make every snapshot wait vacuously true and return empty results.
 
 ### One lock for the chain and the feed
 
-The trace enqueues a batch to every importer under the same lock in which it
-publishes the chain containing that batch, so an importer registering concurrently
-either seeds a chain with the batch or receives it through its queue, never both and
-never neither. Frontiers follow the chain: the published `upper` is the last batch's
+The trace captures the set of live importers under the same lock in which it
+publishes the chain containing a batch, and enqueues the batch to exactly that set after
+releasing the lock. An importer registering concurrently either registers before the
+capture and receives the batch through its queue, or registers after it and seeds a chain
+that already contains the batch, never both and never neither. Frontiers follow the chain: the published `upper` is the last batch's
 upper, and each enqueued batch is followed by the frontier that closes it, so an
 importer's delayed capability never meets a frontier ahead of a batch below it. The
 replay is incremental rather than a one-shot dump of the whole chain under a single
@@ -1071,9 +1075,12 @@ differential's `TraceBox` calls the trace: `set_logical_compaction` and
 `set_physical_compaction` arrive with the meet of the local agents' holds, the
 controller's `AllowCompaction` among them through the trace manager, and the wrapper
 applies the meet of that frontier and the readers' holds to the inner spine. The
-published `since` and physical frontier are read off the spine after the call, so they
-are the trace's own frontiers rather than an approximation of them, and a registering
-reader cannot latch a `since` claiming accuracy at already-merged times. Nothing is
+published `since` is the frontier the wrapper is about to apply, written under the same
+lock in which it reads the holds, before the spine is touched. It can briefly lead the
+spine's own `since`, which refuses a reader the trace could still have served, the safe
+direction. The reverse order would admit a reader at times a running merge is about to
+coalesce away. Either way a registering reader cannot latch a `since` claiming accuracy at
+already-merged times. Nothing is
 forwarded through the registry.
 
 Readers' holds accumulate in two `MutableAntichain`s on the point, one per axis, and
@@ -1154,11 +1161,13 @@ needs no new command.
 
 **One frozen hold would defeat it**, because the target is a **meet** across all holds: a
 single hold pinned at `as_of` dominates it no matter how far every other hold advances.
-So the import keeps no separate hold. The read hold is each returned `Arranged`'s own
-trace handle, registered at `as_of`, and the dataflow token retains only the peer bundle's
-drop token, which keeps the registry slot alive. A consumer
-that keeps the trace downgrades that handle as its frontier advances, and the trace
-compacts behind it. For a single-time read the distinction is unobservable. For a
+So no hold of the import's stays at `as_of`. The import operator owns one hold, which
+follows the frontiers it acknowledges and drops when its input closes. The read hold a
+consumer sees is each returned `Arranged`'s own trace handle, registered at the peer hold's
+frontier, the join of the `as_of` and the published `since`. The dataflow token retains
+only the peer bundle's drop token, which keeps the registry slot alive. A consumer that
+keeps the trace downgrades that handle as its frontier advances, and the trace compacts
+behind it. For a single-time read the distinction is unobservable. For a
 long-lived importer it is what lets the imported index's `since` advance for the
 importer's whole life, so it is in place before any such importer exists rather than
 retrofitted for one.
@@ -1294,12 +1303,17 @@ components when it is built rather than branching on it in shared functions.
   deployment from before this work. Its metric and log label is `None`, so a single-runtime
   registration collides with nothing and looks unchanged.
 * `ProcessGlobals` owns the settings that have one value per process: lgalloc, the memory
-  limiter, the columnation lgalloc region, the overflowing behavior, the pager and its
-  buffer pool, arrangement dictionary compression, and the metrics registry's workload
-  class label. Applying them from both runtimes would double-apply effects that are not
+  limiter, the columnation lgalloc region, the overflowing behavior, the pager, the tiered
+  column pager, the buffer pool, compute's and the MV sink's chunk spill gates, the spill
+  compression depth, arrangement dictionary compression, and the metrics registry's workload
+  class label. Storage sets its own chunk spill gate from its own configuration, and the
+  pool is installed once any of the three gates is on. Applying them from both runtimes would double-apply effects that are not
   idempotent or race the first. Both runtimes receive every `UpdateConfiguration`, so the
   applied values are the controller's configuration whichever runtime applies them, and a
   setting two runtimes could want to differ on still has one value per process.
+* On a unified cluster, storage objects render on the maintenance runtime's workers, and
+  the interactive runtime imports what maintenance publishes as under any other topology.
+  The interactive runtime is built before either controller listener opens.
 * The interactive runtime's tracing span is named `compute-interactive` and its worker
   threads `interactive:<index>`, so profilers and logs tell the runtimes apart. Linux
   truncates a thread name to 15 bytes, which is why the prefix is short.
@@ -1322,9 +1336,10 @@ mechanism.
 * The dyncfg is read when a replica is provisioned, not applied to running ones, because the
   controller decides `ServiceConfig::ports` before the replica exists. Replica-scoped
   overrides are therefore resolved in `environmentd`. An existing replica keeps its old
-  configuration until it is recreated, so the flip is not a live toggle and is not a rolling
+  configuration until it is recreated or `environmentd` restarts, which re-provisions every
+  replica with the value in effect then. The flip is not a live toggle and is not a rolling
   restart either. Plan it as a flip followed by an explicit recreation of every replica that
-  should pick it up.
+  should pick it up, or let the next `environmentd` restart apply it.
 * `ENABLE_COMPUTE_INTERACTIVE_DATAFLOWS` (dyncfg, `mz-controller-types`, environment-scoped)
   is on by default. It is read when the controller creates a dataflow, so a change applies to
   dataflows created after it. Off, peek dataflows render as maintained work, see
@@ -1337,7 +1352,8 @@ mechanism.
   than by the controller, so the runtime flag never reaches them. A suite that wants the
   second runtime on one, as the feature benchmark does, configures its `clusterd` service
   directly, and the feature benchmark reads the flag from its effective system parameters so
-  a `--this-params` or `--other-params` override reaches the replica it measures.
+  a `--this-params` or `--other-params` override reaches the replica it measures. That
+  service runs the standalone `clusterd` binary, also when built from source.
 * The interactive port is named `interactive`, not something more descriptive, because
   Kubernetes rejects a container port name longer than 15 characters. The process orchestrator
   that local runs and mzcompose use has no such limit, so an over-long name passes every test
@@ -1624,10 +1640,11 @@ the existing answer and a better one.
   `as_of`, a trace published under several ids, a hold registered below an attaching trace's
   `since`, incarnations of one id, and one publishing and one reading thread per registry. The multiplexer's broadcast and peek routing and the index peek sweep have
   their own.
-* `compute_state` tests drive a maintenance and an interactive `ActiveComputeState` over one
-  registry with the same command stream, which covers placement, peers and their holds, and
-  peeks served from a peer index. `render` tests cover the shared import, joins over shared
-  arrangements, the publisher's reserved peer hold in either order, and padded peer bundles.
+* `compute_state` tests drive an interactive `ActiveComputeState` against a hand-built
+  publisher on the same registry, which covers placement, peers and their holds, and peeks
+  served from a peer index. `sharing` tests cover joins over imported arrangements. `render`
+  tests cover the shared import, the publisher's reserved peer hold in either order, and
+  padded peer bundles.
 * Four `clusterd-test-driver` specs, run at one and two workers, cover the runtime boundary:
   a fast-path read through a published index, a query dataflow that binds to an index before
   it has produced anything and resolves after, a read through an index that re-exports
@@ -1651,8 +1668,8 @@ the existing answer and a better one.
   regression thresholds. `ReadIsolationUnderHydration` and `IntrospectionUnderHydration`
   read at a fixed rate while hydration churn saturates the maintenance workers.
   `TemporaryDataflowFloor` is the quiet-replica cost of a peek dataflow.
-  `MaintenanceUnderPeekSaturation` saturates every worker of an eight-worker cluster on a
-  sixteen-core agent with peeks while a materialized view's freshness is measured from an
+  `MaintenanceUnderPeekSaturation` runs one worker per core of the host, 16 on a 16-core
+  agent, and loads them with open-loop join peeks while a materialized view's freshness is measured from an
   idle cluster, which prices the oversubscription of two runtimes' worker threads.
   `FreshnessUnderPeekDataflows` runs peek dataflows next to a materialized view and reads
   the view from another cluster. `PeekIsolationUnderExpensivePeeks` and
@@ -1661,10 +1678,10 @@ the existing answer and a better one.
   or not the offload bounds them. Scenarios whose measurement is peek service time read at
   SERIALIZABLE, because a strict serializable read waits on the frontier the contention
   stalls, which is M5 rather than the mechanism under test.
-* The `bounded-memory` composition's `swap` workflow runs a replica whose arrangements
-  exceed its memory limit by 1.5x, 2x, 3x and 6x with unlimited swap, and asserts that
-  the read completes and that the replica's cgroup reports swap use, so the paged-out
-  case has a regression test.
+* A `bounded-memory` `swap` workflow, proposed in #38683 and not yet merged, runs a
+  replica whose arrangements exceed its memory limit by 1.5x, 2x, 3x and 6x with unlimited
+  swap, and asserts that the read completes and that the replica's cgroup reports swap use,
+  so the paged-out case would have a regression test.
 
 What two nightly runs on the CI agents measured, the stack against its merge base, reported
 as p50 / p99:
@@ -1748,7 +1765,7 @@ compiling and passing its tests without the ones above it:
 
 followed by the benchmarks that guard the read paths (#38676), the ones that price
 oversubscription and publication at scale (#38678), and the hold-gap metric (#38736). The
-swap scenarios in `bounded-memory` are independent of the stack (#38683).
+swap scenarios in `bounded-memory` are independent of the stack and still open (#38683).
 
 Every planning and evaluation document that preceded this one has been folded in or moved
 out, so this directory holds one design document and nothing else. The planning documents
