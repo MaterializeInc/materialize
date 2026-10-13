@@ -686,8 +686,8 @@ struct ConnectionLimiter {
     watermark_transitions: IntCounter,
     _limit: ComputedUIntGauge,
     _accepting: ComputedIntGauge,
-    _high_watermark: ComputedIntGauge,
-    _low_watermark: ComputedIntGauge,
+    _high_watermark: ComputedUIntGauge,
+    _low_watermark: ComputedUIntGauge,
 }
 
 #[derive(Debug, Default)]
@@ -704,8 +704,8 @@ struct Watermarks {
     high: usize,
 }
 
-/// The effective watermarks, `Ok(None)` when unset, or `Err` describing why the configured
-/// values are ignored.
+/// The effective watermarks, `Ok(None)` when both are zero, or `Err` describing why the
+/// configured values are ignored.
 ///
 /// The high watermark must be strictly below the hard limit. At the limit the pod would leave
 /// rotation exactly when it is full, which is when a load balancer that closes connections to
@@ -715,29 +715,26 @@ fn configured_watermarks(configs: &ConfigSet) -> Result<Option<Watermarks>, Stri
     let high = CONNECTION_HIGH_WATERMARK.get(configs);
     let max = MAX_CONNECTIONS.get(configs);
     let reason = match (low, high) {
-        (None, None) => return Ok(None),
-        (Some(0), Some(_)) => "the low watermark must be at least 1",
-        (Some(low), Some(high)) if low >= high => {
-            "the low watermark must be below the high watermark"
-        }
-        (Some(_), Some(_)) if max == 0 => "balancerd_max_connections must be enabled",
-        (Some(_), Some(high)) if high >= usize::cast_from(max) => {
+        (0, 0) => return Ok(None),
+        (0, _) | (_, 0) => "both watermarks must be set",
+        (low, high) if low >= high => "the low watermark must be below the high watermark",
+        _ if max == 0 => "balancerd_max_connections must be enabled",
+        (_, high) if high >= usize::cast_from(max) => {
             "the high watermark must be below balancerd_max_connections"
         }
-        (Some(low), Some(high)) => return Ok(Some(Watermarks { low, high })),
-        _ => "both watermarks must be set",
+        (low, high) => return Ok(Some(Watermarks { low, high })),
     };
     Err(format!(
-        "{reason} (low={low:?}, high={high:?}, max_connections={max})"
+        "{reason} (low={low}, high={high}, max_connections={max})"
     ))
 }
 
-/// One effective watermark as a gauge value, -1 when the watermarks are off.
-fn watermark_metric(configs: &ConfigSet, pick: fn(Watermarks) -> usize) -> i64 {
+/// One effective watermark as a gauge value, 0 when the watermarks are off.
+fn watermark_metric(configs: &ConfigSet, pick: fn(Watermarks) -> usize) -> u64 {
     configured_watermarks(configs)
         .ok()
         .flatten()
-        .map_or(-1, |w| i64::try_from(pick(w)).unwrap_or(i64::MAX))
+        .map_or(0, |w| u64::cast_from(pick(w)))
 }
 
 impl ConnectionLimiter {
@@ -776,7 +773,7 @@ impl ConnectionLimiter {
         let high_watermark = registry.register_computed_gauge(
             metric!(
                 name: "mz_balancer_connection_high_watermark",
-                help: "Connections at which balancerd leaves load balancer rotation, -1 if disabled.",
+                help: "Connections at which balancerd leaves load balancer rotation, 0 if disabled.",
             ),
             {
                 let configs = configs.clone();
@@ -786,7 +783,7 @@ impl ConnectionLimiter {
         let low_watermark = registry.register_computed_gauge(
             metric!(
                 name: "mz_balancer_connection_low_watermark",
-                help: "Connections below which balancerd returns to load balancer rotation, -1 if \
+                help: "Connections below which balancerd returns to load balancer rotation, 0 if \
                 disabled.",
             ),
             {
@@ -824,7 +821,7 @@ impl ConnectionLimiter {
     ///
     /// There is no minimum time out of rotation. How long `/api/readyz` must fail before a pod
     /// actually leaves, and how long it must pass before it returns, is up to the health check
-    /// thresholds of whatever reads it, which lets short bursts pass without a round trip.
+    /// thresholds of whatever reads it.
     fn evaluate_watermarks(&self) -> bool {
         let mut state = self.watermark_state.lock().expect("lock poisoned");
         let watermarks = self.watermarks(&mut state.last_warning);
@@ -846,7 +843,7 @@ impl ConnectionLimiter {
                 );
                 true
             }
-            // Watermarks unset or invalidated while out of rotation restore readiness at once,
+            // Watermarks disabled or invalidated while out of rotation restore readiness at once,
             // since off must behave as if they had never been set.
             (None, true) => {
                 info!(
@@ -2221,10 +2218,28 @@ mod tests {
         assert!(limiter.acquire().is_some());
     }
 
+    /// balancerd ignores the sync error at startup, so a dyncfg type LaunchDarkly can't carry
+    /// would silently stop every balancerd flag from syncing.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+    async fn test_dyncfgs_sync_from_launchdarkly() {
+        mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
+            dyncfgs::all_dyncfgs(ConfigSet::default()),
+            &BUILD_INFO,
+            |_| Ok(()),
+            None,
+            Duration::ZERO,
+            None,
+            |_, _| {},
+        )
+        .await
+        .expect("every balancerd dyncfg converts to a LaunchDarkly flag");
+    }
+
     #[mz_ore::test]
     fn test_connection_watermarks() {
         let configs = dyncfgs::all_dyncfgs(ConfigSet::default());
-        let set = |low: Option<usize>, high: Option<usize>, max: u32| {
+        let set = |low: usize, high: usize, max: u32| {
             let mut updates = ConfigUpdates::default();
             updates.add(&CONNECTION_LOW_WATERMARK, low);
             updates.add(&CONNECTION_HIGH_WATERMARK, high);
@@ -2238,25 +2253,24 @@ mod tests {
 
         // Anything short of both watermarks, ordered, below an enabled hard limit is off.
         for (low, high, max) in [
-            (None, None, 5),
-            (Some(1), None, 5),
-            (None, Some(3), 5),
-            (Some(0), Some(3), 5),
-            (Some(3), Some(3), 5),
-            (Some(4), Some(3), 5),
-            (Some(1), Some(5), 5),
-            (Some(1), Some(3), 0),
+            (0, 0, 5),
+            (1, 0, 5),
+            (0, 3, 5),
+            (3, 3, 5),
+            (4, 3, 5),
+            (1, 5, 5),
+            (1, 3, 0),
         ] {
             set(low, high, max);
             limiter.evaluate_watermarks();
             assert!(
                 limiter.accepting(),
-                "watermarks low={low:?} high={high:?} max={max} must be ignored",
+                "watermarks low={low} high={high} max={max} must be ignored",
             );
         }
         assert_eq!(limiter.watermark_transitions.get(), 0);
 
-        set(Some(2), Some(3), 5);
+        set(2, 3, 5);
         limiter.evaluate_watermarks();
         assert!(!limiter.accepting(), "at the high watermark");
         assert_eq!(limiter.watermark_transitions.get(), 1);
@@ -2280,7 +2294,7 @@ mod tests {
         let _fifth = limiter.acquire().expect("under the limit");
         limiter.evaluate_watermarks();
         assert!(!limiter.accepting(), "at the high watermark again");
-        set(None, None, 5);
+        set(0, 0, 5);
         limiter.evaluate_watermarks();
         assert!(
             limiter.accepting(),

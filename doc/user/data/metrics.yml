@@ -242,7 +242,7 @@ metrics:
   source: src/balancerd/src/lib.rs
   visibility: internal
 - name: mz_balancer_connection_high_watermark
-  help: Connections at which balancerd leaves load balancer rotation, -1 if disabled.
+  help: Connections at which balancerd leaves load balancer rotation, 0 if disabled.
   source: src/balancerd/src/lib.rs
   visibility: internal
 - name: mz_balancer_connection_limit
@@ -250,7 +250,7 @@ metrics:
   source: src/balancerd/src/lib.rs
   visibility: internal
 - name: mz_balancer_connection_low_watermark
-  help: Connections below which balancerd returns to load balancer rotation, -1 if disabled.
+  help: Connections below which balancerd returns to load balancer rotation, 0 if disabled.
   source: src/balancerd/src/lib.rs
   visibility: internal
 - name: mz_balancer_connection_rejected_total

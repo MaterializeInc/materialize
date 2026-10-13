@@ -56,25 +56,25 @@ pub const MAX_CONNECTIONS: Config<u32> = Config::new(
 );
 
 /// Number of open connections at which balancerd leaves load balancer rotation.
-pub const CONNECTION_HIGH_WATERMARK: Config<Option<usize>> = Config::new(
+pub const CONNECTION_HIGH_WATERMARK: Config<usize> = Config::new(
     "balancerd_connection_high_watermark",
-    None,
+    0,
     "Number of open connections at which balancerd reports not ready on /api/readyz, so \
     load balancers stop sending it new connections while existing connections continue. \
-    Takes effect only when balancerd_connection_low_watermark is also set, the low \
+    Takes effect only when balancerd_connection_low_watermark is also non-zero, the low \
     watermark is below the high watermark, and the high watermark is below a non-zero \
-    balancerd_max_connections. Unset disables the watermarks.",
+    balancerd_max_connections. Zero disables the watermarks.",
     ParameterScope::Environment,
 );
 
 /// Number of open connections below which balancerd returns to load balancer rotation.
-pub const CONNECTION_LOW_WATERMARK: Config<Option<usize>> = Config::new(
+pub const CONNECTION_LOW_WATERMARK: Config<usize> = Config::new(
     "balancerd_connection_low_watermark",
-    None,
+    0,
     "Number of open connections below which balancerd reports ready again after reaching \
     balancerd_connection_high_watermark. Must be below the high watermark. The gap \
     between the two keeps a balancer near the threshold from repeatedly entering and \
-    leaving load balancer rotation. Unset disables the watermarks.",
+    leaving load balancer rotation. Zero disables the watermarks.",
     ParameterScope::Environment,
 );
 
@@ -188,12 +188,12 @@ pub(crate) fn set_defaults(
         } else if k.as_str() == CONNECTION_HIGH_WATERMARK.name() {
             config_updates.add_dynamic(
                 CONNECTION_HIGH_WATERMARK.name(),
-                mz_dyncfg::ConfigVal::OptUsize(Some(usize::from_str(v)?)),
+                mz_dyncfg::ConfigVal::Usize(usize::from_str(v)?),
             )
         } else if k.as_str() == CONNECTION_LOW_WATERMARK.name() {
             config_updates.add_dynamic(
                 CONNECTION_LOW_WATERMARK.name(),
-                mz_dyncfg::ConfigVal::OptUsize(Some(usize::from_str(v)?)),
+                mz_dyncfg::ConfigVal::Usize(usize::from_str(v)?),
             )
         } else if k.as_str() == PRE_RESOLVED_TIMEOUT.name() {
             config_updates.add_dynamic(
