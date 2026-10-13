@@ -27,11 +27,9 @@ object type that supports indexes.
 2. Compiles the project and verifies the target exists with the expected
    type (materialized view, or any object with the named index).
 3. Starts a Materialize Docker container, or reuses the existing one. The
-   container has a fixed name (`mz-deploy-sandbox`) and is shared across
-   `test` and `explain` invocations on this host. If the existing container
-   was created from a different image than the one configured (for example
-   after upgrading `mz-deploy`, changing `mz_version`, or passing
-   `--docker-image`), it is replaced.
+   container (`mz-deploy-sandbox`) is shared across `test` and `explain`
+   invocations on this host and always runs the configured Materialize
+   version.
 4. Creates a temporary schema (`_mz_explain_<timestamp>`) and stages the
    target's transitive dependencies into it as stub tables, indexes, or
    views.
