@@ -57,6 +57,10 @@ macro_rules! halt {
             ::std::concat!("process halted at ", ::std::file!(), ":", ::std::line!()),
             &message
         );
+        $crate::antithesis::halted(
+            ::std::concat!(::std::file!(), ":", ::std::line!()),
+            &message,
+        );
         $crate::process::exit_thread_safe($crate::process::HALT_EXIT_CODE);
     }}
 }

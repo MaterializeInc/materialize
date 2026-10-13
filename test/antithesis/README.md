@@ -34,6 +34,11 @@ The Antithesis build flavor (`bin/mzimage ... --antithesis`, or
 
 - every process panic as the failed property `Materialize process panicked`,
   except panics marked with `mz_ore::antithesis::expect_panic()`;
+- every `halt!` as a per-site `process halted at <file>:<line>` event, plus a
+  verdict from `mz_ore::antithesis::classify_halt`: `Materialize process
+  halted by design` for messages on the reviewed `DESIGNED_HALTS` list, a
+  dedicated failed property for halts of filed bugs, and `Materialize process
+  halted for an unexpected reason` for everything else;
 - every soft assertion that logs instead of panicking as
   `Materialize soft assertion failed`;
 - assertions placed with `mz_ore::antithesis_{always,sometimes,reachable,unreachable}!`.

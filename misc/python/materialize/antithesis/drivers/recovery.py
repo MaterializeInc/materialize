@@ -18,6 +18,12 @@ budget. The checks run in dependency order (availability first), and each gets
 its own budget so one slow check does not turn every later one into a false
 failure.
 
+From construction on, a background thread samples every Materialize
+container's restart history, and the last check asserts that no container
+crash-looped (see `materialize.antithesis.crash_loops`) in a window after
+faults stopped. The SUT reports each halt's verdict in process; this check
+catches designed halts and panics that repeat.
+
 `anytime_main` samples every Materialize pod's container statuses and
 classifies each new termination by exit code (sut-anomalies-are-explained,
 workload side). It sees exits that bypass the SUT's panic hook.
@@ -40,6 +46,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import sys
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -56,7 +63,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
 from kubernetes import client  # type: ignore
 from kubernetes.client.rest import ApiException  # type: ignore
 
-from materialize.antithesis import sql, state
+from materialize.antithesis import crash_loops, sql, state
 from materialize.antithesis.drivers import configure, lifecycle, rollouts
 from materialize.antithesis.drivers.sources_common import source_error_text
 from materialize.antithesis.endpoints import INTERNAL_HTTP_PORT
@@ -80,8 +87,15 @@ CR_BUDGET_S = CHECK_BUDGET_S + rollouts.T_ROLLOUT_SECONDS
 # schedule on one simulated core does not read as a wedge.
 WEDGE_FACTOR = 3
 POLL_S = 5
-# Longer than one environmentd boot, so a crash loop restarts within it.
-CRASHLOOP_WINDOW_S = 180
+# A crash loop must show `crash_loops.LOOP_MIN_CRASHES` (2) crashes within
+# this window. The kubelet's restart backoff caps at 300 s, so a loop that
+# halts during boot crashes about every 300 s plus one boot; two such cycles
+# fit.
+CRASHLOOP_WINDOW_S = 720
+CRASHLOOP_SAMPLE_S = 5
+# Log lines of a crashed container that name the cause, shown in details.
+EXIT_LOG_MARKERS = ("halting process:", "panicked at")
+EXIT_LOG_TAIL = 200
 # Ten default timestamp intervals; any live collection ticks within it.
 FRONTIER_WINDOW_S = 10
 # A reconfiguration past its deadline must settle within one controller tick;
@@ -272,6 +286,7 @@ class ContainerObservation:
     signal: int | None
     finished_at: str | None
     waiting_reason: str | None
+    deleting: bool = False
 
 
 def pod_role(
@@ -318,6 +333,7 @@ def observe_pods(env: Environment) -> list[ContainerObservation]:
                         signal=term.signal if term else None,
                         finished_at=str(term.finished_at) if term else None,
                         waiting_reason=waiting.reason if waiting else None,
+                        deleting=metadata.deletion_timestamp is not None,
                     )
                 )
     return result
@@ -445,6 +461,15 @@ class Recovery:
         self.unstick = rollouts.OperatorUnstick(
             rollouts.operator_ctx(self.env), "recovery"
         )
+        # Restart history from the moment faults stopped, read by
+        # `no_crash_loop` after the other checks.
+        self.restarts = crash_loops.Tracker()
+        self.restarts_lock = threading.Lock()
+        self.containers: dict[str, ContainerObservation] = {}
+        self.sampling_done = threading.Event()
+        threading.Thread(
+            target=self.sample_restarts, name="crash-loop-sampler", daemon=True
+        ).start()
 
     def details(self, **extra: Any) -> dict[str, Any]:
         return {"mode": self.mode, "timings": dict(self.timings), **extra}
@@ -741,22 +766,72 @@ class Recovery:
         response.raise_for_status()
         return True, response.json()
 
-    def restart_counts(self) -> dict[tuple[str, str], tuple[str, int]]:
-        return {
-            (o.pod_uid, o.container): (f"{o.role}/{o.pod}", o.restart_count)
-            for o in observe_pods(self.env)
-        }
+    def sample_restarts(self) -> None:
+        """Feed `self.restarts` from pod statuses until `run` ends."""
+        while not self.sampling_done.is_set():
+            try:
+                observations = observe_pods(self.env)
+            except rollouts.TRANSIENT_ERRORS as e:
+                log(f"crash-loop sampler cannot read pods: {e}")
+                observations = None
+            if observations is not None:
+                samples = []
+                for o in observations:
+                    name = f"{o.role}/{o.pod}/{o.container}"
+                    self.containers[name] = o
+                    samples.append(
+                        crash_loops.Sample(
+                            key=(o.pod_uid, o.container),
+                            name=name,
+                            restart_count=o.restart_count,
+                            exit_class=(
+                                classify_exit(o.exit_code, o.reason)
+                                if o.exit_code is not None
+                                else None
+                            ),
+                            exit_code=o.exit_code,
+                            finished_at=o.finished_at,
+                            waiting_reason=o.waiting_reason,
+                            deleting=o.deleting,
+                        )
+                    )
+                with self.restarts_lock:
+                    self.restarts.observe(time.monotonic(), samples)
+            self.sampling_done.wait(CRASHLOOP_SAMPLE_S)
+
+    def exit_log_lines(self, name: str) -> list[str]:
+        """Halt and panic lines from the previous run of a container, best effort."""
+        o = self.containers.get(name)
+        if o is None:
+            return []
+        try:
+            text = client.CoreV1Api().read_namespaced_pod_log(
+                o.pod,
+                o.namespace,
+                container=o.container,
+                previous=True,
+                tail_lines=EXIT_LOG_TAIL,
+                _request_timeout=HTTP_TIMEOUT_S,  # pyright: ignore[reportCallIssue]
+            )
+        except rollouts.TRANSIENT_ERRORS as e:
+            return [f"cannot read the previous log: {e}"]
+        return [
+            line[:1000]
+            for line in text.splitlines()
+            if any(m in line for m in EXIT_LOG_MARKERS)
+        ][-5:]
 
     def no_crash_loop(self) -> tuple[bool, Any]:
-        before = self.restart_counts()
-        time.sleep(CRASHLOOP_WINDOW_S)
-        after = self.restart_counts()
-        increased = {
-            name: [count, after[key][1]]
-            for key, (name, count) in before.items()
-            if key in after and after[key][1] > count
-        }
-        return not increased, {"increased": increased}
+        """No container crash-looped in the last `CRASHLOOP_WINDOW_S`, once
+        the sampler has covered that long."""
+        with self.restarts_lock:
+            covered = self.restarts.covered(CRASHLOOP_WINDOW_S)
+            loops = self.restarts.loops(CRASHLOOP_WINDOW_S)
+        if not covered:
+            return False, {"waiting_for_coverage_s": CRASHLOOP_WINDOW_S}
+        for name, info in loops.items():
+            info["exit_log"] = self.exit_log_lines(name)
+        return not loops, {"crash_loops": loops}
 
     def retry_ledger(self) -> None:
         families = self.db.execute(
@@ -1015,11 +1090,30 @@ class Recovery:
             record_terminations(self.db, observe_pods(self.env))
         except (ApiException, OSError) as e:
             log(f"cannot read pods: {e}")
-        ok, info, _ = poll(CHECK_BUDGET_S, self.no_crash_loop, "crash loop")
+        # Recovery's own steps do no DDL while a read-only generation runs
+        # (`cr_up_to_date` settles any rollout first), and eventually_ and
+        # finally_ commands run without the drivers, so the designed reboot of
+        # a read-only generation on leader DDL cannot repeat here.
+        with self.restarts_lock:
+            started = self.restarts.started
+        sampled_s = time.monotonic() - started if started is not None else 0.0
+        coverage_wait = max(0.0, CRASHLOOP_WINDOW_S - sampled_s)
+        ok, info, took = poll(
+            coverage_wait + CRASHLOOP_WINDOW_S * WEDGE_FACTOR,
+            self.no_crash_loop,
+            "crash loop",
+        )
+        took = max(0.0, took - coverage_wait)
+        self.sampling_done.set()
         always(
             ok,
-            "no Materialize pod keeps restarting after faults stop",
+            "No Materialize pod crash-loops after faults stop",
             self.details(info=info, window_s=CRASHLOOP_WINDOW_S),
+        )
+        sometimes(
+            ok and took <= CHECK_BUDGET_S,
+            "No Materialize pod crash-looped within the tight budget after faults stop",
+            self.details(window_s=CRASHLOOP_WINDOW_S, took_s=took),
         )
 
         if rng.random() < RESTART_COMPARE_P:
