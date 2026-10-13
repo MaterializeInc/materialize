@@ -35,6 +35,7 @@
 )]
 
 pub mod batch;
+pub mod catalog;
 pub mod classify;
 pub mod decode;
 pub mod error;
@@ -45,6 +46,7 @@ pub mod subscription;
 mod wire;
 
 pub use batch::{Batch, BatchError, Batcher, Event, Start};
+pub use catalog::{CatalogObject, ObjectKind, ObjectName};
 pub use classify::{
     Classification, ErrorKind, ObjectOutcome, Phase, classify, resolve_index_check,
     resolve_object_check,

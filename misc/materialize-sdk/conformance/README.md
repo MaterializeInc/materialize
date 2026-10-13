@@ -99,3 +99,21 @@ serve the object. The output is `{"kind": ...}`.
 ### `compare_identity.json`
 
 Input: `stored`, `current` (or `null`). The output is the change.
+
+### `catalog.json`
+
+Input: one operation:
+
+- `{"lookup_sql": {"name"}}`, `{"indexes_sql": {"object_id", "cluster"}}`, and
+  `{"read_frontier_sql": {"object_id"}}` yield `{"sql": ...}`.
+- `{"parse_lookup": {"columns", "rows"}}` yields `{"object": ...}`, with
+  `null` when the name resolves to nothing.
+- `{"parse_indexes": {"columns", "rows"}}` yields `{"indexes": [...]}`, and
+  `{"parse_read_frontier": {"columns", "rows"}}` yields
+  `{"read_frontier": ...}`.
+- `{"resume_margin": {"frontier", "read_frontier"}}` yields
+  `{"margin_ms": ...}`, with `null` when history is lost.
+- `{"fingerprint": {"object", "envelope"}}` yields `{"fingerprint": ...}` for
+  an object a resumable subscription can read, or `{"error": "usage"}`.
+
+A query's result that the query cannot return yields `{"error": "protocol"}`.
