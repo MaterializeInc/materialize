@@ -10,7 +10,17 @@ publish = false
 workspace = true
 
 [dependencies]
-wasmtime = { workspace = true, features = ["anyhow", "backtrace", "cranelift", "runtime", "std"] }
+itertools.workspace = true
+mz-expr = { path = "../expr" }
+mz-ore = { path = "../ore", features = ["process", "tracing"] }
+mz-wasm-udf-abi = { path = "../wasm-udf-abi" }
+stacker.workspace = true
+thiserror.workspace = true
+wasmparser.workspace = true
+wasmtime = { workspace = true, features = ["anyhow", "backtrace", "call-hook", "cranelift", "runtime", "std"] }
+
+[dev-dependencies]
+mz-ore = { path = "../ore", features = ["test"] }
 
 [features]
 default = []

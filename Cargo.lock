@@ -9447,6 +9447,13 @@ dependencies = [
 name = "mz-wasm-udf"
 version = "0.1.0"
 dependencies = [
+ "itertools 0.15.0",
+ "mz-expr",
+ "mz-ore",
+ "mz-wasm-udf-abi",
+ "stacker",
+ "thiserror 2.0.21",
+ "wasmparser",
  "wasmtime",
 ]
 
