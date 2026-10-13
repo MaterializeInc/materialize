@@ -29,3 +29,18 @@ impl ProtocolError {
         ProtocolError(message.into())
     }
 }
+
+/// One timestamp held more update bytes than the limit set with
+/// [`crate::Batcher::with_max_timestamp_bytes`]. The timestamp is the same on
+/// every retry, so retrying cannot help.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "the updates at timestamp {timestamp} exceed the limit of {limit} bytes. Raise the limit, \
+     or subscribe to a smaller materialized view"
+)]
+pub struct TimestampTooLarge {
+    /// The timestamp.
+    pub timestamp: u64,
+    /// The limit.
+    pub limit: usize,
+}
