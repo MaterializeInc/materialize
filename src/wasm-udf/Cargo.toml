@@ -1,0 +1,16 @@
+[package]
+name = "mz-wasm-udf"
+description = "Deterministic WebAssembly runtime for arrow-udf scalar functions."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+wasmtime = { workspace = true, features = ["anyhow", "backtrace", "cranelift", "runtime", "std"] }
+
+[features]
+default = []
