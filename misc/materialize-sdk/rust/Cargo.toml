@@ -1,0 +1,20 @@
+[package]
+name = "materialize-sdk"
+description = "Consume Materialize SUBSCRIBE correctly, and write custom sinks."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+materialize-sdk-core = { path = "../core" }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio-postgres.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
