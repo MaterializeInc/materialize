@@ -19,7 +19,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::channels::pact::Pipeline;
 
-use crate::operators::arrange::{Arranged, TraceAgent};
+use crate::operators::arrange::{Agent, AgentWriter, Arranged, TraceAgent};
 use crate::trace::{BatchCursor, BatchDiff, BatchKey, BatchReader, BatchVal, BatchValOwn, Builder, Cursor, Description, ExertionLogic, Navigable, Trace, TraceReader};
 use crate::trace::cursor::cursor_list;
 use crate::trace::implementations::containers::BatchContainer;
@@ -117,11 +117,39 @@ pub use reference::reduce_trace_reference;
 /// `TraceReader` of its input and `Trace` of its output, never `Navigable`: it extracts batches via
 /// `batches_through`, and building cursors over them (if that is how the reduce proceeds) is the
 /// tactic's concern.
-pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T) -> Arranged<'scope, TraceAgent<Tr2>>
+pub fn reduce_with_tactic<'scope, Tr1, Tr2, T>(trace: Arranged<'scope, Tr1>, name: &str, tactic: T) -> Arranged<'scope, TraceAgent<Tr2>>
 where
     Tr1: TraceReader + 'static,
     Tr2: Trace<Time = Tr1::Time> + 'static,
     T: ReduceTactic<Tr1::Batch, Tr2::Batch> + 'static,
+{
+    reduce_with_tactic_and_agent::<_, _, _, TraceAgent<Tr2>>(trace, name, tactic)
+}
+
+/// As [`reduce_trace`], maintaining the output trace behind an agent of type `A`.
+pub fn reduce_trace_with_agent<'scope, Tr1, Bu, Tr2, KC, L, P, A>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, A>
+where
+    Tr1: TraceReader<Batch: Navigable> + 'static,
+    Tr2: Trace<Batch: Navigable, Time = Tr1::Time> + 'static,
+    KC: BatchContainer,
+    BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
+    for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
+    for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time>,
+    Bu: Builder<Time=Tr2::Time, Output = Tr2::Batch, Input: Default> + 'static,
+    L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
+    P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
+    A: Agent<Tr2> + 'static,
+{
+    reduce_with_tactic_and_agent::<_, _, _, A>(trace, name, cursors::CursorTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push))
+}
+
+/// As [`reduce_with_tactic`], maintaining the output trace behind an agent of type `A`.
+pub fn reduce_with_tactic_and_agent<'scope, Tr1, Tr2, T, A>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T) -> Arranged<'scope, A>
+where
+    Tr1: TraceReader + 'static,
+    Tr2: Trace<Time = Tr1::Time> + 'static,
+    T: ReduceTactic<Tr1::Batch, Tr2::Batch> + 'static,
+    A: Agent<Tr2> + 'static,
 {
     let mut result_trace = None;
 
@@ -143,7 +171,7 @@ where
                 empty.set_exert_logic(exert_logic);
             }
 
-            let (mut output_reader, mut output_writer) = TraceAgent::new(empty, operator_info, logger);
+            let (mut output_reader, mut output_writer) = A::new(empty, operator_info, logger);
 
             *result_trace = Some(output_reader.clone());
 

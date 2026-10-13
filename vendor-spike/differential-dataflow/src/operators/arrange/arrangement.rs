@@ -36,7 +36,7 @@ use trace::wrappers::enter::{TraceEnter, BatchEnter,};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
 use trace::wrappers::enter_at::BatchEnter as BatchEnterAt;
 
-use super::TraceAgent;
+use super::{Agent, AgentWriter, TraceAgent};
 
 /// An arranged collection of `(K,V)` values.
 ///
@@ -358,6 +358,20 @@ where
     Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output = Tr::Batch>,
     Tr: Trace+'static,
 {
+    arrange_core_with_agent::<_, _, Chu, Ba, Bu, Tr, TraceAgent<Tr>>(stream, pact, name)
+}
+
+/// As [`arrange_core`], maintaining the trace behind an agent of type `A`.
+pub fn arrange_core_with_agent<'scope, P, C, Chu, Ba, Bu, Tr, A>(stream: Stream<'scope, Tr::Time, C>, pact: P, name: &str) -> Arranged<'scope, A>
+where
+    C: Container + Clone + 'static,
+    P: ParallelizationContract<Tr::Time, C>,
+    Chu: ContainerBuilder<Container=Ba::Output> + for<'a> PushInto<&'a mut C> + 'static,
+    Ba: Batcher<Time=Tr::Time> + 'static,
+    Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output = Tr::Batch>,
+    Tr: Trace+'static,
+    A: Agent<Tr> + 'static,
+{
     // The `Arrange` operator is tasked with reacting to an advancing input
     // frontier by producing the sequence of batches whose lower and upper
     // bounds are those frontiers, containing updates at times greater or
@@ -373,7 +387,7 @@ where
     // held by the batcher, which may prevents the operator from sending an
     // empty batch.
 
-    let mut reader: Option<TraceAgent<Tr>> = None;
+    let mut reader: Option<A> = None;
 
     // fabricate a data-parallel operator using the `unary_notify` pattern.
     let reader_ref = &mut reader;
@@ -397,7 +411,7 @@ where
             empty_trace.set_exert_logic(exert_logic);
         }
 
-        let (reader_local, mut writer) = TraceAgent::new(empty_trace, info, logger);
+        let (reader_local, mut writer) = A::new(empty_trace, info, logger);
 
         *reader_ref = Some(reader_local);
 

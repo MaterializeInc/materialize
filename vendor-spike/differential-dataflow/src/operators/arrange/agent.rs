@@ -15,6 +15,43 @@ use crate::trace::{Trace, TraceReader, BatchReader};
 use timely::scheduling::Activator;
 
 use super::{TraceWriter, TraceAgentQueueWriter, TraceAgentQueueReader, Arranged};
+
+/// A shared handle to a trace, created together with the writer an arranging operator feeds.
+///
+/// Arranging operators (`arrange_core_with_agent`, `reduce_with_tactic_and_agent`,
+/// `arrange_from_upsert_with_agent`) construct the agent for the trace they maintain, write
+/// through its writer, and read and compact through their own clone of it. [`TraceAgent`] is
+/// the default implementation.
+pub trait Agent<Tr: Trace>: TraceReader<Time = Tr::Time, Batch = Tr::Batch> + Clone {
+    /// The write endpoint the arranging operator inserts batches through.
+    type Writer: AgentWriter<Tr> + 'static;
+    /// Wraps `trace`, maintained by `operator`, into an agent and its writer.
+    fn new(trace: Tr, operator: OperatorInfo, logging: Option<crate::logging::Logger>) -> (Self, Self::Writer);
+}
+
+/// The write endpoint of an [`Agent`].
+pub trait AgentWriter<Tr: Trace> {
+    /// Appends `batch`, whose lower must equal the previous upper. `hint` is a time at or below
+    /// every update in the batch, suitable as a capability, or `None` for an empty batch.
+    fn insert(&mut self, batch: Tr::Batch, hint: Option<Tr::Time>);
+    /// Advances the upper to `upper` with an empty batch, if it moves.
+    fn seal(&mut self, upper: Antichain<Tr::Time>);
+    /// Exerts merge effort on the trace, even without new batches.
+    fn exert(&mut self);
+}
+
+impl<Tr: Trace + 'static> Agent<Tr> for TraceAgent<Tr> {
+    type Writer = TraceWriter<Tr>;
+    fn new(trace: Tr, operator: OperatorInfo, logging: Option<crate::logging::Logger>) -> (Self, Self::Writer) {
+        TraceAgent::new(trace, operator, logging)
+    }
+}
+
+impl<Tr: Trace> AgentWriter<Tr> for TraceWriter<Tr> {
+    fn insert(&mut self, batch: Tr::Batch, hint: Option<Tr::Time>) { TraceWriter::insert(self, batch, hint) }
+    fn seal(&mut self, upper: Antichain<Tr::Time>) { TraceWriter::seal(self, upper) }
+    fn exert(&mut self) { TraceWriter::exert(self) }
+}
 use super::TraceReplayInstruction;
 
 use crate::trace::wrappers::frontier::{TraceFrontier, BatchFrontier};

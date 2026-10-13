@@ -108,12 +108,12 @@ use timely::progress::{Antichain, Timestamp};
 use timely::dataflow::operators::Capability;
 
 use crate::operators::arrange::arrangement::Arranged;
-use crate::trace::{self, BatchCursor, BatchDiff, Builder, Cursor, Description, Navigable, Trace, TraceReader};
+use crate::trace::{self, BatchCursor, BatchDiff, Builder, Cursor, Description, Navigable, Trace};
 use crate::{ExchangeData, Hashable};
 
 use crate::trace::implementations::containers::BatchContainer;
 
-use super::TraceAgent;
+use super::{Agent, AgentWriter, TraceAgent};
 
 /// Arrange data from a stream of keyed upserts.
 ///
@@ -140,7 +140,27 @@ where
     >,
     Bu: Builder<Time=Tr::Time, Input = Vec<((K, V), Tr::Time, BatchDiff<Tr>)>, Output = Tr::Batch>,
 {
-    let mut reader: Option<TraceAgent<Tr>> = None;
+    arrange_from_upsert_with_agent::<Bu, Tr, K, V, TraceAgent<Tr>>(stream, name)
+}
+
+/// As [`arrange_from_upsert`], maintaining the trace behind an agent of type `A`.
+pub fn arrange_from_upsert_with_agent<'scope, Bu, Tr, K, V, A>(
+    stream: Stream<'scope, Tr::Time, Vec<(K, Option<V>, Tr::Time)>>,
+    name: &str,
+) -> Arranged<'scope, A>
+where
+    K: ExchangeData+Hashable+std::hash::Hash,
+    V: ExchangeData,
+    Tr: Trace<Batch: Navigable, Time: TotalOrder+ExchangeData>+'static,
+    for<'a> BatchCursor<Tr>: Cursor<
+        Key<'a> = &'a K,
+        Val<'a> = &'a V,
+        Diff=isize,
+    >,
+    Bu: Builder<Time=Tr::Time, Input = Vec<((K, V), Tr::Time, BatchDiff<Tr>)>, Output = Tr::Batch>,
+    A: Agent<Tr> + 'static,
+{
+    let mut reader: Option<A> = None;
 
     // fabricate a data-parallel operator using the `unary_notify` pattern.
     let stream = {
@@ -165,7 +185,7 @@ where
                 empty_trace.set_exert_logic(exert_logic);
             }
 
-            let (mut reader_local, mut writer) = TraceAgent::new(empty_trace, info, logger);
+            let (mut reader_local, mut writer) = A::new(empty_trace, info, logger);
             // Capture the reader outside the builder scope.
             *reader = Some(reader_local.clone());
 
