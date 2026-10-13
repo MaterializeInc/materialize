@@ -3002,6 +3002,7 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_enable_incremental_compaction"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["persist_fast_path_order"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_stats_audit_percent"] = [
             "0",
             "1",
@@ -3450,7 +3451,6 @@ class FlipFlagsAction(Action):
             "plan_insights_notice_fast_path_clusters_optimize_duration",
             "enable_expression_cache",
             "enable_password_auth",
-            "persist_fast_path_order",
             "enable_mcp_agent",
             "enable_mcp_agent_query_tool",
             "enable_mcp_agent_read_data_product_tool",
