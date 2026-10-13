@@ -54,6 +54,7 @@ use std::sync::Arc;
 use differential_dataflow::{Hashable, VecCollection};
 use mz_compute_types::dyncfgs::{
     ENABLE_SYNC_MV_SINK_SHARED_BATCHES, MV_SINK_ADVANCE_PERSIST_FRONTIERS,
+    MV_SINK_SHARED_BATCH_MAX_BYTES,
 };
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_ore::cast::CastFrom;
@@ -560,8 +561,8 @@ mod write {
 
     /// A response from the Tokio write task back to the Timely operator.
     struct WriteResponse {
-        /// The written batch, or `None` if the corrections buffer had no updates.
-        batch: Option<ProtoBatch>,
+        /// The written batches, empty if this worker has none to deliver for the interval.
+        batches: Vec<ProtoBatch>,
     }
 
     /// Render the `write` operator.
@@ -660,6 +661,7 @@ mod write {
             MV_SINK_ADVANCE_PERSIST_FRONTIERS.get(&worker_config);
 
         let shared_batches_enabled = ENABLE_SYNC_MV_SINK_SHARED_BATCHES.handle(&worker_config);
+        let shared_batch_max_bytes = MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config);
 
         // Mirror the persist-frontier initialization performed by `State::new` below. With the
         // flag enabled, `State` advances its Timely-side `persist_frontiers` to `as_of`, opening
@@ -691,7 +693,12 @@ mod write {
             mz_ore::task::spawn(
                 || operator_name(sink_id, "write::batch_writer"),
                 async move {
-                    let batch_writer = BatchWriter::new(&persist_api, shared_batches_enabled).await;
+                    let batch_writer = BatchWriter::new(
+                        &persist_api,
+                        shared_batches_enabled,
+                        shared_batch_max_bytes,
+                    )
+                    .await;
 
                     while let Some(cmd) = cmd_rx.recv().await {
                         corrections =
@@ -813,12 +820,15 @@ mod write {
                     match resp_rx.try_recv() {
                         Ok(resp) => {
                             if let Some((desc, cap)) = batch_in_flight.take() {
-                                if let Some(batch) = resp.batch {
-                                    let mut out = batches_output.activate();
-                                    out.session(&cap).give((desc, batch));
-                                    state.trace("wrote a batch");
-                                } else {
+                                if resp.batches.is_empty() {
                                     state.trace("skipping empty batch");
+                                } else {
+                                    state.trace(format!("wrote {} batches", resp.batches.len()));
+                                    let mut out = batches_output.activate();
+                                    let mut session = out.session(&cap);
+                                    for batch in resp.batches {
+                                        session.give((desc.clone(), batch));
+                                    }
                                 }
                             }
                         }
@@ -860,9 +870,16 @@ mod write {
         async fn new(
             persist_api: &PersistApi,
             shared_batches_enabled: ConfigValHandle<bool>,
+            shared_batch_max_bytes: ConfigValHandle<usize>,
         ) -> Self {
             let writer = persist_api.open_writer().await;
-            let shared = SharedBatchWriter::new(persist_api, &writer, shared_batches_enabled).await;
+            let shared = SharedBatchWriter::new(
+                persist_api,
+                &writer,
+                shared_batches_enabled,
+                shared_batch_max_bytes,
+            )
+            .await;
             Self { writer, shared }
         }
     }
@@ -939,14 +956,17 @@ mod write {
                         },
                     );
 
-                let proto_batch = match batch_writer.shared.start(&desc) {
+                let batches = match batch_writer.shared.start(&desc) {
                     Some(write) => write_shared_batch(write, &mut updates_rx).await,
-                    None => write_worker_batch(&batch_writer.writer, &desc, &mut updates_rx).await,
+                    None => write_worker_batch(&batch_writer.writer, &desc, &mut updates_rx)
+                        .await
+                        .into_iter()
+                        .collect(),
                 };
                 let corrections = read_back.await;
 
-                if let Err(err) = resp_tx.send(WriteResponse { batch: proto_batch }) {
-                    if let Some(proto_batch) = err.0.batch {
+                if let Err(err) = resp_tx.send(WriteResponse { batches }) {
+                    for proto_batch in err.0.batches {
                         let batch = batch_writer
                             .writer
                             .batch_from_transmittable_batch(proto_batch);
@@ -959,12 +979,12 @@ mod write {
         }
     }
 
-    /// Hand the updates for one interval to the shared batch, returning the batch if this worker
-    /// delivers it.
+    /// Write the updates for one interval through `write`, returning the batches this worker
+    /// delivers.
     async fn write_shared_batch(
-        mut write: SharedBatchWrite,
+        mut write: SharedBatchWrite<'_>,
         updates_rx: &mut mpsc::Receiver<Vec<((SourceData, ()), Timestamp, StorageDiff)>>,
-    ) -> Option<ProtoBatch> {
+    ) -> Vec<ProtoBatch> {
         while let Some(chunk) = updates_rx.recv().await {
             for (kv, t, d) in &chunk {
                 write.push(kv, *t, *d).await;

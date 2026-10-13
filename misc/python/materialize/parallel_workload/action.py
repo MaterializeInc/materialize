@@ -2944,6 +2944,13 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_compute_sync_mv_sink_shared_batches"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["compute_mv_sink_shared_batch_max_bytes"] = [
+            # 0 never shares, 64 KiB, 1 MiB, 128 MiB
+            "0",
+            "65536",
+            "1048576",
+            "134217728",
+        ]
         self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
         # Applies to replicas provisioned after the flip.
         self.flags_with_values["enable_unified_cluster"] = BOOLEAN_FLAG_VALUES

@@ -124,6 +124,7 @@ use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use mz_compute_types::dyncfgs::{
     ENABLE_SYNC_MV_SINK_SHARED_BATCHES, MV_SINK_ADVANCE_PERSIST_FRONTIERS,
+    MV_SINK_SHARED_BATCH_MAX_BYTES,
 };
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_dyncfg::ConfigSet;
@@ -848,6 +849,7 @@ mod write {
                 &persist_api,
                 &writer,
                 ENABLE_SYNC_MV_SINK_SHARED_BATCHES.handle(&worker_config),
+                MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config),
             )
             .await;
             let sink_metrics = persist_api.open_metrics().await;
@@ -947,8 +949,10 @@ mod write {
                     else => return,
                 };
 
-                if let Some((index, batch, cap)) = maybe_batch {
-                    batches_output.give(&cap, (index, batch));
+                if let Some((desc, batches, cap)) = maybe_batch {
+                    for batch in batches {
+                        batches_output.give(&cap, (desc.clone(), batch));
+                    }
                 }
             }
         });
@@ -1163,7 +1167,7 @@ mod write {
 
         async fn maybe_write_batch(
             &mut self,
-        ) -> Option<(BatchDescription, ProtoBatch, Capability<Timestamp>)> {
+        ) -> Option<(BatchDescription, Vec<ProtoBatch>, Capability<Timestamp>)> {
             let (desc, _cap) = self.batch_description.as_ref()?;
 
             // We can write a new batch if we have seen all `persist` updates before `lower` and
@@ -1193,27 +1197,29 @@ mod write {
                 return None;
             }
 
-            let batch = match self.shared_batch_writer.start(&desc) {
+            let batches = match self.shared_batch_writer.start(&desc) {
                 Some(mut write) => {
                     for (kv, t, d) in updates {
                         write.push(&kv, t, d).await;
                     }
-                    let Some(batch) = write.finish().await else {
+                    let batches = write.finish().await;
+                    if batches.is_empty() {
                         self.trace("contributed to a shared batch");
                         return None;
-                    };
-                    batch
+                    }
+                    batches
                 }
-                None => self
-                    .persist_writer
-                    .batch(updates, desc.lower.clone(), desc.upper.clone())
-                    .await
-                    .expect("valid usage")
-                    .into_transmittable_batch(),
+                None => vec![
+                    self.persist_writer
+                        .batch(updates, desc.lower.clone(), desc.upper.clone())
+                        .await
+                        .expect("valid usage")
+                        .into_transmittable_batch(),
+                ],
             };
 
-            self.trace("wrote a batch");
-            Some((desc, batch, cap))
+            self.trace(format!("wrote {} batches", batches.len()));
+            Some((desc, batches, cap))
         }
     }
 }

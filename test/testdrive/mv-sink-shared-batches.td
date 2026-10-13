@@ -98,6 +98,38 @@ ALTER SYSTEM SET enable_compute_sync_mv_sink = true
 > SELECT sum(cnt) FROM mv_v2
 25000
 
+# With a tiny threshold, workers whose updates for an interval exceed it write
+# their own batch while the rest still contribute to the shared one, so one
+# interval yields both kinds of batch.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET compute_mv_sink_shared_batch_max_bytes = 1024
+
+> UPDATE t SET v = v + 1 WHERE k % 3 = 0
+
+> INSERT INTO t VALUES (1, 1), (2, 2)
+
+> (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
+  EXCEPT ALL
+  (SELECT bucket, cnt, s FROM mv_v1)
+
+> (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
+  EXCEPT ALL
+  (SELECT bucket, cnt, s FROM mv_v2)
+
+> (SELECT bucket, cnt, s FROM mv_v1)
+  EXCEPT ALL
+  (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
+
+> (SELECT bucket, cnt, s FROM mv_v2)
+  EXCEPT ALL
+  (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
+
+> SELECT sum(cnt) FROM mv_v2
+25002
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET compute_mv_sink_shared_batch_max_bytes
+
 # A write with no net change must not corrupt the view. Workers that end up
 # with no data for the interval must still finish their shared batch, since any
 # one of them may be the last holder responsible for delivering the batch.
