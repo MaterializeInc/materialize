@@ -353,6 +353,14 @@ impl CatalogItem for LocalItem {
         })
     }
 
+    fn wasm_function(&self) -> Option<&mz_sql::plan::WasmFunction> {
+        None
+    }
+
+    fn wasm_module(&self) -> Option<&mz_sql::plan::WasmModule> {
+        None
+    }
+
     fn source_desc(&self) -> Result<Option<&SourceDesc<ReferencedConnection>>, CatalogError> {
         Err(CatalogError::UnexpectedType {
             name: self.name.item.clone(),

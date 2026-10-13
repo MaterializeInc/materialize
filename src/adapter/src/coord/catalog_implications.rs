@@ -34,8 +34,9 @@ use fail::fail_point;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{
-    CatalogItem, Cluster, ClusterReplica, Connection, DataSourceDesc, Index, MaterializedView,
-    MetricSink, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
+    CatalogItem, Cluster, ClusterReplica, Connection, DataSourceDesc, Func, Index,
+    MaterializedView, MetricSink, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
+    WasmModule,
 };
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::logging::LogVariant;
@@ -559,6 +560,25 @@ impl Coordinator {
                 )) => {
                     secrets_to_drop.push(catalog_id);
                 }
+                // A function only names its module by hash, which the compute
+                // controller resolves when it ships a dataflow or peek.
+                CatalogImplication::Func(
+                    CatalogImplicationKind::Added(_)
+                    | CatalogImplicationKind::Altered { .. }
+                    | CatalogImplicationKind::Dropped(..),
+                ) => {}
+                CatalogImplication::WasmModule(CatalogImplicationKind::Added(module)) => {
+                    self.register_wasm_module(&module.definition);
+                }
+                // Renaming a module or changing its owner leaves its bytes as
+                // they are.
+                CatalogImplication::WasmModule(CatalogImplicationKind::Altered { .. }) => {}
+                CatalogImplication::WasmModule(CatalogImplicationKind::Dropped(
+                    module,
+                    _full_name,
+                )) => {
+                    self.deregister_wasm_module(&module.definition);
+                }
                 CatalogImplication::Connection(CatalogImplicationKind::Added(connection)) => {
                     match &connection.details {
                         // SSH connections: key pair is stored in secrets_controller
@@ -620,7 +640,9 @@ impl Coordinator {
                 | CatalogImplication::MaterializedView(CatalogImplicationKind::None)
                 | CatalogImplication::View(CatalogImplicationKind::None)
                 | CatalogImplication::Secret(CatalogImplicationKind::None)
-                | CatalogImplication::Connection(CatalogImplicationKind::None) => {
+                | CatalogImplication::Connection(CatalogImplicationKind::None)
+                | CatalogImplication::Func(CatalogImplicationKind::None)
+                | CatalogImplication::WasmModule(CatalogImplicationKind::None) => {
                     unreachable!("will never leave None in place");
                 }
             }
@@ -1696,6 +1718,7 @@ impl Coordinator {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
+                    | CatalogItem::WasmModule(_)
                     | CatalogItem::MetricSink(_) => {
                         // Other item types don't have connection dependencies
                         // that need updating.
@@ -1758,6 +1781,8 @@ enum CatalogImplication {
     View(CatalogImplicationKind<View>),
     Secret(CatalogImplicationKind<Secret>),
     Connection(CatalogImplicationKind<Connection>),
+    Func(CatalogImplicationKind<Func>),
+    WasmModule(CatalogImplicationKind<WasmModule>),
     Cluster(CatalogImplicationKind<Cluster>),
     ClusterReplica(CatalogImplicationKind<ClusterReplica>),
 }
@@ -1916,7 +1941,12 @@ impl CatalogImplication {
                 }
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
-                CatalogItem::Func(_) => {}
+                CatalogItem::Func(func) => {
+                    self.absorb_func(func, None, catalog_update.diff);
+                }
+                CatalogItem::WasmModule(module) => {
+                    self.absorb_wasm_module(module, None, catalog_update.diff);
+                }
             },
             ParsedStateUpdateKind::Cluster {
                 durable_cluster: _,
@@ -1969,6 +1999,8 @@ impl CatalogImplication {
 
     impl_absorb_method!(absorb_secret, Secret, Secret);
     impl_absorb_method!(absorb_connection, Connection, Connection);
+    impl_absorb_method!(absorb_func, Func, Func);
+    impl_absorb_method!(absorb_wasm_module, WasmModule, WasmModule);
 
     impl_absorb_method!(absorb_cluster, Cluster, Cluster);
     impl_absorb_method!(absorb_cluster_replica, ClusterReplica, ClusterReplica);

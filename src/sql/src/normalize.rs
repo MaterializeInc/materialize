@@ -21,11 +21,12 @@ use mz_repr::{ColumnName, GlobalId, RelationVersion};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateMetricSinkStatement, CreateSecretStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement,
-    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CteBlock, Function,
-    FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement, TableFactor,
+    CreateConnectionStatement, CreateFunctionStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateMetricSinkStatement, CreateSecretStatement,
+    CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
+    CreateTableFromSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
+    CreateWasmModuleStatement, CreateWebhookSourceStatement, CteBlock, Function, FunctionArgs,
+    Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement, TableFactor,
     TableFromSourceColumns, UnresolvedItemName, UnresolvedSchemaName, Value, Version,
     ViewDefinition,
 };
@@ -482,6 +483,28 @@ pub fn create_statement(
             name,
             if_not_exists,
             value: _,
+        }) => {
+            *name = allocate_name(name)?;
+            *if_not_exists = false;
+        }
+        Statement::CreateFunction(CreateFunctionStatement {
+            name,
+            if_not_exists,
+            args: _,
+            returns: _,
+            language: _,
+            volatility: _,
+            null_behavior: _,
+            module: _,
+            with_options: _,
+        }) => {
+            *name = allocate_name(name)?;
+            *if_not_exists = false;
+        }
+        Statement::CreateWasmModule(CreateWasmModuleStatement {
+            name,
+            if_not_exists,
+            body: _,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;

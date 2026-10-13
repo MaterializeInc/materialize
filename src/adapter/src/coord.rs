@@ -2743,6 +2743,15 @@ impl Coordinator {
 
         let mut privatelink_connections = BTreeMap::new();
 
+        // Register every WebAssembly module before shipping any dataflow. The
+        // loop below visits an index right after the object it is on, not
+        // after the functions and modules its key expressions call.
+        for entry in &entries {
+            if let CatalogItem::WasmModule(module) = entry.item() {
+                self.register_wasm_module(&module.definition);
+            }
+        }
+
         for entry in &entries {
             debug!(
                 "coordinator init: installing {} {}",
@@ -2951,11 +2960,10 @@ impl Coordinator {
                         );
                     }
                 }
+                // Registered before this loop.
+                CatalogItem::WasmModule(_) | CatalogItem::Func(_) => {}
                 // Nothing to do for these cases
-                CatalogItem::Log(_)
-                | CatalogItem::Type(_)
-                | CatalogItem::Func(_)
-                | CatalogItem::Secret(_) => {}
+                CatalogItem::Log(_) | CatalogItem::Type(_) | CatalogItem::Secret(_) => {}
             }
         }
 
@@ -3535,6 +3543,7 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
+                | CatalogItem::WasmModule(_)
                 | CatalogItem::Connection(_)
                 // Nothing to bootstrap: a metric sink has no storage collection, it publishes
                 // into the replica's metrics registry.
@@ -4047,6 +4056,7 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
+                | CatalogItem::WasmModule(_)
                 | CatalogItem::Connection(_) => (),
             }
         }
@@ -4080,6 +4090,7 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
+                | CatalogItem::WasmModule(_)
                 | CatalogItem::Connection(_) => continue,
             };
             if let Some(plan) = self.catalog.try_get_physical_plan(&gid) {
@@ -4598,6 +4609,20 @@ impl Coordinator {
         id: ComputeInstanceId,
     ) -> Result<ComputeInstanceSnapshot, InstanceMissing> {
         ComputeInstanceSnapshot::new(&self.controller, id)
+    }
+
+    /// Registers a WebAssembly module with the compute controller, which
+    /// installs it on the clusters whose dataflows and peeks call into it.
+    pub(crate) fn register_wasm_module(&mut self, module: &mz_sql::plan::WasmModule) {
+        self.controller.compute.register_wasm_module(
+            module.hash,
+            mz_expr::func::WasmModuleBytes(Arc::clone(&module.bytes)),
+        );
+    }
+
+    /// Withdraws a module registered with [`Self::register_wasm_module`].
+    pub(crate) fn deregister_wasm_module(&mut self, module: &mz_sql::plan::WasmModule) {
+        self.controller.compute.deregister_wasm_module(module.hash);
     }
 
     /// Call into the compute controller to install a finalized dataflow, and

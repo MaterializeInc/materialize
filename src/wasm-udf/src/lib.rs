@@ -30,4 +30,4 @@ mod wasi;
 
 pub use call::{CallError, CallReport, CompileError, CompiledModule};
 pub use invoker::{BatchConfig, CallObserver, Invoker};
-pub use runtime::Runtime;
+pub use runtime::{ModulePin, Runtime};

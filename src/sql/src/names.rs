@@ -1237,7 +1237,8 @@ impl From<CommentObjectId> for ObjectId {
             | CommentObjectId::Func(item_id)
             | CommentObjectId::Connection(item_id)
             | CommentObjectId::Type(item_id)
-            | CommentObjectId::Secret(item_id) => ObjectId::Item(item_id),
+            | CommentObjectId::Secret(item_id)
+            | CommentObjectId::WasmModule(item_id) => ObjectId::Item(item_id),
             CommentObjectId::Role(id) => ObjectId::Role(id),
             CommentObjectId::Database(id) => ObjectId::Database(id),
             CommentObjectId::Schema(id) => ObjectId::Schema(id),
@@ -1299,6 +1300,7 @@ pub enum CommentObjectId {
     Connection(CatalogItemId),
     Type(CatalogItemId),
     Secret(CatalogItemId),
+    WasmModule(CatalogItemId),
     Role(RoleId),
     Database(DatabaseId),
     Schema((ResolvedDatabaseSpecifier, SchemaSpecifier)),
@@ -1821,6 +1823,27 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         )
     }
 
+    fn fold_comment_object_type(
+        &mut self,
+        node: ast::CommentObjectType<Raw>,
+    ) -> ast::CommentObjectType<Aug> {
+        match node {
+            // Functions live in their own namespace, which item names do not
+            // search by default.
+            ast::CommentObjectType::Func { name } => ast::CommentObjectType::Func {
+                name: self.resolve_item_name(
+                    name,
+                    ItemResolutionConfig {
+                        functions: true,
+                        types: false,
+                        relations: false,
+                    },
+                ),
+            },
+            node => mz_sql_parser::ast::fold::fold_comment_object_type(self, node),
+        }
+    }
+
     fn fold_column_name(&mut self, column_name: ast::ColumnName<Raw>) -> ast::ColumnName<Aug> {
         let item_name = self.resolve_doc_on_name(column_name.relation);
 
@@ -2327,6 +2350,14 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         // Exprs can be recursive, so need the ability to grow the stack.
         mz_ore::stack::maybe_grow(|| mz_sql_parser::ast::fold::fold_expr(self, node))
     }
+}
+
+/// Resolves one data type, as resolving a statement that contains it would.
+pub(crate) fn resolve_data_type(
+    catalog: &dyn SessionCatalog,
+    data_type: RawDataType,
+) -> Result<ResolvedDataType, PlanError> {
+    NameResolver::new(catalog).resolve_data_type(data_type)
 }
 
 /// Resolves names in an AST node using the provided catalog.

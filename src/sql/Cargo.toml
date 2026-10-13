@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 array-concat.workspace = true
+base64.workspace = true
 chrono.workspace = true
 derivative.workspace = true
 dynfmt.workspace = true
@@ -57,6 +58,7 @@ mz-sql-server-util = { path = "../sql-server-util" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
+mz-wasm-udf-abi = { path = "../wasm-udf-abi" }
 paste.workspace = true
 prometheus.workspace = true
 protobuf-native.workspace = true

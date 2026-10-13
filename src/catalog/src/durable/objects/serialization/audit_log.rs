@@ -99,6 +99,9 @@ impl RustType<proto::audit_log_event_v1::ObjectType> for mz_audit_log::ObjectTyp
             }
             mz_audit_log::ObjectType::Role => proto::audit_log_event_v1::ObjectType::Role,
             mz_audit_log::ObjectType::Secret => proto::audit_log_event_v1::ObjectType::Secret,
+            mz_audit_log::ObjectType::WasmModule => {
+                proto::audit_log_event_v1::ObjectType::WasmModule
+            }
             mz_audit_log::ObjectType::Schema => proto::audit_log_event_v1::ObjectType::Schema,
             mz_audit_log::ObjectType::Sink => proto::audit_log_event_v1::ObjectType::Sink,
             mz_audit_log::ObjectType::Source => proto::audit_log_event_v1::ObjectType::Source,
@@ -137,6 +140,9 @@ impl RustType<proto::audit_log_event_v1::ObjectType> for mz_audit_log::ObjectTyp
             }
             proto::audit_log_event_v1::ObjectType::Role => Ok(mz_audit_log::ObjectType::Role),
             proto::audit_log_event_v1::ObjectType::Secret => Ok(mz_audit_log::ObjectType::Secret),
+            proto::audit_log_event_v1::ObjectType::WasmModule => {
+                Ok(mz_audit_log::ObjectType::WasmModule)
+            }
             proto::audit_log_event_v1::ObjectType::Schema => Ok(mz_audit_log::ObjectType::Schema),
             proto::audit_log_event_v1::ObjectType::Sink => Ok(mz_audit_log::ObjectType::Sink),
             proto::audit_log_event_v1::ObjectType::Source => Ok(mz_audit_log::ObjectType::Source),

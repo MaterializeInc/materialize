@@ -232,6 +232,8 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::CreatedIntrospectionSubscribe
             | ExecuteResponse::CreatedMetricSink
             | ExecuteResponse::CreatedSecret
+            | ExecuteResponse::CreatedFunction
+            | ExecuteResponse::CreatedWasmModule
             | ExecuteResponse::CreatedSink
             | ExecuteResponse::CreatedSource
             | ExecuteResponse::CreatedTable
@@ -820,6 +822,23 @@ fn serialize_params(params: &Params) -> Vec<Option<String>> {
         .collect()
 }
 
+/// Whether statements of `kind` log their parameters redacted.
+///
+/// A `CREATE WASM MODULE` parameter is a whole WebAssembly module, megabytes of
+/// base64, which `SHOW REDACTED CREATE WASM MODULE` also hides.
+fn redacts_params(kind: StatementKind) -> bool {
+    matches!(kind, StatementKind::CreateWasmModule)
+}
+
+/// `params` with every non-null value replaced by `<REDACTED>`.
+fn redacted_params(params: &Params) -> Vec<Option<String>> {
+    params
+        .datums
+        .iter()
+        .map(|datum| (!datum.is_null()).then(|| "<REDACTED>".to_string()))
+        .collect()
+}
+
 /// Helper function to create a `StatementBeganExecutionRecord`.
 pub(crate) fn create_began_execution_record(
     execution_uuid: Uuid,
@@ -831,7 +850,10 @@ pub(crate) fn create_began_execution_record(
     build_info_version: String,
     kind: Option<StatementKind>,
 ) -> StatementBeganExecutionRecord {
-    let params = serialize_params(params);
+    let params = match kind {
+        Some(kind) if redacts_params(kind) => redacted_params(params),
+        _ => serialize_params(params),
+    };
     StatementBeganExecutionRecord {
         id: execution_uuid,
         prepared_statement_id: prepared_statement_uuid,
@@ -1078,7 +1100,9 @@ mod tests {
     use mz_repr::{Datum, Row, SqlScalarType};
     use mz_sql::plan::Params;
 
-    use super::serialize_params;
+    use mz_sql_parser::ast::StatementKind;
+
+    use super::{redacted_params, redacts_params, serialize_params};
 
     /// A `"char"` param whose byte is `>= 0x80` used to panic
     /// `String::from_utf8` on the statement-logging path. It should now
@@ -1106,5 +1130,20 @@ mod tests {
         };
         let out = serialize_params(&params);
         assert_eq!(out[0].as_deref(), Some("A"));
+    }
+
+    #[mz_ore::test]
+    fn create_wasm_module_params_are_redacted() {
+        let params = Params {
+            datums: Row::pack_slice(&[Datum::String("AGFzbQEAAAA="), Datum::Null]),
+            execute_types: vec![SqlScalarType::String, SqlScalarType::String],
+            expected_types: vec![SqlScalarType::String, SqlScalarType::String],
+        };
+        assert!(redacts_params(StatementKind::CreateWasmModule));
+        assert!(!redacts_params(StatementKind::Select));
+        assert_eq!(
+            redacted_params(&params),
+            vec![Some("<REDACTED>".to_string()), None]
+        );
     }
 }

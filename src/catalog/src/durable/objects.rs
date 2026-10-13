@@ -1570,6 +1570,10 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
         Some("FUNCTION") => CatalogItemType::Func,
         Some("SECRET") => CatalogItemType::Secret,
         Some("CONNECTION") => CatalogItemType::Connection,
+        Some("WASM") => {
+            assert_eq!(tokens.next(), Some("MODULE"));
+            CatalogItemType::WasmModule
+        }
         _ => panic!("unexpected create sql: {}", create_sql),
     }
 }

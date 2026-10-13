@@ -27,7 +27,8 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
-    CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
+    CatalogEntry, CatalogItem, Connection, DataSourceDesc, Func, FuncDef, Sink, Source, Table,
+    TableDataSource, Type, WasmFunction, WasmModule,
 };
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -38,6 +39,7 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::future::OreFutureExt;
+use mz_ore::str::StrExt;
 use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument};
@@ -59,7 +61,7 @@ use mz_sql::ast::{
 use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
-    CatalogItem as SqlCatalogItem, CatalogRole, CatalogSchema, CatalogTypeDetails,
+    CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRole, CatalogSchema, CatalogTypeDetails,
     ErrorMessageObjectDescription, ObjectType, RoleAttributesRaw, RoleVars, SessionCatalog,
 };
 use mz_sql::names::{
@@ -193,6 +195,39 @@ fn check_connection_details(details: &ConnectionDetails) -> Result<(), PlanError
                 .map_err(PlanError::InvalidPrivatelinkServiceName)
         }
         _ => Ok(()),
+    }
+}
+
+/// Resolves `CREATE ... IF NOT EXISTS` once an object of the planned name
+/// exists: a notice if it has the same definition, and an error otherwise,
+/// so that a deployment that ships a changed module or function under an
+/// existing name does not appear to succeed.
+fn if_not_exists_outcome(
+    session: &Session,
+    existing: Option<&CatalogEntry>,
+    create_sql: &str,
+    name: QualifiedItemName,
+    expected: CatalogItemType,
+    ty: &'static str,
+) -> Result<(), AdapterError> {
+    let error = |message: String| Err(AdapterError::PlanError(PlanError::Unstructured(message)));
+    match existing {
+        Some(entry) if entry.item_type() != expected => error(format!(
+            "{} {} already exists",
+            entry.item_type(),
+            name.item.quoted()
+        )),
+        Some(entry) if mz_sql::catalog::CatalogItem::create_sql(entry) == create_sql => {
+            session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                name: name.item,
+                ty,
+            });
+            Ok(())
+        }
+        _ => error(format!(
+            "{ty} {} already exists with a different definition",
+            name.item.quoted()
+        )),
     }
 }
 
@@ -1289,6 +1324,184 @@ impl Coordinator {
         };
         match self.catalog_transact(Some(session), vec![op]).await {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub(super) async fn sequence_create_function(
+        &mut self,
+        session: &Session,
+        plan: plan::CreateFunctionPlan,
+        resolved_ids: ResolvedIds,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // The name, the limits and the export are checked here rather than in
+        // planning, so that new builtins, lower limits, or tighter validation
+        // never stop existing functions from being re-planned at boot.
+        // An identical `IF NOT EXISTS` is a no-op even when creating the
+        // function anew would now fail a check.
+        if plan.if_not_exists {
+            let state = self.catalog().state();
+            if let Some(existing) = state.get_function_by_name(&plan.name, session.conn_id()) {
+                if_not_exists_outcome(
+                    session,
+                    Some(existing),
+                    &plan.function.create_sql,
+                    plan.name,
+                    CatalogItemType::Func,
+                    "function",
+                )?;
+                return Ok(ExecuteResponse::CreatedFunction);
+            }
+        }
+        plan.check_not_builtin()?;
+        let plan::CreateFunctionPlan {
+            name,
+            function,
+            if_not_exists,
+        } = plan;
+
+        let config = self.catalog().system_config();
+        let limit_error = |message: String| {
+            AdapterError::PlanError(mz_sql::plan::PlanError::Unstructured(message))
+        };
+        let module = self
+            .catalog()
+            .get_entry(&function.wasm.module_id)
+            .wasm_module()
+            .expect("planning checked that the module is a WebAssembly module");
+        module.check_export(&function.wasm)?;
+        if function.wasm.limits.fuel > config.max_wasm_function_fuel() {
+            return Err(limit_error(format!(
+                "FUEL {} exceeds max_wasm_function_fuel ({})",
+                function.wasm.limits.fuel,
+                config.max_wasm_function_fuel()
+            )));
+        }
+        if function.wasm.limits.memory_bytes > config.max_wasm_function_memory().as_bytes() {
+            return Err(limit_error(format!(
+                "MEMORY {} bytes exceeds max_wasm_function_memory ({})",
+                function.wasm.limits.memory_bytes,
+                config.max_wasm_function_memory()
+            )));
+        }
+
+        let (item_id, global_id) = self.allocate_user_id().await?;
+        let create_sql = function.create_sql.clone();
+        let func = Func {
+            inner: FuncDef::Wasm(WasmFunction {
+                create_sql: function.create_sql,
+                resolved_ids,
+                definition: function.wasm,
+            }),
+            global_id,
+        };
+        let op = catalog::Op::CreateItem {
+            id: item_id,
+            name: name.clone(),
+            item: CatalogItem::Func(func),
+            owner_id: *session.current_role_id(),
+        };
+        match self.catalog_transact(Some(session), vec![op]).await {
+            Ok(()) => Ok(ExecuteResponse::CreatedFunction),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            })) if if_not_exists => {
+                let existing = self
+                    .catalog()
+                    .state()
+                    .get_function_by_name(&name, session.conn_id());
+                if_not_exists_outcome(
+                    session,
+                    existing,
+                    &create_sql,
+                    name,
+                    CatalogItemType::Func,
+                    "function",
+                )?;
+                Ok(ExecuteResponse::CreatedFunction)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    pub(super) async fn sequence_create_wasm_module(
+        &mut self,
+        session: &Session,
+        plan: plan::CreateWasmModulePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let plan::CreateWasmModulePlan {
+            name,
+            module,
+            if_not_exists,
+        } = plan;
+
+        // An identical `IF NOT EXISTS` is a no-op even when creating the
+        // module anew would now fail a check or a resource limit.
+        if if_not_exists {
+            if let Some(existing) = self
+                .catalog()
+                .state()
+                .get_item_by_name(&name, session.conn_id())
+            {
+                if_not_exists_outcome(
+                    session,
+                    Some(existing),
+                    &module.create_sql,
+                    name,
+                    CatalogItemType::WasmModule,
+                    "wasm module",
+                )?;
+                return Ok(ExecuteResponse::CreatedWasmModule);
+            }
+        }
+
+        // The size limit and validation run here rather than in planning, so
+        // that lowering the limit or tightening validation never stops
+        // existing modules from being re-planned at boot.
+        let config = self.catalog().system_config();
+        let size = u64::cast_from(module.bytes.len());
+        if size > config.max_wasm_module_size().as_bytes() {
+            return Err(AdapterError::PlanError(
+                mz_sql::plan::PlanError::Unstructured(format!(
+                    "WebAssembly module is {} bytes, which exceeds max_wasm_module_size ({})",
+                    size,
+                    config.max_wasm_module_size()
+                )),
+            ));
+        }
+        module.validate()?;
+
+        let (item_id, global_id) = self.allocate_user_id().await?;
+        let create_sql = module.create_sql.clone();
+        let op = catalog::Op::CreateItem {
+            id: item_id,
+            name: name.clone(),
+            item: CatalogItem::WasmModule(WasmModule {
+                create_sql: module.create_sql.clone(),
+                global_id,
+                definition: module,
+            }),
+            owner_id: *session.current_role_id(),
+        };
+        match self.catalog_transact(Some(session), vec![op]).await {
+            Ok(()) => Ok(ExecuteResponse::CreatedWasmModule),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+            })) if if_not_exists => {
+                let existing = self
+                    .catalog()
+                    .state()
+                    .get_item_by_name(&name, session.conn_id());
+                if_not_exists_outcome(
+                    session,
+                    existing,
+                    &create_sql,
+                    name,
+                    CatalogItemType::WasmModule,
+                    "wasm module",
+                )?;
+                Ok(ExecuteResponse::CreatedWasmModule)
+            }
             Err(err) => Err(err),
         }
     }

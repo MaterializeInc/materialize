@@ -3517,6 +3517,7 @@ SELECT
         WHEN obj ? 'Connection'       THEN mz_internal.parse_catalog_id(obj->'Connection')
         WHEN obj ? 'Type'             THEN mz_internal.parse_catalog_id(obj->'Type')
         WHEN obj ? 'Secret'           THEN mz_internal.parse_catalog_id(obj->'Secret')
+        WHEN obj ? 'WasmModule'       THEN mz_internal.parse_catalog_id(obj->'WasmModule')
         WHEN obj ? 'Role'             THEN mz_internal.parse_catalog_id(obj->'Role')
         WHEN obj ? 'Database'         THEN mz_internal.parse_catalog_id(obj->'Database')
         WHEN obj ? 'Schema'           THEN mz_internal.parse_catalog_id(obj->'Schema'->'schema'->'Id')
@@ -3535,6 +3536,7 @@ SELECT
         WHEN obj ? 'Connection'       THEN 'connection'
         WHEN obj ? 'Type'             THEN 'type'
         WHEN obj ? 'Secret'           THEN 'secret'
+        WHEN obj ? 'WasmModule'       THEN 'wasm-module'
         WHEN obj ? 'Role'             THEN 'role'
         WHEN obj ? 'Database'         THEN 'database'
         WHEN obj ? 'Schema'           THEN 'schema'
@@ -3994,7 +3996,8 @@ pub static MZ_OBJECTS_ID_NAMESPACE_TYPES: LazyLock<BuiltinView> = LazyLock::new(
             ('connection'),
             ('type'),
             ('function'),
-            ('secret')
+            ('secret'),
+            ('wasm-module')
     )
     AS _ (object_type)"#,
     access: vec![PUBLIC_SELECT],

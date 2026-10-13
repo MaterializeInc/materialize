@@ -101,6 +101,7 @@ where
 
         let mut initialization_complete = false;
         let mut allow_writes = BTreeSet::new();
+        let mut wasm_modules = BTreeMap::new();
 
         for command in self.commands.drain(..) {
             match command {
@@ -136,6 +137,12 @@ where
                 }
                 ComputeCommand::AllowWrites(id) => {
                     allow_writes.insert(id);
+                }
+                ComputeCommand::InstallWasmModule(module) => {
+                    wasm_modules.insert(module.hash, module);
+                }
+                ComputeCommand::DropWasmModule(hash) => {
+                    wasm_modules.remove(&hash);
                 }
             }
         }
@@ -209,6 +216,17 @@ where
             let config = Box::new(final_configuration);
             self.commands
                 .push(ComputeCommand::UpdateConfiguration(config));
+        }
+
+        // Modules must precede the dataflows and peeks that call them. A module dropped since it
+        // was installed is in neither.
+        let count = u64::cast_from(wasm_modules.len());
+        command_counts.install_wasm_module.borrow().set(count);
+        // Compaction cancels every drop against its install.
+        command_counts.drop_wasm_module.borrow().set(0);
+        for module in wasm_modules.into_values() {
+            self.commands
+                .push(ComputeCommand::InstallWasmModule(module));
         }
 
         let count = u64::cast_from(created_dataflows.len());

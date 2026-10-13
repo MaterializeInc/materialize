@@ -1364,6 +1364,11 @@ impl Catalog {
             .filter(|entry| entry.is_secret() && entry.id().is_user())
     }
 
+    pub fn user_wasm_modules(&self) -> impl Iterator<Item = &CatalogEntry> {
+        self.entries()
+            .filter(|entry| entry.wasm_module().is_some() && entry.id().is_user())
+    }
+
     pub fn get_network_policy(&self, network_policy_id: NetworkPolicyId) -> &NetworkPolicy {
         self.state.get_network_policy(&network_policy_id)
     }
@@ -1706,6 +1711,7 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         CommentObjectId::Connection(_) => ObjectType::Connection,
         CommentObjectId::Type(_) => ObjectType::Type,
         CommentObjectId::Secret(_) => ObjectType::Secret,
+        CommentObjectId::WasmModule(_) => ObjectType::WasmModule,
         CommentObjectId::Role(_) => ObjectType::Role,
         CommentObjectId::Database(_) => ObjectType::Database,
         CommentObjectId::Schema(_) => ObjectType::Schema,
@@ -1738,6 +1744,7 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Cluster => ObjectType::Cluster,
             mz_sql::catalog::ObjectType::ClusterReplica => ObjectType::ClusterReplica,
             mz_sql::catalog::ObjectType::Secret => ObjectType::Secret,
+            mz_sql::catalog::ObjectType::WasmModule => ObjectType::WasmModule,
             mz_sql::catalog::ObjectType::Connection => ObjectType::Connection,
             mz_sql::catalog::ObjectType::Database => ObjectType::Database,
             mz_sql::catalog::ObjectType::Schema => ObjectType::Schema,

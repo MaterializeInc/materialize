@@ -98,7 +98,7 @@ fn filter_requirements(
 
 // The default item types that most statements require USAGE privileges for.
 static DEFAULT_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::new(|| {
-    btreeset! {CatalogItemType::Secret, CatalogItemType::Connection}
+    btreeset! {CatalogItemType::Secret, CatalogItemType::Connection, CatalogItemType::WasmModule}
 });
 // CREATE statements require USAGE privileges on the default item types and USAGE privileges on
 // Types.
@@ -558,6 +558,24 @@ fn generate_rbac_requirements(
                 }
             }
         }
+        // Loading a module puts native-compiled code in clusterd, a separate
+        // capability from creating other items in a schema.
+        Plan::CreateWasmModule(plan::CreateWasmModulePlan {
+            name,
+            module: _,
+            if_not_exists: _,
+        }) => RbacRequirements {
+            privileges: vec![
+                (
+                    SystemObjectId::Object(name.qualifiers.clone().into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+                (SystemObjectId::System, AclMode::CREATE_WASM_MODULE, role_id),
+            ],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::CreateNetworkPolicy(plan::CreateNetworkPolicyPlan { .. }) => RbacRequirements {
             privileges: vec![(
                 SystemObjectId::System,
@@ -637,6 +655,11 @@ fn generate_rbac_requirements(
         Plan::CreateSecret(plan::CreateSecretPlan {
             name,
             secret: _,
+            if_not_exists: _,
+        })
+        | Plan::CreateFunction(plan::CreateFunctionPlan {
+            name,
+            function: _,
             if_not_exists: _,
         }) => RbacRequirements {
             privileges: vec![(
@@ -1857,7 +1880,10 @@ fn generate_read_privileges_inner(
                 CatalogItemType::Table | CatalogItemType::Source => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
                 }
-                CatalogItemType::Type | CatalogItemType::Secret | CatalogItemType::Connection => {
+                CatalogItemType::Type
+                | CatalogItemType::Secret
+                | CatalogItemType::Connection
+                | CatalogItemType::WasmModule => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::USAGE, role_id));
                 }
                 CatalogItemType::Sink
@@ -1879,19 +1905,26 @@ fn generate_usage_privileges(
 ) -> BTreeSet<(SystemObjectId, AclMode, RoleId)> {
     // Use a `BTreeSet` to remove duplicate privileges.
     ids.items()
-        .filter_map(move |id| {
+        .flat_map(move |id| {
             let item = catalog.get_item(id);
+            let schema_id: ObjectId = item.name().qualifiers.clone().into();
             if item_types.contains(&item.item_type()) {
-                let schema_id = item.name().qualifiers.clone().into();
-                Some([
+                vec![
                     (SystemObjectId::Object(schema_id), AclMode::USAGE, role_id),
                     (SystemObjectId::Object(id.into()), AclMode::USAGE, role_id),
-                ])
+                ]
+            } else if item.item_type() == CatalogItemType::Func
+                && id.is_user()
+                && !item_types.is_empty()
+            {
+                // Functions have no privileges of their own, so calling one
+                // takes USAGE on its schema, as in PostgreSQL. Statements that
+                // only name an item, which require no usage, skip this too.
+                vec![(SystemObjectId::Object(schema_id), AclMode::USAGE, role_id)]
             } else {
-                None
+                vec![]
             }
         })
-        .flatten()
         .collect()
 }
 
@@ -1968,7 +2001,8 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
     const ALL_SYSTEM_PRIVILEGES: AclMode = AclMode::CREATE_ROLE
         .union(AclMode::CREATE_DB)
         .union(AclMode::CREATE_CLUSTER)
-        .union(AclMode::CREATE_NETWORK_POLICY);
+        .union(AclMode::CREATE_NETWORK_POLICY)
+        .union(AclMode::CREATE_WASM_MODULE);
 
     const EMPTY_ACL_MODE: AclMode = AclMode::empty();
     match object_type {
@@ -1989,6 +2023,7 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Database) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Schema) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Func) => EMPTY_ACL_MODE,
+        SystemObjectType::Object(ObjectType::WasmModule) => AclMode::USAGE,
         SystemObjectType::System => ALL_SYSTEM_PRIVILEGES,
     }
 }
@@ -2018,7 +2053,8 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         | ObjectType::Connection
         | ObjectType::Database
         | ObjectType::Func
-        | ObjectType::NetworkPolicy => AclMode::empty(),
+        | ObjectType::NetworkPolicy
+        | ObjectType::WasmModule => AclMode::empty(),
     }
 }
 

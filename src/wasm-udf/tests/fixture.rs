@@ -421,9 +421,16 @@ fn stateful_guests_observe_batches() {
 fn runtime_binds_installed_modules() {
     let runtime = Runtime::global();
     let hash = WasmModuleHash(MODULE.info().hash);
-    runtime.install(hash, &FIXTURE).unwrap();
+    runtime.install(hash, Arc::from(FIXTURE.as_slice()));
     assert!(runtime.contains(&hash));
-    assert!(runtime.install(WasmModuleHash([1; 32]), &FIXTURE).is_err());
+
+    // A module stays installed until every install is undone.
+    runtime.install(hash, Arc::from(FIXTURE.as_slice()));
+    runtime.uninstall(&hash);
+    assert!(runtime.contains(&hash), "one install is still outstanding");
+    runtime.uninstall(&hash);
+    assert!(!runtime.contains(&hash), "every install is undone");
+    runtime.install(hash, Arc::from(FIXTURE.as_slice()));
 
     let sig = ScalarSignature {
         name: "gcd".into(),
@@ -451,13 +458,4 @@ fn runtime_binds_installed_modules() {
         &mut out,
     );
     assert_eq!(out, vec![Ok(Datum::Int32(3)), Ok(Datum::Null)]);
-
-    let missing = WasmFunc {
-        module: WasmModuleHash([2; 32]),
-        invoker: InvokerCell::default(),
-        ..func
-    };
-    out.clear();
-    missing.call_batch(&[&[Datum::Int32(1), Datum::Int32(1)]], &arena, &mut out);
-    assert!(matches!(out[0], Err(EvalError::Internal(_))), "{out:?}");
 }

@@ -18,11 +18,11 @@ use mz_sql_parser::ast::CreateTableFromSourceStatement;
 use crate::ast::visit::{self, Visit};
 use crate::ast::visit_mut::{self, VisitMut};
 use crate::ast::{
-    AstInfo, CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateMetricSinkStatement, CreateSecretStatement, CreateSinkStatement, CreateSourceStatement,
-    CreateSubsourceStatement, CreateTableStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, Expr, Ident, Query, Raw, RawDataType, RawItemName, Statement,
-    UnresolvedItemName, ViewDefinition,
+    AstInfo, CreateConnectionStatement, CreateFunctionStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateMetricSinkStatement, CreateSecretStatement,
+    CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement, CreateTableStatement,
+    CreateViewStatement, CreateWasmModuleStatement, CreateWebhookSourceStatement, Expr, Function,
+    Ident, Query, Raw, RawDataType, RawItemName, Statement, UnresolvedItemName, ViewDefinition,
 };
 use crate::names::FullItemName;
 
@@ -49,7 +49,9 @@ pub fn create_stmt_rename_schema_refs(
         | stmt @ Statement::CreateTableFromSource(_)
         | stmt @ Statement::CreateIndex(_)
         | stmt @ Statement::CreateType(_)
-        | stmt @ Statement::CreateSecret(_) => {
+        | stmt @ Statement::CreateSecret(_)
+        | stmt @ Statement::CreateFunction(_)
+        | stmt @ Statement::CreateWasmModule(_) => {
             let mut visitor = CreateSqlRewriteSchema {
                 database,
                 cur_schema,
@@ -175,6 +177,7 @@ pub fn create_stmt_rename(create_stmt: &mut Statement<Raw>, to_item_name: String
         | Statement::CreateTable(CreateTableStatement { name, .. })
         | Statement::CreateTableFromSource(CreateTableFromSourceStatement { name, .. })
         | Statement::CreateSecret(CreateSecretStatement { name, .. })
+        | Statement::CreateWasmModule(CreateWasmModuleStatement { name, .. })
         | Statement::CreateConnection(CreateConnectionStatement { name, .. })
         | Statement::CreateWebhookSource(CreateWebhookSourceStatement { name, .. }) => {
             // The last name in an ItemName is the item name. The item name
@@ -226,6 +229,9 @@ pub fn create_stmt_rename_refs(
         Statement::CreateMetricSink(CreateMetricSinkStatement { from, .. }) => {
             maybe_update_item_name(from.name_mut());
         }
+        Statement::CreateFunction(CreateFunctionStatement { module, .. }) => {
+            maybe_update_item_name(module.name_mut());
+        }
         Statement::CreateTableFromSource(CreateTableFromSourceStatement { source, .. }) => {
             maybe_update_item_name(source.name_mut());
         }
@@ -250,7 +256,8 @@ pub fn create_stmt_rename_refs(
         | Statement::CreateTable(_)
         | Statement::CreateSecret(_)
         | Statement::CreateConnection(_)
-        | Statement::CreateWebhookSource(_) => {}
+        | Statement::CreateWebhookSource(_)
+        | Statement::CreateWasmModule(_) => {}
         item => {
             unreachable!("Internal error: only catalog items need to update item refs {item:?}")
         }
@@ -467,6 +474,15 @@ impl CreateSqlRewriter {
 }
 
 impl<'ast> VisitMut<'ast, Raw> for CreateSqlRewriter {
+    fn visit_function_mut(&mut self, func: &'ast mut Function<Raw>) {
+        // Functions resolve in their own namespace and cannot be renamed, so
+        // a call keeps its name even when it spells the renamed item. Its
+        // arguments are rewritten as usual.
+        let name = func.name.clone();
+        visit_mut::visit_function_mut(self, func);
+        func.name = name;
+    }
+
     fn visit_expr_mut(&mut self, e: &'ast mut Expr<Raw>) {
         match e {
             Expr::Identifier(id) => {

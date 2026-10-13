@@ -41,7 +41,7 @@ use mz_sql::session::vars::{
     MAX_CREDIT_CONSUMPTION_RATE, MAX_DATABASES, MAX_KAFKA_CONNECTIONS, MAX_MATERIALIZED_VIEWS,
     MAX_MYSQL_CONNECTIONS, MAX_NETWORK_POLICIES, MAX_OBJECTS_PER_SCHEMA, MAX_POSTGRES_CONNECTIONS,
     MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
-    MAX_SOURCES, MAX_SQL_SERVER_CONNECTIONS, MAX_TABLES, SystemVars, Var,
+    MAX_SOURCES, MAX_SQL_SERVER_CONNECTIONS, MAX_TABLES, MAX_WASM_MODULES, SystemVars, Var,
 };
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
@@ -1202,6 +1202,7 @@ impl Coordinator {
         let mut new_schemas_per_database = BTreeMap::new();
         let mut new_objects_per_schema = BTreeMap::new();
         let mut new_secrets = 0;
+        let mut new_wasm_modules = 0;
         let mut new_roles = 0;
         let mut new_network_policies = 0;
         for op in ops {
@@ -1271,6 +1272,9 @@ impl Coordinator {
                         }
                         CatalogItem::Secret(_) => {
                             new_secrets += 1;
+                        }
+                        CatalogItem::WasmModule(_) => {
+                            new_wasm_modules += 1;
                         }
                         CatalogItem::Log(_)
                         | CatalogItem::View(_)
@@ -1344,6 +1348,9 @@ impl Coordinator {
                                     CatalogItem::Secret(_) => {
                                         new_secrets -= 1;
                                     }
+                                    CatalogItem::WasmModule(_) => {
+                                        new_wasm_modules -= 1;
+                                    }
                                     CatalogItem::Log(_)
                                     | CatalogItem::View(_)
                                     | CatalogItem::Index(_)
@@ -1375,6 +1382,7 @@ impl Coordinator {
                     | CatalogItem::Sink(_)
                     | CatalogItem::MaterializedView(_)
                     | CatalogItem::Secret(_)
+                    | CatalogItem::WasmModule(_)
                     | CatalogItem::Log(_)
                     | CatalogItem::View(_)
                     | CatalogItem::Index(_)
@@ -1566,7 +1574,7 @@ impl Coordinator {
             let current_items = self
                 .catalog()
                 .try_get_schema(&database_spec, &schema_spec, conn_id)
-                .map(|schema| schema.items.len())
+                .map(|schema| schema.items.len() + schema.functions.len())
                 .unwrap_or(0);
             self.validate_resource_limit(
                 current_items,
@@ -1582,6 +1590,13 @@ impl Coordinator {
             SystemVars::max_secrets,
             "secret",
             MAX_SECRETS.name(),
+        )?;
+        self.validate_resource_limit(
+            self.catalog().user_wasm_modules().count(),
+            new_wasm_modules,
+            SystemVars::max_wasm_modules,
+            "wasm module",
+            MAX_WASM_MODULES.name(),
         )?;
         self.validate_resource_limit(
             self.catalog().user_roles().count(),

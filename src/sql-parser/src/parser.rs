@@ -2123,6 +2123,12 @@ impl<'a> Parser<'a> {
         } else if self.peek_keyword(SECRET) {
             self.parse_create_secret()
                 .map_parser_err(StatementKind::CreateSecret)
+        } else if self.peek_keyword(FUNCTION) {
+            self.parse_create_function()
+                .map_parser_err(StatementKind::CreateFunction)
+        } else if self.peek_keywords(&[WASM, MODULE]) {
+            self.parse_create_wasm_module()
+                .map_parser_err(StatementKind::CreateWasmModule)
         } else if self.peek_keyword(CONNECTION) {
             self.parse_create_connection()
                 .map_parser_err(StatementKind::CreateConnection)
@@ -2162,8 +2168,8 @@ impl<'a> Parser<'a> {
                     (false, true) => "TABLE, or VIEW after CREATE TEMPORARY",
                     (false, false) => {
                         "DATABASE, SCHEMA, ROLE, TYPE, INDEX, SINK, SOURCE, [TEMPORARY] TABLE, \
-                        SECRET, [OR REPLACE] [TEMPORARY] VIEW, or [OR REPLACE] MATERIALIZED VIEW \
-                        after CREATE"
+                        SECRET, FUNCTION, WASM MODULE, [OR REPLACE] [TEMPORARY] VIEW, or \
+                        [OR REPLACE] MATERIALIZED VIEW after CREATE"
                     }
                 };
                 self.expected(self.peek_pos(), expected_msg, self.peek_token())
@@ -4556,6 +4562,151 @@ impl<'a> Parser<'a> {
         Ok(options)
     }
 
+    fn parse_create_function(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keyword(FUNCTION)?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_item_name()?;
+        self.expect_token(&Token::LParen)?;
+        let args = if self.consume_token(&Token::RParen) {
+            vec![]
+        } else {
+            let args = self.parse_comma_separated(Parser::parse_function_arg)?;
+            self.expect_token(&Token::RParen)?;
+            args
+        };
+        self.expect_keyword(RETURNS)?;
+        let returns = self.parse_data_type()?;
+
+        // As in PostgreSQL, the clauses after `RETURNS` may appear in any order.
+        let mut language = None;
+        let mut volatility = None;
+        let mut null_behavior = None;
+        let mut module = None;
+        loop {
+            let pos = self.peek_pos();
+            if self.parse_keyword(LANGUAGE) {
+                if language.is_some() {
+                    return parser_err!(self, pos, "LANGUAGE specified more than once");
+                }
+                language = Some(self.parse_identifier()?);
+            } else if let Some(keyword) = self.parse_one_of_keywords(&[IMMUTABLE, STABLE, VOLATILE])
+            {
+                if volatility.is_some() {
+                    return parser_err!(self, pos, "conflicting or redundant volatility");
+                }
+                volatility = Some(match keyword {
+                    IMMUTABLE => FunctionVolatility::Immutable,
+                    STABLE => FunctionVolatility::Stable,
+                    VOLATILE => FunctionVolatility::Volatile,
+                    _ => unreachable!(),
+                });
+            } else if let Some(behavior) = self.parse_function_null_behavior() {
+                if null_behavior.is_some() {
+                    return parser_err!(self, pos, "conflicting or redundant null input behavior");
+                }
+                null_behavior = Some(behavior);
+            } else if self.parse_keywords(&[USING, MODULE]) {
+                if module.is_some() {
+                    return parser_err!(self, pos, "USING MODULE specified more than once");
+                }
+                module = Some(self.parse_raw_name()?);
+            } else {
+                break;
+            }
+        }
+        let Some(language) = language else {
+            return self.expected(self.peek_pos(), "LANGUAGE", self.peek_token());
+        };
+        let Some(module) = module else {
+            return self.expected(self.peek_pos(), "USING MODULE", self.peek_token());
+        };
+
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_create_function_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+
+        Ok(Statement::CreateFunction(CreateFunctionStatement {
+            name,
+            if_not_exists,
+            args,
+            returns,
+            language,
+            volatility,
+            null_behavior,
+            module,
+            with_options,
+        }))
+    }
+
+    fn parse_create_wasm_module(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[WASM, MODULE])?;
+        let if_not_exists = self.parse_if_not_exists()?;
+        let name = self.parse_item_name()?;
+        self.expect_keywords(&[USING, BASE64])?;
+        let body = match self.peek_token() {
+            Some(Token::Parameter(n)) => {
+                self.next_token();
+                WasmModuleBody::Base64Parameter(n)
+            }
+            _ => WasmModuleBody::Base64(self.parse_literal_string()?),
+        };
+        Ok(Statement::CreateWasmModule(CreateWasmModuleStatement {
+            name,
+            if_not_exists,
+            body,
+        }))
+    }
+
+    /// Parses `[name] type`. The argument is unnamed if a complete type ends
+    /// the argument, which keeps multi-word types like `double precision`
+    /// from reading as a name followed by a type.
+    fn parse_function_arg(&mut self) -> Result<FunctionArg<Raw>, ParserError> {
+        let start = self.index;
+        if let Ok(data_type) = self.parse_data_type() {
+            if matches!(self.peek_token(), Some(Token::Comma | Token::RParen)) {
+                return Ok(FunctionArg {
+                    name: None,
+                    data_type,
+                });
+            }
+        }
+        self.index = start;
+        Ok(FunctionArg {
+            name: Some(self.parse_identifier()?),
+            data_type: self.parse_data_type()?,
+        })
+    }
+
+    fn parse_function_null_behavior(&mut self) -> Option<FunctionNullBehavior> {
+        if self.parse_keyword(STRICT) {
+            Some(FunctionNullBehavior::Strict)
+        } else if self.parse_keywords(&[RETURNS, NULL, ON, NULL, INPUT]) {
+            Some(FunctionNullBehavior::ReturnsNullOnNullInput)
+        } else if self.parse_keywords(&[CALLED, ON, NULL, INPUT]) {
+            Some(FunctionNullBehavior::CalledOnNullInput)
+        } else {
+            None
+        }
+    }
+
+    fn parse_create_function_option(&mut self) -> Result<CreateFunctionOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[EXPORT, FUEL, MEMORY])? {
+            EXPORT => CreateFunctionOptionName::Export,
+            FUEL => CreateFunctionOptionName::Fuel,
+            MEMORY => CreateFunctionOptionName::Memory,
+            v => panic!("found unreachable keyword {}", v),
+        };
+        Ok(CreateFunctionOption {
+            name,
+            value: self.parse_optional_option_value()?,
+        })
+    }
+
     fn parse_create_secret(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.expect_keyword(SECRET)?;
         let if_not_exists = self.parse_if_not_exists()?;
@@ -5063,6 +5214,7 @@ impl<'a> Parser<'a> {
                     if_exists,
                     names: vec![name],
                     cascade: !restrict,
+                    function_args: None,
                 }))
             }
             ObjectType::Schema => {
@@ -5079,6 +5231,7 @@ impl<'a> Parser<'a> {
                     if_exists,
                     names,
                     cascade,
+                    function_args: None,
                 }))
             }
             ObjectType::Role => {
@@ -5090,6 +5243,7 @@ impl<'a> Parser<'a> {
                     if_exists,
                     names,
                     cascade: false,
+                    function_args: None,
                 }))
             }
             ObjectType::NetworkPolicy => {
@@ -5103,6 +5257,7 @@ impl<'a> Parser<'a> {
                     if_exists,
                     names,
                     cascade: false,
+                    function_args: None,
                 }))
             }
             ObjectType::Cluster => self.parse_drop_clusters(if_exists),
@@ -5116,10 +5271,35 @@ impl<'a> Parser<'a> {
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
-            | ObjectType::Connection => {
+            | ObjectType::Connection
+            | ObjectType::Func
+            | ObjectType::WasmModule => {
                 let names = self.parse_comma_separated(|parser| {
                     Ok(UnresolvedObjectName::Item(parser.parse_item_name()?))
                 })?;
+                // `DROP FUNCTION name (argtype, ...)`, the form migration tools
+                // emit. Functions are not overloaded, so the list only has to
+                // match the one function of that name.
+                let function_args =
+                    if object_type == ObjectType::Func && self.consume_token(&Token::LParen) {
+                        if names.len() > 1 {
+                            return parser_err!(
+                                self,
+                                self.peek_prev_pos(),
+                                "DROP FUNCTION with an argument list drops one function"
+                            );
+                        }
+                        let args = if self.consume_token(&Token::RParen) {
+                            vec![]
+                        } else {
+                            let args = self.parse_comma_separated(Parser::parse_data_type)?;
+                            self.expect_token(&Token::RParen)?;
+                            args
+                        };
+                        Some(args.iter().map(|ty| ty.to_ast_string_stable()).collect())
+                    } else {
+                        None
+                    };
                 let cascade = matches!(
                     self.parse_at_most_one_keyword(&[CASCADE, RESTRICT], "DROP")?,
                     Some(CASCADE),
@@ -5129,9 +5309,10 @@ impl<'a> Parser<'a> {
                     if_exists,
                     names,
                     cascade,
+                    function_args,
                 }))
             }
-            ObjectType::Func | ObjectType::Subsource => parser_err!(
+            ObjectType::Subsource => parser_err!(
                 self,
                 self.peek_prev_pos(),
                 format!("Unsupported DROP on {object_type}")
@@ -5152,6 +5333,7 @@ impl<'a> Parser<'a> {
             if_exists,
             names,
             cascade,
+            function_args: None,
         }))
     }
 
@@ -5169,6 +5351,7 @@ impl<'a> Parser<'a> {
             if_exists,
             names,
             cascade: false,
+            function_args: None,
         }))
     }
 
@@ -6007,6 +6190,41 @@ impl<'a> Parser<'a> {
             ObjectType::NetworkPolicy => self
                 .parse_alter_network_policy()
                 .map_parser_err(StatementKind::AlterNetworkPolicy),
+            ObjectType::WasmModule => {
+                let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
+                let name = UnresolvedObjectName::Item(
+                    self.parse_item_name().map_no_statement_parser_err()?,
+                );
+                let action = self
+                    .expect_one_of_keywords(&[OWNER, RENAME])
+                    .map_no_statement_parser_err()?;
+                self.expect_keyword(TO).map_no_statement_parser_err()?;
+                match action {
+                    OWNER => {
+                        let new_owner = self
+                            .parse_identifier()
+                            .map_parser_err(StatementKind::AlterOwner)?;
+                        Ok(Statement::AlterOwner(AlterOwnerStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            new_owner,
+                        }))
+                    }
+                    RENAME => {
+                        let to_item_name = self
+                            .parse_identifier()
+                            .map_parser_err(StatementKind::AlterObjectRename)?;
+                        Ok(Statement::AlterObjectRename(AlterObjectRenameStatement {
+                            object_type,
+                            if_exists,
+                            name,
+                            to_item_name,
+                        }))
+                    }
+                    _ => unreachable!(),
+                }
+            }
             // Metric sinks are adapter-created and not a user surface, so they deliberately
             // support no ALTER at all, `RENAME TO` and `OWNER TO` included. REASSIGN OWNED
             // works off object ids and is unaffected.
@@ -6771,7 +6989,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Schema
             | ObjectType::Func
             | ObjectType::Subsource
-            | ObjectType::NetworkPolicy => {
+            | ObjectType::NetworkPolicy
+            | ObjectType::WasmModule => {
                 unreachable!("parse_alter_views called with unsupported object type: {object_type}")
             }
         };
@@ -7611,7 +7830,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Type
             | ObjectType::Secret
             | ObjectType::Connection
-            | ObjectType::Func => UnresolvedObjectName::Item(self.parse_item_name()?),
+            | ObjectType::Func
+            | ObjectType::WasmModule => UnresolvedObjectName::Item(self.parse_item_name()?),
             ObjectType::Role => UnresolvedObjectName::Role(self.parse_identifier()?),
             ObjectType::Cluster => UnresolvedObjectName::Cluster(self.parse_identifier()?),
             ObjectType::ClusterReplica => {
@@ -8410,6 +8630,7 @@ impl<'a> Parser<'a> {
                 ObjectType::Connection => ShowObjectType::Connection,
                 ObjectType::Cluster => ShowObjectType::Cluster,
                 ObjectType::NetworkPolicy => ShowObjectType::NetworkPolicy,
+                ObjectType::WasmModule => ShowObjectType::WasmModule,
                 ObjectType::MaterializedView => {
                     let in_cluster = self.parse_optional_in_cluster()?;
                     ShowObjectType::MaterializedView { in_cluster }
@@ -8532,6 +8753,20 @@ impl<'a> Parser<'a> {
                 type_name: self.parse_data_type()?,
                 redacted,
             }))
+        } else if self.parse_keywords(&[CREATE, FUNCTION]) {
+            Ok(ShowStatement::ShowCreateFunction(
+                ShowCreateFunctionStatement {
+                    function_name: self.parse_item_name()?,
+                    redacted,
+                },
+            ))
+        } else if self.parse_keywords(&[CREATE, WASM, MODULE]) {
+            Ok(ShowStatement::ShowCreateWasmModule(
+                ShowCreateWasmModuleStatement {
+                    module_name: self.parse_raw_name()?,
+                    redacted,
+                },
+            ))
         } else {
             let variable = if self.parse_keywords(&[TRANSACTION, ISOLATION, LEVEL]) {
                 ident!("transaction_isolation")
@@ -10039,7 +10274,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Connection
             | ObjectType::Database
             | ObjectType::Schema
-            | ObjectType::NetworkPolicy => Ok(object_type),
+            | ObjectType::NetworkPolicy
+            | ObjectType::WasmModule => Ok(object_type),
         }
     }
 
@@ -10064,6 +10300,7 @@ impl<'a> Parser<'a> {
                 SCHEMA,
                 FUNCTION,
                 NETWORK,
+                WASM,
             ])? {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
@@ -10105,6 +10342,13 @@ impl<'a> Parser<'a> {
                     }
                     ObjectType::NetworkPolicy
                 }
+                WASM => {
+                    if let Err(e) = self.expect_keyword(MODULE) {
+                        self.prev_token();
+                        return Err(e);
+                    }
+                    ObjectType::WasmModule
+                }
                 _ => unreachable!(),
             },
         )
@@ -10131,6 +10375,7 @@ impl<'a> Parser<'a> {
                 SCHEMA,
                 FUNCTION,
                 NETWORK,
+                WASM,
             ])? {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
@@ -10175,6 +10420,14 @@ impl<'a> Parser<'a> {
                         return None;
                     }
                 }
+                WASM => {
+                    if self.parse_keyword(MODULE) {
+                        ObjectType::WasmModule
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 _ => unreachable!(),
             },
         )
@@ -10200,6 +10453,7 @@ impl<'a> Parser<'a> {
                 DATABASES,
                 SCHEMAS,
                 POLICIES,
+                WASM,
             ])? {
                 TABLES => ObjectType::Table,
                 VIEWS => ObjectType::View,
@@ -10228,6 +10482,13 @@ impl<'a> Parser<'a> {
                 DATABASES => ObjectType::Database,
                 SCHEMAS => ObjectType::Schema,
                 POLICIES => ObjectType::NetworkPolicy,
+                WASM => {
+                    if let Err(e) = self.expect_keyword(MODULES) {
+                        self.prev_token();
+                        return Err(e);
+                    }
+                    ObjectType::WasmModule
+                }
                 _ => unreachable!(),
             },
         )
@@ -10255,6 +10516,7 @@ impl<'a> Parser<'a> {
                 SCHEMAS,
                 SUBSOURCES,
                 NETWORK,
+                WASM,
             ])? {
                 TABLES => ObjectType::Table,
                 VIEWS => ObjectType::View,
@@ -10301,6 +10563,14 @@ impl<'a> Parser<'a> {
                         return None;
                     }
                 }
+                WASM => {
+                    if self.parse_keyword(MODULES) {
+                        ObjectType::WasmModule
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 _ => unreachable!(),
             },
         )
@@ -10334,6 +10604,7 @@ impl<'a> Parser<'a> {
                 CONNECTIONS,
                 DATABASES,
                 SCHEMAS,
+                WASM,
             ])? {
                 TABLES => ObjectType::Table,
                 TYPES => ObjectType::Type,
@@ -10342,6 +10613,10 @@ impl<'a> Parser<'a> {
                 CONNECTIONS => ObjectType::Connection,
                 DATABASES => ObjectType::Database,
                 SCHEMAS => ObjectType::Schema,
+                WASM => {
+                    self.expect_keyword(MODULES)?;
+                    ObjectType::WasmModule
+                }
                 _ => unreachable!(),
             },
         )
@@ -10378,6 +10653,7 @@ impl<'a> Parser<'a> {
                 CONNECTIONS,
                 DATABASES,
                 SCHEMAS,
+                WASM,
             ])? {
                 SYSTEM => SystemObjectType::System,
                 TABLES => SystemObjectType::Object(ObjectType::Table),
@@ -10387,6 +10663,10 @@ impl<'a> Parser<'a> {
                 CONNECTIONS => SystemObjectType::Object(ObjectType::Connection),
                 DATABASES => SystemObjectType::Object(ObjectType::Database),
                 SCHEMAS => SystemObjectType::Object(ObjectType::Schema),
+                WASM => {
+                    self.expect_keyword(MODULES)?;
+                    SystemObjectType::Object(ObjectType::WasmModule)
+                }
                 _ => unreachable!(),
             },
         )
@@ -10406,6 +10686,7 @@ impl<'a> Parser<'a> {
                 CREATEDB,
                 CREATECLUSTER,
                 CREATENETWORKPOLICY,
+                CREATEWASMMODULE,
             ])? {
                 INSERT => Privilege::INSERT,
                 SELECT => Privilege::SELECT,
@@ -10417,6 +10698,7 @@ impl<'a> Parser<'a> {
                 CREATEDB => Privilege::CREATEDB,
                 CREATECLUSTER => Privilege::CREATECLUSTER,
                 CREATENETWORKPOLICY => Privilege::CREATENETWORKPOLICY,
+                CREATEWASMMODULE => Privilege::CREATEWASMMODULE,
                 _ => unreachable!(),
             },
         )
@@ -10483,6 +10765,7 @@ impl<'a> Parser<'a> {
             SCHEMA,
             CLUSTER,
             NETWORK,
+            WASM,
         ])? {
             TABLE => {
                 let name = self.parse_raw_name()?;
@@ -10524,6 +10807,11 @@ impl<'a> Parser<'a> {
             SECRET => {
                 let name = self.parse_raw_name()?;
                 CommentObjectType::Secret { name }
+            }
+            WASM => {
+                self.expect_keyword(MODULE)?;
+                let name = self.parse_raw_name()?;
+                CommentObjectType::WasmModule { name }
             }
             ROLE => {
                 let name = self.parse_identifier()?;

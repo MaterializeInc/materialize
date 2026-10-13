@@ -520,6 +520,7 @@ async fn a_walk_cancelled_while_running_reports_no_outcome() {
         let state = WalkState {
             scan,
             _permit: permit,
+            _module_pins: Vec::new(),
             result_tx,
         };
         let (_state, response) =
@@ -779,6 +780,7 @@ async fn a_walk_cancelled_while_uploading_deletes_what_it_wrote() {
         let state = WalkState {
             scan,
             _permit: permit,
+            _module_pins: Vec::new(),
             result_tx,
         };
         let (_state, response) = OffloadedPeek::walk(

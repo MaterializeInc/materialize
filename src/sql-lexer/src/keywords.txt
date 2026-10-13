@@ -60,6 +60,7 @@ Auto
 Availability
 Avro
 Aws
+Base64
 Batch
 Begin
 Between
@@ -74,6 +75,7 @@ Broker
 Brokers
 By
 Bytes
+Called
 Cancellation
 Capture
 Cardinality
@@ -122,6 +124,7 @@ Createcluster
 Createdb
 Createnetworkpolicy
 Createrole
+Createwasmmodule
 Creation
 Credential
 Cross
@@ -183,6 +186,7 @@ Exists
 Expected
 Experimental
 Explain
+Export
 Expose
 Expressions
 External
@@ -206,6 +210,7 @@ Foreign
 Format
 Forward
 From
+Fuel
 Full
 Fullname
 Function
@@ -235,6 +240,7 @@ Ids
 If
 Ignore
 Ilike
+Immutable
 Implementations
 Imported
 In
@@ -266,6 +272,7 @@ Json
 Kafka
 Key
 Keys
+Language
 Last
 Lateral
 Latest
@@ -305,6 +312,8 @@ Minute
 Minutes
 Mock
 Mode
+Module
+Modules
 Month
 Months
 Mutually
@@ -421,6 +430,7 @@ Restrict
 Retain
 Return
 Returning
+Returns
 Revoke
 Right
 Role
@@ -465,6 +475,7 @@ Sources
 Sql
 Ssh
 Ssl
+Stable
 Start
 Stdin
 Stdout
@@ -539,9 +550,11 @@ Verbose
 Version
 View
 Views
+Volatile
 Wait
 Warehouse
 Warning
+Wasm
 Webhook
 When
 Where

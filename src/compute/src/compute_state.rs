@@ -33,6 +33,7 @@ use mz_compute_types::dyncfgs::{
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_expr::SafeMfpPlan;
+use mz_expr::func::WasmModuleHash;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
@@ -207,6 +208,11 @@ pub struct ComputeState {
     /// These are polled on every sweep and draw no budget, because the work they are waiting on is
     /// not running on the worker.
     pub pending_peeks: VecDeque<PendingPeek>,
+    /// The WebAssembly modules this worker holds an install of in the process-wide runtime.
+    ///
+    /// The runtime counts installs across workers, so each worker holds at most one install per
+    /// module. A repeated `InstallWasmModule`, as reconciliation replays, is then a no-op.
+    pub wasm_modules: BTreeSet<WasmModuleHash>,
     /// The persist location where we can stash large peek results.
     pub peek_stash_persist_location: Option<PersistLocation>,
     /// The logger, from Timely's logging framework, if logs are enabled.
@@ -327,6 +333,7 @@ impl ComputeState {
             copy_to_response_buffer: Default::default(),
             queued_peeks: Default::default(),
             pending_peeks: Default::default(),
+            wasm_modules: Default::default(),
             peek_stash_persist_location: None,
             compute_logger: None,
             persist_clients,
@@ -694,6 +701,17 @@ impl<'a> ActiveComputeState<'a> {
             CancelPeek { uuid } => self.handle_cancel_peek(uuid),
             AllowWrites(id) => {
                 self.handle_allow_writes(id);
+            }
+            InstallWasmModule(module) => {
+                if self.compute_state.wasm_modules.insert(module.hash) {
+                    mz_wasm_udf::Runtime::global()
+                        .install(module.hash, Arc::clone(&module.bytes.0));
+                }
+            }
+            DropWasmModule(hash) => {
+                if self.compute_state.wasm_modules.remove(&hash) {
+                    mz_wasm_udf::Runtime::global().uninstall(&hash);
+                }
             }
         }
 
@@ -1569,6 +1587,24 @@ pub enum PendingPeek {
     Offloaded(OffloadedPeek),
 }
 
+/// Pins the WebAssembly modules `mfp` calls, for evaluating it off the worker thread. The
+/// controller drops a peek's modules right after cancelling it, while evaluation off the worker
+/// can still be running and bind a function for the first time.
+fn pin_wasm_modules(mfp: &mz_expr::SafeMfpPlan) -> Vec<mz_wasm_udf::ModulePin> {
+    let mut hashes = BTreeSet::new();
+    for expr in mfp
+        .expressions
+        .iter()
+        .chain(mfp.predicates.iter().map(|(_, predicate)| predicate))
+    {
+        expr.collect_wasm_modules(&mut hashes);
+    }
+    hashes
+        .into_iter()
+        .filter_map(|hash| mz_wasm_udf::Runtime::global().pin(hash))
+        .collect()
+}
+
 impl PendingPeek {
     /// Produces a corresponding log event.
     pub fn as_log_event(&self, installed: bool) -> ComputeEvent {
@@ -1629,6 +1665,9 @@ impl PendingPeek {
         let (result_tx, result_rx) = oneshot::channel();
         let timestamp = peek.timestamp;
         let mfp_plan = peek.map_filter_project.clone();
+        // Dropping the task on cancellation waits for a poll already running, which may still
+        // evaluate the plan, so the pins live in the task.
+        let module_pins = pin_wasm_modules(&mfp_plan);
         let max_results_needed = peek
             .finishing
             .limit
@@ -1644,6 +1683,7 @@ impl PendingPeek {
             .map(|rows| rows.into_element());
 
         let task_handle = mz_ore::task::spawn(|| "persist::peek", async move {
+            let _module_pins = module_pins;
             let start = Instant::now();
             let result = if active_worker {
                 PersistPeek::do_peek(

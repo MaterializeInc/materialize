@@ -31,8 +31,8 @@ use mz_catalog::durable::objects::{
 use mz_catalog::durable::{CatalogError, SystemObjectMapping};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Func, Index, Log, NetworkPolicy,
-    Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
+    CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database, Func, FuncDef, Index, Log,
+    NetworkPolicy, Role, RoleAuth, Schema, Source, StateDiff, StateUpdate, StateUpdateKind, Table,
     TableDataSource, Type, UpdateFrom,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
@@ -998,7 +998,7 @@ impl CatalogState {
                     oid,
                     name.clone(),
                     CatalogItem::Func(Func {
-                        inner: func.inner,
+                        inner: FuncDef::Builtin(func.inner),
                         global_id,
                     }),
                     MZ_SYSTEM_ROLE_ID,
@@ -2054,21 +2054,14 @@ impl CatalogState {
             &metadata.name().qualifiers.schema_spec,
             conn_id,
         );
-        if metadata.item_type() == CatalogItemType::Type {
-            schema
-                .types
-                .remove(&metadata.name().item)
-                .expect("catalog out of sync");
-        } else {
-            // Functions would need special handling, but we don't yet support
-            // dropping functions.
-            assert_ne!(metadata.item_type(), CatalogItemType::Func);
-
-            schema
-                .items
-                .remove(&metadata.name().item)
-                .expect("catalog out of sync");
+        let namespace = match metadata.item_type() {
+            CatalogItemType::Type => &mut schema.types,
+            CatalogItemType::Func => &mut schema.functions,
+            _ => &mut schema.items,
         };
+        namespace
+            .remove(&metadata.name().item)
+            .expect("catalog out of sync");
 
         if !id.is_system() {
             if let Some(cluster_id) = metadata.item().cluster_id() {
@@ -2348,8 +2341,9 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         // Partition items into groups s.t. each item in one group has a predefined order with all
         // items in other groups. For example, all sinks are ordered greater than all tables.
         let mut types = Vec::new();
-        // N.B. Functions can depend on system tables, but not user tables.
-        // TODO(udf): This will change when UDFs are supported.
+        // A user function references its WebAssembly module, and builtin
+        // types for its signature, but never a relation.
+        let mut wasm_modules = Vec::new();
         let mut funcs = Vec::new();
         let mut secrets = Vec::new();
         let mut connections = Vec::new();
@@ -2360,6 +2354,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         for update in item_updates {
             match update.0.item_type() {
                 CatalogItemType::Type => types.push(update),
+                CatalogItemType::WasmModule => wasm_modules.push(update),
                 CatalogItemType::Func => funcs.push(update),
                 CatalogItemType::Secret => secrets.push(update),
                 CatalogItemType::Connection => connections.push(update),
@@ -2382,6 +2377,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         // Other groups we can simply sort by ID.
         for group in [
             &mut types,
+            &mut wasm_modules,
             &mut funcs,
             &mut secrets,
             &mut sources,
@@ -2393,6 +2389,7 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
 
         iter::empty()
             .chain(types)
+            .chain(wasm_modules)
             .chain(funcs)
             .chain(secrets)
             .chain(connections)

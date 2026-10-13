@@ -496,6 +496,28 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_source_references",
         ),
+        // Mapping the new `WasmModule` object type in these views' CASE
+        // expressions changes their catalog fingerprints. See the NOTE above:
+        // this version must stay at the workspace's current dev version until
+        // the change ships.
+        MigrationStep::replacement(
+            "26.46.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_audit_events",
+        ),
+        MigrationStep::replacement(
+            "26.46.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_default_privileges",
+        ),
+        MigrationStep::replacement(
+            "26.46.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_comments",
+        ),
     ]
 });
 

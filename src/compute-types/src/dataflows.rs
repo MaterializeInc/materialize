@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use mz_expr::func::WasmModuleHash;
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
@@ -67,6 +68,9 @@ pub struct DataflowDescription<P, S: 'static = ()> {
     pub debug_name: String,
     /// Description of how the dataflow's progress relates to wall-clock time. None for unknown.
     pub time_dependence: Option<TimeDependence>,
+    /// The WebAssembly modules the dataflow's expressions call into. The
+    /// controller installs each on a replica before the dataflow reaches it.
+    pub wasm_modules: BTreeSet<WasmModuleHash>,
 }
 
 impl<P, S> DataflowDescription<P, S> {
@@ -125,6 +129,36 @@ impl DataflowDescription<LirRelationExpr, ()> {
 }
 
 impl DataflowDescription<OptimizedMirRelationExpr, ()> {
+    /// The WebAssembly modules the dataflow's expressions call into: those of
+    /// the objects it builds, the operators pushed onto its source imports,
+    /// and the keys of the indexes it exports.
+    pub fn referenced_wasm_modules(&self) -> BTreeSet<WasmModuleHash> {
+        let mut modules = BTreeSet::new();
+        for build in &self.objects_to_build {
+            build
+                .plan
+                .as_inner()
+                .visit_scalars(&mut |e| e.collect_wasm_modules(&mut modules));
+        }
+        for import in self.source_imports.values() {
+            if let Some(mfp) = &import.desc.arguments.operators {
+                for expr in mfp
+                    .expressions
+                    .iter()
+                    .chain(mfp.predicates.iter().map(|(_, p)| p))
+                {
+                    expr.collect_wasm_modules(&mut modules);
+                }
+            }
+        }
+        for (desc, _) in self.index_exports.values() {
+            for key in &desc.key {
+                key.collect_wasm_modules(&mut modules);
+            }
+        }
+        modules
+    }
+
     /// Imports a previously exported index.
     ///
     /// This method makes available an index previously exported as `id`, identified
@@ -270,6 +304,7 @@ impl<P, S> DataflowDescription<P, S> {
             refresh_schedule: None,
             debug_name: name,
             time_dependence: None,
+            wasm_modules: BTreeSet::new(),
         }
     }
 
@@ -597,6 +632,7 @@ where
             refresh_schedule: self.refresh_schedule.clone(),
             debug_name: self.debug_name.clone(),
             time_dependence: self.time_dependence.clone(),
+            wasm_modules: self.wasm_modules.clone(),
         }
     }
 }

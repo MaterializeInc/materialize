@@ -2462,6 +2462,8 @@ where
             | ExecuteResponse::CreatedRole
             | ExecuteResponse::CreatedSchema { .. }
             | ExecuteResponse::CreatedSecret { .. }
+            | ExecuteResponse::CreatedFunction
+            | ExecuteResponse::CreatedWasmModule
             | ExecuteResponse::CreatedSink { .. }
             | ExecuteResponse::CreatedSource { .. }
             | ExecuteResponse::CreatedTable { .. }

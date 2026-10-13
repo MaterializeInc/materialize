@@ -137,6 +137,7 @@ impl Context {
         mut self,
         desc: DataflowDescription<OptimizedMirRelationExpr>,
     ) -> Result<DataflowDescription<LirRelationExpr>, String> {
+        let wasm_modules = desc.referenced_wasm_modules();
         // Sources might provide arranged forms of their data, in the future.
         // Indexes provide arranged forms of their data.
         for IndexImport {
@@ -202,6 +203,7 @@ impl Context {
             refresh_schedule: desc.refresh_schedule,
             debug_name: desc.debug_name,
             time_dependence: desc.time_dependence,
+            wasm_modules,
         };
 
         // Refining: identify the common parts in the MFPs pushed onto a

@@ -713,6 +713,10 @@ pub enum ExecuteResponse {
     CreatedIntrospectionSubscribe,
     /// The requested secret was created.
     CreatedSecret,
+    /// The requested function was created.
+    CreatedFunction,
+    /// The requested WebAssembly module was created.
+    CreatedWasmModule,
     /// The requested sink was created.
     CreatedSink,
     /// The requested source was created.
@@ -891,6 +895,8 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::CreatedIndex => Ok(ExecuteResponse::CreatedIndex),
             ExecuteResponseKind::CreatedMetricSink => Ok(ExecuteResponse::CreatedMetricSink),
             ExecuteResponseKind::CreatedSecret => Ok(ExecuteResponse::CreatedSecret),
+            ExecuteResponseKind::CreatedFunction => Ok(ExecuteResponse::CreatedFunction),
+            ExecuteResponseKind::CreatedWasmModule => Ok(ExecuteResponse::CreatedWasmModule),
             ExecuteResponseKind::CreatedSink => Ok(ExecuteResponse::CreatedSink),
             ExecuteResponseKind::CreatedSource => Ok(ExecuteResponse::CreatedSource),
             ExecuteResponseKind::CreatedTable => Ok(ExecuteResponse::CreatedTable),
@@ -956,6 +962,8 @@ impl ExecuteResponse {
             CreatedIndex { .. } => Some("CREATE INDEX".into()),
             CreatedMetricSink { .. } => Some("CREATE METRIC SINK".into()),
             CreatedSecret { .. } => Some("CREATE SECRET".into()),
+            CreatedFunction { .. } => Some("CREATE FUNCTION".into()),
+            CreatedWasmModule { .. } => Some("CREATE WASM MODULE".into()),
             CreatedSink { .. } => Some("CREATE SINK".into()),
             CreatedSource { .. } => Some("CREATE SOURCE".into()),
             CreatedTable { .. } => Some("CREATE TABLE".into()),
@@ -1049,6 +1057,8 @@ impl ExecuteResponse {
             CreateClusterReplica => &[CreatedClusterReplica],
             CreateSource | CreateSources => &[CreatedSource],
             CreateSecret => &[CreatedSecret],
+            CreateFunction => &[CreatedFunction],
+            CreateWasmModule => &[CreatedWasmModule],
             CreateSink => &[CreatedSink],
             CreateTable => &[CreatedTable],
             CreateView => &[CreatedView],

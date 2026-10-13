@@ -1143,6 +1143,19 @@ impl MirScalarExpr {
         contains
     }
 
+    /// Adds the WebAssembly modules the expression calls into to `modules`.
+    pub fn collect_wasm_modules(&self, modules: &mut BTreeSet<crate::func::WasmModuleHash>) {
+        self.visit_pre(|e| {
+            if let MirScalarExpr::CallVariadic {
+                func: VariadicFunc::Wasm(func),
+                ..
+            } = e
+            {
+                modules.insert(func.module);
+            }
+        });
+    }
+
     /// True iff the expression contains an `UnmaterializableFunc` that is not in the `exceptions`
     /// list.
     pub fn contains_unmaterializable_except(&self, exceptions: &[UnmaterializableFunc]) -> bool {

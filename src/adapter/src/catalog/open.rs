@@ -969,6 +969,7 @@ fn add_new_remove_old_builtin_items_migration(
             | CatalogItemType::Type
             | CatalogItemType::Func
             | CatalogItemType::Secret
+            | CatalogItemType::WasmModule
             | CatalogItemType::Connection => continue,
         };
         deleted_comments.insert(comment_id);

@@ -243,7 +243,7 @@ macro_rules! objects {
 objects!(
     [v74, v75, v76, v77, v78],
     [
-        v79, v80, v81, v82, v83, v84, v85, v86, v87, v88, v89, v90, v91, v92
+        v79, v80, v81, v82, v83, v84, v85, v86, v87, v88, v89, v90, v91, v92, v93
     ]
 );
 
@@ -275,6 +275,7 @@ mod v88_to_v89;
 mod v89_to_v90;
 mod v90_to_v91;
 mod v91_to_v92;
+mod v92_to_v93;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -503,6 +504,15 @@ async fn run_upgrade(
                 version,
                 commit_ts,
                 v91_to_v92::upgrade,
+            )
+            .await
+        }
+        92 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v92_to_v93::upgrade,
             )
             .await
         }

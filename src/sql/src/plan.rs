@@ -29,6 +29,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -142,6 +143,8 @@ pub enum Plan {
     CreateSource(CreateSourcePlan),
     CreateSources(Vec<CreateSourcePlanBundle>),
     CreateSecret(CreateSecretPlan),
+    CreateFunction(CreateFunctionPlan),
+    CreateWasmModule(CreateWasmModulePlan),
     CreateSink(CreateSinkPlan),
     CreateTable(CreateTablePlan),
     CreateView(CreateViewPlan),
@@ -281,6 +284,8 @@ impl Plan {
             StatementKind::CreateRole => &[PlanKind::CreateRole],
             StatementKind::CreateSchema => &[PlanKind::CreateSchema],
             StatementKind::CreateSecret => &[PlanKind::CreateSecret],
+            StatementKind::CreateFunction => &[PlanKind::CreateFunction],
+            StatementKind::CreateWasmModule => &[PlanKind::CreateWasmModule],
             StatementKind::CreateSink => &[PlanKind::CreateSink],
             StatementKind::CreateMetricSink => &[PlanKind::CreateMetricSink],
             StatementKind::CreateSource | StatementKind::CreateSubsource => {
@@ -347,6 +352,8 @@ impl Plan {
             Plan::CreateSource(_) => "create source",
             Plan::CreateSources(_) => "create source",
             Plan::CreateSecret(_) => "create secret",
+            Plan::CreateFunction(_) => "create function",
+            Plan::CreateWasmModule(_) => "create wasm module",
             Plan::CreateSink(_) => "create sink",
             Plan::CreateTable(_) => "create table",
             Plan::CreateView(_) => "create view",
@@ -376,6 +383,7 @@ impl Plan {
                 ObjectType::Schema => "drop schema",
                 ObjectType::Func => "drop function",
                 ObjectType::NetworkPolicy => "drop network policy",
+                ObjectType::WasmModule => "drop wasm module",
             },
             Plan::DropOwned(_) => "drop owned",
             Plan::EmptyQuery => "do nothing",
@@ -417,6 +425,7 @@ impl Plan {
                 ObjectType::Schema => "alter schema",
                 ObjectType::Func => "alter function",
                 ObjectType::NetworkPolicy => "alter network policy",
+                ObjectType::WasmModule => "alter wasm module",
             },
             Plan::AlterCluster(_) => "alter cluster",
             Plan::AlterClusterRename(_) => "alter cluster rename",
@@ -453,6 +462,7 @@ impl Plan {
                 ObjectType::Schema => "alter schema owner",
                 ObjectType::Func => "alter function owner",
                 ObjectType::NetworkPolicy => "alter network policy owner",
+                ObjectType::WasmModule => "alter wasm module owner",
             },
             Plan::AlterTableAddColumn(_) => "alter table add column",
             Plan::AlterMaterializedViewApplyReplacement(_) => {
@@ -750,6 +760,20 @@ pub struct ValidateConnectionPlan {
 pub struct CreateSecretPlan {
     pub name: QualifiedItemName,
     pub secret: Secret,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug)]
+pub struct CreateFunctionPlan {
+    pub name: QualifiedItemName,
+    pub function: Function,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug)]
+pub struct CreateWasmModulePlan {
+    pub name: QualifiedItemName,
+    pub module: WasmModule,
     pub if_not_exists: bool,
 }
 
@@ -1931,6 +1955,58 @@ impl SshKey {
 pub struct Secret {
     pub create_sql: String,
     pub secret_as: MirScalarExpr,
+}
+
+/// A user-defined function.
+#[derive(Clone, Debug)]
+pub struct Function {
+    pub create_sql: String,
+    pub wasm: WasmFunction,
+}
+
+/// A WebAssembly module, stored once and referenced by the functions it
+/// implements.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WasmModule {
+    /// Parse-able SQL that is stored durably and defines this module.
+    pub create_sql: String,
+    /// The decoded module.
+    pub bytes: Arc<[u8]>,
+    pub hash: mz_expr::func::WasmModuleHash,
+}
+
+/// A function implemented by an export of a WebAssembly module.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WasmFunction {
+    /// The catalog item of the module that implements the function.
+    pub module_id: CatalogItemId,
+    pub module_hash: mz_expr::func::WasmModuleHash,
+    /// The export that implements the function.
+    pub export: String,
+    /// The arrow-udf signature the export implements.
+    pub signature: String,
+    pub arg_names: Vec<Option<String>>,
+    pub arg_types: Vec<SqlScalarType>,
+    pub return_type: SqlScalarType,
+    pub strict: bool,
+    pub limits: mz_expr::func::WasmLimits,
+}
+
+impl WasmFunction {
+    /// The expression-level function that calls this one, displayed as
+    /// `name`.
+    pub fn call(&self, name: String) -> mz_expr::func::WasmFunc {
+        mz_expr::func::WasmFunc {
+            name,
+            module: self.module_hash,
+            export: self.export.clone(),
+            arg_types: self.arg_types.clone(),
+            return_type: self.return_type.clone(),
+            strict: self.strict,
+            limits: self.limits,
+            invoker: Default::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
