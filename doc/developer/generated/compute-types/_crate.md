@@ -16,6 +16,7 @@ revision: bbb56d46f3
 * `config` — `ComputeReplicaConfig` and `ComputeReplicaLogging`.
 * `dyncfgs` — all `dyncfg::Config` constants for the compute layer.
 * `explain` — `Explain` impl for `DataflowDescription<Plan>` (text and JSON).
+* `optimizer_metrics` — `OptimizerMetrics`, the Prometheus metrics collected by the optimizer.
 
 ## Key dependencies
 
