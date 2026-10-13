@@ -15,6 +15,7 @@
 
 use std::sync::Arc;
 
+use mz_dyncfg::ConfigValHandle;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{PersistClient, Schemas};
@@ -42,13 +43,15 @@ pub(super) struct SharedBatchWriter {
     shard_name: String,
     schemas: Schemas<SourceData, ()>,
     shared_batches: SharedBatches,
+    enabled: ConfigValHandle<bool>,
 }
 
 impl SharedBatchWriter {
-    /// Creates a writer for the shard `writer` writes to.
+    /// Creates a writer for the shard `writer` writes to, which shares batches while `enabled`.
     pub(super) async fn new(
         persist_api: &PersistApi,
         writer: &WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+        enabled: ConfigValHandle<bool>,
     ) -> Self {
         Self {
             persist_client: persist_api.open_client().await,
@@ -64,11 +67,19 @@ impl SharedBatchWriter {
                 val: Arc::new(UnitSchema),
             },
             shared_batches: persist_api.persist_batches.clone(),
+            enabled,
         }
     }
 
-    /// Starts this worker's contribution to the shared batch for `desc`.
-    pub(super) fn start(&self, desc: &BatchDescription) -> SharedBatchWrite {
+    /// Starts this worker's contribution to the shared batch for `desc`, or returns `None` when
+    /// sharing is disabled and the worker writes its own batch.
+    pub(super) fn start(&self, desc: &BatchDescription) -> Option<SharedBatchWrite> {
+        // Read per interval, so a flag flip applies without re-rendering the sink. Workers may
+        // disagree on an interval: each either contributes to the shared batch or writes its own,
+        // and the append operator appends all of them together.
+        if !self.enabled.get() {
+            return None;
+        }
         let shared = self.shared_batches.builder(
             desc.shared_id,
             self.persist_client.clone(),
@@ -78,11 +89,11 @@ impl SharedBatchWriter {
             desc.lower.clone(),
             desc.upper.clone(),
         );
-        SharedBatchWrite {
+        Some(SharedBatchWrite {
             builder: PartBuilder::new(&*self.schemas.key, &*self.schemas.val),
             schemas: self.schemas.clone(),
             shared,
-        }
+        })
     }
 }
 

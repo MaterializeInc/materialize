@@ -844,11 +844,12 @@ mod write {
             drop(capabilities);
 
             let writer = persist_api.open_writer().await;
-            let shared_batch_writer = if ENABLE_SYNC_MV_SINK_SHARED_BATCHES.get(&worker_config) {
-                Some(SharedBatchWriter::new(&persist_api, &writer).await)
-            } else {
-                None
-            };
+            let shared_batch_writer = SharedBatchWriter::new(
+                &persist_api,
+                &writer,
+                ENABLE_SYNC_MV_SINK_SHARED_BATCHES.handle(&worker_config),
+            )
+            .await;
             let sink_metrics = persist_api.open_metrics().await;
             let read_only = *read_only_rx.borrow_and_update();
             let mut state = State::new(
@@ -960,8 +961,8 @@ mod write {
         sink_id: GlobalId,
         worker_id: usize,
         persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
-        /// Set when batches are coalesced across the workers in this process.
-        shared_batch_writer: Option<SharedBatchWriter>,
+        /// Coalesces batches across the workers in this process while enabled.
+        shared_batch_writer: SharedBatchWriter,
         /// Contains `desired - persist`, reflecting the updates we would like to commit to
         /// `persist` in order to "correct" it to track `desired`. This collection is only modified
         /// by updates received from either the `desired` or `persist` inputs.
@@ -998,7 +999,7 @@ mod write {
             sink_id: GlobalId,
             worker_id: usize,
             persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
-            shared_batch_writer: Option<SharedBatchWriter>,
+            shared_batch_writer: SharedBatchWriter,
             metrics: SinkMetrics,
             logging: Option<ChannelLogging>,
             as_of: Antichain<Timestamp>,
@@ -1192,9 +1193,8 @@ mod write {
                 return None;
             }
 
-            let batch = match &self.shared_batch_writer {
-                Some(shared) => {
-                    let mut write = shared.start(&desc);
+            let batch = match self.shared_batch_writer.start(&desc) {
+                Some(mut write) => {
                     for (kv, t, d) in updates {
                         write.push(&kv, t, d).await;
                     }

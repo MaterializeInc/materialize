@@ -55,7 +55,7 @@ use differential_dataflow::{Hashable, VecCollection};
 use mz_compute_types::dyncfgs::{
     ENABLE_SYNC_MV_SINK_SHARED_BATCHES, MV_SINK_ADVANCE_PERSIST_FRONTIERS,
 };
-use mz_dyncfg::ConfigSet;
+use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::write::WriteHandle;
@@ -81,7 +81,7 @@ use crate::sink::materialized_view::{
     BatchDescription, BatchesStream, DescsStream, DesiredStreams, OkErr, PersistApi,
     PersistStreams, SharedSinkFrontier, advance, operator_name, persist_source,
 };
-use crate::sink::shared_batch::SharedBatchWriter;
+use crate::sink::shared_batch::{SharedBatchWrite, SharedBatchWriter};
 
 /// Renders an MV sink writing the given desired collection into the `target` persist collection.
 ///
@@ -659,9 +659,7 @@ mod write {
         let advance_persist_frontiers_at_startup =
             MV_SINK_ADVANCE_PERSIST_FRONTIERS.get(&worker_config);
 
-        // Read the shared-batch flag on the Timely thread. `worker_config` is an `Rc<ConfigSet>`
-        // and thus not `Send`, so the value must be captured before it moves into the Tokio task.
-        let shared_batches_enabled = ENABLE_SYNC_MV_SINK_SHARED_BATCHES.get(&worker_config);
+        let shared_batches_enabled = ENABLE_SYNC_MV_SINK_SHARED_BATCHES.handle(&worker_config);
 
         // Mirror the persist-frontier initialization performed by `State::new` below. With the
         // flag enabled, `State` advances its Timely-side `persist_frontiers` to `as_of`, opening
@@ -851,22 +849,20 @@ mod write {
     const READ_BACK_CHUNKS_IN_FLIGHT: usize = 4;
     /// The batch-writing context owned by the Tokio write task.
     ///
-    /// With `shared` set, batches are built through the process-global shared batches. The
-    /// `writer` then serves only to clean up a finished batch when the response channel has
-    /// already gone away.
+    /// The `writer` writes per-worker batches and cleans up a finished batch when the response
+    /// channel has already gone away.
     struct BatchWriter {
         writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
-        shared: Option<SharedBatchWriter>,
+        shared: SharedBatchWriter,
     }
 
     impl BatchWriter {
-        async fn new(persist_api: &PersistApi, shared_batches_enabled: bool) -> Self {
+        async fn new(
+            persist_api: &PersistApi,
+            shared_batches_enabled: ConfigValHandle<bool>,
+        ) -> Self {
             let writer = persist_api.open_writer().await;
-            let shared = if shared_batches_enabled {
-                Some(SharedBatchWriter::new(persist_api, &writer).await)
-            } else {
-                None
-            };
+            let shared = SharedBatchWriter::new(persist_api, &writer, shared_batches_enabled).await;
             Self { writer, shared }
         }
     }
@@ -943,35 +939,9 @@ mod write {
                         },
                     );
 
-                let proto_batch = if let Some(shared) = &batch_writer.shared {
-                    let mut write = shared.start(&desc);
-                    while let Some(chunk) = updates_rx.recv().await {
-                        for (kv, t, d) in &chunk {
-                            write.push(kv, *t, *d).await;
-                        }
-                    }
-                    write.finish().await
-                } else {
-                    // Per-worker path: each worker writes its own batch for the interval. Create
-                    // the builder lazily: an idle sink's descriptions find no corrections.
-                    let mut builder = None;
-                    while let Some(chunk) = updates_rx.recv().await {
-                        let builder = builder
-                            .get_or_insert_with(|| batch_writer.writer.builder(desc.lower.clone()));
-                        for ((k, v), t, d) in &chunk {
-                            builder.add(k, v, t, d).await.expect("valid usage");
-                        }
-                    }
-                    match builder {
-                        Some(builder) => {
-                            let batch = builder
-                                .finish(desc.upper.clone())
-                                .await
-                                .expect("valid usage");
-                            Some(batch.into_transmittable_batch())
-                        }
-                        None => None,
-                    }
+                let proto_batch = match batch_writer.shared.start(&desc) {
+                    Some(write) => write_shared_batch(write, &mut updates_rx).await,
+                    None => write_worker_batch(&batch_writer.writer, &desc, &mut updates_rx).await,
                 };
                 let corrections = read_back.await;
 
@@ -987,6 +957,41 @@ mod write {
                 corrections
             }
         }
+    }
+
+    /// Hand the updates for one interval to the shared batch, returning the batch if this worker
+    /// delivers it.
+    async fn write_shared_batch(
+        mut write: SharedBatchWrite,
+        updates_rx: &mut mpsc::Receiver<Vec<((SourceData, ()), Timestamp, StorageDiff)>>,
+    ) -> Option<ProtoBatch> {
+        while let Some(chunk) = updates_rx.recv().await {
+            for (kv, t, d) in &chunk {
+                write.push(kv, *t, *d).await;
+            }
+        }
+        write.finish().await
+    }
+
+    /// Write this worker's own batch for `desc`, or nothing if it has no updates.
+    async fn write_worker_batch(
+        writer: &WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+        desc: &BatchDescription,
+        updates_rx: &mut mpsc::Receiver<Vec<((SourceData, ()), Timestamp, StorageDiff)>>,
+    ) -> Option<ProtoBatch> {
+        // Create the builder lazily: an idle sink's descriptions find no corrections.
+        let mut builder = None;
+        while let Some(chunk) = updates_rx.recv().await {
+            let builder = builder.get_or_insert_with(|| writer.builder(desc.lower.clone()));
+            for ((k, v), t, d) in &chunk {
+                builder.add(k, v, t, d).await.expect("valid usage");
+            }
+        }
+        let batch = builder?
+            .finish(desc.upper.clone())
+            .await
+            .expect("valid usage");
+        Some(batch.into_transmittable_batch())
     }
 
     /// Apply a coalesced batch of updates to the correction buffers, on a blocking thread.
