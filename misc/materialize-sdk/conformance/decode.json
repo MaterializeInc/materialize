@@ -1,0 +1,228 @@
+{
+  "function": "decode",
+  "cases": [
+    {
+      "name": "diff updates keep their sign, multiplicity, and NULLs",
+      "input": {
+        "envelope": {"kind": "diff"},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id", "name"],
+        "rows": [["7", "f", "3", "1", "alice"], ["7", "f", "-2", "2", null]]
+      },
+      "expect": {
+        "messages": [
+          {"message": "update", "timestamp": "7", "op": "diff", "row": ["1", "alice"], "diff": "3"},
+          {"message": "update", "timestamp": "7", "op": "diff", "row": ["2", null], "diff": "-2"}
+        ]
+      }
+    },
+    {
+      "name": "diffs keep every bit of an i64",
+      "input": {
+        "envelope": {"kind": "diff"},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id", "name"],
+        "rows": [
+          ["1", "f", "9223372036854775807", "a", null],
+          ["1", "f", "-9223372036854775808", "a", null],
+          ["1", "f", "9007199254740993", "a", null],
+          ["1", "f", "9223372036854775808", "a", null]
+        ]
+      },
+      "expect": {
+        "messages": [
+          {
+            "message": "update",
+            "timestamp": "1",
+            "op": "diff",
+            "row": ["a", null],
+            "diff": "9223372036854775807"
+          },
+          {
+            "message": "update",
+            "timestamp": "1",
+            "op": "diff",
+            "row": ["a", null],
+            "diff": "-9223372036854775808"
+          },
+          {
+            "message": "update",
+            "timestamp": "1",
+            "op": "diff",
+            "row": ["a", null],
+            "diff": "9007199254740993"
+          },
+          {"error": "protocol"}
+        ]
+      }
+    },
+    {
+      "name": "a progress row has NULL in every other cell",
+      "input": {
+        "envelope": {"kind": "diff"},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id", "name"],
+        "rows": [["8", "t", null, null, null]]
+      },
+      "expect": {"messages": [{"message": "progress", "frontier": "8"}]}
+    },
+    {
+      "name": "a progress row with a non-NULL cell is refused",
+      "input": {
+        "envelope": {"kind": "diff"},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id", "name"],
+        "rows": [["9", "t", "1", null, null], ["9", "t", null, "x", null]]
+      },
+      "expect": {"messages": [{"error": "protocol"}, {"error": "protocol"}]}
+    },
+    {
+      "name": "timestamps use the full u64 range",
+      "input": {
+        "envelope": {"kind": "diff"},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id", "name"],
+        "rows": [["18446744073709551615", "t", null, null, null], ["18446744073709551616", "t", null, null, null]]
+      },
+      "expect": {"messages": [{"message": "progress", "frontier": "18446744073709551615"}, {"error": "protocol"}]}
+    },
+    {
+      "name": "timestamps have one spelling",
+      "input": {
+        "envelope": {"kind": "diff"},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id", "name"],
+        "rows": [["+1", "t", null, null, null], ["01", "t", null, null, null], ["0", "t", null, null, null]]
+      },
+      "expect": {"messages": [{"error": "protocol"}, {"error": "protocol"}, {"message": "progress", "frontier": "0"}]}
+    },
+    {
+      "name": "upsert rows carry the key first, in KEY order, and deletes have NULL values",
+      "input": {
+        "envelope": {"kind": "upsert", "key": ["region", "id"]},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_state", "region", "id", "total"],
+        "rows": [
+          ["5", "f", "upsert", "eu", "9", "10"],
+          ["5", "f", "delete", "us", "3", null],
+          ["5", "f", "key_violation", "eu", "4", null],
+          ["6", "t", null, null, null, null]
+        ]
+      },
+      "expect": {
+        "messages": [
+          {"message": "update", "timestamp": "5", "op": "upsert", "key": ["eu", "9"], "value": ["10"]},
+          {"message": "update", "timestamp": "5", "op": "delete", "key": ["us", "3"]},
+          {"message": "update", "timestamp": "5", "op": "key_violation", "key": ["eu", "4"]},
+          {"message": "progress", "frontier": "6"}
+        ]
+      }
+    },
+    {
+      "name": "a delete or key violation with a value is refused",
+      "input": {
+        "envelope": {"kind": "upsert", "key": ["region", "id"]},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_state", "region", "id", "total"],
+        "rows": [["5", "f", "delete", "us", "3", "7"], ["5", "f", "key_violation", "us", "3", "7"]]
+      },
+      "expect": {"messages": [{"error": "protocol"}, {"error": "protocol"}]}
+    },
+    {
+      "name": "an upsert whose columns are all key has an empty value",
+      "input": {
+        "envelope": {"kind": "upsert", "key": ["id"]},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_state", "id"],
+        "rows": [["5", "f", "upsert", "1"]]
+      },
+      "expect": {"messages": [{"message": "update", "timestamp": "5", "op": "upsert", "key": ["1"], "value": []}]}
+    },
+    {
+      "name": "a user column named like a metadata column is payload",
+      "input": {
+        "envelope": {"kind": "diff"},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "mz_timestamp"],
+        "rows": [["3", "f", "1", "x"]]
+      },
+      "expect": {"messages": [{"message": "update", "timestamp": "3", "op": "diff", "row": ["x"], "diff": "1"}]}
+    },
+    {
+      "name": "NULL metadata in an update is refused",
+      "input": {
+        "envelope": {"kind": "diff"},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id", "name"],
+        "rows": [[null, "f", "1", "a", "b"], ["1", null, "1", "a", "b"], ["1", "f", null, "a", "b"]]
+      },
+      "expect": {"messages": [{"error": "protocol"}, {"error": "protocol"}, {"error": "protocol"}]}
+    },
+    {
+      "name": "a NULL or unknown upsert state is refused",
+      "input": {
+        "envelope": {"kind": "upsert", "key": ["region", "id"]},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_state", "region", "id", "total"],
+        "rows": [["5", "f", null, "eu", "9", "10"], ["5", "f", "insert", "eu", "9", "10"]]
+      },
+      "expect": {"messages": [{"error": "protocol"}, {"error": "protocol"}]}
+    },
+    {
+      "name": "a zero or non-integer diff is refused",
+      "input": {
+        "envelope": {"kind": "diff"},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id", "name"],
+        "rows": [["1", "f", "0", "a", "b"], ["1", "f", "1.5", "a", "b"], ["1", "f", "-0", "a", "b"]]
+      },
+      "expect": {"messages": [{"error": "protocol"}, {"error": "protocol"}, {"error": "protocol"}]}
+    },
+    {
+      "name": "a boolean not in the text format is refused",
+      "input": {
+        "envelope": {"kind": "diff"},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id", "name"],
+        "rows": [["1", "true", null, null, null]]
+      },
+      "expect": {"messages": [{"error": "protocol"}]}
+    },
+    {
+      "name": "a row of the wrong width is refused",
+      "input": {
+        "envelope": {"kind": "diff"},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id", "name"],
+        "rows": [["1", "t", null, null]]
+      },
+      "expect": {"messages": [{"error": "protocol"}]}
+    },
+    {
+      "name": "columns without PROGRESS are refused",
+      "input": {"envelope": {"kind": "diff"}, "columns": ["mz_timestamp", "mz_diff", "id"], "rows": []},
+      "expect": {"error": "protocol"}
+    },
+    {
+      "name": "diff columns under the upsert envelope are refused",
+      "input": {
+        "envelope": {"kind": "upsert", "key": ["id"]},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_diff", "id"],
+        "rows": []
+      },
+      "expect": {"error": "protocol"}
+    },
+    {
+      "name": "key columns out of KEY order are refused",
+      "input": {
+        "envelope": {"kind": "upsert", "key": ["region", "id"]},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_state", "id", "region", "total"],
+        "rows": []
+      },
+      "expect": {"error": "protocol"}
+    },
+    {
+      "name": "an empty key is refused",
+      "input": {
+        "envelope": {"kind": "upsert", "key": []},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_state", "id"],
+        "rows": []
+      },
+      "expect": {"error": "protocol"}
+    },
+    {
+      "name": "a repeated key column is refused",
+      "input": {
+        "envelope": {"kind": "upsert", "key": ["id", "id"]},
+        "columns": ["mz_timestamp", "mz_progressed", "mz_state", "id", "id"],
+        "rows": []
+      },
+      "expect": {"error": "protocol"}
+    }
+  ]
+}
