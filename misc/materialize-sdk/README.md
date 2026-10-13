@@ -16,4 +16,11 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
+The Rust package's integration tests need a running Materialize. The nightly
+pipeline runs them through `test/materialize-sdk`.
+
+```
+MATERIALIZE_URL="host=localhost port=6875 user=materialize" cargo test -- --ignored
+```
+
 `bin/fmt` formats it with the rest of the repository.
