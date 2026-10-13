@@ -56,3 +56,13 @@ events it released, or `{"error": kind}` with kind `protocol` or
 
 Input: `updates`, in timestamp order at timestamps of one or more. Release them
 as one batch and return the latest change per key, as a list of updates.
+
+### `subscribe_sql.json`
+
+Input: `subscribe`, `start`. The output is `{"sql": ...}`, or
+`{"error": "usage"}`.
+
+### `fetch_sql.json`
+
+Input: `cursor`, `max_rows`, optional `timeout_ms`. The output is
+`{"sql": ...}`, or `{"error": "usage"}`.

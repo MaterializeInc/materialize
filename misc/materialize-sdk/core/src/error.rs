@@ -44,3 +44,15 @@ pub struct TimestampTooLarge {
     /// The limit.
     pub limit: usize,
 }
+
+/// The caller asked for something the core does not support, such as resuming
+/// a query.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct UsageError(String);
+
+impl UsageError {
+    pub(crate) fn new(message: impl Into<String>) -> UsageError {
+        UsageError(message.into())
+    }
+}
