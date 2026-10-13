@@ -3136,6 +3136,7 @@ mod tests {
                 input: u32,
                 receive: u32,
                 send: u32,
+                len: i16,
             }
 
             struct PgOper {
@@ -3175,7 +3176,7 @@ mod tests {
             let pg_type: BTreeMap<_, _> = query(
                 &client,
                 sql!(
-                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive, typsend::oid as typsend FROM pg_type"
+                    "SELECT oid, typname, typtype::text, typelem, typarray, typinput::oid, typreceive::oid as typreceive, typsend::oid as typsend, typlen FROM pg_type"
                 ),
                 &[],
             )
@@ -3192,6 +3193,7 @@ mod tests {
                         input: row.get("typinput"),
                         receive: row.get("typreceive"),
                         send: row.get("typsend"),
+                        len: row.get("typlen"),
                     };
                     (oid, pg_type)
                 })
@@ -3325,6 +3327,25 @@ mod tests {
                                 "type {} has typreceive OID {} that does not exist in pg_proc",
                                 ty.name,
                                 typreceive_oid,
+                            );
+                        }
+                        let id = conn_catalog
+                            .resolve_type(&PartialItemName {
+                                database: None,
+                                schema: Some(ty.schema.into()),
+                                item: ty.name.to_string(),
+                            })
+                            .expect("unable to resolve type")
+                            .id();
+                        // Types with no scalar type report an unknown typlen.
+                        if let Ok(scalar_type) =
+                            mz_sql::plan::scalar_type_from_catalog(&conn_catalog, id, &[])
+                        {
+                            let typlen = mz_pgrepr::Type::from(&scalar_type).typlen();
+                            assert_eq!(
+                                typlen, pg_ty.len,
+                                "type {} has typlen {} in mz but {} in pg",
+                                ty.name, typlen, pg_ty.len,
                             );
                         }
 

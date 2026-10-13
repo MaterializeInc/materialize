@@ -517,6 +517,14 @@ impl CatalogState {
         out.push(BuiltinTableUpdate::row(index_id, row, diff));
 
         if let Some(pg_metadata) = &typ.details.pg_metadata {
+            // Resolved the same way as a column's wire type, so this matches the
+            // `type_len` pgwire sends in `RowDescription`. Pseudo-types and arrays
+            // of them (`_record`) have no scalar type, so their length is unknown.
+            let typlen =
+                match mz_sql::plan::scalar_type_from_catalog(&self.for_system_session(), id, &[]) {
+                    Ok(scalar_type) => Datum::Int16(mz_pgrepr::Type::from(&scalar_type).typlen()),
+                    Err(_) => Datum::Null,
+                };
             out.push(BuiltinTableUpdate::row(
                 &*MZ_TYPE_PG_METADATA,
                 Row::pack_slice(&[
@@ -524,6 +532,7 @@ impl CatalogState {
                     Datum::UInt32(pg_metadata.typinput_oid),
                     Datum::UInt32(pg_metadata.typreceive_oid),
                     Datum::UInt32(pg_metadata.typsend_oid),
+                    typlen,
                 ]),
                 diff,
             ));

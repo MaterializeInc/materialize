@@ -4020,6 +4020,7 @@ export interface MzTypePgMetadata {
   typinput: Generated<number>;
   typreceive: Generated<number>;
   typsend: Generated<number>;
+  typlen: Generated<number | null>;
 }
 
 export interface MzTypes {

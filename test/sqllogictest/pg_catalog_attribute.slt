@@ -216,3 +216,42 @@ FROM pg_type t
 WHERE typname = 'list';
 ----
 list  0
+
+# pg_type.typlen matches PostgreSQL. JDBC derives its identifier length limit
+# from typlen of `name`. Types with no PostgreSQL counterpart, pseudo-types,
+# and user-defined types report NULL.
+query TI
+SELECT typname, typlen
+FROM pg_type
+WHERE typname IN (
+    'name', 'bool', 'char', 'int2', 'int4', 'int8', 'float8', 'uuid', 'interval',
+    'text', 'numeric', '_int4', 'uint2', 'anyelement', '_record', 'int4_list'
+)
+ORDER BY typname;
+----
+_int4  -1
+_record  NULL
+anyelement  NULL
+bool  1
+char  1
+float8  8
+int2  2
+int4  4
+int4_list  NULL
+int8  8
+interval  16
+name  64
+numeric  -1
+text  -1
+uint2  NULL
+uuid  16
+
+query TI
+SELECT attname, attlen FROM pg_attribute
+WHERE attrelid = (SELECT oid FROM mz_tables WHERE name = 'coltypes')
+    AND attname IN ('c_int4', 'c_text', 'c_uuid')
+ORDER BY attname;
+----
+c_int4  4
+c_text  -1
+c_uuid  16

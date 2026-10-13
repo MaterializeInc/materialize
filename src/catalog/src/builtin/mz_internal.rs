@@ -653,6 +653,8 @@ pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
         // because its `LEFT JOIN` against this table yields NULLs for types with
         // no PostgreSQL metadata.
         .with_column("typsend", SqlScalarType::Oid.nullable(false))
+        // NULL for pseudo-types and arrays of them.
+        .with_column("typlen", SqlScalarType::Int16.nullable(true))
         .finish(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: false,
@@ -4826,7 +4828,7 @@ SELECT
     mz_types.name AS typname,
     mz_schemas.oid AS typnamespace,
     role_owner.oid AS typowner,
-    NULL::pg_catalog.int2 AS typlen,
+    mz_internal.mz_type_pg_metadata.typlen,
     -- 'a' is used internally to denote an array type, but in postgres they show up
     -- as 'b'.
     (CASE mztype WHEN 'a' THEN 'b' ELSE mztype END)::pg_catalog.char AS typtype,
