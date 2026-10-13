@@ -76,25 +76,26 @@ impl DockerRuntime {
     }
 
     pub(crate) async fn get_client(&self) -> Result<Client, DockerRuntimeError> {
-        let profile = Self::make_profile();
-        // The ephemeral Docker container has no `_mz_deploy_server` cluster,
-        // so bypass the usual session-cluster pin and use the server default.
-        let client = match Client::connect_sandbox(profile).await {
-            Ok(client) => {
-                verbose!("Fast-path connect succeeded");
-                client
+        // The image check in `ensure_container` must also gate the fast path.
+        // Nothing stops the sandbox, so it is usually still running from an
+        // earlier invocation and `ensure_container` would never be reached.
+        if self.container_runs_configured_image().await {
+            // The ephemeral Docker container has no `_mz_deploy_server`
+            // cluster, so bypass the usual session-cluster pin and use the
+            // server default.
+            match Client::connect_sandbox(Self::make_profile()).await {
+                Ok(client) => {
+                    verbose!("Fast-path connect succeeded");
+                    return Ok(client);
+                }
+                Err(_) => verbose!("Fast-path connect failed, falling back to Docker CLI"),
             }
-            Err(_) => {
-                verbose!("Fast-path connect failed, falling back to Docker CLI");
-                self.ensure_container().await?;
-                let profile = Self::make_profile();
-                verbose!("Connecting to Materialize...");
-                let client = Client::connect_sandbox(profile).await?;
-                verbose!("Connected");
-                client
-            }
-        };
+        }
 
+        self.ensure_container().await?;
+        verbose!("Connecting to Materialize...");
+        let client = Client::connect_sandbox(Self::make_profile()).await?;
+        verbose!("Connected");
         Ok(client)
     }
 
