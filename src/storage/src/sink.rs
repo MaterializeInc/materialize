@@ -11,3 +11,4 @@
 
 mod iceberg;
 mod kafka;
+mod postgres;

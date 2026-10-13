@@ -136,11 +136,12 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
 
     /// Normalize connection references in CREATE SINK statements.
     ///
-    /// Handles both Kafka and Iceberg sink types, ensuring their connection
-    /// references are normalized.
+    /// Handles every sink type, ensuring their connection references are
+    /// normalized.
     pub fn normalize_sink_connection(&self, connection: &mut CreateSinkConnection<Raw>) {
         match connection {
-            CreateSinkConnection::Kafka { connection, .. } => {
+            CreateSinkConnection::Kafka { connection, .. }
+            | CreateSinkConnection::Postgres { connection, .. } => {
                 self.normalize_raw_item_name(connection);
             }
             CreateSinkConnection::Iceberg {

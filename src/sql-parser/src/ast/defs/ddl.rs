@@ -1323,6 +1323,43 @@ impl_display_for_with_option!(IcebergSinkConfigOption);
 impl_display_t!(IcebergSinkConfigOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PostgresSinkConfigOptionName {
+    Schema,
+    Table,
+}
+
+impl AstDisplay for PostgresSinkConfigOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str(match self {
+            PostgresSinkConfigOptionName::Schema => "SCHEMA",
+            PostgresSinkConfigOptionName::Table => "TABLE",
+        })
+    }
+}
+impl_display!(PostgresSinkConfigOptionName);
+
+impl WithOptionName for PostgresSinkConfigOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            PostgresSinkConfigOptionName::Schema | PostgresSinkConfigOptionName::Table => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PostgresSinkConfigOption<T: AstInfo> {
+    pub name: PostgresSinkConfigOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+impl_display_for_with_option!(PostgresSinkConfigOption);
+impl_display_t!(PostgresSinkConfigOption);
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PgConfigOptionName {
     /// Hex encoded string of binary serialization of
     /// `mz_storage_types::sources::postgres::PostgresSourcePublicationDetails`
@@ -1715,6 +1752,11 @@ pub enum CreateSinkConnection<T: AstInfo> {
         key: Option<SinkKey>,
         options: Vec<IcebergSinkConfigOption<T>>,
     },
+    Postgres {
+        connection: T::ItemName,
+        key: Option<SinkKey>,
+        options: Vec<PostgresSinkConfigOption<T>>,
+    },
 }
 
 impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
@@ -1758,6 +1800,23 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
                 if let Some(aws_connection) = aws_connection {
                     f.write_str(" USING AWS CONNECTION ");
                     f.write_node(aws_connection);
+                }
+                if let Some(key) = key.as_ref() {
+                    f.write_str(" ");
+                    f.write_node(key);
+                }
+            }
+            CreateSinkConnection::Postgres {
+                connection,
+                key,
+                options,
+            } => {
+                f.write_str("POSTGRES CONNECTION ");
+                f.write_node(connection);
+                if !options.is_empty() {
+                    f.write_str(" (");
+                    f.write_node(&display::comma_separated(options));
+                    f.write_str(")");
                 }
                 if let Some(key) = key.as_ref() {
                     f.write_str(" ");
