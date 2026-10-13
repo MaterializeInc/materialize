@@ -87,6 +87,9 @@ pub enum Error {
     /// Error when a command fails unexpectedly.
     #[error("Command failed: {0}")]
     CommandFailed(String),
+    /// Error loading, inspecting, or calling a WebAssembly function.
+    #[error("{0}")]
+    Udf(String),
     /// I/O Error
     #[error(transparent)]
     IOError(#[from] std::io::Error),
