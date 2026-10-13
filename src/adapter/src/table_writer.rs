@@ -11,7 +11,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
-use std::fmt::Write;
 use std::sync::Arc;
 
 use futures::StreamExt;
@@ -502,13 +501,14 @@ impl TxnsTableWorker {
                 .iter()
                 .map(|(x, _)| x.to_string())
                 .collect::<BTreeSet<_>>(),
-            updates.iter().filter(|(_, v)| !v.is_empty()).fold(
-                String::new(),
-                |mut output, (k, v)| {
-                    let _ = write!(output, "\n  {}: {:?}", k, v.first());
-                    output
+            // Metadata enablement does not guarantee that a tracing consumer
+            // accepts the event. Defer payload formatting until one renders it.
+            mz_ore::str::closure_to_display(|f| {
+                for (k, v) in updates.iter().filter(|(_, v)| !v.is_empty()) {
+                    write!(f, "\n  {}: {:?}", k, v.first())?;
                 }
-            )
+                Ok(())
+            })
         );
         // TODO: txn-wal doesn't take an advance_to yet, it uses
         // timestamp.step_forward. This is the same in all cases, so just assert that
