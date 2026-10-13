@@ -1119,37 +1119,41 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
                 .expect("reducing over a non-empty argument list");
         }
 
-        let mapped_spec = if args.len() >= Self::MAX_EVAL_ARGS {
-            ResultSpec::anything()
-        } else {
-            fn eval_loop<'a>(
-                is_monotonic: bool,
-                expr: &mut MirScalarExpr,
-                args: &[ColumnSpec<'a>],
-                index: usize,
-                datum_map: &mut impl FnMut(&MirScalarExpr) -> ResultSpec<'a>,
-            ) -> ResultSpec<'a> {
-                if index >= args.len() {
-                    datum_map(expr)
-                } else {
-                    args[index].range.flat_map(is_monotonic, |datum| {
-                        ColumnSpecs::set_argument(expr, index, datum);
-                        eval_loop(is_monotonic, expr, args, index + 1, datum_map)
-                    })
+        // A WebAssembly call is never evaluated here: this runs while
+        // filtering persist parts, where there is no runtime and where a
+        // guest's cost would land on every statistics check.
+        let mapped_spec =
+            if args.len() >= Self::MAX_EVAL_ARGS || matches!(func, VariadicFunc::Wasm(_)) {
+                ResultSpec::anything()
+            } else {
+                fn eval_loop<'a>(
+                    is_monotonic: bool,
+                    expr: &mut MirScalarExpr,
+                    args: &[ColumnSpec<'a>],
+                    index: usize,
+                    datum_map: &mut impl FnMut(&MirScalarExpr) -> ResultSpec<'a>,
+                ) -> ResultSpec<'a> {
+                    if index >= args.len() {
+                        datum_map(expr)
+                    } else {
+                        args[index].range.flat_map(is_monotonic, |datum| {
+                            ColumnSpecs::set_argument(expr, index, datum);
+                            eval_loop(is_monotonic, expr, args, index + 1, datum_map)
+                        })
+                    }
                 }
-            }
 
-            let mut fn_expr = MirScalarExpr::CallVariadic {
-                func: func.clone(),
-                exprs: args
-                    .iter()
-                    .map(|spec| Self::placeholder(spec.col_type.clone()))
-                    .collect(),
+                let mut fn_expr = MirScalarExpr::CallVariadic {
+                    func: func.clone(),
+                    exprs: args
+                        .iter()
+                        .map(|spec| Self::placeholder(spec.col_type.clone()))
+                        .collect(),
+                };
+                eval_loop(func.is_monotone(), &mut fn_expr, &args, 0, &mut |expr| {
+                    self.eval_result(expr.eval(&[], self.arena))
+                })
             };
-            eval_loop(func.is_monotone(), &mut fn_expr, &args, 0, &mut |expr| {
-                self.eval_result(expr.eval(&[], self.arena))
-            })
-        };
 
         let col_types = args.into_iter().map(|spec| spec.col_type).collect();
         let col_type = func.output_type(col_types);
@@ -2388,6 +2392,38 @@ mod tests {
                 check(a, b, v)?;
             }
         );
+    }
+
+    /// A WebAssembly call on a single-value column is not evaluated. Here the
+    /// function is unbound, so evaluating it would produce only an error and
+    /// let pushdown discard a part whose rows the function maps to `true`.
+    #[mz_ore::test]
+    fn test_wasm_calls_are_not_evaluated() {
+        use crate::func::{InvokerCell, WasmFunc, WasmLimits, WasmModuleHash};
+
+        let call = MirScalarExpr::CallVariadic {
+            func: VariadicFunc::Wasm(WasmFunc {
+                name: "f".into(),
+                module: WasmModuleHash([7; 32]),
+                export: "f".into(),
+                arg_types: vec![SqlScalarType::Int64],
+                return_type: SqlScalarType::Bool,
+                strict: true,
+                limits: WasmLimits {
+                    fuel: 1,
+                    memory_bytes: 1,
+                },
+                invoker: InvokerCell::default(),
+            }),
+            exprs: vec![MirScalarExpr::column(0)],
+        };
+        let relation = ReprRelationType::new(vec![ReprScalarType::Int64.nullable(false)]);
+        let arena = RowArena::new();
+        let mut interpreter = ColumnSpecs::new(&relation, &arena);
+        interpreter.push_column(0, ResultSpec::value(Datum::Int64(1)));
+        let spec = interpreter.expr(&call);
+        assert!(spec.range.may_contain(Datum::True), "{:?}", spec.range);
+        assert!(spec.range.may_contain(Datum::False), "{:?}", spec.range);
     }
 
     /// Deterministic regression test for database-issues#9656 (PER-50), the

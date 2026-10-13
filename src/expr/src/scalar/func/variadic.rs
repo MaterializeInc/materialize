@@ -40,7 +40,7 @@ use mz_repr::{
 use serde::{Deserialize, Serialize};
 
 use crate::func::{
-    CaseLiteral, array_create_scalar, build_regex, check_build_fits_budget,
+    CaseLiteral, WasmFunc, array_create_scalar, build_regex, check_build_fits_budget,
     check_datums_fit_budget, date_bin, max_string_func_result_bytes, parse_timezone,
     regexp_match_static, regexp_replace_parse_flags, regexp_split_to_array_re, stringify_datum,
     timezone_time,
@@ -1903,6 +1903,7 @@ derive_variadic! {
     RegexpSplitToArray(RegexpSplitToArray),
     RegexpReplace(RegexpReplace),
     CaseLiteral(CaseLiteral),
+    Wasm(WasmFunc),
 }
 
 impl VariadicFunc {

@@ -18,7 +18,7 @@ use std::hash::Hash;
 use serde::Serialize;
 
 use crate::scalar::columns::Columns;
-use crate::scalar::func::{BinaryFunc, UnaryFunc, VariadicFunc};
+use crate::scalar::func::{BinaryFunc, UnaryFunc, VariadicFunc, WasmFunc};
 use crate::visit::VisitChildren;
 use crate::{MirScalarExpr, func};
 
@@ -57,6 +57,10 @@ pub trait OptimizableExpr:
     ///
     /// Returns `(lower_bounds, upper_bounds)` for use in `MfpPlan`.
     fn extract_temporal_bounds(temporal: Vec<Self>) -> Result<(Vec<Self>, Vec<Self>), String>;
+
+    /// If this is a call to a WebAssembly function, the function and its
+    /// arguments.
+    fn as_wasm_call(&self) -> Option<(&WasmFunc, &[Self])>;
 }
 
 impl OptimizableExpr for MirScalarExpr {
@@ -159,5 +163,15 @@ impl OptimizableExpr for MirScalarExpr {
         }
 
         Ok((lower_bounds, upper_bounds))
+    }
+
+    fn as_wasm_call(&self) -> Option<(&WasmFunc, &[Self])> {
+        match self {
+            MirScalarExpr::CallVariadic {
+                func: VariadicFunc::Wasm(func),
+                exprs,
+            } => Some((func, exprs)),
+            _ => None,
+        }
     }
 }
