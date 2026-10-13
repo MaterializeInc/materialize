@@ -197,7 +197,7 @@ fn interactive_import_replays_rows_and_holds_at_as_of() {
 }
 
 /// Like [`publish_index`], but also returns the writer-side `oks` `InputSession` and a plain
-/// `TraceAgent` clone of the `oks` trace (not a `SharedReader`), so a test can keep
+/// `SharedAgent` clone of the `oks` trace (not a `SharedReader`), so a test can keep
 /// publishing after the initial seal and force compaction directly on the writer. Mirrors the
 /// `writer` handle in the differential-dataflow primitive's own `import_hold_pins_then_releases`
 /// (`differential-dataflow/tests/sharing.rs`), which drives the writer side of the identical

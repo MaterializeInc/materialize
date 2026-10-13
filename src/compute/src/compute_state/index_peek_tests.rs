@@ -9,13 +9,13 @@
 
 //! Tests of the inline index-peek driver, and the fixtures a peek scan is tested over.
 
-use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::{Batcher, Builder, Trace};
 use mz_expr::RowSetFinishing;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, RelationDesc, SqlScalarType};
 use mz_row_spine::{RowRowBatcher, RowRowBuilder};
 use mz_timely_util::columnation::ColumnationStack;
+use mz_timely_util::shared_trace::SharedAgent;
 use timely::container::PushInto;
 use timely::dataflow::operators::generic::OperatorInfo;
 
@@ -50,12 +50,12 @@ const STASH_EVERYTHING: StashBounds = StashBounds {
 /// The writer is dropped here, which seals the trace to the empty frontier. That is what lets
 /// `TraceReader::cursor` hand out a cursor covering every batch, which is the only way a peek
 /// reads a trace.
-fn agent<Tr>(batch: Tr::Batch) -> TraceAgent<Tr>
+fn agent<Tr>(batch: Tr::Batch) -> SharedAgent<Tr>
 where
     Tr: Trace<Time = Timestamp> + 'static,
 {
     let info = OperatorInfo::new(0, 0, [].into());
-    let (agent, mut writer) = TraceAgent::new(Tr::new(info.clone(), None, None), info, None);
+    let (agent, mut writer) = SharedAgent::new(Tr::new(info.clone(), None, None), info, None);
     writer.insert(batch, Some(Timestamp::MIN));
     agent
 }
