@@ -183,14 +183,16 @@ impl Coordinator {
     /// In general this is fully satisfied by the getting the current write timestamp in the
     /// [epoch millisecond timeline](Timeline::EpochMilliseconds) from the timestamp oracle,
     /// however, in read-only mode we cannot modify the timestamp oracle.
-    pub(crate) async fn get_catalog_write_ts(&mut self) -> Timestamp {
+    pub(crate) async fn get_catalog_write_ts(
+        &mut self,
+    ) -> mz_catalog::durable::CatalogCommitTimestamp {
         if self.read_only_controllers {
             let (write_ts, upper) =
                 futures::future::join(self.peek_local_write_ts(), self.catalog().current_upper())
                     .await;
-            std::cmp::max(write_ts, upper)
+            std::cmp::max(write_ts, upper).into()
         } else {
-            self.get_local_write_ts().await.timestamp
+            self.get_local_write_ts().await.into()
         }
     }
 

@@ -795,7 +795,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_cluster");
 
-        let id_ts = self.get_catalog_write_ts().await;
+        let id_ts = self.get_catalog_write_ts().await.lower_bound();
         let id = self.catalog().allocate_user_cluster_id(id_ts).await?;
         // The catalog items for the introspection sources are shared between all replicas
         // of a compute instance, so we create them unconditionally during instance creation.
@@ -926,7 +926,7 @@ impl Coordinator {
         // Pre-allocate replica ids out-of-band via the durable allocator,
         // picking the id type from the owning cluster. This mirrors how cluster
         // and item ids are allocated, so nothing allocates a replica id in-apply.
-        let id_ts = self.get_catalog_write_ts().await;
+        let id_ts = self.get_catalog_write_ts().await.lower_bound();
         let replica_ids = self
             .catalog()
             .allocate_replica_ids(cluster_id, u64::from(replication_factor), id_ts)
@@ -1074,7 +1074,7 @@ impl Coordinator {
         // Pre-allocate replica ids out-of-band via the durable allocator,
         // picking the id type from the owning cluster. This mirrors how cluster
         // and item ids are allocated, so nothing allocates a replica id in-apply.
-        let id_ts = self.get_catalog_write_ts().await;
+        let id_ts = self.get_catalog_write_ts().await.lower_bound();
         let replica_ids = self
             .catalog()
             .allocate_replica_ids(id, u64::cast_from(replicas.len()), id_ts)
@@ -1395,7 +1395,7 @@ impl Coordinator {
         // picking the id type from the target cluster, which may be a system
         // cluster. This mirrors how cluster and item ids are allocated, so
         // nothing allocates a replica id in-apply.
-        let id_ts = self.get_catalog_write_ts().await;
+        let id_ts = self.get_catalog_write_ts().await.lower_bound();
         let replica_id = self
             .catalog()
             .allocate_replica_ids(cluster_id, 1, id_ts)

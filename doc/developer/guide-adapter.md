@@ -103,6 +103,7 @@ On success, merge them with the candidate's effects so its bound changes and dro
 supersede earlier permissions. Do not apply a caught-up bound against an already
 dropped collection. Config operations with shared precommit dynamic-config effects
 are excluded from immediate reconstruction.
+
 Ordinary DDL derives the creator grant inside the real admission candidate, at
 the maximum of the admitted bound and the client's oracle minimum. The pending
 local barrier retains committed grants until the definitive outcome. Successful
@@ -431,6 +432,15 @@ oracle before acknowledging, and strict serializable reads wait for R to reach
 their chosen timestamp. Catalog content commits follow durability, completion
 (including `apply_write`), then acknowledgement. Heartbeats carry no user-visible
 DDL and do not need to apply a timestamp.
+
+An oracle allocation taken after an operation starts orders it after reads and
+writes completed before that start. Its internal catalog reads are instead ordered
+by Persist's expected-upper CAS. `CatalogCommitTimestamp` retains a genuine
+allocation through bounded frontier rebuilds and empty-progress rebasing.
+Plain timestamps, including read-only peeks, remain lower bounds requiring durable
+allocation. Do not cache an allocation across operations or staged retry rounds.
+Actual commit timestamps still pass the future-jump check and complete through the
+oracle before acknowledgement.
 
 OCC selects `as_of >= R_s`, where `R_s` is read from the shared oracle after the
 statement begins, and writes at `T > as_of`. Thus every operation acknowledged

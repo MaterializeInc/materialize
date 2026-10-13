@@ -424,7 +424,7 @@ impl Coordinator {
         //
         // `storage_usage_fetch` skips this path in read-only mode, so we can
         // unconditionally bump the oracle write ts here.
-        let write_ts = self.get_catalog_write_ts().await;
+        let write_ts = self.get_catalog_write_ts().await.lower_bound();
         let collection_timestamp: EpochMillis = write_ts.into();
 
         // All rows in this collection cycle share `batch_id` so consumers can

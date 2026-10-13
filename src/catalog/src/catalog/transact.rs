@@ -906,10 +906,12 @@ impl Catalog {
         // n.b. this is an option to prevent us from needing to build out a
         // dummy impl of `StorageController` for tests.
         mut storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
-        oracle_write_ts: mz_repr::Timestamp,
+        oracle_write_ts: impl Into<crate::durable::CatalogCommitTimestamp> + std::fmt::Debug,
         session: Option<&TransactionContext<'_>>,
         ops: Vec<Op>,
     ) -> Result<TransactionResult, CatalogError> {
+        let commit_timestamp = oracle_write_ts.into();
+        let oracle_write_ts = commit_timestamp.lower_bound();
         trace!("transact: {:?}", ops);
         fail::fail_point!("catalog_transact", |arg| {
             Err(CatalogError::Unstructured(anyhow::anyhow!(
@@ -1102,7 +1104,9 @@ impl Catalog {
                 phase = "durable_commit",
                 "catalog phase start",
             );
-            let result = tx.commit_with_upper(commit_ts).await;
+            let result = tx
+                .commit_with_upper(commit_timestamp.advance_to(commit_ts))
+                .await;
             debug!(
                 target: "mz_adapter::frontend_read_then_write",
                 phase = "durable_commit",

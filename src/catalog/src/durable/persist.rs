@@ -504,30 +504,41 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     pub(crate) async fn compare_and_append<S: IntoStateUpdateKindJson>(
         &mut self,
         updates: Vec<(S, Diff)>,
-        commit_ts: Timestamp,
+        commit_ts: impl Into<crate::durable::CatalogCommitTimestamp> + std::fmt::Debug,
     ) -> Result<Timestamp, CompareAndAppendError> {
         self.validate_runtime()?;
+        let commit_ts = commit_ts.into();
         let (commit_ts, allocation) = if let Some(oracle) = &self.timestamp_oracle {
-            // Every entry point, including bootstrap, upgrades and debug edits,
-            // must allocate after preceding reads. A rebased upper is a lower
-            // bound, not a substitute for that oracle allocation.
-            let phase_started = Instant::now();
-            debug!(
-                target: "mz_adapter::frontend_read_then_write",
-                phase = "oracle_allocate",
-                "durable catalog phase start",
-            );
-            let allocated = oracle.oracle.write_ts().await.timestamp;
-            debug!(
-                target: "mz_adapter::frontend_read_then_write",
-                phase = "oracle_allocate",
-                elapsed = ?phase_started.elapsed(),
-                outcome = "ok",
-                "durable catalog phase complete",
-            );
-            (max(commit_ts, max(self.upper, allocated)), Some(allocated))
+            // The allocation orders this operation after previously completed
+            // reads and writes. Internal prefix reads are ordered by the CAS:
+            // the commit is at or beyond the prefix used by the candidate.
+            // Writers without an operation-scoped allocation must obtain one
+            // here. A peek or a rebased upper is not an allocation.
+            let allocated = if let Some(allocated) = commit_ts.allocation {
+                allocated
+            } else {
+                let phase_started = Instant::now();
+                debug!(
+                    target: "mz_adapter::frontend_read_then_write",
+                    phase = "oracle_allocate",
+                    "durable catalog phase start",
+                );
+                let allocated = oracle.oracle.write_ts().await.timestamp;
+                debug!(
+                    target: "mz_adapter::frontend_read_then_write",
+                    phase = "oracle_allocate",
+                    elapsed = ?phase_started.elapsed(),
+                    outcome = "ok",
+                    "durable catalog phase complete",
+                );
+                allocated
+            };
+            (
+                max(commit_ts.lower_bound(), max(self.upper, allocated)),
+                Some(allocated),
+            )
         } else {
-            (commit_ts, None)
+            (commit_ts.lower_bound(), None)
         };
         let mut traffic = [(0u64, 0u64); 3];
         let updates = updates.into_iter().map(|(kind, diff)| {
@@ -2905,12 +2916,12 @@ impl DurableCatalogState for PersistCatalogState {
     async fn commit_transaction(
         &mut self,
         txn_batch: TransactionBatch,
-        commit_ts: Timestamp,
+        commit_ts: crate::durable::CatalogCommitTimestamp,
     ) -> Result<Timestamp, CatalogError> {
         async fn commit_transaction_inner(
             catalog: &mut PersistCatalogState,
             txn_batch: TransactionBatch,
-            commit_ts: Timestamp,
+            commit_ts: crate::durable::CatalogCommitTimestamp,
         ) -> Result<Timestamp, CatalogError> {
             catalog.validate_runtime()?;
             // If the transaction is empty then we don't error, even in read-only mode.
@@ -2944,7 +2955,7 @@ impl DurableCatalogState for PersistCatalogState {
             debug!("committing updates: {updates:?}");
 
             // Empty upper progress does not invalidate the transaction.
-            let mut commit_ts = max(commit_ts, catalog.upper);
+            let mut commit_ts = commit_ts.advance_to(catalog.upper);
 
             let mut attempt = 0u64;
             let next_upper = match catalog.mode {
@@ -2983,19 +2994,19 @@ impl DurableCatalogState for PersistCatalogState {
                                 "durable catalog mismatch classified",
                             );
                             result?;
-                            commit_ts = max(commit_ts, catalog.upper);
+                            commit_ts = commit_ts.advance_to(catalog.upper);
                         }
                     }
                 },
                 Mode::Savepoint => {
                     let updates = updates.into_iter().map(|(kind, diff)| StateUpdate {
                         kind,
-                        ts: commit_ts,
+                        ts: commit_ts.lower_bound(),
                         diff,
                     });
                     catalog.apply_updates_and_consolidate(updates)?;
                     catalog.validate_runtime()?;
-                    catalog.upper = commit_ts.step_forward();
+                    catalog.upper = commit_ts.lower_bound().step_forward();
                     catalog.upper
                 }
                 Mode::Readonly => unreachable!("handled above"),

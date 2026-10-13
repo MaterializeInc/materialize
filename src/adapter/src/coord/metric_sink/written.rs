@@ -98,7 +98,7 @@ impl Coordinator {
             return Ok(Vec::new());
         }
         let revision = self.catalog().transient_revision();
-        let write_ts = self.get_catalog_write_ts().await;
+        let write_ts = self.get_catalog_write_ts().await.lower_bound();
         let selections = prepare_selections(
             self.catalog(),
             Arc::new(self.catalog().state().clone()),

@@ -320,6 +320,97 @@ async fn catalog_acknowledgement_waits_for_oracle_completion() {
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] // unsupported OpenSSL calls
+async fn catalog_reuses_supplied_allocation_across_rebase() {
+    let persist = PersistClient::new_for_tests().await;
+    let oracle = Arc::new(TestOracle::default());
+    let mut catalog = TestCatalogStateBuilder::new(persist.clone())
+        .with_default_deploy_generation()
+        .with_timestamp_oracle(CatalogTimestampOracle::new(
+            Arc::<TestOracle>::clone(&oracle),
+            NowFn::from(|| 1_000),
+        ))
+        .unwrap_build()
+        .await
+        .open(1_000.into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let mut raw = persist
+        .open_writer::<SourceData, (), Timestamp, i64>(
+            catalog.shard_id(),
+            Arc::new(mz_catalog::durable::persist_desc()),
+            Arc::new(UnitSchema::default()),
+            Diagnostics {
+                shard_name: "catalog".into(),
+                handle_purpose: "race and observe allocated catalog commit".into(),
+            },
+        )
+        .await
+        .unwrap();
+    catalog.sync_to_current_updates().await.unwrap();
+    let start_id = catalog.get_next_id(USER_ITEM_ALLOC_KEY).await.unwrap();
+    let preceding_read = oracle.read_ts().await;
+    let allocation = oracle.write_ts().await;
+    let allocated = allocation.timestamp;
+    assert!(allocated > preceding_read);
+    let before = *oracle.times.lock().unwrap();
+    let mut txn = catalog.transaction().await.unwrap();
+    let upper = txn.upper();
+    txn.get_and_increment_id_by(USER_ITEM_ALLOC_KEY.into(), 1)
+        .unwrap();
+    let _ = txn.get_and_commit_op_updates();
+
+    // Empty progress races the prepared transaction and overtakes its allocation.
+    let overtaken = upper.max(allocated).saturating_add(100);
+    raw.compare_and_append(
+        Vec::<((SourceData, ()), Timestamp, i64)>::new(),
+        Antichain::from_elem(upper),
+        Antichain::from_elem(overtaken),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let gate = Arc::new(Notify::new());
+    *oracle.completion_gate.lock().unwrap() = Some(Arc::clone(&gate));
+    {
+        let commit = txn.commit_with_upper(allocation);
+        tokio::pin!(commit);
+        tokio::select! {
+            result = &mut commit => panic!("acknowledged before oracle completion: {result:?}"),
+            result = tokio::time::timeout(
+                Duration::from_secs(5),
+                oracle.completion_started.notified(),
+            ) => result.expect("catalog did not complete its timestamp"),
+        }
+        let committed = raw
+            .fetch_recent_upper()
+            .await
+            .as_option()
+            .unwrap()
+            .step_back()
+            .unwrap();
+        assert!(committed >= overtaken);
+        // apply_write is gated, so any extra write_ts call would advance times.1.
+        assert_eq!(*oracle.times.lock().unwrap(), before);
+        assert!(oracle.read_ts().await < committed);
+        assert!(futures::poll!(&mut commit).is_pending());
+        gate.notify_one();
+        let committed_upper = tokio::time::timeout(Duration::from_secs(5), commit)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(committed_upper, committed.step_forward());
+        assert_eq!(oracle.read_ts().await, committed);
+    }
+    assert_eq!(
+        catalog.get_next_id(USER_ITEM_ALLOC_KEY).await.unwrap(),
+        start_id + 1
+    );
+    catalog.expire().await;
+    raw.expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)] // unsupported OpenSSL calls
 async fn catalog_rebase_preserves_inherited_future_progress() {
     let persist = PersistClient::new_for_tests().await;
     let oracle = Arc::new(TestOracle::default());
