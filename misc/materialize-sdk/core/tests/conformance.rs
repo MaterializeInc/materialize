@@ -19,10 +19,12 @@
 
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 use materialize_sdk_core::Frontier;
 use materialize_sdk_core::batch::{BatchError, Batcher, Event, Start};
 use materialize_sdk_core::decode::{Decoder, Envelope, Message, Row, Update};
+use materialize_sdk_core::statement::{Subscribe, fetch_sql};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -85,6 +87,8 @@ fn run(function: &str, input: Value) -> Value {
         "decode" => decode(input),
         "batch" => batch(input),
         "latest_by_key" => latest_by_key(input),
+        "subscribe_sql" => subscribe_sql(input),
+        "fetch_sql" => fetch(input),
         other => panic!("unknown function {other:?}"),
     }
 }
@@ -217,4 +221,56 @@ fn latest_by_key(value: Value) -> Value {
     }
     let batch = batcher.finish().unwrap().unwrap();
     json!(batch.into_latest_by_key())
+}
+
+fn subscribe_sql(value: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        subscribe: Subscribe,
+        start: Start,
+    }
+    let Input { subscribe, start } = input(value);
+    match subscribe.sql(start) {
+        Ok(sql) => json!({ "sql": sql }),
+        Err(_) => error("usage"),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FetchInput {
+    max_rows: String,
+    timeout_ms: Option<String>,
+}
+
+impl FetchInput {
+    fn timeout(&self) -> Option<Duration> {
+        self.timeout_ms
+            .as_deref()
+            .map(|ms| Duration::from_millis(u64_of(ms)))
+    }
+}
+
+fn fetch(value: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        cursor: String,
+        max_rows: String,
+        timeout_ms: Option<String>,
+    }
+    let Input {
+        cursor,
+        max_rows,
+        timeout_ms,
+    } = input(value);
+    let fetch = FetchInput {
+        max_rows,
+        timeout_ms,
+    };
+    match fetch_sql(&cursor, u64_of(&fetch.max_rows), fetch.timeout()) {
+        Ok(sql) => json!({ "sql": sql }),
+        Err(_) => error("usage"),
+    }
 }
