@@ -3726,6 +3726,8 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Numeric) => AggregateFunc::MaxNumeric => Numeric, oid::FUNC_MAX_NUMERIC_OID;
             params!(Interval) => AggregateFunc::MaxInterval => Interval, 2128;
             params!(Time) => AggregateFunc::MaxTime => Time, 2123;
+            params!(ArrayAny) => AggregateFunc::MaxArray => ArrayAny, 2050;
+            params!(ListAny) => AggregateFunc::MaxList => ListAny, oid::FUNC_MAX_LIST_OID;
         },
         "min" => Aggregate {
             params!(Bool) => AggregateFunc::MinBool => Bool, oid::FUNC_MIN_BOOL_OID;
@@ -3748,6 +3750,8 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Numeric) => AggregateFunc::MinNumeric => Numeric, oid::FUNC_MIN_NUMERIC_OID;
             params!(Interval) => AggregateFunc::MinInterval => Interval, 2144;
             params!(Time) => AggregateFunc::MinTime => Time, 2139;
+            params!(ArrayAny) => AggregateFunc::MinArray => ArrayAny, 2051;
+            params!(ListAny) => AggregateFunc::MinList => ListAny, oid::FUNC_MIN_LIST_OID;
         },
         "jsonb_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {

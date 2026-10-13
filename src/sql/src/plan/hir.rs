@@ -1309,6 +1309,8 @@ pub enum AggregateFunc {
     MaxTimestampTz,
     MaxInterval,
     MaxTime,
+    MaxArray,
+    MaxList,
     MinNumeric,
     MinInt16,
     MinInt32,
@@ -1326,6 +1328,8 @@ pub enum AggregateFunc {
     MinTimestampTz,
     MinInterval,
     MinTime,
+    MinArray,
+    MinList,
     SumInt16,
     SumInt32,
     SumInt64,
@@ -1409,6 +1413,8 @@ impl AggregateFunc {
             AggregateFunc::MaxTimestampTz => mz_expr::AggregateFunc::MaxTimestampTz,
             AggregateFunc::MaxInterval => mz_expr::AggregateFunc::MaxInterval,
             AggregateFunc::MaxTime => mz_expr::AggregateFunc::MaxTime,
+            AggregateFunc::MaxArray => mz_expr::AggregateFunc::MaxArray,
+            AggregateFunc::MaxList => mz_expr::AggregateFunc::MaxList,
             AggregateFunc::MinNumeric => mz_expr::AggregateFunc::MinNumeric,
             AggregateFunc::MinInt16 => mz_expr::AggregateFunc::MinInt16,
             AggregateFunc::MinInt32 => mz_expr::AggregateFunc::MinInt32,
@@ -1426,6 +1432,8 @@ impl AggregateFunc {
             AggregateFunc::MinTimestampTz => mz_expr::AggregateFunc::MinTimestampTz,
             AggregateFunc::MinInterval => mz_expr::AggregateFunc::MinInterval,
             AggregateFunc::MinTime => mz_expr::AggregateFunc::MinTime,
+            AggregateFunc::MinArray => mz_expr::AggregateFunc::MinArray,
+            AggregateFunc::MinList => mz_expr::AggregateFunc::MinList,
             AggregateFunc::SumInt16 => mz_expr::AggregateFunc::SumInt16,
             AggregateFunc::SumInt32 => mz_expr::AggregateFunc::SumInt32,
             AggregateFunc::SumInt64 => mz_expr::AggregateFunc::SumInt64,
@@ -1496,6 +1504,8 @@ impl AggregateFunc {
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
             | AggregateFunc::MaxTime
+            | AggregateFunc::MaxArray
+            | AggregateFunc::MaxList
             | AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
@@ -1513,6 +1523,8 @@ impl AggregateFunc {
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
             | AggregateFunc::MinTime
+            | AggregateFunc::MinArray
+            | AggregateFunc::MinList
             | AggregateFunc::SumInt16
             | AggregateFunc::SumInt32
             | AggregateFunc::SumInt64
@@ -1592,6 +1604,8 @@ impl AggregateFunc {
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
             | AggregateFunc::MaxTime
+            | AggregateFunc::MaxArray
+            | AggregateFunc::MaxList
             | AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
@@ -1609,6 +1623,8 @@ impl AggregateFunc {
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
             | AggregateFunc::MinTime
+            | AggregateFunc::MinArray
+            | AggregateFunc::MinList
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric

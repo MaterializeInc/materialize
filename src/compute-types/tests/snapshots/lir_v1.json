@@ -220,6 +220,7 @@
           }
         }
       },
+      "MaxArray": "UNIT",
       "MaxBool": "UNIT",
       "MaxDate": "UNIT",
       "MaxFloat32": "UNIT",
@@ -228,6 +229,7 @@
       "MaxInt32": "UNIT",
       "MaxInt64": "UNIT",
       "MaxInterval": "UNIT",
+      "MaxList": "UNIT",
       "MaxMzTimestamp": "UNIT",
       "MaxNumeric": "UNIT",
       "MaxString": "UNIT",
@@ -237,6 +239,7 @@
       "MaxUInt16": "UNIT",
       "MaxUInt32": "UNIT",
       "MaxUInt64": "UNIT",
+      "MinArray": "UNIT",
       "MinBool": "UNIT",
       "MinDate": "UNIT",
       "MinFloat32": "UNIT",
@@ -245,6 +248,7 @@
       "MinInt32": "UNIT",
       "MinInt64": "UNIT",
       "MinInterval": "UNIT",
+      "MinList": "UNIT",
       "MinMzTimestamp": "UNIT",
       "MinNumeric": "UNIT",
       "MinString": "UNIT",

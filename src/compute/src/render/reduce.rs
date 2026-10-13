@@ -2639,7 +2639,9 @@ mod monoids {
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz
             | AggregateFunc::MaxInterval
-            | AggregateFunc::MaxTime => Some(ReductionMonoid::Max(row)),
+            | AggregateFunc::MaxTime
+            | AggregateFunc::MaxArray
+            | AggregateFunc::MaxList => Some(ReductionMonoid::Max(row)),
             AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
@@ -2656,7 +2658,9 @@ mod monoids {
             | AggregateFunc::MinTimestamp
             | AggregateFunc::MinTimestampTz
             | AggregateFunc::MinInterval
-            | AggregateFunc::MinTime => Some(ReductionMonoid::Min(row)),
+            | AggregateFunc::MinTime
+            | AggregateFunc::MinArray
+            | AggregateFunc::MinList => Some(ReductionMonoid::Min(row)),
             AggregateFunc::SumInt16
             | AggregateFunc::SumInt32
             | AggregateFunc::SumInt64

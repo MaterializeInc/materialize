@@ -159,6 +159,17 @@ SELECT pg_typeof('{1,2,3}`::integer[]::integer list);
 integer list
 ```
 
+### Comparison
+
+Arrays are compared element by element, in row-major order, and the first pair
+of elements that differ decides. A _NULL_ element is greater than any
+non-_NULL_ element, whatever `NULLS FIRST` or `NULLS LAST` says, since those
+only place values that are _NULL_ as a whole. If one array's elements are a
+prefix of the other's, the array with fewer elements is smaller. Arrays with
+the same elements are ordered by their number of dimensions, then by the length
+of each dimension, then by the lower bound of each dimension. This matches
+PostgreSQL, and `ORDER BY`, `min`, and `max` use the same order.
+
 ## Examples
 
 ```mzsql
