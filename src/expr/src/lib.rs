@@ -31,6 +31,7 @@ pub mod visit;
 pub use id::{Id, LocalId, SourceInstanceId};
 pub use interpret::{ColumnSpec, ColumnSpecs, Interpreter, ResultSpec, Trace, TraceSummary};
 pub use linear::batch::MfpBatchSizer;
+pub use linear::columns::{BatchExpr, BatchNode, Int64Op};
 pub use linear::plan::{BatchInput, MfpPlan, SafeMfpPlan};
 pub use linear::util::{join_permutations, permutation_for_arrangement};
 pub use linear::{MapFilterProject, memoize_expr};

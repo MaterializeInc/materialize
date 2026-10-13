@@ -18,8 +18,8 @@ use std::sync::Arc;
 use itertools::Itertools;
 use mz_expr::explain::{HumanizedExplain, HumanizedExpr, HumanizerMode};
 use mz_expr::{
-    BinaryFunc, Columns, Eval, EvalError, MapFilterProject, MfpPlan, MirScalarExpr,
-    OptimizableExpr, SafeMfpPlan, UnaryFunc, UnmaterializableFunc, VariadicFunc,
+    BatchExpr, BatchNode, BinaryFunc, Columns, Eval, EvalError, Int64Op, MapFilterProject, MfpPlan,
+    MirScalarExpr, OptimizableExpr, SafeMfpPlan, UnaryFunc, UnmaterializableFunc, VariadicFunc,
 };
 use mz_ore::str::separated;
 use mz_ore::treat_as_equal::TreatAsEqual;
@@ -392,6 +392,21 @@ impl Columns for LirScalarExpr {
                 support.insert(*i);
             }
         });
+    }
+}
+
+impl BatchExpr for LirScalarExpr {
+    fn batch_node(&self) -> BatchNode<'_, Self> {
+        match self {
+            LirScalarExpr::Column(index, _) => BatchNode::Column(*index),
+            LirScalarExpr::Literal(Ok(row), _) => BatchNode::Literal(row.unpack_first()),
+            LirScalarExpr::CallBinary { func, expr1, expr2 } => match Int64Op::from_func(func) {
+                Some(op) => BatchNode::Int64(op, expr1, expr2),
+                None => BatchNode::Other,
+            },
+            LirScalarExpr::If { cond, then, els } => BatchNode::If(cond, then, els),
+            _ => BatchNode::Other,
+        }
     }
 }
 

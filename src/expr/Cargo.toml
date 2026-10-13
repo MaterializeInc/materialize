@@ -26,6 +26,7 @@ aho-corasick.workspace = true
 anyhow.workspace = true
 bytesize.workspace = true
 chrono.workspace = true
+columnar.workspace = true
 columnation.workspace = true
 chrono-tz.workspace = true
 crc32fast.workspace = true

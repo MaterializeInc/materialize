@@ -1173,6 +1173,22 @@ fn check_temp_storage_budget(temp_storage: &RowArena) -> Result<(), EvalError> {
     Ok(())
 }
 
+impl crate::BatchExpr for MirScalarExpr {
+    fn batch_node(&self) -> crate::BatchNode<'_, Self> {
+        use crate::{BatchNode, Int64Op};
+        match self {
+            MirScalarExpr::Column(index, _) => BatchNode::Column(*index),
+            MirScalarExpr::Literal(Ok(row), _) => BatchNode::Literal(row.unpack_first()),
+            MirScalarExpr::CallBinary { func, expr1, expr2 } => match Int64Op::from_func(func) {
+                Some(op) => BatchNode::Int64(op, expr1, expr2),
+                None => BatchNode::Other,
+            },
+            MirScalarExpr::If { cond, then, els } => BatchNode::If(cond, then, els),
+            _ => BatchNode::Other,
+        }
+    }
+}
+
 impl Eval for MirScalarExpr {
     fn eval<'a>(
         &'a self,
