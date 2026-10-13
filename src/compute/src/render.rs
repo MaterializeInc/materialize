@@ -173,7 +173,7 @@ use crate::render::columnar::{
     ColCollection, RecTimestamp, columnar_consolidate, columnar_leave_dynamic, columnar_negate,
     concat_many, flat_map_datums,
 };
-use crate::render::context::{ArrangementFlavor, Context};
+use crate::render::context::{ArrangementFlavor, Context, mfp_batch_rows};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
@@ -1401,12 +1401,17 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             mfp,
                             Some((key, row)),
                             self.until.clone(),
+                            mfp_batch_rows(&self.config_set),
                         );
                         CollectionBundle::from_edge(oks, errs)
                     }
                     mz_compute_types::plan::GetPlan::Collection(mfp) => {
-                        let (oks, errs) =
-                            collection.as_collection_core(mfp, None, self.until.clone());
+                        let (oks, errs) = collection.as_collection_core(
+                            mfp,
+                            None,
+                            self.until.clone(),
+                            mfp_batch_rows(&self.config_set),
+                        );
                         CollectionBundle::from_edge(oks, errs)
                     }
                 }
@@ -1421,8 +1426,12 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 if mfp.is_identity() {
                     input
                 } else {
-                    let (oks, errs) =
-                        input.as_collection_core(mfp, input_key_val, self.until.clone());
+                    let (oks, errs) = input.as_collection_core(
+                        mfp,
+                        input_key_val,
+                        self.until.clone(),
+                        mfp_batch_rows(&self.config_set),
+                    );
                     CollectionBundle::from_edge(oks, errs)
                 }
             }

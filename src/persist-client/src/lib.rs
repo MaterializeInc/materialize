@@ -97,6 +97,17 @@ pub mod operators {
         operator before yielding.",
         ParameterScope::Environment,
     );
+
+    /// Whether the persist source evaluates its MFP over batches of decoded
+    /// rows rather than one row at a time.
+    pub const STORAGE_SOURCE_BATCHED_MFP: Config<bool> = Config::new(
+        "storage_source_batched_mfp",
+        false,
+        "\
+        Whether the persist_source decode operator evaluates its MFP over \
+        batches of rows rather than one row at a time.",
+        ParameterScope::Environment,
+    );
 }
 pub mod read;
 pub mod rpc;

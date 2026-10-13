@@ -84,8 +84,12 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
             // The sink serializes rows, so decode to `Vec` here. This is the
             // sanctioned sink leaf, the same seam as the raw-collection arm
             // above.
-            let (oks, errs) =
-                bundle.as_collection_core(mfp_plan, Some((key.clone(), None)), self.until.clone());
+            let (oks, errs) = bundle.as_collection_core(
+                mfp_plan,
+                Some((key.clone(), None)),
+                self.until.clone(),
+                None,
+            );
             (columnar_to_vec(oks), errs)
         };
 
