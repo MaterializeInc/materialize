@@ -125,6 +125,55 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
 $ kafka-verify-data format=json sink=materialize.public.sink key=false
 {"before": null, "after": {"created_post_name": "hundred", "created_post_value": 99}}
 
+# Regression test for SQL-517: a catalog change to a connection, for example a
+# GRANT, re-alters all dependent sinks, which must work off each sink's current
+# definition after ALTER SINK ... SET FROM.
+> CREATE ROLE conn_grant_role;
+
+> GRANT USAGE ON CONNECTION kafka_conn TO conn_grant_role;
+
+> INSERT INTO created_post_alter VALUES ('after-grant', 1);
+
+$ kafka-verify-data format=json sink=materialize.public.sink key=false
+{"before": null, "after": {"created_post_name": "after-grant", "created_post_value": 1}}
+
+# A SET FROM a relation of the same shape leaves the connection compatible, so
+# the REVOKE below re-alters the sink without an error. It must restart the sink
+# with its current input and version, not the pre-ALTER ones, which would fence
+# the sink off.
+> CREATE TABLE same_shape_a (a int);
+> CREATE TABLE same_shape_b (a int);
+
+> CREATE SINK same_shape_sink
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM same_shape_a
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-alter-sink-same-shape-${testdrive.seed}')
+  FORMAT JSON
+  ENVELOPE DEBEZIUM;
+
+> INSERT INTO same_shape_a VALUES (1);
+
+$ kafka-verify-data format=json sink=materialize.public.same_shape_sink key=false
+{"before": null, "after": {"a": 1}}
+
+> ALTER SINK same_shape_sink SET FROM same_shape_b;
+
+# Wait for the altered sink to take effect, like the ALTER SINK above.
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
+
+> INSERT INTO same_shape_b VALUES (2);
+
+$ kafka-verify-data format=json sink=materialize.public.same_shape_sink key=false
+{"before": null, "after": {"a": 2}}
+
+> REVOKE USAGE ON CONNECTION kafka_conn FROM conn_grant_role;
+
+> INSERT INTO same_shape_b VALUES (3);
+> INSERT INTO same_shape_a VALUES (99);
+
+$ kafka-verify-data format=json sink=materialize.public.same_shape_sink key=false
+{"before": null, "after": {"a": 3}}
+
 # COMMIT INTERVAL only applies to Iceberg sinks.
 ! ALTER SINK sink SET (COMMIT INTERVAL = '1s');
 contains: COMMIT INTERVAL option is not supported with KAFKA sinks
