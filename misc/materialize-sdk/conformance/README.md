@@ -45,7 +45,14 @@ row: the decoded message, or `{"error": "protocol"}`.
 
 ### `batch.json`
 
-Input: `start`, optional `up_to`, and `steps`. Build a batcher, then push each
-step, a message. The output is `{"outputs": [...], "finished": bool}`, with
-one entry per step: the list of events it released, or `{"error": "protocol"}`.
-After an error the batcher fails every later step.
+Input: `start`, optional `up_to`, `max_pending_bytes`, and
+`max_timestamp_bytes`, and `steps`. Build a batcher, then run each step: a
+message is pushed, and `"finish"` reports the end of the stream. The output is
+`{"outputs": [...], "finished": bool}`, with one entry per step: the list of
+events it released, or `{"error": kind}` with kind `protocol` or
+`timestamp_too_large`. After an error the batcher fails every later step.
+
+### `latest_by_key.json`
+
+Input: `updates`, in timestamp order at timestamps of one or more. Release them
+as one batch and return the latest change per key, as a list of updates.
