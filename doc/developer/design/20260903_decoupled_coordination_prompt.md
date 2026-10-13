@@ -127,12 +127,27 @@ remain separate from catalog protection lifetime. Do not tune them, statement
 deadlines or publication cadence, weaken safety checks, or invent scheduling
 guarantees to turn an unexplained failure green.
 
-Follow repository instructions and skills. Use regular draft-PR CI as the
-default integration loop, including mzcompose and performance workloads. Run
-cheap local formatting/checks and targeted tests where useful. Verify changed
-contracts at their boundaries and use existing regressions where they suffice.
-Compare disputed behavior against the baseline. Seek independent review when
-warranted. Report failed, pending and unverified results explicitly.
+Follow repository instructions and skills. Use a dedicated scratch worker for
+focused compilation, tests, reproductions and profiling, rather than waiting for
+broad CI on every debugging iteration. The shared editing VM stays lightweight.
+Use bin/scratch with misc/scratch/decoupled-coordination.json: one ARM64 worker,
+16 vCPUs, 64 GiB RAM and 500 GiB disk. Reuse its checkout and build caches, keep
+the default 36-hour expiry, and record its ID and expiry with the run evidence.
+Preserve useful results before expiry. Ask before increasing size, count or lifetime.
+
+Keep canonical edits in this workspace. Sync an explicit Git commit to an idle,
+clean worker checkout: bin/scratch push force-checks out the supplied revision.
+Do not overwrite remote work or change source under a running build/test.
+Use repository build/test defaults, adjusting concurrency from observed resource
+pressure rather than arbitrary caps. Keep unrelated heavy workloads off the worker
+during reproductions. Use the repository's entry points and matching-architecture
+CI artifacts where available. Diagnose a faithful focused reproduction, not
+another acceptance suite.
+
+Keep regular draft-PR CI for broad integration and final combined verification.
+Verify changed contracts at their boundaries and use existing regressions where
+they suffice. Compare disputed behavior against the baseline. Seek independent
+review when warranted. Report failed, pending and unverified results explicitly.
 
 Preserve contracts, not the test inventory. Remove obsolete or vacuous tests
 rather than preserving them with weaker or tautological assertions. Add
