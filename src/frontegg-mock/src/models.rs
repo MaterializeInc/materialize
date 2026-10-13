@@ -10,6 +10,7 @@
 pub mod group;
 pub mod scim;
 pub mod sso;
+pub mod tenant;
 pub mod token;
 pub mod user;
 pub mod utils;
@@ -17,6 +18,7 @@ pub mod utils;
 pub use group::*;
 pub use scim::*;
 pub use sso::*;
+pub use tenant::*;
 pub use token::*;
 pub use user::*;
 pub use utils::*;
