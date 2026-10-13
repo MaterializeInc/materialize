@@ -18,7 +18,11 @@ from materialize import MZ_ROOT, spawn
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
 
-SERVICES = [Materialized()]
+SERVICES = [
+    Materialized(
+        additional_system_parameter_defaults={"enable_alter_table_add_column": "true"}
+    )
+]
 
 
 def workflow_default(c: Composition) -> None:
