@@ -143,6 +143,18 @@ steps:
           queue: hetzner-aarch64-4cpu-8gb
         sanitizer: skip
 
+      - id: cargo-deny-check-advisories-sdk
+        label: Security advisories (SDK)
+        command: bin/ci-builder run stable cargo deny --locked --manifest-path misc/materialize-sdk/Cargo.toml check --config deny.toml advisories
+        inputs:
+          - misc/materialize-sdk/Cargo.lock
+          - deny.toml
+        depends_on: []
+        timeout_in_minutes: 20
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        sanitizer: skip
+
       - id: sbomgen
         timeout_in_minutes: 30
         label: Generate SBOM and upload to AWS
@@ -3101,6 +3113,17 @@ steps:
               composition: java
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+
+      - id: materialize-sdk-live
+        label: "Materialize SDK"
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: materialize-sdk
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
 
       - id: lang-python
         label: ":python:"
