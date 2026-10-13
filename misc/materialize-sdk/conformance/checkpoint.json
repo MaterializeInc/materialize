@@ -1,0 +1,744 @@
+{
+  "function": "checkpoint",
+  "cases": [
+    {
+      "name": "a checkpoint round-trips to the same text",
+      "input": {
+        "stored": {
+          "format": 1,
+          "epoch": "2",
+          "generation": "1",
+          "frontier": "1700000000000",
+          "snapshot_as_of": null,
+          "subscriptions": {
+            "orders": {
+              "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+              "shard": "s1",
+              "envelope": {"kind": "upsert", "key": ["id"]},
+              "columns": [
+                {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+                {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+              ]
+            }
+          }
+        },
+        "operation": "encode"
+      },
+      "expect": {
+        "checkpoint": {
+          "format": 1,
+          "epoch": "2",
+          "generation": "1",
+          "frontier": "1700000000000",
+          "snapshot_as_of": null,
+          "subscriptions": {
+            "orders": {
+              "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+              "shard": "s1",
+              "envelope": {"kind": "upsert", "key": ["id"]},
+              "columns": [
+                {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+                {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+              ]
+            }
+          }
+        },
+        "text": "{\"epoch\":\"2\",\"format\":1,\"frontier\":\"1700000000000\",\"generation\":\"1\",\"snapshot_as_of\":null,\"subscriptions\":{\"orders\":{\"columns\":[{\"name\":\"id\",\"nullable\":false,\"type_mod\":-1,\"type_oid\":20},{\"name\":\"total\",\"nullable\":true,\"type_mod\":655366,\"type_oid\":1700}],\"envelope\":{\"key\":[\"id\"],\"kind\":\"upsert\"},\"object\":{\"database\":\"db\",\"id\":\"u7\",\"name\":\"orders\",\"schema\":\"public\"},\"shard\":\"s1\"}}}"
+      }
+    },
+    {
+      "name": "a new checkpoint has no frontier",
+      "input": {
+        "stored": {"format": 1, "epoch": "1", "generation": "1", "frontier": null, "snapshot_as_of": null, "subscriptions": {}},
+        "operation": "encode"
+      },
+      "expect": {
+        "checkpoint": {"format": 1, "epoch": "1", "generation": "1", "frontier": null, "snapshot_as_of": null, "subscriptions": {}},
+        "text": "{\"epoch\":\"1\",\"format\":1,\"frontier\":null,\"generation\":\"1\",\"snapshot_as_of\":null,\"subscriptions\":{}}"
+      }
+    },
+    {
+      "name": "the frontier after the largest timestamp round-trips",
+      "input": {
+        "stored": {
+          "format": 1,
+          "epoch": "1",
+          "generation": "1",
+          "frontier": "18446744073709551616",
+          "snapshot_as_of": null,
+          "subscriptions": {}
+        },
+        "operation": "encode"
+      },
+      "expect": {
+        "checkpoint": {
+          "format": 1,
+          "epoch": "1",
+          "generation": "1",
+          "frontier": "18446744073709551616",
+          "snapshot_as_of": null,
+          "subscriptions": {}
+        },
+        "text": "{\"epoch\":\"1\",\"format\":1,\"frontier\":\"18446744073709551616\",\"generation\":\"1\",\"snapshot_as_of\":null,\"subscriptions\":{}}"
+      }
+    },
+    {
+      "name": "a frontier past 2^64 is refused",
+      "input": {
+        "stored": {
+          "format": 1,
+          "epoch": "1",
+          "generation": "1",
+          "frontier": "18446744073709551617",
+          "snapshot_as_of": null,
+          "subscriptions": {}
+        },
+        "operation": "encode"
+      },
+      "expect": {"error": "checkpoint"}
+    },
+    {
+      "name": "a zero frontier is refused",
+      "input": {
+        "stored": {"format": 1, "epoch": "1", "generation": "1", "frontier": "0", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": "encode"
+      },
+      "expect": {"error": "checkpoint"}
+    },
+    {
+      "name": "a missing frontier is refused",
+      "input": {
+        "stored": {"format": 1, "epoch": "1", "generation": "1", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": "encode"
+      },
+      "expect": {"error": "checkpoint"}
+    },
+    {
+      "name": "a missing snapshot AS OF is refused",
+      "input": {
+        "stored": {"format": 1, "epoch": "1", "generation": "1", "frontier": null, "subscriptions": {}},
+        "operation": "encode"
+      },
+      "expect": {"error": "checkpoint"}
+    },
+    {
+      "name": "another format is refused",
+      "input": {
+        "stored": {"format": 2, "epoch": "1", "generation": "1", "frontier": null, "snapshot_as_of": null, "subscriptions": {}},
+        "operation": "encode"
+      },
+      "expect": {"error": "checkpoint"}
+    },
+    {
+      "name": "a missing format is refused",
+      "input": {
+        "stored": {"epoch": "1", "generation": "1", "frontier": null, "snapshot_as_of": null, "subscriptions": {}},
+        "operation": "encode"
+      },
+      "expect": {"error": "checkpoint"}
+    },
+    {
+      "name": "an unknown field is refused, so it is never dropped on rewrite",
+      "input": {
+        "stored": {"format": 1, "epoch": "1", "generation": "1", "frontier": null, "snapshot_as_of": null, "subscriptions": {}, "x": "1"},
+        "operation": "encode"
+      },
+      "expect": {"error": "checkpoint"}
+    },
+    {
+      "name": "an unknown field inside a fingerprint is refused",
+      "input": {
+        "stored": {
+          "format": 1,
+          "epoch": "1",
+          "generation": "1",
+          "frontier": null,
+          "snapshot_as_of": null,
+          "subscriptions": {
+            "orders": {
+              "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+              "shard": "s1",
+              "envelope": {"kind": "upsert", "key": ["id"]},
+              "columns": [
+                {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+                {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+              ],
+              "future": "1"
+            }
+          }
+        },
+        "operation": "encode"
+      },
+      "expect": {"error": "checkpoint"}
+    },
+    {
+      "name": "a numeric epoch is refused",
+      "input": {
+        "stored": {"format": 1, "epoch": 1, "generation": "1", "frontier": null, "snapshot_as_of": null, "subscriptions": {}},
+        "operation": "encode"
+      },
+      "expect": {"error": "checkpoint"}
+    },
+    {
+      "name": "take over raises the epoch and keeps the rest",
+      "input": {
+        "stored": {
+          "format": 1,
+          "epoch": "3",
+          "generation": "2",
+          "frontier": "10",
+          "snapshot_as_of": null,
+          "subscriptions": {
+            "orders": {
+              "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+              "shard": "s1",
+              "envelope": {"kind": "upsert", "key": ["id"]},
+              "columns": [
+                {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+                {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+              ]
+            }
+          }
+        },
+        "operation": "take_over"
+      },
+      "expect": {
+        "checkpoint": {
+          "format": 1,
+          "epoch": "4",
+          "generation": "2",
+          "frontier": "10",
+          "snapshot_as_of": null,
+          "subscriptions": {
+            "orders": {
+              "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+              "shard": "s1",
+              "envelope": {"kind": "upsert", "key": ["id"]},
+              "columns": [
+                {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+                {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+              ]
+            }
+          }
+        },
+        "text": "{\"epoch\":\"4\",\"format\":1,\"frontier\":\"10\",\"generation\":\"2\",\"snapshot_as_of\":null,\"subscriptions\":{\"orders\":{\"columns\":[{\"name\":\"id\",\"nullable\":false,\"type_mod\":-1,\"type_oid\":20},{\"name\":\"total\",\"nullable\":true,\"type_mod\":655366,\"type_oid\":1700}],\"envelope\":{\"key\":[\"id\"],\"kind\":\"upsert\"},\"object\":{\"database\":\"db\",\"id\":\"u7\",\"name\":\"orders\",\"schema\":\"public\"},\"shard\":\"s1\"}}}"
+      }
+    },
+    {
+      "name": "take over works before the first commit",
+      "input": {
+        "stored": {"format": 1, "epoch": "1", "generation": "1", "frontier": null, "snapshot_as_of": null, "subscriptions": {}},
+        "operation": "take_over"
+      },
+      "expect": {
+        "checkpoint": {"format": 1, "epoch": "2", "generation": "1", "frontier": null, "snapshot_as_of": null, "subscriptions": {}},
+        "text": "{\"epoch\":\"2\",\"format\":1,\"frontier\":null,\"generation\":\"1\",\"snapshot_as_of\":null,\"subscriptions\":{}}"
+      }
+    },
+    {
+      "name": "take over refuses to wrap the epoch",
+      "input": {
+        "stored": {
+          "format": 1,
+          "epoch": "18446744073709551615",
+          "generation": "1",
+          "frontier": "10",
+          "snapshot_as_of": null,
+          "subscriptions": {}
+        },
+        "operation": "take_over"
+      },
+      "expect": {"error": "checkpoint"}
+    },
+    {
+      "name": "a restart raises the generation, clears the frontier, and records the new subscriptions and the AS OF",
+      "input": {
+        "stored": {
+          "format": 1,
+          "epoch": "3",
+          "generation": "1",
+          "frontier": "10",
+          "snapshot_as_of": null,
+          "subscriptions": {
+            "orders": {
+              "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+              "shard": "s1",
+              "envelope": {"kind": "upsert", "key": ["id"]},
+              "columns": [
+                {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+                {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+              ]
+            }
+          }
+        },
+        "operation": {
+          "restart": {
+            "subscriptions": {
+              "orders": {
+                "object": {"id": "u9", "database": "db", "schema": "public", "name": "orders"},
+                "shard": "s2",
+                "envelope": {"kind": "upsert", "key": ["id"]},
+                "columns": [
+                  {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+                  {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+                ]
+              }
+            },
+            "as_of": "40"
+          }
+        }
+      },
+      "expect": {
+        "checkpoint": {
+          "format": 1,
+          "epoch": "3",
+          "generation": "2",
+          "frontier": null,
+          "snapshot_as_of": "40",
+          "subscriptions": {
+            "orders": {
+              "object": {"id": "u9", "database": "db", "schema": "public", "name": "orders"},
+              "shard": "s2",
+              "envelope": {"kind": "upsert", "key": ["id"]},
+              "columns": [
+                {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+                {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+              ]
+            }
+          }
+        },
+        "text": "{\"epoch\":\"3\",\"format\":1,\"frontier\":null,\"generation\":\"2\",\"snapshot_as_of\":\"40\",\"subscriptions\":{\"orders\":{\"columns\":[{\"name\":\"id\",\"nullable\":false,\"type_mod\":-1,\"type_oid\":20},{\"name\":\"total\",\"nullable\":true,\"type_mod\":655366,\"type_oid\":1700}],\"envelope\":{\"key\":[\"id\"],\"kind\":\"upsert\"},\"object\":{\"database\":\"db\",\"id\":\"u9\",\"name\":\"orders\",\"schema\":\"public\"},\"shard\":\"s2\"}}}"
+      }
+    },
+    {
+      "name": "a replacement records the new subscriptions and keeps the rest",
+      "input": {
+        "stored": {
+          "format": 1,
+          "epoch": "3",
+          "generation": "2",
+          "frontier": "10",
+          "snapshot_as_of": null,
+          "subscriptions": {
+            "orders": {
+              "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+              "shard": "s1",
+              "envelope": {"kind": "upsert", "key": ["id"]},
+              "columns": [
+                {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+                {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+              ]
+            }
+          }
+        },
+        "operation": {
+          "with_subscriptions": {
+            "subscriptions": {
+              "orders": {
+                "object": {"id": "u9", "database": "db", "schema": "public", "name": "orders"},
+                "shard": "s2",
+                "envelope": {"kind": "upsert", "key": ["id"]},
+                "columns": [
+                  {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+                  {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+                ]
+              }
+            }
+          }
+        }
+      },
+      "expect": {
+        "checkpoint": {
+          "format": 1,
+          "epoch": "3",
+          "generation": "2",
+          "frontier": "10",
+          "snapshot_as_of": null,
+          "subscriptions": {
+            "orders": {
+              "object": {"id": "u9", "database": "db", "schema": "public", "name": "orders"},
+              "shard": "s2",
+              "envelope": {"kind": "upsert", "key": ["id"]},
+              "columns": [
+                {"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false},
+                {"name": "total", "type_oid": 1700, "type_mod": 655366, "nullable": true}
+              ]
+            }
+          }
+        },
+        "text": "{\"epoch\":\"3\",\"format\":1,\"frontier\":\"10\",\"generation\":\"2\",\"snapshot_as_of\":null,\"subscriptions\":{\"orders\":{\"columns\":[{\"name\":\"id\",\"nullable\":false,\"type_mod\":-1,\"type_oid\":20},{\"name\":\"total\",\"nullable\":true,\"type_mod\":655366,\"type_oid\":1700}],\"envelope\":{\"key\":[\"id\"],\"kind\":\"upsert\"},\"object\":{\"database\":\"db\",\"id\":\"u9\",\"name\":\"orders\",\"schema\":\"public\"},\"shard\":\"s2\"}}}"
+      }
+    },
+    {
+      "name": "a commit records its upper",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"committed": {"upper": "20"}}
+      },
+      "expect": {
+        "checkpoint": {"format": 1, "epoch": "3", "generation": "1", "frontier": "20", "snapshot_as_of": null, "subscriptions": {}},
+        "text": "{\"epoch\":\"3\",\"format\":1,\"frontier\":\"20\",\"generation\":\"1\",\"snapshot_as_of\":null,\"subscriptions\":{}}"
+      }
+    },
+    {
+      "name": "a commit applies from the expected frontier",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "upper": "20"}}
+      },
+      "expect": {"commit": "apply"}
+    },
+    {
+      "name": "the first commit expects no frontier",
+      "input": {
+        "stored": {"format": 1, "epoch": "1", "generation": "1", "frontier": null, "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "1", "generation": "1", "frontier": null, "snapshot_as_of": null, "subscriptions": {}}, "upper": "5"}}
+      },
+      "expect": {"commit": "apply"}
+    },
+    {
+      "name": "a retried commit whose first attempt landed is recognized",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "1", "frontier": "20", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "upper": "20"}}
+      },
+      "expect": {"commit": "already_committed"}
+    },
+    {
+      "name": "a stale worker is fenced",
+      "input": {
+        "stored": {"format": 1, "epoch": "4", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "upper": "20"}}
+      },
+      "expect": {"conflict": "fenced", "stored": "4", "epoch": "3"}
+    },
+    {
+      "name": "a stale worker is fenced even when the frontier matches its retry",
+      "input": {
+        "stored": {"format": 1, "epoch": "4", "generation": "1", "frontier": "20", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "upper": "20"}}
+      },
+      "expect": {"conflict": "fenced", "stored": "4", "epoch": "3"}
+    },
+    {
+      "name": "a commit from before a restart is superseded",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": null, "snapshot_as_of": null, "subscriptions": {}}, "upper": "50"}}
+      },
+      "expect": {"conflict": "superseded", "stored": "2", "generation": "1"}
+    },
+    {
+      "name": "after a restart, the snapshot commits from no frontier",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}}, "upper": "50"}}
+      },
+      "expect": {"commit": "apply"}
+    },
+    {
+      "name": "a snapshot's first commit must close its AS OF",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}}, "upper": "40"}}
+      },
+      "expect": {"conflict": "snapshot_not_closed", "as_of": "40", "upper": "40"}
+    },
+    {
+      "name": "a snapshot's first commit cannot end below its AS OF",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}}, "upper": "10"}}
+      },
+      "expect": {"conflict": "snapshot_not_closed", "as_of": "40", "upper": "10"}
+    },
+    {
+      "name": "a snapshot as of the largest timestamp is closed only by 2^64",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "18446744073709551615", "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "18446744073709551615", "subscriptions": {}}, "upper": "18446744073709551615"}}
+      },
+      "expect": {"conflict": "snapshot_not_closed", "as_of": "18446744073709551615", "upper": "18446744073709551615"}
+    },
+    {
+      "name": "a snapshot as of the largest timestamp commits at 2^64",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "18446744073709551615", "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "18446744073709551615", "subscriptions": {}}, "upper": "18446744073709551616"}}
+      },
+      "expect": {"commit": "apply"}
+    },
+    {
+      "name": "a snapshot as of zero commits at the first frontier",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "0", "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "0", "subscriptions": {}}, "upper": "1"}}
+      },
+      "expect": {"commit": "apply"}
+    },
+    {
+      "name": "a snapshot's first commit may close just its AS OF",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}}, "upper": "41"}}
+      },
+      "expect": {"commit": "apply"}
+    },
+    {
+      "name": "a range that does not advance is refused",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "upper": "10"}}
+      },
+      "expect": {"conflict": "invalid_range", "lower": "10", "upper": "10"}
+    },
+    {
+      "name": "a frontier this worker did not write diverges",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "1", "frontier": "15", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "upper": "20"}}
+      },
+      "expect": {
+        "conflict": "diverged",
+        "stored": {"epoch": "3", "generation": "1"},
+        "stored_frontier": "15",
+        "same_subscriptions": true,
+        "writer": {"epoch": "3", "generation": "1"},
+        "lower": "10"
+      }
+    },
+    {
+      "name": "an epoch below the worker's diverges",
+      "input": {
+        "stored": {"format": 1, "epoch": "2", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "upper": "20"}}
+      },
+      "expect": {
+        "conflict": "diverged",
+        "stored": {"epoch": "2", "generation": "1"},
+        "stored_frontier": "10",
+        "same_subscriptions": true,
+        "writer": {"epoch": "3", "generation": "1"},
+        "lower": "10"
+      }
+    },
+    {
+      "name": "the owner may write snapshot data",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": {"check_write": {"expected": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}}}}
+      },
+      "expect": {"write": "ok"}
+    },
+    {
+      "name": "a stale worker may not write snapshot data",
+      "input": {
+        "stored": {"format": 1, "epoch": "4", "generation": "1", "frontier": null, "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"check_write": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": null, "snapshot_as_of": null, "subscriptions": {}}}}
+      },
+      "expect": {"conflict": "fenced", "stored": "4", "epoch": "3"}
+    },
+    {
+      "name": "a write for an abandoned snapshot is superseded",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": {"check_write": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": null, "snapshot_as_of": null, "subscriptions": {}}}}
+      },
+      "expect": {"conflict": "superseded", "stored": "2", "generation": "1"}
+    },
+    {
+      "name": "a checkpoint whose subscriptions alone changed diverges",
+      "input": {
+        "stored": {
+          "format": 1,
+          "epoch": "3",
+          "generation": "1",
+          "frontier": "10",
+          "snapshot_as_of": null,
+          "subscriptions": {
+            "orders": {
+              "object": {"id": "u9", "database": "db", "schema": "public", "name": "orders"},
+              "shard": "s1",
+              "envelope": {"kind": "diff"},
+              "columns": [{"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false}]
+            }
+          }
+        },
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "upper": "20"}}
+      },
+      "expect": {
+        "conflict": "diverged",
+        "stored": {"epoch": "3", "generation": "1"},
+        "stored_frontier": "10",
+        "same_subscriptions": false,
+        "writer": {"epoch": "3", "generation": "1"},
+        "lower": "10"
+      }
+    },
+    {
+      "name": "a landed commit with other subscriptions diverges",
+      "input": {
+        "stored": {
+          "format": 1,
+          "epoch": "3",
+          "generation": "1",
+          "frontier": "20",
+          "snapshot_as_of": null,
+          "subscriptions": {
+            "orders": {
+              "object": {"id": "u9", "database": "db", "schema": "public", "name": "orders"},
+              "shard": "s1",
+              "envelope": {"kind": "diff"},
+              "columns": [{"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false}]
+            }
+          }
+        },
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "upper": "20"}}
+      },
+      "expect": {
+        "conflict": "diverged",
+        "stored": {"epoch": "3", "generation": "1"},
+        "stored_frontier": "20",
+        "same_subscriptions": false,
+        "writer": {"epoch": "3", "generation": "1"},
+        "lower": "10"
+      }
+    },
+    {
+      "name": "the first commit after a snapshot clears its AS OF",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": {"committed": {"upper": "50"}}
+      },
+      "expect": {"checkpoint": {"format": 1, "epoch": "3", "generation": "2", "frontier": "50", "snapshot_as_of": null, "subscriptions": {}}, "text": "{\"epoch\":\"3\",\"format\":1,\"frontier\":\"50\",\"generation\":\"2\",\"snapshot_as_of\":null,\"subscriptions\":{}}"}
+    },
+    {
+      "name": "a frontier and a snapshot in progress are refused together",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": "50", "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": "encode"
+      },
+      "expect": {"error": "checkpoint"}
+    },
+    {
+      "name": "a checkpoint one byte over the store's limit is refused",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"encode_within": {"limit": "97"}}
+      },
+      "expect": {"error": "checkpoint_too_large"}
+    },
+    {
+      "name": "a checkpoint exactly at the store's limit is written",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"encode_within": {"limit": "98"}}
+      },
+      "expect": {"checkpoint": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "text": "{\"epoch\":\"3\",\"format\":1,\"frontier\":\"10\",\"generation\":\"1\",\"snapshot_as_of\":null,\"subscriptions\":{}}"}
+    },
+    {
+      "name": "an unknown commit that landed is applied",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "1", "frontier": "20", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"settle": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "new": {"format": 1, "epoch": "3", "generation": "1", "frontier": "20", "snapshot_as_of": null, "subscriptions": {}}}}
+      },
+      "expect": {"settlement": "applied"}
+    },
+    {
+      "name": "an unknown commit that did not land yet is sent again",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"settle": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "new": {"format": 1, "epoch": "3", "generation": "1", "frontier": "20", "snapshot_as_of": null, "subscriptions": {}}}}
+      },
+      "expect": {"settlement": "send_again"}
+    },
+    {
+      "name": "a write that changes no text is sent again while the checkpoint is unchanged",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": {"settle": {"expected": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}}, "new": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}}}}
+      },
+      "expect": {"settlement": "send_again"}
+    },
+    {
+      "name": "an unknown restart that landed is applied, not superseded",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": {"settle": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "new": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}}}}
+      },
+      "expect": {"settlement": "applied"}
+    },
+    {
+      "name": "an unknown take-over is always taken over again",
+      "input": {
+        "stored": {"format": 1, "epoch": "4", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"settle": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "new": {"format": 1, "epoch": "4", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}}}
+      },
+      "expect": {"settlement": "take_over_again"}
+    },
+    {
+      "name": "an unknown commit after a take-over is fenced",
+      "input": {
+        "stored": {"format": 1, "epoch": "4", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"settle": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "new": {"format": 1, "epoch": "3", "generation": "1", "frontier": "20", "snapshot_as_of": null, "subscriptions": {}}}}
+      },
+      "expect": {"settlement": "conflict", "conflict": {"conflict": "fenced", "stored": "4", "epoch": "3"}}
+    },
+    {
+      "name": "take over keeps the AS OF of a snapshot in progress",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": "take_over"
+      },
+      "expect": {"checkpoint": {"format": 1, "epoch": "4", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}}, "text": "{\"epoch\":\"4\",\"format\":1,\"frontier\":null,\"generation\":\"2\",\"snapshot_as_of\":\"40\",\"subscriptions\":{}}"}
+    },
+    {
+      "name": "new fingerprints keep the AS OF of a snapshot in progress",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": {"with_subscriptions": {"subscriptions": {}}}
+      },
+      "expect": {"checkpoint": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}}, "text": "{\"epoch\":\"3\",\"format\":1,\"frontier\":null,\"generation\":\"2\",\"snapshot_as_of\":\"40\",\"subscriptions\":{}}"}
+    },
+    {
+      "name": "a retried commit that completed a snapshot is recognized",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "2", "frontier": "50", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"check_commit": {"expected": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}}, "upper": "50"}}
+      },
+      "expect": {"commit": "already_committed"}
+    },
+    {
+      "name": "a write that changes no text stops once fenced",
+      "input": {
+        "stored": {"format": 1, "epoch": "4", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": {"settle": {"expected": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}}, "new": {"format": 1, "epoch": "3", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}}}}
+      },
+      "expect": {"settlement": "conflict", "conflict": {"conflict": "fenced", "stored": "4", "epoch": "3"}}
+    },
+    {
+      "name": "a write that finds a frontier no write of this worker left has diverged",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "1", "frontier": "15", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"settle": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "new": {"format": 1, "epoch": "3", "generation": "1", "frontier": "20", "snapshot_as_of": null, "subscriptions": {}}}}
+      },
+      "expect": {"settlement": "conflict", "conflict": {"conflict": "diverged", "stored": {"epoch": "3", "generation": "1"}, "stored_frontier": "15", "same_subscriptions": true, "writer": {"epoch": "3", "generation": "1"}, "lower": "10"}}
+    },
+    {
+      "name": "a write for a snapshot the owner has since restarted is superseded",
+      "input": {
+        "stored": {"format": 1, "epoch": "3", "generation": "3", "frontier": null, "snapshot_as_of": "50", "subscriptions": {}},
+        "operation": {"settle": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "new": {"format": 1, "epoch": "3", "generation": "1", "frontier": "20", "snapshot_as_of": null, "subscriptions": {}}}}
+      },
+      "expect": {"settlement": "conflict", "conflict": {"conflict": "superseded", "stored": "3", "generation": "1"}}
+    },
+    {
+      "name": "a take-over that finds a later take-over takes over again",
+      "input": {
+        "stored": {"format": 1, "epoch": "5", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"settle": {"expected": {"format": 1, "epoch": "3", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}, "new": {"format": 1, "epoch": "4", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}}}}
+      },
+      "expect": {"settlement": "take_over_again"}
+    }
+  ]
+}

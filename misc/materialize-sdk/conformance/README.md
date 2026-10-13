@@ -99,3 +99,27 @@ serve the object. The output is `{"kind": ...}`.
 ### `compare_identity.json`
 
 Input: `stored`, `current` (or `null`). The output is the change.
+
+### `checkpoint.json`
+
+Input: `stored`, a checkpoint in its JSON form, and `operation`. A
+checkpoint's text is its JSON form written compactly with every object's keys
+in sorted order, and decoding refuses any other text. Write the stored
+checkpoint as its text and decode it, or output `{"error": "checkpoint"}`, then
+apply the operation:
+
+- `"encode"`, `"take_over"`, `{"restart": {"subscriptions", "as_of"}}`,
+  `{"with_subscriptions": {"subscriptions"}}`, and `{"committed": {"upper"}}`
+  yield the new checkpoint as `{"checkpoint": ..., "text": ...}`, where `text`
+  is its exact encoding, or `{"error": kind}` with kind `checkpoint`, or
+  `checkpoint_too_large` when the text would be longer than `MAX_BYTES`.
+- `{"check_commit": {"expected", "upper"}}` yields `{"commit": ...}` or a
+  conflict, and `{"check_write": {"expected"}}` yields `{"write": "ok"}` or a
+  conflict. `expected` is the checkpoint the write was conditional on, in its
+  JSON form, and decoding it fails as `stored` does.
+- `{"encode_within": {"limit"}}` yields the checkpoint as `"encode"` does, with
+  `limit` in place of `MAX_BYTES` when it is lower.
+- `{"settle": {"expected", "new"}}` settles a write from `expected` to `new`
+  that failed or whose result is unknown, with `stored` as the checkpoint read
+  back after it. It yields `{"settlement": ...}`, with a `conflict` for
+  `"conflict"`.

@@ -17,12 +17,14 @@
 //! the protocol core. The README there defines each function's input and
 //! output.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
 use materialize_sdk_core::Frontier;
 use materialize_sdk_core::batch::{BatchError, Batcher, Event, Start};
+use materialize_sdk_core::checkpoint::{Checkpoint, CheckpointError};
 use materialize_sdk_core::classify::{
     ErrorKind, Phase, classify, resolve_index_check, resolve_object_check,
 };
@@ -99,6 +101,7 @@ fn run(function: &str, input: Value) -> Value {
         "compare_identity" => compare_identity(input),
         "resolve_object_check" => resolve(input),
         "resolve_index_check" => resolve_index(input),
+        "checkpoint" => checkpoint(input),
         other => panic!("unknown function {other:?}"),
     }
 }
@@ -408,4 +411,114 @@ fn resolve_index(value: Value) -> Value {
     }
     let Input { indexes } = input(value);
     json!({ "kind": resolve_index_check(&indexes) })
+}
+
+/// Decodes the stored checkpoint, then applies the operation. A new checkpoint
+/// is compared by its decoded JSON, and its exact text separately as `text`.
+fn checkpoint(value: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        stored: Value,
+        operation: Operation,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "snake_case")]
+    enum Operation {
+        Encode,
+        TakeOver,
+        EncodeWithin {
+            limit: String,
+        },
+        Restart {
+            subscriptions: BTreeMap<String, Fingerprint>,
+            as_of: String,
+        },
+        WithSubscriptions {
+            subscriptions: BTreeMap<String, Fingerprint>,
+        },
+        Committed {
+            upper: Frontier,
+        },
+        CheckCommit {
+            expected: Value,
+            upper: Frontier,
+        },
+        CheckWrite {
+            expected: Value,
+        },
+        Settle {
+            expected: Value,
+            new: Value,
+        },
+    }
+    let Input { stored, operation } = input(value);
+    // A store holds the exact encoding, so the JSON form is written out with
+    // its keys sorted, as the encoding writes them.
+    let decode = |value: Value| Checkpoint::decode(&sorted(value).to_string());
+    let stored = match decode(stored) {
+        Ok(stored) => stored,
+        Err(_) => return error("checkpoint"),
+    };
+    let written = |text: String| -> Value {
+        json!({ "checkpoint": serde_json::from_str::<Value>(&text).unwrap(), "text": text })
+    };
+    let encoded = |checkpoint: Checkpoint| match checkpoint.encode() {
+        Ok(text) => written(text),
+        Err(CheckpointError::TooLarge { .. }) => error("checkpoint_too_large"),
+        Err(_) => error("checkpoint"),
+    };
+    match operation {
+        Operation::Encode => encoded(stored),
+        Operation::TakeOver => match stored.take_over() {
+            Ok(next) => encoded(next),
+            Err(_) => error("checkpoint"),
+        },
+        Operation::EncodeWithin { limit } => match stored.encode_within(canonical(&limit)) {
+            Ok(text) => written(text),
+            Err(CheckpointError::TooLarge { .. }) => error("checkpoint_too_large"),
+            Err(_) => error("checkpoint"),
+        },
+        Operation::Restart {
+            subscriptions,
+            as_of,
+        } => match stored.restart(subscriptions, u64_of(&as_of)) {
+            Ok(next) => encoded(next),
+            Err(_) => error("checkpoint"),
+        },
+        Operation::WithSubscriptions { subscriptions } => {
+            encoded(stored.with_subscriptions(subscriptions))
+        }
+        Operation::Committed { upper } => encoded(stored.committed(upper)),
+        Operation::CheckCommit { expected, upper } => match decode(expected) {
+            Ok(expected) => match stored.check_commit(&expected, upper) {
+                Ok(check) => json!({ "commit": check }),
+                Err(conflict) => json!(conflict),
+            },
+            Err(_) => error("checkpoint"),
+        },
+        Operation::Settle { expected, new } => match (decode(expected), decode(new)) {
+            (Ok(expected), Ok(new)) => json!(stored.settle(&expected, &new)),
+            _ => error("checkpoint"),
+        },
+        Operation::CheckWrite { expected } => match decode(expected) {
+            Ok(expected) => match stored.check_write(&expected) {
+                Ok(()) => json!({ "write": "ok" }),
+                Err(conflict) => json!(conflict),
+            },
+            Err(_) => error("checkpoint"),
+        },
+    }
+}
+
+/// `value` with every object's keys in sorted order.
+fn sorted(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let entries: std::collections::BTreeMap<String, Value> = map.into_iter().collect();
+            Value::Object(entries.into_iter().map(|(k, v)| (k, sorted(v))).collect())
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(sorted).collect()),
+        other => other,
+    }
 }
