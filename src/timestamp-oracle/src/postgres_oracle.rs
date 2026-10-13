@@ -14,7 +14,7 @@
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
 use deadpool_postgres::PoolError;
@@ -795,11 +795,27 @@ where
                 WHERE timeline = $1
             RETURNING write_ts;
         "#;
+        // Successful-attempt phases include scheduling. The outer measurement
+        // also includes failed attempts and retry backoff.
+        let started = Instant::now();
         let client = self.get_connection().await?;
+        let connected = Instant::now();
         let statement = client.prepare_cached(q).await?;
+        let prepared = Instant::now();
         let result =
             pg_query_one_prepared(&client, &statement, &[&self.timeline, &proposed_next_ts])
                 .await?;
+        let queried = Instant::now();
+        if queried.duration_since(started) >= Duration::from_millis(20) {
+            debug!(
+                target: "mz_timestamp_oracle::allocation_diagnostics",
+                timeline = ?self.timeline,
+                connection_elapsed = ?connected.duration_since(started),
+                prepare_elapsed = ?prepared.duration_since(connected),
+                query_elapsed = ?queried.duration_since(prepared),
+                "slow oracle allocation query returned",
+            );
+        }
 
         let write_ts: Numeric = result.try_get("write_ts").expect("missing column write_ts");
         let write_ts = Self::decimal_to_ts(write_ts);
@@ -913,14 +929,27 @@ where
     #[instrument]
     async fn write_ts(&self) -> WriteTimestamp<Timestamp> {
         let metrics = &self.metrics.retries.write_ts;
+        let started = Instant::now();
+        let mut attempts = 0_u64;
 
         let res = retry_fallible(metrics, || {
+            attempts = attempts.saturating_add(1);
             self.metrics
                 .oracle
                 .write_ts
                 .run_op(|| self.fallible_write_ts())
         })
         .await;
+        let elapsed = started.elapsed();
+        if elapsed >= Duration::from_millis(20) {
+            debug!(
+                target: "mz_timestamp_oracle::allocation_diagnostics",
+                timeline = ?self.timeline,
+                ?elapsed,
+                attempts,
+                "slow oracle allocation completed",
+            );
+        }
 
         res
     }
