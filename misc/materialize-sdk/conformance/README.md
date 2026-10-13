@@ -67,6 +67,21 @@ Input: `subscribe`, `start`. The output is `{"sql": ...}`, or
 Input: `cursor`, `max_rows`, optional `timeout_ms`. The output is
 `{"sql": ...}`, or `{"error": "usage"}`.
 
+### `subscription.json`
+
+Input: `subscribe`, `start`, optional `max_pending_bytes` and
+`max_timestamp_bytes`, and `steps`. Create the subscription, or output
+`{"error": "usage"}`. The output is a list that starts with `{"declare": ...}`,
+followed by one entry per step:
+
+- `{"fetch": {"max_rows", "timeout_ms"}}` asks for the next `FETCH` and yields
+  `{"sql", "timeout_ms"}`, or `{"error": "usage"}`.
+- `{"push": {"columns", "rows"}}` passes the latest `FETCH` and its result to
+  `push` and yields `{"events", "finished"}`, or `{"error": kind}` with kind
+  `protocol` or `timestamp_too_large`.
+- `{"classify": {"sqlstate", "message"}}` classifies an error at this point of
+  the stream, which decides its phase, and yields the classification.
+
 ### `classify.json`
 
 Input: `sqlstate` (or `null`), `message`, `phase`. The output is the
