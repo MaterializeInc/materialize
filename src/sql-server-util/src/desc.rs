@@ -504,7 +504,7 @@ fn parse_data_type(
             //
             // If the `max text repl size` changes, it does not affect events already written to
             // the CDC table, nor does it change the behavior of what CDC captures for updates
-            // to non-LOD columns (based on testing).
+            // to non-LOB columns (based on testing).
             let max_length = if raw.max_length != -1 {
                 let length =
                     VarCharMaxLength::try_from(i64::from(raw.max_length)).map_err(|e| {
@@ -549,7 +549,7 @@ fn parse_data_type(
         }
         "binary" | "varbinary" => {
             // [`SqlScalarType`] does not support tracking max_length for binary data. To ensure
-            // columns of type varbinary(max) (Large Object Data) are decoded properly, it is
+            // columns of type varbinary(max) (Large Object) are decoded properly, it is
             // necessary to know that the length is `max`. `varchar` and `nvarchar` track this
             // using [`SqlScalarType::VarChar`] max_length field.
             if raw.max_length == -1 {
@@ -1209,9 +1209,9 @@ impl SqlServerRowDecoder {
 
     /// Decode data from the provided [`tiberius::Row`] into the provided [`Row`].
     ///
-    /// For updates, the new row data is provided in the event the data contains Large Object Data
+    /// For updates, the new row data is provided in the event the data contains Large Object
     /// (e.g. varchar(max)). [`SqlServerRowDecoder::decode()`] will decode the [`UpdateMask`] from
-    /// the new row and retrieve LOD values from the new row for any LOD column that was not updated
+    /// the new row and retrieve LOB values from the new row for any LOB column that was not updated
     /// in the old row.
     pub fn decode(
         &self,
@@ -1232,10 +1232,10 @@ impl SqlServerRowDecoder {
                 && *is_lob
                 && !data_col_updated(new_data, mask, col_name)?
             {
-                // The only time it is valid to pull the LOD column value from the new row
-                // is if the LOD column was *not* updated. The mask check is necessary to
-                // differentiate between updating a non-LOD column (the LOD column in old row
-                // is NULL) and updating a LOD column where the old value is NULL.
+                // The only time it is valid to pull the LOB column value from the new row
+                // is if the LOB column was *not* updated. The mask check is necessary to
+                // differentiate between updating a non-LOB column (the LOB column in old row
+                // is NULL) and updating a LOB column where the old value is NULL.
                 decoder.decode(new_data, col_name, col_type, arena)?
             } else {
                 decoder.decode(data, col_name, col_type, arena)?

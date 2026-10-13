@@ -68,7 +68,7 @@ INSERT INTO foo VALUES (6, 'abcdefghijklmnopqrstuvwxyz', 0, 'abcdefghijklmnopqrs
 
 ## can update rows that have been written with fields larger than `max repl text size`
 
-# Update LOD (Large Object Data)
+# Update LOB (Large Object)
 $ sql-server-execute name=sql-server
 EXEC sp_configure 'max text repl size', 20;
 RECONFIGURE;
@@ -82,7 +82,7 @@ UPDATE foo SET name = 'd', other = 'd' WHERE id = 4;
 5 abcdefghijklmnopqrstuvwxyz 0 abcdefghijklmnopqrstuvwxyz
 6 abcdefghijklmnopqrstuvwxyz 0 abcdefghijklmnopqrstuvwxyz
 
-# Update non-LOD column
+# Update non-LOB column
 $ sql-server-execute name=sql-server
 UPDATE foo SET skip = 1 WHERE id = 5;
 
@@ -94,7 +94,7 @@ UPDATE foo SET skip = 1 WHERE id = 5;
 5 abcdefghijklmnopqrstuvwxyz 1 abcdefghijklmnopqrstuvwxyz
 6 abcdefghijklmnopqrstuvwxyz 0 abcdefghijklmnopqrstuvwxyz
 
-## can delete rows that contain LOD columns
+## can delete rows that contain LOB columns
 $ sql-server-execute name=sql-server
 DELETE FROM foo WHERE id = 6;
 
@@ -200,7 +200,7 @@ UPDATE foo SET id = 2 WHERE id = 222;
 62 z z
 63 z z
 
-## NOT NULL LOD columns are NULL in the before image of an UPDATE that leaves them unchanged,
+## NOT NULL LOB columns are NULL in the before image of an UPDATE that leaves them unchanged,
 ## so their values must come from the after image.
 
 $ sql-server-execute name=sql-server
