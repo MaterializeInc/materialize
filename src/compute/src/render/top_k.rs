@@ -20,7 +20,6 @@ use differential_dataflow::AsCollection;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use mz_timely_util::shared_trace::SharedAgent;
 use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchValOwn};
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
@@ -43,6 +42,7 @@ use mz_row_spine::{
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::shared_trace::SharedAgent;
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::Pipeline;

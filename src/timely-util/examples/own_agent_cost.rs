@@ -88,7 +88,11 @@ fn main() {
     let label = format!(
         "{} {}",
         api::NAME,
-        if published { "published" } else { "unpublished" }
+        if published {
+            "published"
+        } else {
+            "unpublished"
+        }
     );
 
     timely::execute_directly(move |worker| {

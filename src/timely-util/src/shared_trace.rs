@@ -407,7 +407,8 @@ impl<Tr: Trace> SharedBox<Tr> {
         // frontier it already has, and publishing then costs locks and clones per trace. A moved
         // hold introduces pending merges and is published, and a reader's moved hold reaches the
         // spine through `exert`, which the hold's activation schedules.
-        let moved = self.sync_holds(|state| adjust(&mut state.holds_physical, &lower[..], &upper[..]));
+        let moved =
+            self.sync_holds(|state| adjust(&mut state.holds_physical, &lower[..], &upper[..]));
         if moved {
             self.publish_chain(None);
         }
@@ -721,7 +722,11 @@ pub struct SharedAgent<Tr: Trace> {
 
 impl<Tr: Trace> SharedAgent<Tr> {
     /// Wraps `trace`, maintained by `operator`, into an agent and the writer that feeds it.
-    pub fn new(trace: Tr, operator: OperatorInfo, logging: Option<Logger>) -> (Self, SharedWriter<Tr>) {
+    pub fn new(
+        trace: Tr,
+        operator: OperatorInfo,
+        logging: Option<Logger>,
+    ) -> (Self, SharedWriter<Tr>) {
         let trace = Rc::new(RefCell::new(SharedBox::new(trace)));
         let queues = Rc::new(RefCell::new(Vec::new()));
         if let Some(logging) = &logging {
@@ -832,7 +837,8 @@ impl<Tr: Trace> SharedAgent<Tr> {
                 let queue = self.new_listener(activator);
 
                 let activator = scope.activator_for(info.address);
-                *shutdown_button_ref = Some(ShutdownButton::new(Rc::clone(&capabilities), activator));
+                *shutdown_button_ref =
+                    Some(ShutdownButton::new(Rc::clone(&capabilities), activator));
 
                 capabilities
                     .borrow_mut()
@@ -1025,7 +1031,10 @@ impl<Tr: Trace> SharedWriter<Tr> {
     /// updates in the batch, suitable for use as a capability.
     pub fn insert(&mut self, batch: Tr::Batch, hint: Option<Tr::Time>) {
         assert!(&self.upper == batch.lower(), "batches must be contiguous");
-        assert!(batch.lower() != batch.upper(), "batches must be non-empty intervals");
+        assert!(
+            batch.lower() != batch.upper(),
+            "batches must be non-empty intervals"
+        );
         self.upper.clone_from(batch.upper());
 
         let mut borrow = self.queues.borrow_mut();
