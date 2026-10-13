@@ -128,6 +128,31 @@ pub struct Update {
     pub change: Change,
 }
 
+/// The bytes [`Update::approx_bytes`] charges for an update and for a cell,
+/// on top of the cells' text. They estimate a 64-bit build's allocations, and
+/// stay fixed so a memory limit behaves the same on every platform, including
+/// a 32-bit WebAssembly build.
+const UPDATE_BYTES: usize = 64;
+const CELL_BYTES: usize = 24;
+
+impl Update {
+    /// An estimate of the memory the update holds, the unit of the batcher's
+    /// memory limit.
+    pub(crate) fn approx_bytes(&self) -> usize {
+        let row_bytes = |row: &Row| -> usize {
+            row.iter()
+                .map(|cell| CELL_BYTES.saturating_add(cell.as_ref().map_or(0, String::len)))
+                .fold(0, usize::saturating_add)
+        };
+        let cells = match &self.change {
+            Change::Diff { row, .. } => row_bytes(row),
+            Change::Upsert { key, value } => row_bytes(key).saturating_add(row_bytes(value)),
+            Change::Delete { key } | Change::KeyViolation { key } => row_bytes(key),
+        };
+        UPDATE_BYTES.saturating_add(cells)
+    }
+}
+
 /// A decoded row: an update, or a progress row.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "message", rename_all = "snake_case")]

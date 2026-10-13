@@ -1,0 +1,70 @@
+{
+  "function": "latest_by_key",
+  "cases": [
+    {
+      "name": "the latest change per key wins, ordered by key, with its timestamp",
+      "input": {
+        "updates": [
+          {"timestamp": "1", "op": "upsert", "key": ["k2"], "value": ["x"]},
+          {"timestamp": "1", "op": "upsert", "key": ["k1"], "value": ["a"]},
+          {"timestamp": "2", "op": "upsert", "key": ["k1"], "value": ["b"]},
+          {"timestamp": "3", "op": "delete", "key": ["k2"]}
+        ]
+      },
+      "expect": [
+        {"timestamp": "2", "op": "upsert", "key": ["k1"], "value": ["b"]},
+        {"timestamp": "3", "op": "delete", "key": ["k2"]}
+      ]
+    },
+    {
+      "name": "a key violation is kept over a later change to its key",
+      "input": {
+        "updates": [
+          {"timestamp": "1", "op": "key_violation", "key": ["k"]},
+          {"timestamp": "2", "op": "delete", "key": ["k"]}
+        ]
+      },
+      "expect": [{"timestamp": "1", "op": "key_violation", "key": ["k"]}]
+    },
+    {
+      "name": "the latest of several key violations is kept",
+      "input": {
+        "updates": [
+          {"timestamp": "1", "op": "key_violation", "key": ["k"]},
+          {"timestamp": "2", "op": "upsert", "key": ["k"], "value": ["v"]},
+          {"timestamp": "3", "op": "key_violation", "key": ["k"]},
+          {"timestamp": "4", "op": "delete", "key": ["k"]}
+        ]
+      },
+      "expect": [{"timestamp": "3", "op": "key_violation", "key": ["k"]}]
+    },
+    {
+      "name": "keys order as text, with NULL first",
+      "input": {
+        "updates": [
+          {"timestamp": "1", "op": "upsert", "key": ["9"], "value": ["a"]},
+          {"timestamp": "1", "op": "upsert", "key": ["10"], "value": ["b"]},
+          {"timestamp": "1", "op": "upsert", "key": [null], "value": ["c"]}
+        ]
+      },
+      "expect": [
+        {"timestamp": "1", "op": "upsert", "key": [null], "value": ["c"]},
+        {"timestamp": "1", "op": "upsert", "key": ["10"], "value": ["b"]},
+        {"timestamp": "1", "op": "upsert", "key": ["9"], "value": ["a"]}
+      ]
+    },
+    {
+      "name": "diff updates have no key and pass through",
+      "input": {
+        "updates": [
+          {"timestamp": "1", "op": "diff", "row": ["a"], "diff": "1"},
+          {"timestamp": "2", "op": "diff", "row": ["a"], "diff": "1"}
+        ]
+      },
+      "expect": [
+        {"timestamp": "1", "op": "diff", "row": ["a"], "diff": "1"},
+        {"timestamp": "2", "op": "diff", "row": ["a"], "diff": "1"}
+      ]
+    }
+  ]
+}
