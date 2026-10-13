@@ -956,13 +956,8 @@ mod write {
                         },
                     );
 
-                let batches = match batch_writer.shared.start(&desc) {
-                    Some(write) => write_shared_batch(write, &mut updates_rx).await,
-                    None => write_worker_batch(&batch_writer.writer, &desc, &mut updates_rx)
-                        .await
-                        .into_iter()
-                        .collect(),
-                };
+                let batches =
+                    write_batches(batch_writer.shared.start(&desc), &mut updates_rx).await;
                 let corrections = read_back.await;
 
                 if let Err(err) = resp_tx.send(WriteResponse { batches }) {
@@ -981,7 +976,7 @@ mod write {
 
     /// Write the updates for one interval through `write`, returning the batches this worker
     /// delivers.
-    async fn write_shared_batch(
+    async fn write_batches(
         mut write: SharedBatchWrite<'_>,
         updates_rx: &mut mpsc::Receiver<Vec<((SourceData, ()), Timestamp, StorageDiff)>>,
     ) -> Vec<ProtoBatch> {
@@ -991,27 +986,6 @@ mod write {
             }
         }
         write.finish().await
-    }
-
-    /// Write this worker's own batch for `desc`, or nothing if it has no updates.
-    async fn write_worker_batch(
-        writer: &WriteHandle<SourceData, (), Timestamp, StorageDiff>,
-        desc: &BatchDescription,
-        updates_rx: &mut mpsc::Receiver<Vec<((SourceData, ()), Timestamp, StorageDiff)>>,
-    ) -> Option<ProtoBatch> {
-        // Create the builder lazily: an idle sink's descriptions find no corrections.
-        let mut builder = None;
-        while let Some(chunk) = updates_rx.recv().await {
-            let builder = builder.get_or_insert_with(|| writer.builder(desc.lower.clone()));
-            for ((k, v), t, d) in &chunk {
-                builder.add(k, v, t, d).await.expect("valid usage");
-            }
-        }
-        let batch = builder?
-            .finish(desc.upper.clone())
-            .await
-            .expect("valid usage");
-        Some(batch.into_transmittable_batch())
     }
 
     /// Apply a coalesced batch of updates to the correction buffers, on a blocking thread.

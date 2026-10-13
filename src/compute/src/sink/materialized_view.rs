@@ -857,7 +857,6 @@ mod write {
             let mut state = State::new(
                 sink_id,
                 worker_id,
-                writer,
                 shared_batch_writer,
                 sink_metrics,
                 channel_logging,
@@ -964,7 +963,6 @@ mod write {
     struct State {
         sink_id: GlobalId,
         worker_id: usize,
-        persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         /// Coalesces batches across the workers in this process while enabled.
         shared_batch_writer: SharedBatchWriter,
         /// Contains `desired - persist`, reflecting the updates we would like to commit to
@@ -1002,7 +1000,6 @@ mod write {
         fn new(
             sink_id: GlobalId,
             worker_id: usize,
-            persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
             shared_batch_writer: SharedBatchWriter,
             metrics: SinkMetrics,
             logging: Option<ChannelLogging>,
@@ -1019,7 +1016,6 @@ mod write {
             let mut state = Self {
                 sink_id,
                 worker_id,
-                persist_writer,
                 shared_batch_writer,
                 corrections: OkErr::new(
                     Correction::new(
@@ -1197,26 +1193,15 @@ mod write {
                 return None;
             }
 
-            let batches = match self.shared_batch_writer.start(&desc) {
-                Some(mut write) => {
-                    for (kv, t, d) in updates {
-                        write.push(&kv, t, d).await;
-                    }
-                    let batches = write.finish().await;
-                    if batches.is_empty() {
-                        self.trace("contributed to a shared batch");
-                        return None;
-                    }
-                    batches
-                }
-                None => vec![
-                    self.persist_writer
-                        .batch(updates, desc.lower.clone(), desc.upper.clone())
-                        .await
-                        .expect("valid usage")
-                        .into_transmittable_batch(),
-                ],
-            };
+            let mut write = self.shared_batch_writer.start(&desc);
+            for (kv, t, d) in updates {
+                write.push(&kv, t, d).await;
+            }
+            let batches = write.finish().await;
+            if batches.is_empty() {
+                self.trace("contributed to a shared batch");
+                return None;
+            }
 
             self.trace(format!("wrote {} batches", batches.len()));
             Some((desc, batches, cap))

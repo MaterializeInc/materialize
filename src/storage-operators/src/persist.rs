@@ -315,6 +315,76 @@ mod tests {
         )
     }
 
+    fn test_builder(
+        shared: &SharedBatches,
+        client: &PersistClient,
+        batch_id: SharedBatchId,
+        shard_id: ShardId,
+    ) -> SharedBatchBuilder {
+        shared.builder(
+            batch_id,
+            client.clone(),
+            shard_id,
+            "test".to_string(),
+            bool_schemas(),
+            Antichain::from_elem(0.into()),
+            Antichain::from_elem(1.into()),
+        )
+    }
+
+    // A worker that goes away after pushing, without finishing, leaves its data to whichever
+    // handle finishes last.
+    #[mz_ore::test(tokio::test)]
+    async fn test_shared_batch_dropped_handle() {
+        let client = PersistClient::new_for_tests().await;
+        let shared = SharedBatches::new();
+        let batch_id = SharedBatchId::new();
+        let shard_id = ShardId::new();
+        let schemas = bool_schemas();
+        let first = test_builder(&shared, &client, batch_id, shard_id);
+        let second = test_builder(&shared, &client, batch_id, shard_id);
+        first.push(bool_part(&schemas)).await;
+        second.push(bool_part(&schemas)).await;
+        drop(second);
+        let batch = first
+            .finish()
+            .await
+            .expect("last finisher receives the batch");
+        assert_eq!(
+            batch.into_hollow_batch().len,
+            2,
+            "batch should include the dropped handle's updates"
+        );
+    }
+
+    // When every handle goes away without finishing, the batch is abandoned: it is delivered to
+    // nobody, and a later builder for the same id starts a fresh batch without its data.
+    #[mz_ore::test(tokio::test)]
+    async fn test_shared_batch_abandoned() {
+        let client = PersistClient::new_for_tests().await;
+        let shared = SharedBatches::new();
+        let batch_id = SharedBatchId::new();
+        let shard_id = ShardId::new();
+        let schemas = bool_schemas();
+        let first = test_builder(&shared, &client, batch_id, shard_id);
+        let second = test_builder(&shared, &client, batch_id, shard_id);
+        first.push(bool_part(&schemas)).await;
+        second.push(bool_part(&schemas)).await;
+        drop(first);
+        drop(second);
+        let third = test_builder(&shared, &client, batch_id, shard_id);
+        third.push(bool_part(&schemas)).await;
+        let batch = third
+            .finish()
+            .await
+            .expect("sole handle receives the batch");
+        assert_eq!(
+            batch.into_hollow_batch().len,
+            1,
+            "batch should exclude the abandoned batch's updates"
+        );
+    }
+
     // Sweeping dead entries while handles for a live batch finish concurrently must not lose the
     // batch: exactly one of the finishing handles receives it.
     #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]

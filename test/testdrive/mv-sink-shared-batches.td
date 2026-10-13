@@ -130,6 +130,36 @@ ALTER SYSTEM SET compute_mv_sink_shared_batch_max_bytes = 1024
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET compute_mv_sink_shared_batch_max_bytes
 
+# With sharing disabled, every worker writes its own batch.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_compute_sync_mv_sink_shared_batches = false
+
+> DELETE FROM t WHERE k IN (1, 2)
+
+> INSERT INTO t VALUES (1, 10), (2, 20)
+
+> (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
+  EXCEPT ALL
+  (SELECT bucket, cnt, s FROM mv_v1)
+
+> (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
+  EXCEPT ALL
+  (SELECT bucket, cnt, s FROM mv_v2)
+
+> (SELECT bucket, cnt, s FROM mv_v1)
+  EXCEPT ALL
+  (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
+
+> (SELECT bucket, cnt, s FROM mv_v2)
+  EXCEPT ALL
+  (SELECT k % 256, count(*), sum(v) FROM t GROUP BY k % 256)
+
+> SELECT sum(cnt) FROM mv_v2
+25001
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_compute_sync_mv_sink_shared_batches = true
+
 # A write with no net change must not corrupt the view. Workers that end up
 # with no data for the interval must still finish their shared batch, since any
 # one of them may be the last holder responsible for delivering the batch.
