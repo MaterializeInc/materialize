@@ -467,13 +467,18 @@ fn create_public_service_object(
     mz: &Materialize,
     generation: u64,
 ) -> Service {
-    create_base_service_object(
+    let mut service = create_base_service_object(
         config,
         mz,
         generation,
         &mz.environmentd_service_name(),
         true,
-    )
+    );
+    // Only the stable, public Service is annotated for Teleport discovery,
+    // not the per-generation Service: the agent must not see the name churn
+    // on every rollout.
+    super::teleport::apply_teleport_registration(config, mz, &mut service);
+    service
 }
 
 fn create_generation_service_object(

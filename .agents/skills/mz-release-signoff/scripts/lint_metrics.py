@@ -189,7 +189,7 @@ REFERENCE_NAME_COUNTS = {
     "adapter.md": 35,
     "compute.md": 31,
     "persist.md": 84,
-    "reference-dashboards.md": 24,
+    "reference-dashboards.md": 26,
     "sources-and-sinks.md": 63,
 }
 

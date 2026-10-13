@@ -115,6 +115,7 @@ def get_minimal_system_parameters(
         "enable_lgalloc": "false",
         "enable_load_generator_counter": "true",
         "enable_logical_compaction_window": "true",
+        "enable_mcp_protocol_2026_07_28": "true",
         "enable_metric_sink": "true",
         "enable_multi_worker_storage_persist_sink": "true",
         "enable_rbac_checks": "true",
@@ -139,7 +140,6 @@ def get_minimal_system_parameters(
             "true" if version >= MzVersion.parse_mz("v26.43.0-dev") else "false"
         ),
         "enable_compute_error_distinct": "true",
-        "enable_compute_temporal_bucketing": "true",
         "enable_union_cancellation_after_relation_cse": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
@@ -175,11 +175,13 @@ def get_minimal_system_parameters(
     if version >= MzVersion.parse_mz("v26.40.0-dev"):
         config["hydration_history_collection_interval"] = "60s"
 
-    if version >= MzVersion.parse_mz("v26.41.0-dev"):
+    if version >= MzVersion.parse_mz("v26.45.0-dev"):
         # Exercise the source persist sink's grouping of a snapshotting export's
-        # updates while it defaults off in production. Several timestamp
-        # intervals, so the ceiling stays ahead of the data.
-        config["storage_persist_sink_description_lookahead"] = "5s"
+        # updates ahead of release to production. At least one default_timestamp_interval
+        # (1s by default). A Postgres source's snapshot and first CDC
+        # rows become visible about this much later, which the PgCdc feature
+        # benchmarks measure.
+        config["storage_persist_sink_description_lookahead"] = "2s"
 
     if sanitizer_enabled():
         config["with_0dt_deployment_max_wait"] = "18000s"
@@ -200,6 +202,14 @@ def get_minimal_system_parameters(
             "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
         )
 
+    # Frontend peek sequencing's flag, which current versions no longer have
+    # because the frontend always sequences peeks. Older binaries that have it
+    # still read it, so pin the value CI has been running them with.
+    if version < MzVersion.parse_mz("v26.47.0-dev"):
+        config["enable_frontend_peek_sequencing"] = (
+            "true" if version >= MzVersion.parse_mz("v26.9.0-dev") else "false"
+        )
+
     # The `WITH (WAIT ...)` graceful-reconfiguration surface. Always accepted
     # from v26.42 on. Older binaries still gate it behind this feature flag, so
     # pin it on for them: the tests that use the surface no longer enable it
@@ -207,6 +217,12 @@ def get_minimal_system_parameters(
     # against the old binary.
     if version < MzVersion.parse_mz("v26.42.0-dev"):
         config["enable_zero_downtime_cluster_reconfiguration"] = "true"
+
+    # Temporal bucketing is unconditional from v26.47 on. Older binaries still
+    # read this flag and default it off, so pin it on for them to keep benchmark
+    # baselines and mixed-version runs bucketing like current versions.
+    if version < MzVersion.parse_mz("v26.47.0-dev"):
+        config["enable_compute_temporal_bucketing"] = "true"
 
     return config
 
@@ -374,11 +390,6 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_password_auth",
             "true",
-            ["true", "false"],
-        ),
-        VariableSystemParameter(
-            "enable_frontend_peek_sequencing",
-            "true" if version >= MzVersion.parse_mz("v26.9.0-dev") else "false",
             ["true", "false"],
         ),
         VariableSystemParameter(
@@ -579,6 +590,17 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "persist_part_decode_format", "arrow", ["arrow", "row_with_validate"]
+        ),
+        # Empty decodes fetched parts whole, otherwise at most this many rows
+        # at once. 7 makes batch boundaries split small test parts.
+        *(
+            [
+                VariableSystemParameter(
+                    "persist_part_decode_batch_rows", "16384", ["", "7", "16384"]
+                )
+            ]
+            if version >= MzVersion.parse_mz("v26.46.0-dev")
+            else []
         ),
         VariableSystemParameter(
             "persist_blob_cache_scale_with_threads", "true", ["true", "false"]

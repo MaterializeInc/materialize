@@ -56,6 +56,7 @@ use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
 
 pub mod generation;
 pub mod global;
+pub mod teleport;
 
 /// The name identifying this controller in its reconciliation metrics and in
 /// the reporter of the events it publishes.
@@ -138,6 +139,8 @@ pub struct Config {
 
     pub tracing: TracingCliArgs,
     pub orchestratord_namespace: String,
+
+    pub teleport: Option<teleport::TeleportConfig>,
 }
 
 pub struct Context {

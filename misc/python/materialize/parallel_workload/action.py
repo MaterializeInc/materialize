@@ -2991,6 +2991,11 @@ class FlipFlagsAction(Action):
             "'^u1'",
             "'.*'",
         ]
+        self.flags_with_values["persist_part_decode_batch_rows"] = [
+            "''",
+            "7",
+            "16384",
+        ]
         self.flags_with_values["persist_encoding_enable_dictionary"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -3080,9 +3085,6 @@ class FlipFlagsAction(Action):
             "65536",
             "2097152",
         ]
-        self.flags_with_values["enable_compute_temporal_bucketing"] = (
-            BOOLEAN_FLAG_VALUES
-        )
         self.flags_with_values["enable_compute_error_distinct"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_arrangement_dictionary_compression_alpha"] = (
@@ -3145,10 +3147,6 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["cluster"] = ["quickstart", "dont_exist"]
-        self.flags_with_values["enable_frontend_peek_sequencing"] = [
-            "true",
-            "false",
-        ]
         self.flags_with_values["enable_frontend_subscribes"] = [
             "true",
             "false",
@@ -3458,6 +3456,7 @@ class FlipFlagsAction(Action):
             "enable_mcp_agent_read_data_product_tool",
             "enable_mcp_developer",
             "enable_mcp_developer_query_tool",
+            "enable_mcp_protocol_2026_07_28",
             "mcp_max_response_size",
             "mcp_request_timeout",
             "mz_metrics_lgalloc_map_refresh_interval",

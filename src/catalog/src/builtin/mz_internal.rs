@@ -4585,6 +4585,7 @@ pub static PG_CLASS_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_column("relowner", SqlScalarType::Oid.nullable(false))
             .with_column("relam", SqlScalarType::Oid.nullable(false))
             .with_column("reltablespace", SqlScalarType::Oid.nullable(false))
+            .with_column("relpages", SqlScalarType::Int32.nullable(false))
             .with_column("reltuples", SqlScalarType::Float32.nullable(false))
             .with_column("reltoastrelid", SqlScalarType::Oid.nullable(false))
             .with_column("relhasindex", SqlScalarType::Bool.nullable(false))
@@ -4615,6 +4616,9 @@ SELECT
     0::pg_catalog.oid AS relam,
     -- MZ doesn't have tablespaces so reltablespace is filled in with 0 implying the default tablespace
     0::pg_catalog.oid AS reltablespace,
+    -- MZ doesn't track relation sizes in pages. Postgres reports 0 for a relation
+    -- that has never been vacuumed or analyzed, which matches reltuples = -1 below.
+    0::pg_catalog.int4 AS relpages,
     -- MZ doesn't support (estimated) row counts currently.
     -- Postgres defines a value of -1 as unknown.
     -1::float4 as reltuples,

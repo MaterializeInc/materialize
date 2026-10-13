@@ -367,11 +367,16 @@ fn test_cancel_long_running_query() {
 #[allow(clippy::disallowed_methods)]
 fn test_cancellation_cancels_dataflows(query: &str) {
     // Query that returns how many dataflows are currently installed.
-    // Ignores introspection subscribe dataflows.
+    // Ignores the background dataflows every replica carries: introspection
+    // subscribes and curated metric sinks. Filtering rather than turning the
+    // features off keeps the shipping configuration under test, and it also
+    // sidesteps the async install: a sink landing mid-test cannot be mistaken
+    // for the query's dataflow, nor for one that failed to clean up.
     const DATAFLOW_QUERY: &str = " \
         SELECT count(*) \
         FROM mz_introspection.mz_dataflows \
-        WHERE name NOT LIKE '%introspection-subscribe%'";
+        WHERE name NOT LIKE '%introspection-subscribe%' \
+        AND name NOT LIKE '%metric-sink-%'";
 
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -447,11 +452,16 @@ fn test_cancel_insert_select() {
 #[allow(clippy::disallowed_methods)]
 fn test_closing_connection_cancels_dataflows(query: String) {
     // Query that returns how many dataflows are currently installed.
-    // Ignores introspection subscribe dataflows.
+    // Ignores the background dataflows every replica carries: introspection
+    // subscribes and curated metric sinks. Filtering rather than turning the
+    // features off keeps the shipping configuration under test, and it also
+    // sidesteps the async install: a sink landing mid-test cannot be mistaken
+    // for the query's dataflow, nor for one that failed to clean up.
     const DATAFLOW_QUERY: &str = " \
         SELECT count(*) \
         FROM mz_introspection.mz_dataflows \
-        WHERE name NOT LIKE '%introspection-subscribe%'";
+        WHERE name NOT LIKE '%introspection-subscribe%' \
+        AND name NOT LIKE '%metric-sink-%'";
 
     let server = test_util::TestHarness::default()
         .unsafe_mode()
@@ -3319,7 +3329,7 @@ async fn test_http_metrics() {
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)]
 #[allow(clippy::disallowed_methods)]
-async fn test_time_to_first_row_metric() {
+async fn test_statement_metrics() {
     let server = test_util::TestHarness::default().start().await;
 
     let client = server.connect().application_name("dbt").await.unwrap();
@@ -3360,6 +3370,62 @@ async fn test_time_to_first_row_metric() {
             ("strategy", "constant"),
         ],
     );
+
+    // Each SELECT or SUBSCRIBE with an AS OF clause counts once per execution. A cursor's SUBSCRIBE
+    // counts when FETCH runs it, not at DECLARE.
+    let as_of_queries = |kind, statement, application_name| {
+        test_util::get_counter_value(
+            &server.metrics_registry,
+            "mz_as_of_queries_total",
+            &[
+                ("session_type", "user"),
+                ("kind", kind),
+                ("statement", statement),
+                ("application_name", application_name),
+            ],
+        )
+    };
+
+    // The harness's default application name reports as `unrecognized`.
+    let client = server.connect().await.unwrap();
+    client
+        .batch_execute("CREATE TABLE t (a int)")
+        .await
+        .unwrap();
+    client.batch_execute("SELECT * FROM t").await.unwrap();
+    client
+        .batch_execute("SELECT * FROM t AS OF AT LEAST 0")
+        .await
+        .unwrap();
+    client.batch_execute("SELECT 1 AS OF 0").await.unwrap();
+    assert_eq!(as_of_queries("at_least", "select", "unrecognized"), 1);
+    assert_eq!(as_of_queries("at", "select", "unrecognized"), 1);
+
+    client.batch_execute("BEGIN").await.unwrap();
+    client
+        .batch_execute("DECLARE c CURSOR FOR SUBSCRIBE t AS OF AT LEAST 0")
+        .await
+        .unwrap();
+    assert_eq!(as_of_queries("at_least", "subscribe", "unrecognized"), 0);
+    client
+        .batch_execute("FETCH ALL c WITH (timeout = '0s')")
+        .await
+        .unwrap();
+    assert_eq!(as_of_queries("at_least", "subscribe", "unrecognized"), 1);
+    client.batch_execute("COMMIT").await.unwrap();
+
+    for application_name in ["web_console", "web_console_shell"] {
+        let client = server
+            .connect()
+            .application_name(application_name)
+            .await
+            .unwrap();
+        client
+            .batch_execute("SELECT * FROM t AS OF AT LEAST 0")
+            .await
+            .unwrap();
+        assert_eq!(as_of_queries("at_least", "select", application_name), 1);
+    }
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
@@ -4197,17 +4263,6 @@ async fn test_github_25388() {
         .enable_feature_flags(&["unsafe_enable_unsafe_functions"])
         .await;
 
-    // TODO(peek-seq) The second part of this test no longer works with the new peek sequencing,
-    // because we no longer check the catalog after optimization whether the original dependencies
-    // still exist. This might be fine, because nothing bad happens: timestamp determination already
-    // puts a a read hold on the index, so the index doesn't actually gets dropped in the
-    // Controller, and therefore the peek actually succeeds. In other words, the old peek
-    // sequencing's dependency check was overly cautious. I'm planning to revisit this later, and
-    // probably delete the second part of the test.
-    server
-        .disable_feature_flags(&["enable_frontend_peek_sequencing"])
-        .await;
-
     let client1 = server.connect().await.unwrap();
 
     client1
@@ -4235,35 +4290,6 @@ async fn test_github_25388() {
 
             match client1
                 .query("SUBSCRIBE (SELECT *, mz_unsafe.mz_sleep(2) FROM t)", &[])
-                .await
-            {
-                Ok(_) => Err("unexpected query success".to_string()),
-                Err(err) if err.to_string_with_causes().contains("was dropped") => Ok(()),
-                Err(err) => Err(err.to_string_with_causes()),
-            }
-        })
-        .await
-        .unwrap();
-
-    Retry::default()
-        .retry_async(|_| async {
-            client1
-                .batch_execute("DROP INDEX IF EXISTS idx")
-                .await
-                .unwrap();
-            client1
-                .batch_execute("CREATE INDEX idx ON t(a)")
-                .await
-                .unwrap();
-
-            let client2 = server.connect().await.unwrap();
-            mz_ore::task::spawn(|| "test", async move {
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                client2.batch_execute("DROP INDEX idx").await.unwrap();
-            });
-
-            match client1
-                .query("SELECT *, mz_unsafe.mz_sleep(2) FROM t", &[])
                 .await
             {
                 Ok(_) => Err("unexpected query success".to_string()),
@@ -5288,13 +5314,28 @@ fn run_mcp_datadriven_inner(
             // Origin header to exercise the DNS-rebinding defense. (Datadriven
             // arg values cannot contain `:` or `/`, so the origin value is a
             // fixed constant here rather than a directive parameter.)
+            //
+            // Input lines before the JSON body are `Name: value` request
+            // headers, written the way they appear on the wire.
             let client = Client::new();
+            let lines: Vec<&str> = tc.input.lines().collect();
+            let body_start = lines
+                .iter()
+                .position(|line| line.trim_start().starts_with('{'))
+                .unwrap_or(lines.len());
+            let (header_lines, body) = lines.split_at(body_start);
             let mut req = if tc.args.contains_key("get") {
                 client.get(url)
             } else {
-                let json: serde_json::Value = serde_json::from_str(&tc.input).unwrap();
+                let json: serde_json::Value = serde_json::from_str(&body.join("\n")).unwrap();
                 client.post(url).json(&json)
             };
+            for line in header_lines {
+                let (name, value) = line
+                    .split_once(':')
+                    .expect("header lines are `Name: value`");
+                req = req.header(name.trim(), value.trim());
+            }
             if tc.args.contains_key("origin") {
                 req = req.header("origin", "https://evil.example.com");
             }
@@ -5374,6 +5415,19 @@ fn test_mcp_agent_disabled() {
         .with_mcp_routes(true, false)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "false".to_string());
     run_mcp_datadriven("tests/testdata/mcp/agent_disabled", harness);
+}
+
+/// Tests the 2026-07-28 request headers on the MCP developer endpoint.
+#[mz_ore::test]
+fn test_mcp_developer_protocol_2026_07_28() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(false, true)
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "enable_mcp_protocol_2026_07_28".to_string(),
+            "true".to_string(),
+        );
+    run_mcp_datadriven("tests/testdata/mcp/developer_2026_07_28", harness);
 }
 
 /// Tests the MCP developer endpoint with the query tool explicitly disabled.

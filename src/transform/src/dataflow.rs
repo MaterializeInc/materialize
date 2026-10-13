@@ -1465,6 +1465,7 @@ mod tests {
                 up_to: Default::default(),
                 non_null_assertions: Vec::new(),
                 refresh_schedule: None,
+                from_arrangement: None,
             },
         );
     }

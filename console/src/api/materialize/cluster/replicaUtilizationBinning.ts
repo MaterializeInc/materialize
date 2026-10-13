@@ -228,8 +228,7 @@ export function attachOfflineEvents(
 /**
  * Group per-(replica, bucket) rows into `Bucket[]` by replica, tracking the
  * overall min/max bounds. `resolveCurrentDeployment` maps a past cluster id to its
- * current blue-green deployment; omitted (the SUBSCRIBE path resolves lineage in
- * SQL) it defaults to the row's own `clusterId`.
+ * current blue-green deployment; omitted, it defaults to the row's own `clusterId`.
  */
 export function bucketRowsToBucketsByReplicaId(
   rows: UtilizationBucketRow[],

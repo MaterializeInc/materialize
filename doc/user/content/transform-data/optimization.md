@@ -195,7 +195,7 @@ CREATE INDEX ON foo (x, y);
 EXPLAIN SELECT * FROM foo WHERE x = 42 AND y = 50;
 ```
 
-In the [`EXPLAIN`](/sql/explain-plan/) output, check for `lookup_value` after
+In the [`EXPLAIN`](/sql/explain-plan/) output, check for `lookup value` after
 the index name to confirm that Materialize will use a point lookup; i.e., that
 Materialize will only read the matching records from the index instead of
 scanning the entire index:
@@ -207,6 +207,38 @@ scanning the entire index:
 
  Used Indexes:
    - materialize.public.foo_x_y_idx (lookup)
+```
+
+#### Long `IN` lists
+
+An `IN` list with more than a few hundred values falls back to a full index
+scan, even when it constrains the indexed field. The cutoff is not a fixed
+number of values. It depends on the size of the `WHERE` clause as a whole, so
+additional conditions lower it. If [`EXPLAIN`](/sql/explain-plan/) does not
+show `lookup` for such a query, join against the values instead of listing
+them:
+
+```mzsql
+CREATE INDEX ON foo (x);
+SELECT foo.*
+FROM foo
+JOIN unnest(ARRAY[1, 2, 3]) AS v(x) ON foo.x = v.x;
+```
+
+Materialize plans this form as a join against the index on `x`, which reads
+only the matching records instead of scanning the entire index. The query runs
+as a temporary dataflow rather than on the fast path, so keep the `IN` list for
+short lists.
+
+```
+ Explained Query:
+   →Differential Join %1[#0{x}] » %0:foo[#0{x}]
+     →Arranged materialize.public.foo
+     →Arrange (#0{x})
+       →Constant (3 rows)
+
+ Used Indexes:
+   - materialize.public.foo_x_idx (differential join)
 ```
 
 ### `JOIN`

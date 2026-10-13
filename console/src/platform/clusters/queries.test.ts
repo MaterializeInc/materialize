@@ -20,7 +20,12 @@ import { roleQueryKeys } from "~/platform/roles/queries";
 import { getQueryClient } from "~/queryClient";
 import { createProviderWrapper } from "~/test/utils";
 
-import { useOwners } from "./queries";
+import {
+  clusterQueryKeys,
+  useClusterLineageIds,
+  useOwners,
+  useReplicaOfflineEvents,
+} from "./queries";
 
 const ownersColumns = buildColumns([
   "id",
@@ -135,5 +140,146 @@ describe("useOwners", () => {
     const firstReference = result.current.isOwner;
     rerender();
     expect(result.current.isOwner).toBe(firstReference);
+  });
+});
+
+const lineageColumns = buildColumns([
+  "clusterId",
+  "currentDeploymentClusterId",
+  "clusterName",
+]);
+
+function buildLineageHandler(
+  clusterIdsKey: string,
+  rows: {
+    clusterId: string;
+    currentDeploymentClusterId: string;
+    clusterName: string;
+  }[],
+) {
+  return buildSqlQueryHandlerV2({
+    queryKey: clusterQueryKeys.deploymentLineage({ clusterIdsKey }),
+    results: mapKyselyToTabular({ columns: lineageColumns, rows }),
+  });
+}
+
+describe("useClusterLineageIds", () => {
+  it("resolves a cluster to itself and its past blue-green deployments", async () => {
+    server.use(
+      buildLineageHandler("u3", [
+        { clusterId: "u3", currentDeploymentClusterId: "u3", clusterName: "a" },
+        { clusterId: "u2", currentDeploymentClusterId: "u3", clusterName: "a" },
+      ]),
+    );
+    const ProviderWrapper = await createProviderWrapper();
+    const { result } = renderHook(() => useClusterLineageIds(["u3"], true), {
+      wrapper: ProviderWrapper,
+    });
+
+    await waitFor(() => expect(result.current.data).toEqual(["u2", "u3"]));
+  });
+
+  it("resolves a system cluster, which has no lineage rows, to itself", async () => {
+    server.use(buildLineageHandler("s2", []));
+    const ProviderWrapper = await createProviderWrapper();
+    const { result } = renderHook(() => useClusterLineageIds(["s2"], true), {
+      wrapper: ProviderWrapper,
+    });
+
+    await waitFor(() => expect(result.current.data).toEqual(["s2"]));
+  });
+});
+
+const offlineEventColumns = buildColumns([
+  "replicaId",
+  "occurredAt",
+  "status",
+  "reason",
+]);
+
+const TIME_PERIOD_MINUTES = 60;
+
+const offlineEvent = (replicaId: string) => ({
+  replicaId,
+  occurredAt: "2030-01-01 00:00:30+00",
+  status: "offline",
+  reason: "oom-killed",
+});
+
+function buildOfflineEventsHandler(
+  replicaIdsKey: string,
+  rows: ReturnType<typeof offlineEvent>[],
+  waitTimeMs?: number,
+) {
+  return buildSqlQueryHandlerV2(
+    {
+      queryKey: clusterQueryKeys.replicaOfflineEvents({
+        replicaIdsKey,
+        timePeriodMinutes: TIME_PERIOD_MINUTES,
+      }),
+      results: mapKyselyToTabular({ columns: offlineEventColumns, rows }),
+    },
+    { waitTimeMs },
+  );
+}
+
+async function renderUseReplicaOfflineEvents(
+  initialSamples: { replicaId: string }[],
+) {
+  const ProviderWrapper = await createProviderWrapper();
+  return renderHook(
+    ({ samples }) =>
+      useReplicaOfflineEvents(samples, TIME_PERIOD_MINUTES, true),
+    { wrapper: ProviderWrapper, initialProps: { samples: initialSamples } },
+  );
+}
+
+describe("useReplicaOfflineEvents", () => {
+  it("fetches events for the sorted set of sampled replicas", async () => {
+    // The handler only answers the sorted, deduplicated key.
+    server.use(buildOfflineEventsHandler("u1,u2", [offlineEvent("u2")]));
+    const { result } = await renderUseReplicaOfflineEvents([
+      { replicaId: "u2" },
+      { replicaId: "u1" },
+      { replicaId: "u2" },
+    ]);
+
+    await waitFor(() => expect(result.current).toEqual([offlineEvent("u2")]));
+  });
+
+  it("stays idle while there are no samples", async () => {
+    const { result } = await renderUseReplicaOfflineEvents([]);
+
+    expect(
+      getQueryClient().getQueryState(
+        clusterQueryKeys.replicaOfflineEvents({
+          replicaIdsKey: "",
+          timePeriodMinutes: TIME_PERIOD_MINUTES,
+        }),
+      )?.fetchStatus,
+    ).toEqual("idle");
+    expect(result.current).toBeUndefined();
+  });
+
+  it("keeps the previous events while a changed replica set loads", async () => {
+    server.use(
+      buildOfflineEventsHandler("u1", [offlineEvent("u1")]),
+      buildOfflineEventsHandler(
+        "u1,u2",
+        [offlineEvent("u1"), offlineEvent("u2")],
+        50,
+      ),
+    );
+    const { result, rerender } = await renderUseReplicaOfflineEvents([
+      { replicaId: "u1" },
+    ]);
+    await waitFor(() => expect(result.current).toEqual([offlineEvent("u1")]));
+
+    rerender({ samples: [{ replicaId: "u1" }, { replicaId: "u2" }] });
+    expect(result.current).toEqual([offlineEvent("u1")]);
+
+    await waitFor(() =>
+      expect(result.current).toEqual([offlineEvent("u1"), offlineEvent("u2")]),
+    );
   });
 });

@@ -119,7 +119,7 @@ use mz_controller::clusters::{
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_dyncfg::{ConfigUpdates, ParameterScope};
-use mz_expr::{MapFilterProject, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
+use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::OfflineReason;
 use mz_ore::cast::{CastFrom, CastInto, CastLossy};
@@ -203,10 +203,9 @@ use crate::coord::metric_sink::{CuratedMetricSink, InstalledMetricSink, PlannedM
 use crate::coord::peek::PendingPeek;
 use crate::coord::statement_logging::StatementLogging;
 use crate::coord::timeline::{TimelineContext, TimelineState};
-use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
+use crate::coord::timestamp_selection::TimestampContext;
 use crate::coord::validity::PlanValidity;
 use crate::error::AdapterError;
-use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
@@ -333,8 +332,8 @@ impl IdPool {
 }
 
 /// A row for `mz_object_arrangement_size_history`, prepared off-thread by the
-/// arrangement sizes snapshot task and stamped with a collection timestamp at
-/// write time.
+/// arrangement sizes snapshot task and stamped with the snapshot's read
+/// timestamp when written.
 #[derive(Debug)]
 pub struct ArrangementSizeRecord {
     pub replica_id: String,
@@ -386,7 +385,10 @@ pub enum Message {
     StorageUsagePrune(Vec<BuiltinTableUpdate>),
     ArrangementSizesSchedule,
     ArrangementSizesSnapshot,
-    ArrangementSizesWrite(Vec<ArrangementSizeRecord>),
+    ArrangementSizesWrite {
+        records: Vec<ArrangementSizeRecord>,
+        collection_ts: EpochMillis,
+    },
     ArrangementSizesPrune(Vec<BuiltinTableUpdate>),
     HydrationHistorySchedule,
     HydrationHistoryRun,
@@ -403,11 +405,6 @@ pub enum Message {
         otel_ctx: OpenTelemetryContext,
         stmt: Arc<Statement<Raw>>,
         params: mz_sql::plan::Params,
-    },
-    PeekStageReady {
-        ctx: ExecuteContext,
-        span: Span,
-        stage: PeekStage,
     },
     CreateIndexStageReady {
         ctx: ExecuteContext,
@@ -547,7 +544,7 @@ impl Message {
             Message::StorageUsagePrune(_) => "storage_usage_prune",
             Message::ArrangementSizesSchedule => "arrangement_sizes_schedule",
             Message::ArrangementSizesSnapshot => "arrangement_sizes_snapshot",
-            Message::ArrangementSizesWrite(_) => "arrangement_sizes_write",
+            Message::ArrangementSizesWrite { .. } => "arrangement_sizes_write",
             Message::ArrangementSizesPrune(_) => "arrangement_sizes_prune",
             Message::HydrationHistorySchedule => "hydration_history_schedule",
             Message::HydrationHistoryRun => "hydration_history_run",
@@ -556,7 +553,6 @@ impl Message {
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
             }
-            Message::PeekStageReady { .. } => "peek_stage_ready",
             Message::ExplainTimestampStageReady { .. } => "explain_timestamp_stage_ready",
             Message::CreateIndexStageReady { .. } => "create_index_stage_ready",
             Message::CreateMetricSinkStageReady { .. } => "create_metric_sink_stage_ready",
@@ -624,24 +620,6 @@ pub type CreateConnectionValidationReady = ValidationReady<CreateConnectionPlan>
 pub type AlterConnectionValidationReady = ValidationReady<Connection>;
 
 #[derive(Debug)]
-pub enum PeekStage {
-    /// Common stages across SELECT, EXPLAIN and COPY TO queries.
-    LinearizeTimestamp(PeekStageLinearizeTimestamp),
-    RealTimeRecency(PeekStageRealTimeRecency),
-    TimestampReadHold(PeekStageTimestampReadHold),
-    Optimize(PeekStageOptimize),
-    /// Final stage for a peek.
-    Finish(PeekStageFinish),
-    /// Final stage for an explain.
-    ExplainPlan(PeekStageExplainPlan),
-    ExplainPushdown(PeekStageExplainPushdown),
-    /// Preflight checks for a copy to operation.
-    CopyToPreflight(PeekStageCopyTo),
-    /// Final stage for a copy to which involves shipping the dataflow.
-    CopyToDataflow(PeekStageCopyTo),
-}
-
-#[derive(Debug)]
 pub struct CopyToContext {
     /// The `RelationDesc` of the data to be copied.
     pub desc: RelationDesc,
@@ -657,114 +635,9 @@ pub struct CopyToContext {
     pub max_file_size: u64,
     /// Number of batches the output of the COPY TO will be partitioned into
     /// to distribute the load across workers deterministically.
-    /// This is only an option since it's not set when CopyToContext is instantiated
-    /// but immediately after in the PeekStageValidate stage.
+    /// Not set when the context is created, but during sequencing, to the
+    /// largest worker count among the target cluster's replicas.
     pub output_batch_count: Option<u64>,
-}
-
-#[derive(Debug)]
-pub struct PeekStageLinearizeTimestamp {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    max_query_result_size: Option<u64>,
-    source_ids: BTreeSet<GlobalId>,
-    target_replica: Option<ReplicaId>,
-    timeline_context: TimelineContext,
-    optimizer: optimize::PeekOptimizer,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct PeekStageRealTimeRecency {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    max_query_result_size: Option<u64>,
-    source_ids: BTreeSet<GlobalId>,
-    target_replica: Option<ReplicaId>,
-    timeline_context: TimelineContext,
-    oracle_read_ts: Option<Timestamp>,
-    optimizer: optimize::PeekOptimizer,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct PeekStageTimestampReadHold {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    max_query_result_size: Option<u64>,
-    source_ids: BTreeSet<GlobalId>,
-    target_replica: Option<ReplicaId>,
-    timeline_context: TimelineContext,
-    oracle_read_ts: Option<Timestamp>,
-    real_time_recency_ts: Option<mz_repr::Timestamp>,
-    optimizer: optimize::PeekOptimizer,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct PeekStageOptimize {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    max_query_result_size: Option<u64>,
-    source_ids: BTreeSet<GlobalId>,
-    id_bundle: CollectionIdBundle,
-    target_replica: Option<ReplicaId>,
-    determination: TimestampDetermination,
-    optimizer: optimize::PeekOptimizer,
-    /// An optional context set iff the state machine is initiated from
-    /// sequencing an EXPLAIN for this statement.
-    explain_ctx: ExplainContext,
-}
-
-#[derive(Debug)]
-pub struct PeekStageFinish {
-    validity: PlanValidity,
-    plan: mz_sql::plan::SelectPlan,
-    max_query_result_size: Option<u64>,
-    id_bundle: CollectionIdBundle,
-    target_replica: Option<ReplicaId>,
-    source_ids: BTreeSet<GlobalId>,
-    determination: TimestampDetermination,
-    cluster_id: ComputeInstanceId,
-    finishing: RowSetFinishing,
-    /// When present, an optimizer trace to be used for emitting a plan insights
-    /// notice.
-    plan_insights_optimizer_trace: Option<OptimizerTrace>,
-    insights_ctx: Option<Box<PlanInsightsContext>>,
-    global_lir_plan: optimize::peek::GlobalLirPlan,
-    optimization_finished_at: EpochMillis,
-}
-
-#[derive(Debug)]
-pub struct PeekStageCopyTo {
-    validity: PlanValidity,
-    optimizer: optimize::copy_to::Optimizer,
-    global_lir_plan: optimize::copy_to::GlobalLirPlan,
-    optimization_finished_at: EpochMillis,
-    target_replica: Option<ReplicaId>,
-    source_ids: BTreeSet<GlobalId>,
-}
-
-#[derive(Debug)]
-pub struct PeekStageExplainPlan {
-    validity: PlanValidity,
-    optimizer: optimize::peek::Optimizer,
-    df_meta: DataflowMetainfo,
-    explain_ctx: ExplainPlanContext,
-    insights_ctx: Option<Box<PlanInsightsContext>>,
-}
-
-#[derive(Debug)]
-pub struct PeekStageExplainPushdown {
-    validity: PlanValidity,
-    determination: TimestampDetermination,
-    imports: BTreeMap<GlobalId, MapFilterProject>,
 }
 
 #[derive(Debug)]
@@ -4105,7 +3978,7 @@ impl Coordinator {
             });
 
             self.schedule_storage_usage_collection().await;
-            self.schedule_arrangement_sizes_collection().await;
+            self.schedule_arrangement_sizes_collection();
             self.schedule_hydration_history_collection();
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
@@ -4818,9 +4691,11 @@ impl Coordinator {
 /// `mz_object_arrangement_size_history` snapshot whose `collection_timestamp`
 /// (column 3) is strictly before `cutoff_ts`.
 ///
-/// Panics if any input row has `diff != 1`: the caller must consolidate first,
-/// and a consolidated history table should never contain retractions because
-/// the only source of retractions is this function itself.
+/// Every input row should have `diff == 1`: the caller must consolidate first,
+/// this function is the only source of retractions, and a single writer never
+/// repeats a `collection_timestamp`. Any other diff is a soft panic, and the
+/// expired row is retracted at its full multiplicity. A hard panic here would
+/// fail every boot, since this runs at startup.
 fn arrangement_sizes_expired_retractions(
     rows: impl IntoIterator<Item = (mz_repr::Row, i64)>,
     cutoff_ts: u128,
@@ -4828,10 +4703,11 @@ fn arrangement_sizes_expired_retractions(
 ) -> Vec<BuiltinTableUpdate> {
     let mut expired = Vec::new();
     for (row, diff) in rows {
-        assert_eq!(
-            diff, 1,
-            "consolidated contents should not contain retractions: ({row:#?}, {diff:#?})"
-        );
+        if diff != 1 {
+            soft_panic_or_log!(
+                "consolidated contents should only contain diff 1: ({row:#?}, {diff:#?})"
+            );
+        }
         let collection_timestamp = row
             .unpack()
             .get(3)
@@ -4842,7 +4718,7 @@ fn arrangement_sizes_expired_retractions(
             .try_into()
             .expect("all collections happen after Jan 1 1970");
         if collection_timestamp < cutoff_ts {
-            expired.push(BuiltinTableUpdate::row(item_id, row, Diff::MINUS_ONE));
+            expired.push(BuiltinTableUpdate::row(item_id, row, -Diff::from(diff)));
         }
     }
     expired
@@ -5904,7 +5780,7 @@ mod arrangement_sizes_pruner_tests {
     }
 
     #[mz_ore::test]
-    #[should_panic(expected = "consolidated contents should not contain retractions")]
+    #[should_panic(expected = "consolidated contents should only contain diff 1")]
     fn retraction_in_input_panics() {
         let rows = vec![(history_row(100), -1)];
         let _ = arrangement_sizes_expired_retractions(rows, 1_000, item_id());

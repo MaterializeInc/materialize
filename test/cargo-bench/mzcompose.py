@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from materialize import MZ_ROOT, buildkite, git, spawn
+from materialize.cargo_bench.ancestor import clamp_to_baseline
 from materialize.cargo_bench.compare import (
     CompareReport,
     Verdict,
@@ -83,7 +84,18 @@ class TargetFailure:
 
 
 def resolve_ancestor() -> str:
-    """Pick the commit to compare against: the merge base in a pull request, else the latest release tag."""
+    """Pick the commit to compare against: `default_ancestor()`, moved forward to the bench baseline when HEAD contains the baseline and that ancestor does not."""
+    ancestor = default_ancestor()
+    clamped = clamp_to_baseline(ancestor, "HEAD", MZ_ROOT)
+    if clamped != ancestor:
+        print(
+            f"--- Ancestor {ancestor} predates the bench baseline, using {clamped} instead"
+        )
+    return clamped
+
+
+def default_ancestor() -> str:
+    """The merge base in a pull request, else the latest release tag."""
     if buildkite.is_in_pull_request():
         return buildkite.get_merge_base()
     current = MzVersion.parse_cargo()
@@ -541,7 +553,7 @@ def render_report(
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--ancestor",
-        help="commit to compare against, defaults to the merge base in a PR and the latest release tag otherwise",
+        help="commit to compare against, used as given, defaults to the merge base in a PR and the latest release tag otherwise, never older than the bench baseline",
     )
     parser.add_argument(
         "--threshold",

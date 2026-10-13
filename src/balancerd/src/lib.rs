@@ -1068,11 +1068,15 @@ impl PgwireBalancer {
         password: Option<String>,
         params: BTreeMap<String, String>,
         internal_tls: Option<&SslConnector>,
-    ) -> Result<Conn<TcpStream>, anyhow::Error>
+    ) -> Result<Conn<netio::Stream>, anyhow::Error>
     where
         A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
     {
-        let mut mz_stream = TcpStream::connect(envd_addr).await?;
+        // NOTE: `netio::Stream::connect` sets `TCP_NODELAY`. Without it, Nagle's algorithm holds
+        // the tail of an extended-protocol batch that arrives in several reads until
+        // environmentd's delayed ACK (at least 40 ms on Linux), because environmentd responds
+        // only at `Sync`.
+        let mut mz_stream = netio::Stream::connect(envd_addr).await?;
         let mut buf = BytesMut::new();
 
         let mut mz_stream = if let Some(internal_tls) = internal_tls {
@@ -1538,7 +1542,7 @@ impl mz_server_core::Server for HttpsBalancer {
                     .tenant
                     .as_ref()
                     .map(|tenant| inner_metrics.tenant_connections(tenant));
-                let mut mz_stream = match TcpStream::connect(resolved.addr).await {
+                let mut mz_stream = match netio::Stream::connect(resolved.addr).await {
                     Ok(stream) => stream,
                     Err(e) => {
                         error!("failed to connect to upstream server: {e}");

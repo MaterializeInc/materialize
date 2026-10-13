@@ -86,7 +86,7 @@ pub const ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK: Config<bool> = Config::new(
 pub const WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD: Config<Duration> = Config::new(
     "with_0dt_caught_up_check_stability_period",
     Duration::from_secs(10 * 60), // 10 minutes
-    "How long a cluster must continuously be caught-up and have all replicas healthy before it is considered ready to cut over during a 0dt deployment.",
+    "Required continuous hydration before a caught-up cluster is ready for 0dt cutover. Each non-exempt replica's period is capped at its catalog creation age when it hydrated. Missing creation evidence retains the full period.",
     ParameterScope::Environment,
 );
 
@@ -285,6 +285,16 @@ pub const ENABLE_MCP_DEVELOPER_QUERY_TOOL: Config<bool> = Config::new(
     "enable_mcp_developer_query_tool",
     true,
     "Whether the MCP developer query tool is enabled. When false, the query tool is not advertised and calls to it are rejected. Developers can still use query_system_catalog.",
+    ParameterScope::Environment,
+);
+
+/// Whether the MCP endpoints serve the 2026-07-28 protocol alongside
+/// 2025-11-25. When off, every request is served as today, including one that
+/// asks for 2026-07-28, so modern clients keep falling back to `initialize`.
+pub const ENABLE_MCP_PROTOCOL_2026_07_28: Config<bool> = Config::new(
+    "enable_mcp_protocol_2026_07_28",
+    false,
+    "Whether the MCP endpoints serve the 2026-07-28 protocol revision alongside 2025-11-25. When false, requests are served on the 2025-11-25 protocol only.",
     ParameterScope::Environment,
 );
 
@@ -584,6 +594,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL)
         .add(&ENABLE_MCP_DEVELOPER)
         .add(&ENABLE_MCP_DEVELOPER_QUERY_TOOL)
+        .add(&ENABLE_MCP_PROTOCOL_2026_07_28)
         .add(&ENABLE_PUBLIC_METRICS_ENDPOINT)
         .add(&MCP_MAX_RESPONSE_SIZE)
         .add(&MCP_REQUEST_TIMEOUT)

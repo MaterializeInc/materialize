@@ -325,14 +325,6 @@ pub const ENABLE_CORRECTION_V2_SPILL: Config<bool> = Config::new(
     ParameterScope::Replica,
 );
 
-/// Whether to enable temporal bucketing in compute.
-pub const ENABLE_COMPUTE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
-    "enable_compute_temporal_bucketing",
-    false,
-    "Whether to enable temporal bucketing in compute.",
-    ParameterScope::Environment,
-);
-
 /// The summary to apply to the frontier in temporal bucketing in compute.
 pub const TEMPORAL_BUCKETING_SUMMARY: Config<Duration> = Config::new(
     "compute_temporal_bucketing_summary",
@@ -831,7 +823,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)
         .add(&ENABLE_CORRECTION_V2_SPILL)
-        .add(&ENABLE_COMPUTE_TEMPORAL_BUCKETING)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)

@@ -296,10 +296,8 @@ SELECT * FROM other.t2
 statement ok
 ROLLBACK
 
-# The same bug also affected statements sequenced by the old peek path
-# (EXECUTE always is): the stored read holds of the timestamp-independent
-# query made the old path validate the timedomain against them and spuriously
-# fail.
+# A statement run through EXECUTE after the timestamp-independent query must
+# not spuriously fail the timedomain validation either.
 simple
 BEGIN;
 SELECT * FROM other.const_view;

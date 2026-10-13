@@ -106,3 +106,27 @@ export async function fetchClusterDeploymentLineage({
     currentDeploymentByPastDeployment,
   };
 }
+
+/**
+ * Expands each of `clusterIds` to every cluster in its blue-green lineage. The
+ * result is sorted and deduplicated, so equal lineages yield equal arrays
+ * regardless of row order.
+ */
+export function expandClusterLineage(
+  clusterIds: string[],
+  pastDeploymentsByCurrentDeployment: Map<string, DeploymentRow[]>,
+): string[] {
+  const expanded = new Set<string>();
+  for (const clusterId of clusterIds) {
+    const lineage = pastDeploymentsByCurrentDeployment.get(clusterId);
+    if (lineage) {
+      for (const deployment of lineage) {
+        expanded.add(deployment.clusterId);
+      }
+    } else {
+      // System clusters have no lineage rows, so keep the id itself.
+      expanded.add(clusterId);
+    }
+  }
+  return [...expanded].sort();
+}

@@ -3932,8 +3932,8 @@ mz_internal.pg_class_all_databases:
                     →Arranged l12
   →Return
     →Map/Filter/Project
-      Project: #0..=#2, #8, #4, #8, #8, #9, #8, #5, #10, #6, #7, #11..=#20, #3
-      Map: 0, -1, 112, 0, false, false, false, false, false, 100, false, false, null
+      Project: #0..=#2, #8, #4, #8, #8..=#10, #8, #5, #11, #6, #7, #12..=#21, #3
+      Map: 0, 0, -1, 112, 0, false, false, false, false, false, 100, false, false, null
         →Union
           →Differential Join %1[#0] » %0:l7[#0]
             after %0:
@@ -4010,7 +4010,7 @@ mz_internal.pg_description_all_databases:
       →Differential Join %0:pg_class_all_databases[#2{relnamespace}] » %1[#0]
         →Arrange (#2{relnamespace})
           →Fused with Child Map/Filter/Project
-            Project: #1, #0, #2, #23
+            Project: #1, #0, #2, #24
               →Arranged mz_internal.pg_class_all_databases
                 Key: (#1{relname})
         →Arrange (#0)
@@ -4126,7 +4126,7 @@ mz_internal.pg_description_all_databases:
           →Delta Cross Join [%0:pg_class_all_databases[×] » %1[×] » %2[×]] [%1[×] » %0:pg_class_all_databases[×] » %2[×]] [%2[×] » %0:pg_class_all_databases[×] » %1[×]]
             →Arrange (empty key)
               →Fused with Child Map/Filter/Project
-                Project: #1, #23
+                Project: #1, #24
                   →Arranged mz_internal.pg_class_all_databases
                     Key: (#1{relname})
             →Arrange (empty key)
@@ -5889,7 +5889,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1037 rows)
+            →Constant (1039 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -10403,7 +10403,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1037 rows)
+            →Constant (1039 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -13737,7 +13737,7 @@ EXPLAIN SELECT * FROM "mz_internal"."pg_class_all_databases";
 ----
 Explained Query (fast path):
   →Map/Filter/Project
-    Project: #1, #0, #2..=#23
+    Project: #1, #0, #2..=#24
     →Indexed mz_internal.pg_class_all_databases (using mz_internal.pg_class_all_databases_ind)
 
 Used Indexes:
@@ -18008,8 +18008,8 @@ EXPLAIN SELECT * FROM "pg_catalog"."pg_class";
 ----
 Explained Query (fast path):
   →Map/Filter/Project
-    Project: #1, #0, #2..=#22
-    Filter: ((#23{database_name}) IS NULL OR (#23{database_name} = "materialize"))
+    Project: #1, #0, #2..=#23
+    Filter: ((#24{database_name}) IS NULL OR (#24{database_name} = "materialize"))
       →Indexed mz_internal.pg_class_all_databases (using mz_internal.pg_class_all_databases_ind)
 
 Used Indexes:
@@ -19893,8 +19893,8 @@ Explained Query:
       →Differential Join %0:pg_class_all_databases[#1{relnamespace}] » %1:pg_namespace_all_databases[#0{oid}]
         →Arrange (#1{relnamespace})
           →Fused with Child Map/Filter/Project
-            Project: #0, #2, #4, #11
-            Filter: ((#23{database_name}) IS NULL OR (#23{database_name} = "materialize"))
+            Project: #0, #2, #4, #12
+            Filter: ((#24{database_name}) IS NULL OR (#24{database_name} = "materialize"))
               →Arranged mz_internal.pg_class_all_databases
                 Key: (#1{relname})
         →Arrange (#0{oid})
@@ -19906,7 +19906,7 @@ Explained Query:
     cte l1 =
       →Fused with Child Map/Filter/Project
         Project: #0, #2, #4
-        Filter: ((#11{relkind} = "p") OR (#11{relkind} = "r")) AND ((#23{database_name}) IS NULL OR (#23{database_name} = "materialize"))
+        Filter: ((#12{relkind} = "p") OR (#12{relkind} = "r")) AND ((#24{database_name}) IS NULL OR (#24{database_name} = "materialize"))
           →Arranged mz_internal.pg_class_all_databases
             Key: (#1{relname})
     cte l2 =

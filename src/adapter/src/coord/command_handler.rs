@@ -49,6 +49,7 @@ use mz_sql::pure::{
     materialized_view_option_contains_temporal, purify_create_materialized_view_options,
 };
 use mz_sql::rbac;
+use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
     EndTransactionAction, NETWORK_POLICY, OwnedVarInput, STATEMENT_LOGGING_SAMPLE_RATE,
@@ -1264,6 +1265,12 @@ impl Coordinator {
             }
             _ => {}
         }
+        let application_name = ApplicationNameHint::from_str(ctx.session().application_name());
+        if let Some(labels) =
+            metrics::as_of_query_label_values(session_type, application_name, &stmt)
+        {
+            self.metrics.as_of_queries.with_label_values(&labels).inc();
+        }
 
         self.handle_execute_inner(stmt, params, ctx).await
     }
@@ -2271,7 +2278,7 @@ impl Coordinator {
         if let Some(ws) = watch_set {
             if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), ws) {
                 let _ = tx.send(Err(
-                    AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e),
+                    AdapterError::concurrent_dependency_drop_from_compute_lookup_error(e),
                 ));
                 return;
             }
