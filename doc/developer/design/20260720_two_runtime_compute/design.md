@@ -995,7 +995,6 @@ against a released differential-dataflow, with no fork and no `[patch.crates-io]
   `SharedReader`, the `Clone + Send` reader, which implements `TraceReader` and imports
   the arrangement into another scope with `import_frontier_core`. Every spine in
   `mz_compute::typedefs` is a `SharedSpine`, so any arrangement can be published.
-  Unattached, the wrapper costs one branch per trace call.
 * `mz_compute::shared_trace` is the Materialize glue: `Published`, the owner-facing
   publication point, which also mints the logical-only peer handle, and `adopt_trace`,
   which attaches an arrangement's trace to a point on the owning worker and takes the
