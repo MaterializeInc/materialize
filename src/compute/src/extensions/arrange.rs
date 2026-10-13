@@ -8,13 +8,12 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::arrangement::arrange_core;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::operators::arrange::arrangement::arrange_core_with_agent;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
@@ -22,6 +21,7 @@ use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COLUMNAR_MER
 use mz_dyncfg::ConfigSet;
 use mz_row_spine::ArcBatch;
 use mz_timely_util::containers::HeapSize;
+use mz_timely_util::shared_trace::SharedAgent;
 use timely::Container;
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::Stream;
@@ -83,7 +83,7 @@ pub trait MzArrange<'scope>: MzArrangeCore<'scope> {
     /// This operator arranges a stream of values into a shared trace, whose contents it maintains.
     /// This trace is current for all times marked completed in the output stream, and probing this stream
     /// is the correct way to determine that times in the shared trace are committed.
-    fn mz_arrange<Chu, Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
+    fn mz_arrange<Chu, Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, SharedAgent<Tr>>
     where
         Ba: Batcher<Time = Self::Timestamp> + 'static,
         Chu: ContainerBuilder<Container = Ba::Output>
@@ -92,7 +92,7 @@ pub trait MzArrange<'scope>: MzArrangeCore<'scope> {
         Bu: Builder<Time = Self::Timestamp, Input = Ba::Output, Output = Tr::Batch>,
         Tr: Trace + TraceReader<Time = Self::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize;
+        Arranged<'scope, SharedAgent<Tr>>: ArrangementSize;
 }
 
 /// Extension trait to arrange data.
@@ -112,7 +112,7 @@ pub trait MzArrangeCore<'scope> {
         self,
         pact: P,
         name: &str,
-    ) -> Arranged<'scope, TraceAgent<Tr>>
+    ) -> Arranged<'scope, SharedAgent<Tr>>
     where
         P: ParallelizationContract<Self::Timestamp, Self::Input>,
         Ba: Batcher<Time = Self::Timestamp> + 'static,
@@ -122,7 +122,7 @@ pub trait MzArrangeCore<'scope> {
         Bu: Builder<Time = Self::Timestamp, Input = Ba::Output, Output = Tr::Batch>,
         Tr: Trace + TraceReader<Time = Self::Timestamp> + 'static,
         Tr::Batch: Batch,
-        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize;
+        Arranged<'scope, SharedAgent<Tr>>: ArrangementSize;
 }
 
 impl<'scope, T, C> MzArrangeCore<'scope> for Stream<'scope, T, C>
@@ -137,7 +137,7 @@ where
         self,
         pact: P,
         name: &str,
-    ) -> Arranged<'scope, TraceAgent<Tr>>
+    ) -> Arranged<'scope, SharedAgent<Tr>>
     where
         P: ParallelizationContract<T, Self::Input>,
         Ba: Batcher<Time = T> + 'static,
@@ -147,11 +147,12 @@ where
         Bu: Builder<Time = T, Input = Ba::Output, Output = Tr::Batch>,
         Tr: Trace + TraceReader<Time = T> + 'static,
         Tr::Batch: Batch,
-        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
+        Arranged<'scope, SharedAgent<Tr>>: ArrangementSize,
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
         #[allow(clippy::disallowed_methods)]
-        arrange_core::<_, _, Chu, Ba, Bu, _>(self, pact, name).log_arrangement_size()
+        arrange_core_with_agent::<_, _, Chu, Ba, Bu, Tr, SharedAgent<Tr>>(self, pact, name)
+            .log_arrangement_size()
     }
 }
 
@@ -162,7 +163,7 @@ where
     V: ExchangeData,
     R: ExchangeData,
 {
-    fn mz_arrange<Chu, Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
+    fn mz_arrange<Chu, Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, SharedAgent<Tr>>
     where
         Ba: Batcher<Time = T> + 'static,
         Chu: ContainerBuilder<Container = Ba::Output>
@@ -171,7 +172,7 @@ where
         Bu: Builder<Time = T, Input = Ba::Output, Output = Tr::Batch>,
         Tr: Trace + TraceReader<Time = T> + 'static,
         Tr::Batch: Batch,
-        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
+        Arranged<'scope, SharedAgent<Tr>>: ArrangementSize,
     {
         let exchange = Exchange::new(move |update: &((K, V), T, R)| (update.0).0.hashed().into());
         self.mz_arrange_core::<_, Chu, Ba, Bu, _>(exchange, name)
@@ -190,7 +191,7 @@ where
         self,
         pact: P,
         name: &str,
-    ) -> Arranged<'scope, TraceAgent<Tr>>
+    ) -> Arranged<'scope, SharedAgent<Tr>>
     where
         P: ParallelizationContract<T, Self::Input>,
         Ba: Batcher<Time = T> + 'static,
@@ -200,7 +201,7 @@ where
         Bu: Builder<Time = T, Input = Ba::Output, Output = Tr::Batch>,
         Tr: Trace + TraceReader<Time = T> + 'static,
         Tr::Batch: Batch,
-        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
+        Arranged<'scope, SharedAgent<Tr>>: ArrangementSize,
     {
         self.inner.mz_arrange_core::<_, Chu, Ba, Bu, _>(pact, name)
     }
@@ -227,7 +228,7 @@ where
     K: ExchangeData + Hashable,
     R: ExchangeData,
 {
-    fn mz_arrange<Chu, Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, TraceAgent<Tr>>
+    fn mz_arrange<Chu, Ba, Bu, Tr>(self, name: &str) -> Arranged<'scope, SharedAgent<Tr>>
     where
         Ba: Batcher<Time = T> + 'static,
         Chu: ContainerBuilder<Container = Ba::Output>
@@ -236,7 +237,7 @@ where
         Bu: Builder<Time = T, Input = Ba::Output, Output = Tr::Batch>,
         Tr: Trace + TraceReader<Time = T> + 'static,
         Tr::Batch: Batch,
-        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
+        Arranged<'scope, SharedAgent<Tr>>: ArrangementSize,
     {
         self.0.map(|d| (d, ())).mz_arrange::<Chu, Ba, Bu, _>(name)
     }
@@ -255,7 +256,7 @@ where
         self,
         pact: P,
         name: &str,
-    ) -> Arranged<'scope, TraceAgent<Tr>>
+    ) -> Arranged<'scope, SharedAgent<Tr>>
     where
         P: ParallelizationContract<T, Self::Input>,
         Ba: Batcher<Time = T> + 'static,
@@ -265,7 +266,7 @@ where
         Bu: Builder<Time = T, Input = Ba::Output, Output = Tr::Batch>,
         Tr: Trace + TraceReader<Time = T> + 'static,
         Tr::Batch: Batch,
-        Arranged<'scope, TraceAgent<Tr>>: ArrangementSize,
+        Arranged<'scope, SharedAgent<Tr>>: ArrangementSize,
     {
         self.0
             .map(|d| (d, ()))
@@ -289,12 +290,12 @@ pub trait ArrangementSize {
 /// weak reference to it, so it needs the `Arc` underlying the spine's [`ArcBatch<B>`] batches;
 /// `batch.0` reaches straight through the newtype to it.
 fn log_arrangement_size_inner<'scope, B, Tr, L>(
-    arranged: Arranged<'scope, TraceAgent<Tr>>,
+    arranged: Arranged<'scope, SharedAgent<Tr>>,
     mut logic: L,
-) -> Arranged<'scope, TraceAgent<Tr>>
+) -> Arranged<'scope, SharedAgent<Tr>>
 where
     B: Batch + 'static,
-    Tr: TraceReader<Batch = ArcBatch<B>> + 'static,
+    Tr: Trace<Batch = ArcBatch<B>> + 'static,
     L: FnMut(&B) -> (usize, usize, usize) + 'static,
 {
     let scope = arranged.stream.scope();
@@ -305,7 +306,7 @@ where
         return arranged;
     };
     let operator_id = arranged.trace.operator().global_id;
-    let trace = Rc::downgrade(&arranged.trace.trace_box_unstable());
+    let trace = arranged.trace.observer();
 
     let (mut old_size, mut old_capacity, mut old_allocations) = (0isize, 0isize, 0isize);
 
@@ -336,22 +337,20 @@ where
                     }
                     output.session(&time).give_container(data);
                 });
-                let Some(trace) = trace.upgrade() else {
-                    // Invariant: `batches` holds no entries once the trace is gone. Each entry's
-                    // `Weak` keeps its batch's `ArcInner` allocation reserved, and the `retain` below
-                    // that would drop it is unreachable on this path, so the entries have to go
-                    // here. The upgrade cannot start succeeding again, hence clearing on every
-                    // activation that takes this path also covers batches that arrive on the
-                    // input afterwards.
-                    batches.clear();
-                    return;
-                };
-
-                trace.borrow().trace().map_batches(|batch| {
+                let live = trace.map_batches(|batch| {
                     batches
                         .entry(Arc::as_ptr(&batch.0))
                         .or_insert_with(|| (Arc::downgrade(&batch.0), logic(&batch.0)));
                 });
+                if !live {
+                    // Invariant: `batches` holds no entries once the trace is gone. Each entry's
+                    // `Weak` keeps its batch's `ArcInner` allocation reserved, and the `retain` below
+                    // that would drop it is unreachable on this path, so the entries have to go
+                    // here. The trace cannot come back, hence clearing on every activation that
+                    // takes this path also covers batches that arrive on the input afterwards.
+                    batches.clear();
+                    return;
+                }
 
                 let (mut size, mut capacity, mut allocations) = (0, 0, 0);
                 batches.retain(|_, (weak, cached)| {

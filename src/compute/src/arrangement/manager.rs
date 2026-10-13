@@ -15,12 +15,12 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use differential_dataflow::lattice::antichain_join;
-use differential_dataflow::operators::arrange::{Arranged, ShutdownButton, TraceAgent};
+use differential_dataflow::operators::arrange::{Arranged, ShutdownButton};
 use differential_dataflow::trace::cursor::Navigable;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
-use differential_dataflow::trace::{Batch, TraceReader};
+use differential_dataflow::trace::{Batch, Trace, TraceReader};
 use mz_repr::{Diff, GlobalId, Timestamp};
-use mz_timely_util::shared_trace::SharedReader;
+use mz_timely_util::shared_trace::{SharedAgent, SharedReader};
 use timely::PartialOrder;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::CapabilitySet;
@@ -217,9 +217,9 @@ where
     }
 }
 
-impl<Tr> PaddedTrace<TraceAgent<Tr>>
+impl<Tr> PaddedTrace<SharedAgent<Tr>>
 where
-    Tr: TraceReader<Time = Timestamp> + 'static,
+    Tr: Trace<Time = Timestamp> + 'static,
 {
     /// Import a trace restricted to a specific time interval `[since, until)`.
     pub fn import_frontier_core<'scope>(
@@ -229,7 +229,7 @@ where
         since: Antichain<Tr::Time>,
         until: Antichain<Tr::Time>,
     ) -> (
-        Arranged<'scope, TraceFrontier<TraceAgent<Tr>>>,
+        Arranged<'scope, TraceFrontier<SharedAgent<Tr>>>,
         ShutdownButton<CapabilitySet<Tr::Time>>,
     ) {
         self.trace.import_frontier_core(scope, name, since, until)
@@ -241,9 +241,9 @@ where
 ///
 /// The two variants share their batch type, so cursors over either are the same and dispatch costs
 /// one branch per trace call, not per record.
-pub enum IndexTrace<Tr: TraceReader<Time = Timestamp>> {
+pub enum IndexTrace<Tr: Trace<Time = Timestamp>> {
     /// A trace this runtime maintains.
-    Local(PaddedTrace<TraceAgent<Tr>>),
+    Local(PaddedTrace<SharedAgent<Tr>>),
     /// A trace the other runtime publishes. Its logical compaction is this runtime's hold on the
     /// publication, padded as the local variant is.
     Shared(PaddedTrace<SharedReader<Tr::Batch>>),
@@ -254,7 +254,7 @@ pub type OksTrace = IndexTrace<RowRowSpine<Timestamp, Diff>>;
 /// The `errs` trace of an index.
 pub type ErrsTrace = IndexTrace<ErrSpine<Timestamp, Diff>>;
 
-impl<Tr: TraceReader<Time = Timestamp>> Clone for IndexTrace<Tr> {
+impl<Tr: Trace<Time = Timestamp>> Clone for IndexTrace<Tr> {
     fn clone(&self) -> Self {
         match self {
             IndexTrace::Local(trace) => IndexTrace::Local(trace.clone()),
@@ -265,7 +265,7 @@ impl<Tr: TraceReader<Time = Timestamp>> Clone for IndexTrace<Tr> {
 
 impl<Tr> TraceReader for IndexTrace<Tr>
 where
-    Tr: TraceReader<Time = Timestamp>,
+    Tr: Trace<Time = Timestamp>,
     Tr::Batch: Clone + 'static,
 {
     type Time = Timestamp;
@@ -316,7 +316,7 @@ where
 
 impl<Tr> IndexTrace<Tr>
 where
-    Tr: TraceReader<Time = Timestamp> + 'static,
+    Tr: Trace<Time = Timestamp> + 'static,
     Tr::Batch: Batch + Navigable + Clone + 'static,
 {
     /// Imports the trace into `scope`, restricted to `[since, until)`.

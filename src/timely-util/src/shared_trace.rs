@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! A [`Trace`] wrapper whose contents are readable from other threads.
+//! A trace agent whose trace can be published to readers on other threads.
 //!
 //! An arrangement's trace is owned by the worker that arranges into it and is not `Send`: its
 //! handles are `Rc<RefCell<..>>`, and its spine does merge work whenever it is touched, including
@@ -16,17 +16,19 @@
 //! though, are immutable and reference counted, so a chain of them plus the trace's frontiers is a
 //! consistent, self-describing view that any thread can read.
 //!
-//! [`SharedSpine`] is a [`Trace`] that owns an inner trace on its worker's thread and, once
-//! [attached](SharedSpine::attach) to a [`Shared`] publication point, mirrors the inner trace's
-//! batch chain, `upper`, and compaction frontiers into the point after every mutation. The lock is
-//! held for a chain rebuild, one reference count per spine level, never for merge work.
+//! [`SharedAgent`] is the agent arranging operators return in place of differential's
+//! `TraceAgent`. Its [`SharedBox`] owns a plain spine on the arranging worker and its
+//! [`SharedWriter`] feeds it. Same-thread agents read the spine directly, as `TraceAgent`s do.
+//! Once [published](SharedAgent::publish) to a [`Shared`] point, the box mirrors the spine's batch
+//! chain, `upper`, and compaction frontiers into the point after every mutation. The lock is held
+//! for a chain swap, never for merge work. A trace nobody published pays no mirror cost and takes
+//! no lock.
 //!
-//! [`SharedReader`]s on any thread read the view through [`TraceReader`], register compaction
-//! holds against it, and [import](SharedReader::import_frontier_core) it as an arrangement. Their
-//! holds accumulate in the point as differential's `TraceBox` accumulates its agents' holds, and the
-//! writer applies the meet of its local `TraceBox` frontier and the readers' to the inner trace. A
-//! reader that moves the meet of the holds wakes the writer so the inner trace learns of it
-//! without waiting for the arrangement's next input.
+//! Every handle holds the trace through one accounting. While unpublished, the box keeps the holds
+//! of its same-thread agents, as differential's `TraceBox` does. Publishing moves them into the
+//! point the trace first publishes to, its home, where [`SharedReader`]s on any thread register
+//! theirs next to them. The box applies the meet to the spine. A reader that moves the meet wakes
+//! the writer so the spine learns of it without waiting for the arrangement's next input.
 //!
 //! Logical compaction decides which times stay distinguishable, physical compaction which batches
 //! may merge. A reader needs distinguishability at the times it reads, and a batch boundary at each
@@ -36,13 +38,17 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::rc::{Rc, Weak as RcWeak};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::logging::{Logger, TraceShare};
+use differential_dataflow::operators::arrange::{
+    Agent, AgentWriter, Arranged, ShutdownButton, TraceReplayInstruction,
+};
 use differential_dataflow::trace::cursor::Navigable;
 use differential_dataflow::trace::wrappers::frontier::{BatchFrontier, TraceFrontier};
-use differential_dataflow::trace::{Batch, BatchReader, ExertionLogic, Trace, TraceReader};
+use differential_dataflow::trace::{Batch, BatchReader, Trace, TraceReader};
 use timely::PartialOrder;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::CapabilitySet;
@@ -50,6 +56,7 @@ use timely::dataflow::operators::generic::{OperatorInfo, source};
 use timely::order::TotalOrder;
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
+use timely::scheduling::Activator;
 use timely::scheduling::activate::SyncActivator;
 
 /// A replay instruction for an importer's queue.
@@ -79,28 +86,33 @@ impl<B: BatchReader> ImportQueue<B> {
     }
 }
 
-/// The view readers see, plus the holds they register.
+/// The view readers see, plus the holds every handle registers.
 struct State<B: BatchReader> {
-    /// The inner trace's batches in time order, as `map_batches` yields them.
+    /// The spine's batches in time order, as `map_batches` yields them.
     chain: Vec<B>,
     /// Upper of the last batch in `chain`, or the minimum time for an empty chain.
     upper: Antichain<B::Time>,
-    /// The inner trace's logical compaction frontier. Reads at times not beyond it are not accurate.
+    /// The spine's logical compaction frontier. Reads at times not beyond it are not accurate.
     logical: Antichain<B::Time>,
-    /// The frontier the writer asked for, before meeting the readers' holds.
+    /// The frontier the publishing trace's same-thread agents ask for, before meeting the readers'
+    /// holds.
     ///
-    /// Equal to `logical` when nothing holds the trace back. Above it by exactly the amount a
+    /// Equal to `logical` when no reader holds the trace back. Above it by exactly the amount a
     /// reader is keeping the writer from compacting, which is the coupling this publication
     /// introduces and the only place it is observable.
     writer_logical: Antichain<B::Time>,
-    /// The inner trace's physical compaction frontier.
+    /// The spine's physical compaction frontier.
     physical: Antichain<B::Time>,
-    /// Readers' logical holds.
-    remote_logical: MutableAntichain<B::Time>,
-    /// Readers' physical holds.
-    remote_physical: MutableAntichain<B::Time>,
+    /// The logical holds of every handle on this point. On the home point of a published trace that
+    /// includes the trace's same-thread agents.
+    holds_logical: MutableAntichain<B::Time>,
+    /// The physical holds, as `holds_logical`.
+    holds_physical: MutableAntichain<B::Time>,
+    /// The part of `holds_logical` the publishing trace's same-thread agents registered. Read only
+    /// to report `writer_logical`.
+    local_logical: MutableAntichain<B::Time>,
     queues: Vec<Weak<ImportQueue<B>>>,
-    /// Wakes the writer's arrange operator so a changed hold reaches the inner trace.
+    /// Wakes the writer's arrange operator so a changed hold reaches the spine.
     writer_activator: Option<SyncActivator>,
     /// How many writers have attached. The latest one owns `writer_activator`.
     writers: u64,
@@ -122,11 +134,11 @@ impl<B: BatchReader> State<B> {
     }
 }
 
-/// A publication point: the view of one [`SharedSpine`] and the holds its readers register.
+/// A publication point: the view of one published trace and the holds its handles register.
 ///
 /// Created unattached, with an empty chain and frontiers at the minimum time. Readers may register
-/// and import before a writer [attaches](SharedSpine::attach). Their imports produce nothing until
-/// then and are seeded from the writer's chain at attachment.
+/// and import before a trace [publishes](SharedAgent::publish) to it. Their imports produce nothing
+/// until then and are seeded from the trace's chain at attachment.
 pub struct Shared<B: BatchReader> {
     state: Mutex<State<B>>,
 }
@@ -155,8 +167,9 @@ impl<B: BatchReader> Shared<B> {
                 logical: minimum.clone(),
                 writer_logical: minimum.clone(),
                 physical: minimum,
-                remote_logical: MutableAntichain::new(),
-                remote_physical: MutableAntichain::new(),
+                holds_logical: MutableAntichain::new(),
+                holds_physical: MutableAntichain::new(),
+                local_logical: MutableAntichain::new(),
                 queues: Vec::new(),
                 writer_activator: None,
                 writers: 0,
@@ -178,9 +191,9 @@ impl<B: BatchReader> Shared<B> {
         self.lock().logical.clone()
     }
 
-    /// The published `since`, and the logical compaction frontier the writer asked for before the
-    /// readers' holds were met into it, read together. The second is at or beyond the first, and
-    /// equal to it when no reader holds this point.
+    /// The published `since`, and the logical compaction frontier the publishing trace's own
+    /// agents asked for before the readers' holds were met into it, read together. The second is
+    /// at or beyond the first, and equal to it when no reader holds this point.
     pub fn logical_frontiers(&self) -> (Antichain<B::Time>, Antichain<B::Time>) {
         let state = self.lock();
         (state.logical.clone(), state.writer_logical.clone())
@@ -192,14 +205,15 @@ impl<B: BatchReader> Shared<B> {
         (state.logical.clone(), state.upper.clone())
     }
 
-    /// The meet of the readers' logical holds. Empty when no reader holds.
+    /// The meet of every logical hold on this point, the publishing trace's agents included.
+    /// Empty when nothing holds.
     pub fn logical_holds(&self) -> Antichain<B::Time> {
-        self.lock().remote_logical.frontier().to_owned()
+        self.lock().holds_logical.frontier().to_owned()
     }
 
-    /// The meet of the readers' physical holds. Empty when no reader holds.
+    /// The meet of every physical hold on this point, as [`Self::logical_holds`].
     pub fn physical_holds(&self) -> Antichain<B::Time> {
-        self.lock().remote_physical.frontier().to_owned()
+        self.lock().holds_physical.frontier().to_owned()
     }
 
     /// A reader holding logical compaction at the published `since` and physical compaction at the
@@ -208,8 +222,8 @@ impl<B: BatchReader> Shared<B> {
         let mut state = self.lock();
         let logical = state.logical.clone();
         let physical = state.upper.clone();
-        adjust(&mut state.remote_logical, &Antichain::new(), &logical);
-        adjust(&mut state.remote_physical, &Antichain::new(), &physical);
+        adjust(&mut state.holds_logical, &[], &logical);
+        adjust(&mut state.holds_physical, &[], &physical);
         drop(state);
         SharedReader {
             shared: Arc::clone(self),
@@ -232,8 +246,8 @@ impl<B: BatchReader> Shared<B> {
             return Err(state.logical.clone());
         }
         let physical = state.upper.clone();
-        adjust(&mut state.remote_logical, &Antichain::new(), as_of);
-        adjust(&mut state.remote_physical, &Antichain::new(), &physical);
+        adjust(&mut state.holds_logical, &[], as_of);
+        adjust(&mut state.holds_physical, &[], &physical);
         drop(state);
         Ok(SharedReader {
             shared: Arc::clone(self),
@@ -251,7 +265,7 @@ impl<B: BatchReader> Shared<B> {
     pub fn reader_at_least(self: &Arc<Self>, as_of: &Antichain<B::Time>) -> SharedReader<B> {
         let mut state = self.lock();
         let logical = as_of.join(&state.logical);
-        adjust(&mut state.remote_logical, &Antichain::new(), &logical);
+        adjust(&mut state.holds_logical, &[], &logical);
         drop(state);
         SharedReader {
             shared: Arc::clone(self),
@@ -292,18 +306,14 @@ fn chain_through<B: BatchReader + Clone>(chain: &[B], upper: AntichainRef<B::Tim
 ///
 /// The writer reads the readers' holds only when it runs, so a change that leaves the frontier in
 /// place gives it nothing to do and needs no wake.
-fn adjust<T: Timestamp>(
-    accumulated: &mut MutableAntichain<T>,
-    lower: &Antichain<T>,
-    upper: &Antichain<T>,
-) -> bool {
+fn adjust<T: Timestamp>(accumulated: &mut MutableAntichain<T>, lower: &[T], upper: &[T]) -> bool {
     let before = accumulated.frontier().to_owned();
     accumulated.update_iter(upper.iter().cloned().map(|time| (time, 1)));
     accumulated.update_iter(lower.iter().cloned().map(|time| (time, -1)));
     accumulated.frontier() != before.borrow()
 }
 
-/// What a [`SharedSpine`] publishes into once attached.
+/// A point a [`SharedBox`] publishes into.
 struct Attachment<B: BatchReader> {
     shared: Arc<Shared<B>>,
     /// Which writer of `shared` this trace is, counting from one.
@@ -312,41 +322,279 @@ struct Attachment<B: BatchReader> {
     on_seal: Box<dyn Fn()>,
 }
 
-/// A [`Trace`] that publishes its contents for [`SharedReader`]s once attached.
-///
-/// Unattached, it delegates to the inner trace and does no locking. It lives on the arranging
-/// worker's thread only.
-pub struct SharedSpine<Tr: Trace> {
-    inner: Tr,
-    /// The publication points this trace backs. One trace may be published under several ids, as
-    /// the logging dataflow's single shared error arrangement is, so this is a list rather than a
-    /// slot: attaching a second point must not silently detach the first.
-    attachment: RefCell<Vec<Attachment<Tr::Batch>>>,
-    /// The frontiers the local `TraceBox` last requested. The inner trace gets their meet with the
-    /// readers' holds.
-    local_logical: Antichain<Tr::Time>,
-    local_physical: Antichain<Tr::Time>,
-    chain_scratch: Vec<Tr::Batch>,
+impl<B: BatchReader> Attachment<B> {
+    /// Whether anything besides this trace references the point. Minting a reader needs a
+    /// reference, so an unreferenced point cannot gain one while the trace runs.
+    fn reachable(&self) -> bool {
+        Arc::strong_count(&self.shared) > 1
+    }
 }
 
-impl<Tr: Trace> SharedSpine<Tr> {
-    /// Attaches this trace to `shared`, in addition to any points it is already attached to.
+/// The points a published trace backs.
+struct Publication<B: BatchReader> {
+    /// The first point the trace published to. Its holds include the trace's same-thread agents.
+    home: Attachment<B>,
+    /// Further points over the same trace, as an index re-exporting another's arrangement
+    /// publishes. They carry their readers' holds only.
+    others: Vec<Attachment<B>>,
+    chain_scratch: Vec<B>,
+}
+
+/// The shared state behind a [`SharedAgent`]: the spine and the holds on it.
+///
+/// It lives on the arranging worker's thread only.
+pub struct SharedBox<Tr: Trace> {
+    trace: Tr,
+    /// Every same-thread agent's logical hold while the trace is unpublished. Empty once
+    /// published, when they live in the home point.
+    logical: MutableAntichain<Tr::Time>,
+    /// The physical holds, as `logical`.
+    physical: MutableAntichain<Tr::Time>,
+    publication: Option<Publication<Tr::Batch>>,
+}
+
+impl<Tr: Trace> SharedBox<Tr> {
+    fn new(mut trace: Tr) -> Self {
+        // As differential's `TraceBox`, the trace's own frontiers become the first agent's holds.
+        let mut logical = MutableAntichain::new();
+        logical.update_iter(
+            trace
+                .get_logical_compaction()
+                .iter()
+                .cloned()
+                .map(|t| (t, 1)),
+        );
+        let mut physical = MutableAntichain::new();
+        physical.update_iter(
+            trace
+                .get_physical_compaction()
+                .iter()
+                .cloned()
+                .map(|t| (t, 1)),
+        );
+        SharedBox {
+            trace,
+            logical,
+            physical,
+            publication: None,
+        }
+    }
+
+    /// The spine, for inspecting its batches.
+    pub fn trace(&self) -> &Tr {
+        &self.trace
+    }
+
+    fn adjust_logical(&mut self, lower: AntichainRef<Tr::Time>, upper: AntichainRef<Tr::Time>) {
+        if self.publication.is_none() {
+            adjust(&mut self.logical, &lower[..], &upper[..]);
+            self.trace.set_logical_compaction(self.logical.frontier());
+            return;
+        }
+        self.sync_holds(|state| {
+            adjust(&mut state.local_logical, &lower[..], &upper[..]);
+            adjust(&mut state.holds_logical, &lower[..], &upper[..])
+        });
+    }
+
+    fn adjust_physical(&mut self, lower: AntichainRef<Tr::Time>, upper: AntichainRef<Tr::Time>) {
+        if self.publication.is_none() {
+            adjust(&mut self.physical, &lower[..], &upper[..]);
+            self.trace.set_physical_compaction(self.physical.frontier());
+            return;
+        }
+        // Compute's maintenance sets this on every trace every few milliseconds, mostly to the
+        // frontier it already has, and publishing then costs locks and clones per trace. A moved
+        // hold introduces pending merges and is published, and a reader's moved hold reaches the
+        // spine through `exert`, which the hold's activation schedules.
+        let moved = self.sync_holds(|state| adjust(&mut state.holds_physical, &lower[..], &upper[..]));
+        if moved {
+            self.publish_chain(None);
+        }
+    }
+
+    /// Applies `change` to the home point's holds, and when it reports the meet moved, applies the
+    /// meet of every point's holds to the spine. Returns whether it applied. Unpublished, it does
+    /// nothing.
+    fn sync_holds(&mut self, change: impl FnOnce(&mut State<Tr::Batch>) -> bool) -> bool {
+        let Some(publication) = &self.publication else {
+            return false;
+        };
+        let current_logical = self.trace.get_logical_compaction().to_owned();
+        // Reading the holds and publishing the frontier they produce happen under one acquisition,
+        // and the spine is touched only afterwards. A reader that registers before us is counted
+        // in the meet. One that registers after us sees the frontier we are about to apply, and
+        // `reader_at` refuses an `as_of` below it. So no reader is ever admitted at a time the
+        // trace is about to coalesce away, which a read-then-release-then-apply order permits for
+        // the length of the merge it runs.
+        //
+        // Publishing the target before applying it means the point can briefly advertise a `since`
+        // ahead of the spine's own. That refuses a reader the trace could still have served, which
+        // is the safe direction. The reverse admits a reader the trace cannot serve.
+        //
+        // Points are locked in address order, so two traces sharing a pair of points cannot
+        // deadlock. The critical section is antichain arithmetic, never merge work.
+        let mut ordered: Vec<(bool, &Arc<Shared<Tr::Batch>>)> =
+            std::iter::once((true, &publication.home.shared))
+                .chain(publication.others.iter().map(|a| (false, &a.shared)))
+                .collect();
+        ordered.sort_unstable_by_key(|(_, shared)| Arc::as_ptr(shared));
+        let mut guards: Vec<(bool, MutexGuard<'_, State<Tr::Batch>>)> = ordered
+            .into_iter()
+            .map(|(home, shared)| (home, shared.lock()))
+            .collect();
+        let home = guards
+            .iter_mut()
+            .find(|(home, _)| *home)
+            .map(|(_, state)| state)
+            .expect("the home point is locked");
+        if !change(home) {
+            return false;
+        }
+        let requested = home.local_logical.frontier().to_owned();
+        // The meet runs across every point, since a reader of any of them holds this one trace.
+        let mut logical = Antichain::new();
+        let mut physical = Antichain::new();
+        for (_, state) in guards.iter() {
+            logical = logical.meet(&state.holds_logical.frontier().to_owned());
+            physical = physical.meet(&state.holds_physical.frontier().to_owned());
+        }
+        // The join keeps the spine from rewinding, which differential's spine would accept without
+        // complaint: a hold below the spine's `since`, as a reader registered on a placeholder may
+        // place, cannot be honoured, so it constrains nothing.
+        let logical = logical.join(&current_logical);
+        for (_, state) in guards.iter_mut() {
+            state.logical = logical.clone();
+            state.writer_logical = requested.clone();
+        }
+        drop(guards);
+
+        if self.trace.get_logical_compaction() != logical.borrow() {
+            self.trace.set_logical_compaction(logical.borrow());
+        }
+        // The spine refuses to rewind its physical frontier. A reader registers its physical hold
+        // at the chain coverage it was seeded with, which is at or beyond the spine's frontier, so
+        // the meet regresses only for a reader registered on a placeholder. The guard checks it.
+        if self.trace.get_physical_compaction() != physical.borrow()
+            && PartialOrder::less_equal(&self.trace.get_physical_compaction(), &physical.borrow())
+        {
+            self.trace.set_physical_compaction(physical.borrow());
+        }
+        true
+    }
+
+    /// Mirrors the spine's chain and frontiers into every reachable point.
     ///
-    /// Publishes the current chain and frontiers, and seeds every importer already registered on
-    /// `shared` with them. `activator` must schedule the operator that drives this trace: a reader
-    /// moves its hold from another thread, and only that operator's next `exert` applies it to the
-    /// inner trace. `on_seal` fires after every publish that advanced `upper`, on this thread.
+    /// Also enqueues `arrived`, a batch the spine just accepted, to every importer that was live
+    /// under the lock that swapped in the chain containing it. A reader registering concurrently
+    /// therefore either seeds a chain containing that batch or is in that snapshot and receives it
+    /// through its queue, never neither. The push itself happens after the lock is released.
+    fn publish_chain(&mut self, arrived: Option<&Tr::Batch>) {
+        let Some(publication) = &mut self.publication else {
+            return;
+        };
+        // A point only this trace references has no reader and no owner left. Publishing into it
+        // would cost a chain clone, a lock, and an `on_seal` per mutation for as long as the trace
+        // lives, which for a point published over another collection's trace outlasts the point's
+        // own collection.
+        publication.others.retain(Attachment::reachable);
+        if !publication.home.reachable() && publication.others.is_empty() {
+            self.unpublish();
+            return;
+        }
+        let chain = &mut publication.chain_scratch;
+        chain.clear();
+        self.trace.map_batches(|batch| chain.push(batch.clone()));
+        let upper = chain_upper::<Tr::Batch>(chain);
+        let logical = self.trace.get_logical_compaction().to_owned();
+        let physical = self.trace.get_physical_compaction().to_owned();
+
+        let attachments = std::iter::once(&publication.home).chain(publication.others.iter());
+        for attachment in attachments.filter(|a| a.reachable()) {
+            // Built before the lock and swapped in, so neither the allocation nor the old chain's
+            // reference count drops happen while the lock is held.
+            let mut next = chain.clone();
+            let (advanced, live) = {
+                let mut state = attachment.shared.lock();
+                std::mem::swap(&mut state.chain, &mut next);
+                let advanced = state.upper != upper;
+                state.upper = upper.clone();
+                state.logical = logical.clone();
+                state.physical = physical.clone();
+                let live = if arrived.is_some() {
+                    state.live_queues()
+                } else {
+                    Vec::new()
+                };
+                (advanced, live)
+            };
+            drop(next);
+
+            if let Some(batch) = arrived {
+                for queue in &live {
+                    queue.push([
+                        Replay::Batch(batch.clone()),
+                        Replay::Frontier(upper.clone()),
+                    ]);
+                    queue.activate();
+                }
+            }
+            if advanced {
+                (attachment.on_seal)();
+            }
+        }
+        chain.clear();
+    }
+
+    /// Takes the holds back from a home point nothing else references and stops publishing.
     ///
-    /// Takes `&self` because the trace is reached through `TraceAgent::trace_box_unstable`, which
-    /// exposes it by shared reference.
-    pub fn attach(
-        &self,
+    /// No reader references the point, so every hold on it is a same-thread agent's.
+    fn unpublish(&mut self) {
+        let Some(publication) = self.publication.take() else {
+            return;
+        };
+        let mut state = publication.home.shared.lock();
+        let logical: Vec<_> = state.holds_logical.updates().cloned().collect();
+        let physical: Vec<_> = state.holds_physical.updates().cloned().collect();
+        drop(state);
+        self.logical.update_iter(logical);
+        self.physical.update_iter(physical);
+    }
+
+    /// Publishes this trace to `shared`, in addition to any points it already backs.
+    ///
+    /// Mirrors the current chain and frontiers, and seeds every importer already registered on
+    /// `shared` with them. The first point a trace publishes to becomes its home and takes over the
+    /// holds of the trace's same-thread agents. `activator` must schedule the operator that drives
+    /// this trace: a reader moves its hold from another thread, and only that operator's next
+    /// `exert` applies it to the spine. `on_seal` fires after every publish that advanced `upper`,
+    /// on this thread.
+    fn attach(
+        &mut self,
         shared: Arc<Shared<Tr::Batch>>,
         activator: SyncActivator,
         on_seal: impl Fn() + 'static,
     ) {
+        if let Some(publication) = &mut self.publication {
+            let attached = std::iter::once(&mut publication.home)
+                .chain(publication.others.iter_mut())
+                .find(|attached| Arc::ptr_eq(&attached.shared, &shared));
+            if let Some(attached) = attached {
+                // Several points over one trace is expected, the logging error arrangement being
+                // published under every log id. The same point twice is not: it would publish the
+                // chain there twice per mutation and fire two `on_seal`s per seal, and keeping the
+                // newest callback discards one whose loss costs a lost wakeup.
+                mz_ore::soft_assert_or_log!(
+                    false,
+                    "trace re-attached to a publication point it already backs"
+                );
+                attached.on_seal = Box::new(on_seal);
+                return;
+            }
+        }
+        let home = self.publication.is_none();
         let mut chain = Vec::new();
-        self.inner.map_batches(|batch| chain.push(batch.clone()));
+        self.trace.map_batches(|batch| chain.push(batch.clone()));
         let upper = chain_upper::<Tr::Batch>(&chain);
         let (writer, live) = {
             let mut state = shared.lock();
@@ -355,13 +603,15 @@ impl<Tr: Trace> SharedSpine<Tr> {
             let writer = state.writers;
             state.chain = chain.clone();
             state.upper = upper.clone();
-            // The frontiers the `TraceReader` impl below last saw. Reading them from `inner` here
-            // would need `&mut`. They equal the inner trace's unless readers of another point this
-            // trace backs hold it lower, and then this point claims the higher frontier, which
-            // refuses readers the trace could still serve but never admits one it cannot.
-            state.logical = self.local_logical.clone();
-            state.writer_logical = self.local_logical.clone();
-            state.physical = self.local_physical.clone();
+            state.logical = self.trace.get_logical_compaction().to_owned();
+            state.physical = self.trace.get_physical_compaction().to_owned();
+            if home {
+                let logical: Vec<_> = self.logical.updates().cloned().collect();
+                let physical: Vec<_> = self.physical.updates().cloned().collect();
+                state.local_logical.update_iter(logical.iter().cloned());
+                state.holds_logical.update_iter(logical);
+                state.holds_physical.update_iter(physical);
+            }
             // An importer seeded by an earlier writer has acknowledged that writer's frontiers, and
             // this trace's chain regresses below them, which an importer cannot follow: a batch
             // straddling its acknowledged frontier panics its capability downgrade. Such an
@@ -382,170 +632,62 @@ impl<Tr: Trace> SharedSpine<Tr> {
             );
             queue.activate();
         }
-        let entry = Attachment {
-            shared: Arc::clone(&shared),
+        let attachment = Attachment {
+            shared,
             writer,
             on_seal: Box::new(on_seal),
         };
-        let mut attachments = self.attachment.borrow_mut();
-        match attachments
-            .iter()
-            .position(|attached| Arc::ptr_eq(&attached.shared, &shared))
-        {
-            Some(index) => {
-                // Several points over one trace is expected, the logging error arrangement being
-                // published under every log id. The same point twice is not: it would publish the
-                // chain there twice per mutation and fire two `on_seal`s per seal, and keeping the
-                // newest entry discards a callback whose loss costs a lost wakeup.
-                mz_ore::soft_assert_or_log!(
-                    false,
-                    "trace re-attached to a publication point it already backs"
-                );
-                attachments[index] = entry;
+        match &mut self.publication {
+            Some(publication) => publication.others.push(attachment),
+            None => {
+                self.logical = MutableAntichain::new();
+                self.physical = MutableAntichain::new();
+                self.publication = Some(Publication {
+                    home: attachment,
+                    others: Vec::new(),
+                    chain_scratch: Vec::new(),
+                });
             }
-            None => attachments.push(entry),
         }
+        // Holds readers registered on the point before it was attached take effect now.
+        self.sync_holds(|_| true);
     }
 
-    /// Mirrors the inner trace's frontiers into the view.
-    fn publish_frontiers(&mut self) {
-        let attachments = self.attachment.borrow();
-        if attachments.is_empty() {
+    fn insert(&mut self, batch: Tr::Batch) {
+        if self.publication.is_none() {
+            self.trace.insert(batch);
             return;
         }
-        let logical = self.inner.get_logical_compaction().to_owned();
-        let physical = self.inner.get_physical_compaction().to_owned();
-        for attachment in attachments.iter() {
+        self.trace.insert(batch.clone());
+        self.publish_chain(Some(&batch));
+    }
+
+    fn exert(&mut self) {
+        if self.publication.is_none() {
+            self.trace.exert();
+            return;
+        }
+        self.sync_holds(|_| true);
+        self.trace.exert();
+        self.publish_chain(None);
+    }
+}
+
+impl<Tr: Trace> Drop for SharedBox<Tr> {
+    fn drop(&mut self) {
+        // NOTE: Readers keep the `upper` this trace last published rather than advancing to the
+        // empty frontier. A dropped trace says nothing about the times past its `upper`, and
+        // completing would present them as empty. An importing dataflow is dropped with
+        // `drop_dataflow`, which does not need its inputs to complete.
+        let Some(publication) = self.publication.take() else {
+            return;
+        };
+        for attachment in std::iter::once(publication.home).chain(publication.others) {
             let mut state = attachment.shared.lock();
-            state.logical = logical.clone();
-            state.physical = physical.clone();
-        }
-    }
-
-    /// Mirrors the inner trace's chain and frontiers into the view.
-    ///
-    /// Also enqueues `arrived`, a batch the inner trace just accepted, to every importer that was
-    /// live under the lock that swapped in the chain containing it. A reader registering
-    /// concurrently therefore either seeds a chain containing that batch or is in that snapshot and
-    /// receives it through its queue, never neither. The push itself happens after the lock is
-    /// released.
-    fn publish_chain(&mut self, arrived: Option<Tr::Batch>) {
-        self.detach_unreachable();
-        let attachments = self.attachment.borrow();
-        if attachments.is_empty() {
-            return;
-        }
-        let chain = &mut self.chain_scratch;
-        chain.clear();
-        self.inner.map_batches(|batch| chain.push(batch.clone()));
-        let upper = chain_upper::<Tr::Batch>(chain);
-        let logical = self.inner.get_logical_compaction().to_owned();
-        let physical = self.inner.get_physical_compaction().to_owned();
-
-        for attachment in attachments.iter() {
-            // Built before the lock and swapped in, so neither the allocation nor the old chain's
-            // reference count drops happen while the lock is held.
-            let mut next = chain.clone();
-            let (advanced, live) = {
-                let mut state = attachment.shared.lock();
-                std::mem::swap(&mut state.chain, &mut next);
-                let advanced = state.upper != upper;
-                state.upper = upper.clone();
-                state.logical = logical.clone();
-                state.physical = physical.clone();
-                let live = if arrived.is_some() {
-                    state.live_queues()
-                } else {
-                    Vec::new()
-                };
-                (advanced, live)
-            };
-            drop(next);
-
-            if let Some(batch) = &arrived {
-                for queue in &live {
-                    queue.push([
-                        Replay::Batch(batch.clone()),
-                        Replay::Frontier(upper.clone()),
-                    ]);
-                    queue.activate();
-                }
+            // A later writer owns the activator once it attaches.
+            if state.writers == attachment.writer {
+                state.writer_activator = None;
             }
-            if advanced {
-                (attachment.on_seal)();
-            }
-        }
-        chain.clear();
-    }
-
-    /// Detaches every point that only this trace still references.
-    ///
-    /// Such a point has no reader and no owner left, and minting a reader needs a reference to the
-    /// point, so no other thread can revive it while this runs. Publishing into it would cost a
-    /// chain clone, a lock, and an `on_seal` per mutation for as long as this trace lives, which
-    /// for a point published over another collection's trace outlasts the point's own collection.
-    fn detach_unreachable(&self) {
-        self.attachment
-            .borrow_mut()
-            .retain(|attached| Arc::strong_count(&attached.shared) > 1);
-    }
-
-    /// Applies the meet of the local and the readers' holds to the inner trace.
-    fn apply_holds(&mut self) {
-        let current_logical = self.inner.get_logical_compaction().to_owned();
-        let attachment = self.attachment.borrow();
-        // Reading the holds and publishing the frontier they produce happen under one acquisition,
-        // and the inner trace is touched only afterwards. A reader that registers before us is
-        // counted in the meet. One that registers after us sees the frontier we are about to apply,
-        // and `reader_at` refuses an `as_of` below it. So no reader is ever admitted at a time the
-        // trace is about to coalesce away, which a read-then-release-then-apply order permits for
-        // the length of the merge it runs.
-        //
-        // Publishing the target before applying it means the point can briefly advertise a `since`
-        // ahead of the trace's own. That refuses a reader the trace could still have served, which
-        // is the safe direction. The reverse admits a reader the trace cannot serve.
-        //
-        // Points are locked in address order, so two traces sharing a pair of points cannot
-        // deadlock. The critical section is antichain arithmetic, never merge work.
-        let mut ordered: Vec<_> = attachment.iter().collect();
-        ordered.sort_unstable_by_key(|attached| Arc::as_ptr(&attached.shared));
-        let mut guards: Vec<_> = ordered
-            .iter()
-            .map(|attached| attached.shared.lock())
-            .collect();
-
-        // The meet runs across every point, since a reader of any of them holds this one trace.
-        let mut remote_logical = Antichain::new();
-        let mut remote_physical = Antichain::new();
-        for state in guards.iter() {
-            remote_logical = remote_logical.meet(&state.remote_logical.frontier().to_owned());
-            remote_physical = remote_physical.meet(&state.remote_physical.frontier().to_owned());
-        }
-        // The empty antichain is the identity of `meet`: a side with no holds constrains nothing.
-        // The join keeps the trace from rewinding, which differential's spine would accept without
-        // complaint: a hold below the trace's `since` cannot be honoured, so it constrains nothing.
-        let logical = self
-            .local_logical
-            .meet(&remote_logical)
-            .join(&current_logical);
-        for state in guards.iter_mut() {
-            state.logical = logical.clone();
-            state.writer_logical = self.local_logical.clone();
-        }
-        drop(guards);
-        drop(attachment);
-
-        if self.inner.get_logical_compaction() != logical.borrow() {
-            self.inner.set_logical_compaction(logical.borrow());
-        }
-        let physical = self.local_physical.meet(&remote_physical);
-        // The spine refuses to rewind its physical frontier. A reader registers its physical hold
-        // at the chain coverage it was seeded with, which is at or beyond the spine's frontier, so
-        // the meet cannot regress. The guard checks it.
-        if self.inner.get_physical_compaction() != physical.borrow()
-            && PartialOrder::less_equal(&self.inner.get_physical_compaction(), &physical.borrow())
-        {
-            self.inner.set_physical_compaction(physical.borrow());
         }
     }
 }
@@ -558,113 +700,386 @@ fn chain_upper<B: BatchReader>(chain: &[B]) -> Antichain<B::Time> {
     )
 }
 
-impl<Tr: Trace> TraceReader for SharedSpine<Tr> {
+type LocalQueue<Tr> = VecDeque<TraceReplayInstruction<Tr>>;
+type LocalQueueReader<Tr> = Rc<(Activator, RefCell<LocalQueue<Tr>>)>;
+type LocalQueueWriter<Tr> = RcWeak<(Activator, RefCell<LocalQueue<Tr>>)>;
+
+/// A same-thread handle to a trace that can be published to other threads.
+///
+/// The counterpart of differential's `TraceAgent`: it reads the spine directly, registers its
+/// compaction holds with the trace's [`SharedBox`], and imports into dataflows on its own worker.
+/// Each clone is an independent hold.
+pub struct SharedAgent<Tr: Trace> {
+    trace: Rc<RefCell<SharedBox<Tr>>>,
+    queues: RcWeak<RefCell<Vec<LocalQueueWriter<Tr>>>>,
+    logical_compaction: Antichain<Tr::Time>,
+    physical_compaction: Antichain<Tr::Time>,
+    temp_antichain: Antichain<Tr::Time>,
+    operator: OperatorInfo,
+    logging: Option<Logger>,
+}
+
+impl<Tr: Trace> SharedAgent<Tr> {
+    /// Wraps `trace`, maintained by `operator`, into an agent and the writer that feeds it.
+    pub fn new(trace: Tr, operator: OperatorInfo, logging: Option<Logger>) -> (Self, SharedWriter<Tr>) {
+        let trace = Rc::new(RefCell::new(SharedBox::new(trace)));
+        let queues = Rc::new(RefCell::new(Vec::new()));
+        if let Some(logging) = &logging {
+            logging.log(TraceShare {
+                operator: operator.global_id,
+                diff: 1,
+            });
+        }
+        let (logical_compaction, physical_compaction) = {
+            let trace = trace.borrow();
+            (
+                trace.logical.frontier().to_owned(),
+                trace.physical.frontier().to_owned(),
+            )
+        };
+        let agent = SharedAgent {
+            trace: Rc::clone(&trace),
+            queues: Rc::downgrade(&queues),
+            logical_compaction,
+            physical_compaction,
+            temp_antichain: Antichain::new(),
+            operator,
+            logging,
+        };
+        let writer = SharedWriter {
+            upper: Antichain::from_elem(Tr::Time::minimum()),
+            trace: Rc::downgrade(&trace),
+            queues,
+        };
+        (agent, writer)
+    }
+
+    /// The [`OperatorInfo`] of the operator that maintains the trace.
+    pub fn operator(&self) -> &OperatorInfo {
+        &self.operator
+    }
+
+    /// A handle that observes the trace's batches without holding the trace.
+    pub fn observer(&self) -> TraceObserver<Tr> {
+        TraceObserver {
+            trace: Rc::downgrade(&self.trace),
+        }
+    }
+
+    /// Publishes the trace to `shared`. See [`SharedBox`] for what publishing does.
+    ///
+    /// `activator` must schedule the operator that maintains the trace, and `on_seal` fires on this
+    /// thread after every publish that advanced the published `upper`.
+    pub fn publish(
+        &self,
+        shared: Arc<Shared<Tr::Batch>>,
+        activator: SyncActivator,
+        on_seal: impl Fn() + 'static,
+    ) {
+        self.trace.borrow_mut().attach(shared, activator, on_seal);
+    }
+
+    /// Attaches a queue that replays the trace's batches and then follows its writer.
+    fn new_listener(&mut self, activator: Activator) -> LocalQueueReader<Tr> {
+        let mut new_queue = VecDeque::new();
+        let mut upper = None;
+        self.trace.borrow().trace.map_batches(|batch| {
+            new_queue.push_back(TraceReplayInstruction::Batch(
+                batch.clone(),
+                Some(Tr::Time::minimum()),
+            ));
+            upper = Some(batch.upper().clone());
+        });
+        if let Some(upper) = upper {
+            new_queue.push_back(TraceReplayInstruction::Frontier(upper));
+        }
+        let reference = Rc::new((activator, RefCell::new(new_queue)));
+        if let Some(queue) = self.queues.upgrade() {
+            queue.borrow_mut().push(Rc::downgrade(&reference));
+        }
+        reference.0.activate();
+        reference
+    }
+
+    /// Imports the trace into `scope`, restricted to `[since, until)`.
+    ///
+    /// The port of `TraceAgent::import_frontier_core`: updates are advanced to `since`, those at or
+    /// beyond `until` are suppressed, and the capability drops once the trace passes `until`.
+    pub fn import_frontier_core<'scope>(
+        &mut self,
+        scope: Scope<'scope, Tr::Time>,
+        name: &str,
+        since: Antichain<Tr::Time>,
+        until: Antichain<Tr::Time>,
+    ) -> (
+        Arranged<'scope, TraceFrontier<SharedAgent<Tr>>>,
+        ShutdownButton<CapabilitySet<Tr::Time>>,
+    )
+    where
+        Tr: 'static,
+    {
+        let trace = self.clone();
+        let trace = TraceFrontier::make_from(trace, since.borrow(), until.borrow());
+
+        let mut shutdown_button = None;
+
+        let stream = {
+            let shutdown_button_ref = &mut shutdown_button;
+            source(scope, name, move |capability, info| {
+                let capabilities = Rc::new(RefCell::new(Some(CapabilitySet::new())));
+
+                let activator = scope.activator_for(Rc::clone(&info.address));
+                let queue = self.new_listener(activator);
+
+                let activator = scope.activator_for(info.address);
+                *shutdown_button_ref = Some(ShutdownButton::new(Rc::clone(&capabilities), activator));
+
+                capabilities
+                    .borrow_mut()
+                    .as_mut()
+                    .expect("just created")
+                    .insert(capability);
+
+                move |output| {
+                    let mut capabilities = capabilities.borrow_mut();
+                    if let Some(ref mut capabilities) = *capabilities {
+                        let mut borrow = queue.1.borrow_mut();
+                        for instruction in borrow.drain(..) {
+                            // Without capabilities, `until` was reached and this import is done.
+                            if !capabilities.is_empty() {
+                                match instruction {
+                                    TraceReplayInstruction::Frontier(frontier) => {
+                                        if PartialOrder::less_equal(&until, &frontier) {
+                                            capabilities.downgrade(&[]);
+                                        } else {
+                                            capabilities.downgrade(&frontier.borrow()[..]);
+                                        }
+                                    }
+                                    TraceReplayInstruction::Batch(batch, hint) => {
+                                        if let Some(time) = hint {
+                                            if !batch.is_empty() {
+                                                let delayed = capabilities.delayed(&time);
+                                                output.session(&delayed).give(
+                                                    BatchFrontier::make_from(
+                                                        batch,
+                                                        since.borrow(),
+                                                        until.borrow(),
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+        };
+
+        (
+            Arranged { stream, trace },
+            shutdown_button.expect("source constructor ran"),
+        )
+    }
+}
+
+impl<Tr: Trace> TraceReader for SharedAgent<Tr> {
     type Time = Tr::Time;
     type Batch = Tr::Batch;
 
-    fn batches_through(&mut self, upper: AntichainRef<Self::Time>) -> Option<Vec<Self::Batch>> {
-        self.inner.batches_through(upper)
+    fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
+        // As `TraceAgent`: a hold is the joint consequence of every frontier it has been asked to
+        // hold, so the request is joined rather than assigned.
+        differential_dataflow::lattice::antichain_join_into(
+            &self.logical_compaction.borrow()[..],
+            &frontier[..],
+            &mut self.temp_antichain,
+        );
+        self.trace.borrow_mut().adjust_logical(
+            self.logical_compaction.borrow(),
+            self.temp_antichain.borrow(),
+        );
+        std::mem::swap(&mut self.logical_compaction, &mut self.temp_antichain);
+        self.temp_antichain.clear();
     }
 
-    fn set_logical_compaction(&mut self, frontier: AntichainRef<Self::Time>) {
-        // See `set_physical_compaction`.
-        if self.local_logical.borrow() == frontier {
-            return;
-        }
-        self.local_logical = frontier.to_owned();
-        self.apply_holds();
-        self.publish_frontiers();
+    fn get_logical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> {
+        self.logical_compaction.borrow()
     }
 
-    fn get_logical_compaction(&mut self) -> AntichainRef<'_, Self::Time> {
-        self.inner.get_logical_compaction()
+    fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) {
+        differential_dataflow::lattice::antichain_join_into(
+            &self.physical_compaction.borrow()[..],
+            &frontier[..],
+            &mut self.temp_antichain,
+        );
+        self.trace.borrow_mut().adjust_physical(
+            self.physical_compaction.borrow(),
+            self.temp_antichain.borrow(),
+        );
+        std::mem::swap(&mut self.physical_compaction, &mut self.temp_antichain);
+        self.temp_antichain.clear();
     }
 
-    fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Self::Time>) {
-        // Compute's maintenance sets this on every trace every few milliseconds, mostly to the
-        // frontier it already has, and publishing then costs locks and clones per trace. The
-        // inner spine introduces pending batches on `insert` and on a frontier change, so an
-        // unchanged frontier leaves it nothing to do. A reader's moved hold reaches it through
-        // `exert`, which the hold's activation schedules.
-        if self.local_physical.borrow() == frontier {
-            return;
-        }
-        self.local_physical = frontier.to_owned();
-        self.apply_holds();
-        // Physical compaction introduces pending batches and can complete merges.
-        self.publish_chain(None);
+    fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> {
+        self.physical_compaction.borrow()
     }
 
-    fn get_physical_compaction(&mut self) -> AntichainRef<'_, Self::Time> {
-        self.inner.get_physical_compaction()
+    fn batches_through(&mut self, frontier: AntichainRef<'_, Tr::Time>) -> Option<Vec<Tr::Batch>> {
+        self.trace.borrow_mut().trace.batches_through(frontier)
     }
 
-    fn map_batches<F: FnMut(&Self::Batch)>(&self, f: F) {
-        self.inner.map_batches(f)
+    fn map_batches<F: FnMut(&Tr::Batch)>(&self, f: F) {
+        self.trace.borrow().trace.map_batches(f)
     }
 }
 
-impl<Tr: Trace> Trace for SharedSpine<Tr> {
-    fn new(
-        info: OperatorInfo,
-        logging: Option<differential_dataflow::logging::Logger>,
-        activator: Option<timely::scheduling::activate::Activator>,
-    ) -> Self {
-        let minimum = Antichain::from_elem(Tr::Time::minimum());
-        SharedSpine {
-            inner: Tr::new(info, logging, activator),
-            attachment: RefCell::new(Vec::new()),
-            local_logical: minimum.clone(),
-            local_physical: minimum,
-            chain_scratch: Vec::new(),
+impl<Tr: Trace> Clone for SharedAgent<Tr> {
+    fn clone(&self) -> Self {
+        if let Some(logging) = &self.logging {
+            logging.log(TraceShare {
+                operator: self.operator.global_id,
+                diff: 1,
+            });
         }
+        let empty = Antichain::new();
+        let mut trace = self.trace.borrow_mut();
+        trace.adjust_logical(empty.borrow(), self.logical_compaction.borrow());
+        trace.adjust_physical(empty.borrow(), self.physical_compaction.borrow());
+        drop(trace);
+        SharedAgent {
+            trace: Rc::clone(&self.trace),
+            queues: RcWeak::clone(&self.queues),
+            logical_compaction: self.logical_compaction.clone(),
+            physical_compaction: self.physical_compaction.clone(),
+            temp_antichain: Antichain::new(),
+            operator: self.operator.clone(),
+            logging: self.logging.clone(),
+        }
+    }
+}
+
+impl<Tr: Trace> Drop for SharedAgent<Tr> {
+    fn drop(&mut self) {
+        if let Some(logging) = &self.logging {
+            logging.log(TraceShare {
+                operator: self.operator.global_id,
+                diff: -1,
+            });
+        }
+        let empty = Antichain::new();
+        let mut trace = self.trace.borrow_mut();
+        trace.adjust_logical(self.logical_compaction.borrow(), empty.borrow());
+        trace.adjust_physical(self.physical_compaction.borrow(), empty.borrow());
+    }
+}
+
+impl<Tr: Trace + 'static> Agent<Tr> for SharedAgent<Tr> {
+    type Writer = SharedWriter<Tr>;
+
+    fn new(trace: Tr, operator: OperatorInfo, logging: Option<Logger>) -> (Self, Self::Writer) {
+        SharedAgent::new(trace, operator, logging)
+    }
+}
+
+/// Observes a trace's batches without keeping the trace alive.
+pub struct TraceObserver<Tr: Trace> {
+    trace: RcWeak<RefCell<SharedBox<Tr>>>,
+}
+
+impl<Tr: Trace> TraceObserver<Tr> {
+    /// Calls `f` on every batch of the trace, and returns `false` if the trace is gone.
+    pub fn map_batches<F: FnMut(&Tr::Batch)>(&self, f: F) -> bool {
+        match self.trace.upgrade() {
+            Some(trace) => {
+                trace.borrow().trace.map_batches(f);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// The write endpoint of a [`SharedAgent`]'s trace.
+///
+/// The counterpart of differential's `TraceWriter`. It holds the trace weakly, so a trace whose
+/// agents have all dropped is gone even while its arranging operator runs.
+pub struct SharedWriter<Tr: Trace> {
+    upper: Antichain<Tr::Time>,
+    trace: RcWeak<RefCell<SharedBox<Tr>>>,
+    queues: Rc<RefCell<Vec<LocalQueueWriter<Tr>>>>,
+}
+
+impl<Tr: Trace> SharedWriter<Tr> {
+    /// Exerts merge effort, even without additional updates.
+    pub fn exert(&mut self) {
+        if let Some(trace) = self.trace.upgrade() {
+            trace.borrow_mut().exert();
+        }
+    }
+
+    /// Advances the trace by `batch`.
+    ///
+    /// `hint` is `None` for an empty batch, or `Some(time)` for a time less or equal to all
+    /// updates in the batch, suitable for use as a capability.
+    pub fn insert(&mut self, batch: Tr::Batch, hint: Option<Tr::Time>) {
+        assert!(&self.upper == batch.lower(), "batches must be contiguous");
+        assert!(batch.lower() != batch.upper(), "batches must be non-empty intervals");
+        self.upper.clone_from(batch.upper());
+
+        let mut borrow = self.queues.borrow_mut();
+        for queue in borrow.iter_mut() {
+            if let Some(pair) = queue.upgrade() {
+                pair.1
+                    .borrow_mut()
+                    .push_back(TraceReplayInstruction::Batch(batch.clone(), hint.clone()));
+                pair.1
+                    .borrow_mut()
+                    .push_back(TraceReplayInstruction::Frontier(batch.upper().clone()));
+                pair.0.activate();
+            }
+        }
+        borrow.retain(|w| w.upgrade().is_some());
+
+        if let Some(trace) = self.trace.upgrade() {
+            trace.borrow_mut().insert(batch);
+        }
+    }
+
+    /// Inserts an empty batch up to `upper`.
+    pub fn seal(&mut self, upper: Antichain<Tr::Time>) {
+        if self.upper != upper {
+            self.insert(Tr::Batch::empty(self.upper.clone(), upper), None);
+        }
+    }
+}
+
+impl<Tr: Trace> AgentWriter<Tr> for SharedWriter<Tr> {
+    fn insert(&mut self, batch: Tr::Batch, hint: Option<Tr::Time>) {
+        SharedWriter::insert(self, batch, hint)
+    }
+
+    fn seal(&mut self, upper: Antichain<Tr::Time>) {
+        SharedWriter::seal(self, upper)
     }
 
     fn exert(&mut self) {
-        self.apply_holds();
-        self.inner.exert();
-        self.publish_chain(None);
-    }
-
-    fn set_exert_logic(&mut self, logic: ExertionLogic) {
-        self.inner.set_exert_logic(logic)
-    }
-
-    fn insert(&mut self, batch: Self::Batch) {
-        self.inner.insert(batch.clone());
-        self.publish_chain(Some(batch));
-    }
-
-    fn close(&mut self) {
-        let mut upper = Antichain::new();
-        self.inner.read_upper(&mut upper);
-        if !upper.is_empty() {
-            self.insert(Tr::Batch::empty(upper, Antichain::new()));
-        }
+        SharedWriter::exert(self)
     }
 }
 
-impl<Tr: Trace> Drop for SharedSpine<Tr> {
+impl<Tr: Trace> Drop for SharedWriter<Tr> {
     fn drop(&mut self) {
-        // NOTE: Readers keep the `upper` this trace last published rather than advancing to the
-        // empty frontier. A dropped writer says nothing about the times past its `upper`, and
-        // completing would present them as empty. An importing dataflow is dropped with
-        // `drop_dataflow`, which does not need its inputs to complete.
-        for attachment in self.attachment.take() {
-            let mut state = attachment.shared.lock();
-            // A later writer owns the activator once it attaches.
-            if state.writers == attachment.writer {
-                state.writer_activator = None;
-            }
-        }
+        self.seal(Antichain::new())
     }
 }
 
 /// A `Clone + Send` reader of a [`Shared`] publication point.
 ///
 /// Implements [`TraceReader`], so downstream operators drive its compaction and acquire cursors as
-/// with any trace handle. Each clone is an independent hold, as each `TraceAgent` clone is, so two
-/// consumers of one import cannot release each other's holds.
+/// with any trace handle. Each clone is an independent hold, as each [`SharedAgent`] clone is, so
+/// two consumers of one import cannot release each other's holds.
 pub struct SharedReader<B: BatchReader> {
     shared: Arc<Shared<B>>,
     /// This reader's logical hold. Kept locally so the setter and `Drop` adjust the accumulation by a
@@ -693,12 +1108,8 @@ impl<B: BatchReader> Clone for SharedReader<B> {
     fn clone(&self) -> Self {
         {
             let mut state = self.shared.lock();
-            adjust(&mut state.remote_logical, &Antichain::new(), &self.logical);
-            adjust(
-                &mut state.remote_physical,
-                &Antichain::new(),
-                &self.physical,
-            );
+            adjust(&mut state.holds_logical, &[], &self.logical);
+            adjust(&mut state.holds_physical, &[], &self.physical);
         }
         SharedReader {
             shared: Arc::clone(&self.shared),
@@ -711,12 +1122,8 @@ impl<B: BatchReader> Clone for SharedReader<B> {
 impl<B: BatchReader> Drop for SharedReader<B> {
     fn drop(&mut self) {
         if let Ok(mut state) = self.shared.state.lock() {
-            let logical = adjust(&mut state.remote_logical, &self.logical, &Antichain::new());
-            let physical = adjust(
-                &mut state.remote_physical,
-                &self.physical,
-                &Antichain::new(),
-            );
+            let logical = adjust(&mut state.holds_logical, &self.logical, &[]);
+            let physical = adjust(&mut state.holds_physical, &self.physical, &[]);
             if logical || physical {
                 Shared::wake_writer(&state);
             }
@@ -745,13 +1152,13 @@ where
     }
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<B::Time>) {
-        // Join rather than overwrite, as `TraceAgent` does: a hold is the joint consequence of every
-        // frontier it has been asked to hold, and the getter reports what is held. Joining with the
-        // empty antichain is absorbing, so an empty request still releases.
+        // Join rather than overwrite, as `SharedAgent` does: a hold is the joint consequence of
+        // every frontier it has been asked to hold, and the getter reports what is held. Joining
+        // with the empty antichain is absorbing, so an empty request still releases.
         let next = self.logical.join(&frontier.to_owned());
         let previous = std::mem::replace(&mut self.logical, next);
         let mut state = self.shared.lock();
-        if adjust(&mut state.remote_logical, &previous, &self.logical) {
+        if adjust(&mut state.holds_logical, &previous, &self.logical) {
             Shared::wake_writer(&state);
         }
     }
@@ -766,7 +1173,7 @@ where
         let next = self.physical.join(&frontier.to_owned());
         let previous = std::mem::replace(&mut self.physical, next);
         let mut state = self.shared.lock();
-        if adjust(&mut state.remote_physical, &previous, &self.physical) {
+        if adjust(&mut state.holds_physical, &previous, &self.physical) {
             Shared::wake_writer(&state);
         }
     }
@@ -881,8 +1288,7 @@ where
                         Replay::Batch(batch) => {
                             // The writer enqueues a batch only to importers live under the lock
                             // that published the chain containing it, so a batch in the seed cannot
-                            // also arrive live. This
-                            // guards the invariant: emitting a covered batch
+                            // also arrive live. This guards the invariant: emitting a covered batch
                             // twice would double count it under a capability already moved past.
                             if !draining_seed
                                 && PartialOrder::less_equal(&batch.upper().borrow(), &seed.borrow())

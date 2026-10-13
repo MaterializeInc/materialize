@@ -16,11 +16,13 @@
 use columnation::Columnation;
 use differential_dataflow::Data;
 use differential_dataflow::difference::Abelian;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::operators::reduce::reduce_trace_with_agent;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchDiff, BatchVal, BatchValOwn};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace, TraceReader};
 use mz_timely_util::columnation::ColumnationStack;
+use mz_timely_util::shared_trace::SharedAgent;
 use timely::Container;
 use timely::container::PushInto;
 
@@ -54,7 +56,7 @@ pub(crate) trait MzReduce<'scope, T1: TraceReader> {
         self,
         name: &str,
         logic: L,
-    ) -> Arranged<'scope, TraceAgent<T2>>
+    ) -> Arranged<'scope, SharedAgent<T2>>
     where
         // `KC` is a distinct parameter, not `T1::KeyContainer`: pinning it from the concrete input
         // lets the compiler normalize the higher-ranked key equality on both cursors to
@@ -77,7 +79,7 @@ pub(crate) trait MzReduce<'scope, T1: TraceReader> {
                 &[(BatchVal<'_, T1>, BatchDiff<T1>)],
                 &mut Vec<(BatchValOwn<T2>, BatchDiff<T2>)>,
             ) + 'static,
-        Arranged<'scope, TraceAgent<T2>>: ArrangementSize;
+        Arranged<'scope, SharedAgent<T2>>: ArrangementSize;
 }
 
 impl<'scope, T1> MzReduce<'scope, T1> for Arranged<'scope, T1>
@@ -89,7 +91,7 @@ where
         self,
         name: &str,
         logic: L,
-    ) -> Arranged<'scope, TraceAgent<T2>>
+    ) -> Arranged<'scope, SharedAgent<T2>>
     where
         T1: TraceReader<Batch: Navigable>,
         KC: BatchContainer,
@@ -109,8 +111,9 @@ where
                 &[(BatchVal<'_, T1>, BatchDiff<T1>)],
                 &mut Vec<(BatchValOwn<T2>, BatchDiff<T2>)>,
             ) + 'static,
-        Arranged<'scope, TraceAgent<T2>>: ArrangementSize,
+        Arranged<'scope, SharedAgent<T2>>: ArrangementSize,
     {
+        let mut logic = logic;
         // The push closure clears its buffer between keys (the reduce operator cannot reset it,
         // and failing to clear leaks one key's rows into the next), then stages each value update
         // with the owned key prepended.
@@ -125,10 +128,31 @@ where
                 }
             };
 
-        // Allow access to `reduce_abelian` since we're within Mz's wrapper and force arrangement
-        // size logging.
+        // The body of differential's `reduce_abelian`, which fixes its output agent: present the
+        // logic with the input only, and retract the previous output.
+        let logic = move |key: KC::ReadItem<'_>,
+                          input: &[(BatchVal<'_, T1>, BatchDiff<T1>)],
+                          output: &mut Vec<(BatchValOwn<T2>, BatchDiff<T2>)>,
+                          change: &mut Vec<(BatchValOwn<T2>, BatchDiff<T2>)>| {
+            if !input.is_empty() {
+                logic(key, input, change);
+            }
+            change.extend(output.drain(..).map(|(x, mut d)| {
+                d.negate();
+                (x, d)
+            }));
+            differential_dataflow::consolidation::consolidate(change);
+        };
+
+        // Allow access to `reduce_trace_with_agent` since we're within Mz's wrapper and force
+        // arrangement size logging.
         #[allow(clippy::disallowed_methods)]
-        Arranged::<_>::reduce_abelian::<_, Bu, T2, KC, _>(self, name, logic, push_closure)
-            .log_arrangement_size()
+        reduce_trace_with_agent::<_, Bu, T2, KC, _, _, SharedAgent<T2>>(
+            self,
+            name,
+            logic,
+            push_closure,
+        )
+        .log_arrangement_size()
     }
 }
