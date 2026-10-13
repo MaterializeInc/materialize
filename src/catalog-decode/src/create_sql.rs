@@ -21,9 +21,9 @@ use mz_sql_parser::ast::{
     AstInfo, AvroSchema, ConnectionOption, ConnectionOptionName, CreateConnectionType,
     CreateSinkConnection, CreateSubsourceOptionName, Format, FormatSpecifier,
     IcebergSinkConfigOptionName, IcebergSinkMode, KafkaSinkConfigOptionName,
-    KafkaSourceConfigOptionName, PgConfigOptionName, ProtobufSchema, Raw, RawClusterName,
-    RawItemName, SinkEnvelope, SourceEnvelope, SourceErrorPolicy, Statement, UnresolvedItemName,
-    Value, WithOptionValue,
+    KafkaSourceConfigOptionName, PgConfigOptionName, PostgresSinkConfigOptionName, ProtobufSchema,
+    Raw, RawClusterName, RawItemName, SinkEnvelope, SourceEnvelope, SourceErrorPolicy, Statement,
+    UnresolvedItemName, Value, WithOptionValue,
 };
 use prost::Message as _;
 use serde_json::json;
@@ -353,6 +353,40 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
                         let envelope_type = match mode {
                             IcebergSinkMode::Upsert => "upsert",
                             IcebergSinkMode::Append => "append",
+                        };
+                        info.insert("envelope_type", json!(envelope_type));
+                    }
+                }
+                CreateSinkConnection::Postgres {
+                    connection,
+                    options,
+                    ..
+                } => {
+                    info.insert("sink_type", json!("postgres"));
+                    info.insert("connection_id", json!(item_id(connection)?));
+
+                    let mut schema = None;
+                    let mut table = None;
+                    for option in options {
+                        match option.name {
+                            PostgresSinkConfigOptionName::Schema => {
+                                schema = option.value.as_ref().and_then(option_string)
+                            }
+                            PostgresSinkConfigOptionName::Table => {
+                                table = option.value.as_ref().and_then(option_string)
+                            }
+                        }
+                    }
+                    // SCHEMA is optional and defaults to `public` at plan time,
+                    // so report that default rather than bailing.
+                    info.insert("schema", json!(schema.unwrap_or_else(|| "public".into())));
+                    info.insert("table", json!(table.ok_or("postgres sink missing TABLE")?));
+
+                    // Rows are written as SQL, so there are no format columns.
+                    if let Some(envelope) = stmt.envelope {
+                        let envelope_type = match envelope {
+                            SinkEnvelope::Upsert => "upsert",
+                            SinkEnvelope::Debezium => "debezium",
                         };
                         info.insert("envelope_type", json!(envelope_type));
                     }
