@@ -4573,7 +4573,10 @@ async fn test_startup_cluster_notice() {
         .await
         .expect("success");
     let notices = { notices.lock().expect("not poisoned").clone() };
-    assert!(notices.is_empty());
+    assert!(
+        notices.is_empty(),
+        "unexpected startup notices: {notices:?}"
+    );
     drop(client);
 
     let sys_client = server
