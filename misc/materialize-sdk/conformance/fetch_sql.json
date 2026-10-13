@@ -1,0 +1,41 @@
+{
+  "function": "fetch_sql",
+  "cases": [
+    {
+      "name": "a FETCH without a timeout",
+      "input": {"cursor": "c", "max_rows": "1000"},
+      "expect": {"sql": "FETCH 1000 \"c\""}
+    },
+    {
+      "name": "a timeout is in milliseconds",
+      "input": {"cursor": "c", "max_rows": "10", "timeout_ms": "1500"},
+      "expect": {"sql": "FETCH 10 \"c\" WITH (TIMEOUT = '1500 milliseconds')"}
+    },
+    {
+      "name": "a zero timeout returns at once",
+      "input": {"cursor": "c", "max_rows": "10", "timeout_ms": "0"},
+      "expect": {"sql": "FETCH 10 \"c\" WITH (TIMEOUT = '0 milliseconds')"}
+    },
+    {
+      "name": "a timeout of one day is the maximum",
+      "input": {"cursor": "c", "max_rows": "1", "timeout_ms": "86400000"},
+      "expect": {"sql": "FETCH 1 \"c\" WITH (TIMEOUT = '86400000 milliseconds')"}
+    },
+    {
+      "name": "a timeout over one day is refused",
+      "input": {"cursor": "c", "max_rows": "1", "timeout_ms": "86400001"},
+      "expect": {"error": "usage"}
+    },
+    {"name": "zero rows is refused", "input": {"cursor": "c", "max_rows": "0"}, "expect": {"error": "usage"}},
+    {
+      "name": "a row count beyond JavaScript's integers keeps every digit",
+      "input": {"cursor": "c", "max_rows": "9007199254740993"},
+      "expect": {"sql": "FETCH 9007199254740993 \"c\""}
+    },
+    {
+      "name": "the cursor name is quoted",
+      "input": {"cursor": "my \"cursor\"", "max_rows": "1"},
+      "expect": {"sql": "FETCH 1 \"my \"\"cursor\"\"\""}
+    }
+  ]
+}

@@ -38,9 +38,11 @@ pub mod batch;
 pub mod decode;
 pub mod error;
 pub mod frontier;
+pub mod statement;
 mod wire;
 
 pub use batch::{Batch, BatchError, Batcher, Event, Start};
 pub use decode::{Change, Datum, Decoder, Envelope, Message, Row, Update};
-pub use error::{ProtocolError, TimestampTooLarge};
+pub use error::{ProtocolError, TimestampTooLarge, UsageError};
 pub use frontier::Frontier;
+pub use statement::{ObjectRef, Subscribe, Target};
