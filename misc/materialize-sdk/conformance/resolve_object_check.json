@@ -1,0 +1,35 @@
+{
+  "function": "resolve_object_check",
+  "cases": [
+    {
+      "name": "unchanged with otherwise fatal",
+      "input": {"otherwise": "fatal", "change": "unchanged"},
+      "expect": {"outcome": "error", "kind": "fatal"}
+    },
+    {
+      "name": "unchanged with otherwise object_dropped",
+      "input": {"otherwise": "object_dropped", "change": "unchanged"},
+      "expect": {"outcome": "error", "kind": "object_dropped"}
+    },
+    {
+      "name": "dropped with otherwise fatal",
+      "input": {"otherwise": "fatal", "change": "dropped"},
+      "expect": {"outcome": "error", "kind": "object_dropped"}
+    },
+    {
+      "name": "schema_changed with otherwise fatal",
+      "input": {"otherwise": "fatal", "change": "schema_changed"},
+      "expect": {"outcome": "error", "kind": "schema_mismatch"}
+    },
+    {
+      "name": "replaced with otherwise fatal",
+      "input": {"otherwise": "fatal", "change": "replaced"},
+      "expect": {"outcome": "replaced"}
+    },
+    {
+      "name": "swapped with otherwise object_dropped",
+      "input": {"otherwise": "object_dropped", "change": "swapped"},
+      "expect": {"outcome": "swapped"}
+    }
+  ]
+}
