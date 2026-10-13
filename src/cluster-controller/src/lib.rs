@@ -240,12 +240,9 @@ impl ClusterController {
     /// single [`StateWrite`] the tick applies under one compare-and-append.
     ///
     /// The merge is a per-field join, independent of the order strategies run
-    /// in: a field set by exactly one strategy is taken as-is, a field no
-    /// strategy sets is left unchanged, and a field set to the same value by
-    /// several is that value.
-    ///
-    /// After joining fields, a graceful cutover preserves an active burst and
-    /// clears its readiness timestamp, unless explicit policy cleanup ends it.
+    /// in, before the cutover adjustment below: a field set by exactly one
+    /// strategy is taken as-is, a field no strategy sets is left unchanged, and
+    /// a field set to the same value by several is that value.
     ///
     /// Two strategies setting one field to *different* values is a conflict.
     /// The strategies keep every field single-writer at any given moment:
