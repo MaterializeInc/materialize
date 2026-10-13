@@ -42,3 +42,10 @@ Input: `envelope`, `columns`, `rows`. Build a decoder from the envelope and
 columns. If that fails, the output is `{"error": "protocol"}`. Otherwise decode
 each row on its own, and the output is `{"messages": [...]}` with one entry per
 row: the decoded message, or `{"error": "protocol"}`.
+
+### `batch.json`
+
+Input: `start`, optional `up_to`, and `steps`. Build a batcher, then push each
+step, a message. The output is `{"outputs": [...], "finished": bool}`, with
+one entry per step: the list of events it released, or `{"error": "protocol"}`.
+After an error the batcher fails every later step.
