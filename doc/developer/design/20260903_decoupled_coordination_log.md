@@ -17,8 +17,11 @@ archival tags. Preserve designer commits and useful implementation boundaries
 when folding our remaining fixups. Detailed verification belongs in the
 [PR status](https://github.com/MaterializeInc/materialize/pull/38696).
 
-Use the scratch worker described in the prompt for focused builds, tests and
-interactive debugging. Launch with `bin/scratch create decoupled-coordination
+Use the dedicated x86_64 scratch worker for focused builds, tests and
+interactive debugging. The parallel-check workflow requires SQL Server, which
+does not run natively on ARM. Keep the 16-vCPU, 64-GiB, 500-GiB configuration,
+one worker and the default 36-hour lifetime.
+Launch with `bin/scratch create decoupled-coordination
 --git-rev <commit>`, then reuse that worker and its caches. The shared editing VM
 must not host heavy workloads. CI remains the broad integration check, not the
 only place to compile or reproduce a failure. Keep the workload's contention and
