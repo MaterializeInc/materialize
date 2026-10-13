@@ -178,6 +178,9 @@ class ServiceConfig(TypedDict, total=False):
     network_mode: str | None
     """Network mode."""
 
+    cgroup_parent: str
+    """Parent cgroup for the container, interpreted by the Docker daemon."""
+
     user: str | None
     """The user for the container."""
 
