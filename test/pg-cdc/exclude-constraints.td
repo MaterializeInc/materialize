@@ -249,13 +249,13 @@ $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.mater
 ALTER SYSTEM SET enable_exclude_constraints_option = true
 
 #
-# ALL COLUMNS NULLABLE: keys and uniqueness remain, but every column nullable, so
+# EXCLUDE ALL NOT NULL CONSTRAINTS: keys and uniqueness remain, but every column nullable, so
 # DROP NOT NULL is a non-event.
 #
 
 > CREATE TABLE all_nullable
   FROM SOURCE mz_source (REFERENCE public.excl_combo)
-  WITH (ALL COLUMNS NULLABLE);
+  WITH (EXCLUDE ALL NOT NULL CONSTRAINTS);
 
 > CREATE DEFAULT INDEX ON all_nullable;
 > SELECT key FROM (SHOW INDEXES ON all_nullable);
@@ -269,7 +269,7 @@ val true
 
 > CREATE TABLE all_nullable_combo
   FROM SOURCE mz_source (REFERENCE public.excl_combo)
-  WITH (ALL COLUMNS NULLABLE, EXCLUDE CONSTRAINTS ('excl_combo_pkey'));
+  WITH (EXCLUDE ALL NOT NULL CONSTRAINTS, EXCLUDE CONSTRAINTS ('excl_combo_pkey'));
 
 > CREATE DEFAULT INDEX ON all_nullable_combo;
 > SELECT key FROM (SHOW INDEXES ON all_nullable_combo);
@@ -305,3 +305,21 @@ hint:WITH (EXCLUDE CONSTRAINTS ('excl_combo_pkey')) before the upstream drop
 1 10 a
 2 20 <null>
 3 30 c
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER TABLE excl_combo ALTER COLUMN u DROP NOT NULL;
+INSERT INTO excl_combo VALUES (4, NULL, 'd');
+INSERT INTO excl_combo VALUES (5, NULL, 'e');
+
+> SELECT * FROM all_nullable_combo;
+1 10 a
+2 20 <null>
+3 30 c
+4 <null> d
+5 <null> e
+
+> SELECT u, COUNT(*) FROM all_nullable_combo GROUP BY u;
+10 1
+20 1
+30 1
+<null> 2

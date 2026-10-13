@@ -1782,7 +1782,7 @@ pub enum TableFromSourceOptionName {
     /// ingested as nullable.
     ExcludeAllConstraints,
     /// Ignore all `NOT NULL` constraints on columns
-    AllColumnsNullable,
+    ExcludeAllNotNullConstraints,
     /// Hex-encoded protobuf of a `ProtoSourceExportStatementDetails`
     /// message, which includes details necessary for planning this
     /// table as a Source Export
@@ -1800,7 +1800,9 @@ impl AstDisplay for TableFromSourceOptionName {
             TableFromSourceOptionName::ExcludeColumns => "EXCLUDE COLUMNS",
             TableFromSourceOptionName::ExcludeConstraints => "EXCLUDE CONSTRAINTS",
             TableFromSourceOptionName::ExcludeAllConstraints => "EXCLUDE ALL CONSTRAINTS",
-            TableFromSourceOptionName::AllColumnsNullable => "ALL COLUMNS NULLABLE",
+            TableFromSourceOptionName::ExcludeAllNotNullConstraints => {
+                "EXCLUDE ALL NOT NULL CONSTRAINTS"
+            }
             TableFromSourceOptionName::Details => "DETAILS",
             TableFromSourceOptionName::PartitionBy => "PARTITION BY",
             TableFromSourceOptionName::RetainHistory => "RETAIN HISTORY",
@@ -1822,7 +1824,7 @@ impl WithOptionName for TableFromSourceOptionName {
             | TableFromSourceOptionName::ExcludeColumns
             | TableFromSourceOptionName::ExcludeConstraints
             | TableFromSourceOptionName::ExcludeAllConstraints
-            | TableFromSourceOptionName::AllColumnsNullable
+            | TableFromSourceOptionName::ExcludeAllNotNullConstraints
             | TableFromSourceOptionName::RetainHistory => false,
             // The value is an arbitrary user expression/literal that may embed
             // sensitive data, so redact it (mirrors `KafkaSinkConfigOptionName`).

@@ -1554,7 +1554,7 @@ fn plan_source_export_desc(
                             } else if !(*nulls_not_distinct || !*nullable) {
                                 // Non-primary key unique constraints are only keys if all of their
                                 // columns are `NOT NULL` or the constraint is `NULLS NOT DISTINCT`.
-                                break 'c;
+                                continue 'c;
                             }
 
                             key.push(i);
@@ -1752,7 +1752,7 @@ generate_extracted_config!(
     (ExcludeColumns, Vec::<Ident>, Default(vec![])),
     (ExcludeConstraints, Vec::<String>, Default(vec![])),
     (ExcludeAllConstraints, bool, Default(false)),
-    (AllColumnsNullable, bool, Default(false)),
+    (ExcludeAllNotNullConstraints, bool, Default(false)),
     (PartitionBy, Vec<Ident>),
     (RetainHistory, OptionalDuration),
     (Details, String)
@@ -1786,7 +1786,7 @@ pub fn plan_create_table_from_source(
         exclude_columns,
         exclude_constraints: _,
         exclude_all_constraints: _,
-        all_columns_nullable: _,
+        exclude_all_not_null_constraints: _,
         retain_history,
         partition_by,
         details,

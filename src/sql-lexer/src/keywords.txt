@@ -336,7 +336,6 @@ Not
 Notice
 Notices
 Null
-Nullable
 Nullif
 Nulls
 Oauth2

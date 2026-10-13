@@ -5379,7 +5379,7 @@ impl<'a> Parser<'a> {
         &mut self,
     ) -> Result<TableFromSourceOption<Raw>, ParserError> {
         let option = match self
-            .expect_one_of_keywords(&[TEXT, EXCLUDE, IGNORE, DETAILS, PARTITION, RETAIN, ALL])?
+            .expect_one_of_keywords(&[TEXT, EXCLUDE, IGNORE, DETAILS, PARTITION, RETAIN])?
         {
             TEXT => {
                 self.expect_keyword(COLUMNS)?;
@@ -5439,11 +5439,15 @@ impl<'a> Parser<'a> {
                     }
                 }
                 ALL => {
-                    self.expect_keyword(CONSTRAINTS)?;
-                    TableFromSourceOption {
-                        name: TableFromSourceOptionName::ExcludeAllConstraints,
-                        value: None,
-                    }
+                    let name = match self.expect_one_of_keywords(&[CONSTRAINTS, NOT])? {
+                        CONSTRAINTS => TableFromSourceOptionName::ExcludeAllConstraints,
+                        NOT => {
+                            self.expect_keywords(&[NULL, CONSTRAINTS])?;
+                            TableFromSourceOptionName::ExcludeAllNotNullConstraints
+                        }
+                        _ => unreachable!(),
+                    };
+                    TableFromSourceOption { name, value: None }
                 }
                 _ => unreachable!(),
             },
@@ -5480,14 +5484,6 @@ impl<'a> Parser<'a> {
                 TableFromSourceOption {
                     name: TableFromSourceOptionName::RetainHistory,
                     value: self.parse_option_retain_history()?,
-                }
-            }
-            ALL => {
-                self.expect_keyword(COLUMNS)?;
-                self.expect_keyword(NULLABLE)?;
-                TableFromSourceOption {
-                    name: TableFromSourceOptionName::AllColumnsNullable,
-                    value: None,
                 }
             }
             _ => unreachable!(),
