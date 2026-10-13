@@ -59,7 +59,11 @@ terminal error" is checked through `updates_committed` in
 Every per-export oracle has three messages, chosen by `terminal_before_restart`:
 whether a TRUNCATE of the table, a DROP of it, or neither was followed by an
 ingestion restart. Each of the first two holds a known unfixed bug, so the
-third stays a clean signal for other mechanisms. Timelines where `first_configure`
+third stays a clean signal for other mechanisms. The duplicate-key and
+replay-equality oracles, the ones a re-ingested duplicate would fail, split
+the third bucket again: an export the shard auditor saw with its remap since
+past its upper (`remap_frontiers.seen_past_upper`, SS-346) gets its own
+message. Timelines where `first_configure`
 set `pg_terminal_upstream_ops` to `off` issue no terminal ops at all.
 """
 
@@ -80,7 +84,7 @@ from antithesis.assertions import (  # pyright: ignore[reportMissingModuleSource
     sometimes,
 )
 
-from materialize.antithesis import ddl_hold, sql, state
+from materialize.antithesis import ddl_hold, remap_frontiers, sql, state
 from materialize.antithesis.drivers import configure
 from materialize.antithesis.drivers.recovery import mark_expected_unhealthy
 from materialize.antithesis.drivers.source_status import (
@@ -127,6 +131,11 @@ TERMINAL_KINDS = ("truncate", "drop")
 REEXPORT_P_CHOICES = (0.2, 1.0)
 """Chance of re-exporting a table right after a terminal op. Otherwise a later
 invocation re-exports it, after more DML has landed on the dead export."""
+EXTRA_EXPORT_P_CHOICES = (0.0, 0.2, 0.5)
+"""Chance per driver run of adding an export of a table that already has a live
+one. Adding an export restarts the source's ingestion with a new export whose
+since and upper start at the minimum, the window of SS-346. The oldest export
+beyond `MAX_EXPORTS_PER_TABLE` is dropped."""
 VALUE_MENU: tuple[str | None, ...] = (
     None,
     "",
@@ -170,6 +179,11 @@ TERMINAL_EXPORTS_QUERY = (
 )
 """Live exports whose upstream table had an acknowledged TRUNCATE or DROP after
 the export bound to it. Read-only, for other drivers' triggers."""
+RECENT_EXPORTS_QUERY = (
+    "SELECT count(*) FROM exports WHERE state != 'dropped' AND created_epoch >= ?"
+)
+"""Exports whose `CREATE TABLE .. FROM SOURCE` was issued at or after the given
+wall-clock time. Read-only, for other drivers' triggers."""
 
 
 def log(message: str) -> None:
@@ -946,6 +960,7 @@ def upstream_main() -> int:
     n_ops = timeline_choice(db, "ops_per_txn", OPS_PER_TXN_CHOICES)
     disrupt_p = timeline_choice(db, "disrupt_p", DISRUPT_P_CHOICES)
     reexport_p = timeline_choice(db, "reexport_p", REEXPORT_P_CHOICES)
+    extra_export_p = timeline_choice(db, "extra_export_p", EXTRA_EXPORT_P_CHOICES)
     # Swarm: each disruptive kind may be left out of this timeline entirely.
     kinds = [
         k
@@ -987,6 +1002,11 @@ def upstream_main() -> int:
                 }
                 run_txn(up, db, slot, plan)
             done += 1
+        if ready_slots and rng.random() < extra_export_p and not ddl_hold.active():
+            slot = rng.choice(ready_slots)
+            _create_export(
+                endpoints, host, db, up, slot, rng.randrange(TABLES_PER_SLOT)
+            )
         for slot in ready_slots:
             _maintain_exports(endpoints, host, db, up, slot)
     except (psycopg.Error, OSError) as e:
@@ -1164,11 +1184,19 @@ def _check(
         "postgres source: the mapped LSN is monotone in mz time",
         {**details, "conflicting": regressions},
     )
-    always(
-        not ledger_dups,
-        "postgres source: the ledger export holds at most one row per primary key",
-        {**details, "duplicates": [list(r) for r in ledger_dups]},
-    )
+    ledger_dup_details = {**details, "duplicates": [list(r) for r in ledger_dups]}
+    if remap_frontiers.seen_past_upper(ledger):
+        always_or_unreachable(
+            not ledger_dups,
+            "postgres source: the ledger export holds at most one row per primary key, after its remap since was seen past its upper (SS-346)",
+            ledger_dup_details,
+        )
+    else:
+        always(
+            not ledger_dups,
+            "postgres source: the ledger export holds at most one row per primary key",
+            ledger_dup_details,
+        )
 
     led = _check_ledger(db, slot, f, ledger_rows, details)
     if led is None:
@@ -1298,6 +1326,8 @@ def _check_export(
     details["errored"] = errored
     tag = terminal_before_restart(db, conn, e.tbl, e.s1, e.slot, e.name, export_id, src)
     details["terminal_before_restart"] = tag
+    remap_past = remap_frontiers.seen_past_upper(export_id)
+    details["remap_since_seen_past_upper"] = remap_past
 
     _check_terminal_permanence(db, conn, e, export_id, src, t, errored, tag, details)
 
@@ -1321,6 +1351,12 @@ def _check_export(
             always_or_unreachable(
                 not dups,
                 "postgres source: an export holds at most one row per upstream primary key, ingestion restarted after an upstream DROP",
+                dup_details,
+            )
+        elif remap_past:
+            always_or_unreachable(
+                not dups,
+                "postgres source: an export holds at most one row per upstream primary key, after its remap since was seen past its upper (SS-346)",
                 dup_details,
             )
         else:
@@ -1416,6 +1452,12 @@ def _check_export(
         always_or_unreachable(
             matched,
             "postgres source: an export equals its upstream table replayed to the mapped LSN, ingestion restarted after an upstream DROP",
+            {**details, **diff},
+        )
+    elif remap_past:
+        always_or_unreachable(
+            matched,
+            "postgres source: an export equals its upstream table replayed to the mapped LSN, after its remap since was seen past its upper (SS-346)",
             {**details, **diff},
         )
     else:
