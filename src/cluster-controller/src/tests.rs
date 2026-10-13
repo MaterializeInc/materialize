@@ -3503,6 +3503,31 @@ mod hydration_burst {
     }
 
     #[mz_ore::test]
+    fn burst_helper_alone_does_not_start_linger() {
+        let (s, mut signals) = burst_state(
+            "100cc",
+            1,
+            "400cc",
+            Duration::from_millis(100),
+            vec![
+                observed(replica(1), "steady", "100cc"),
+                observed(replica(3), "helper", "400cc"),
+            ],
+            Some(record("400cc", Duration::from_millis(100), None)),
+        );
+        // The real probe reports the helper ready against itself.
+        signals
+            .ready_replicas
+            .insert(BTreeSet::from([replica(3)]), BTreeSet::from([replica(3)]));
+        assert!(
+            HydrationBurstStrategy
+                .update_state(&s, &signals, &config(), now(1000))
+                .is_empty(),
+            "the helper must not start its own linger"
+        );
+    }
+
+    #[mz_ore::test]
     fn burst_restarts_linger_when_steady_loses_readiness() {
         // Record present, previously stamped, but the steady set is no longer
         // ready: reset the stamp so linger restarts after the next catch-up.

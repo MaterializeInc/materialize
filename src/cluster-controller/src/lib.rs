@@ -244,6 +244,9 @@ impl ClusterController {
     /// strategy sets is left unchanged, and a field set to the same value by
     /// several is that value.
     ///
+    /// After joining fields, a graceful cutover preserves an active burst and
+    /// clears its readiness timestamp, unless explicit policy cleanup ends it.
+    ///
     /// Two strategies setting one field to *different* values is a conflict.
     /// The strategies keep every field single-writer at any given moment:
     /// most fields are owned by exactly one strategy outright, and
