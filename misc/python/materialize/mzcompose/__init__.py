@@ -115,6 +115,7 @@ def get_minimal_system_parameters(
         "enable_lgalloc": "false",
         "enable_load_generator_counter": "true",
         "enable_logical_compaction_window": "true",
+        "enable_mcp_protocol_2026_07_28": "true",
         "enable_metric_sink": "true",
         "enable_multi_worker_storage_persist_sink": "true",
         "enable_rbac_checks": "true",
@@ -175,8 +176,23 @@ def get_minimal_system_parameters(
     if version >= MzVersion.parse_mz("v26.40.0-dev"):
         config["hydration_history_collection_interval"] = "60s"
 
+    if version >= MzVersion.parse_mz("v26.45.0-dev"):
+        # Exercise the source persist sink's grouping of a snapshotting export's
+        # updates ahead of release to production. At least one default_timestamp_interval
+        # (1s by default). A Postgres source's snapshot and first CDC
+        # rows become visible about this much later, which the PgCdc feature
+        # benchmarks measure.
+        config["storage_persist_sink_description_lookahead"] = "2s"
+
     if sanitizer_enabled():
         config["with_0dt_deployment_max_wait"] = "18000s"
+
+    # Keep older baselines and mixed-version runs on the same read-then-write
+    # path as current binaries, where frontend OCC is unconditional.
+    if version < MzVersion.parse_mz("v26.46.0-dev"):
+        config["enable_adapter_frontend_occ_read_then_write"] = (
+            "true" if version >= MzVersion.parse_mz("v26.36.0-dev") else "false"
+        )
 
     # The cluster controller's break-glass gate. Removed in v26.38, where the
     # controller runs unconditionally. Older binaries still read it, and
@@ -278,8 +294,8 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "compute_correction_v2_chunk_size",
-            "8192",
-            ["8192", "65536", "1048576"],
+            "2097152",
+            ["8192", "65536", "2097152"],
         ),
         VariableSystemParameter(
             "compute_dataflow_max_inflight_bytes",
@@ -306,8 +322,8 @@ def get_variable_system_parameters(
         ),
         # Varied for the same reason, and because it reaches past the arrange
         # sites: it installs the process buffer pool and enables the column pager
-        # the MV sink's correction buffer and storage's upsert stash draw from, so
-        # defaulting it on would move several subsystems' memory behavior at once.
+        # storage's upsert stash draws from, so defaulting it on would move several
+        # subsystems' memory behavior at once.
         VariableSystemParameter(
             "enable_column_paged_batcher_spill", "false", ["true", "false"]
         ),
@@ -315,6 +331,11 @@ def get_variable_system_parameters(
         # is off in production while it earns trust.
         VariableSystemParameter(
             "enable_columnar_accumulable_diff", "true", ["true", "false"]
+        ),
+        # On by default so CI exercises correction chunks spilling through the
+        # buffer pool, which is off in production while it earns trust.
+        VariableSystemParameter(
+            "enable_compute_correction_v2_spill", "true", ["true", "false"]
         ),
         VariableSystemParameter(
             "compute_peek_response_stash_threshold_bytes",
@@ -336,11 +357,6 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_coalesce_case_transform",
             "true",
-            ["true", "false"],
-        ),
-        VariableSystemParameter(
-            "enable_adapter_frontend_occ_read_then_write",
-            "true" if version >= MzVersion.parse_mz("v26.36.0-dev") else "false",
             ["true", "false"],
         ),
         VariableSystemParameter(
@@ -411,6 +427,15 @@ def get_variable_system_parameters(
             "true" if force_source_table_syntax else "false",
             ["true", "false"] if force_source_table_syntax else ["false"],
         ),
+        # Low default so CI exercises the periodic recommit, which production
+        # only reaches after ten minutes.
+        VariableSystemParameter(
+            "kafka_offset_commit_refresh_interval", "10s", ["1s", "10s", "10min"]
+        ),
+        # On by default so CI exercises the sink id header path.
+        VariableSystemParameter(
+            "kafka_sink_emit_sink_id_header", "true", ["true", "false"]
+        ),
         VariableSystemParameter(
             "mysql_source_snapshot_parallelism", "true", ["true", "false"]
         ),
@@ -451,6 +476,16 @@ def get_variable_system_parameters(
             ],
         ),
         VariableSystemParameter("persist_stats_audit_panic", "true", ["true", "false"]),
+        VariableSystemParameter(
+            "persist_shard_metrics",
+            "summary",
+            ["none", "summary", "per_shard", "both"],
+        ),
+        VariableSystemParameter(
+            "persist_per_shard_metrics_enable_regex",
+            "",
+            ["", "^u1", ".*"],
+        ),
         VariableSystemParameter(
             "persist_encoding_enable_dictionary", "true", ["true", "false"]
         ),
@@ -547,6 +582,17 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "persist_part_decode_format", "arrow", ["arrow", "row_with_validate"]
+        ),
+        # Empty decodes fetched parts whole, otherwise at most this many rows
+        # at once. 7 makes batch boundaries split small test parts.
+        *(
+            [
+                VariableSystemParameter(
+                    "persist_part_decode_batch_rows", "16384", ["", "7", "16384"]
+                )
+            ]
+            if version >= MzVersion.parse_mz("v26.46.0-dev")
+            else []
         ),
         VariableSystemParameter(
             "persist_blob_cache_scale_with_threads", "true", ["true", "false"]
@@ -952,9 +998,7 @@ def _check_tcp(
         spawn.capture(cmd, stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError as e:
         ui.log_in_automation(
-            "wait-for-tcp ({}{}:{}): error running {}: {}, stdout:\n{}\nstderr:\n{}".format(
-                kind, host, port, ui.shell_quote(cmd), e, e.stdout, e.stderr
-            )
+            f"wait-for-tcp ({kind}{host}:{port}): error running {ui.shell_quote(cmd)}: {e}, stdout:\n{e.stdout}\nstderr:\n{e.stderr}"
         )
         raise
     return cmd

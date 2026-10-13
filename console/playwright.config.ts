@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { fileURLToPath } from "node:url";
+
 import { defineConfig, devices } from "@playwright/test";
 import { addAliases } from "module-alias";
 
@@ -15,7 +17,9 @@ import { addAliases } from "module-alias";
 // This is necessary because Playwright requires CommonJS (which doesn't support top-level await), while our main appConfig uses ESM with top-level await.
 // We use module-alias rather than tsconfig.json's compilerOptions.paths because I couldn't get it to resolve correctly.
 addAliases({
-  "~/config/importAppConfig": "__mocks__/importAppConfig",
+  "~/config/importAppConfig": fileURLToPath(
+    new URL("./__mocks__/importAppConfig", import.meta.url),
+  ),
 });
 
 const config = defineConfig({

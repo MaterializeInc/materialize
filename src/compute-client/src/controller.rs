@@ -828,11 +828,13 @@ impl ComputeController {
             arrangement_dictionary_compression,
         };
 
+        let dyncfg_override = overrides.cloned().unwrap_or_default();
+
         let instance = self.instance_mut(instance_id).expect("validated");
         instance.replicas.insert(replica_id);
 
         instance.call(move |i| {
-            i.add_replica(replica_id, replica_config, None)
+            i.add_replica(replica_id, replica_config, None, dyncfg_override)
                 .expect("validated")
         });
 

@@ -24,13 +24,8 @@ export default defineConfig({
     // Disabling isolation improves performance
     isolate: false,
     pool: "forks",
-    poolOptions: {
-      forks: {
-        // Because we use a shared mzcompose project, tests must be run sequentially
-        maxForks: 1,
-        minForks: 1,
-      },
-    },
+    // Because we use a shared mzcompose project, tests must be run sequentially
+    maxWorkers: 1,
     // These tests execute SQL against mzcompose services. On loaded CI runners,
     // Docker exec, testdrive reset, and catalog queries can exceed browser-test
     // timeouts even when Materialize is healthy.

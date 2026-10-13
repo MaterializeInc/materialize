@@ -307,7 +307,6 @@ impl Client {
             statement_logging_frontend,
             superuser_attribute,
             occ_write_semaphore,
-            frontend_read_then_write_enabled,
             group_commit_notifier,
             read_only,
         } = response;
@@ -321,7 +320,6 @@ impl Client {
             persist_client,
             statement_logging_frontend,
             occ_write_semaphore,
-            frontend_read_then_write_enabled,
             group_commit_notifier,
             read_only,
         );
@@ -1470,15 +1468,12 @@ impl SessionClient {
 
     /// Whether the frontend read-then-write path could take this portal over.
     ///
-    /// The gate is deliberately cheap, a flag read and a portal lookup, because
+    /// The gate is deliberately cheap, a portal lookup, because
     /// every statement that reaches `execute_attempts` without being handled by
     /// the peek path is tested against it. Everything expensive, including the
     /// coordinator round-trip that registers the connection cancel watch, sits
     /// behind it.
     fn frontend_read_then_write_applies(&self, portal_name: &str) -> bool {
-        if !self.peek_client.frontend_read_then_write_enabled {
-            return false;
-        }
         let session = self.session.as_ref().expect("SessionClient invariant");
         match session.get_portal_unverified(portal_name) {
             Some(portal) => portal
@@ -1604,13 +1599,6 @@ impl SessionClient {
         logging: &mut ExecutionLogging,
         attempt_state: Arc<FrontendWriteAttemptState>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        // Re-checked here rather than relying on the caller's gate. See the
-        // module-level docs on `frontend_read_then_write` for why the flag is
-        // fixed for the lifetime of the process.
-        if !self.peek_client.frontend_read_then_write_enabled {
-            return Ok(None);
-        }
-
         let catalog = self.catalog_snapshot("try_frontend_read_then_write").await;
 
         let stmt = {
@@ -1797,13 +1785,6 @@ impl SessionClient {
             }
         }
 
-        // The coordinator's per-plan checks, in the order it applies them:
-        // `sequence_insert` rejects a transaction that cannot take a write
-        // before it rejects the isolation level, and both it and
-        // `sequence_read_then_write` reject bounded staleness before dispatching
-        // on the plan. So both checks sit here, above the constant-INSERT
-        // dispatch as well as the read-then-write path.
-        //
         // `allows_writes` is only defined inside a transaction, which is also
         // the only place it can be false: outside one the session task opens a
         // fresh transaction with no ops. Autocommit statements therefore rely on
@@ -2037,20 +2018,41 @@ impl Drop for SessionClient {
 }
 
 /// Renders SQL for statement arrival logging: parsed and displayed with its
-/// literals redacted, which is the same redaction the statement log applies.
+/// literals redacted, which is the same redaction the statement log applies,
+/// and capped by [`truncate_sql_for_logging`].
 /// When the text does not parse or exceeds the statement batch size limit, a
 /// placeholder with the byte length is returned. Raw text is never returned,
 /// so a statement that crashes the parser is not captured, an accepted
 /// limitation.
 pub fn redact_sql_for_logging(sql: &str) -> String {
     match mz_sql_parser::parser::parse_statements_with_limit(sql) {
-        Ok(Ok(stmts)) => stmts
-            .into_iter()
-            .map(|stmt| stmt.ast.to_ast_string_redacted())
-            .join("; "),
+        Ok(Ok(stmts)) => truncate_sql_for_logging(
+            stmts
+                .into_iter()
+                .map(|stmt| stmt.ast.to_ast_string_redacted())
+                .join("; "),
+        ),
         Ok(Err(_)) => format!("<unparseable ({} bytes)>", sql.len()),
         Err(_) => format!("<too large ({} bytes)>", sql.len()),
     }
+}
+
+/// The maximum length in bytes of SQL text included in a log line.
+///
+/// Loki rejects a log entry larger than 256 KiB and drops it whole. A span's
+/// fields are repeated in every event logged inside the span, twice when it is
+/// the innermost span (the JSON format writes both `span` and `spans`), so one
+/// statement can appear several times in an entry.
+const MAX_LOGGED_SQL_LEN: usize = 8 * 1024;
+
+/// Truncates SQL text to `MAX_LOGGED_SQL_LEN` bytes for a log line, noting
+/// the original length.
+pub fn truncate_sql_for_logging(sql: String) -> String {
+    if sql.len() <= MAX_LOGGED_SQL_LEN {
+        return sql;
+    }
+    let end = sql.floor_char_boundary(MAX_LOGGED_SQL_LEN);
+    format!("{}... <truncated from {} bytes>", &sql[..end], sql.len())
 }
 
 #[derive(Hash, PartialEq, Eq, PartialOrd, Ord, Clone, Debug)]
@@ -2218,5 +2220,36 @@ impl RecordFirstRowStream {
             self.no_more_rows = true;
         }
         msg
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn truncate_sql_for_logging_caps_length() {
+        let short = "SELECT 1".to_string();
+        assert_eq!(truncate_sql_for_logging(short.clone()), short);
+
+        let exact = "x".repeat(MAX_LOGGED_SQL_LEN);
+        assert_eq!(truncate_sql_for_logging(exact.clone()), exact);
+
+        // A multi-byte character straddles the cap, so the cut must move back
+        // to the previous character boundary.
+        let long = format!(
+            "{}é{}",
+            "x".repeat(MAX_LOGGED_SQL_LEN - 1),
+            "y".repeat(1000)
+        );
+        let truncated = truncate_sql_for_logging(long.clone());
+        assert_eq!(
+            truncated,
+            format!(
+                "{}... <truncated from {} bytes>",
+                "x".repeat(MAX_LOGGED_SQL_LEN - 1),
+                long.len()
+            )
+        );
     }
 }

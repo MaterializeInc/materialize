@@ -2940,6 +2940,7 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["kafka_sink_emit_sink_id_header"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
         # Applies to replicas provisioned after the flip.
         self.flags_with_values["enable_unified_cluster"] = BOOLEAN_FLAG_VALUES
@@ -2975,6 +2976,25 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_part_decode_format"] = [
             "row_with_validate",
             "arrow",
+        ]
+        self.flags_with_values["persist_shard_metrics"] = [
+            "none",
+            "summary",
+            "per_shard",
+            "both",
+        ]
+        # Only has an effect while persist_shard_metrics leaves the per-shard
+        # families out. Shard names are GlobalIds, so "^u1" keeps a subset of
+        # the user collections.
+        self.flags_with_values["persist_per_shard_metrics_enable_regex"] = [
+            "''",
+            "'^u1'",
+            "'.*'",
+        ]
+        self.flags_with_values["persist_part_decode_batch_rows"] = [
+            "''",
+            "7",
+            "16384",
         ]
         self.flags_with_values["persist_encoding_enable_dictionary"] = (
             BOOLEAN_FLAG_VALUES
@@ -3025,6 +3045,12 @@ class FlipFlagsAction(Action):
             "'1min'",
             "'120d'",
         ]
+        # "0s" turns committing a ceiling ahead of a pinned frontier off.
+        self.flags_with_values["storage_persist_sink_description_lookahead"] = [
+            "'0s'",
+            "'1s'",
+            "'30s'",
+        ]
         # Keep these generous: a tight timeout would abort the oracle's own
         # queries (they are retried, but it adds noise). "0s" leaves it unset.
         self.flags_with_values["pg_timestamp_oracle_statement_timeout"] = [
@@ -3057,7 +3083,7 @@ class FlipFlagsAction(Action):
         self.flags_with_values["compute_correction_v2_chunk_size"] = [
             "8192",
             "65536",
-            "1048576",
+            "2097152",
         ]
         self.flags_with_values["enable_compute_temporal_bucketing"] = (
             BOOLEAN_FLAG_VALUES
@@ -3186,6 +3212,9 @@ class FlipFlagsAction(Action):
             "0.02",
         ]
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_compute_correction_v2_spill"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_upsert_chunked_stash"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["column_chunk_compress_min_depth"] = [
             "0",  # compress every spilled body
@@ -3241,10 +3270,6 @@ class FlipFlagsAction(Action):
         # behavior, you should add it. Feature flags which turn on/off
         # externally visible features should not be flipped.
         self.uninteresting_flags: list[str] = [
-            # Read once at environmentd startup, so an ALTER SYSTEM SET only
-            # takes effect after a restart. Flipping it here would be a no-op
-            # for the running process.
-            "enable_adapter_frontend_occ_read_then_write",
             "persist_blob_hedged_get_budget_ratio",
             "persist_blob_hedged_get_max_concurrent",
             "persist_blob_hedged_get_warm_interval",
@@ -3391,6 +3416,7 @@ class FlipFlagsAction(Action):
             "wallclock_lag_history_retention_interval",
             "wallclock_global_lag_histogram_retention_interval",
             "kafka_client_id_enrichment_rules",
+            "kafka_offset_commit_refresh_interval",
             "kafka_poll_max_wait",
             "kafka_default_aws_privatelink_endpoint_identification_algorithm",
             "kafka_buffered_event_resize_threshold_elements",
@@ -3437,6 +3463,7 @@ class FlipFlagsAction(Action):
             "enable_mcp_agent_read_data_product_tool",
             "enable_mcp_developer",
             "enable_mcp_developer_query_tool",
+            "enable_mcp_protocol_2026_07_28",
             "mcp_max_response_size",
             "mcp_request_timeout",
             "mz_metrics_lgalloc_map_refresh_interval",
@@ -5079,7 +5106,7 @@ class ZeroDowntimeDeployAction(Action):
             )
             self.composition.promote_mz(
                 mz_service,
-                retire=(
+                retire_mz_service=(
                     "materialized2" if mz_service == "materialized" else "materialized"
                 ),
             )
@@ -5880,7 +5907,7 @@ class HttpPostAction(Action):
 
             headers = {
                 header: (
-                    f"{datetime.datetime.now()}"
+                    f"{datetime.datetime.now(datetime.UTC)}"
                     if header == "timestamp"
                     else f'"{Text.random_value(self.rng)}"'.encode()
                 )
@@ -5925,15 +5952,6 @@ class AlterClusterSetAction(Action):
     Resizing or changing the replica count of a cluster hosting indexes, MVs,
     sources, and sinks forces rehydration and replica teardown/spin-up under
     concurrent DDL and DML."""
-
-    def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
-            # A SET (SIZE) here or a ReconfigureCluster on the same cluster
-            # leaves a reconfiguration record in flight past the statement
-            # that started it. Replication factor is folded in at cut-over,
-            # so changing it meanwhile is refused.
-            "cannot change replication factor while a reconfiguration is in progress",
-        ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:

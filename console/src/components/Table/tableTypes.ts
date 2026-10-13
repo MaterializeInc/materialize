@@ -16,11 +16,7 @@ import React from "react";
  * `src/theme/components/Table.ts`.
  */
 export type TableVariant =
-  | "linkable"
-  | "standalone"
-  | "rounded"
-  | "shell"
-  | "borderless";
+  "linkable" | "standalone" | "rounded" | "shell" | "borderless";
 
 export interface UniversalTableProps<TData> {
   /** TanStack table instance returned by `useUniversalTable`. */

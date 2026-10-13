@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/metric_sink.rs
-revision: 05fa578c92
+revision: 9ffffa68eb
 ---
 
 # adapter::coord::metric_sink

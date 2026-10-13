@@ -5127,7 +5127,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (46 rows)
+        →Constant (47 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -5472,7 +5472,7 @@ mz_catalog.mz_tables:
           Project: #3, #0, #4, #1, #5, #2, #6, #6, #6
           Map: "s1", null
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (28 rows)
+        →Constant (27 rows)
       →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #5, #4, #6
@@ -5889,7 +5889,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1034 rows)
+            →Constant (1037 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -6051,6 +6051,21 @@ Source mz_internal.mz_catalog_raw
   project=(#3..=#5)
   filter=(("Item" = (#0{data} ->> "kind")) AND ("postgres" = (parse_catalog_create_sql(#1) ->> "source_type")))
   map=(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql"), parse_postgres_source_details(#1), parse_catalog_id(((#0{data} -> "key") -> "gid")), (#2{details} ->> "slot"), text_to_uint8((#2{details} ->> "timeline_id")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_replacements";
+----
+mz_internal.mz_replacements:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#2, #1)
+  filter=(("Item" = (#0{data} ->> "kind")) AND (#1) IS NOT NULL)
+  map=((parse_catalog_create_sql(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql")) ->> "replacement_target"), parse_catalog_id(((#0{data} -> "key") -> "gid")))
 
 Target cluster: mz_catalog_server
 
@@ -8440,7 +8455,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (46 rows)
+  →Constant (47 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8460,7 +8475,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_tables";
 ----
 Explained Query (fast path):
-  →Constant (28 rows)
+  →Constant (27 rows)
 
 Target cluster: mz_catalog_server
 
@@ -10388,7 +10403,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1034 rows)
+            →Constant (1037 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3

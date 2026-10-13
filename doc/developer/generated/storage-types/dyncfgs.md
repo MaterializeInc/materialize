@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/dyncfgs.rs
-revision: cc09d0a733
+revision: 80e24400e7
 ---
 
 # storage-types::dyncfgs
@@ -21,6 +21,7 @@ Covers:
 * **RocksDB**: `STORAGE_ROCKSDB_CLEANUP_TRIES`.
 * **Runtime**: `STORAGE_SUSPEND_AND_RESTART_DELAY`, `STORAGE_SERVER_MAINTENANCE_INTERVAL`.
 * **Sinks**: `SINK_PROGRESS_SEARCH` (iterative progress-topic search with increasing lookback, defaults `true`) and `SINK_ENSURE_TOPIC_CONFIG` (controls topic-config reconciliation: `"skip"`, `"check"`, or `"alter"`, defaults `"skip"`).
+* **Persist sink**: `STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD` — how far ahead of the remap upper the source `persist_sink` commits a ceiling while a snapshotting export holds its frontier pinned, so that it can group updates into one batch. Zero (the default) disables committing ahead; values below the timestamp interval are clamped to the timestamp interval. Only applies to Postgres sources snapshotting in the current dataflow incarnation.
 * **Misc**: `ORE_OVERFLOWING_BEHAVIOR` (overflow behavior for `Overflowing` types: `"ignore"`, `"panic"`, or `"soft_panic"`, defaults `"soft_panic"`) and `STATISTICS_RETENTION_DURATION` (defaults one day).
 
 All constants are registered into a `ConfigSet` via `all_dyncfgs` and can be read both statically during dataflow rendering and dynamically at runtime.

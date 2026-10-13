@@ -58,7 +58,7 @@ use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{Diagnostics, PersistClient, PersistLocation};
 use mz_repr::{Diff, Timestamp};
-use mz_service::secrets::SecretsReaderCliArgs;
+use mz_secrets_cli::SecretsReaderCliArgs;
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::connections::ConnectionContext;
@@ -602,7 +602,9 @@ async fn upgrade_check(
     cluster_replica_sizes: ClusterReplicaSizeMap,
     start: Instant,
 ) -> Result<(), anyhow::Error> {
-    let secrets_reader = secrets.load().await.context("loading secrets reader")?;
+    let secrets_reader = mz_secrets_loader::load(secrets)
+        .await
+        .context("loading secrets reader")?;
 
     let now = SYSTEM_TIME.clone();
     let mut storage = openable_state

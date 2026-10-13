@@ -44,7 +44,7 @@ def wait_ready_and_promote(
 ) -> list[MzcomposeAction]:
     return [
         WaitReadyMz(mz_service),
-        PromoteMz(mz_service, retire=previous_mz_service),
+        PromoteMz(mz_service, retire_mz_service=previous_mz_service),
     ]
 
 
@@ -160,7 +160,7 @@ class ZeroDowntimeUpgradeEntireMzOnce(Scenario):
             # below the 1200s default so that a genuinely stuck cutover still
             # fails the pipeline quickly.
             WaitReadyMz(mz_service="mz_2", timeout=180),
-            PromoteMz(mz_service="mz_2", retire="mz_1"),
+            PromoteMz(mz_service="mz_2", retire_mz_service="mz_1"),
             Manipulate(self, phase=2, mz_service="mz_2"),
             Validate(self, mz_service="mz_2"),
         ]

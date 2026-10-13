@@ -30,7 +30,8 @@ use crate::pure::{MySqlSourcePurificationError, ResolvedItemName};
 
 use super::references::RetrievedSourceReferences;
 use super::{
-    PurifiedExportDetails, PurifiedSourceExport, RequestedSourceExport, SourceReferencePolicy,
+    FilterConstraints, PurifiedExportDetails, PurifiedSourceExport, RequestedSourceExport,
+    SourceReferencePolicy,
 };
 
 /// The name of the fake database that we use for MySQL sources
@@ -338,6 +339,10 @@ pub(super) async fn purify_source_exports(
     requested_references: &Option<ExternalReferences>,
     text_columns: Vec<UnresolvedItemName>,
     exclude_columns: Vec<UnresolvedItemName>,
+    // NOTE: constraints may only be excluded when exactly one export is
+    // purified, as `CREATE TABLE .. FROM SOURCE` does, since constraint names
+    // are validated against that single table's keys. Enforced below.
+    filter_constraints: &FilterConstraints,
     unresolved_source_name: &UnresolvedItemName,
     initial_gtid_set: String,
     reference_policy: &SourceReferencePolicy,
@@ -391,6 +396,14 @@ pub(super) async fn purify_source_exports(
 
     super::validate_source_export_names(&requested_exports)?;
 
+    if filter_constraints.excludes_any() && requested_exports.len() != 1 {
+        sql_bail!(
+            "EXCLUDE CONSTRAINTS and EXCLUDE ALL CONSTRAINTS apply to exactly one table, \
+             but {} tables were referenced",
+            requested_exports.len()
+        );
+    }
+
     let text_cols_map = map_column_refs(&text_columns, MySqlConfigOptionName::TextColumns)?;
     let exclude_columns_map =
         map_column_refs(&exclude_columns, MySqlConfigOptionName::ExcludeColumns)?;
@@ -402,6 +415,22 @@ pub(super) async fn purify_source_exports(
         .map(|requested_export| {
             let table = requested_export.meta.mysql_table().expect("is mysql");
             let table_ref = table.table_ref();
+
+            if let FilterConstraints::Exclude(names) = filter_constraints {
+                let missing: Vec<_> = names
+                    .iter()
+                    .filter(|n| !table.keys.iter().any(|k| &&k.name == n))
+                    .cloned()
+                    .collect();
+                if !missing.is_empty() {
+                    return Err(MySqlSourcePurificationError::ConstraintsNotFound {
+                        table: format!("{}.{}", table.schema_name, table.name),
+                        constraints: missing,
+                    }
+                    .into());
+                }
+            }
+
             // we are cloning the BTreeSet<&str> so we can avoid a borrow on `table` here
             let text_cols = text_cols_map.get(&table_ref).map(|s| s.clone());
             let exclude_columns = exclude_columns_map.get(&table_ref).map(|s| s.clone());
@@ -426,6 +455,22 @@ pub(super) async fn purify_source_exports(
                     )),
                     _ => err.into(),
                 })?;
+            let mut parsed_table = parsed_table;
+            match filter_constraints {
+                FilterConstraints::Exclude(names) => {
+                    parsed_table.keys.retain(|k| !names.contains(&k.name));
+                }
+                FilterConstraints::ExcludeAll => {
+                    // Marking columns as nullable allows dropping (and adding) the
+                    // NOT NULL constraint without an outage.
+                    parsed_table.keys.clear();
+                    for c in &mut parsed_table.columns {
+                        if let Some(column_type) = &mut c.column_type {
+                            column_type.nullable = true;
+                        }
+                    }
+                }
+            }
             Ok(requested_export.change_meta(parsed_table))
         })
         .collect::<Result<Vec<_>, PlanError>>()?;

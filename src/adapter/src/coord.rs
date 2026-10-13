@@ -91,11 +91,7 @@ use itertools::Itertools;
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::FRONTEND_READ_THEN_WRITE;
-use mz_adapter_types::dyncfgs::{
-    ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS, USER_ID_POOL_BATCH_SIZE,
-    WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
-};
+use mz_adapter_types::dyncfgs::{ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS, USER_ID_POOL_BATCH_SIZE};
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
 use mz_catalog::builtin::{
@@ -182,14 +178,14 @@ use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
 use tokio::sync::{Notify, OwnedMutexGuard, Semaphore, mpsc, oneshot, watch};
-use tokio::time::{Interval, MissedTickBehavior};
+use tokio::time::Interval;
 use tracing::{Instrument, Level, Span, debug, info, info_span, span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyFrom};
 use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
-use crate::client::{Client, Handle};
+use crate::client::{Client, Handle, truncate_sql_for_logging};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{
     ClusterEvalContext, ClusterScopeContext, ReplicaEvalContext, ReplicaScopeContext,
@@ -197,7 +193,7 @@ use crate::config::{
     SystemParameterSyncConfig,
 };
 use crate::coord::appends::{
-    BuiltinTableAppendCompletion, BuiltinTableAppendNotify, DeferredOp, GroupCommitPermit,
+    BuiltinTableAppendCompletion, BuiltinTableAppendNotify, DeferredPlan, GroupCommitPermit,
     PendingWriteTxn,
 };
 use crate::coord::caught_up::CaughtUpCheckContext;
@@ -337,8 +333,8 @@ impl IdPool {
 }
 
 /// A row for `mz_object_arrangement_size_history`, prepared off-thread by the
-/// arrangement sizes snapshot task and stamped with a collection timestamp at
-/// write time.
+/// arrangement sizes snapshot task and stamped with the snapshot's read
+/// timestamp when written.
 #[derive(Debug)]
 pub struct ArrangementSizeRecord {
     pub replica_id: String,
@@ -356,19 +352,9 @@ pub enum Message {
     PurifiedStatementReady(PurifiedStatementReady),
     CreateConnectionValidationReady(CreateConnectionValidationReady),
     AlterConnectionValidationReady(AlterConnectionValidationReady),
-    TryDeferred {
-        /// The connection that created this op.
+    DeferredPlanReady {
+        /// The connection whose session-startup appends completed.
         conn_id: ConnectionId,
-        /// The write lock that notified us our deferred op might be able to run.
-        ///
-        /// Note: While we never want to hold a partial set of locks, it can be important to hold
-        /// onto the _one_ that notified us our op might be ready. If there are multiple operations
-        /// waiting on a single collection, and we don't hold this lock through retyring the op,
-        /// then everything waiting on this collection will get retried causing traffic in the
-        /// Coordinator's message queue.
-        ///
-        /// See [`DeferredOp::can_be_optimistically_retried`] for more detail.
-        acquired_lock: Option<(CatalogItemId, tokio::sync::OwnedMutexGuard<()>)>,
     },
     /// Initiates a group commit.
     GroupCommitInitiate(Span, Option<GroupCommitPermit>),
@@ -388,9 +374,6 @@ pub enum Message {
     DeferredStatementReady,
     AdvanceTimelines,
     ClusterEvent(ClusterEvent),
-    CancelPendingPeeks {
-        conn_id: ConnectionId,
-    },
     LinearizeReads,
     StagedBatches {
         conn_id: ConnectionId,
@@ -403,10 +386,14 @@ pub enum Message {
     StorageUsagePrune(Vec<BuiltinTableUpdate>),
     ArrangementSizesSchedule,
     ArrangementSizesSnapshot,
-    ArrangementSizesWrite(Vec<ArrangementSizeRecord>),
+    ArrangementSizesWrite {
+        records: Vec<ArrangementSizeRecord>,
+        collection_ts: EpochMillis,
+    },
     ArrangementSizesPrune(Vec<BuiltinTableUpdate>),
     HydrationHistorySchedule,
     HydrationHistoryRun,
+    CaughtUpCheck(caught_up::CaughtUpCheckRequest),
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
@@ -550,12 +537,11 @@ impl Message {
             } => "controller_ready(internal)",
             Message::PurifiedStatementReady(_) => "purified_statement_ready",
             Message::CreateConnectionValidationReady(_) => "create_connection_validation_ready",
-            Message::TryDeferred { .. } => "try_deferred",
+            Message::DeferredPlanReady { .. } => "deferred_plan_ready",
             Message::GroupCommitInitiate(..) => "group_commit_initiate",
             Message::GroupCommitApplied { .. } => "group_commit_applied",
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
-            Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
             Message::LinearizeReads => "linearize_reads",
             Message::StagedBatches { .. } => "staged_batches",
             Message::StorageUsageSchedule => "storage_usage_schedule",
@@ -564,10 +550,11 @@ impl Message {
             Message::StorageUsagePrune(_) => "storage_usage_prune",
             Message::ArrangementSizesSchedule => "arrangement_sizes_schedule",
             Message::ArrangementSizesSnapshot => "arrangement_sizes_snapshot",
-            Message::ArrangementSizesWrite(_) => "arrangement_sizes_write",
+            Message::ArrangementSizesWrite { .. } => "arrangement_sizes_write",
             Message::ArrangementSizesPrune(_) => "arrangement_sizes_prune",
             Message::HydrationHistorySchedule => "hydration_history_schedule",
             Message::HydrationHistoryRun => "hydration_history_run",
+            Message::CaughtUpCheck(_) => "caught_up_check",
             Message::RetireExecute { .. } => "retire_execute",
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
@@ -1477,8 +1464,7 @@ impl From<PendingTxnResponse> for ExecuteResponse {
 #[derive(Debug)]
 /// A pending read transaction waiting to be linearized along with metadata about it's state
 pub struct PendingReadTxn {
-    /// The transaction type
-    txn: PendingRead,
+    txn: PendingTxn,
     /// The timestamp context of the transaction.
     timestamp_context: TimestampContext,
     /// When we created this pending txn, when the transaction ends. Only used for metrics.
@@ -1498,77 +1484,23 @@ impl PendingReadTxn {
     }
 
     pub(crate) fn take_context(self) -> ExecuteContext {
-        self.txn.take_context()
+        self.txn.ctx
     }
-}
 
-#[derive(Debug)]
-/// A pending read transaction waiting to be linearized.
-enum PendingRead {
-    Read {
-        /// The inner transaction.
-        txn: PendingTxn,
-    },
-    ReadThenWrite {
-        /// Context used to send a response back to the client.
-        ctx: ExecuteContext,
-        /// Channel used to alert the transaction that the read has been linearized and send back
-        /// `ctx`.
-        tx: oneshot::Sender<Option<ExecuteContext>>,
-    },
-}
-
-impl PendingRead {
     /// Alert the client that the read has been linearized.
-    ///
-    /// If it is necessary to finalize an execute, return the state necessary to do so
-    /// (execution context and result)
     #[instrument(level = "debug")]
-    pub fn finish(self) -> Option<(ExecuteContext, Result<ExecuteResponse, AdapterError>)> {
-        match self {
-            PendingRead::Read {
-                txn:
-                    PendingTxn {
-                        mut ctx,
-                        response,
-                        action,
-                    },
-                ..
-            } => {
-                let changed = ctx.session_mut().vars_mut().end_transaction(action);
-                // Append any parameters that changed to the response.
-                let response = response.map(|mut r| {
-                    r.extend_params(changed);
-                    ExecuteResponse::from(r)
-                });
-
-                Some((ctx, response))
-            }
-            PendingRead::ReadThenWrite { ctx, tx, .. } => {
-                // Ignore errors if the caller has hung up.
-                let _ = tx.send(Some(ctx));
-                None
-            }
-        }
-    }
-
-    fn label(&self) -> &'static str {
-        match self {
-            PendingRead::Read { .. } => "read",
-            PendingRead::ReadThenWrite { .. } => "read_then_write",
-        }
-    }
-
-    pub(crate) fn take_context(self) -> ExecuteContext {
-        match self {
-            PendingRead::Read { txn, .. } => txn.ctx,
-            PendingRead::ReadThenWrite { ctx, tx, .. } => {
-                // Inform the transaction that we've taken their context.
-                // Ignore errors if the caller has hung up.
-                let _ = tx.send(None);
-                ctx
-            }
-        }
+    pub fn finish(self) {
+        let PendingTxn {
+            mut ctx,
+            response,
+            action,
+        } = self.txn;
+        let changed = ctx.session_mut().vars_mut().end_transaction(action);
+        let response = response.map(|mut r| {
+            r.extend_params(changed);
+            ExecuteResponse::from(r)
+        });
+        ctx.retire(response);
     }
 }
 
@@ -2142,10 +2074,8 @@ pub struct Coordinator {
     /// per replica. See [`Coordinator::plan_metric_sink`].
     metric_sink_plans: BTreeMap<&'static str, PlannedMetricSink>,
 
-    /// Locks that grant access to a specific object, populated lazily as objects are written to.
-    write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
-    /// Plans that are currently deferred and waiting on a write lock.
-    deferred_write_ops: BTreeMap<ConnectionId, DeferredOp>,
+    /// Plans waiting for session-startup builtin table appends.
+    deferred_plans: BTreeMap<ConnectionId, DeferredPlan>,
 
     /// Pending writes waiting for a group commit.
     pending_writes: Vec<PendingWriteTxn>,
@@ -2161,12 +2091,6 @@ pub struct Coordinator {
     /// NOTE: The number of permits is read from `max_concurrent_occ_writes` at
     /// coordinator startup. Runtime changes require an `environmentd` restart.
     occ_write_semaphore: Arc<Semaphore>,
-
-    /// Whether frontend OCC read-then-write is enabled. Read once at startup
-    /// from the `FRONTEND_READ_THEN_WRITE` dyncfg and fixed for the lifetime of
-    /// this process. See the module-level docs on `frontend_read_then_write`
-    /// for why mixed-mode operation is not allowed.
-    frontend_read_then_write_enabled: bool,
 
     /// For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
     /// table's timestamps, but there are cases where timestamps are not bumped but
@@ -2226,12 +2150,9 @@ pub struct Coordinator {
     /// a timestamp oracle backend is configured.
     timestamp_oracle_config: Option<TimestampOracleConfig>,
 
-    /// When doing 0dt upgrades/in read-only mode, periodically ask all known
-    /// clusters/collections whether they are caught up.
-    caught_up_check_interval: Interval,
-
     /// Context needed to check whether all clusters/collections have caught up.
-    /// Only used during 0dt deployment, while in read-only mode.
+    /// Only present during 0dt deployment, while in read-only mode, and taken
+    /// by [`Coordinator::spawn_caught_up_check_task`].
     caught_up_check: Option<CaughtUpCheckContext>,
 
     /// The metrics registry, handed to the catalog info-metrics background task
@@ -4187,12 +4108,13 @@ impl Coordinator {
             });
 
             self.schedule_storage_usage_collection().await;
-            self.schedule_arrangement_sizes_collection().await;
+            self.schedule_arrangement_sizes_collection();
             self.schedule_hydration_history_collection();
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
             self.spawn_catalog_info_metrics_task();
             self.spawn_cluster_controller_task();
+            self.spawn_caught_up_check_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
             // Report if the handling of a single message takes longer than this threshold.
@@ -4337,18 +4259,6 @@ impl Coordinator {
                         linearize_reads_notified.set(linearize_reads_notify.notified());
                         messages.push(Message::LinearizeReads);
                     }
-                    // `tick()` on `Interval` is cancel-safe:
-                    // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                    // Receive a single command.
-                    _ = self.caught_up_check_interval.tick() => {
-                        // We do this directly on the main loop instead of
-                        // firing off a message. We are still in read-only mode,
-                        // so optimizing for latency, not blocking the main loop
-                        // is not that important.
-                        self.maybe_check_caught_up().await;
-
-                        continue;
-                    },
 
                     // Process the idle metric at the lowest priority to sample queue non-idle time.
                     // `recv()` on `Receiver` is cancellation safe:
@@ -4911,9 +4821,11 @@ impl Coordinator {
 /// `mz_object_arrangement_size_history` snapshot whose `collection_timestamp`
 /// (column 3) is strictly before `cutoff_ts`.
 ///
-/// Panics if any input row has `diff != 1`: the caller must consolidate first,
-/// and a consolidated history table should never contain retractions because
-/// the only source of retractions is this function itself.
+/// Every input row should have `diff == 1`: the caller must consolidate first,
+/// this function is the only source of retractions, and a single writer never
+/// repeats a `collection_timestamp`. Any other diff is a soft panic, and the
+/// expired row is retracted at its full multiplicity. A hard panic here would
+/// fail every boot, since this runs at startup.
 fn arrangement_sizes_expired_retractions(
     rows: impl IntoIterator<Item = (mz_repr::Row, i64)>,
     cutoff_ts: u128,
@@ -4921,10 +4833,11 @@ fn arrangement_sizes_expired_retractions(
 ) -> Vec<BuiltinTableUpdate> {
     let mut expired = Vec::new();
     for (row, diff) in rows {
-        assert_eq!(
-            diff, 1,
-            "consolidated contents should not contain retractions: ({row:#?}, {diff:#?})"
-        );
+        if diff != 1 {
+            soft_panic_or_log!(
+                "consolidated contents should only contain diff 1: ({row:#?}, {diff:#?})"
+            );
+        }
         let collection_timestamp = row
             .unpack()
             .get(3)
@@ -4935,7 +4848,7 @@ fn arrangement_sizes_expired_retractions(
             .try_into()
             .expect("all collections happen after Jan 1 1970");
         if collection_timestamp < cutoff_ts {
-            expired.push(BuiltinTableUpdate::row(item_id, row, Diff::MINUS_ONE));
+            expired.push(BuiltinTableUpdate::row(item_id, row, -Diff::from(diff)));
         }
     }
     expired
@@ -4972,7 +4885,7 @@ impl LastMessage {
     fn stmt_to_string(&self) -> Cow<'static, str> {
         self.stmt
             .as_ref()
-            .map(|stmt| stmt.to_ast_string_redacted().into())
+            .map(|stmt| truncate_sql_for_logging(stmt.to_ast_string_redacted()).into())
             .unwrap_or(Cow::Borrowed("<none>"))
     }
 }
@@ -5270,26 +5183,6 @@ pub fn serve(
         let advance_timelines_interval =
             tokio::time::interval(catalog.system_config().default_timestamp_interval());
 
-        let clusters_caught_up_check_interval = if read_only_controllers {
-            let dyncfgs = catalog.system_config().dyncfgs();
-            let interval = WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL.get(dyncfgs);
-
-            let mut interval = tokio::time::interval(interval);
-            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-            interval
-        } else {
-            // When not in read-only mode, we don't do hydration checks. But we
-            // still have to provide _some_ interval. This is large enough that
-            // it doesn't matter.
-            //
-            // TODO(aljoscha): We cannot use Duration::MAX right now because of
-            // https://github.com/tokio-rs/tokio/issues/6634. Use that once it's
-            // fixed for good.
-            let mut interval = tokio::time::interval(Duration::from_secs(60 * 60));
-            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
-            interval
-        };
-
         let clusters_caught_up_check =
             clusters_caught_up_trigger.map(|trigger| {
                 let mut exclude_collections: BTreeSet<GlobalId> =
@@ -5331,7 +5224,6 @@ pub fn serve(
                 CaughtUpCheckContext {
                     trigger,
                     exclude_collections,
-                    cluster_stability: BTreeMap::new(),
                 }
             });
 
@@ -5411,13 +5303,8 @@ pub fn serve(
                 }
 
                 let catalog = Arc::new(catalog);
-                // Both are read once at startup, see the field docs on
-                // `occ_write_semaphore` and `frontend_read_then_write_enabled`.
                 let max_concurrent_occ_writes =
                     usize::cast_from(catalog.system_config().max_concurrent_occ_writes());
-                let frontend_read_then_write_enabled = {
-                                FRONTEND_READ_THEN_WRITE.get(catalog.system_config().dyncfgs())
-                };
 
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
                 let (group_committer_tx, group_committer_rx) = mpsc::unbounded_channel();
@@ -5447,11 +5334,9 @@ pub fn serve(
                     hydration_history_sweep: None,
                     metric_sinks: BTreeMap::new(),
                     metric_sink_plans: BTreeMap::new(),
-                    write_locks: BTreeMap::new(),
-                    deferred_write_ops: BTreeMap::new(),
+                    deferred_plans: BTreeMap::new(),
                     pending_writes: Vec::new(),
                     occ_write_semaphore: Arc::new(Semaphore::new(max_concurrent_occ_writes)),
-                    frontend_read_then_write_enabled,
                     advance_timelines_interval,
                     secrets_controller,
                     caching_secrets_reader,
@@ -5467,7 +5352,6 @@ pub fn serve(
                     statement_logging: StatementLogging::new(coord_now.clone()),
                     webhook_concurrency_limit,
                     timestamp_oracle_config,
-                    caught_up_check_interval: clusters_caught_up_check_interval,
                     caught_up_check: clusters_caught_up_check,
                     installed_watch_sets: BTreeMap::new(),
                     connection_watch_sets: BTreeMap::new(),
@@ -6026,7 +5910,7 @@ mod arrangement_sizes_pruner_tests {
     }
 
     #[mz_ore::test]
-    #[should_panic(expected = "consolidated contents should not contain retractions")]
+    #[should_panic(expected = "consolidated contents should only contain diff 1")]
     fn retraction_in_input_panics() {
         let rows = vec![(history_row(100), -1)];
         let _ = arrangement_sizes_expired_retractions(rows, 1_000, item_id());

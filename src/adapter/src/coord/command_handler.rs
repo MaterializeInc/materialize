@@ -49,6 +49,7 @@ use mz_sql::pure::{
     materialized_view_option_contains_temporal, purify_create_materialized_view_options,
 };
 use mz_sql::rbac;
+use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
     EndTransactionAction, NETWORK_POLICY, OwnedVarInput, STATEMENT_LOGGING_SAMPLE_RATE,
@@ -66,6 +67,7 @@ use tracing::{Instrument, debug_span, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
+use crate::client::truncate_sql_for_logging;
 use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, Response, SASLChallengeResponse,
     SASLVerifyProofResponse, StartupResponse, SuperuserAttribute,
@@ -948,7 +950,6 @@ impl Coordinator {
                     statement_logging_frontend,
                     superuser_attribute,
                     occ_write_semaphore: Arc::clone(&self.occ_write_semaphore),
-                    frontend_read_then_write_enabled: self.frontend_read_then_write_enabled,
                     group_commit_notifier: self.group_commit_tx.clone(),
                     read_only: self.controller.read_only(),
                 });
@@ -1264,11 +1265,20 @@ impl Coordinator {
             }
             _ => {}
         }
+        let application_name = ApplicationNameHint::from_str(ctx.session().application_name());
+        if let Some(labels) =
+            metrics::as_of_query_label_values(session_type, application_name, &stmt)
+        {
+            self.metrics.as_of_queries.with_label_values(&labels).inc();
+        }
 
         self.handle_execute_inner(stmt, params, ctx).await
     }
 
-    #[instrument(name = "coord::handle_execute_inner", fields(stmt = stmt.to_ast_string_redacted()))]
+    #[instrument(
+        name = "coord::handle_execute_inner",
+        fields(stmt = truncate_sql_for_logging(stmt.to_ast_string_redacted())),
+    )]
     pub(crate) async fn handle_execute_inner(
         &mut self,
         stmt: Arc<Statement<Raw>>,
@@ -2030,9 +2040,9 @@ impl Coordinator {
             }
         }
 
-        // Cancel deferred writes.
-        if let Some(write_op) = self.deferred_write_ops.remove(&conn_id) {
-            maybe_ctx = Some(write_op.into_ctx());
+        // Cancel plans waiting for session-startup appends.
+        if let Some(plan) = self.deferred_plans.remove(&conn_id) {
+            maybe_ctx = Some(plan.ctx);
         }
 
         // Cancel deferred statements.
@@ -2081,13 +2091,10 @@ impl Coordinator {
     /// may be sent for it.
     #[mz_ore::instrument(level = "debug")]
     async fn handle_terminate(&mut self, conn_id: ConnectionId) {
-        // If the session doesn't exist in `active_conns`, then this method will panic later on.
-        // Instead we explicitly panic here while dumping the entire Coord to the logs to help
-        // debug. This panic is very infrequent so we want as much information as possible.
-        // See https://github.com/MaterializeInc/database-issues/issues/5627.
+        // Checked up front so that an unknown connection panics before the cleanup below runs.
         assert!(
             self.active_conns.contains_key(&conn_id),
-            "unknown connection: {conn_id:?}\n\n{self:?}"
+            "unknown connection: {conn_id:?}"
         );
 
         // We do not need to call clear_transaction here because there are no side effects to run

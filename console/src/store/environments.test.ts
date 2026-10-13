@@ -66,9 +66,19 @@ describe("store/environments", () => {
       expect(result.health).toEqual("healthy");
     });
 
-    it("should return crashed when there is an error", async () => {
+    it("should return booting for a SQL error while still within the boot window", async () => {
       server.use(badRequestHandler);
       const result = await fetchEnvironmentHealth(enabledEnvironment);
+      expect(result.health).toEqual("booting");
+    });
+
+    it("should return crashed for a SQL error after the boot window", async () => {
+      server.use(badRequestHandler);
+      const result = await fetchEnvironmentHealth(
+        enabledEnvironment,
+        10_000,
+        { seconds: 0.001 }, // 1ms max boot time (already exceeded)
+      );
       expect(result.health).toEqual("crashed");
       const { errors } = result as { errors?: EnvironmentError[] };
       expect(errors).toEqual([

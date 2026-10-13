@@ -102,63 +102,60 @@ const CURATED: &[CuratedMetricSink] = &[
         //
         // Logs are per operator, so map operator -> dataflow -> export id. Take the operator ->
         // dataflow step off `mz_dataflow_addresses_per_worker` (`address[1]` is the dataflow id),
-        // and fold each family to one row per dataflow before the export join, so only live
-        // dataflows reach it.
+        // which avoids the multi-way join behind `mz_dataflow_operator_dataflows`.
         //
         // `min(export_id)` collapses a multi-export dataflow to one series (lexicographic, so
         // `min('u10', 'u2')` is `'u10'`: arbitrary but stable). The group-size hint stops that `min`
         // from rendering the 8-level hierarchy, which would otherwise show up as tuning advice for
         // the sink's own dataflow in `mz_expected_group_size_advice`.
         //
-        // Transient exports (subscribes, peeks, metric sinks) and operators with no address row on
-        // their own worker fall through to an `unattributable` sentinel, so their bytes still count
-        // without a churning `t<N>` label growing series without bound.
+        // NOTE: counting an arrangement this sink reads is a feedback loop. Every change to it
+        // changes its logged size, the sink reads that on the next logging tick, and the dataflow
+        // re-runs every tick for the replica's lifetime (SQL-730). `NOT LIKE 't%'` keeps out the
+        // sink's own dataflow and the replica's introspection subscribes. `NOT LIKE 'si%'` keeps
+        // out the logging dataflow: `si<N>` names only the introspection source indexes it
+        // exports, and a plain system index prints `s<N>`. Only that filter excludes it under
+        // `INTROSPECTION DEBUGGING`, which registers the loggers before the logging dataflow is
+        // built, so its own operators get log rows. The cost is that transient dataflows'
+        // arrangements go unreported, so these families sum below what the replica holds.
+        //
+        // `f` joins each raw log separately to reuse its `(operator_id, worker_id)` index
+        // (`LogVariant::index_by`). One union would arrange all three logs' rows afresh.
         source_sql: "
 WITH ex AS (
     SELECT dataflow_id, min(export_id) AS export_id
     FROM mz_introspection.mz_compute_exports
-    WHERE export_id NOT LIKE 't%'
+    WHERE export_id NOT LIKE 't%' AND export_id NOT LIKE 'si%'
     GROUP BY dataflow_id OPTIONS (AGGREGATE INPUT GROUP SIZE = 1)
 ),
-od AS (
-    SELECT id, worker_id, address[1] AS dataflow_id
-    FROM mz_introspection.mz_dataflow_addresses_per_worker
+oe AS (
+    SELECT a.id, a.worker_id, ex.export_id
+    FROM mz_introspection.mz_dataflow_addresses_per_worker a
+    JOIN ex ON ex.dataflow_id = a.address[1]
 ),
-size_bytes AS (
-    SELECT od.dataflow_id, count(*) AS value
+f AS (
+    SELECT 'arrangement_size_bytes'::text AS metric_name, oe.export_id
     FROM mz_introspection.mz_arrangement_heap_size_raw r
-    LEFT JOIN od ON r.operator_id = od.id AND r.worker_id = od.worker_id
-    GROUP BY od.dataflow_id
-),
-records AS (
-    SELECT od.dataflow_id, count(*) AS value
+    JOIN oe ON r.operator_id = oe.id AND r.worker_id = oe.worker_id
+    UNION ALL
+    SELECT 'arrangement_records'::text, oe.export_id
     FROM mz_introspection.mz_arrangement_records_raw r
-    LEFT JOIN od ON r.operator_id = od.id AND r.worker_id = od.worker_id
-    GROUP BY od.dataflow_id
-),
-batches AS (
-    SELECT od.dataflow_id, count(*) AS value
+    JOIN oe ON r.operator_id = oe.id AND r.worker_id = oe.worker_id
+    UNION ALL
+    SELECT 'arrangement_batches'::text, oe.export_id
     FROM mz_introspection.mz_arrangement_batches_raw r
-    LEFT JOIN od ON r.operator_id = od.id AND r.worker_id = od.worker_id
-    GROUP BY od.dataflow_id
+    JOIN oe ON r.operator_id = oe.id AND r.worker_id = oe.worker_id
 )
-SELECT 'arrangement_size_bytes'::text AS metric_name, 'gauge'::text AS metric_type,
-       map_build(LIST[ROW('id', COALESCE(ex.export_id, 'unattributable'))])::map[text=>text] AS labels,
-       sum(f.value)::double precision AS value, 'arrangement heap size in bytes'::text AS help
-FROM size_bytes f LEFT JOIN ex ON ex.dataflow_id = f.dataflow_id
-GROUP BY COALESCE(ex.export_id, 'unattributable')
-UNION ALL
-SELECT 'arrangement_records'::text AS metric_name, 'gauge'::text AS metric_type,
-       map_build(LIST[ROW('id', COALESCE(ex.export_id, 'unattributable'))])::map[text=>text] AS labels,
-       sum(f.value)::double precision AS value, 'number of records in arrangement heaps'::text AS help
-FROM records f LEFT JOIN ex ON ex.dataflow_id = f.dataflow_id
-GROUP BY COALESCE(ex.export_id, 'unattributable')
-UNION ALL
-SELECT 'arrangement_batches'::text AS metric_name, 'gauge'::text AS metric_type,
-       map_build(LIST[ROW('id', COALESCE(ex.export_id, 'unattributable'))])::map[text=>text] AS labels,
-       sum(f.value)::double precision AS value, 'number of batches in arrangements'::text AS help
-FROM batches f LEFT JOIN ex ON ex.dataflow_id = f.dataflow_id
-GROUP BY COALESCE(ex.export_id, 'unattributable')",
+SELECT metric_name, 'gauge'::text AS metric_type,
+       map_build(LIST[ROW('id', export_id)])::map[text=>text] AS labels,
+       count(*)::double precision AS value,
+       CASE metric_name
+           WHEN 'arrangement_size_bytes' THEN 'arrangement heap size in bytes'
+           WHEN 'arrangement_records' THEN 'number of records in arrangement heaps'
+           WHEN 'arrangement_batches' THEN 'number of batches in arrangements'
+       END AS help
+FROM f
+GROUP BY metric_name, export_id",
     },
     CuratedMetricSink {
         name: "mz_metric_dataflow_errors",

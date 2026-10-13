@@ -603,13 +603,6 @@ impl RustType<ProtoColumnName> for ColumnName {
     }
 }
 
-impl From<ColumnName> for mz_sql_parser::ast::Ident {
-    fn from(value: ColumnName) -> Self {
-        // Note: ColumnNames are known to be less than the max length of an Ident (I think?).
-        mz_sql_parser::ast::Ident::new_unchecked(value.0)
-    }
-}
-
 #[cfg(any(test, feature = "proptest"))]
 impl proptest::arbitrary::Arbitrary for ColumnName {
     type Parameters = ();
@@ -731,21 +724,9 @@ impl From<RelationVersion> for SchemaId {
     }
 }
 
-impl From<mz_sql_parser::ast::Version> for RelationVersion {
-    fn from(value: mz_sql_parser::ast::Version) -> Self {
-        RelationVersion(value.into_inner())
-    }
-}
-
 impl fmt::Display for RelationVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "v{}", self.0)
-    }
-}
-
-impl From<RelationVersion> for mz_sql_parser::ast::Version {
-    fn from(value: RelationVersion) -> Self {
-        mz_sql_parser::ast::Version::new(value.0)
     }
 }
 

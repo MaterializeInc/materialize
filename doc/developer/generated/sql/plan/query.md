@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/query.rs
-revision: 8be80d79b9
+revision: 8941c49828
 ---
 
 # mz-sql::plan::query

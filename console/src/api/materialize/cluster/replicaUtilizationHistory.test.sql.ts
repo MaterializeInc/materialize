@@ -393,14 +393,13 @@ describe("console cluster utilization indexed views", () => {
       },
     });
 
-  it("buildConsoleClusterUtilizationUnbinned3hQuery filters by cluster and optionally expands blue-green lineage", async () => {
+  it("buildConsoleClusterUtilizationUnbinned3hQuery filters by the given cluster ids", async () => {
     const client = await getMaterializeClient();
 
     await testdrive(`
         > CREATE SCHEMA IF NOT EXISTS internal_test;
         > SET schema = internal_test;
         > DROP TABLE IF EXISTS mz_console_cluster_utilization_overview_3h;
-        > DROP TABLE IF EXISTS mz_cluster_deployment_lineage;
         > CREATE TABLE mz_console_cluster_utilization_overview_3h (
             replica_id TEXT,
             cluster_id TEXT,
@@ -413,24 +412,14 @@ describe("console cluster utilization indexed views", () => {
             heap_percent DOUBLE,
             memory_and_disk_percent DOUBLE
           );
-        > CREATE TABLE mz_cluster_deployment_lineage (
-            cluster_id TEXT,
-            current_deployment_cluster_id TEXT,
-            cluster_name TEXT
-          );
         > INSERT INTO internal_test.mz_console_cluster_utilization_overview_3h VALUES
             ('u7', 'u3', '50cc', 'r1', '2030-01-01T00:00:00Z', 0.5, 0.4, 0.3, 0.2, 0.6),
             ('u5', 'u2', '50cc', 'r1', '2030-01-01T00:00:00Z', 0.1, 0.1, 0.1, 0.1, 0.1),
             ('u6', 'u4', '50cc', 'r1', '2030-01-01T00:00:00Z', 0.9, 0.9, 0.9, 0.9, 0.9);
-        > INSERT INTO internal_test.mz_cluster_deployment_lineage VALUES
-            ('u2', 'u3', 'blue_green'),
-            ('u3', 'u3', 'blue_green'),
-            ('u4', 'u4', 'non_blue_green');
     `);
 
     await client.query(`SET search_path TO ${mockedSearchPath};`);
 
-    // Without lineage: only the requested cluster.
     const direct = await run(
       buildConsoleClusterUtilizationUnbinned3hQuery({
         clusterIds: ["u3"],
@@ -444,17 +433,14 @@ describe("console cluster utilization indexed views", () => {
       memoryAndDiskPercent: 0.6,
     });
 
-    // With lineage: also the cluster's past blue-green deployment (u2).
-    const withLineage = await run(
+    // A lineage-expanded id list (u3 and its past deployment u2) reads every
+    // listed cluster and no other.
+    const expanded = await run(
       buildConsoleClusterUtilizationUnbinned3hQuery({
-        clusterIds: ["u3"],
-        resolveLineage: true,
+        clusterIds: ["u2", "u3"],
       }).compile(),
     );
-    expect(withLineage.rows.map((r) => r.clusterId).sort()).toEqual([
-      "u2",
-      "u3",
-    ]);
+    expect(expanded.rows.map((r) => r.clusterId).sort()).toEqual(["u2", "u3"]);
   });
 
   it("buildConsoleClusterUtilizationOverviewQuery reads the 24h view, filters by cluster, and clips by startDate", async () => {
@@ -601,7 +587,7 @@ describe("console cluster utilization indexed views", () => {
     const offlineEvents = (
       await run(
         buildReplicaOfflineEventsQuery({
-          clusterIds: [cluster.id],
+          replicaIds: [replica.id],
           startDate: startTime,
         }).compile(),
       )

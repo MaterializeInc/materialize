@@ -1,6 +1,6 @@
 ---
 source: src/frontegg-auth/src/auth.rs
-revision: 6d8b3dba7f
+revision: bb5c454adc01868b58a0754a26274cbef45045f0
 ---
 
 # frontegg-auth::auth

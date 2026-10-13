@@ -156,6 +156,16 @@ metrics:
   help: The time it takes to apply catalog implications.
   source: src/adapter/src/metrics.rs
   visibility: internal
+- name: mz_arrangement_exert_policy_calls_total
+  help: Arrangement exertion policy evaluations.
+  source: src/cluster/src/client.rs
+  visibility: internal
+- name: mz_arrangement_exert_policy_grants_total
+  help: Arrangement exertion policy evaluations that returned effort, by reason.
+  labels:
+  - reason
+  source: src/cluster/src/client.rs
+  visibility: internal
 - name: mz_arrangement_maintenance_active_info
   help: Whether maintenance is currently occuring.
   labels:
@@ -186,6 +196,15 @@ metrics:
   visibility: internal
 - name: mz_arrangement_sizes_rows_written_total
   help: Total rows appended to mz_object_arrangement_size_history since process start.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_as_of_queries_total
+  help: The total number of SELECT and SUBSCRIBE executions with an AS OF clause.
+  labels:
+  - application_name
+  - kind
+  - session_type
+  - statement
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_auth_refresh_tasks_active
@@ -520,6 +539,31 @@ metrics:
   - server_name
   source: src/service/src/transport/metrics.rs
   visibility: internal
+- name: mz_column_chunk_work_bytes_total
+  help: Uncompressed serialized bytes processed at instrumented columnar stages.
+  labels:
+  - stage
+  source: src/timely-util/src/columnar/chunk/metrics.rs
+  visibility: internal
+- name: mz_column_chunk_work_calls_total
+  help: Columnar work operations, by stage.
+  labels:
+  - stage
+  source: src/timely-util/src/columnar/chunk/metrics.rs
+  visibility: internal
+- name: mz_column_chunk_work_rows_total
+  help: Rows processed by columnar work, including repeated visits.
+  labels:
+  - stage
+  source: src/timely-util/src/columnar/chunk/metrics.rs
+  visibility: internal
+- name: mz_column_chunk_work_size_total
+  help: Disjoint columnar operation row-size buckets, indexed by ceil(log2(rows)), the last bucket unbounded.
+  labels:
+  - log2_rows
+  - stage
+  source: src/timely-util/src/columnar/chunk/metrics.rs
+  visibility: internal
 - name: mz_column_pager_budget_configured_bytes
   help: Most-recently-configured total budget for the column-pager tiered policy.
   source: src/timely-util/src/column_pager/metrics.rs
@@ -574,6 +618,10 @@ metrics:
   visibility: internal
 - name: mz_column_pool_admissions_steal_total
   help: Evicted chunks re-admitted by an admitting read stealing the slot of a clean backed victim of the same size class.
+  source: src/timely-util/src/pool_config/metrics.rs
+  visibility: internal
+- name: mz_column_pool_direct_extent_inserts_total
+  help: Inserts written directly to an extent because resident admission was full.
   source: src/timely-util/src/pool_config/metrics.rs
   visibility: internal
 - name: mz_column_pool_eager_backs_total
@@ -785,6 +833,36 @@ metrics:
   labels:
   - instance_id
   source: src/compute-client/src/metrics.rs
+  visibility: internal
+- name: mz_compute_logging_records_total
+  help: The number of log records handed to the logging dataflow, by log.
+  labels:
+  - log
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_compute_logging_step_duration_seconds_bucket
+  help: The time spent in each scheduling of the logging dataflow.
+  labels:
+  - le
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_compute_logging_step_duration_seconds_count
+  help: The time spent in each scheduling of the logging dataflow.
+  labels:
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_compute_logging_step_duration_seconds_sum
+  help: The time spent in each scheduling of the logging dataflow.
+  labels:
+  - worker_id
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_compute_metric_sink_registration_retries_total
+  help: The number of times a metric sink failed to register its collector and scheduled a retry.
+  source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_compute_peek_duration_seconds_bucket
   help: A histogram of peek durations since restart.
@@ -1609,6 +1687,13 @@ metrics:
   - case
   source: src/compute-types/src/plan.rs
   visibility: internal
+- name: mz_orchestrator_kubernetes_process_metrics_fetch_failures_total
+  help: The number of failed per-process metrics fetches, by fetch step and error kind.
+  labels:
+  - kind
+  - step
+  source: src/orchestrator-kubernetes/src/metrics.rs
+  visibility: internal
 - name: mz_otel_on_close
   help: count of on_close events sent to otel
   source: src/ore/src/tracing.rs
@@ -1755,6 +1840,10 @@ metrics:
   - honeycomb
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_blob_gets
+  help: number of Blob::get calls for batch parts, over all shards
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_blob_hedge_armed
   help: 1 once this process has opened a hedge sibling and can hedge when enabled
   source: src/persist/src/metrics.rs
@@ -1798,6 +1887,10 @@ metrics:
 - name: mz_persist_blob_hedges_won
   help: blob gets where the hedge request won the race
   source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_sets
+  help: number of Blob::set calls for batch parts, over all shards
+  source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_cmd_cas_mismatch_count
   help: count of command retries from CaS mismatch
@@ -1993,6 +2086,10 @@ metrics:
   help: time spent in op decodes
   labels:
   - op
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_diff_size_bytes
+  help: total encoded diff size, over all shards
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_encode_count
@@ -2192,6 +2289,10 @@ metrics:
   labels:
   - worker_id
   source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_persist_per_shard_metrics_regex_invalid
+  help: count of metrics scrapes that found persist_per_shard_metrics_enable_regex invalid and so kept no per-shard series
+  source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_pubsub_client_approx_diff_apply_latency_seconds_bucket
   help: histogram of (approximate) latency between sending a diff and applying it
@@ -2644,6 +2745,10 @@ metrics:
   - shard
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_shard_metrics_mode_invalid
+  help: count of metrics scrapes that found persist_shard_metrics unrecognized and so exported the default
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_shard_noncompact_batches
   help: number of batches in the shard that aren't compact and have no ongoing compaction
   labels:
@@ -2863,6 +2968,10 @@ metrics:
   help: Seconds of time spent scheduled, ie. ready to poll but not yet polled.
   labels:
   - name
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
+- name: mz_persist_unconsolidated_snapshot
+  help: in snapshot_and_read, the number of times consolidating the raw data wasn't enough to produce consolidated output, over all shards
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
 - name: mz_persist_wait_resolved_via_sleep
@@ -4321,6 +4430,66 @@ metrics:
   visibility: internal
 - name: orchestratord_is_leader
   help: Whether this operator replica holds the controller leadership lease, and is therefore the replica reconciling. Summed across the replicas this should be 1. A sustained 0 means no replica can take the lease, for instance because the service account lacks permission on leases, and the operator is reconciling nothing.
+  source: src/orchestratord/src/metrics.rs
+  visibility: internal
+- name: orchestratord_reconciliation_duration_seconds_bucket
+  help: Time spent in one reconciliation pass.
+  labels:
+  - controller
+  - le
+  - phase
+  source: src/orchestratord/src/metrics.rs
+  visibility: internal
+- name: orchestratord_reconciliation_duration_seconds_count
+  help: Time spent in one reconciliation pass.
+  labels:
+  - controller
+  - phase
+  source: src/orchestratord/src/metrics.rs
+  visibility: internal
+- name: orchestratord_reconciliation_duration_seconds_sum
+  help: Time spent in one reconciliation pass.
+  labels:
+  - controller
+  - phase
+  source: src/orchestratord/src/metrics.rs
+  visibility: internal
+- name: orchestratord_reconciliation_step_duration_seconds_bucket
+  help: Time spent in one reconciliation step.
+  labels:
+  - controller
+  - le
+  - step
+  source: src/orchestratord/src/metrics.rs
+  visibility: internal
+- name: orchestratord_reconciliation_step_duration_seconds_count
+  help: Time spent in one reconciliation step.
+  labels:
+  - controller
+  - step
+  source: src/orchestratord/src/metrics.rs
+  visibility: internal
+- name: orchestratord_reconciliation_step_duration_seconds_sum
+  help: Time spent in one reconciliation step.
+  labels:
+  - controller
+  - step
+  source: src/orchestratord/src/metrics.rs
+  visibility: internal
+- name: orchestratord_reconciliation_steps_total
+  help: Count of reconciliation steps, by controller, by step, and by what the step concluded. An outcome of `abandoned` means the step did not conclude, either because an error propagated out of it or because the pass was cancelled.
+  labels:
+  - controller
+  - outcome
+  - step
+  source: src/orchestratord/src/metrics.rs
+  visibility: internal
+- name: orchestratord_reconciliations_total
+  help: Count of reconciliation passes, by controller, by the phase of the resource's lifecycle handled, and by what the pass concluded. An outcome of `failed` means the reconciler returned an error.
+  labels:
+  - controller
+  - outcome
+  - phase
   source: src/orchestratord/src/metrics.rs
   visibility: internal
 - name: outer_join_lowering_cases

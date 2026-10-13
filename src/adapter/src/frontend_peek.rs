@@ -12,11 +12,12 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::StreamExt;
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::ENABLE_FRONTEND_SUBSCRIBES;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_controller_types::ClusterId;
+use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, ResultSpec, RowSetFinishing};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
@@ -24,7 +25,7 @@ use mz_ore::now::EpochMillis;
 use mz_ore::task::JoinHandle;
 use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
+use mz_repr::{Datum, GlobalId, IntoRowIterator, Row, RowIterator, Timestamp};
 use mz_sql::ast::Raw;
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::Params;
@@ -34,7 +35,10 @@ use mz_sql::plan::{
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql::session::vars::IsolationLevel;
+use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+use mz_sql::session::vars::{
+    CLUSTER, CLUSTER_REPLICA, IsolationLevel, TRANSACTION_ISOLATION, Var, VarInput,
+};
 use mz_sql_parser::ast::{CopyDirection, ExplainStage, ShowStatement, Statement};
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
@@ -44,9 +48,9 @@ use tracing::{Span, debug, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::catalog::Catalog;
-use crate::command::Command;
+use crate::command::{CatalogSnapshot, Command};
 use crate::coord;
-use crate::coord::peek::{FastPathPlan, PeekPlan};
+use crate::coord::peek::{FastPathPlan, PeekPlan, PeekResponseUnary};
 use crate::coord::sequencer::{eval_copy_to_uri, statistics_oracle};
 use crate::coord::timeline::timedomain_for;
 use crate::coord::timestamp_selection::TimestampDetermination;
@@ -201,6 +205,101 @@ impl PeekClient {
 
         self.try_frontend_peek_inner(session, catalog, stmt, params, logging)
             .await
+    }
+
+    /// Executes a coordinator-owned `SELECT`, pinned to `replica_id`, and
+    /// returns its rows.
+    ///
+    /// The caller must build `sql` itself rather than accept it from a user.
+    /// It runs as the system role, in a session of its own, and is not
+    /// statement-logged. This calls into the coordinator, so awaiting it on the
+    /// coordinator's main loop deadlocks.
+    ///
+    /// NOTE: Dropping the returned future does not cancel the peek, since
+    /// there is no connection to cancel it with. A peek dropped after its issue
+    /// keeps its read holds until the replica answers or goes away. One dropped
+    /// between its registration with the coordinator and its issue leaves the
+    /// registration behind, since only a response, a cancel of its connection,
+    /// or a drop of its inputs retires it.
+    pub(crate) async fn background_peek(
+        &mut self,
+        sql: &str,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+    ) -> Result<Vec<Row>, AdapterError> {
+        // Not `catalog_snapshot`, which expects the coordinator to outlive its
+        // caller. A background client may race the coordinator's shutdown.
+        let CatalogSnapshot { catalog } = self
+            .call_coordinator(|tx| Command::CatalogSnapshot { tx })
+            .await?;
+        let (cluster_name, replica_name) = {
+            let cluster = catalog
+                .try_get_cluster(cluster_id)
+                .ok_or_else(|| AdapterError::Internal(format!("unknown cluster {cluster_id}")))?;
+            let replica = cluster
+                .replica(replica_id)
+                .ok_or_else(|| AdapterError::Internal(format!("unknown replica {replica_id}")))?;
+            (cluster.name.clone(), replica.name.clone())
+        };
+        let stmt = mz_sql::parse::parse(sql)?.into_element().ast;
+
+        let mut session = Session::dummy();
+        session.initialize_role_metadata(MZ_SYSTEM_ROLE_ID);
+        let system_vars = catalog.system_config();
+        // Serializable reads at the freshest time the inputs can serve. A
+        // strict-serializable read picks the stalest valid time at or past the
+        // oracle's read timestamp instead. In a read-only environment whose
+        // leader is not running, nothing advances the oracle, and such a read
+        // sees introspection logs as of a time before the replicas started.
+        for (var, value) in [
+            (&CLUSTER, cluster_name.as_str()),
+            (&CLUSTER_REPLICA, replica_name.as_str()),
+            (&TRANSACTION_ISOLATION, "serializable"),
+        ] {
+            session
+                .vars_mut()
+                .set(system_vars, var.name(), VarInput::Flat(value), false)?;
+        }
+        session.start_transaction_single_stmt(mz_ore::now::to_datetime((catalog.config().now)()));
+
+        let mut logging = ExecutionLogging::adopt(None, self);
+        let response = self
+            .try_frontend_peek_inner(
+                &mut session,
+                catalog,
+                Some(Arc::new(stmt)),
+                Params::empty(),
+                &mut logging,
+            )
+            .await?;
+
+        let mut rows = Vec::new();
+        let mut collect = |mut iter: Box<dyn RowIterator + Send + Sync>| {
+            while let Some(row) = iter.next() {
+                rows.push(row.to_owned());
+            }
+        };
+        match response {
+            Some(ExecuteResponse::SendingRowsImmediate { rows }) => collect(rows),
+            Some(ExecuteResponse::SendingRowsStreaming { mut rows, .. }) => {
+                while let Some(response) = rows.next().await {
+                    match response {
+                        PeekResponseUnary::Rows(iter) => collect(iter),
+                        PeekResponseUnary::Error(error) => return Err(error),
+                        PeekResponseUnary::Canceled => return Err(AdapterError::Canceled),
+                        PeekResponseUnary::DependencyDropped(dependency) => {
+                            return Err(dependency.to_concurrent_dependency_drop());
+                        }
+                    }
+                }
+            }
+            response => {
+                return Err(AdapterError::Internal(format!(
+                    "background peek returned an unexpected response: {response:?}"
+                )));
+            }
+        }
+        Ok(rows)
     }
 
     /// This is encapsulated in an inner function so that the outer function can still do statement

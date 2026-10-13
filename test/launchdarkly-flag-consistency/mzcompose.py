@@ -235,12 +235,10 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     default_cluster_reconfiguration_timeout
     default_hydration_burst_linger
     default_timestamp_interval
-    disabled_metric_sinks
     disallow_unmaterializable_functions_as_of
     enable_0dt_caught_up_replica_status_check
     enable_0dt_caught_up_stability_check
     enable_0dt_deployment_panic_after_timeout
-    enable_adapter_frontend_occ_read_then_write
     enable_alter_table_add_column
     enable_any_all_null_array_semantics
     enable_auto_scaling_strategy
@@ -251,6 +249,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_coalesce_case_transform
     enable_columnar_accumulable_diff
     enable_columnar_merge_batcher
+    enable_compute_correction_v2_spill
     enable_compute_half_join2
     enable_compute_index_peek_offload
     enable_compute_peek_row_iteration_limit
@@ -272,7 +271,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_load_generator_counter
     enable_load_generator_datums
     enable_managed_cluster_availability_zones
-    enable_metric_sink
     enable_notices_for_equals_null
     enable_notices_for_index_already_exists
     enable_notices_for_index_empty_key
@@ -305,12 +303,14 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     hydration_history_retention_period
     kafka_buffered_event_resize_threshold_elements
     kafka_default_aws_privatelink_endpoint_identification_algorithm
+    kafka_offset_commit_refresh_interval
     kafka_poll_max_wait
     kafka_reconnect_backoff
     kafka_reconnect_backoff_max
     kafka_retry_backoff
     kafka_retry_backoff_max
     kafka_sink_batch_num_messages
+    kafka_sink_emit_sink_id_header
     kafka_socket_keepalive
     keep_n_privatelink_status_history_entries
     keep_n_sink_status_history_entries
@@ -419,6 +419,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     statement_logging_use_reproducible_rng
     storage_cluster_shutdown_grace_period
     storage_downgrade_since_during_finalization
+    storage_persist_sink_description_lookahead
     storage_record_source_sink_namespaced_errors
     storage_rocksdb_cleanup_tries
     storage_server_maintenance_interval

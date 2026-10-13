@@ -25,7 +25,7 @@ use mz_ore::vec::VecExt;
 use mz_ore::{soft_assert_no_log, soft_assert_or_log, soft_panic_or_log};
 use mz_persist_types::ShardId;
 use mz_pgrepr::oid::FIRST_USER_OID;
-use mz_proto::{RustType, TryFromProtoError};
+use mz_proto::TryFromProtoError;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
@@ -47,7 +47,7 @@ use crate::durable::initialize::{
     ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, SYSTEM_CONFIG_SYNCED_KEY,
     WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL, WITH_0DT_DEPLOYMENT_MAX_WAIT,
 };
-use crate::durable::objects::serialization::proto;
+use crate::durable::objects::serialization::{RustType, proto};
 use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
     ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaKey,

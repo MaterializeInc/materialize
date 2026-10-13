@@ -873,6 +873,15 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION: LazyLock<SystemObjectDescri
         object_type: CatalogItemType::Source,
         object_name: MZ_CLUSTER_REPLICA_FRONTIERS.name.to_string(),
     });
+
+/// Identifies the leader hydration source that the 0dt caught-up gate reads.
+pub static MZ_COMPUTE_HYDRATION_TIMES_DESCRIPTION: LazyLock<SystemObjectDescription> =
+    LazyLock::new(|| SystemObjectDescription {
+        schema_name: MZ_COMPUTE_HYDRATION_TIMES.schema.to_string(),
+        object_type: CatalogItemType::Source,
+        object_name: MZ_COMPUTE_HYDRATION_TIMES.name.to_string(),
+    });
+
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
     name: SYSTEM_USER_NAME,
@@ -1219,7 +1228,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_NETWORK_POLICIES),
         Builtin::MaterializedView(&MZ_NETWORK_POLICY_RULES),
         Builtin::Table(&MZ_LICENSE_KEYS),
-        Builtin::Table(&MZ_REPLACEMENTS),
+        Builtin::MaterializedView(&MZ_REPLACEMENTS),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECT_OID_ALIAS),
         Builtin::View(&MZ_OBJECTS),

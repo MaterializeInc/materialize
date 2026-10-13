@@ -13,16 +13,16 @@ locals {
   materialize_instance_name      = "main"
 
   vnet_config = {
-    address_space                      = "20.0.0.0/16"
-    aks_subnet_cidr                    = "20.0.0.0/20"
-    postgres_subnet_cidr               = "20.0.16.0/24"
+    address_space                      = "10.0.0.0/16"
+    aks_subnet_cidr                    = "10.0.0.0/20"
+    postgres_subnet_cidr               = "10.0.16.0/24"
     enable_api_server_vnet_integration = true
-    api_server_subnet_cidr             = "20.0.32.0/27"
+    api_server_subnet_cidr             = "10.0.32.0/27"
   }
 
   aks_config = {
     kubernetes_version         = "1.34"
-    service_cidr               = "20.1.0.0/16"
+    service_cidr               = "10.1.0.0/16"
     enable_azure_monitor       = false
     log_analytics_workspace_id = null
   }
@@ -102,7 +102,7 @@ resource "azurerm_resource_group" "materialize" {
 
 # 2. Create networking infrastructure
 module "networking" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/networking?ref=v13.12.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/networking?ref=v15.0.0"
 
   resource_group_name                = azurerm_resource_group.materialize.name
   location                           = var.location
@@ -120,7 +120,7 @@ module "networking" {
 
 # 3. Create AKS cluster with default node pool
 module "aks" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/aks?ref=v13.12.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/aks?ref=v15.0.0"
 
   resource_group_name = azurerm_resource_group.materialize.name
   kubernetes_version  = local.aks_config.kubernetes_version
@@ -136,7 +136,7 @@ module "aks" {
   api_server_subnet_id               = module.networking.api_server_subnet_id
 
   # Default node pool with autoscaling (runs all workloads except Materialize)
-  default_node_pool_vm_size             = "Standard_D4pds_v6"
+  default_node_pool_vm_size             = "Standard_D4ps_v6"
   default_node_pool_enable_auto_scaling = true
   default_node_pool_min_count           = 2
   default_node_pool_max_count           = 5
@@ -153,7 +153,7 @@ module "aks" {
 
 # 3.1 Create Materialize-dedicated node pool with taints
 module "materialize_nodepool" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/nodepool?ref=v13.12.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/nodepool?ref=v15.0.0"
 
   prefix     = var.name_prefix
   cluster_id = module.aks.cluster_id
@@ -183,7 +183,7 @@ module "materialize_nodepool" {
 
 # 4. Create PostgreSQL database
 module "database" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/database?ref=v13.12.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/database?ref=v15.0.0"
 
   depends_on = [module.networking]
 
@@ -218,7 +218,7 @@ module "database" {
 
 # 5. Create Azure Blob Storage
 module "storage" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/storage?ref=v13.12.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/storage?ref=v15.0.0"
 
   resource_group_name            = azurerm_resource_group.materialize.name
   location                       = var.location
@@ -240,7 +240,7 @@ module "storage" {
 
 # 6. Install cert-manager for TLS
 module "cert_manager" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/cert-manager?ref=v13.12.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/cert-manager?ref=v15.0.0"
 
   node_selector = local.generic_node_labels
 
@@ -250,7 +250,7 @@ module "cert_manager" {
 }
 
 module "self_signed_cluster_issuer" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/self-signed-cluster-issuer?ref=v13.12.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/self-signed-cluster-issuer?ref=v15.0.0"
 
   name_prefix = var.name_prefix
 
@@ -261,7 +261,7 @@ module "self_signed_cluster_issuer" {
 
 # 7. Install Materialize Operator
 module "operator" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/operator?ref=v13.12.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//azure/modules/operator?ref=v15.0.0"
 
   name_prefix = var.name_prefix
   location    = var.location
@@ -301,7 +301,7 @@ module "operator" {
 
 # 8. Deploy Materialize instance
 module "materialize_instance" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/materialize-instance?ref=v13.12.1"
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/materialize-instance?ref=v15.0.0"
 
   instance_name        = local.materialize_instance_name
   instance_namespace   = local.materialize_instance_namespace

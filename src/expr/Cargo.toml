@@ -76,6 +76,7 @@ bincode.workspace = true
 criterion.workspace = true
 datadriven.workspace = true
 insta.workspace = true
+mz-alloc-default = { path = "../alloc-default" }
 mz-expr = { path = ".", features = ["func-registry", "proptest"] }
 mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }
 mz-expr-parser = { path = "../expr-parser" }

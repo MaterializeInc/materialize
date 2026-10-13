@@ -8,10 +8,12 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::{Extension, Router, body::Body, routing::get};
 use http::{HeaderMap, Method, Request, Response, StatusCode};
+use k8s_controller::PrometheusMetrics;
 use prometheus::{Encoder, TextEncoder};
 use tower_http::{classify::ServerErrorsFailureClass, trace::TraceLayer};
 use tracing::{Level, Span};
@@ -23,6 +25,10 @@ use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 pub struct Metrics {
     pub is_leader: UIntGauge,
     pub environmentd_needs_update: UIntGauge,
+    /// The reconciliation metrics of every controller, as defined by
+    /// `k8s_controller`: counts and durations of reconciliation passes, and
+    /// of the steps within them.
+    pub reconcile: Arc<PrometheusMetrics>,
 }
 
 impl Metrics {
@@ -38,6 +44,12 @@ impl Metrics {
                     name: "environmentd_needs_update",
                     help: "Count of organizations in this cluster which are running outdated pod templates. Only the operator replica holding the leadership lease reconciles, so the others report zero.",
                 }),
+            reconcile: {
+                let reconcile = PrometheusMetrics::new("orchestratord")
+                    .expect("valid reconciliation metric definitions");
+                registry.register_collector(reconcile.clone());
+                Arc::new(reconcile)
+            },
         }
     }
 

@@ -1,6 +1,6 @@
 ---
 source: src/clusterd/src/lib.rs
-revision: 198d2281c2
+revision: c0f89a5887
 ---
 
 # clusterd
@@ -11,7 +11,7 @@ On startup, `main()` pins the rustls crypto provider to `aws-lc-rs` via `rustls:
 An internal HTTP server (port 6878 by default) exposes liveness, Prometheus metrics, tracing controls, and the `/api/usage-metrics` endpoint backed by the `usage_metrics` module.
 When `--unified-cluster` is set (env `UNIFIED_CLUSTER`), storage objects are hosted on the compute Timely cluster instead of a separate storage Timely cluster; the storage and compute controller protocols are served unchanged from the same cluster via `mz_compute::server::serve_unified`.
 `mz_metrics::register_metrics_into` is called with the scratch directory path so the `usage` subsystem can track disk usage on the replica's filesystem.
-The crate depends on `mz-compute`, `mz-storage`, `mz-persist-client`, `mz-cluster-client`, and `mz-service`; it is consumed only as a binary by the Materialize cluster orchestration layer.
+The crate depends on `mz-compute`, `mz-storage`, `mz-persist-client`, `mz-cluster-client`, `mz-service`, and `mz-secrets-cli`; it is consumed only as a binary by the Materialize cluster orchestration layer.
 
 ## Modules
 

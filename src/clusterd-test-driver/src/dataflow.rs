@@ -351,6 +351,7 @@ impl DataflowBuilder {
             up_to: Antichain::new(),
             non_null_assertions: vec![],
             refresh_schedule: None,
+            from_arrangement: None,
         };
         self.mir.export_sink(sink_id, desc);
         self
@@ -381,6 +382,7 @@ impl DataflowBuilder {
             up_to,
             non_null_assertions: vec![],
             refresh_schedule: None,
+            from_arrangement: None,
         };
         self.mir.export_sink(sink_id, desc);
         self
@@ -410,6 +412,7 @@ impl DataflowBuilder {
             up_to: Antichain::new(),
             non_null_assertions: vec![],
             refresh_schedule: None,
+            from_arrangement: None,
         };
         self.mir.export_sink(sink_id, desc);
         self
@@ -698,6 +701,7 @@ fn augment(
                 up_to: sink.up_to,
                 non_null_assertions: sink.non_null_assertions,
                 refresh_schedule: sink.refresh_schedule,
+                from_arrangement: sink.from_arrangement,
             },
         );
     }

@@ -3826,7 +3826,7 @@ fn expand_select_item<'a>(
                     } else {
                         let item = ExpandedSelectItem::Expr(Cow::Owned(Expr::FieldAccess {
                             expr: sql_expr.clone(),
-                            field: name.clone().into(),
+                            field: normalize::column_name_ident(name),
                         }));
                         Some((item, name.clone()))
                     }

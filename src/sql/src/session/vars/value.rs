@@ -467,6 +467,18 @@ impl Value for Vec<Ident> {
             // element. This matches PostgreSQL.
             VarInput::SqlSet(values) => values,
         };
+        // An empty identifier formats as `""`, which the `Flat` path rejects
+        // when the durable catalog re-parses it. A lone `''` means the empty
+        // list instead.
+        if values.iter().any(|v| v.is_empty()) {
+            if values.len() == 1 {
+                return Ok(vec![]);
+            }
+            return Err(VarParseError::InvalidParameterValue {
+                invalid_values: values.to_vec(),
+                reason: "empty identifier".into(),
+            });
+        }
         let values = values
             .iter()
             .map(Ident::new)
@@ -1300,6 +1312,33 @@ mod tests {
         errs("1²ms");
         errs("½");
         errs("１ms");
+    }
+
+    #[mz_ore::test]
+    fn test_value_ident_list() {
+        fn sql_set(values: &[&str]) -> Result<Vec<Ident>, VarParseError> {
+            let values: Vec<String> = values.iter().map(|v| v.to_string()).collect();
+            Vec::<Ident>::parse(VarInput::SqlSet(&values))
+        }
+        fn flat(value: &str) -> Result<Vec<Ident>, VarParseError> {
+            Vec::<Ident>::parse(VarInput::Flat(value))
+        }
+
+        // The durable catalog stores `format()` and re-parses it with `Flat`.
+        for input in [&[""][..], &["a", "b"], &["A b", "c\"d"]] {
+            let parsed = sql_set(input).expect("valid input");
+            let formatted = parsed.format();
+            assert_eq!(
+                flat(&formatted).ok(),
+                Some(parsed),
+                "{input:?} does not round-trip through {formatted:?}"
+            );
+        }
+
+        assert_eq!(sql_set(&[""]).ok(), Some(vec![]));
+        assert_eq!(flat("''").ok(), Some(vec![]));
+        assert_err!(sql_set(&["a", ""]));
+        assert_err!(flat("a, ''"));
     }
 
     #[mz_ore::test]

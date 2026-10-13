@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/parser.rs
-revision: bdb21878e5
+revision: 950797294c
 ---
 
 # mz-sql-parser::parser
@@ -12,6 +12,7 @@ The parser enforces a recursion limit (`RECURSION_LIMIT = 128`) to guard against
 `parse_table_factor` guards the nested table-factor recursion via `checked_recur_mut`; the actual work is delegated to `parse_table_factor_inner`.
 The right-hand side of `IS [NOT] DISTINCT FROM` is parsed at the precedence of the surrounding `IS` operator (via `parse_subexpr(precedence)`), not at `Precedence::Zero`. This ensures that `AND`/`OR` following the RHS are left for the enclosing expression rather than absorbed into it, matching PostgreSQL precedence.
 `parse_cast_expr` wraps the inner expression in `Expr::Nested` only for expressions that are unsafe to place directly left of a `::` cast (i.e. those with an exposed operator spine that would re-associate on reparse); self-delimiting expressions (identifiers, function calls, nested, values, etc.) are left unwrapped.
+A prefix `OPERATOR(...)` expression (e.g. `OPERATOR(pg_catalog.-) x`) parses the qualified operator name inside the parentheses via `parse_operator`, then parses its operand at `Precedence::Other` (not at the tighter precedence of bare `-`/`+`), matching PostgreSQL semantics. `parse_operator` accepts `*` and `=` as terminal operator names in addition to `Token::Op` tokens, since the lexer emits those as dedicated token kinds.
 `parse_raw_ident_str` rejects empty identifiers so that resolved names like `[""]` (which display as `[]` and fail to reparse) are caught at parse time.
 A parenthesized `(SHOW …)` query at statement level is unwrapped to a bare `Statement::Show` when it carries no CTEs, ORDER BY, LIMIT, or OFFSET, keeping the AST independent of redundant outer parens.
 `parse_explain_timestamp` accepts `TEXT`, `JSON`, and `DOT` as format keywords; `DOT` produces `ExplainFormat::Dot`, matching the behavior of `parse_explain_plan`. An `EXPLAIN TIMESTAMP AS DOT FOR <query>` statement parses successfully and reaches the sequencer's existing unsupported-format error path rather than panicking.

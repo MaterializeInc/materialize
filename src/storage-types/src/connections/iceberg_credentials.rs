@@ -35,7 +35,7 @@ use iceberg_storage_opendal::{
 };
 use mz_ore::error::ErrorExt;
 use reqsign_core::time::Timestamp;
-use reqwest::StatusCode;
+use reqwest_0_12::StatusCode;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
@@ -210,7 +210,7 @@ fn vended_expires_at(
 
 #[derive(Debug)]
 pub(super) struct VendedCredentialLoader<C> {
-    client: reqwest::Client,
+    client: reqwest_0_12::Client,
     credential_endpoint: Url,
     token: Arc<dyn TokenProvider>,
     /// Every header this request needs beyond the bearer token, resolved once.
@@ -223,7 +223,7 @@ impl<C: VendedCredential> VendedCredentialLoader<C> {
     /// bypasses. The delegation header is added here rather than expected in `headers`, since
     /// asking the catalog to vend is the whole point of this request.
     pub(super) fn new(
-        client: reqwest::Client,
+        client: reqwest_0_12::Client,
         credential_endpoint: Url,
         token: Arc<dyn TokenProvider>,
         mut headers: HeaderMap,
@@ -458,7 +458,7 @@ fn table_credentials_url(
 /// on its own requests, which this one bypasses.
 pub(super) async fn table_credentials_endpoint(
     uri: &Url,
-    client: &reqwest::Client,
+    client: &reqwest_0_12::Client,
     token: &Arc<dyn TokenProvider>,
     headers: &HeaderMap,
     warehouse: Option<&str>,

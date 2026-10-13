@@ -732,7 +732,12 @@ class CargoBuild(CargoPreImage):
                 "RANLIB": "llvm-ranlib-22",
                 "CFLAGS": "-flto=thin",
                 "CXXFLAGS": "-flto=thin",
-                "LDFLAGS": "--ld-path=/usr/bin/ld.lld-22 -static-libstdc++",
+                # `-static-libstdc++` is unused when clang links a C program,
+                # and jemalloc's configure runs its `strerror_r` link checks
+                # with `-Werror`. Without `-Wno-unused-command-line-argument`
+                # both checks fail and configure aborts with "cannot determine
+                # return type of strerror_r".
+                "LDFLAGS": "--ld-path=/usr/bin/ld.lld-22 -static-libstdc++ -Wno-unused-command-line-argument",
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
                 "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
             }

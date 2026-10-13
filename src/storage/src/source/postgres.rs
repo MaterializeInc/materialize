@@ -111,7 +111,7 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{Probe, SourceRender, StackedCollection};
+use crate::source::types::{Probe, ResumeUppers, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
@@ -128,7 +128,7 @@ impl SourceRender for PostgresSourceConnection {
         self,
         scope: Scope<'scope, MzOffset>,
         config: &RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+        resume_uppers: impl futures::Stream<Item = ResumeUppers<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<
@@ -391,7 +391,7 @@ pub enum DefiniteError {
         "old row missing from replication stream. Did you forget to set REPLICA IDENTITY to FULL for your table?"
     )]
     DefaultReplicaIdentity,
-    #[error("{0}")]
+    #[error(transparent)]
     IncompatibleSchema(SchemaChangeError),
     #[error("invalid UTF8 string: {0:?}")]
     InvalidUTF8(Vec<u8>),

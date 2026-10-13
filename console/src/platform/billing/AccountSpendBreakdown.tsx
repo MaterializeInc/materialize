@@ -13,9 +13,7 @@ import { AxisBottom, AxisLeft, AxisScale } from "@visx/axis";
 import { curveMonotoneX } from "@visx/curve";
 import { localPoint } from "@visx/event";
 import { Group } from "@visx/group";
-import ParentSize, {
-  ParentSizeProvidedProps,
-} from "@visx/responsive/lib/components/ParentSize";
+import { ParentSize, type ParentSizeProvidedProps } from "@visx/responsive";
 import { scaleBand, scaleLinear, scaleOrdinal } from "@visx/scale";
 import { BarStack, LinePath } from "@visx/shape";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
@@ -526,19 +524,18 @@ const UnifiedLedger = ({
     const sum = totals.reduce((acc, total) => acc + total, 0);
     return {
       grandTotal: sum,
-      ledgerRows: accounts.map(
-        (account, ix): LedgerRow => ({
-          kind: "account",
-          account,
-          total: totals[ix],
-          share: sum > 0 ? totals[ix] / sum : 0,
-          trend: series.get(account.external_customer_id) ?? [],
-          color: colorFor.get(account.external_customer_id) ?? fallbackColor,
-          clusters: account.clusters.map(
-            (cluster): LedgerRow => ({ kind: "cluster", cluster }),
-          ),
-        }),
-      ),
+      ledgerRows: accounts.map((account, ix): LedgerRow => ({
+        kind: "account",
+        account,
+        total: totals[ix],
+        share: sum > 0 ? totals[ix] / sum : 0,
+        trend: series.get(account.external_customer_id) ?? [],
+        color: colorFor.get(account.external_customer_id) ?? fallbackColor,
+        clusters: account.clusters.map((cluster): LedgerRow => ({
+          kind: "cluster",
+          cluster,
+        })),
+      })),
     };
   }, [accounts, series, colorFor, fallbackColor]);
 

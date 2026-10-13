@@ -1,6 +1,6 @@
 ---
 source: src/ssh-util/src/tunnel.rs
-revision: 202a4d6caa
+revision: aafb0ea1df
 ---
 
 # mz-ssh-util::tunnel

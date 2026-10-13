@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/dyncfgs.rs
-revision: 703250aa39
+revision: 07d9506f7e
 ---
 
 # compute-types::dyncfgs
@@ -8,7 +8,7 @@ revision: 703250aa39
 Declares all dynamic configuration (`dyncfg`) constants for the compute layer. Key groups include:
 
 - **Rendering**: `ENABLE_HALF_JOIN2`, `ENABLE_ERROR_DISTINCT`, `ENABLE_MZ_JOIN_CORE`, `LINEAR_JOIN_YIELDING`, `ENABLE_COMPUTE_TEMPORAL_BUCKETING`/`TEMPORAL_BUCKETING_SUMMARY`, `COMPUTE_FLAT_MAP_FUEL`, `ENABLE_COLUMNAR_ACCUMULABLE_DIFF`, `COMPUTE_APPLY_COLUMN_DEMANDS`, `ENABLE_COLUMN_PAGED_BATCHER` (replica-scoped), `ENABLE_COLUMNAR_MERGE_BATCHER` (replica-scoped), `ENABLE_COLUMN_PAGED_BATCHER_SPILL` (replica-scoped), `COLUMN_PAGED_BATCHER_BUDGET_FRACTION` (replica-scoped), `COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT` (replica-scoped), `COLUMN_PAGED_BATCHER_LZ4` (replica-scoped), `COLUMN_PAGED_BATCHER_SWAP_PAGEOUT` (replica-scoped), `COLUMN_PAGED_BATCHER_EAGER_BACKING` (replica-scoped), `COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION` (replica-scoped), `COLUMN_CHUNK_COMPRESS_MIN_DEPTH` (replica-scoped, the youngest chunk generation whose spilled bodies are lz4-compressed; default 1, meaning depth-0 chunks are stored uncompressed).
-- **MV sink**: `ENABLE_SYNC_MV_SINK`, `ENABLE_CORRECTION_V2`, `CONSOLIDATING_VEC_GROWTH_DAMPENER`, `CORRECTION_V2_CHAIN_PROPORTIONALITY`, `CORRECTION_V2_CHUNK_SIZE`, `MV_SINK_ADVANCE_PERSIST_FRONTIERS`.
+- **MV sink**: `ENABLE_SYNC_MV_SINK`, `ENABLE_CORRECTION_V2`, `CONSOLIDATING_VEC_GROWTH_DAMPENER`, `CORRECTION_V2_CHAIN_PROPORTIONALITY`, `CORRECTION_V2_CHUNK_SIZE` (the byte size of the correction V2 buffer's staging area, heap included; default 2 MiB), `ENABLE_CORRECTION_V2_SPILL` (replica-scoped, default false; allows the correction V2 buffer's chunk bodies to spill to the process buffer pool under memory pressure; enabling it also installs the pool), `MV_SINK_ADVANCE_PERSIST_FRONTIERS`.
 - **Memory management**: `ENABLE_LGALLOC` (replica-scoped), `ENABLE_LGALLOC_EAGER_RECLAMATION`, `LGALLOC_BACKGROUND_INTERVAL`, `LGALLOC_FILE_GROWTH_DAMPENER`, `LGALLOC_LOCAL_BUFFER_BYTES`, `LGALLOC_SLOW_CLEAR_BYTES`, `ENABLE_COLUMNATION_LGALLOC`, `MEMORY_LIMITER_INTERVAL`, `MEMORY_LIMITER_USAGE_BIAS`, `MEMORY_LIMITER_BURST_FACTOR`.
 - **Backpressure**: `DATAFLOW_MAX_INFLIGHT_BYTES`, `DATAFLOW_MAX_INFLIGHT_BYTES_CC`, `ENABLE_COMPUTE_LOGICAL_BACKPRESSURE`, `COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES`, `COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK`.
 - **Peek stash**: `ENABLE_PEEK_RESPONSE_STASH`, `PEEK_RESPONSE_STASH_THRESHOLD_BYTES`, `PEEK_RESPONSE_STASH_BATCH_BYTES` (replica-scoped, default 1 MiB; the size at which an in-progress stash upload hands accumulated rows to the batch builder after the first threshold batch), `PEEK_RESPONSE_STASH_BATCH_MAX_RUNS`, `PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES`, `PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES`.

@@ -37,7 +37,7 @@ There are two ways to authenticate to the `materialize-developer` MCP server:
 
 - **OAuth**: Starting in v26.30, your MCP client can sign you in through your
   browser; no token to generate or store. Available for **Cloud** and for
-  **Self-Managed** [using SSO](/security/self-managed/sso/).
+  **Self-Managed** [using SSO](/self-managed-deployments/sso/oidc/).
 
 - **Token-based**: You provide Base64-encoded credentials (the MCP token) to the
   client. Available for **Cloud**, **Self-Managed**, and the **Emulator**.
@@ -49,7 +49,7 @@ There are two ways to authenticate to the `materialize-developer` MCP server:
 {{< note >}}
 
 The OAuth method is available for **Cloud** and for **Self-Managed** deployments
-using [SSO](/security/self-managed/sso/). For Self-Managed deployments not using
+using [SSO](/self-managed-deployments/sso/oidc/). For Self-Managed deployments not using
 SSO, use [Method 2: Token-based
 authentication](#method-2-token-based-authentication). For the **Emulator**, use
 [Method 3: No authentication](#method-3-no-authentication-emulator).
@@ -85,7 +85,7 @@ Self-Managed deployments using OAuth require SSO, which uses TLS. Your
 identity provider may also need additional configuration for MCP clients, such
 as a pre-registered OAuth client if your IdP does not support anonymous
 dynamic client registration. See [Connecting MCP
-clients](/security/self-managed/sso/#connecting-mcp-clients).
+clients](/self-managed-deployments/sso/oidc/#connecting-mcp-clients).
 
 Get your MCP server URL from the Materialize Console:
 
@@ -134,7 +134,7 @@ your MCP client. The `materialize-developer` MCP server URL has the form:
    The `--callback-port` value must match the port in the
    `http://localhost:<port>/callback` redirect URI registered on the OIDC
    client. See [Connecting MCP
-   clients](/security/self-managed/sso/#connecting-mcp-clients) for
+   clients](/self-managed-deployments/sso/oidc/#connecting-mcp-clients) for
    the full IdP configuration.
 
    {{% include-headless "/headless/mcp-endpoint-baseurl-replacements" %}}

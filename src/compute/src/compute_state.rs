@@ -506,7 +506,7 @@ impl ComputeState {
         // reruns on every UpdateConfiguration, so flipping a gate on installs
         // the pool on the next tick. The pool is a process singleton with no
         // teardown: once installed it stays active for the life of the process.
-        // Turning both gates back off makes this block do nothing, so the pool
+        // Turning every gate back off makes this block do nothing, so the pool
         // keeps its last-applied budget rather than being uninstalled. Later
         // ticks with a gate on retune the one instance in place.
         //
@@ -519,13 +519,11 @@ impl ComputeState {
 
             let compute_spill = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
             let storage_spill = mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL.get(config);
-            // Set compute's leg of the process-wide chunk spill gate. The
-            // gate ORs this leg with storage's, so chunks spill while either
-            // subsystem's flag is set. Storage's config application writes
-            // only its own leg, keeping the two flags from clobbering each
-            // other.
+            let sink_spill = ENABLE_CORRECTION_V2_SPILL.get(config);
+            // Storage's config application sets the storage chunk gate.
             mz_timely_util::columnar::chunk::set_compute_spill_enabled(compute_spill);
-            if !(compute_spill || storage_spill) {
+            mz_timely_util::columnar::chunk::set_sink_spill_enabled(sink_spill);
+            if !(compute_spill || storage_spill || sink_spill) {
                 debug!("chunk spill: gates off, leaving the buffer pool uninstalled");
             } else {
                 let spill_threads = COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT.get(config);
@@ -1023,6 +1021,7 @@ impl<'a> ActiveComputeState<'a> {
             self.timely_worker,
             &config,
             self.compute_state.metrics_registry.clone(),
+            self.compute_state.metrics.for_logging(),
             Rc::clone(&self.compute_state.worker_config),
             self.compute_state.workers_per_process,
         );

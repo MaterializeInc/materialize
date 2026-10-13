@@ -975,6 +975,11 @@ fn test_pgtest_mz_desc() {
 }
 
 #[mz_ore::test]
+fn test_pgtest_mz_discard() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/discard.pt"), true);
+}
+
+#[mz_ore::test]
 fn test_pgtest_mz_notice() {
     pg_test_inner(Path::new("../../test/pgtest-mz/notice.pt"), true);
 }
@@ -1286,11 +1291,6 @@ fn test_pgtest_mz_frontend_occ_pipelined_dml() {
     pg_test_harness(
         Path::new("../../test/pgtest-mz/frontend-occ-pipelined-dml.pt"),
         true,
-        || {
-            test_util::TestHarness::default().with_system_parameter_default(
-                "enable_adapter_frontend_occ_read_then_write".to_string(),
-                "true".to_string(),
-            )
-        },
+        test_util::TestHarness::default,
     );
 }

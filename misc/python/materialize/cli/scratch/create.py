@@ -156,8 +156,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
         "--instance-profile",
         type=str,
         default=DEFAULT_INSTANCE_PROFILE_NAME,
-        help="EC2 instance profile / IAM role. Defaults to `%s`."
-        % DEFAULT_INSTANCE_PROFILE_NAME,
+        help=f"EC2 instance profile / IAM role. Defaults to `{DEFAULT_INSTANCE_PROFILE_NAME}`.",
     )
     parser.add_argument("--output-format", choices=["table", "csv"], default="table")
     parser.add_argument(
@@ -239,7 +238,7 @@ def run(args: argparse.Namespace) -> None:
         security_group_name=args.security_group_name,
         instance_profile=args.instance_profile,
         extra_tags=extra_tags,
-        delete_after=datetime.datetime.now(datetime.timezone.utc) + max_age,
+        delete_after=datetime.datetime.now(datetime.UTC) + max_age,
         git_rev=args.git_rev,
         extra_env={},
     )

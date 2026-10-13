@@ -218,13 +218,13 @@ OIDC (OpenID Connect) authentication allows users to authenticate using JWT
 tokens from an external identity provider such as Okta or Microsoft Entra ID.
 
 For detailed setup instructions, including identity provider configuration and
-system parameter settings, see [Single sign-on (SSO)](/security/self-managed/sso/).
+system parameter settings, see [Single sign-on (SSO)](/self-managed-deployments/sso/oidc/).
 
 ## Logging in and creating users
 
 {{< note >}}
-With OIDC authentication, roles are [auto-provisioned](/security/self-managed/sso/#auto-provisioning-roles) when a
-user first [logs in through SSO](/security/self-managed/sso/#step-4-verify-the-configuration).
+With OIDC authentication, roles are [auto-provisioned](/self-managed-deployments/sso/oidc/#auto-provisioning-roles) when a
+user first [logs in through SSO](/self-managed-deployments/sso/oidc/#step-4-verify-the-configuration).
 {{< /note >}}
 
 When authentication is enabled, only the `mz_system` user is initially

@@ -539,7 +539,7 @@ impl AzureBlobConfig {
         url: Url,
         knobs: Box<dyn BlobKnobs>,
     ) -> Result<Self, Error> {
-        let http_client = reqwest_0_13::ClientBuilder::new()
+        let http_client = reqwest::ClientBuilder::new()
             .timeout(knobs.operation_attempt_timeout())
             .read_timeout(knobs.read_timeout())
             .connect_timeout(knobs.connect_timeout())

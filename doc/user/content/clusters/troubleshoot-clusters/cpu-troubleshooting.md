@@ -46,11 +46,11 @@ Establish when the anomaly started and which replicas it affected, replacing
 ```mzsql
 SELECT
     u.occurred_at,
-    r.name AS replica_name,
+    rh.replica_name,
     u.cpu_percent
 FROM mz_internal.mz_cluster_replica_utilization_history u
-JOIN mz_catalog.mz_cluster_replicas r ON u.replica_id = r.id
-JOIN mz_catalog.mz_clusters c ON r.cluster_id = c.id
+JOIN mz_internal.mz_cluster_replica_history rh ON u.replica_id = rh.replica_id
+JOIN mz_catalog.mz_clusters c ON rh.cluster_id = c.id
 WHERE c.name = '<cluster_name>'
   AND u.occurred_at > now() - INTERVAL '6 hours'
 ORDER BY u.occurred_at DESC;

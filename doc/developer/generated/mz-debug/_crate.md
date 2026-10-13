@@ -1,6 +1,6 @@
 ---
 source: src/mz-debug/src/main.rs
-revision: 253293ef87
+revision: 1b8ce14b2a
 ---
 
 # mz-debug
@@ -12,6 +12,8 @@ In `emulator` mode it connects to a Docker container directly using its IP addre
 In both modes it optionally connects to Materialize via pgwire and exports ~80 system catalog relations to CSV files, then zips everything into a single archive.
 
 Key types: `Args` / `DebugModeArgs` / `SelfManagedDebugModeArgs` / `EmulatorDebugModeArgs` (CLI argument structure), `AuthMode` (none or password credentials), `Context` / `SelfManagedContext` / `EmulatorContext` (runtime state), `ContainerDumper` (trait implemented by `K8sDumper` and `DockerDumper`).
+
+The binary pins the rustls crypto provider to `aws-lc-rs` at startup via `rustls::crypto::aws_lc_rs::default_provider().install_default()`, because the `kube` client builds its TLS config from the process-default rustls provider and panics when both `ring` and `aws-lc-rs` features are linked with no default installed.
 
 Key dependencies: `kube`, `k8s-openapi`, `tokio-postgres`, `reqwest`, `mz-cloud-resources` (for the Materialize CRD type), `mz-server-core` (for `AuthenticatorKind`), `mz-sql-parser`, `mz-tls-util`.
 Downstream consumers: primarily used as a standalone binary by operators debugging self-managed Materialize clusters.

@@ -50,9 +50,6 @@ skip = [
     # TODO: Required for Rust nightly upgrade
     { name = "http", version = "0.2.9" },
 
-    # TODO: Required for Rust nightly upgrade
-    { name = "http-body", version = "0.4.5" },
-
     # There are many external crates that rely on 0.10.5. Upgrading them should
     # be its own PR.
     { name = "itertools", version = "0.10.5" },
@@ -61,20 +58,6 @@ skip = [
     { name = "toml_edit", version = "0.19.14" },
     { name = "toml_datetime", version = "0.6.11" },
     { name = "winnow", version = "0.5.4" },
-
-    # There are some crates in our dependency tree that have yet to upgrade to
-    # `hyper 1.*`. As of now these are:
-    #     * `aws-config`
-    #     * `aws-smithy-runtime`
-    #     * `eventsource-client`
-    #     * `launchdarkly-server-sdk`
-    # Until they upgrade we'll need to duplicate some related hyper deps.
-
-    { name = "hyper", version = "0.14.27" },
-
-    { name = "h2", version = "0.3.26" },
-
-    { name = "hyper-tls", version = "0.5.0" },
 
     { name = "memmap2", version = "0.5.4" },
 
@@ -95,17 +78,16 @@ skip = [
     { name = "rustix", version = "0.38.44" },
     # Used by bindgen
     { name = "itertools", version = "0.13.0" },
+    # Used by launchdarkly-server-sdk-evaluation, prost-build, prost-derive and
+    # timely
+    { name = "itertools", version = "0.14.0" },
     # Used by pprof
     { name = "nix", version = "0.26.4" },
-    # Held back by mysql_async `v0.36.1`
-    { name = "socket2", version = "0.5.10" },
-    # kube-client and reqwest still pull 0.6.
-    { name = "tower-http", version = "0.6.11" },
     # tokio-tungstenite still pulls 0.29.
     { name = "tungstenite", version = "0.29.0" },
     # libduckdb-sys still pulls 6.
     { name = "zip", version = "6.0.0" },
-    # aws-sdk-s3 is on 0.18, while launchdarkly-server-sdk, mysql_async, and mz-frontegg-auth still use 0.16.
+    # launchdarkly-server-sdk still uses 0.16, up to its latest release 3.3.
     { name = "lru", version = "0.16.3" },
     # flate2 is on 0.9, while apache-avro and backtrace still pull 0.8.
     { name = "miniz_oxide", version = "0.8.9" },
@@ -120,12 +102,10 @@ skip = [
     # Used by tokio-postgres (MaterializeInc/rust-postgres fork)
     { name = "phf", version = "0.13.1" },
     { name = "phf_shared", version = "0.13.1" },
-    # Used by junit-report
-    { name = "quick-xml", version = "0.31.0" },
-    # reqsign-aws (via iceberg) is ahead of opendal, which pulls 0.39.
-    { name = "quick-xml", version = "0.41.0" },
-    # Used by sentry
-    { name = "reqwest", version = "0.13.3" },
+    # Used by iceberg, iceberg-catalog-rest, libduckdb-sys (build), segment, and
+    # the iceberg connection code in mz-storage-types, whose client crosses into
+    # iceberg's API.
+    { name = "reqwest", version = "0.12.28" },
     # Conflicts between `bon` in apache-avro and `derive_builder` in iceberg
     { name = "darling_macro", version = "0.20.11" },
     { name = "darling_core", version = "0.20.11" },
@@ -162,27 +142,31 @@ skip = [
     { name = "arrow-schema", version = "57.2.0" },
     { name = "arrow-select", version = "57.2.0" },
     { name = "arrow-string", version = "57.1.0" },
-    # opendal 0.59 and reqsign 3.x (both via iceberg) are on the next generation
-    # of the RustCrypto crates, while the rest of the workspace is still on the
-    # current one.
-    { name = "base64", version = "0.23.1" },
-    { name = "block-buffer", version = "0.12.1" },
-    { name = "const-oid", version = "0.10.2" },
-    { name = "crypto-common", version = "0.2.2" },
-    { name = "digest", version = "0.11.3" },
-    { name = "hmac", version = "0.13.0" },
-    { name = "md-5", version = "0.11.0" },
-    { name = "sha1", version = "0.11.0" },
-    { name = "sha2", version = "0.11.0" },
+    # base64 0.22 is still used by arrow, axum, eventsource-client, gcp_auth,
+    # headers, iceberg, jsonwebtoken, kube, mysql_common, parquet, pem 3,
+    # postgres-protocol, prost-reflect, reqwest 0.12, tonic, tower-http,
+    # tower-sessions-core and typespec.
+    { name = "base64", version = "0.22.1" },
+    # The previous generation of the RustCrypto crates is still used by
+    # apache-avro, aws-config, axum, azure_core, crc-fast, headers,
+    # launchdarkly-server-sdk-evaluation, mysql_common, pest_meta, tungstenite,
+    # and the RustCrypto signature, key and cipher crates (ecdsa, elliptic-curve,
+    # p256, p384, p521, pbkdf2, pkcs5, rsa, rfc6979, scrypt, ssh-key and
+    # friends).
+    { name = "block-buffer", version = "0.10.4" },
+    { name = "const-oid", version = "0.9.6" },
+    { name = "crypto-common", version = "0.1.6" },
+    { name = "digest", version = "0.10.7" },
+    { name = "hmac", version = "0.12.1" },
+    { name = "sha1", version = "0.10.6" },
+    { name = "sha2", version = "0.10.9" },
     # reqsign-azure-storage 3.2 moved to pem 4, while jsonwebtoken, and so most
     # of the workspace, is still on pem 3. The ADLS credential loader needs the
     # `expires_at` field that 3.2 added to `Credential::SasToken`, so the older
     # reqsign that would converge here is not an option.
     { name = "pem", version = "4.0.0" },
-    # Held back by mz-timely-util; iceberg and the persist crates use 0.13.
-    { name = "lz4_flex", version = "0.12.1" },
-    # Used by dynfmt; iceberg/typetag pulls in v0.4.
-    { name = "erased-serde", version = "0.3.26" },
+    # Held back by parquet 58. parquet 60 moves to 0.14.
+    { name = "lz4_flex", version = "0.13.1" },
     # gcp_auth → hyper-rustls → rustls-native-certs pulls newer versions
     # while native-tls still pulls older versions.
     { name = "core-foundation", version = "0.10.1" },
@@ -197,6 +181,10 @@ skip = [
     { name = "hashlink", version = "0.10.0" },
     # held back by owo-colors 4.3 (mz-deploy terminal styling)
     { name = "supports-color", version = "2.1.0" },
+    # held back by insta 1.48
+    { name = "similar", version = "2.7.0" },
+    # held back by bindgen 0.72, the build dependency of custom-labels 0.4.6
+    { name = "shlex", version = "1.3.0" },
 
     # Pulled by launchdarkly-server-sdk 3.x via launchdarkly-sdk-transport /
     # eventsource-client (proxy/timeout/rustls stack and the SDK's RNG path).
@@ -255,6 +243,7 @@ wrappers = [
     "eventsource-client",
     "fail",
     "globset",
+    "hyper-rustls",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "launchdarkly-sdk-transport",
@@ -339,20 +328,8 @@ ignore = [
     # Allows private key leakage through timing information
     # rsa is required through iceberg-storage-opendal
     "RUSTSEC-2023-0071",
-    # `quick-xml` pulled in as transitive dependency: Quadratic run time when
-    # checking a start tag for duplicate attribute names. Not used to parse
-    # untrusted XML.
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
-    # `aws-sdk-s3` and `launchdarkly-server-sdk` both require `lru ^0.16.3` in their latest releases
+    # `launchdarkly-server-sdk` requires `lru ^0.16.3` in its latest release.
     "RUSTSEC-2026-0253",
-    # `h2` unbounded empty DATA frames, only patched in `h2 >=0.4.16`. Our
-    # `h2 0.4` is patched, but `h2 0.3` is also in the tree via `hyper 0.14`,
-    # which `mz-aws-util` keeps to override the DNS resolver of the AWS SDK
-    # (`aws-smithy-runtime/connector-hyper-0-14-x`). The `h2 0.3` line has no
-    # patched release, so this cannot be resolved by a version bump. That
-    # client only talks to AWS endpoints, and the advisory is low severity.
-    "RUSTSEC-2026-0258",
 ]
 
 # Must be manually kept in sync with about.toml.

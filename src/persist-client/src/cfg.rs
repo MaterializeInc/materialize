@@ -315,6 +315,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&BLOB_OPERATION_ATTEMPT_TIMEOUT)
         .add(&BLOB_CONNECT_TIMEOUT)
         .add(&BLOB_READ_TIMEOUT)
+        .add(&SHARD_METRICS)
+        .add(&PER_SHARD_METRICS_ENABLE_REGEX)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_SIZE)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_WAIT)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
@@ -389,6 +391,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_PREFIX)
         .add(&crate::stats::STATS_UNTRIMMABLE_COLUMNS_SUFFIX)
         .add(&crate::fetch::PART_DECODE_FORMAT)
+        .add(&crate::fetch::PART_DECODE_BATCH_ROWS)
         .add(&crate::write::COMBINE_INLINE_WRITES)
         .add(&crate::write::VALIDATE_PART_BOUNDS_ON_WRITE)
 }
@@ -738,6 +741,93 @@ pub(crate) const BLOB_READ_TIMEOUT: Config<Duration> = Config::new(
     "persist_blob_read_timeout",
     Duration::from_secs(10),
     "Maximum time to wait to read the first byte of a response, including connection time.",
+    ParameterScope::Environment,
+);
+
+/// Which persist shard metrics this process exports, one of the
+/// [`ShardMetricsExport`] values.
+///
+/// Read on every metrics scrape, so a change takes effect on the next scrape.
+/// A scrape reads it twice, once collecting the aggregates and once filtering
+/// the families, so a change between the two mixes the modes for that scrape.
+pub const SHARD_METRICS: Config<&'static str> = Config::new(
+    "persist_shard_metrics",
+    ShardMetricsExport::default().as_str(),
+    "Which persist shard metrics to export: 'per_shard' (the `mz_persist_shard_*` families \
+    with one series per shard), 'summary' (their bounded `_percentile`, `_topk` and \
+    per-version aggregates), 'both', or 'none'. Shard counts and process-level counters are \
+    always exported.",
+    ParameterScope::Environment,
+);
+
+/// The values of [`SHARD_METRICS`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShardMetricsExport {
+    None,
+    Summary,
+    PerShard,
+    Both,
+}
+
+impl ShardMetricsExport {
+    pub const ALL: [Self; 4] = [Self::None, Self::Summary, Self::PerShard, Self::Both];
+
+    /// The value [`SHARD_METRICS`] defaults to, which exports everything this
+    /// setting can turn off.
+    pub const fn default() -> Self {
+        Self::Both
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Summary => "summary",
+            Self::PerShard => "per_shard",
+            Self::Both => "both",
+        }
+    }
+
+    /// Parses a value of [`SHARD_METRICS`], or `None` if it is unrecognized.
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.as_str() == s)
+    }
+
+    /// Parses a value of [`SHARD_METRICS`], falling back to the default if it
+    /// is unrecognized.
+    ///
+    /// Silent: both callers run per scrape, so a typo would log forever.
+    /// `PerShardMetricsFilter` reports it once per change instead.
+    pub fn from_str_lossy(s: &str) -> Self {
+        Self::parse(s).unwrap_or_else(Self::default)
+    }
+
+    pub fn get(configs: &ConfigSet) -> Self {
+        Self::from_str_lossy(&SHARD_METRICS.get(configs))
+    }
+
+    /// Whether to export the per-shard families.
+    pub fn per_shard(self) -> bool {
+        matches!(self, Self::PerShard | Self::Both)
+    }
+
+    /// Whether to export the bounded aggregates of the per-shard families.
+    pub fn summary(self) -> bool {
+        matches!(self, Self::Summary | Self::Both)
+    }
+}
+
+/// Per-shard series to keep exporting while [`SHARD_METRICS`] leaves the
+/// per-shard families out.
+///
+/// A series is kept if its `shard` or `name` label matches this regex. The
+/// match is unanchored, so `s1` also matches `s10`: use `^...$` for an exact
+/// match. Empty keeps none, as does an invalid regex.
+pub const PER_SHARD_METRICS_ENABLE_REGEX: Config<&'static str> = Config::new(
+    "persist_per_shard_metrics_enable_regex",
+    "",
+    "While `persist_shard_metrics` is 'summary' or 'none', keep exporting the per-shard series \
+    whose `shard` or `name` label matches this regex (unanchored). Empty or invalid keeps \
+    none.",
     ParameterScope::Environment,
 );
 

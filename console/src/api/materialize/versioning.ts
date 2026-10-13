@@ -14,7 +14,8 @@ import {
   rcompare as semverRcompare,
   valid as semverValid,
 } from "semver";
-import { DB } from "types/materialize";
+
+import { DB } from "~/types/materialize";
 
 /**
  * Parses two semantic version strings and returns true if the first version

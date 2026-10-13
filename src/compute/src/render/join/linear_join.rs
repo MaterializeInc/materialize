@@ -30,7 +30,9 @@ use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ChunkChunker, UnchunkBuilder};
+use mz_timely_util::columnar::chunk::{
+    AccountedChunkBatcher, ChunkChunker, ComputeSpill, UnchunkBuilder,
+};
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Col2ValColBatcher, columnar_exchange};
 use mz_timely_util::operator::StreamExt;
@@ -670,9 +672,9 @@ where
     let arranged = match batcher {
         ArrangementBatcher::Chunked => keyed.mz_arrange_core::<
             _,
-            ChunkChunker<(Row, Row), T, Diff>,
-            AccountedChunkBatcher<(Row, Row), T, Diff>,
-            UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff>,
+            ChunkChunker<(Row, Row), T, Diff, ComputeSpill>,
+            AccountedChunkBatcher<(Row, Row), T, Diff, ComputeSpill>,
+            UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff, ComputeSpill>,
             RowRowSpine<_, _>,
         >(exchange, "JoinStage"),
         ArrangementBatcher::Columnar => keyed.mz_arrange_core::<

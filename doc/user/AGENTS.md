@@ -214,6 +214,17 @@ output in the documentation and verify that it matches the emulator output.
 
 Don't try to build Materialize from source; just use the latest emulator verison.
 
+## Query history relations by ID
+
+History relations outlive renames and replicas, so find their rows by ID:
+
+- `mz_cluster_replica_history.cluster_name` is the name at replica creation and
+  goes stale after a rename or swap. Filter on the current name instead:
+  `JOIN mz_catalog.mz_clusters AS c ON c.id = rh.cluster_id WHERE c.name = '...'`.
+- Join history to `mz_internal.mz_cluster_replica_history`, not
+  `mz_catalog.mz_cluster_replicas`, which lists only current replicas and drops
+  the rows of replicas a resize replaced.
+
 ## Deployments
 
 Docs changes are deployed via CI/CD. Don't deploy manually.

@@ -176,7 +176,7 @@ with conn.cursor() as cur:
             print(row)
 ```
 
-The [SUBSCRIBE output format](/sql/subscribe/#output) of `cur` is a data access object that can be used to iterate over the set of rows. When a row of a subscribed view is **updated,** two objects will show up in the `rows` array:
+`cur` iterates over the fetched rows, which have the [`SUBSCRIBE` output format](/sql/subscribe/#output). When a row of a subscribed view is **updated**, two rows show up in the output:
 
 ```python
     ...
@@ -225,5 +225,23 @@ ORM frameworks tend to run complex introspection queries that may use configurat
 
 The level of support for these tools will improve as we extend the coverage of `pg_catalog` in Materialize and join efforts with each community to make the integrations Just Work™️.
 
-Check out the [integrations page](/developer-tools/integrations/) for a list of ORM frameworks
-that are known to work well with Materialize.
+For other tools that work with Materialize, see [Tools and integrations](/developer-tools/integrations/).
+
+### SQLAlchemy
+
+To connect with [SQLAlchemy](https://www.sqlalchemy.org/), specify the `psycopg2` driver in the connection URL (`postgresql+psycopg2://`):
+
+```python
+#!/usr/bin/env python3
+
+import sqlalchemy
+
+engine = sqlalchemy.create_engine(
+    "postgresql+psycopg2://MATERIALIZE_USERNAME:MATERIALIZE_PASSWORD@MATERIALIZE_HOST:6875/materialize?sslmode=require"
+)
+
+with engine.connect() as conn:
+    print(conn.execute(sqlalchemy.text("SELECT mz_version()")).scalar())
+```
+
+The URL names the `psycopg2` driver explicitly because SQLAlchemy 2.1 and later use `psycopg3` for plain `postgresql://` URLs, and connecting to Materialize through `psycopg3` fails. The error is `Explicit rollback() forbidden within a Transaction context`, caused by `Expected a keyword at the beginning of a statement, found identifier "savepoint"`. (If you need `psycopg3`, for example for SQLAlchemy's `asyncio` support, pass `use_native_hstore=False` to `create_engine` or `create_async_engine`.)

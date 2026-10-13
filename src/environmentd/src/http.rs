@@ -82,6 +82,7 @@ use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppe
 use mz_adapter_types::dyncfgs::OIDC_GROUP_CLAIM;
 use mz_auth::Authenticated;
 use mz_auth::password::Password;
+use mz_auth::user::ExternalUserMetadata;
 use mz_authenticator::Authenticator;
 use mz_controller::ReplicaHttpLocator;
 use mz_dyncfg::ConfigSet;
@@ -92,7 +93,6 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::str::StrExt;
 use mz_pgwire_common::{ConnectionCounter, ConnectionHandle};
-use mz_repr::user::ExternalUserMetadata;
 use mz_server_core::listeners::{self, AllowedRoles, HttpRoutesEnabled, RouteGroup};
 use mz_server_core::{Connection, ConnectionHandler, ReloadingSslContext, Server};
 use mz_sql::session::metadata::SessionMetadata;

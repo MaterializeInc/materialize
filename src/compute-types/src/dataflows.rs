@@ -712,6 +712,7 @@ mod tests {
                 up_to: Antichain::new(),
                 non_null_assertions: Vec::new(),
                 refresh_schedule: None,
+                from_arrangement: None,
             },
         );
         df

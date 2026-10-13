@@ -116,7 +116,9 @@ use crate::source::RawSourceCreationConfig;
 use crate::source::postgres::verify_schema;
 use crate::source::postgres::{DefiniteError, ReplicationError, SourceOutputInfo, TransientError};
 use crate::source::probe;
-use crate::source::types::{FuelSize, Probe, SignaledFuture, SourceMessage, StackedCollection};
+use crate::source::types::{
+    FuelSize, Probe, ResumeUppers, SignaledFuture, SourceMessage, StackedCollection,
+};
 
 /// A logical replication message from the server.
 type LogicalReplMsg = ReplicationMessage<LogicalReplicationMessage>;
@@ -148,7 +150,7 @@ pub(crate) fn render<'scope>(
     table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     rewind_stream: StreamVec<'scope, MzOffset, RewindRequest>,
     slot_ready_stream: StreamVec<'scope, MzOffset, Infallible>,
-    committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+    committed_uppers: impl futures::Stream<Item = ResumeUppers<MzOffset>> + 'static,
     metrics: PgSourceMetrics,
 ) -> (
     StackedCollection<'scope, MzOffset, (usize, Result<SourceMessage, DataflowError>)>,
@@ -668,7 +670,7 @@ async fn raw_stream<'a>(
     timeline_id: &'a Option<u64>,
     publication: &'a str,
     resume_lsn: MzOffset,
-    uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'a,
+    uppers: impl futures::Stream<Item = ResumeUppers<MzOffset>> + 'a,
     probe_output: &'a AsyncOutputHandle<MzOffset, CapacityContainerBuilder<Vec<Probe<MzOffset>>>>,
     probe_cap: &'a Capability<MzOffset>,
     is_physical_replica: bool,
@@ -856,17 +858,20 @@ async fn raw_stream<'a>(
                     let res = stream.as_mut().standby_status_update(lsn, lsn, lsn, ts, 1).await;
                     res.map_err(|e| e.into())
                 },
-                Some(upper) = uppers.next() => match upper.into_option() {
-                    Some(lsn) => {
-                        if last_committed_upper < lsn {
-                            last_committed_upper = lsn;
-                            for stat in config.statistics.values() {
-                                stat.set_offset_committed(last_committed_upper.offset);
-                            }
+                Some(uppers) = uppers.next() => {
+                    if let Some(lsn) = uppers.source.as_ref().and_then(|upper| upper.as_option()) {
+                        if last_committed_upper < *lsn {
+                            last_committed_upper = *lsn;
                         }
-                        Ok(())
                     }
-                    None => Ok(()),
+                    // `offset_committed` was seeded with `resume_lsn`, so never report below it.
+                    for (id, upper) in &uppers.exports {
+                        let stat = config.statistics.get(id);
+                        if let (Some(lsn), Some(stat)) = (upper.as_option(), stat) {
+                            stat.set_offset_committed(std::cmp::max(*lsn, resume_lsn).offset);
+                        }
+                    }
+                    Ok(())
                 },
                 Ok(()) = probe_rx.changed() => match &*probe_rx.borrow() {
                     Some(Ok(probe)) => {

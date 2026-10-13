@@ -59,15 +59,10 @@ const vitestConfig = defineConfig({
     // findBy/waitFor wait for an individual element.
     testTimeout: 30_000,
     pool: "forks",
-    poolOptions: {
-      forks: {
-        // By default vitest sets these based on the logical processor count.
-        // Our CI runners have hyperthreading, but using the virtual cores seems to make
-        // the tests more flaky, and only slightly faster.
-        maxForks: process.env.CI ? physicalCpuCount() : undefined,
-        minForks: process.env.CI ? physicalCpuCount() : undefined,
-      },
-    },
+    // By default vitest sets this based on the logical processor count.
+    // Our CI runners have hyperthreading, but using the virtual cores seems to make
+    // the tests more flaky, and only slightly faster.
+    maxWorkers: process.env.CI ? physicalCpuCount() : undefined,
     onConsoleLog(log: string, _type: "stdout" | "stderr"): boolean | void {
       if (process.env.PRINT_TEST_CONSOLE_LOGS === "true") {
         return true;

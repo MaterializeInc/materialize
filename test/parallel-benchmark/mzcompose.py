@@ -60,7 +60,7 @@ from materialize.parallel_benchmark.framework import (
     SQLiteStore,
     State,
 )
-from materialize.parallel_benchmark.scenarios import *  # noqa: F401 F403
+from materialize.parallel_benchmark.scenarios import *  # noqa: F403
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config,
 )

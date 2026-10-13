@@ -610,7 +610,6 @@ mz_materialized_view_refresh_strategies  ""
 mz_object_arrangement_size_history       ""
 mz_object_hydration_history              ""
 mz_optimizer_notices                     ""
-mz_replacements                          ""
 mz_replica_hydration_history             ""
 mz_sessions                              ""
 mz_storage_usage_by_shard                ""
@@ -738,6 +737,7 @@ mz_overridden_system_parameters mz_catalog_server   ""
 mz_pending_cluster_replicas    mz_catalog_server   ""
 mz_postgres_source_tables      mz_catalog_server   ""
 mz_postgres_sources            mz_catalog_server   ""
+mz_replacements                mz_catalog_server   ""
 mz_replica_system_parameters   mz_catalog_server   ""
 mz_source_references           mz_catalog_server   ""
 mz_sql_server_source_tables    mz_catalog_server   ""
@@ -838,7 +838,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-28
+27
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

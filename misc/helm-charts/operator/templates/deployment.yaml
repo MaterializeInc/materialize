@@ -91,6 +91,9 @@ spec:
         {{- if not .Values.operator.args.enableLicenseKeyChecks }}
         - "--disable-license-key-checks"
         {{- end }}
+        {{- if not .Values.operator.args.enableDatabaseNetworkPolicies }}
+        - "--disable-database-network-policies"
+        {{- end }}
         {{- if .Values.operator.args.installV1CRD }}
         - "--install-v1-crd"
         {{- if .Values.operator.args.webhookCertReloadInterval }}

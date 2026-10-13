@@ -301,7 +301,7 @@ CREATE ROLE "carol@initech.example" WITH LOGIN PASSWORD '<password>';
 ```
 
 The name is arbitrary, so pick a convention and hold to it. Under
-[OIDC](/security/self-managed/sso/), roles are provisioned from the identity
+[OIDC](/self-managed-deployments/sso/oidc/), roles are provisioned from the identity
 provider.
 
 See [Manage database

@@ -12,6 +12,7 @@
 use std::time::Duration;
 
 use mz_cluster_client::client::TryIntoProtocolNonce;
+use mz_cluster_client::params::GrpcClientParameters;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigUpdates;
@@ -19,7 +20,6 @@ use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
 use mz_repr::{GlobalId, RelationDesc, Row, Timestamp};
-use mz_service::params::GrpcClientParameters;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_tracing::params::TracingParameters;
 use serde::{Deserialize, Serialize};

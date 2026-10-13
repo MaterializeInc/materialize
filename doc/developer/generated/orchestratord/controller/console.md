@@ -1,6 +1,6 @@
 ---
 source: src/orchestratord/src/controller/console.rs
-revision: 8dad2dbf43
+revision: bb5c454adc
 ---
 
 # mz-orchestratord::controller::console

@@ -19,6 +19,7 @@
 //! One `DatumVec` decodes the whole batch, as an operator does. Batches are sized so the row
 //! data stays in cache, since throughput falls off sharply once it does not.
 
+use mz_alloc_default as _;
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};

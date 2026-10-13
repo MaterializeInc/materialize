@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: v26.45.0-dev.0](https://img.shields.io/badge/Version-v26.45.0--dev.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v26.45.0-dev.0](https://img.shields.io/badge/AppVersion-v26.45.0--dev.0-informational?style=flat-square)
+![Version: v26.47.0-dev.0](https://img.shields.io/badge/Version-v26.47.0--dev.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v26.47.0-dev.0](https://img.shields.io/badge/AppVersion-v26.47.0--dev.0-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -143,6 +143,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `observability.prometheus.scrapeAnnotations.enabled` | Whether to annotate pods with common keys used for prometheus scraping. | ``true`` |
 | `operator.additionalMaterializeCRDColumns` | Additional columns to display when printing the Materialize CRD in table format. | ``{}`` |
 | `operator.affinity` | Affinity to use for the operator pod | ``{}`` |
+| `operator.args.enableDatabaseNetworkPolicies` | Whether to allow `CREATE NETWORK POLICY` and `ALTER NETWORK POLICY` in environmentd. Network policies match on client IP, which self-managed deployments generally do not preserve (port-forwards and most ingress setups present a proxy address), so they are disabled by default. | ``false`` |
 | `operator.args.enableInternalStatementLogging` |  | ``true`` |
 | `operator.args.enableLicenseKeyChecks` |  | ``false`` |
 | `operator.args.installV1CRD` | Whether to install the v1 version of the Materialize CRD and the conversion webhook that converts between v1 and v1alpha1. When false, only the v1alpha1 CRD version is installed and no webhook serving certificate or service is created. | ``false`` |
@@ -178,7 +179,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.swap_enabled` | Configure sizes such that the pod QoS class is not Guaranteed, as is required for swap to be enabled. Disk doesn't make much sense with swap, as swap performs better than lgalloc, so it also gets disabled. | ``true`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
-| `operator.image.tag` | The tag/version of the operator image to be used | ``"v26.43.0"`` |
+| `operator.image.tag` | The tag/version of the operator image to be used | ``"v26.45.1"`` |
 | `operator.nodeSelector` | Node selector to use for the operator pod | ``{}`` |
 | `operator.podDisruptionBudget.enabled` | Whether to create a PodDisruptionBudget for the operator. Only created when `replicas` is greater than 1, since a budget over a single replica either blocks node drains or protects nothing. | ``true`` |
 | `operator.podDisruptionBudget.maxUnavailable` | Maximum number of operator pods that may be unavailable at once during voluntary disruptions. Expressed as a maximum rather than a minimum so that node drains are never blocked outright, they are only serialized. | ``1`` |
@@ -208,7 +209,7 @@ Specify each parameter using the `--set key=value[,key=value]` argument to `helm
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v26.45.0-dev.0 \
+  --set operator.image.tag=v26.47.0-dev.0 \
   materialize/materialize-operator
 ```
 
@@ -243,7 +244,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v26.45.0-dev.0
+  environmentdImageRef: materialize/environmentd:v26.47.0-dev.0
   backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:

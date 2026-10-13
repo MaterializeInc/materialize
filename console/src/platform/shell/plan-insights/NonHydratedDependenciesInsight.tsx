@@ -124,7 +124,7 @@ const NonHydratedDependenciesInsight = ({
       >
         <NoticeExternalLink
           insightVersionedId={VERSIONED_ID}
-          href={`${docUrls["/docs/transform-data/troubleshooting/"]}#hydrating-upstream-objects`}
+          href={`${docUrls["/docs/serve-results/troubleshooting/unresponsive-queries/"]}#check-for-hydrating-objects`}
           redactedSql={planInsights.redactedSql}
         >
           Learn more about hydration

@@ -70,13 +70,17 @@ pub fn build_http_client(enforce_external_addresses: bool) -> Result<Client, req
         .build()
 }
 
-/// Returns an error if `response` is a 3xx redirect. Materialize disables
-/// redirect following on the HTTP client (see `build_http_client`) to close
-/// an SSRF hole, so callers must surface a meaningful error rather than
-/// letting the response fall through to header parsing.
-fn check_not_redirect(response: &reqwest::Response) -> Result<(), StorageErrorX> {
-    if response.status().is_redirection() {
-        return Err(StorageErrorXKind::Redirect(response.status().as_u16()).into());
+/// Returns an error unless `response` has a 2xx status. A 3xx gets a
+/// dedicated error because redirects are disabled on the HTTP client (see
+/// `build_http_client`). Any other status would otherwise let an error page
+/// body be ingested as data.
+fn check_success(response: &reqwest::Response) -> Result<(), StorageErrorX> {
+    let status = response.status();
+    if status.is_redirection() {
+        return Err(StorageErrorXKind::Redirect(status.as_u16()).into());
+    }
+    if !status.is_success() {
+        return Err(StorageErrorXKind::HttpStatus(status.as_u16()).into());
     }
     Ok(())
 }
@@ -214,7 +218,10 @@ impl OneshotSource for HttpOneshotSource {
             .await
             .context("HEAD request")?;
 
-        check_not_redirect(&response)?;
+        // Other HEAD failures fall back to GET below, which must succeed.
+        if response.status().is_redirection() {
+            return Err(StorageErrorXKind::Redirect(response.status().as_u16()).into());
+        }
 
         // Not all servers accept `HEAD` requests though, so we'll fallback to a `GET`
         // request and skip fetching the body.
@@ -230,7 +237,7 @@ impl OneshotSource for HttpOneshotSource {
                     .await
                     .context("GET request")?;
 
-                check_not_redirect(&response)?;
+                check_success(&response)?;
 
                 let headers = response.headers().clone();
 
@@ -308,7 +315,7 @@ impl OneshotSource for HttpOneshotSource {
             // got back an HTTP 206?
 
             let response = request.send().await.context("get")?;
-            check_not_redirect(&response)?;
+            check_success(&response)?;
             let bytes_stream = response.bytes_stream().err_into();
 
             Ok::<_, StorageErrorX>(bytes_stream)

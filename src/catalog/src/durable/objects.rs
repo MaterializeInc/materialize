@@ -11,7 +11,8 @@
 //! into two categories.
 //!
 //! The key-value objects are a one-to-one mapping of the protobuf objects used to save catalog
-//! data durably. They can be converted to and from protobuf via the [`mz_proto::RustType`] trait.
+//! data durably. They can be converted to and from protobuf via the
+//! [`RustType`](crate::durable::objects::serialization::RustType) trait.
 //! These objects should not be exposed anywhere outside the [`crate::durable`] module.
 //!
 //! The other type of objects combine the information from keys and values into a single struct,
@@ -74,7 +75,7 @@ fn any_uuid() -> impl proptest::strategy::Strategy<Value = Uuid> {
 /// convert the types used in [`RustType`] to a more consumable and
 /// condensed type.
 ///
-/// [`RustType`]: mz_proto::RustType
+/// [`RustType`]: crate::durable::objects::serialization::RustType
 pub trait DurableType: Sized {
     type Key;
     type Value;
@@ -1727,7 +1728,7 @@ pub struct RoleAuthValue {
 
 #[cfg(test)]
 mod test {
-    use mz_proto::{ProtoType, RustType};
+    use crate::durable::objects::serialization::{ProtoType, RustType};
     use proptest::prelude::*;
 
     use super::{

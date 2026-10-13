@@ -695,6 +695,20 @@ impl<'a> Parser<'a> {
             (Token::Keyword(NOT), _) => Ok(Expr::Not {
                 expr: Box::new(self.parse_subexpr(Precedence::PrefixNot)?),
             }),
+            (Token::Keyword(OPERATOR), Some(Token::LParen)) => {
+                self.expect_token(&Token::LParen)?;
+                let op = self.parse_operator()?;
+                self.expect_token(&Token::RParen)?;
+                // Like PostgreSQL, the operand of a prefix `OPERATOR(...)`
+                // parses at the precedence of "any other operator", not at
+                // the tighter precedence of bare unary `+` and `-`, so
+                // `OPERATOR(pg_catalog.-) 1 + 2` means `- (1 + 2)`.
+                Ok(Expr::Op {
+                    op,
+                    expr1: Box::new(self.parse_subexpr(Precedence::Other)?),
+                    expr2: None,
+                })
+            }
             (Token::Keyword(ROW), Some(Token::LParen)) => self.parse_row_expr(),
             (Token::Keyword(TRIM), Some(Token::LParen)) => self.parse_trim_expr(),
             (Token::Keyword(POSITION), Some(Token::LParen)) => self.parse_position_expr(),
@@ -1556,7 +1570,10 @@ impl<'a> Parser<'a> {
                 Some(Token::Keyword(kw)) => namespace.push(kw.into()),
                 Some(Token::Ident(id)) => namespace.push(self.new_identifier(id)?),
                 Some(Token::Op(op)) => break op,
+                // The lexer emits `*` and `=` as dedicated tokens rather than
+                // `Token::Op`, but both are valid operator names here.
                 Some(Token::Star) => break "*".to_string(),
+                Some(Token::Eq) => break "=".to_string(),
                 tok => self.expected(self.peek_prev_pos(), "operator", tok)?,
             }
             self.expect_token(&Token::Dot)?;

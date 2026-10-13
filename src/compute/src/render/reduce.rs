@@ -38,6 +38,7 @@ use mz_compute_types::plan::reduce::{
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_expr::{AggregateFunc, EvalError, SafeMfpPlan};
 use mz_ore::cast::CastLossy;
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg, OrderedNumericAgg};
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
@@ -1063,7 +1064,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
     /// Build a bucketed stage fragment that wraps [`Self::build_bucketed_negated_output`], and
     /// adds validation if `validating` is true. It returns the consolidated inputs concatenated
-    /// with the negation of what's produced by the reduction.
+    /// with the reduction's output, which is the winner of each key.
     /// `validating` indicates whether we want this stage to perform error detection
     /// for invalid accumulations. Once a stage is clean of such errors, subsequent
     /// stages can skip validation.
@@ -1123,7 +1124,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
     /// Build a dataflow fragment for one stage of a reduction tree for multiple hierarchical
     /// aggregates to arrange and reduce the inputs. Returns the arranged input and the reduction,
-    /// with all diffs in the reduction's output negated.
+    /// whose output for each key is the key's winner minus its input.
     fn build_bucketed_negated_output<'s, Bu, Tr>(
         &self,
         input: VecCollection<'s, T, (Row, Row), Diff>,
@@ -1207,12 +1208,13 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     row_packer.push(func.eval(column_iter, &temp_storage));
                 }
                 // We only want to arrange the parts of the input that are not part of the output.
-                // More specifically, we want to arrange it so that `input.concat(&output.negate())`
-                // gives us the intended value of this aggregate function. Also we assume that regardless
-                // of the multiplicity of the final result in the input, we only want to have one copy
-                // in the output.
+                // The reduction emits the winner with a positive diff and every input with its diff
+                // negated, so `negated_output.concat(input)` in the caller holds one copy of the
+                // winner, regardless of its multiplicity in the input. The winner cancels against an
+                // input row only if it equals one, which holds for a single aggregate but not in
+                // general for several aggregates whose results come from different rows.
                 target.reserve(source.len().saturating_add(1));
-                target.push((BatchValOwn::<Tr>::ok(row_builder.clone()), Diff::MINUS_ONE));
+                target.push((BatchValOwn::<Tr>::ok(row_builder.clone()), Diff::ONE));
                 target.extend(source.iter().map(|(values, cnt)| {
                     let mut cnt = *cnt;
                     cnt.negate();
@@ -1594,6 +1596,34 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                     output.push((err.into(), Diff::ONE));
                                 }
                             }
+                            (
+                                AggregateFunc::SumInterval,
+                                Accum::Interval {
+                                    months,
+                                    days,
+                                    micros,
+                                    ..
+                                },
+                            ) => {
+                                // PostgreSQL reports a sum that leaves the
+                                // `Interval` field widths as `interval out of
+                                // range`. So do we.
+                                if Interval::try_new(
+                                    months.into_inner(),
+                                    days.into_inner(),
+                                    micros.into_inner(),
+                                )
+                                .is_none()
+                                {
+                                    let err = EvalError::IntervalOutOfRange(
+                                        format!(
+                                            "{months} months {days} days {micros} microseconds"
+                                        )
+                                        .into(),
+                                    );
+                                    output.push((err.into(), Diff::ONE));
+                                }
+                            }
                             _ => (), // no more errors to check for at this point!
                         }
                     }
@@ -1664,6 +1694,12 @@ fn accumulable_zero(aggr_func: &AggregateFunc) -> Accum {
             pos_infs: Diff::ZERO,
             neg_infs: Diff::ZERO,
             nans: Diff::ZERO,
+            non_nulls: Diff::ZERO,
+        },
+        AggregateFunc::SumInterval => Accum::Interval {
+            months: AccumCount::ZERO,
+            days: AccumCount::ZERO,
+            micros: AccumCount::ZERO,
             non_nulls: Diff::ZERO,
         },
         _ => Accum::SimpleNumber {
@@ -1831,6 +1867,21 @@ fn datum_to_accumulator(aggregate_func: &AggregateFunc, datum: Datum) -> Accum {
                 non_nulls: Diff::ZERO,
             },
             x => panic!("Invalid argument to AggregateFunc::SumNumeric: {x:?}"),
+        },
+        AggregateFunc::SumInterval => match datum {
+            Datum::Interval(i) => Accum::Interval {
+                months: i.months.into(),
+                days: i.days.into(),
+                micros: i.micros.into(),
+                non_nulls: Diff::ONE,
+            },
+            Datum::Null => Accum::Interval {
+                months: AccumCount::ZERO,
+                days: AccumCount::ZERO,
+                micros: AccumCount::ZERO,
+                non_nulls: Diff::ZERO,
+            },
+            x => panic!("Invalid argument to AggregateFunc::SumInterval: {x:?}"),
         },
         _ => {
             // Other accumulations need to disentangle the accumulable
@@ -2026,6 +2077,26 @@ fn finalize_accum<'a>(aggr_func: &'a AggregateFunc, accum: &'a Accum, total: Dif
                     Datum::from(d)
                 }
             }
+            (
+                AggregateFunc::SumInterval,
+                Accum::Interval {
+                    months,
+                    days,
+                    micros,
+                    non_nulls: _,
+                },
+            ) => {
+                match Interval::try_new(months.into_inner(), days.into_inner(), micros.into_inner())
+                {
+                    Some(interval) => Datum::Interval(interval),
+                    // The sum overflows an `Interval`. In the accumulable
+                    // reduce pair the sibling operator raises the error, so
+                    // this value is never exposed. `AccumulableOneByOneAggr`
+                    // has no sibling, so a window aggregate does surface this
+                    // NULL. See `mz_expr::sum_interval_counted`.
+                    None => Datum::Null,
+                }
+            }
             _ => panic!(
                 "Unexpected accumulation (aggr={:?}, accum={accum:?})",
                 aggr_func
@@ -2091,6 +2162,23 @@ enum Accum {
         /// Counts non-NULL values
         non_nulls: Diff,
     },
+    /// Accumulates intervals as three independent component sums, matching
+    /// PostgreSQL's interval addition: nothing is carried from a coarser
+    /// component into a finer one. Each component accumulates in the same
+    /// `AccumCount` the other variants use, so a sum that overflows an
+    /// `Interval` field still consolidates and retracts correctly, and the
+    /// narrowing at finalization is the single place that decides whether the
+    /// result is representable.
+    Interval {
+        /// The accumulation of all non-NULL month counts observed.
+        months: AccumCount,
+        /// The accumulation of all non-NULL day counts observed.
+        days: AccumCount,
+        /// The accumulation of all non-NULL microsecond counts observed.
+        micros: AccumCount,
+        /// The number of non-NULL values observed.
+        non_nulls: Diff,
+    },
     /// Accumulates arbitrary precision decimals.
     Numeric {
         /// Accumulates non-special values
@@ -2124,6 +2212,12 @@ impl IsZero for Accum {
                     && nans.is_zero()
                     && non_nulls.is_zero()
             }
+            Accum::Interval {
+                months,
+                days,
+                micros,
+                non_nulls,
+            } => months.is_zero() && days.is_zero() && micros.is_zero() && non_nulls.is_zero(),
             Accum::Numeric {
                 accum,
                 pos_infs,
@@ -2187,6 +2281,25 @@ impl Semigroup for Accum {
                 *pos_infs += other_pos_infs;
                 *neg_infs += other_neg_infs;
                 *nans += other_nans;
+                *non_nulls += other_non_nulls;
+            }
+            (
+                Accum::Interval {
+                    months,
+                    days,
+                    micros,
+                    non_nulls,
+                },
+                Accum::Interval {
+                    months: other_months,
+                    days: other_days,
+                    micros: other_micros,
+                    non_nulls: other_non_nulls,
+                },
+            ) => {
+                *months += other_months;
+                *days += other_days;
+                *micros += other_micros;
                 *non_nulls += other_non_nulls;
             }
             (
@@ -2274,6 +2387,17 @@ impl Multiply<Diff> for Accum {
                 pos_infs: pos_infs * factor,
                 neg_infs: neg_infs * factor,
                 nans: nans * factor,
+                non_nulls: non_nulls * factor,
+            },
+            Accum::Interval {
+                months,
+                days,
+                micros,
+                non_nulls,
+            } => Accum::Interval {
+                months: months * AccumCount::from(factor),
+                days: days * AccumCount::from(factor),
+                micros: micros * AccumCount::from(factor),
                 non_nulls: non_nulls * factor,
             },
             Accum::Numeric {
@@ -2545,6 +2669,7 @@ mod monoids {
             | AggregateFunc::SumFloat32
             | AggregateFunc::SumFloat64
             | AggregateFunc::SumNumeric
+            | AggregateFunc::SumInterval
             | AggregateFunc::Count
             | AggregateFunc::Any
             | AggregateFunc::All
@@ -2800,6 +2925,14 @@ mod tests {
                     numeric("9e39"),
                     numeric("NaN"),
                     numeric("Infinity"),
+                    Datum::Null,
+                ],
+            ),
+            (
+                AggregateFunc::SumInterval,
+                vec![
+                    Datum::Interval(Interval::new(-13, 40, 1_234_567)),
+                    Datum::Interval(Interval::new(i32::MAX, i32::MIN, i64::MAX)),
                     Datum::Null,
                 ],
             ),

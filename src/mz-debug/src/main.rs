@@ -213,6 +213,14 @@ pub struct Context {
 
 #[tokio::main]
 async fn main() {
+    // Pin the rustls crypto provider to aws-lc-rs. The kube client builds its
+    // rustls config via `ClientConfig::builder()`, which resolves the
+    // process-default provider and panics when rustls' `ring` and `aws-lc-rs`
+    // features are both enabled and no default is installed.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("installing the aws-lc-rs crypto provider should not fail");
+
     let args: Args = cli::parse_args(CliConfig {
         // mz_ore::cli::parse_args' env_prefix doesn't apply for subcommand flags. Thus
         // we manually set each env_prefix to MZ_ for each flag.

@@ -110,7 +110,7 @@ def delete_after(tags: dict[str, str]) -> datetime.datetime | None:
     if not unix:
         return None
     unix = int(float(unix))
-    return datetime.datetime.fromtimestamp(unix)
+    return datetime.datetime.fromtimestamp(unix, datetime.UTC)
 
 
 def instance_host(instance: Instance, user: str | None = None) -> str:
@@ -142,7 +142,7 @@ def _format_expires(dt: datetime.datetime | None) -> str:
     """Render a delete-after time as a compact relative duration."""
     if dt is None:
         return "-"
-    secs = (dt - datetime.datetime.now()).total_seconds()
+    secs = (dt - datetime.datetime.now(datetime.UTC)).total_seconds()
     if secs <= 0:
         return "expired"
     if secs >= 86400:
@@ -420,7 +420,7 @@ def launch(
     tags.setdefault("team", "engineering")
     tags.setdefault(
         "deleteAfter",
-        delete_after.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        delete_after.astimezone(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
     )
 
     ec2 = boto3.client("ec2")
@@ -708,7 +708,7 @@ def get_old_instances() -> list[InstanceTypeDef]:
         if delete_after is None:
             return False
         delete_after = float(delete_after)
-        return datetime.datetime.now(datetime.timezone.utc).timestamp() > delete_after
+        return datetime.datetime.now(datetime.UTC).timestamp() > delete_after
 
     return [
         i

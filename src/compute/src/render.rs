@@ -1272,6 +1272,11 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     operator
                 };
 
+                // NOTE: `EXPLAIN ANALYZE ... CPU` (mz-sql) counts the operators of a span at the
+                // smallest address depth as its outermost ones. That holds because every node
+                // renders in `self.scope` and closes the regions it opens before
+                // `render_plan_expr` returns. A region open across span boundaries would make
+                // those queries count nested operators' time twice.
                 let operator_id_start = self.scope.worker().peek_identifier();
                 Some((operator, operator_id_start))
             } else {

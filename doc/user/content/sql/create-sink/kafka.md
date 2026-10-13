@@ -69,6 +69,19 @@ Materialize always adds a header with key `materialize-timestamp` to each
 message emitted by the sink. The value of this header indicates the logical time
 at which the event described by the message occurred.
 
+{{< private-preview >}}
+The `materialize-sink-id` header
+{{< /private-preview >}}
+
+When enabled for your region, Materialize also adds a header with key
+`materialize-sink-id` to each message emitted by the sink. The value of this
+header is the ID of the sink, as shown in
+[`mz_sinks`](/sql/system-catalog/mz_catalog/#mz_sinks). This is the same ID
+Materialize records in the [progress topic](#exactly-once-processing), so
+downstream consumers (for example, a ClickHouse view or a Kafka Streams
+application) can correlate a data topic with its progress records without
+querying Materialize.
+
 The `HEADERS` option allows specifying the name of a column containing
 additional headers to add to each message emitted by the sink. When the option
 is unspecified, no additional headers are added. When specified, the named

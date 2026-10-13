@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/action/kafka/verify_data.rs
-revision: 5b2cefc829
+revision: 1718310c06
 ---
 
 # testdrive::action::kafka::verify_data

@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/extensions/temporal_bucket.rs
-revision: feff142553
+revision: 241f928bf3
 ---
 
 # mz-compute::extensions::temporal_bucket

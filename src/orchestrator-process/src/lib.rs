@@ -369,6 +369,13 @@ impl NamespacedOrchestrator for NamespacedProcessOrchestrator {
         result_rx.await.expect("worker task not dropped")
     }
 
+    async fn flush(&self) -> Result<(), anyhow::Error> {
+        let (result_tx, result_rx) = oneshot::channel();
+        self.send_command(WorkerCommand::Flush { result_tx });
+        result_rx.await.expect("worker task not dropped");
+        Ok(())
+    }
+
     fn watch_services(&self) -> BoxStream<'static, Result<ServiceEvent, anyhow::Error>> {
         let mut initial_events = vec![];
         let mut service_event_rx = {
@@ -432,6 +439,9 @@ enum WorkerCommand {
     },
     ListServices {
         result_tx: oneshot::Sender<Result<Vec<String>, anyhow::Error>>,
+    },
+    Flush {
+        result_tx: oneshot::Sender<()>,
     },
     FetchServiceMetrics {
         id: String,
@@ -498,6 +508,10 @@ impl OrchestratorWorker {
                 DropService { id } => self.drop_service(&id).await,
                 ListServices { result_tx } => {
                     let _ = result_tx.send(self.list_services().await);
+                    Ok(())
+                }
+                Flush { result_tx } => {
+                    let _ = result_tx.send(());
                     Ok(())
                 }
                 FetchServiceMetrics { id, result_tx } => {

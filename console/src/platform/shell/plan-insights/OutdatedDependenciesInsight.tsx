@@ -123,7 +123,7 @@ const OutdatedDependenciesInsights = ({
       >
         <NoticeExternalLink
           insightVersionedId={VERSIONED_ID}
-          href={`${docUrls["/docs/transform-data/troubleshooting/"]}#lagging-materialized-views-or-indexes`}
+          href={`${docUrls["/docs/serve-results/troubleshooting/slow-queries/"]}#check-for-lagging-dependencies`}
           redactedSql={planInsights.redactedSql}
         >
           How to resolve lag

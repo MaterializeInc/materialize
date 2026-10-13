@@ -1,6 +1,6 @@
 ---
 source: src/timestamp-oracle/src/retry.rs
-revision: bffa995dc9
+revision: aafb0ea1df
 ---
 
 # mz-timestamp-oracle::retry

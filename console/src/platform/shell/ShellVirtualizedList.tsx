@@ -212,7 +212,7 @@ export const ShellVirtualizedListProvider = ({
       // This should be valid, because _requestScrollToBottom isn't executed during render,
       // just refererenced.
       // https://github.com/facebook/react/issues/31290
-      // eslint-disable-next-line react-compiler/react-compiler
+      // eslint-disable-next-line react-hooks/refs
       debounce(_requestScrollToBottom, JOTAI_DEBOUNCE_WAIT_MS),
     [_requestScrollToBottom],
   );

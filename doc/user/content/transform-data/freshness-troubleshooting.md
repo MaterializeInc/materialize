@@ -255,7 +255,8 @@ SELECT
     rsh.occurred_at
 FROM mz_internal.mz_cluster_replica_status_history rsh
 JOIN mz_internal.mz_cluster_replica_history rh ON rsh.replica_id = rh.replica_id
-WHERE rh.cluster_name = '<cluster_name>'
+JOIN mz_catalog.mz_clusters c ON c.id = rh.cluster_id
+WHERE c.name = '<cluster_name>'
 ORDER BY rsh.occurred_at DESC
 LIMIT 20;
 ```

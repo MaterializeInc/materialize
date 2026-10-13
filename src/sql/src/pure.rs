@@ -766,6 +766,40 @@ pub(crate) enum SourceReferencePolicy {
     Required,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FilterConstraints {
+    ExcludeAll,
+    Exclude(BTreeSet<String>),
+}
+
+impl FilterConstraints {
+    pub(crate) fn none() -> Self {
+        FilterConstraints::Exclude(BTreeSet::new())
+    }
+
+    fn from_options(
+        exclude_constraints: Vec<String>,
+        exclude_all_constraints: bool,
+    ) -> Result<Self, PlanError> {
+        if !exclude_all_constraints {
+            return Ok(FilterConstraints::Exclude(
+                exclude_constraints.into_iter().collect(),
+            ));
+        }
+        if !exclude_constraints.is_empty() {
+            sql_bail!("EXCLUDE ALL CONSTRAINTS cannot be combined with EXCLUDE CONSTRAINTS");
+        }
+        Ok(FilterConstraints::ExcludeAll)
+    }
+
+    pub(crate) fn excludes_any(&self) -> bool {
+        match self {
+            FilterConstraints::ExcludeAll => true,
+            FilterConstraints::Exclude(names) => !names.is_empty(),
+        }
+    }
+}
+
 async fn purify_create_source(
     catalog: impl SessionCatalog,
     now: u64,
@@ -1008,8 +1042,7 @@ async fn purify_create_source(
                 external_references,
                 text_columns,
                 exclude_columns,
-                &BTreeSet::new(),
-                false,
+                &FilterConstraints::none(),
                 source_name,
                 &reference_policy,
                 initial_lsn,
@@ -1194,6 +1227,7 @@ async fn purify_create_source(
                 external_references,
                 text_columns,
                 exclude_columns,
+                &FilterConstraints::none(),
                 source_name,
                 initial_gtid_set.clone(),
                 &reference_policy,
@@ -1579,8 +1613,7 @@ async fn purify_alter_source_add_subsources(
                 &Some(ExternalReferences::SubsetTables(external_references)),
                 text_columns,
                 exclude_columns,
-                &BTreeSet::new(),
-                false,
+                &FilterConstraints::none(),
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
                 initial_lsn,
@@ -1638,6 +1671,7 @@ async fn purify_alter_source_add_subsources(
                 &requested_references,
                 text_columns,
                 exclude_columns,
+                &FilterConstraints::none(),
                 &unresolved_source_name,
                 initial_gtid_set,
                 &SourceReferencePolicy::Required,
@@ -1886,13 +1920,11 @@ async fn purify_create_table_from_source(
         sql_bail!("DETAILS option cannot be explicitly set");
     }
 
-    if !exclude_constraints.is_empty() || exclude_all_constraints {
+    let filter_constraints =
+        FilterConstraints::from_options(exclude_constraints, exclude_all_constraints)?;
+    if filter_constraints.excludes_any() {
         scx.require_feature_flag(&crate::session::vars::ENABLE_EXCLUDE_CONSTRAINTS_OPTION)?;
     }
-    if !exclude_constraints.is_empty() && exclude_all_constraints {
-        sql_bail!("EXCLUDE ALL CONSTRAINTS cannot be combined with EXCLUDE CONSTRAINTS");
-    }
-    let exclude_constraints: BTreeSet<String> = exclude_constraints.into_iter().collect();
 
     // Our text column values are unqualified (just column names), but the purification methods below
     // expect to match the fully-qualified names against the full set of tables in upstream, so we
@@ -1932,8 +1964,11 @@ async fn purify_create_table_from_source(
         }])
     });
 
-    if (!exclude_constraints.is_empty() || exclude_all_constraints)
-        && !matches!(desc.connection, GenericSourceConnection::Postgres(_))
+    if filter_constraints.excludes_any()
+        && !matches!(
+            desc.connection,
+            GenericSourceConnection::Postgres(_) | GenericSourceConnection::MySql(_)
+        )
     {
         sql_bail!(
             "EXCLUDE CONSTRAINTS is not supported for {} sources",
@@ -1982,8 +2017,7 @@ async fn purify_create_table_from_source(
                 &requested_references,
                 qualified_text_columns,
                 qualified_exclude_columns,
-                &exclude_constraints,
-                exclude_all_constraints,
+                &filter_constraints,
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
                 initial_lsn,
@@ -2037,6 +2071,7 @@ async fn purify_create_table_from_source(
                 &requested_references,
                 qualified_text_columns,
                 qualified_exclude_columns,
+                &filter_constraints,
                 &unresolved_source_name,
                 initial_gtid_set,
                 &SourceReferencePolicy::Required,

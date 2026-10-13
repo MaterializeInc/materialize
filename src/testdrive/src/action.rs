@@ -28,11 +28,14 @@ use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
 use mz_ccsr::SubjectVersion;
-use mz_kafka_util::client::{MzClientContext, create_new_client_config_simple};
+use mz_kafka_util::client::{
+    MzClientContext, create_new_client_config_simple, create_with_context,
+};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
+use mz_ore::secure::Zeroizing;
 use mz_ore::task;
 use mz_ore::url::SensitiveUrl;
 use mz_persist_client::cache::PersistClientCache;
@@ -45,6 +48,7 @@ use mz_postgres_util::{
 };
 use mz_sql::catalog::EnvironmentId;
 use mz_tls_util::make_tls;
+use openssl::pkcs12::Pkcs12;
 use rdkafka::ClientConfig;
 use rdkafka::producer::Producer;
 use regex::{Captures, Regex};
@@ -1179,9 +1183,9 @@ pub async fn create_state(
         let mut ccsr_config = mz_ccsr::ClientConfig::new(schema_registry_url.clone());
 
         if let Some(cert_path) = &config.cert_path {
-            let cert = fs::read(cert_path).context("reading cert")?;
-            let pass = config.cert_password.as_deref().unwrap_or("").to_owned();
-            let ident = mz_ccsr::tls::Identity::from_pkcs12_der(cert, pass)
+            let keystore = Zeroizing::new(fs::read(cert_path).context("reading cert")?);
+            let pass = config.cert_password.as_deref().unwrap_or("");
+            let ident = identity_from_pkcs12_der(&keystore, pass)
                 .context("reading keystore file as pkcs12")?;
             ccsr_config = ccsr_config.identity(ident);
         }
@@ -1215,15 +1219,15 @@ pub async fn create_state(
             kafka_config.set(key, value);
         }
 
-        let admin: AdminClient<_> = kafka_config
-            .create_with_context(MzClientContext::default())
+        let admin: AdminClient<_> = create_with_context(&kafka_config, MzClientContext::default())
             .with_context(|| format!("opening Kafka connection: {}", config.kafka_addr))?;
 
         let admin_opts = AdminOptions::new().operation_timeout(Some(config.default_timeout));
 
-        let producer: FutureProducer<_> = kafka_config
-            .create_with_context(MzClientContext::default())
-            .with_context(|| format!("opening Kafka producer connection: {}", config.kafka_addr))?;
+        let producer: FutureProducer<_> =
+            create_with_context(&kafka_config, MzClientContext::default()).with_context(|| {
+                format!("opening Kafka producer connection: {}", config.kafka_addr)
+            })?;
 
         let topics = BTreeMap::new();
 
@@ -1307,6 +1311,28 @@ pub async fn create_state(
     };
     state.initialize_cmd_vars().await?;
     Ok((state, pgconn_task))
+}
+
+/// Converts a PKCS #12 keystore into a schema registry client identity.
+///
+/// The same keystore is handed to librdkafka, which reads PKCS #12 natively,
+/// while the schema registry client's rustls backend only accepts PEM.
+fn identity_from_pkcs12_der(der: &[u8], pass: &str) -> anyhow::Result<mz_ccsr::tls::Identity> {
+    let parsed = Pkcs12::from_der(der)?.parse2(pass)?;
+    let key = Zeroizing::new(
+        parsed
+            .pkey
+            .context("keystore has no private key")?
+            .private_key_to_pem_pkcs8()?,
+    );
+    let mut chain = parsed
+        .cert
+        .context("keystore has no certificate")?
+        .to_pem()?;
+    for ca in parsed.ca.into_iter().flatten() {
+        chain.extend(ca.to_pem()?);
+    }
+    Ok(mz_ccsr::tls::Identity::from_pem(&key, &chain)?)
 }
 
 async fn create_materialize_state(

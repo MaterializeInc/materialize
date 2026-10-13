@@ -1,6 +1,6 @@
 ---
 source: src/orchestratord/src/controller.rs
-revision: 82d92a7fad
+revision: bb5c454adc
 ---
 
 # mz-orchestratord::controller

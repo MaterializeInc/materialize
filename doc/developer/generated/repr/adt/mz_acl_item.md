@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/adt/mz_acl_item.rs
-revision: c0559e3dbe
+revision: 45b9904d36
 ---
 
 # mz-repr::adt::mz_acl_item

@@ -295,19 +295,14 @@ macro_rules! upsert_source_time_unit {
 }
 upsert_source_time_unit!(GtidPartition, Lsn);
 
-/// Storage's leg of the process-wide chunk spill gate, used by the chunked
-/// upsert-v2 stash flavor.
+/// The storage spill gate ([`mz_timely_util::columnar::chunk::StorageSpill`]),
+/// used by the chunked upsert-v2 stash flavor.
 ///
 /// In that flavor the source stash and feedback arrangement spill through the
-/// process buffer pool ([`mz_timely_util::columnar::chunk`]): committed chunk
-/// bodies land in the pool once compute's config handler has installed and
-/// budgeted it (storage and compute run in the same `clusterd` process).
-///
-/// The gate is process-wide with one leg per subsystem, and chunks spill
-/// while either leg is set. Storage sets its leg from
-/// `enable_upsert_paged_spill`, so that flag alone cannot veto spilling
-/// enabled by compute's leg. The gate is consulted at every chunk commit, so
-/// flips apply to running dataflows.
+/// process buffer pool: committed chunk bodies land in the pool once compute's
+/// config handler has installed and budgeted it (storage and compute run in
+/// the same `clusterd` process). The gate is consulted at every chunk commit,
+/// so flips apply to running dataflows.
 pub mod upsert_stash_spill {
     /// Enable or disable spilling of upsert chunk bodies to the buffer pool.
     pub fn set_enabled(enabled: bool) {

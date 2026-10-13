@@ -1,6 +1,6 @@
 ---
 source: src/persist/src/retry.rs
-revision: bffa995dc9
+revision: aafb0ea1df
 ---
 
 # persist::retry

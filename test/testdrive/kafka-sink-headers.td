@@ -119,3 +119,48 @@ b         d         {"k": 5, "h": {"a": [98], "c": [100]}}
 
 $ kafka-verify-data headers=a,c format=json sink=materialize.public.bytea_snk key=false sort-messages=true
 b         <null>    {"k": 6, "h": {"a": [98], "c": null}}
+
+# Test the `materialize-sink-id` header. The key is reserved, so a
+# user-specified value is always dropped.
+
+> CREATE TABLE sink_id_tbl (k int, h map[text => text])
+> INSERT INTO sink_id_tbl VALUES
+    (1, NULL),
+    (2, '{"materialize-sink-id" => "custom"}')
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET kafka_sink_emit_sink_id_header = false
+
+> CREATE SINK sink_id_off_snk
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM sink_id_tbl
+  INTO KAFKA CONNECTION k (TOPIC 'testdrive-sink-id-off-${testdrive.seed}')
+  KEY (k) NOT ENFORCED
+  HEADERS h
+  FORMAT JSON ENVELOPE UPSERT
+
+$ kafka-verify-data headers=materialize-sink-id format=json sink=materialize.public.sink_id_off_snk key=false sort-messages=true
+<missing> {"k": 1, "h": null}
+<missing> {"k": 2, "h": {"materialize-sink-id": "custom"}}
+
+# Once enabled, the sink attaches its own id.
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET kafka_sink_emit_sink_id_header = true
+
+> CREATE SINK sink_id_snk
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM sink_id_tbl
+  INTO KAFKA CONNECTION k (TOPIC 'testdrive-sink-id-${testdrive.seed}')
+  KEY (k) NOT ENFORCED
+  HEADERS h
+  FORMAT JSON ENVELOPE UPSERT
+
+$ set-from-sql var=sink-id
+SELECT id FROM mz_sinks WHERE name = 'sink_id_snk'
+
+# A leading `\` keeps the `$` of the substituted row from being read as a
+# testdrive command.
+$ kafka-verify-data headers=materialize-sink-id format=json sink=materialize.public.sink_id_snk key=false sort-messages=true
+\${sink-id} {"k": 1, "h": null}
+\${sink-id} {"k": 2, "h": {"materialize-sink-id": "custom"}}

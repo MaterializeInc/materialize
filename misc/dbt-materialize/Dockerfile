@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM python:3.10.14
+# Pinned by rolling tag + multi-arch index digest so dependabot refreshes the
+# digest for security fixes.
+FROM python:3.14.7@sha256:be8ccd085666c34273c9dc5607c9842f8b2e3116128aae45148ce164c07ce09d
 
 COPY . dbt-materialize/
 

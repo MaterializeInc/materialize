@@ -52,7 +52,9 @@ export const FILTER_MENU_FORM_FIELDS = [
   "showConsoleIntrospection",
 ] as const;
 
-function isFormArrayDirty(formArray?: boolean[] | boolean | number) {
+function isFormArrayDirty(
+  formArray?: (boolean | undefined)[] | boolean | number,
+) {
   if (Array.isArray(formArray)) {
     return formArray.some((isDirty) => !!isDirty);
   }

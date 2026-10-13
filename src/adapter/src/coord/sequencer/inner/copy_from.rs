@@ -717,8 +717,7 @@ impl Coordinator {
         }
 
         // Stage a WriteOp, then when the Session is retired we complete the
-        // transaction, which handles acquiring the write lock for `table_id`,
-        // advancing the timestamps of the staged batches, and waiting for
+        // transaction, which handles advancing the timestamps of the staged batches and waiting for
         // everything to complete before sending a response to the client.
         let stage_write = ctx
             .session_mut()

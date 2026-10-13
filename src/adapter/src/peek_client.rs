@@ -27,6 +27,7 @@ use mz_repr::{RelationDesc, Row};
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::Params;
+use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::{CopyRelation, CopyStatement, SubscribeStatement};
 use mz_storage_types::sources::Timeline;
@@ -56,7 +57,7 @@ pub type StorageCollectionsHandle =
     Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>;
 
 /// Clients needed for peek sequencing in the Adapter Frontend.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PeekClient {
     coordinator_client: CoordinatorClient,
     /// Cache of the latest catalog snapshot. Serves
@@ -83,8 +84,6 @@ pub struct PeekClient {
     pub statement_logging_frontend: StatementLoggingFrontend,
     /// Semaphore for limiting concurrent OCC (optimistic concurrency control) write operations.
     pub occ_write_semaphore: Arc<Semaphore>,
-    /// Whether frontend OCC read-then-write is enabled (determined once at process startup).
-    pub frontend_read_then_write_enabled: bool,
     /// Requests a group commit. Used to advance the write timeline when we
     /// need the oracle to move but have nothing to write ourselves.
     pub(crate) group_commit_notifier: GroupCommitNotifier,
@@ -158,7 +157,6 @@ impl PeekClient {
         persist_client: PersistClient,
         statement_logging_frontend: StatementLoggingFrontend,
         occ_write_semaphore: Arc<Semaphore>,
-        frontend_read_then_write_enabled: bool,
         group_commit_notifier: GroupCommitNotifier,
         read_only: bool,
     ) -> Self {
@@ -173,7 +171,6 @@ impl PeekClient {
             oracles: Default::default(), // lazily populated
             persist_client,
             occ_write_semaphore,
-            frontend_read_then_write_enabled,
             group_commit_notifier,
             read_only,
         }
@@ -966,6 +963,10 @@ fn count_statement(session: &Session, stmt: Option<&Statement<Raw>>) {
             .metrics()
             .subscribe_outputs(&[session_type, metrics::subscribe_output_label_value(output)])
             .inc();
+    }
+    let application_name = ApplicationNameHint::from_str(session.application_name());
+    if let Some(labels) = metrics::as_of_query_label_values(session_type, application_name, stmt) {
+        session.metrics().as_of_queries(&labels).inc();
     }
 }
 

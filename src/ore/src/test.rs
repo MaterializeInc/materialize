@@ -28,8 +28,10 @@ static LOG_INIT: Once = Once::new();
 /// Initialize global logger, using the [`tracing_subscriber`] crate, with
 /// sensible defaults.
 ///
-/// It is safe to call `init_logging` multiple times. Since `cargo test` does
-/// not run tests in any particular order, each must call `init_logging`.
+/// It is safe to call `init_logging` multiple times, and safe to call it in a
+/// binary where another test has already installed a global subscriber; in
+/// that case the installed subscriber is kept. Since `cargo test` does not run
+/// tests in any particular order, each must call `init_logging`.
 pub fn init_logging() {
     init_logging_default("info");
 }
@@ -45,10 +47,15 @@ pub fn init_logging_default(level: &str) {
         let filter = EnvFilter::try_from_env("MZ_TEST_LOG_FILTER")
             .or_else(|_| EnvFilter::try_new(level))
             .unwrap();
-        FmtSubscriber::builder()
+        // Another test in this binary may have installed a global subscriber
+        // already (a turmoil test configuring its own timer, for example).
+        // `init` would panic on that, and a panic here poisons `LOG_INIT` for
+        // every `#[mz_ore::test]` in the process, so keep whatever is
+        // installed instead.
+        let _ = FmtSubscriber::builder()
             .with_env_filter(filter)
             .with_test_writer()
-            .init();
+            .try_init();
     });
 }
 

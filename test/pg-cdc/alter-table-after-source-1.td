@@ -251,9 +251,14 @@ INSERT INTO alter_add_pk VALUES (2);
 > SELECT * from alter_cycle_pk
 1
 
+# The source's periodic schema validator reports "dropped" instead of
+# "recreated" if it observes the schema between the two statements, so
+# commit both atomically.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
+BEGIN;
 ALTER TABLE alter_cycle_pk DROP CONSTRAINT alter_cycle_pk_pkey;
 ALTER TABLE alter_cycle_pk ADD PRIMARY KEY(f1);
+COMMIT;
 
 ! SELECT * FROM alter_cycle_pk;
 regex:incompatible schema change on public\.alter_cycle_pk \(oid \d+\): PRIMARY KEY constraint "alter_cycle_pk_pkey" \(f1\) was renamed or recreated upstream

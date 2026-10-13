@@ -625,6 +625,7 @@ impl Controller {
             }
         }
 
+        self.orchestrator.flush().await?;
         Ok(())
     }
 

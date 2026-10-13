@@ -20,9 +20,121 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.45.1
+*Released to Materialize Cloud: 2026-10-08* <br>
+*Released to Materialize Self-Managed: 2026-10-09* <br>
+
+### Alerting for Self-Managed {#v26.45.1-alerting}
+
+<red>*Materialize Self-Managed only*</red>
+
+Starting with v16.0.0 of the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules), the monitoring stack ships with ready-made alerts, so you hear about a problem before your users do:
+
+- **Ready-made alert rules**: 34 alerts are on by default, covering Materialize and the Kubernetes platform under it. They include `environmentd` going down, clusters stuck hydrating, replicas nearing their memory limit or being OOM-killed, and panics in Materialize's logs.
+- **Route each alert to whoever acts on it**: Every alert carries a severity and an audience, `platform` for the team operating the deployment and `workload` for the teams that own the clusters, so you can send each to the right people.
+- **Notify the tools your team already uses**: Configure PagerDuty, Slack, Microsoft Teams, email, or webhook receivers from Terraform.
+
+A default install configures no receiver, so alerts notify nobody until you add one. For more information, see [Alerting](/observability/self-managed/alerting/) and [Customize alerting](/observability/self-managed/customize-alerting/).
+
+### Improvements {#v26.45.1-improvements}
+- **External dependency monitoring for Self-Managed**: Starting with v15.0.0 of the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules), new **Materialize Persist (Storage)** and **Materialize Consensus (Metadata)** dashboards show the object storage and metadata database that Materialize depends on, so you can tell quickly whether a problem is in Materialize or in one of its dependencies.
+- **`sum` and `avg` over `interval`**: `sum(interval)` and `avg(interval)` now work and return `interval`, matching PostgreSQL.
+- **Improved compatibility with PostgreSQL ODBC clients**: Queries that psqlODBC generates with `OPERATOR(pg_catalog.=)` syntax now parse instead of failing.
+- **Lower memory for `MIN` and `MAX`**: A materialized view or index computing a single `MIN` or `MAX` over an input that receives updates or deletes no longer keeps an extra copy of its input in memory.
+- **Lower `SUBSCRIBE` and query latency**: Introspection logging now processes its events in bounded chunks instead of all at once, so it no longer holds up `SUBSCRIBE` results and indexed queries on the same replica.
+- **Kubernetes API server certificates need a subject alternative name (Self-Managed)**: The Materialize operator, `environmentd`, and `mz-debug` now reject a Kubernetes API server certificate that names its host only in its common name. EKS, GKE, AKS, and kind are unaffected; if you use hand-issued API server certificates, check them before upgrading.
+- **Schema registry and `COPY FROM` server certificates need a subject alternative name**: Confluent Schema Registry connections, `COPY FROM` URLs, and the OIDC issuer fetch now reject a server certificate that names its host only in its common name, so reissue any such certificate with a matching subject alternative name before upgrading. A schema registry certificate that is byte-for-byte identical to the connection's `SSL CERTIFICATE AUTHORITY` is still trusted.
+- **Kubernetes events from the Materialize operator**: The operator now publishes Kubernetes events when it fails to reconcile a `Materialize`, `Balancer`, or `Console` resource and at each `Materialize` rollout phase, so `kubectl describe` shows why a resource is not progressing.
+
+### Agent Skills {#v26.45.1-agent-skills}
+- **`mz-demo-data`**: A new skill that creates continuously updating synthetic data inside Materialize using views over `mz_now()`, with no Kafka or external load generator, in a `materialize_demo` schema that one `DROP SCHEMA` removes.
+
+### Bug Fixes {#v26.45.1-bug-fixes}
+- Fixed zero-downtime deployment cut-overs that could stall for hours on environments with a large catalog audit log.
+- Fixed `DISCARD ALL` not reporting the parameters it resets, which caused connection poolers such as pgbouncer to lose track of values like `application_name`.
+- Fixed the Console showing different cluster utilization on different pages, and reporting memory and CPU per process rather than combined for multi-process replicas.
+
+## v26.44.1
+*Released to Materialize Cloud: 2026-10-01* <br>
+*Released to Materialize Self-Managed: 2026-10-02* <br>
+
+### Advanced SSO (OIDC, SAML and SCIM) for Self-Managed {#v26.44.1-advanced-sso}
+
+<red>*Materialize Self-Managed only*</red>
+
+{{< public-preview />}}
+
+Self-Managed deployments can now use advanced single sign-on (SSO). Users sign in to Materialize with your identity provider (IdP), such as Okta, instead of a separate Materialize password:
+
+- **Sign in with [SAML](/self-managed-deployments/sso/advanced/identity-providers/#saml-via-polis) or [OIDC](/self-managed-deployments/sso/advanced/identity-providers/#direct-oidc)**, whichever protocol your IdP already uses.
+- **Provision users and groups with [SCIM](/self-managed-deployments/sso/advanced/identity-providers/#scim-via-polis)**, so users are created and deactivated in Materialize as they change in your IdP.
+- **[Map IdP groups to Materialize roles](/self-managed-deployments/sso/advanced/role-mapping/)**: roles follow a user's IdP groups every time they sign in, with no manual `GRANT` or `REVOKE` statements required.
+
+Advanced SSO is deployed with the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules) and requires a license key with the advanced SSO entitlement (see [Prerequisites](/self-managed-deployments/sso/advanced/prerequisites/)). You can deploy it as part of a new installation on [AWS](/self-managed-deployments/sso/advanced/install-on-aws/), [GCP](/self-managed-deployments/sso/advanced/install-on-gcp/), or [Azure](/self-managed-deployments/sso/advanced/install-on-azure/), or [add it to an existing installation](/self-managed-deployments/sso/advanced/existing-installation/). For more information, see [Advanced SSO (OIDC, SAML and SCIM)](/self-managed-deployments/sso/advanced/).
+
+### SCIM group-to-role mapping is generally available on Materialize Cloud {#v26.44.1-scim-group-to-role-mapping}
+
+<red>*Materialize Cloud only*</red>
+
+Syncing identity provider groups to Materialize via SCIM is now generally available, graduating from private preview. You can manage who has access to what in Materialize directly from your identity provider (IdP):
+
+- **Map IdP groups to custom organization roles**, so members of a group automatically receive the right level of access to your Materialize organization.
+- **Sync group membership to database roles**: when a user reconnects, they are granted membership in database roles with names matching their IdP groups, with no manual `GRANT` or `REVOKE` statements required.
+
+As team members join, leave, or change teams, updating their group membership in your IdP keeps their access in Materialize aligned. Set it up in the [Materialize Console](/developer-tools/console/) or with Terraform. For more information, see [Sync IdP groups](/security/cloud/users-service-accounts/sync-idp-groups/).
+
+### Improved query latency under load {#v26.44.1-improved-query-latency-under-load}
+
+We've changed how Materialize serves indexed queries under heavy load. In our tests, the client-side p99 latency of single-key lookups running next to heavy scans dropped from 3.64s to 37ms. Excluding the network round trip, the server-side p99 latency dropped from 3.61s to 3ms.
+
+![Client-side latency of single-key lookups running next to heavy scans, with offload disabled (2 to 4 seconds) and enabled (about 30 ms)](/images/releases/v2644_query_latency.png)
+
+We've done this by offloading heavy `SELECT` queries onto separate threads. Previously, heavy `SELECT` queries (such as a filter on a key that matches millions of rows) caused head-of-line blocking. Now, these queries run on separate threads, allowing smaller lookups to keep running in parallel. Concurrent heavy scans also finish faster, because they run side by side instead of queuing on one worker. Queries that read little data are unaffected.
+
+### Operational dashboards for Self-Managed {#v26.44.1-operational-dashboards}
+
+<red>*Materialize Self-Managed only*</red>
+
+Starting with v13.1.2 of the [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules), the monitoring stack installs new Grafana dashboards for operating Materialize day to day:
+
+- **Environment dashboards**: Follow an upgrade as it rolls out with **Materialize Upgrade**, which shows Kubernetes events, blue/green generation progress, and the operator's reconciliation loop. It requires Materialize v26.41.0 or later for full coverage. View logs and Kubernetes events from your Materialize workloads with **Materialize Logs and Events**.
+- **Infrastructure dashboards**: View logs and events from the monitoring stack, Kubernetes system components, and the node journal with **Infrastructure Logs and Events**. Inspect a single node's CPU, memory, network, storage, pods, and conditions with **Infrastructure Node Detail**.
+
+![Materialize Upgrade dashboard during a blue/green upgrade, showing the old and new generations' hydration progress, worst-case lag, pods, and versions](/images/releases/v2644_upgrade_dashboard.png)
+
+For more information, see [Grafana](/observability/self-managed/grafana/) and the [list of available dashboards ⧉](https://materializeinc.github.io/materialize-monitoring/dashboards/all/).
+
+### Improvements {#v26.44.1-improvements}
+- **Improved freshness, by addressing slow object storage reads**: A single hung read from object storage, such as one on a connection that died without closing, could hold back every dataflow that depends on it. Materialize now retries a read that is still outstanding after 2 seconds on a second, independent connection and uses whichever response arrives first. In Materialize Cloud, this cut reads slower than 4 seconds by about 70%.
+- **Dynamic balancerd configuration for Self-Managed**: Pointing `spec.balancerdConfigmapName` on a `Materialize` resource, or `spec.configmapName` on a standalone `Balancer`, at a ConfigMap you own containing `config.json` lets you change balancerd settings such as `balancerd_max_connections` without restarting balancer pods, with balancerd rereading the file about once a second after Kubernetes propagates an update.
+- **Connection limits in balancerd count connections from accept**: `balancerd_max_connections` now counts every connection from the moment it is accepted rather than only those that completed the startup sequence, so a connection over the limit is closed rather than answered with an error, and the new `balancerd_pre_resolved_timeout` (default 60 seconds, `0` disables) closes a connection that has not finished TLS negotiation, startup, and authentication within it.
+- **Lower balancerd memory use per connection**: `balancerd` now builds the TLS connector for its upstream `environmentd` connections once at startup instead of once per connection, which takes certificate parsing out of connection setup and cuts memory held per proxied TLS connection by roughly a factor of ten in local measurement, leaving more headroom under `balancerd_max_connections` for a given memory limit.
+- **`uuid` columns in Iceberg sinks**: An Iceberg sink now creates `uuid` columns as Iceberg `string`, in the lowercase hyphenated form, rather than `fixed[16]`, so a sink can target a catalog with no fixed-width binary type such as Unity Catalog; a table already created with a `fixed[16]` column stays writable.
+- **Longer retention for replica hydration history**: `mz_internal.mz_replica_hydration_history` now keeps completed hydration episodes for 120 days on its own retention setting, while `mz_internal.mz_object_hydration_history` stays at 30 days, so a longer window of replica history is available for capacity planning.
+- **PostgreSQL sources are identifiable upstream**: Connections a PostgreSQL source opens to the upstream database, including its replication connection, now set `application_name` to `materialize`, so you can pick them out in `pg_stat_activity`.
+
+### Agent Skills {#v26.44.1-agent-skills}
+- **`mz-` skill names**: The Materialize agent skills are renamed to the `mz-` prefix — `materialize-dbt` is now `mz-dbt`, `materialize-docs` is now `mz-docs`, and `mcp-developer-analysis` is now `mz-health-check`, for example — so if you installed them with `npx skills`, remove the old copies so each skill appears only once.
+- **`mz-health-check`**: The health check now reports materialized views on clusters with no replicas, which stop advancing and hold back compaction of every input they read, so their storage keeps growing.
+
+### Guides {#v26.44.1-guides}
+- [Protect sensitive columns](/security/patterns/protect-sensitive-columns/)
+- [PostgreSQL: Troubleshoot a stuck snapshot](/ingest-data/postgres/stuck-snapshot/)
+- [MySQL: Supported database operations](/ingest-data/mysql/#supported-database-operations)
+- [Troubleshoot slow queries](/serve-results/troubleshooting/slow-queries/)
+- [Troubleshoot unresponsive queries](/serve-results/troubleshooting/unresponsive-queries/)
+- [Troubleshoot expensive queries](/serve-results/troubleshooting/expensive-queries/)
+- [Troubleshoot hydration failures](/clusters/troubleshoot-clusters/hydration-failures/)
+
+### Bug Fixes {#v26.44.1-bug-fixes}
+- Fixed a panic in PostgreSQL sources when the replication stream carried messages committed before Materialize read a table's schema, which may have described an incompatible shape; each table now records the upstream LSN its schema was read at and ignores replication messages from before it.
+- Fixed a security vulnerability in the `postgres-protocol` dependency (GHSA-5x78-73v4-xg6w), where a malicious PostgreSQL server could exhaust client CPU by supplying an unbounded SCRAM iteration count during authentication; iteration counts above 2,000,000 are now rejected.
+- Fixed a security vulnerability in the `imbl` dependency (RUSTSEC-2026-0292), a double free or use-after-free in the chunk and inline-array removal paths when an element's `Drop` panics.
+- Fixed `dbt-materialize` running unit tests on the session's default cluster instead of the cluster configured in the dbt profile.
+
 ## v26.43.0
-*Released to Materialize Cloud: 2026-09-23* <br>
-*Released to Materialize Self-Managed: 2026-09-24* <br>
+*Released to Materialize Cloud: 2026-09-24* <br>
+*Released to Materialize Self-Managed: 2026-09-25* <br>
 
 ### Iceberg support for Databricks on Azure {#v26.43-iceberg-support-for-databricks-on-azure}
 
@@ -144,22 +256,24 @@ SELECT
     h.started_at,
     h.finished_at - h.started_at AS hydration_time,
     h.object_count,
-    pg_size_pretty(h.peak_memory_bytes) AS peak_memory,
-    pg_size_pretty(h.peak_disk_bytes) AS peak_disk
+    pg_size_pretty(h.peak_memory_bytes + coalesce(h.peak_disk_bytes, 0)) AS peak_heap,
+    pg_size_pretty(s.memory_bytes + coalesce(s.disk_bytes, 0)) AS heap_limit
 FROM mz_internal.mz_replica_hydration_history AS h
 JOIN mz_internal.mz_cluster_replica_history AS rh ON rh.replica_id = h.replica_id
-WHERE rh.cluster_name = 'analytics'
+JOIN mz_catalog.mz_clusters AS c ON c.id = rh.cluster_id
+JOIN mz_catalog.mz_cluster_replica_sizes AS s ON s.size = rh.size
+WHERE c.name = 'analytics'
 ORDER BY h.started_at DESC;
 ```
 
 ```none
- replica | size  |          started_at           | hydration_time | object_count | peak_memory | peak_disk
----------+-------+-------------------------------+----------------+--------------+-------------+-----------
- r1      | 400cc | 2026-09-08 09:12:04.117841+00 | 00:04:11.83    |           41 | 11 GB       | 2438 MB
+ replica | size  |          started_at           | hydration_time | object_count | peak_heap | heap_limit
+---------+-------+-------------------------------+----------------+--------------+-----------+------------
+ r1      | 400cc | 2026-09-08 09:12:04.117841+00 | 00:04:11.83    |           41 | 13 GB     | 152 GB
 (1 row)
 ```
 
-Compare `peak_memory` against the replica sizes in [`mz_catalog.mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes) to find the size that fits your workload. This lets you create a cluster at a generous size, hydrate once, and then size down with confidence. The new [cluster sizing guide](/clusters/sizing/) walks through that workflow, and [Optimize hydration requirements](/clusters/optimize-hydration-requirements/) covers what to do when a single object accounts for most of the peak.
+Compare `peak_heap` (the memory plus disk a replica process used) with `heap_limit` (the memory plus disk its size provides) to find the size that fits your workload. This lets you create a cluster at a generous size, hydrate once, and then size down with confidence. The new [cluster sizing guide](/clusters/sizing/) walks through that workflow, and [Optimize hydration requirements](/clusters/optimize-hydration-requirements/) covers what to do when a single object accounts for most of the peak.
 
 ### Improvements {#v26.42-improvements}
 - **Vended credentials for Iceberg sink to GCP BigLake**: `CREATE CONNECTION ... TO ICEBERG CATALOG` now accepts a storage provider option, and `ACCESS DELEGATION` is allowed on GCP BigLake catalog connections, so an Iceberg catalog backed by Google Cloud Storage can authenticate with credentials the catalog vends. For more information, see [GCP BigLake](/export-data/iceberg-gcp/).
@@ -217,8 +331,8 @@ Compare `peak_memory` against the replica sizes in [`mz_catalog.mz_cluster_repli
 - Fixed `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` run while a zero-downtime upgrade was in progress leaving the upgraded environment on the view's previous definition, which either put `environmentd` into a crash loop that restarting could not clear or left the view silently computing and serving the replaced definition.
 
 ## v26.40.0
-*Released to Materialize Cloud: 2026-09-02* <br>
-*Released to Materialize Self-Managed: 2026-09-03* <br>
+*Released to Materialize Cloud: 2026-09-03* <br>
+*Released to Materialize Self-Managed: 2026-09-04* <br>
 
 ### Iceberg support for Databricks on AWS {#v26.40-iceberg-support-for-databricks-on-aws}
 
@@ -288,8 +402,8 @@ For more information, see:
 - Fixed the `mz` CLI failing on read-only commands such as `mz sql` when `mz.toml` sits on a read-only mount.
 
 ## v26.39.0
-*Released to Materialize Cloud: 2026-08-26* <br>
-*Released to Materialize Self-Managed: 2026-08-27* <br>
+*Released to Materialize Cloud: 2026-08-27* <br>
+*Released to Materialize Self-Managed: 2026-08-28* <br>
 
 ### Improvements {#v26.39-improvements}
 - **Improved connect modal in the console**: We've updated the UI to make it easier to connect coding agents to our MCP servers, and connect applications to Materialize.
@@ -311,7 +425,7 @@ For more information, see:
 - `CREATE CONNECTION`, `ALTER CONNECTION`, and `VALIDATE CONNECTION` for AWS PrivateLink now reject a `SERVICE NAME` that is not an AWS VPC endpoint service name, such as a DNS hostname, instead of failing later with a misleading missing-availability-zones error.
 
 ## v26.38.2
-*Released to Materialize Cloud: 2026-08-19* <br>
+*Released to Materialize Cloud: 2026-08-20* <br>
 *Released to Materialize Self-Managed: 2026-08-25* <br>
 
 ### Dictionary compression {#v26.38-dictionary-compression}
@@ -394,8 +508,8 @@ For more information, see:
 - Fixed the comment `dbt-materialize`'s `deploy_promote` puts on each promoted schema ending without a timestamp.
 
 ## v26.37.0
-*Released to Materialize Cloud: 2026-08-12* <br>
-*Released to Materialize Self-Managed: 2026-08-13* <br>
+*Released to Materialize Cloud: 2026-08-13* <br>
+*Released to Materialize Self-Managed: 2026-08-14* <br>
 
 ### Improvements {#v26.37-improvements}
 - **Self-Managed: Highly available operator**: The Materialize operator now runs two replicas by default, so rolling out an operator update no longer interrupts the CRD conversion webhook. Installations that manage their own RBAC must grant the operator `get`, `create`, and `update` on `leases` in `coordination.k8s.io`, because the two replicas coordinate through lease-based leader election.
@@ -447,8 +561,8 @@ For more information, see:
 - Fixed `mz-deploy compile` and `mz-deploy stage` failing with `type "text[]" does not exist` for projects whose dependencies have array-typed columns.
 
 ## v26.35.0
-*Released to Materialize Cloud: 2026-07-29* <br>
-*Released to Materialize Self-Managed: 2026-07-30* <br>
+*Released to Materialize Cloud: 2026-07-30* <br>
+*Released to Materialize Self-Managed: 2026-07-31* <br>
 
 ### Asynchronous Cluster Reconfiguration {#v26.35-background-cluster-reconfiguration}
 `ALTER CLUSTER` now runs configuration changes (such as resizing) in the background, rather than blocking until the new replica set is ready. This means you can start a reconfiguration and move on to other tasks while the process completes.

@@ -15,6 +15,7 @@ use std::sync::Arc;
 use insta::assert_debug_snapshot;
 use itertools::Itertools;
 use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
+use mz_catalog::durable::objects::serialization::RustType;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{Comment, DurableType, IdAlloc};
 use mz_catalog::durable::{
@@ -26,7 +27,6 @@ use mz_ore::collections::HashSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::{PersistClient, ShardId};
-use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_sql::catalog::{RoleAttributesRaw, RoleMembership, RoleVars};

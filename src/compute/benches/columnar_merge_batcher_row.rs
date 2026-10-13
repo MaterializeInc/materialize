@@ -28,6 +28,7 @@
 //! consume the same pre-built [`Column<Tuple>`] inputs so the chunker
 //! sees identical input shape.
 
+use mz_alloc_default as _;
 use std::mem::size_of;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};

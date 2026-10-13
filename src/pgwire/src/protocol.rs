@@ -2441,7 +2441,8 @@ where
                     .await
             }
             ExecuteResponse::TransactionCommitted { params }
-            | ExecuteResponse::TransactionRolledBack { params } => {
+            | ExecuteResponse::TransactionRolledBack { params }
+            | ExecuteResponse::DiscardedAll { params } => {
                 self.send_parameter_statuses(params).await?;
                 command_complete!()
             }
@@ -2471,7 +2472,6 @@ where
             | ExecuteResponse::Comment
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)
-            | ExecuteResponse::DiscardedAll
             | ExecuteResponse::DiscardedTemp
             | ExecuteResponse::DroppedObject(_)
             | ExecuteResponse::DroppedOwned

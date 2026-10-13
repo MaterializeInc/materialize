@@ -12,7 +12,7 @@ import type { Decorator, Preview } from "@storybook/react-vite";
 import React from "react";
 
 import { ChakraProviderWrapper } from "~/components/ChakraProviderWrapper";
-import { MaterializeTheme, config as themeConfig } from "~/theme";
+import { config as themeConfig, MaterializeTheme } from "~/theme";
 
 /**
  * Paints the story's surface with the active theme's page background.

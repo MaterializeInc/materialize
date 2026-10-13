@@ -27,8 +27,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use async_trait::async_trait;
-use deadpool::managed::{self, Hook, HookError, HookErrorCause, Object, Pool, RecycleResult};
+use deadpool::managed::{self, Hook, HookError, Metrics, Object, Pool, RecycleResult};
 use deadpool_postgres::tokio_postgres::{self, Config};
 use deadpool_postgres::{
     ClientWrapper as DeadpoolClient, Manager as PgManager, ManagerConfig, PoolError,
@@ -152,7 +151,6 @@ impl std::fmt::Debug for Manager {
     }
 }
 
-#[async_trait]
 impl managed::Manager for Manager {
     type Type = Client;
     type Error = tokio_postgres::Error;
@@ -186,8 +184,12 @@ impl managed::Manager for Manager {
         Ok(Client { inner, isolation })
     }
 
-    async fn recycle(&self, client: &mut Client) -> RecycleResult<tokio_postgres::Error> {
-        self.inner.recycle(&mut client.inner).await
+    async fn recycle(
+        &self,
+        client: &mut Client,
+        metrics: &Metrics,
+    ) -> RecycleResult<tokio_postgres::Error> {
+        self.inner.recycle(&mut client.inner, metrics).await
     }
 
     fn detach(&self, client: &mut Client) {
@@ -314,9 +316,9 @@ impl PostgresClient {
                         .is_ok()
                 {
                     ttl_reconnections.inc();
-                    return Err(HookError::Continue(Some(HookErrorCause::Message(
-                        "connection has been TTLed".to_string(),
-                    ))));
+                    // A `pre_recycle` error discards the connection and the pool moves on to the
+                    // next one.
+                    return Err(HookError::message("connection has been TTLed"));
                 }
 
                 Ok(())
@@ -331,9 +333,10 @@ impl PostgresClient {
     }
 
     fn status_metrics(&self, status: Status) {
+        // Negative when tasks are waiting for a connection.
         self.metrics
             .connpool_available
-            .set(f64::cast_lossy(status.available));
+            .set(f64::cast_lossy(status.available) - f64::cast_lossy(status.waiting));
         self.metrics.connpool_size.set(u64::cast_from(status.size));
         // Don't bother reporting the maximum size of the pool... we know that from config.
     }

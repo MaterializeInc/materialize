@@ -197,6 +197,11 @@ pub struct Controller {
 
     /// Clients for all known storage instances.
     instances: BTreeMap<StorageInstanceId, Instance>,
+    /// Per-replica dyncfg overrides, consulted when a replica connects. The
+    /// overrides for a replica created by DDL are committed in the same
+    /// transaction that creates it, so they are installed before the replica
+    /// connects.
+    replica_dyncfg_overrides: BTreeMap<ReplicaId, ConfigUpdates>,
     /// Set to `true` once `initialization_complete` has been called.
     initialized: bool,
     /// Storage configuration to apply to newly provisioned instances, and use during purification.
@@ -338,6 +343,11 @@ impl StorageController for Controller {
         &mut self,
         mut overrides: BTreeMap<StorageInstanceId, BTreeMap<ReplicaId, ConfigUpdates>>,
     ) {
+        self.replica_dyncfg_overrides = overrides
+            .values()
+            .flat_map(|replicas| replicas.iter())
+            .map(|(replica_id, updates)| (*replica_id, updates.clone()))
+            .collect();
         for (id, instance) in self.instances.iter_mut() {
             let instance_overrides = overrides.remove(id).unwrap_or_default();
             instance.update_replica_dyncfg_overrides(instance_overrides);
@@ -620,10 +630,20 @@ impl StorageController for Controller {
             location,
             grpc_client: self.config.parameters.grpc_client.clone(),
         };
-        instance.add_replica(replica_id, config);
+        let dyncfg_override = self
+            .replica_dyncfg_overrides
+            .get(&replica_id)
+            .cloned()
+            .unwrap_or_default();
+        instance.add_replica(replica_id, config, dyncfg_override);
     }
 
     fn drop_replica(&mut self, instance_id: StorageInstanceId, replica_id: ReplicaId) {
+        // The coordinator only re-pushes the override map when the scoped
+        // configuration itself changes, so a dropped replica's entry would
+        // otherwise be retained until the next such change.
+        self.replica_dyncfg_overrides.remove(&replica_id);
+
         let instance = self
             .instances
             .get_mut(&instance_id)
@@ -2684,6 +2704,7 @@ impl StorageController for Controller {
             sink_statistics: _,
             statistics_interval_sender: _,
             instances,
+            replica_dyncfg_overrides: _,
             initialized,
             config,
             persist_location,
@@ -2890,6 +2911,7 @@ where
             sink_statistics: Arc::new(Mutex::new(BTreeMap::new())),
             statistics_interval_sender,
             instances: BTreeMap::new(),
+            replica_dyncfg_overrides: BTreeMap::new(),
             initialized: false,
             config: StorageConfiguration::new(connection_context, mz_dyncfgs::all_dyncfgs()),
             persist_location,

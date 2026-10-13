@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/pool.rs
-revision: 24cd10bf65
+revision: de580d5215
 ---
 
 # mz-ore::pool
@@ -20,12 +20,12 @@ Memory descends a ladder of tiers, each with its own ceiling:
 
 ## Key types
 
-- `Pool` — the pool itself; insert chunks, evict, and query stats.
+- `Pool` — the pool itself; insert chunks, evict, and query stats. When the resident budget is full even after enforcement, `insert_with` falls back to compressing the payload directly into an extent on the calling thread, so the returned handle starts `Evicted` rather than `UnbackedResident`.
 - `ChunkHandle` — a handle to an inserted chunk; dropping it frees the chunk.
 - `ChunkHints` — advisory placement hints (generational depth) supplied at insert.
 - `ExtentCodec` — trait for the encode/decode transform between body bytes and stored (compressed) bytes.
 - `IdentityCodec` — an `ExtentCodec` whose stored form is the body verbatim (no compression); `IDENTITY_CODEC` is the static instance to pass to `Pool::insert_with`.
-- `PoolStats` — snapshot of pool counters.
+- `PoolStats` — snapshot of pool counters; includes `direct_extent_inserts` counting insertions that bypassed resident slots because the budget was full.
 - `max_stored_len` — computes the maximum stored-form length for a given body length.
 
 Submodules: `extent` (swap-backed extent arena), `region` (size-class virtual-memory regions).

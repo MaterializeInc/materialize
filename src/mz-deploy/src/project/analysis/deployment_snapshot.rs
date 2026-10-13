@@ -76,7 +76,7 @@ impl Sha256Hasher {
 
     fn finalize(self) -> String {
         let result = self.digest.finalize();
-        format!("sha256:{:x}", result)
+        format!("sha256:{}", hex::encode(result))
     }
 }
 

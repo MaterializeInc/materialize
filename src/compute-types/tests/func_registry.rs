@@ -128,7 +128,10 @@ fn render(records: &Records) -> String {
 }
 
 fn digest(contents: &str) -> String {
-    format!("sha256:{:x}", Sha256::digest(contents.as_bytes()))
+    format!(
+        "sha256:{}",
+        hex::encode(Sha256::digest(contents.as_bytes()))
+    )
 }
 
 /// Per-record differences between two rendered record files.

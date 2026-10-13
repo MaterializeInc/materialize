@@ -109,8 +109,11 @@
 /src/rocksdb                        @MaterializeInc/cluster
 /src/s3-datagen                     @MaterializeInc/cluster
 /src/secrets                        @MaterializeInc/cloud
+/src/secrets-cli                    @MaterializeInc/cluster
+/src/secrets-loader                 @MaterializeInc/cluster
 /src/segment
 /src/service                        @MaterializeInc/cluster
+/src/source-schema-change           @MaterializeInc/sources-sinks
 /src/sql                            @MaterializeInc/adapter
 /src/sql/src/session/vars.rs
 # HirRelationExpr is the boundary between the `sql` crate and the cluster

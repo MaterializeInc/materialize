@@ -511,7 +511,15 @@ fn configure_tracing_for_turmoil() {
             .with_timer(SimElapsedTime)
             .finish();
 
-        tracing::subscriber::set_global_default(subscriber).unwrap();
+        // Another test in this binary may have installed a global subscriber
+        // already: `#[mz_ore::test]` does so through `mz_ore::test::init_logging`.
+        // `cargo test` runs the module's tests in one process, so unwrapping
+        // here would panic and poison `INIT_TRACING` for every turmoil test
+        // after it. The installed subscriber also writes to the test writer,
+        // so nothing is lost by keeping it.
+        if tracing::subscriber::set_global_default(subscriber).is_err() {
+            info!("a global tracing subscriber is already installed; keeping it");
+        }
     });
 }
 

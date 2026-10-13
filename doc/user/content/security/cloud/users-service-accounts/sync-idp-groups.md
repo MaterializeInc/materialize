@@ -279,8 +279,8 @@ Grants and revokes performed by sync are recorded in
   stale manual grants.
 
 * **Organization roles without a matching database role are skipped.** The
-  connection proceeds and Materialize sends the client a `NOTICE` for each
-  unmatched role key.
+  connection proceeds without a `NOTICE`, since not every organization role is
+  expected to have a corresponding database role.
 
 ## Limitations
 

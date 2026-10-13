@@ -20,7 +20,7 @@ use std::fmt;
 use aws_lc_rs::hmac as aws_hmac;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use itertools::Itertools;
 use md5::Md5;
 use mz_expr_derive::sqlfunc;

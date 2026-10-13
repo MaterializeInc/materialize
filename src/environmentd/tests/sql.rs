@@ -1787,10 +1787,6 @@ fn test_subscribe_outlive_cluster() {
 /// `insert_after_pack_before_commit` failpoint as a rendezvous: the INSERT blocks there and tells
 /// the test it has arrived, the test widens the table, then the test hands it back. No wall-clock
 /// waiting is involved, so there is no window to miss.
-///
-/// The reported repro widened the same window instead, by getting the INSERT deferred behind a
-/// write lock another session held. Both paths stage the write through `stage_group_commit`, which
-/// is where the check lives.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_insert_concurrent_alter_table() {
@@ -1871,28 +1867,7 @@ fn test_insert_concurrent_alter_table() {
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_read_then_write_serializability() {
-    test_read_then_write_serializability_inner(false);
-}
-
-// Same as `test_read_then_write_serializability`, but exercising the frontend
-// OCC read-then-write path. Concurrent `INSERT INTO t SELECT * FROM t` must
-// still double the row count exactly, i.e. OCC retries must prevent lost
-// updates.
-#[mz_ore::test]
-fn test_read_then_write_serializability_frontend_occ() {
-    test_read_then_write_serializability_inner(true);
-}
-
-#[allow(clippy::disallowed_methods)]
-fn test_read_then_write_serializability_inner(frontend_occ: bool) {
-    let mut harness = test_util::TestHarness::default();
-    if frontend_occ {
-        harness = harness.with_system_parameter_default(
-            "enable_adapter_frontend_occ_read_then_write".to_string(),
-            "true".to_string(),
-        );
-    }
-    let server = harness.start_blocking();
+    let server = test_util::TestHarness::default().start_blocking();
 
     // Create table with initial value
     {

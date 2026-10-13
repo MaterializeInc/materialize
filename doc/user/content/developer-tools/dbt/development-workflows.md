@@ -94,7 +94,7 @@ For a full rundown of selection logic options, check the [dbt documentation](htt
 
 {{< note >}}
 The `dbt show` command uses a `LIMIT` clause under the hood, which has
-[known performance limitations](/serve-results/troubleshooting/#result-filtering)
+[known performance limitations](/serve-results/troubleshooting/slow-queries/#return-less-data)
 in Materialize.
 {{</ note >}}
 

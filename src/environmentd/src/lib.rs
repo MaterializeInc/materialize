@@ -72,7 +72,7 @@ use tokio::sync::oneshot;
 use tower_http::cors::AllowOrigin;
 use tracing::{Instrument, info, info_span};
 
-use crate::deployment::preflight::{PreflightInput, PreflightOutput};
+use crate::deployment::preflight::{self, CatchupConfig};
 use crate::deployment::state::DeploymentState;
 use crate::http::{HttpConfig, HttpServer, InternalRouteConfig};
 
@@ -663,30 +663,39 @@ impl Listeners {
         // Perform preflight checks.
         //
         // Preflight checks determine whether to boot in read-only mode or not.
+        let read_only = preflight::preflight_0dt(
+            openable_adapter_storage.as_mut(),
+            config.controller.deploy_generation,
+        )
+        .await?;
+
         let bootstrap_args = BootstrapArgs {
             default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
             default_cluster_replication_factor: config.bootstrap_default_cluster_replication_factor,
-            bootstrap_role: config.bootstrap_role.clone(),
+            bootstrap_role: config.bootstrap_role,
             cluster_replica_size_map: config.cluster_replica_sizes.clone(),
         };
-        let preflight_config = PreflightInput {
-            boot_ts,
-            environment_id: config.environment_id.clone(),
-            persist_client,
-            deploy_generation: config.controller.deploy_generation,
-            deployment_state: deployment_state.clone(),
-            openable_adapter_storage,
-            catalog_metrics: Arc::clone(&config.catalog_config.metrics),
-            caught_up_max_wait: with_0dt_deployment_max_wait,
-            panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
-            bootstrap_args,
-            ddl_check_interval: with_0dt_deployment_ddl_check_interval,
+
+        let (caught_up_trigger, bootstrapped) = if read_only {
+            let (caught_up_trigger, caught_up_receiver) = mz_ore::channel::trigger::channel();
+            let (bootstrapped, bootstrapped_receiver) = tokio::sync::oneshot::channel();
+            let catchup_config = CatchupConfig {
+                boot_ts,
+                environment_id: config.environment_id.clone(),
+                persist_client,
+                deploy_generation: config.controller.deploy_generation,
+                deployment_state: deployment_state.clone(),
+                catalog_metrics: Arc::clone(&config.catalog_config.metrics),
+                caught_up_max_wait: with_0dt_deployment_max_wait,
+                panic_after_timeout: enable_0dt_deployment_panic_after_timeout,
+                bootstrap_args: bootstrap_args.clone(),
+                ddl_check_interval: with_0dt_deployment_ddl_check_interval,
+            };
+            preflight::spawn_catchup(catchup_config, caught_up_receiver, bootstrapped_receiver);
+            (Some(caught_up_trigger), Some(bootstrapped))
+        } else {
+            (None, None)
         };
-        let PreflightOutput {
-            openable_adapter_storage,
-            read_only,
-            caught_up_trigger,
-        } = deployment::preflight::preflight_0dt(preflight_config).await?;
 
         info!(
             "startup: envd serve: preflight checks complete in {:?}",
@@ -696,15 +705,8 @@ impl Listeners {
         let catalog_open_start = Instant::now();
         info!("startup: envd serve: durable catalog open beginning");
 
-        let bootstrap_args = BootstrapArgs {
-            default_cluster_replica_size: config.bootstrap_default_cluster_replica_size.clone(),
-            default_cluster_replication_factor: config.bootstrap_default_cluster_replication_factor,
-            bootstrap_role: config.bootstrap_role,
-            cluster_replica_size_map: config.cluster_replica_sizes.clone(),
-        };
-
         // Load the adapter durable storage.
-        let adapter_storage = if read_only {
+        let mut adapter_storage = if read_only {
             // TODO: behavior of migrations when booting in savepoint mode is
             // not well defined.
             let adapter_storage = openable_adapter_storage
@@ -726,6 +728,11 @@ impl Listeners {
             deployment_state.set_is_leader();
 
             adapter_storage
+        };
+
+        let bootstrapped = match bootstrapped {
+            Some(tx) => Some((tx, preflight::get_user_ids(adapter_storage.as_mut()).await?)),
+            None => None,
         };
 
         // Enable Persist compaction if we're not in read only.
@@ -818,6 +825,11 @@ impl Listeners {
         })
         .instrument(info_span!("adapter::serve"))
         .await?;
+
+        if let Some((tx, initial_ids)) = bootstrapped {
+            // The receiver is gone if an administrator already skipped catch-up.
+            let _ = tx.send(initial_ids);
+        }
 
         // Initialize the OIDC authenticator, shared between the HTTP and SQL servers.
         let oidc = GenericOidcAuthenticator::new(adapter_client.clone());

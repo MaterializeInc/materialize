@@ -38,7 +38,9 @@ use timely::progress::{Antichain, Timestamp};
 use tokio::time::{Instant, interval_at};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{FuelSize, Probe, SignaledFuture, SourceRender, StackedCollection};
+use crate::source::types::{
+    FuelSize, Probe, ResumeUppers, SignaledFuture, SourceRender, StackedCollection,
+};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod auction;
@@ -139,7 +141,7 @@ impl GeneratorKind {
         self,
         scope: Scope<'scope, MzOffset>,
         config: &RawSourceCreationConfig,
-        committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+        committed_uppers: impl futures::Stream<Item = ResumeUppers<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<
@@ -210,7 +212,7 @@ impl SourceRender for LoadGeneratorSourceConnection {
         self,
         scope: Scope<'scope, MzOffset>,
         config: &RawSourceCreationConfig,
-        committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+        committed_uppers: impl futures::Stream<Item = ResumeUppers<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<
@@ -248,7 +250,7 @@ fn render_simple_generator<'scope>(
     up_to: MzOffset,
     scope: Scope<'scope, MzOffset>,
     config: &RawSourceCreationConfig,
-    committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+    committed_uppers: impl futures::Stream<Item = ResumeUppers<MzOffset>> + 'static,
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
 ) -> (
     BTreeMap<GlobalId, StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>>,
@@ -343,11 +345,11 @@ fn render_simple_generator<'scope>(
 
             let mut committed_uppers = std::pin::pin!(committed_uppers);
 
-            // If we are just starting up, report 0 as our `offset_committed`.
-            let mut offset_committed = if resume_offset.offset == 0 {
-                Some(0)
+            // Each export's `offset_committed`. If we are just starting up, report 0.
+            let mut offsets_committed: BTreeMap<_, _> = if resume_offset.offset == 0 {
+                source_statistics.keys().map(|id| (*id, 0)).collect()
             } else {
-                None
+                BTreeMap::new()
             };
 
             while let Some((output_type, event)) = rows.next() {
@@ -436,11 +438,13 @@ fn render_simple_generator<'scope>(
                                     _tick = tick_interval.tick() => {
                                         break;
                                     }
-                                    Some(frontier) = committed_uppers.next() => {
-                                        if let Some(offset) = frontier.as_option() {
-                                            // Offset N means we have committed N offsets (offsets are
-                                            // 0-indexed)
-                                            offset_committed = Some(offset.offset);
+                                    Some(uppers) = committed_uppers.next() => {
+                                        for (id, frontier) in uppers.exports {
+                                            if let Some(offset) = frontier.into_option() {
+                                                // Offset N means we have committed N offsets (offsets are
+                                                // 0-indexed)
+                                                offsets_committed.insert(id, offset.offset);
+                                            }
                                         }
                                     }
                                 }
@@ -449,14 +453,14 @@ fn render_simple_generator<'scope>(
                             // TODO(guswynn): generators have various definitions of "snapshot", so
                             // we are not going to implement snapshot progress statistics for them
                             // right now, but will come back to it.
-                            if let Some(offset_committed) = offset_committed {
-                                for stats in source_statistics.values() {
-                                    stats.set_offset_committed(offset_committed);
+                            for (id, offset_committed) in &offsets_committed {
+                                if let Some(stats) = source_statistics.get(id) {
+                                    stats.set_offset_committed(*offset_committed);
                                     // technically we could have _known_ a larger offset
                                     // than the one that has been committed, but we can
                                     // never recover that known amount on restart, so we
                                     // just advance these in lock step.
-                                    stats.set_offset_known(offset_committed);
+                                    stats.set_offset_known(*offset_committed);
                                 }
                             }
                         }

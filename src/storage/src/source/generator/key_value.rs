@@ -32,14 +32,14 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::info;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{FuelSize, SignaledFuture, StackedCollection};
+use crate::source::types::{FuelSize, ResumeUppers, SignaledFuture, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 pub fn render<'scope>(
     key_value: KeyValueLoadGenerator,
     scope: Scope<'scope, MzOffset>,
     config: RawSourceCreationConfig,
-    committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+    committed_uppers: impl futures::Stream<Item = ResumeUppers<MzOffset>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
     idx_to_exportid: BTreeMap<usize, GlobalId>,
@@ -556,7 +556,7 @@ impl UpdateProducer {
 pub fn render_statistics_operator<'scope>(
     scope: Scope<'scope, MzOffset>,
     config: &RawSourceCreationConfig,
-    committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
+    committed_uppers: impl futures::Stream<Item = ResumeUppers<MzOffset>> + 'static,
 ) -> PressOnDropButton {
     let id = config.id;
     let builder =
@@ -576,9 +576,11 @@ pub fn render_statistics_operator<'scope>(
         tokio::pin!(committed_uppers);
         loop {
             match committed_uppers.next().await {
-                Some(frontier) => {
-                    if let Some(offset) = frontier.as_option() {
-                        for stat in source_statistics.values() {
+                Some(uppers) => {
+                    for (id, frontier) in &uppers.exports {
+                        if let (Some(offset), Some(stat)) =
+                            (frontier.as_option(), source_statistics.get(id))
+                        {
                             stat.set_offset_committed(offset.offset);
                             stat.set_offset_known(offset.offset);
                         }

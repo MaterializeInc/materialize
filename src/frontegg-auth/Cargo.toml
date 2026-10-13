@@ -19,7 +19,6 @@ jsonwebtoken.workspace = true
 lru.workspace = true
 mz-auth = { path = "../auth", default-features = false }
 mz-ore = { path = "../ore", features = ["network", "metrics"] }
-mz-repr = { path = "../repr" }
 prometheus.workspace = true
 reqwest.workspace = true
 reqwest-middleware.workspace = true
@@ -29,7 +28,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-uuid = { workspace = true, features = ["serde"] }
+uuid = { workspace = true, features = ["serde", "v4"] }
 
 [dev-dependencies]
 axum.workspace = true

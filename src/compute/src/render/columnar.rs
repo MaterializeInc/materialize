@@ -26,7 +26,7 @@ use differential_dataflow::{AsCollection, Collection, VecCollection};
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ChunkChunker};
+use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ChunkChunker, ComputeSpill};
 use mz_timely_util::columnar::columnar_consolidate_exchange;
 use mz_timely_util::operator::consolidate_pact;
 use timely::ContainerBuilder;
@@ -303,7 +303,7 @@ where
 /// Consolidates a [`ColumnarCollection`] natively, without a row round-trip.
 ///
 /// A [`ChunkChunker`] sorts and consolidates the input columns and an
-/// [`AccountedChunkBatcher`] merges them, both holding their data in [`Column`], so
+/// [`AccountedChunkBatcher`] merges them, both holding their data in columnar form, so
 /// nothing outside the exchange pact visits a record or materializes an owned [`Row`].
 /// The batcher's chains are chunks, so the process buffer pool spills them while the
 /// chunk spill gate is set, bounding what a consolidation holds resident.
@@ -325,8 +325,8 @@ where
         columnar_consolidate_exchange::<Row, T, Diff>,
     );
     let consolidated = consolidate_pact::<
-        ChunkChunker<Row, T, Diff>,
-        AccountedChunkBatcher<Row, T, Diff>,
+        ChunkChunker<Row, T, Diff, ComputeSpill>,
+        AccountedChunkBatcher<Row, T, Diff, ComputeSpill>,
         _,
         _,
     >(collection.inner, exchange, name);
@@ -346,7 +346,7 @@ where
                     input.for_each(|time, data| {
                         let mut session = output.session_with_builder(&time);
                         for chunk in data.drain(..).flatten() {
-                            let mut column = chunk.into_column();
+                            let mut column = Column::from(chunk.into_body());
                             session.give_container(&mut column);
                         }
                     });
