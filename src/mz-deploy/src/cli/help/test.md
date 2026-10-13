@@ -78,11 +78,9 @@ used during test execution:
 
 1. Compiles the project and discovers all `EXECUTE UNIT TEST` statements.
 2. Starts a Materialize Docker container, or reuses the existing one. The
-   container has a fixed name (`mz-deploy-sandbox`) and is shared across
-   `test` and `explain` invocations on this host. If the existing container
-   was created from a different image than the one configured (for example
-   after upgrading `mz-deploy`, changing `mz_version`, or passing
-   `--docker-image`), it is replaced.
+   container (`mz-deploy-sandbox`) is shared across `test` and `explain`
+   invocations on this host and always runs the configured Materialize
+   version.
 3. Loads type information from `types.lock` (external dependencies) and
    the compiler database (internal types, regenerated if stale).
 4. For each test:
