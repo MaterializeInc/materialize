@@ -20,7 +20,8 @@
 use std::fs;
 use std::path::Path;
 
-use materialize_sdk_core::decode::{Decoder, Envelope, Row};
+use materialize_sdk_core::batch::{Batcher, Start};
+use materialize_sdk_core::decode::{Decoder, Envelope, Message, Row};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -81,6 +82,7 @@ fn conformance_vectors() {
 fn run(function: &str, input: Value) -> Value {
     match function {
         "decode" => decode(input),
+        "batch" => batch(input),
         other => panic!("unknown function {other:?}"),
     }
 }
@@ -93,6 +95,22 @@ fn input<T: DeserializeOwned>(input: Value) -> T {
 
 fn error(kind: &str) -> Value {
     json!({ "error": kind })
+}
+
+fn u64_of(s: &str) -> u64 {
+    canonical(s)
+}
+
+/// Parses a decimal string in the vectors' JSON form, refusing a sign or
+/// leading zeros, so that a vector another runner would refuse fails here too.
+fn canonical<T>(s: &str) -> T
+where
+    T: std::str::FromStr + ToString,
+    T::Err: std::fmt::Debug,
+{
+    let n: T = s.parse().unwrap();
+    assert_eq!(n.to_string(), s, "{s:?} is not a canonical decimal string");
+    n
 }
 
 /// Decodes each row on its own.
@@ -120,4 +138,35 @@ fn decode(value: Value) -> Value {
         })
         .collect();
     json!({ "messages": results })
+}
+
+/// Feeds messages to a batcher.
+fn batch(value: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        start: Start,
+        up_to: Option<String>,
+        steps: Vec<Value>,
+    }
+    let Input {
+        start,
+        up_to,
+        steps,
+    } = input(value);
+    let mut batcher = Batcher::new(start, up_to.as_deref().map(u64_of));
+    let outputs: Vec<Value> = steps
+        .into_iter()
+        .map(|step| {
+            let message: Message = serde_json::from_value(step.clone()).unwrap();
+            // Reading the step back refuses unknown keys and other spellings.
+            assert_eq!(json!(message), step, "a step in the core's JSON form");
+            let result = batcher.push(message);
+            match result {
+                Ok(event) => json!(event.into_iter().collect::<Vec<_>>()),
+                Err(_) => error("protocol"),
+            }
+        })
+        .collect();
+    json!({ "outputs": outputs, "finished": batcher.is_finished() })
 }
