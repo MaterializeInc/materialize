@@ -1,0 +1,190 @@
+{
+  "function": "subscribe_sql",
+  "cases": [
+    {
+      "name": "an object is read by catalog id, with a snapshot",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"}
+        },
+        "start": {"kind": "snapshot"}
+      },
+      "expect": {"sql": "SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = true)"}
+    },
+    {
+      "name": "a resume reads from F - 1 without a snapshot",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"}
+        },
+        "start": {"kind": "resume", "frontier": "1700000000001"}
+      },
+      "expect": {
+        "sql": "SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = false) AS OF 1700000000000"
+      }
+    },
+    {
+      "name": "the smallest frontier resumes AS OF 0",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"}
+        },
+        "start": {"kind": "resume", "frontier": "1"}
+      },
+      "expect": {
+        "sql": "SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = false) AS OF 0"
+      }
+    },
+    {
+      "name": "the largest frontier resumes AS OF the largest timestamp",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"}
+        },
+        "start": {"kind": "resume", "frontier": "18446744073709551616"}
+      },
+      "expect": {
+        "sql": "SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = false) AS OF 18446744073709551615"
+      }
+    },
+    {
+      "name": "ENVELOPE precedes WITH, and UP TO comes last",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "upsert", "key": ["region", "id"]},
+          "up_to": "500"
+        },
+        "start": {"kind": "snapshot", "as_of": "7"}
+      },
+      "expect": {
+        "sql": "SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] ENVELOPE UPSERT (KEY (\"region\", \"id\")) WITH (PROGRESS, SNAPSHOT = true) AS OF 7 UP TO 500"
+      }
+    },
+    {
+      "name": "a snapshot at an AS OF without UP TO",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"}
+        },
+        "start": {"kind": "snapshot", "as_of": "7"}
+      },
+      "expect": {
+        "sql": "SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = true) AS OF 7"
+      }
+    },
+    {
+      "name": "an object in an ambient schema has no database",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "s1", "database": null, "schema": "mz_catalog", "name": "mz_tables"},
+          "envelope": {"kind": "diff"}
+        },
+        "start": {"kind": "snapshot"}
+      },
+      "expect": {"sql": "SUBSCRIBE [\"s1\" AS \"mz_catalog\".\"mz_tables\"] WITH (PROGRESS, SNAPSHOT = true)"}
+    },
+    {
+      "name": "identifiers are quoted with embedded quotes doubled",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u1", "database": "d", "schema": "s", "name": "we\"ird"},
+          "envelope": {"kind": "upsert", "key": ["k\"ey"]}
+        },
+        "start": {"kind": "snapshot"}
+      },
+      "expect": {
+        "sql": "SUBSCRIBE [\"u1\" AS \"d\".\"s\".\"we\"\"ird\"] ENVELOPE UPSERT (KEY (\"k\"\"ey\")) WITH (PROGRESS, SNAPSHOT = true)"
+      }
+    },
+    {
+      "name": "a query is wrapped on its own lines, so a trailing comment cannot swallow the parenthesis",
+      "input": {
+        "subscribe": {"target": {"kind": "query", "sql": "SELECT 1 -- one"}, "envelope": {"kind": "diff"}},
+        "start": {"kind": "snapshot"}
+      },
+      "expect": {"sql": "SUBSCRIBE (\nSELECT 1 -- one\n) WITH (PROGRESS, SNAPSHOT = true)"}
+    },
+    {
+      "name": "a query is placed as written, trailing semicolon included",
+      "input": {
+        "subscribe": {"target": {"kind": "query", "sql": "SELECT 1;"}, "envelope": {"kind": "diff"}},
+        "start": {"kind": "snapshot"}
+      },
+      "expect": {"sql": "SUBSCRIBE (\nSELECT 1;\n) WITH (PROGRESS, SNAPSHOT = true)"}
+    },
+    {
+      "name": "a query cannot resume",
+      "input": {
+        "subscribe": {"target": {"kind": "query", "sql": "SELECT 1"}, "envelope": {"kind": "diff"}},
+        "start": {"kind": "resume", "frontier": "5"}
+      },
+      "expect": {"error": "usage"}
+    },
+    {
+      "name": "an upsert without a key is refused",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "upsert", "key": []}
+        },
+        "start": {"kind": "snapshot"}
+      },
+      "expect": {"error": "usage"}
+    },
+    {
+      "name": "an upsert that names a key column twice is refused",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "upsert", "key": ["id", "id"]}
+        },
+        "start": {"kind": "snapshot"}
+      },
+      "expect": {"error": "usage"}
+    },
+    {
+      "name": "an AS OF past UP TO is refused",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"},
+          "up_to": "10"
+        },
+        "start": {"kind": "snapshot", "as_of": "11"}
+      },
+      "expect": {"error": "usage"}
+    },
+    {
+      "name": "a resume past UP TO is refused",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"},
+          "up_to": "10"
+        },
+        "start": {"kind": "resume", "frontier": "12"}
+      },
+      "expect": {"error": "usage"}
+    },
+    {
+      "name": "a resume at UP TO is allowed",
+      "input": {
+        "subscribe": {
+          "target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"},
+          "envelope": {"kind": "diff"},
+          "up_to": "10"
+        },
+        "start": {"kind": "resume", "frontier": "11"}
+      },
+      "expect": {
+        "sql": "SUBSCRIBE [\"u42\" AS \"materialize\".\"public\".\"orders\"] WITH (PROGRESS, SNAPSHOT = false) AS OF 10 UP TO 10"
+      }
+    }
+  ]
+}
