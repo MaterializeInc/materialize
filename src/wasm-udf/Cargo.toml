@@ -21,10 +21,12 @@ mz-repr = { path = "../repr" }
 mz-wasm-udf-abi = { path = "../wasm-udf-abi" }
 stacker.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 wasmparser.workspace = true
 wasmtime = { workspace = true, features = ["anyhow", "backtrace", "call-hook", "cranelift", "runtime", "std"] }
 
 [dev-dependencies]
+flate2.workspace = true
 mz-ore = { path = "../ore", features = ["test"] }
 
 [features]

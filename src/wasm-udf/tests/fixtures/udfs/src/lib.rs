@@ -158,3 +158,33 @@ fn shout(s: &str) -> String {
     println!("shouting {s}");
     s.to_uppercase()
 }
+
+#[link(wasm_import_module = "wasi_snapshot_preview1")]
+unsafe extern "C" {
+    #[link_name = "random_get"]
+    fn wasi_random_get(buf: i32, len: i32) -> i32;
+    #[link_name = "fd_write"]
+    fn wasi_fd_write(fd: i32, iovs: i32, iovs_len: i32, nwritten: i32) -> i32;
+}
+
+/// Asks `random_get` for `len` bytes at address 0 and returns its errno.
+#[function("raw_random_get(int) -> int")]
+fn raw_random_get(len: i32) -> i32 {
+    unsafe { wasi_random_get(0, len) }
+}
+
+/// Writes `len` bytes from address 0 to stdout through `fd_write` and
+/// returns its errno.
+#[function("raw_fd_write(int) -> int")]
+fn raw_fd_write(len: i32) -> i32 {
+    let iovec: [u32; 2] = [0, len as u32];
+    let mut nwritten: u32 = 0;
+    unsafe {
+        wasi_fd_write(
+            1,
+            iovec.as_ptr() as i32,
+            1,
+            &mut nwritten as *mut u32 as i32,
+        )
+    }
+}

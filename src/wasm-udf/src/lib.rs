@@ -17,10 +17,17 @@
 //! * `wasi`: a deterministic WASI preview1 implementation.
 //! * [`call`]: compiled modules and single calls in fresh instances.
 //! * [`codec`]: datums to and from the guest's Arrow batches.
+//! * [`invoker`]: batched calls with per-row semantics.
+//! * [`runtime`]: the process-wide module cache that `mz_expr` binds
+//!   functions through.
 
 pub mod call;
 pub mod codec;
 pub mod engine;
+pub mod invoker;
+pub mod runtime;
 mod wasi;
 
 pub use call::{CallError, CallReport, CompileError, CompiledModule};
+pub use invoker::{BatchConfig, CallObserver, Invoker};
+pub use runtime::Runtime;
