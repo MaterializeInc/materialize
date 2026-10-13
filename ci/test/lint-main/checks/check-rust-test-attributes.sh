@@ -17,7 +17,9 @@ cd "$(dirname "$0")/../../../.."
 
 . misc/shlib/shlib.bash
 
-rust_files=$(sort -u <(git_files '*.rs'))
+# The Materialize SDK cannot depend on `mz_ore`, so it uses the standard
+# `#[test]` attribute.
+rust_files=$(sort -u <(git_files '*.rs' ':!misc/materialize-sdk'))
 
 try xargs misc/lint/test-attribute.py <<< "$rust_files"
 

@@ -290,6 +290,23 @@ steps:
     agents:
       queue: hetzner-x86-64-dedi-48cpu-192gb
 
+  - id: materialize-sdk
+    label: ":rust: Materialize SDK"
+    command: bin/ci-builder run stable ci/test/materialize-sdk.sh
+    inputs:
+      - ci/test/materialize-sdk.sh
+      - misc/materialize-sdk
+      # Cargo and clippy read these from the parent directories.
+      - .cargo/config.toml
+      - clippy.toml
+      - deny.toml
+    depends_on: []
+    timeout_in_minutes: 20
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+    coverage: skip
+    sanitizer: skip
+
   - id: testdrive
     topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
     label: "Testdrive"
