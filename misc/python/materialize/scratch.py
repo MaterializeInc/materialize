@@ -408,7 +408,7 @@ def launch(
         tags["Name"] = display_name
     tags["scratch-delete-after"] = str(delete_after.timestamp())
     tags["nonce"] = nonce
-    tags["git_ref"] = git.describe()
+    tags["git_ref"] = spawn.capture(["git", "describe", "--always"]).strip()
     tags["ami-user"] = ami_user
 
     # The scratch account denies resource creation unless the `owner`,
