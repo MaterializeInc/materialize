@@ -17,6 +17,22 @@ archival tags. Preserve designer commits and useful implementation boundaries
 when folding our remaining fixups. Detailed verification belongs in the
 [PR status](https://github.com/MaterializeInc/materialize/pull/38696).
 
+Use the scratch worker described in the prompt for focused builds, tests and
+interactive debugging. Launch with `bin/scratch create decoupled-coordination
+--git-rev <commit>`, then reuse that worker and its caches. The shared editing VM
+must not host heavy workloads. CI remains the broad integration check, not the
+only place to compile or reproduce a failure. Keep the workload's contention and
+protection contracts intact when reducing a reproduction.
+
+Use `bin/ci-builder run stable <command>` on the worker for pinned build tooling.
+Start with repository concurrency defaults and adjust from observed resource use.
+If a compilation cap is needed, set `CARGO_BUILD_JOBS` inside the builder command,
+not just in the host environment. Preserve the reproduction's internal concurrency.
+Check `getconf PAGESIZE` is 4096 before running ARM binaries. Keep runtime
+reproductions in disposable mzcompose environments and preserve useful evidence
+before resetting them. `bin/scratch create` also transfers local AI-tool config
+and credentials as part of its standard setup.
+
 Finish [realization-owned protection](20260903_decoupled_coordination.md#client-read-protection)
 and [Kafka placement](20260903_decoupled_coordination.md#kafka-placement-and-recovery).
 Execution replacement transfers committed grants into opaque recovery holds until
@@ -271,8 +287,9 @@ messages. Timer-only rounds retain their ordering.
 
 Catalog timing probes expand around awaited expressions rather than adding
 owning async wrappers along nested refresh paths. Nested timings overlap.
-Remove temporary probes after the repair is verified. Heavy builds and runtime
-verification remain CI-owned, using the existing failing workflows and deadlines.
+Remove temporary probes after the repair is verified. Use the scratch worker for
+the focused debugging loop and CI for combined verification, keeping the existing
+failing workflows and deadlines.
 
 Preserve the independent DROP-metric retirement observation and paused-index
 advancement coverage within the explicit protection-lifetime contract. Keep history
