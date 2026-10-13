@@ -596,6 +596,39 @@ SELECT ARRAY[1] > ARRAY[NULL]::int[], ARRAY[1] >= ARRAY[NULL]::int[]
 ----
 false false
 
+# Arrays with equal elements and the same number of dimensions are ordered by
+# the length of each dimension, then by the lower bound of each dimension.
+
+query BBBB
+SELECT ARRAY[[1,2,3,4]] < ARRAY[[1],[2],[3],[4]], ARRAY[[1,2,3,4]] = ARRAY[[1],[2],[3],[4]], ARRAY[[1],[2],[3],[4]] > ARRAY[[1,2],[3,4]], ARRAY[[1,2],[3,4]] > ARRAY[[1,2,3,4]]
+----
+true  false  true  true
+
+query BBB
+SELECT array_fill(7, ARRAY[2], ARRAY[0]) < ARRAY[7,7], array_fill(7, ARRAY[2], ARRAY[0]) = ARRAY[7,7], array_fill(7, ARRAY[2], ARRAY[3]) > ARRAY[7,7]
+----
+true  false  true
+
+query T
+SELECT a FROM (VALUES (ARRAY[[1],[2],[3],[4]]), (ARRAY[[1,2,3,4]]), (ARRAY[[1,2],[3,4]]), (ARRAY[1,2,3,4])) t(a) ORDER BY a
+----
+{1,2,3,4}
+{{1,2,3,4}}
+{{1,2},{3,4}}
+{{1},{2},{3},{4}}
+
+query T
+SELECT a FROM (VALUES (array_fill(7, ARRAY[2], ARRAY[3])), (ARRAY[7,7]), (array_fill(7, ARRAY[2], ARRAY[0]))) t(a) ORDER BY a DESC
+----
+[3:4]={7,7}
+{7,7}
+[0:1]={7,7}
+
+query TT
+SELECT greatest(ARRAY[[1,2,3,4]], ARRAY[[1],[2],[3],[4]]), least(ARRAY[[1],[2],[3],[4]], ARRAY[[1,2,3,4]])
+----
+{{1},{2},{3},{4}}  {{1,2,3,4}}
+
 query error operator does not exist: integer\[\] = text\[\]
 SELECT ARRAY[1,2,3] = ARRAY['1','2','3']
 
