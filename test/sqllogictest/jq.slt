@@ -1,0 +1,149 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+statement error the jq function is not available
+SELECT jq('1', '.')
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_jq = true
+----
+COMPLETE 0
+
+query T
+SELECT jq('{"a": [1, 2.5, 3]}', '.a | map(. * 2)')
+----
+[2,5,6]
+
+query T
+SELECT jq(
+  '{"items": [{"name": "pear", "price": 3}, {"name": "fig", "price": 1}, {"name": "kiwi", "price": 2}]}',
+  '.items | sort_by(.price) | map(.name)'
+)
+----
+["fig","kiwi","pear"]
+
+query T
+SELECT jq('{"b": 2, "a": 1}', 'to_entries | map(.key) | join(",")')
+----
+"a,b"
+
+# Decimal precision survives when the program does not do arithmetic on it.
+query T
+SELECT jq('{"x": 123456789012345678901234567890.123}', '.x')
+----
+123456789012345678901234567890.123
+
+# No output is NULL.
+query T
+SELECT jq('[1, 2, 3]', '.[] | select(. > 5)') IS NULL
+----
+true
+
+query error jq: program produced more than one value; collect them with \[\.\.\.\]
+SELECT jq('[1, 2, 3]', '.[]')
+
+query T
+SELECT jq('[1, 2, 3]', '[.[] | select(. > 1)]')
+----
+[2,3]
+
+query T
+SELECT jq(NULL, '.') IS NULL
+----
+true
+
+# The program must be known when the query is planned.
+query error jq requires a string literal as its second argument
+SELECT jq('1', NULL)
+
+query T
+SELECT jq('{"a": 1}', '.' || 'a')
+----
+1
+
+query error jq: expected term at end of program
+SELECT jq('1', '. +')
+
+query error jq: undefined filter now/0
+SELECT jq('1', 'now')
+
+query error jq: undefined filter env/0
+SELECT jq('1', 'env')
+
+query error jq: cannot import x: module loading not supported
+SELECT jq('1', 'import "x" as x; .')
+
+query error jq: "boom"
+SELECT jq('1', 'error("boom")')
+
+query error jq: program halted with exit code 3
+SELECT jq('1', 'halt_error(3)')
+
+query error jq: output NaN is not JSON
+SELECT jq('1', 'nan')
+
+statement ok
+CREATE TABLE docs (doc jsonb, prog text)
+
+statement ok
+INSERT INTO docs VALUES
+  ('{"name": "ada", "langs": ["en", "fr"]}', '.name'),
+  ('{"name": "bob", "langs": []}', '.name'),
+  ('{"name": "cy"}', '.name')
+
+query error jq requires a string literal as its second argument
+SELECT jq(doc, prog) FROM docs
+
+# Evaluated per row, through a dataflow.
+statement ok
+CREATE MATERIALIZED VIEW docs_jq AS
+  SELECT jq(doc, '{name: .name | ascii_upcase, langs: (.langs // [] | length)}') AS out FROM docs
+
+query T rowsort
+SELECT out FROM docs_jq
+----
+{"langs":0,"name":"BOB"}
+{"langs":0,"name":"CY"}
+{"langs":2,"name":"ADA"}
+
+# Jaro-Winkler similarity, as an example of an algorithm written in jq.
+query T
+SELECT jq('["MARTHA", "MARHTA"]', $$
+def jaro($s; $t):
+  ($s | explode) as $a | ($t | explode) as $b
+  | ($a | length) as $la | ($b | length) as $lb
+  | if $la == 0 and $lb == 0 then 1
+    elif $la == 0 or $lb == 0 then 0
+    else
+      ([0, (([$la, $lb] | max) / 2 | floor) - 1] | max) as $w
+      | reduce range(0; $la) as $i ({am: [range($la) | false], bm: [range($lb) | false], m: 0};
+          . as $st
+          | (first(range([0, $i - $w] | max; [$i + $w + 1, $lb] | min)
+                   | select(($st.bm[.] | not) and $a[$i] == $b[.])) // null) as $j
+          | if $j == null then . else .am[$i] = true | .bm[$j] = true | .m += 1 end)
+      | if .m == 0 then 0 else
+          . as $st
+          | [range($la) | select($st.am[.]) | $a[.]] as $x
+          | [range($lb) | select($st.bm[.]) | $b[.]] as $y
+          | ([range($x | length) | select($x[.] != $y[.])] | length / 2 | floor) as $tr
+          | ($st.m / $la + $st.m / $lb + ($st.m - $tr) / $st.m) / 3
+        end
+    end;
+def jaro_winkler($s; $t):
+  jaro($s; $t) as $j
+  | ($s | explode) as $a | ($t | explode) as $b
+  | ([4, ($a | length), ($b | length)] | min) as $n
+  | (first(range($n) | select($a[.] != $b[.])) // $n) as $l
+  | $j + $l * 0.1 * (1 - $j);
+jaro_winkler(.[0]; .[1]) * 1000 | round
+$$)
+----
+961

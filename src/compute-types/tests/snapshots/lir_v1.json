@@ -2423,6 +2423,9 @@
       }
     }
   },
+  "Jq": {
+    "NEWTYPESTRUCT": "STR"
+  },
   "JsonbArrayLength": "UNITSTRUCT",
   "JsonbBuildArray": "UNITSTRUCT",
   "JsonbBuildObject": "UNITSTRUCT",
@@ -4902,6 +4905,11 @@
       "IsTrue": {
         "NEWTYPE": {
           "TYPENAME": "IsTrue"
+        }
+      },
+      "Jq": {
+        "NEWTYPE": {
+          "TYPENAME": "Jq"
         }
       },
       "JsonbArrayLength": {

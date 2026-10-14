@@ -844,3 +844,4 @@ pub const FUNC_LIST_LT_OID: u32 = 17134;
 pub const FUNC_LIST_LTE_OID: u32 = 17135;
 pub const FUNC_LIST_GT_OID: u32 = 17136;
 pub const FUNC_LIST_GTE_OID: u32 = 17137;
+pub const FUNC_JQ_OID: u32 = 17138;
