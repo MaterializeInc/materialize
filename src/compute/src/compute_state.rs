@@ -25,12 +25,11 @@ use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse, SubscribeResponse,
 };
-use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::RenderDataflowDescription;
 use mz_compute_types::dyncfgs::{
     ENABLE_PEEK_RESPONSE_STASH, ENABLE_PEEK_ROW_ITERATION_LIMIT, PEEK_RESPONSE_STASH_BATCH_BYTES,
     PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_ROW_ITERATION_LIMIT,
 };
-use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_expr::SafeMfpPlan;
 use mz_expr::row::RowCollection;
@@ -761,10 +760,7 @@ impl<'a> ActiveComputeState<'a> {
         self.compute_state.apply_worker_config();
     }
 
-    fn handle_create_dataflow(
-        &mut self,
-        dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
-    ) {
+    fn handle_create_dataflow(&mut self, dataflow: RenderDataflowDescription<CollectionMetadata>) {
         let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
         let as_of = dataflow.as_of.clone().unwrap();
 
