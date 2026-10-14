@@ -346,6 +346,8 @@ pub struct Args {
     balancerd_http_port: u16,
     #[clap(long, default_value = "8080")]
     balancerd_internal_http_port: u16,
+    #[clap(long, default_value = "/api/readyz")]
+    balancerd_readiness_probe_path: String,
 
     #[clap(long, default_value = "8080")]
     console_http_port: u16,
@@ -850,6 +852,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             balancerd_sql_port: args.balancerd_sql_port,
             balancerd_http_port: args.balancerd_http_port,
             balancerd_internal_http_port: args.balancerd_internal_http_port,
+            balancerd_readiness_probe_path: args.balancerd_readiness_probe_path.clone(),
         };
         move || {
             k8s_controller::Controller::namespaced_all(

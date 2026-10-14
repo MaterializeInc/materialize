@@ -88,13 +88,6 @@ class Kubectl:
             pods[pod["metadata"]["name"]] = port
         return pods
 
-    def pod_ready(self, name: str) -> bool:
-        pod = self.get("pod", name)
-        return any(
-            c["type"] == "Ready" and c["status"] == "True"
-            for c in pod["status"].get("conditions", [])
-        )
-
     def metrics(self, pod: str, port: int) -> dict[str, int]:
         """The pod's integer Prometheus metrics, keyed by name with labels."""
         path = f"/api/v1/namespaces/{self.namespace}/pods/{pod}:{port}/proxy/metrics"
@@ -188,6 +181,11 @@ class Balancers:
             for pod, port in self.pods.items()
         }
 
+    def accepting(self, pod: str) -> bool:
+        """Whether the pod passes `/api/readyz`, whatever its readiness probe reads."""
+        metrics = self.kubectl.metrics(pod, self.pods[pod])
+        return metrics["mz_balancer_connection_accepting"] == 1
+
     def limit(self, pod: str) -> int:
         return self.kubectl.metrics(pod, self.pods[pod])["mz_balancer_connection_limit"]
 
@@ -254,11 +252,12 @@ def check(args: argparse.Namespace) -> None:
     balancers = Balancers(kubectl, pods)
     original = kubectl.read_config(args.configmap)
     # Removing a key from config.json does not reset its running value, so
-    # restoring the original config must set the watermarks explicitly.
+    # restoring the original config must set the watermarks explicitly. Zero
+    # is their default and disables them.
     restored = {
         **original,
-        HIGH_WATERMARK: original.get(HIGH_WATERMARK),
-        LOW_WATERMARK: original.get(LOW_WATERMARK),
+        HIGH_WATERMARK: original.get(HIGH_WATERMARK, 0),
+        LOW_WATERMARK: original.get(LOW_WATERMARK, 0),
     }
     high = HELD_PGWIRE_CONNECTIONS + 1
     for pod in pods:
@@ -282,12 +281,12 @@ def check(args: argparse.Namespace) -> None:
             args.configmap, {**original, HIGH_WATERMARK: high, LOW_WATERMARK: 1}
         )
         wait_for(
-            f"{target} to become not ready",
-            lambda: not kubectl.pod_ready(target),
+            f"{target} to fail /api/readyz",
+            lambda: not balancers.accepting(target),
             args.timeout_seconds,
         )
-        if not any(kubectl.pod_ready(pod) for pod in others):
-            raise CheckFailed(f"no other balancerd pod is ready: {others}")
+        if not any(balancers.accepting(pod) for pod in others):
+            raise CheckFailed(f"no other balancerd pod passes /api/readyz: {others}")
 
         print(f"waiting {args.settle_seconds}s for the load balancer to act")
         time.sleep(args.settle_seconds)
@@ -304,7 +303,9 @@ def check(args: argparse.Namespace) -> None:
             for open_conn in (client.pgwire, client.https):
                 conn, pod = balancers.open(open_conn)
                 if pod == target:
-                    raise CheckFailed(f"new connection reached not-ready pod {target}")
+                    raise CheckFailed(
+                        f"new connection reached out-of-rotation {target}"
+                    )
                 if isinstance(conn, http.client.HTTPConnection):
                     client.https_query(conn)
                 balancers.close(conn)
@@ -315,8 +316,8 @@ def check(args: argparse.Namespace) -> None:
         print("clearing the watermarks")
         kubectl.write_config(args.configmap, restored)
         wait_for(
-            f"{target} to become ready",
-            lambda: kubectl.pod_ready(target),
+            f"{target} to pass /api/readyz",
+            lambda: balancers.accepting(target),
             args.timeout_seconds,
         )
 
@@ -367,7 +368,7 @@ def main() -> int:
         "--settle-seconds",
         type=float,
         default=90,
-        help="time for the load balancer to stop routing to a not-ready pod: its "
+        help="time for the load balancer to stop routing to a pod failing /api/readyz: its "
         "unhealthy threshold times its health check interval, plus propagation",
     )
     parser.add_argument(
@@ -375,7 +376,7 @@ def main() -> int:
         type=float,
         default=180,
         help="deadline for a ConfigMap change to flip a pod's readiness, and for "
-        "the load balancer to route to a pod again once it is ready",
+        "the load balancer to route to a pod again once it passes /api/readyz",
     )
     parser.add_argument("--new-connections", type=int, default=10)
     args = parser.parse_args()

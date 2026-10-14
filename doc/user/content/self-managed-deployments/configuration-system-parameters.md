@@ -359,31 +359,24 @@ Keep these behaviors in mind:
 
 ### Take a nearly full balancerd out of load balancer rotation
 
-{{< warn-if-unreleased "v26.45" >}}
+{{< warn-if-unreleased "v26.47" >}}
 
 A load balancer keeps sending new connections to a balancerd pod until the pod
 reaches `balancerd_max_connections` and refuses them. Two optional watermarks,
 both below the hard limit, take a nearly full pod out of rotation instead:
 
 - At or above `balancerd_connection_high_watermark` open connections, the pod
-  reports not ready on `/api/readyz`. Kubernetes removes it from the Service
-  endpoints, so the load balancer stops sending it new connections. Its
-  existing connections continue to be served.
-- Below `balancerd_connection_low_watermark` open connections, and after at
-  least 30 seconds out of rotation, the pod reports ready again.
+  fails `/api/readyz`, so the load balancer stops sending it new connections.
+  Its existing connections continue to be served.
+- Below `balancerd_connection_low_watermark` open connections, the pod passes
+  `/api/readyz` again.
 
-Set both watermarks together, with `1 <= low < high < balancerd_max_connections`.
-balancerd logs a warning and ignores values that violate this. Both unset, the
-default, leaves readiness unconditional. `balancerd_max_connections` remains
-the hard limit either way.
-
-{{< warning >}}
-Before setting the watermarks, confirm that the load balancer in front of
-balancerd keeps established connections open when a backend becomes unhealthy
-or not ready. A load balancer that closes them drops every connection on a
-nearly full pod each time it leaves rotation. Check this for any load
-balancer, including one created by the Materialize Terraform modules.
-{{< /warning >}}
+Set both watermarks together, with `0 < low < high < balancerd_max_connections`
+and a non-zero `balancerd_max_connections`. balancerd logs a warning and
+ignores values that violate this. Both `0`, the default, disables the
+watermarks, and setting both back to `0` at runtime returns an out-of-rotation
+pod to rotation at once. `balancerd_max_connections` remains the hard limit
+either way.
 
 For example, with the hard limit at `10000`:
 
@@ -395,13 +388,32 @@ For example, with the hard limit at `10000`:
 }
 ```
 
-The readiness probe on balancerd pods runs every 2 seconds and fails after 2
-consecutive failures, so a pod leaves the Service endpoints within about 4
-seconds of crossing the high watermark. Your load balancer's own health check
-interval adds to that. A pod out of rotation shows `READY 0/1` in
-`kubectl get pods`. To disable the watermarks at runtime, set both to `null`.
-A pod that is out of rotation then reports ready immediately, without the 30
-second wait.
+#### Load balancer requirements
+
+{{< warn-if-unreleased "v26.50" >}}
+
+{{< warning >}}
+Before setting the watermarks, confirm that the load balancer in front of
+balancerd keeps established connections open when a backend becomes unhealthy
+or not ready. A load balancer that closes them drops every connection on a
+nearly full pod each time it leaves rotation. Check this for any load
+balancer, including one created by the Materialize Terraform modules.
+{{< /warning >}}
+
+By default the balancerd readiness probe reads `/api/readyz` every 2 seconds
+and fails after 2 consecutive failures, so a pod above the high watermark leaves
+the Service endpoints within about 4 seconds and shows `READY 0/1` in
+`kubectl get pods`. This suits load balancers that follow pod readiness, such
+as a `type: LoadBalancer` Service with `externalTrafficPolicy: Local`.
+
+Leaving the endpoints does not suit an NLB whose targets the AWS Load Balancer
+Controller registers from them. The controller deregisters the pod's target,
+which closes its held connections a few minutes after the deregistration delay,
+and the NLB no longer routes to it when every target is unhealthy. For such a
+load balancer, set the operator Helm value `balancerd.readinessProbePath` to
+`/api/livez`, point the target group health check at `/api/readyz` on the
+balancerd internal HTTP port, and disable the target group's
+`target_health_state.unhealthy.connection_termination.enabled` attribute.
 
 ## Troubleshooting
 

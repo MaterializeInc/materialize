@@ -401,6 +401,13 @@ balancerd:
   # @notationType -- k8s/tolerations
   # @default -- ``{}``
   tolerations: {}
+  # -- HTTP path of the balancerd readiness probe. `/api/readyz` fails once a
+  # pod reaches `balancerd_connection_high_watermark`, which removes it from the
+  # Service endpoints. Use `/api/livez` when the load balancer health-checks
+  # `/api/readyz` itself, for example an NLB whose targets the AWS Load Balancer
+  # Controller registers from the endpoints: deregistration cuts held sessions
+  # after the deregistration delay and excludes the pod from fail-open.
+  readinessProbePath: /api/readyz
   # @notationType -- k8s/resources
   defaultResources:
     # -- Default resource limits for balancerd's CPU and memory
