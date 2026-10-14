@@ -114,8 +114,8 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 /// implement.
 ///
 /// Text comes from the token trees via [`render_tokens`], so formatting and
-/// comments do not affect it. `input_tys_raw` are the parameter types as
-/// written, for the signature. `input_tys` are the erased types the trait
+/// comments do not affect it. `input_tys_raw` are the parameter types
+/// before generic erasure, with `'a` added to elided references, for the signature. `input_tys` are the erased types the trait
 /// impl uses, for the probes.
 pub(crate) fn sqlfunc_source(
     attr: &TokenStream,

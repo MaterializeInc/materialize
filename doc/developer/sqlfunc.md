@@ -196,8 +196,9 @@ Generate a snapshot test for the macro expansion.
 * **Default:** `false`
 * **Applies to:** all arities
 
-Snapshot files are stored in `src/expr-derive-impl/src/snapshots/`.
-Update them with `cargo insta accept` after running `cargo test -p mz-expr-derive-impl`.
+The test is emitted next to the function, so its snapshot lands in the `snapshots/` directory beside the calling source file, for example `src/expr/src/scalar/func/snapshots/`.
+Update it with `cargo insta accept` after running `cargo test -p mz-expr`.
+The macro's own expansion tests live in `src/expr-derive-impl/src/test.rs`, with snapshots in `src/expr-derive-impl/src/snapshots/`.
 
 ### `skip_display`
 
@@ -212,6 +213,20 @@ Setting it to `true` rejects `sqlname`, whose only reader is the suppressed impl
 
 Which modifiers apply to which arity is declared in `src/expr-derive-impl/src/shape.rs`, one table per arity.
 A modifier absent from an arity's table is rejected with an error naming both the modifier and the arity.
+
+## Generic type parameters
+
+A function can be generic over the element type of a container, for example `fn range_lower<'a, T>(a: Range<T>) -> Option<T>`.
+The generated trait impl replaces each type parameter with `Datum<'a>`, because the parameters are not in scope there.
+Without `output_type` or `output_type_expr`, the macro derives the output column type from where the first type parameter of the output appears among the inputs, through `mz_repr::SqlContainerType`:
+
+* Output `T` from an input container: the container's element type.
+* Output `T` from an input `T`: that input's type.
+* Output container from an input container: the input's element type, wrapped in the output container.
+
+Any other combination needs an explicit `output_type_expr`.
+The derived type is nullable when the return type is an `Option`, which also sets the `introduces_nulls` default.
+For binary and variadic functions, the derived expression soft-asserts that every input carrying the parameter agrees on its SQL type.
 
 ## Generated items
 
@@ -311,7 +326,7 @@ output.nullable = output.nullable
 
 Where:
 * `output.nullable` is the nullability of the column type that `output_type`, `output_type_expr`, or the return type gives.
-* `non_nullable_input_is_nullable` is true if a nullable input column lands in a parameter position whose Rust type cannot represent NULL. Such a position makes the evaluation layer short-circuit to NULL, so the output is nullable no matter what `propagates_nulls` says. Unary functions have no such term, because a unary function's single position is the one `propagates_nulls` already describes.
+* `non_nullable_input_is_nullable` is true if a nullable input column lands in a parameter position whose Rust type cannot represent NULL. Such a position makes the evaluation layer short-circuit to NULL, so the output is nullable no matter what `propagates_nulls` says. Unary functions have no such term. Their `propagates_nulls` cannot be overridden, so it is always `!Input::nullable()`, which already covers a non-nullable input. The NOTE on `Shape::nullability` in `src/expr-derive-impl/src/shape.rs` owns this argument.
 * `propagates_nulls` indicates whether NULL passes through.
 * `any_input_nullable` is true if any input column is nullable.
 
