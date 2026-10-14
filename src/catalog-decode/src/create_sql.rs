@@ -15,6 +15,7 @@
 
 use std::collections::BTreeMap;
 
+use mz_repr::adt::interval::Interval;
 use mz_repr::strconv;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::item_refs::collect_item_references;
@@ -23,9 +24,10 @@ use mz_sql_parser::ast::{
     CreateSinkConnection, CreateSourceOptionName, CreateSubsourceOptionName, Format,
     FormatSpecifier, IcebergSinkConfigOptionName, IcebergSinkMode, IndexOptionName,
     KafkaSinkConfigOptionName, KafkaSourceConfigOptionName, MaterializedViewOptionName,
-    PgConfigOptionName, ProtobufSchema, Raw, RawClusterName, RawItemName, SinkEnvelope,
-    SourceEnvelope, SourceErrorPolicy, Statement, TableFromSourceOptionName, TableOptionName,
-    UnresolvedItemName, Value, WithOptionValue,
+    PgConfigOptionName, ProtobufSchema, Raw, RawClusterName, RawItemName, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, SinkEnvelope, SourceEnvelope, SourceErrorPolicy,
+    Statement, TableFromSourceOptionName, TableOptionName, UnresolvedItemName, Value,
+    WithOptionValue,
 };
 use prost::Message as _;
 use serde_json::json;
@@ -141,6 +143,54 @@ where
     Ok(())
 }
 
+/// Records the `REFRESH` options among `options` as `refresh` in `info`, one entry per option in
+/// statement order.
+fn insert_refresh_strategies<'a, T: AstInfo + 'a>(
+    info: &mut BTreeMap<&str, serde_json::Value>,
+    options: impl Iterator<Item = &'a Option<WithOptionValue<T>>>,
+) -> Result<(), String> {
+    let mut refresh = Vec::new();
+    for value in options {
+        let Some(WithOptionValue::Refresh(value)) = value else {
+            continue;
+        };
+        refresh.push(match value {
+            RefreshOptionValue::OnCommit => json!({"type": "on-commit"}),
+            RefreshOptionValue::AtCreation => json!({"type": "at", "at": null}),
+            RefreshOptionValue::At(RefreshAtOptionValue { time }) => {
+                json!({"type": "at", "at": time.to_ast_string_stable()})
+            }
+            RefreshOptionValue::Every(RefreshEveryOptionValue {
+                interval,
+                aligned_to,
+            }) => {
+                // The same duration round trip as planning, so that `1 day`
+                // renders as `24:00:00` rather than as a day.
+                let interval = durable::interval_literal(interval)
+                    .and_then(|interval| {
+                        interval
+                            .duration()
+                            .and_then(|duration| Interval::from_duration(&duration))
+                            .map_err(|e| e.to_string())
+                    })
+                    .map_err(|e| format!("invalid REFRESH EVERY interval: {e}"))?;
+                json!({
+                    "type": "every",
+                    "interval": interval.to_string(),
+                    "aligned_to": aligned_to.as_ref().map(|time| time.to_ast_string_stable()),
+                })
+            }
+        });
+    }
+    // Purification leaves at least one REFRESH option, but a statement stored
+    // before it did has none and means ON COMMIT.
+    if refresh.is_empty() {
+        refresh.push(json!({"type": "on-commit"}));
+    }
+    info.insert("refresh", json!(refresh));
+    Ok(())
+}
+
 /// Parses a catalog `create_sql` string into a JSON object.
 ///
 /// The returned JSON does not fully reflect the parsed SQL and instead contains only fields
@@ -187,6 +237,8 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
                 stmt.with_options.iter().map(|o| (&o.name, &o.value)),
                 MaterializedViewOptionName::RetainHistory,
             )?;
+
+            insert_refresh_strategies(&mut info, stmt.with_options.iter().map(|o| &o.value))?;
 
             if let Some(target) = stmt.replacement_for {
                 info.insert("replacement_target", json!(item_id(target)?));
@@ -2129,6 +2181,75 @@ mod tests {
             let out = super::item_details(sql).expect("ok");
             assert_eq!(out["retain_history_millis"], json!(millis), "{sql}");
         }
+    }
+
+    const MZ_TIMESTAMP: &str = "[s1 AS \"mz_catalog\".\"mz_timestamp\"]";
+
+    #[mz_ore::test]
+    fn catalog_refresh_omitted_means_on_commit() {
+        let sql = "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" IN CLUSTER [u1] \
+                   AS SELECT 1";
+        let out = super::item_details(sql).expect("ok");
+        assert_eq!(out["refresh"], json!([{"type": "on-commit"}]));
+    }
+
+    #[mz_ore::test]
+    fn catalog_refresh_one_entry_per_option() {
+        let sql = format!(
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" IN CLUSTER [u1] \
+             WITH (REFRESH = ON COMMIT, \
+             REFRESH = AT 32472144000000::{MZ_TIMESTAMP}, \
+             REFRESH = EVERY '1 day' ALIGNED TO 946684800000::{MZ_TIMESTAMP}, \
+             REFRESH = EVERY '90 minutes' ALIGNED TO '2000-01-01 00:00:00+00') \
+             AS SELECT 1"
+        );
+        let out = super::item_details(&sql).expect("ok");
+        assert_eq!(
+            out["refresh"],
+            json!([
+                {"type": "on-commit"},
+                {"type": "at", "at": format!("32472144000000::{MZ_TIMESTAMP}")},
+                {
+                    "type": "every",
+                    "interval": "24:00:00",
+                    "aligned_to": format!("946684800000::{MZ_TIMESTAMP}"),
+                },
+                {
+                    "type": "every",
+                    "interval": "01:30:00",
+                    "aligned_to": "'2000-01-01 00:00:00+00'",
+                },
+            ])
+        );
+    }
+
+    #[mz_ore::test]
+    fn catalog_refresh_times_read_as_written() {
+        let sql = format!(
+            "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" IN CLUSTER [u1] \
+             WITH (REFRESH = AT ((1790696789484::{MZ_TIMESTAMP})), \
+             REFRESH = AT 946684800000::{MZ_TIMESTAMP}::[s46 AS \"pg_catalog\".\"text\"]::[s22 AS \"pg_catalog\".\"int8\"] + 2000, \
+             REFRESH = EVERY '1 day' ALIGNED TO '2000-01-01 00:00:00+00'::[s52 AS \"pg_catalog\".\"timestamptz\"] + INTERVAL '1 hour') \
+             AS SELECT 1"
+        );
+        let out = super::item_details(&sql).expect("ok");
+        assert_eq!(
+            out["refresh"],
+            json!([
+                {"type": "at", "at": format!("((1790696789484::{MZ_TIMESTAMP}))")},
+                {
+                    "type": "at",
+                    "at": format!(
+                        "946684800000::{MZ_TIMESTAMP}::[s46 AS \"pg_catalog\".\"text\"]::[s22 AS \"pg_catalog\".\"int8\"] + 2000"
+                    ),
+                },
+                {
+                    "type": "every",
+                    "interval": "24:00:00",
+                    "aligned_to": "'2000-01-01 00:00:00+00'::[s52 AS \"pg_catalog\".\"timestamptz\"] + INTERVAL '1 hour'",
+                },
+            ])
+        );
     }
 
     #[mz_ore::test]

@@ -456,11 +456,12 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| B
     }),
 });
 
-pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| {
+        BuiltinMaterializedView {
         name: "mz_materialized_view_refresh_strategies",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::TABLE_MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES_OID,
+        oid: oid::MV_MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES_OID,
         desc: RelationDesc::builder()
             .with_column(
                 "materialized_view_id",
@@ -468,14 +469,8 @@ pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinTable> = Laz
             )
             .with_column("type", SqlScalarType::String.nullable(false))
             .with_column("interval", SqlScalarType::Interval.nullable(true))
-            .with_column(
-                "aligned_to",
-                SqlScalarType::TimestampTz { precision: None }.nullable(true),
-            )
-            .with_column(
-                "at",
-                SqlScalarType::TimestampTz { precision: None }.nullable(true),
-            )
+            .with_column("aligned_to_expression", SqlScalarType::String.nullable(true))
+            .with_column("at_expression", SqlScalarType::String.nullable(true))
             .finish(),
         column_comments: BTreeMap::from_iter([
             (
@@ -491,19 +486,63 @@ pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinTable> = Laz
                 "The refresh interval of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`.",
             ),
             (
-                "aligned_to",
-                "The `ALIGNED TO` option of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`.",
+                "aligned_to_expression",
+                "The `ALIGNED TO` expression of a `REFRESH EVERY` option, as it appears in the materialized view's `create_sql`, or `NULL` if the `type` is not `every`.",
             ),
             (
-                "at",
-                "The time of a `REFRESH AT`, or `NULL` if the `type` is not `at`.",
+                "at_expression",
+                "The time expression of a `REFRESH AT` option, as it appears in the materialized view's `create_sql`, or `NULL` if the `type` is not `at`.",
             ),
         ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL materialized_view_id,
+    ASSERT NOT NULL type
+) AS
+WITH
+    items AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql') AS parsed
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'Item'
+    ),
+    user_strategies AS (
+        SELECT
+            i.id AS materialized_view_id,
+            r->>'type' AS type,
+            (r->>'interval')::interval AS interval,
+            r->>'aligned_to' AS aligned_to_expression,
+            r->>'at' AS at_expression
+        FROM
+            items i,
+            jsonb_array_elements(i.parsed->'refresh') AS r
+        WHERE i.parsed->>'type' = 'materialized-view'
+    ),
+    builtin_strategies AS (
+        SELECT
+            's' || (gm.data->'value'->>'catalog_id') AS materialized_view_id,
+            -- Builtin materialized views do not have refresh strategies
+            'on-commit' AS type,
+            NULL::interval AS interval,
+            NULL::text AS aligned_to_expression,
+            NULL::text AS at_expression
+        FROM mz_internal.mz_builtin_materialized_views b
+        JOIN mz_internal.mz_catalog_raw gm ON
+            gm.data->>'kind' = 'GidMapping' AND
+            gm.data->'key'->>'object_type' = b.object_type AND
+            gm.data->'key'->>'schema_name' = b.schema_name AND
+            gm.data->'key'->>'object_name' = b.name
+    )
+SELECT * FROM user_strategies
+UNION ALL
+SELECT * FROM builtin_strategies",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: None,
     }
-});
+    });
 
 pub static MZ_NETWORK_POLICIES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {

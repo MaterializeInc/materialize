@@ -2831,8 +2831,7 @@ pub fn describe_alter_network_policy(
     Ok(StatementDesc::new(None))
 }
 
-/// Rejects times that `mz_materialized_view_refresh_strategies` could not pack as a
-/// `timestamptz`, whose range is far smaller than `mz_timestamp`'s.
+/// Rejects times that are too large.
 fn check_refresh_time(option: &str, ts: Timestamp) -> Result<(), PlanError> {
     let renderable = i64::try_from(ts)
         .ok()
