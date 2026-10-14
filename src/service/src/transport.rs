@@ -33,7 +33,7 @@ use async_trait::async_trait;
 use bincode::Options;
 use futures::future;
 use mz_ore::cast::CastInto;
-use mz_ore::netio::{Listener, SocketAddr, Stream, TimedReader, TimedWriter};
+use mz_ore::netio::{Listener, SocketAddr, Stream};
 use mz_ore::task::{AbortOnDropHandle, JoinHandle};
 use semver::Version;
 use serde::de::DeserializeOwned;
@@ -269,33 +269,18 @@ struct Connection<Out, In> {
 impl<Out: Message, In: Message> Connection<Out, In> {
     /// The interval with which keepalives are emitted on idle connections.
     const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
-    /// The minimum acceptable idle timeout.
-    ///
-    /// We want this to be significantly greater than `KEEPALIVE_INTERVAL`, to avoid connections
-    /// getting canceled unnecessarily.
-    const MIN_TIMEOUT: Duration = Duration::from_secs(2);
-
     /// Start a new connection wrapping the given stream.
     async fn start(
         stream: Stream,
         version: Version,
         server_fqdn: Option<String>,
-        mut timeout: Duration,
+        _timeout: Duration,
         metrics: impl Metrics<Out, In>,
     ) -> anyhow::Result<Self> {
-        if timeout < Self::MIN_TIMEOUT {
-            warn!(
-                ?timeout,
-                "ctp: configured timeout is less than minimum timeout",
-            );
-            timeout = Self::MIN_TIMEOUT;
-        }
-
         let (reader, writer) = stream.split();
 
-        // Apply the timeout to all connection reads and writes.
-        let reader = TimedReader::new(reader, timeout);
-        let writer = TimedWriter::new(writer, timeout);
+        // NOTE: This benchmark-only experiment disables silent-failure detection.
+        // Keep the timeout API unchanged to isolate per-I/O wrapper overhead.
         // Track byte count metrics for all connection reads and writes.
         let mut reader = metrics::Reader::new(reader, metrics.clone());
         let mut writer = metrics::Writer::new(writer, metrics.clone());

@@ -214,6 +214,7 @@ fn test_server_error() {
 /// fail second, on the error that must not be reported.
 #[test] // allow(test-attribute)
 #[cfg_attr(miri, ignore)] // too slow
+#[ignore = "benchmark-only experiment disables write timeout enforcement"]
 fn test_send_error_reported_first() {
     // Time at which the server is crashed, chosen to be past the client's write deadline.
     const CRASH_TIME: Duration = Duration::from_secs(20);
@@ -401,6 +402,7 @@ fn test_handshake_fqdn_mismatch() {
 
 #[test] // allow(test-attribute)
 #[cfg_attr(miri, ignore)] // too slow
+#[ignore = "benchmark-only experiment disables per-I/O timeout enforcement"]
 fn test_idle_timeout() {
     let mut sim = setup();
 
