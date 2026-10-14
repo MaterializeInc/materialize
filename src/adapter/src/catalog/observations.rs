@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use mz_sql::catalog::{CatalogItem, CatalogItemRef};
 
 use crate::AdapterError;
-use crate::catalog::CatalogState;
+use crate::catalog::{Catalog, CatalogState};
 
 /// Catalog observations whose answers must remain valid when their operations execute.
 #[derive(Clone, Debug, Default)]
@@ -21,10 +21,26 @@ pub struct CatalogReadSet {
     observations: Vec<Observation>,
 }
 
-/// A shared recorder for one statement's catalog observations.
+/// A shared recorder for catalog observations at one operation prefix.
 #[derive(Clone, Debug, Default)]
 pub struct CatalogReadRecorder {
     reads: Arc<Mutex<CatalogReadSet>>,
+}
+
+impl Catalog {
+    /// Starts observations with a conservative configuration fence.
+    ///
+    /// Global and scoped configuration changes invalidate preparation, including
+    /// scoped rows written when clusters or replicas are created.
+    pub(crate) fn new_read_recorder(&self) -> CatalogReadRecorder {
+        let recorder = CatalogReadRecorder::default();
+        recorder.record(
+            "configuration generation",
+            self.state.configuration_generation,
+            |state| state.configuration_generation,
+        );
+        recorder
+    }
 }
 
 impl CatalogReadRecorder {

@@ -308,7 +308,6 @@ steps:
     label: Catalog transaction isolation
     depends_on: build-aarch64
     timeout_in_minutes: 15
-    if: build.env("CI_CATALOG_TRANSACTIONS") == "1"
     inputs: [test/parallel-workload, misc/python/materialize/parallel_workload]
     plugins:
       - ./ci/plugins/mzcompose:

@@ -31,7 +31,7 @@ use mz_repr::Timestamp;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::role_id::RoleId;
 use mz_sql::catalog::{CatalogCluster, CatalogError, ObjectType};
-use mz_sql::names::QualifiedItemName;
+use mz_sql::names::FullItemName;
 use mz_sql::plan::{
     self, AlterClusterPlanStrategy, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
     AlterClusterSwapPlan, AlterOptionParameter, AlterSetClusterPlan, CreateClusterManagedPlan,
@@ -1234,14 +1234,14 @@ impl Coordinator {
         &self,
         session: &Session,
         cluster: &Cluster,
-        creating_source: Option<&QualifiedItemName>,
+        creating_source: Option<&FullItemName>,
     ) {
         if self.notice_relevant_replica_count(cluster) <= 1 {
             return;
         }
         let mut sources = self.single_replica_source_names(cluster);
         if let Some(name) = creating_source {
-            let full_name = self.catalog().resolve_full_name(name, None).to_string();
+            let full_name = name.to_string();
             if !sources.contains(&full_name) {
                 sources.push(full_name);
             }

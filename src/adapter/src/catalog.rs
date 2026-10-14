@@ -95,6 +95,7 @@ use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
+pub use crate::catalog::ddl_transaction::DdlTransaction;
 pub use crate::catalog::observations::{CatalogReadRecorder, CatalogReadSet};
 pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
 pub use crate::catalog::state::CatalogState;
@@ -117,6 +118,7 @@ mod apply;
 #[cfg(test)]
 mod boundary_tests;
 pub(crate) mod cluster_state;
+mod ddl_transaction;
 mod name_observations;
 mod observations;
 mod observed_item;

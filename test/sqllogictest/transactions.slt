@@ -1201,14 +1201,14 @@ BEGIN;
 statement ok
 ALTER SCHEMA green RENAME TO purple;
 
-# Modify the Catalog from a different session while a transaction is open.
+# An unrelated catalog write does not abort the open transaction.
 
 simple conn=mz_system,user=mz_system
 CREATE TABLE yellow_t1 (x int);
 ----
 COMPLETE 0
 
-statement error another session modified the catalog while this DDL transaction was open
+statement ok
 ALTER SCHEMA blue RENAME to pink;
 
 statement ok

@@ -39,7 +39,15 @@ from materialize.mzcompose.services.sql_server import (
 )
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
-from materialize.parallel_workload.catalog_transactions import hammer, independent_ddl
+from materialize.parallel_workload.catalog_transactions import (
+    conflicting_ddl,
+    hammer,
+    independent_ddl,
+    rename_precondition_conflicts,
+    source_ddl,
+    source_noop_conflict,
+    source_notice_conflicts,
+)
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
 from materialize.parallel_workload.settings import (
     ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
@@ -195,14 +203,24 @@ def workflow_catalog_transactions(
             for same_schema in (False, True)
         ]
 
-        def process(case: tuple[bool, bool] | None) -> None:
+        def process(case: tuple[bool, bool] | bool | None) -> None:
             with c.test_case(f"catalog-transactions-{case}"):
                 if case is None:
                     hammer(c, args.workers, args.rounds)
+                elif isinstance(case, bool):
+                    conflicting_ddl(c, replace=case)
                 else:
                     independent_ddl(c, *case)
 
-        c.test_parts([*cases, None], process)
+        c.test_parts([*cases, False, True, None], process)
+        with c.test_case("catalog-transactions-rename-preconditions"):
+            rename_precondition_conflicts(c)
+        with c.test_case("catalog-transactions-source"):
+            source_ddl(c)
+        with c.test_case("catalog-transactions-source-noop"):
+            source_noop_conflict(c)
+        with c.test_case("catalog-transactions-source-notices"):
+            source_notice_conflicts(c)
 
 
 def toxiproxy_start(c: Composition, external: bool) -> None:
