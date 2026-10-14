@@ -1628,6 +1628,7 @@ mod tests {
     use crate::cfg::BATCH_BUILDER_MAX_OUTSTANDING_PARTS;
     use crate::internal::paths::{BlobKey, PartialBlobKey};
     use crate::tests::{all_ok, new_test_client};
+    use mz_persist_types::codec_impls::StringSchema;
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
@@ -1757,6 +1758,108 @@ mod tests {
                 _ => panic!("unparseable blob key"),
             }
         }
+    }
+
+    fn string_part(updates: &[((&str, &str), u64, i64)]) -> Part {
+        let mut builder = PartBuilder::new(&StringSchema, &StringSchema);
+        for ((k, v), t, d) in updates {
+            builder.push(&k.to_string(), &v.to_string(), *t, *d);
+        }
+        builder.finish()
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn batch_builder_add_part_before_lower() {
+        let client = new_test_client(&ConfigUpdates::default()).await;
+        let (write, _) = client
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+        let mut builder = write.builder(Antichain::from_elem(2));
+        let part = string_part(&[(("1", "one"), 2, 1), (("2", "two"), 1, 1)]);
+        match builder.add_part(part).await {
+            Err(InvalidUsage::UpdateNotBeyondLower { ts, .. }) => assert_eq!(ts, 1),
+            other => panic!("expected UpdateNotBeyondLower, got {other:?}"),
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn batch_builder_add_part_flushing() {
+        let small = || string_part(&[(("1", "one"), 1, 1)]);
+        let big = string_part(&[
+            (("2", "two"), 1, 1),
+            (("3", "three"), 1, 1),
+            (("4", "four"), 1, 1),
+            (("5", "five"), 1, 1),
+        ]);
+        let small_bytes = small().goodbytes();
+        assert!(
+            big.goodbytes() > 2 * small_bytes,
+            "big part must exceed the target"
+        );
+
+        let cache = PersistClientCache::new_no_metrics();
+        // Two small parts fit the target exactly. Disable inline writes so every flushed part is
+        // a separate blob that `part_count` sees.
+        cache.cfg.set_config(&BLOB_TARGET_SIZE, 2 * small_bytes);
+        cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
+        let client = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("client construction failed");
+        let (mut write, mut read) = client
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+
+        let mut builder = write.builder(Antichain::from_elem(0));
+        // Parts accumulate while they fit the target.
+        let added = builder.add_part(small()).await.expect("valid usage");
+        assert!(matches!(added, Added::Record), "first part accumulates");
+        let added = builder.add_part(small()).await.expect("valid usage");
+        assert!(
+            matches!(added, Added::Record),
+            "second part fits the target"
+        );
+        // The third would exceed the target, so the first two flush together.
+        let added = builder.add_part(small()).await.expect("valid usage");
+        assert!(matches!(added, Added::RecordAndParts), "third part flushes");
+        // An oversized part flushes the accumulated part first, and then on its own.
+        let added = builder.add_part(big).await.expect("valid usage");
+        assert!(
+            matches!(added, Added::RecordAndParts),
+            "oversized part flushes"
+        );
+        let added = builder.add_part(small()).await.expect("valid usage");
+        assert!(
+            matches!(added, Added::Record),
+            "accounting resets after a flush"
+        );
+
+        let batch = builder
+            .finish(Antichain::from_elem(2))
+            .await
+            .expect("valid usage");
+        // [small, small], [small], [big], [small]
+        assert_eq!(batch.batch.part_count(), 4);
+        write
+            .append_batch(batch, Antichain::from_elem(0), Antichain::from_elem(2))
+            .await
+            .expect("valid usage")
+            .expect("unexpected upper");
+        let mut expected = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 4),
+            (("2".to_owned(), "two".to_owned()), 1, 1),
+            (("3".to_owned(), "three".to_owned()), 1, 1),
+            (("4".to_owned(), "four".to_owned()), 1, 1),
+            (("5".to_owned(), "five".to_owned()), 1, 1),
+        ];
+        expected.sort();
+        assert_eq!(
+            read.expect_snapshot_and_fetch(1).await,
+            all_ok(&expected, 1)
+        );
     }
 
     #[mz_ore::test(tokio::test)]

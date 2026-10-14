@@ -82,7 +82,7 @@ use crate::sink::materialized_view::{
     BatchDescription, BatchesStream, DescsStream, DesiredStreams, OkErr, PersistApi,
     PersistStreams, SharedSinkFrontier, advance, operator_name, persist_source,
 };
-use crate::sink::shared_batch::{SharedBatchWrite, SharedBatchWriter};
+use crate::sink::shared_batch::SharedBatchWriter;
 
 /// Renders an MV sink writing the given desired collection into the `target` persist collection.
 ///
@@ -956,8 +956,7 @@ mod write {
                         },
                     );
 
-                let batches =
-                    write_batches(batch_writer.shared.start(&desc), &mut updates_rx).await;
+                let batches = write_batches(&batch_writer.shared, &desc, &mut updates_rx).await;
                 let corrections = read_back.await;
 
                 if let Err(err) = resp_tx.send(WriteResponse { batches }) {
@@ -974,18 +973,26 @@ mod write {
         }
     }
 
-    /// Write the updates for one interval through `write`, returning the batches this worker
-    /// delivers.
+    /// Write the updates for `desc` through `writer`, returning the batches this worker delivers.
     async fn write_batches(
-        mut write: SharedBatchWrite<'_>,
+        writer: &SharedBatchWriter,
+        desc: &BatchDescription,
         updates_rx: &mut mpsc::Receiver<Vec<((SourceData, ()), Timestamp, StorageDiff)>>,
     ) -> Vec<ProtoBatch> {
+        // Start the write only once there are updates, since `maybe_start_batch` requests a write
+        // for every ready interval, including idle ones. A worker that never joins a shared batch
+        // cannot be the last holder responsible for delivering it.
+        let mut write = None;
         while let Some(chunk) = updates_rx.recv().await {
+            let write = write.get_or_insert_with(|| writer.start(desc));
             for (kv, t, d) in &chunk {
                 write.push(kv, *t, *d).await;
             }
         }
-        write.finish().await
+        match write {
+            Some(write) => write.finish().await,
+            None => Vec::new(),
+        }
     }
 
     /// Apply a coalesced batch of updates to the correction buffers, on a blocking thread.

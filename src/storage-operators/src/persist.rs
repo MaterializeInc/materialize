@@ -426,11 +426,19 @@ mod tests {
             })
             .collect();
 
-        for _ in 0..5000 {
+        for i in 0..5000 {
             let batch_id = SharedBatchId::new();
             let first = builder(batch_id);
             let second = builder(batch_id);
             first.push(bool_part(&schemas)).await;
+            // When both handles push, a sweep that evicted the live entry between the two
+            // `builder` calls would split the updates across two batches.
+            let pushes = if i % 2 == 0 {
+                second.push(bool_part(&schemas)).await;
+                2
+            } else {
+                1
+            };
             let first = mz_ore::task::spawn(|| "finish-first", first.finish());
             let second = mz_ore::task::spawn(|| "finish-second", second.finish());
             let batches: Vec<_> = [first.await, second.await].into_iter().flatten().collect();
@@ -440,7 +448,11 @@ mod tests {
                 "exactly one finishing handle receives the batch"
             );
             for batch in batches {
-                batch.into_hollow_batch();
+                assert_eq!(
+                    batch.into_hollow_batch().len,
+                    pushes,
+                    "the batch holds every handle's updates"
+                );
             }
         }
         drop(churn);
