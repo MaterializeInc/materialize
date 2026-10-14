@@ -261,6 +261,9 @@ ALTER SYSTEM SET enable_exclude_constraints_option = true
   FROM SOURCE mz_source (REFERENCE public.excl_not_null)
   WITH (EXCLUDE ALL NOT NULL CONSTRAINTS);
 
+> SHOW CREATE TABLE all_nullable;
+materialize.public.all_nullable "CREATE TABLE materialize.public.all_nullable\nFROM SOURCE materialize.public.mz_source (REFERENCE = postgres.public.excl_not_null)\nWITH (EXCLUDE ALL NOT NULL CONSTRAINTS);"
+
 > CREATE DEFAULT INDEX ON all_nullable;
 > SELECT key FROM (SHOW INDEXES ON all_nullable);
 {id}

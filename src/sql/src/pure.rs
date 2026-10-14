@@ -1925,10 +1925,7 @@ async fn purify_create_table_from_source(
 
     let filter_constraints =
         FilterConstraints::from_options(exclude_constraints, exclude_all_constraints)?;
-    if filter_constraints.excludes_any() {
-        scx.require_feature_flag(&crate::session::vars::ENABLE_EXCLUDE_CONSTRAINTS_OPTION)?;
-    }
-    if exclude_all_not_null_constraints {
+    if filter_constraints.excludes_any() || exclude_all_not_null_constraints {
         scx.require_feature_flag(&crate::session::vars::ENABLE_EXCLUDE_CONSTRAINTS_OPTION)?;
     }
 
