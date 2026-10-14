@@ -229,7 +229,7 @@ SELECT
     parsed->>'namespace' AS namespace,
     parsed->>'table' AS \"table\"
 FROM
-    mz_internal.mz_catalog_raw
+    mz_internal.mz_catalog_shared
     CROSS JOIN LATERAL (
         SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
     ) AS l(parsed)
@@ -281,7 +281,7 @@ SELECT
     mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
     parsed->>'topic' AS topic
 FROM
-    mz_internal.mz_catalog_raw
+    mz_internal.mz_catalog_shared
     CROSS JOIN LATERAL (
         SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
     ) AS l(parsed)
@@ -359,7 +359,7 @@ SELECT
             || mz_internal.parse_catalog_id(r.data->'key'->'gid')
     ) AS sink_progress_topic
 FROM
-    mz_internal.mz_catalog_raw r,
+    mz_internal.mz_catalog_shared r,
     LATERAL (
         SELECT mz_internal.parse_connection_details(
             r.data->'value'->'definition'->'V1'->>'create_sql')
@@ -432,7 +432,7 @@ SELECT
         AS group_id_prefix,
     details->>'topic' AS topic
 FROM
-    mz_internal.mz_catalog_raw,
+    mz_internal.mz_catalog_shared,
     LATERAL (
         SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
     ) AS l(parsed),
@@ -501,7 +501,7 @@ SELECT
     data->'value'->>'name' AS name,
     mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
     mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges
-FROM mz_internal.mz_catalog_raw
+FROM mz_internal.mz_catalog_shared
 WHERE data->>'kind' = 'Database'",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -575,7 +575,7 @@ SELECT
     data->'value'->>'name' AS name,
     mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
     mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges
-FROM mz_internal.mz_catalog_raw
+FROM mz_internal.mz_catalog_shared
 WHERE data->>'kind' = 'Schema'",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -689,7 +689,7 @@ const USER_INDEXES_CTE: &str = "\
             data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
             mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
         FROM
-            mz_internal.mz_catalog_raw
+            mz_internal.mz_catalog_shared
             CROSS JOIN LATERAL (
                 SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
             ) AS l(parsed)
@@ -703,7 +703,7 @@ const USER_INDEXES_CTE: &str = "\
 const CATALOG_SERVER_CLUSTER_CTE: &str = "\
     catalog_server_cluster AS (
         SELECT mz_internal.parse_catalog_id(data->'key'->'id') AS id
-        FROM mz_internal.mz_catalog_raw
+        FROM mz_internal.mz_catalog_shared
         WHERE data->>'kind' = 'Cluster' AND data->'value'->>'name' = 'mz_catalog_server'
     )";
 
@@ -714,7 +714,7 @@ const GID_MAPPING_CTES: &str = "\
         SELECT
             's' || (data->'value'->>'catalog_id') AS id,
             data->'key'->>'object_name' AS name
-        FROM mz_internal.mz_catalog_raw
+        FROM mz_internal.mz_catalog_shared
         WHERE
             data->>'kind' = 'GidMapping' AND
             data->'key'->>'object_type' = '6'
@@ -724,7 +724,7 @@ const GID_MAPPING_CTES: &str = "\
             's' || (data->'value'->>'catalog_id') AS id,
             data->'key'->>'schema_name' AS schema_name,
             data->'key'->>'object_name' AS object_name
-        FROM mz_internal.mz_catalog_raw
+        FROM mz_internal.mz_catalog_shared
         WHERE data->>'kind' = 'GidMapping'
     )";
 
@@ -839,11 +839,11 @@ pub(super) fn make_mz_indexes(
                 cluster_id,
                 '{MZ_SYSTEM_ROLE_ID}' AS owner_id,
                 'CREATE INDEX \"' || idx_name || '_' || cluster_id || '_primary_idx\" IN CLUSTER [' || cluster_id || '] ON \"mz_introspection\".\"' || idx_name || '\" (' || lc.col_list || ')' AS create_sql
-            FROM mz_internal.mz_catalog_raw AS isi
+            FROM mz_internal.mz_catalog_shared AS isi
             CROSS JOIN LATERAL (
                 SELECT isi.data->'key'->>'name', mz_internal.parse_catalog_id(isi.data->'key'->'cluster_id')
             ) AS l(idx_name, cluster_id)
-            JOIN mz_internal.mz_catalog_raw AS gm ON
+            JOIN mz_internal.mz_catalog_shared AS gm ON
                 gm.data->>'kind' = 'GidMapping' AND
                 gm.data->'key'->>'object_type' = '2' AND
                 gm.data->'key'->>'schema_name' = 'mz_introspection' AND
@@ -1077,7 +1077,7 @@ WITH
             data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
             mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql,
             mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'source_id' AS source_id
-        FROM mz_internal.mz_catalog_raw
+        FROM mz_internal.mz_catalog_shared
         WHERE
             data->>'kind' = 'Item' AND
             mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'table'
@@ -1087,7 +1087,7 @@ WITH
             data->'key'->>'schema_name' AS schema_name,
             data->'key'->>'object_name' AS name,
             's' || (data->'value'->>'catalog_id') AS id
-        FROM mz_internal.mz_catalog_raw
+        FROM mz_internal.mz_catalog_shared
         WHERE
             data->>'kind' = 'GidMapping' AND
             data->'key'->>'object_type' = '1'
@@ -1224,7 +1224,7 @@ SELECT
     mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
     data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
     mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
-FROM mz_internal.mz_catalog_raw
+FROM mz_internal.mz_catalog_shared
 WHERE
     data->>'kind' = 'Item' AND
     mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'connection'",
@@ -1288,7 +1288,7 @@ SELECT
     details->>'public_key_1' AS public_key_1,
     details->>'public_key_2' AS public_key_2
 FROM
-    mz_internal.mz_catalog_raw r,
+    mz_internal.mz_catalog_shared r,
     LATERAL (
         SELECT mz_internal.parse_connection_details(
             r.data->'value'->'definition'->'V1'->>'create_sql')
@@ -1421,7 +1421,7 @@ SELECT
     data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
     mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
 FROM
-    mz_internal.mz_catalog_raw
+    mz_internal.mz_catalog_shared
     CROSS JOIN LATERAL (
         SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
     ) AS l(parsed)
@@ -1551,7 +1551,7 @@ WITH
             mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
             data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
             mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
-        FROM mz_internal.mz_catalog_raw
+        FROM mz_internal.mz_catalog_shared
         WHERE
             data->>'kind' = 'Item' AND
             mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'view'
@@ -1561,7 +1561,7 @@ WITH
             data->'key'->>'schema_name' AS schema_name,
             data->'key'->>'object_name' AS name,
             's' || (data->'value'->>'catalog_id') AS id
-        FROM mz_internal.mz_catalog_raw
+        FROM mz_internal.mz_catalog_shared
         WHERE
             data->>'kind' = 'GidMapping' AND
             data->'key'->>'object_type' = '4'
@@ -1704,7 +1704,7 @@ WITH
             mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
             data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
             mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
-        FROM mz_internal.mz_catalog_raw
+        FROM mz_internal.mz_catalog_shared
         WHERE
             data->>'kind' = 'Item' AND
             mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'materialized-view'
@@ -1714,7 +1714,7 @@ WITH
             data->'key'->>'schema_name' AS schema_name,
             data->'key'->>'object_name' AS name,
             's' || (data->'value'->>'catalog_id') AS id
-        FROM mz_internal.mz_catalog_raw
+        FROM mz_internal.mz_catalog_shared
         WHERE
             data->>'kind' = 'GidMapping' AND
             data->'key'->>'object_type' = '5'
@@ -2029,7 +2029,7 @@ SELECT
         (data->'value'->'attributes'->>'superuser')::bool,
         CASE WHEN data->'value'->>'name' IN ('{system}', '{support}') THEN true END
     ) AS rolsuper
-FROM mz_internal.mz_catalog_raw
+FROM mz_internal.mz_catalog_shared
 WHERE data->>'kind' = 'Role' AND data->'key'->'id' != '\"Public\"'::jsonb",
         system = SYSTEM_USER_NAME,
         support = SUPPORT_USER_NAME,
@@ -2108,7 +2108,7 @@ SELECT
     mz_internal.parse_catalog_id(data->'key'->'id') AS member,
     mz_internal.parse_catalog_id(entry->'value') AS grantor
 FROM
-    mz_internal.mz_catalog_raw,
+    mz_internal.mz_catalog_shared,
     jsonb_array_elements(data->'value'->'membership'->'map') AS entry
 WHERE data->>'kind' = 'Role'",
         is_retained_metrics_object: false,
@@ -2189,7 +2189,7 @@ SELECT
         )
     END AS parameter_value
 FROM
-    mz_internal.mz_catalog_raw,
+    mz_internal.mz_catalog_shared,
     jsonb_array_elements(data->'value'->'vars'->'entries') AS entry
 WHERE data->>'kind' = 'Role'",
         is_retained_metrics_object: false,
@@ -2537,7 +2537,7 @@ SELECT
             )::interval
     END AS introspection_interval
 FROM (
-    SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'Cluster'
+    SELECT data FROM mz_internal.mz_catalog_shared WHERE data->>'kind' = 'Cluster'
 ) raw
 LEFT JOIN mz_internal.mz_cluster_replica_size_internal internal
     ON internal.size = data->'value'->'config'->'variant'->'Managed'->>'size'",
@@ -2617,7 +2617,7 @@ SELECT
     data->'value'->>'name' AS name,
     mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
     mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges
-FROM mz_internal.mz_catalog_raw
+FROM mz_internal.mz_catalog_shared
 WHERE
     data->>'kind' = 'Item' AND
     mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'secret'",
@@ -2736,11 +2736,11 @@ SELECT
 FROM (
     SELECT replicas.data
     FROM (
-        SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'ClusterReplica'
+        SELECT data FROM mz_internal.mz_catalog_shared WHERE data->>'kind' = 'ClusterReplica'
     ) replicas
     JOIN (
         SELECT (data->>'deploy_generation')::uint8 AS generation
-        FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'FenceToken'
+        FROM mz_internal.mz_catalog_shared WHERE data->>'kind' = 'FenceToken'
     ) active ON COALESCE((replicas.data->'key'->>'deployment_generation')::uint8, 0) = active.generation
 ) raw
 LEFT JOIN mz_internal.mz_cluster_replica_size_internal internal
@@ -2909,7 +2909,7 @@ WITH (
 ) AS
 WITH ev AS (
     SELECT data->'key'->'event'->'V1' AS e
-    FROM mz_internal.mz_catalog_raw
+    FROM mz_internal.mz_catalog_shared
     WHERE data->>'kind' = 'AuditLog'
 )
 SELECT
@@ -3031,7 +3031,7 @@ SELECT id, principal FROM (
         'arn:aws:iam::' || mz_aws_account_id() || ':role/mz_'
             || mz_aws_external_id_prefix() || '_'
             || mz_internal.parse_catalog_id(r.data->'key'->'gid') AS principal
-    FROM mz_internal.mz_catalog_raw r
+    FROM mz_internal.mz_catalog_shared r
     WHERE
         r.data->>'kind' = 'Item' AND
         mz_internal.parse_catalog_create_sql(
@@ -3182,7 +3182,7 @@ SELECT
     END AS object_type,
     mz_internal.parse_catalog_id(data->'key'->'grantee') AS grantee,
     mz_internal.parse_catalog_acl_mode(data->'value'->'privileges') AS privileges
-FROM mz_internal.mz_catalog_raw
+FROM mz_internal.mz_catalog_shared
 WHERE data->>'kind' = 'DefaultPrivileges'",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -3264,7 +3264,7 @@ SELECT
             )
         )
     )) AS privileges
-FROM mz_internal.mz_catalog_raw
+FROM mz_internal.mz_catalog_shared
 WHERE data->>'kind' = 'SystemPrivileges'",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],

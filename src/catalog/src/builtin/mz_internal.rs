@@ -50,6 +50,30 @@ pub static MZ_CATALOG_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSou
     access: vec![],
     ontology: None,
 });
+
+// Catalog MVs share decoding through this indexed view. Retained metrics read
+// the raw source directly so their reconstruction windows do not retain
+// unrelated catalog history in this arrangement.
+pub static MZ_CATALOG_SHARED: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_catalog_shared",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_CATALOG_SHARED_OID,
+    desc: crate::durable::persist_desc(),
+    column_comments: BTreeMap::new(),
+    sql: "SELECT data FROM mz_internal.mz_catalog_raw",
+    // Like the raw source, this view contains unredacted SQL statements.
+    access: vec![],
+    ontology: None,
+});
+
+pub static MZ_CATALOG_SHARED_IND: LazyLock<BuiltinIndex> = LazyLock::new(|| BuiltinIndex {
+    name: "mz_catalog_shared_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_CATALOG_SHARED_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server ON mz_internal.mz_catalog_shared ((data->>'kind'))",
+    is_retained_metrics_object: false,
+});
+
 pub static MZ_CLUSTER_REPLICA_FRONTIERS_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| {
     BuiltinSource {
         name: "mz_cluster_replica_frontiers_raw",
@@ -127,7 +151,7 @@ SELECT
     details->>'slot' AS replication_slot,
     (details->>'timeline_id')::uint8 AS timeline_id
 FROM
-    mz_internal.mz_catalog_raw,
+    mz_internal.mz_catalog_shared,
     LATERAL (
         SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
     ) AS l(parsed),
@@ -198,7 +222,7 @@ SELECT
     details->'external_reference'->>1 AS schema_name,
     details->'external_reference'->>2 AS table_name
 FROM
-    mz_internal.mz_catalog_raw r,
+    mz_internal.mz_catalog_shared r,
     LATERAL (
         SELECT mz_internal.parse_source_export_details(
             r.data->'value'->'definition'->'V1'->>'create_sql')
@@ -261,7 +285,7 @@ SELECT
     details->'external_reference'->>0 AS schema_name,
     details->'external_reference'->>1 AS table_name
 FROM
-    mz_internal.mz_catalog_raw r,
+    mz_internal.mz_catalog_shared r,
     LATERAL (
         SELECT mz_internal.parse_source_export_details(
             r.data->'value'->'definition'->'V1'->>'create_sql')
@@ -324,7 +348,7 @@ SELECT
     details->'external_reference'->>1 AS schema_name,
     details->'external_reference'->>2 AS table_name
 FROM
-    mz_internal.mz_catalog_raw r,
+    mz_internal.mz_catalog_shared r,
     LATERAL (
         SELECT mz_internal.parse_source_export_details(
             r.data->'value'->'definition'->'V1'->>'create_sql')
@@ -405,7 +429,7 @@ SELECT
     details->>'key_format' AS key_format,
     details->>'value_format' AS value_format
 FROM
-    mz_internal.mz_catalog_raw r,
+    mz_internal.mz_catalog_shared r,
     LATERAL (
         SELECT mz_internal.parse_source_export_details(
             r.data->'value'->'definition'->'V1'->>'create_sql')
@@ -583,7 +607,7 @@ SELECT
     mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
     mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
     (data->'value'->>'oid')::oid AS oid
-FROM mz_internal.mz_catalog_raw
+FROM mz_internal.mz_catalog_shared
 WHERE data->>'kind' = 'NetworkPolicy'",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -655,7 +679,7 @@ SELECT
     rule->>'address' AS address,
     lower(rule->>'direction') AS direction
 FROM
-    mz_internal.mz_catalog_raw,
+    mz_internal.mz_catalog_shared,
     jsonb_array_elements(data->'value'->'rules') AS rule
 WHERE data->>'kind' = 'NetworkPolicy'",
         is_retained_metrics_object: false,
@@ -736,7 +760,7 @@ SELECT
     CASE WHEN data->'value'->'config'->'workload_class' != 'null'
          THEN data->'value'->'config'->>'workload_class'
     END AS workload_class
-FROM mz_internal.mz_catalog_raw
+FROM mz_internal.mz_catalog_shared
 WHERE data->>'kind' = 'Cluster'",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -806,7 +830,7 @@ SELECT
                 || ' microseconds'
             )::interval
     END AS refresh_hydration_time_estimate
-FROM mz_internal.mz_catalog_raw
+FROM mz_internal.mz_catalog_shared
 WHERE
     data->>'kind' = 'Cluster' AND
     jsonb_typeof(data->'value'->'config'->'variant') = 'object'",
@@ -899,7 +923,7 @@ WITH
         SELECT
             mz_internal.parse_catalog_id(data->'key'->'id') AS cluster_id,
             data->'value'->'config'->'variant'->'Managed' AS config
-        FROM mz_internal.mz_catalog_raw
+        FROM mz_internal.mz_catalog_shared
         WHERE
             data->>'kind' = 'Cluster' AND
             data->'value'->'config'->'variant'->'Managed' IS NOT NULL
@@ -1014,7 +1038,7 @@ WITH
             mz_internal.parse_catalog_id(data->'key'->'id') AS cluster_id,
             data->'value'->'config'->'variant'->'Managed'->'auto_scaling_strategy' AS strategy,
             data->'value'->'config'->'variant'->'Managed'->'burst' AS burst
-        FROM mz_internal.mz_catalog_raw
+        FROM mz_internal.mz_catalog_shared
         WHERE
             data->>'kind' = 'Cluster' AND
             data->'value'->'config'->'variant'->'Managed' IS NOT NULL
@@ -1023,8 +1047,8 @@ WITH
         SELECT
             mz_internal.parse_catalog_id(r.data->'key'->'cluster_id') AS cluster_id,
             r.data->'value'->'burst' AS burst
-        FROM (SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'ClusterRuntime') r
-        JOIN (SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'FenceToken') f
+        FROM (SELECT data FROM mz_internal.mz_catalog_shared WHERE data->>'kind' = 'ClusterRuntime') r
+        JOIN (SELECT data FROM mz_internal.mz_catalog_shared WHERE data->>'kind' = 'FenceToken') f
             ON (r.data->'key'->>'deployment_generation')::uint8 = (f.data->>'deploy_generation')::uint8
     ),
     visible AS (
@@ -1086,7 +1110,7 @@ WITH (
     ASSERT NOT NULL id
 ) AS
 SELECT mz_internal.parse_catalog_id(data->'key'->'id') AS id
-FROM mz_internal.mz_catalog_raw
+FROM mz_internal.mz_catalog_shared
 WHERE
     data->>'kind' = 'ClusterReplica' AND
     (data->'value'->'config'->'location'->'Managed'->>'internal')::bool = true",
@@ -1114,7 +1138,7 @@ WITH (
     ASSERT NOT NULL id
 ) AS
 SELECT mz_internal.parse_catalog_id(data->'key'->'id') AS id
-FROM mz_internal.mz_catalog_raw
+FROM mz_internal.mz_catalog_shared
 WHERE
     data->>'kind' = 'ClusterReplica' AND
     (data->'value'->'config'->'location'->'Managed'->>'pending')::bool = true",
@@ -2765,7 +2789,7 @@ SELECT
         )
     END AS example_trust_policy
 FROM
-    mz_internal.mz_catalog_raw r,
+    mz_internal.mz_catalog_shared r,
     LATERAL (
         SELECT mz_internal.parse_connection_details(
             r.data->'value'->'definition'->'V1'->>'create_sql')
@@ -3445,7 +3469,7 @@ WITH (
 SELECT
     data->'key'->>'name' AS name,
     data->'value'->>'value' AS value
-FROM mz_internal.mz_catalog_raw
+FROM mz_internal.mz_catalog_shared
 WHERE data->>'kind' = 'ServerConfiguration'",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -3489,7 +3513,7 @@ SELECT
     mz_internal.parse_catalog_id(data->'key'->'cluster_id') AS cluster_id,
     data->'key'->>'name' AS name,
     data->'value'->>'value' AS value
-FROM mz_internal.mz_catalog_raw
+FROM mz_internal.mz_catalog_shared
 WHERE data->>'kind' = 'ClusterSystemConfiguration'",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -3544,7 +3568,7 @@ SELECT
     mz_internal.parse_catalog_id(data->'key'->'replica_id') AS replica_id,
     data->'key'->>'name' AS name,
     data->'value'->>'value' AS value
-FROM mz_internal.mz_catalog_raw
+FROM mz_internal.mz_catalog_shared
 WHERE data->>'kind' = 'ReplicaSystemConfiguration'",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
@@ -3617,15 +3641,15 @@ WITH commented AS (
     SELECT data->'key'->'object' AS obj,
            data->'key'->'sub_component' AS sub,
            data->'value'->>'comment' AS comment
-    FROM mz_internal.mz_catalog_raw
+    FROM mz_internal.mz_catalog_shared
     WHERE data->>'kind' = 'Comment'
 ), active_replicas AS (
     SELECT
         mz_internal.parse_catalog_id(r.data->'key'->'id') AS id,
         r.data->'value'->'cluster_id' AS cluster_id,
         r.data->'key'->'id' AS comment_id
-    FROM (SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'ClusterReplica') r
-    JOIN (SELECT data FROM mz_internal.mz_catalog_raw WHERE data->>'kind' = 'FenceToken') f
+    FROM (SELECT data FROM mz_internal.mz_catalog_shared WHERE data->>'kind' = 'ClusterReplica') r
+    JOIN (SELECT data FROM mz_internal.mz_catalog_shared WHERE data->>'kind' = 'FenceToken') f
         ON COALESCE((r.data->'key'->>'deployment_generation')::uint8, 0) = (f.data->>'deploy_generation')::uint8
 )
 SELECT
@@ -3735,7 +3759,7 @@ WITH refs AS (
         to_timestamp(((data->'value'->'updated_at'->>'millis')::double) / 1000.0) AS updated_at,
         reference
     FROM
-        mz_internal.mz_catalog_raw,
+        mz_internal.mz_catalog_shared,
         jsonb_array_elements(data->'value'->'references') AS reference
     WHERE data->>'kind' = 'SourceReferences'
 )
@@ -3859,7 +3883,7 @@ SELECT
     parsed->>'cluster_id' AS cluster_id,
     mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id
 FROM
-    mz_internal.mz_catalog_raw
+    mz_internal.mz_catalog_shared
     CROSS JOIN LATERAL (
         SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
     ) AS l(parsed)
@@ -4027,7 +4051,7 @@ SELECT
     mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
     parsed->>'replacement_target' AS target_id
 FROM
-    mz_internal.mz_catalog_raw
+    mz_internal.mz_catalog_shared
     CROSS JOIN LATERAL (
         SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
     ) AS l(parsed)
@@ -4364,7 +4388,7 @@ WITH
             mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
             mz_internal.parse_catalog_id(data->'value'->'global_id') AS global_id,
             data->'value'->'extra_versions' AS extra_versions
-        FROM mz_internal.mz_catalog_raw
+        FROM mz_internal.mz_catalog_shared
         WHERE data->>'kind' = 'Item'
     ),
     -- Create a one to many mapping between an object and its global IDs. Tables and
@@ -4378,7 +4402,7 @@ WITH
         SELECT
             's' || (data->'value'->>'catalog_id') AS id,
             's' || (data->'value'->>'global_id') AS global_id
-        FROM mz_internal.mz_catalog_raw
+        FROM mz_internal.mz_catalog_shared
         WHERE
             data->>'kind' = 'GidMapping' AND
             -- Exclude runtime-alterable builtins since they're already included in `items`
@@ -4388,7 +4412,7 @@ WITH
         SELECT
             'si' || (data->'value'->>'catalog_id') AS id,
             'si' || (data->'value'->>'global_id') AS global_id
-        FROM mz_internal.mz_catalog_raw
+        FROM mz_internal.mz_catalog_shared
         WHERE data->>'kind' = 'ClusterIntrospectionSourceIndex'
     )
 SELECT id, global_id FROM items

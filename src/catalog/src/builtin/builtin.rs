@@ -395,7 +395,7 @@ WITH
                 parsed->>'cluster_id',
                 (
                     SELECT mz_internal.parse_catalog_create_sql(p.data->'value'->'definition'->'V1'->>'create_sql')->>'cluster_id'
-                    FROM mz_internal.mz_catalog_raw p
+                    FROM mz_internal.mz_catalog_shared p
                     WHERE
                         p.data->>'kind' = 'Item' AND
                         mz_internal.parse_catalog_id(p.data->'key'->'gid') = parsed->>'of_source_id'
@@ -406,7 +406,7 @@ WITH
             data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
             mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
         FROM
-            mz_internal.mz_catalog_raw
+            mz_internal.mz_catalog_shared
             CROSS JOIN LATERAL (
                 SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
             ) AS l(parsed)
@@ -419,7 +419,7 @@ WITH
             data->'key'->>'schema_name' AS schema_name,
             data->'key'->>'object_name' AS name,
             's' || (data->'value'->>'catalog_id') AS id
-        FROM mz_internal.mz_catalog_raw
+        FROM mz_internal.mz_catalog_shared
         WHERE
             data->>'kind' = 'GidMapping' AND
             data->'key'->>'object_type' = '2'
