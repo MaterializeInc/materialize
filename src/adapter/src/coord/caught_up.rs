@@ -49,7 +49,6 @@
 //! [`LeaderHydration::replica_has_unhydrated_collection`].
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -91,20 +90,25 @@ const STABILITY_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Returns a query for when a replica last finished hydrating an export.
 ///
-/// The one row it returns is NULL if some export, other than a transient one
-/// or one in `ignored`, is not hydrated on some worker. It returns no row if
-/// the replica has reported nothing yet.
+/// It returns one row: the number of non-transient exports the replica has
+/// reported, how many of them are not in `ignored`, how many of those are not
+/// hydrated on some worker, and the latest time one of those hydrated.
 fn hydration_query(ignored: &BTreeSet<GlobalId>) -> String {
-    let mut query = "SELECT hydrated_at \
+    let checked = if ignored.is_empty() {
+        "true".to_string()
+    } else {
+        let ids = ignored.iter().map(|id| format!("'{id}'")).join(", ");
+        format!("export_id NOT IN ({ids})")
+    };
+    format!(
+        "SELECT \
+            count(*), \
+            count(*) FILTER (WHERE {checked}), \
+            count(*) FILTER (WHERE {checked} AND hydrated_at IS NULL), \
+            max(hydrated_at) FILTER (WHERE {checked}) \
         FROM mz_introspection.mz_compute_hydration_times_per_worker \
         WHERE export_id NOT LIKE 't%'"
-        .to_string();
-    if !ignored.is_empty() {
-        let ids = ignored.iter().map(|id| format!("'{id}'")).join(", ");
-        write!(query, " AND export_id NOT IN ({ids})").expect("writing to a string");
-    }
-    query.push_str(" ORDER BY hydrated_at DESC NULLS FIRST LIMIT 1");
-    query
+    )
 }
 
 /// Context needed to check whether clusters/collections are caught up.
@@ -433,8 +437,22 @@ fn replica_health(rows: &[Row]) -> ReplicaHealth {
     let Some(row) = rows.first() else {
         return ReplicaHealth::NotHydrated;
     };
-    let hydrated_at = row.unpack_first();
-    if hydrated_at.is_null() {
+    let mut datums = row.iter();
+    let mut count = || datums.next().expect("count column").unwrap_int64();
+    let (reported, checked, unhydrated) = (count(), count(), count());
+    let hydrated_at = datums.next().expect("hydrated_at column");
+    if reported == 0 {
+        // The replica has not reported its exports yet.
+        return ReplicaHealth::NotHydrated;
+    }
+    if checked == 0 {
+        // The classification ignored every export the replica hosts, so no
+        // hydration is left to wait for. Reading this as `NotHydrated` blocks
+        // promotion for good, for example once a stopped leader's frontiers
+        // fall behind `with_0dt_caught_up_check_cutoff`.
+        return ReplicaHealth::Exempt;
+    }
+    if unhydrated > 0 || hydrated_at.is_null() {
         return ReplicaHealth::NotHydrated;
     }
     let millis = hydrated_at.unwrap_timestamptz().timestamp_millis();
@@ -1418,17 +1436,43 @@ mod tests {
 
     #[mz_ore::test]
     fn hydration_answer_fails_closed() {
-        let answer = |millis| {
-            let time = chrono::DateTime::from_timestamp_millis(millis).expect("valid time");
-            let time = CheckedTimestamp::from_timestamplike(time).expect("in range");
-            vec![Row::pack_slice(&[Datum::TimestampTz(time)])]
-        };
-        assert_eq!(replica_health(&answer(1000)), HealthySince(1000));
-        assert_eq!(replica_health(&answer(-1)), NotHydrated, "pre-epoch time");
         assert_eq!(
-            replica_health(&[Row::pack_slice(&[Datum::Null])]),
-            NotHydrated
+            replica_health(&answer(3, 2, 0, Some(1000))),
+            HealthySince(1000)
         );
-        assert_eq!(replica_health(&[]), NotHydrated, "nothing reported yet");
+        assert_eq!(
+            replica_health(&answer(3, 2, 0, Some(-1))),
+            NotHydrated,
+            "pre-epoch time"
+        );
+        assert_eq!(
+            replica_health(&answer(3, 2, 1, Some(1000))),
+            NotHydrated,
+            "an export is not hydrated on some worker"
+        );
+        assert_eq!(
+            replica_health(&answer(0, 0, 0, None)),
+            NotHydrated,
+            "nothing reported yet"
+        );
+        assert_eq!(replica_health(&[]), NotHydrated, "no answer");
+    }
+
+    #[mz_ore::test]
+    fn replica_with_only_ignored_exports_is_exempt() {
+        assert_eq!(replica_health(&answer(33, 0, 0, None)), Exempt);
+    }
+
+    fn answer(reported: i64, checked: i64, unhydrated: i64, hydrated_at: Option<i64>) -> Vec<Row> {
+        let hydrated_at = hydrated_at.map_or(Datum::Null, |millis| {
+            let time = chrono::DateTime::from_timestamp_millis(millis).expect("valid time");
+            Datum::TimestampTz(CheckedTimestamp::from_timestamplike(time).expect("in range"))
+        });
+        vec![Row::pack_slice(&[
+            Datum::Int64(reported),
+            Datum::Int64(checked),
+            Datum::Int64(unhydrated),
+            hydrated_at,
+        ])]
     }
 }

@@ -3406,6 +3406,48 @@ def workflow_caught_up_stability_without_dataflows(c: Composition) -> None:
     c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
 
 
+def workflow_caught_up_leader_stopped_past_cutoff(c: Composition) -> None:
+    """Verify promotion after the leader was stopped for longer than the cutoff.
+
+    This is the shape of re-enabling a suspended environment: no leader runs
+    during the rollout, and its last frontiers are older than
+    `with_0dt_caught_up_check_cutoff`, so the caught-up check ignores every
+    compute collection. A replica with only ignored exports has no hydration
+    left to report and must not hold up promotion.
+    """
+    c.down(destroy_volumes=True)
+    c.up("mz_old")
+
+    c.sql(
+        "ALTER SYSTEM SET with_0dt_caught_up_check_cutoff = '10s'",
+        service="mz_old",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql(
+        """
+        CREATE TABLE t (a int);
+        INSERT INTO t VALUES (1), (2), (3);
+        CREATE MATERIALIZED VIEW mv AS SELECT count(*) AS n FROM t;
+        CREATE INDEX mv_idx ON mv (n);
+        """,
+        service="mz_old",
+    )
+    # Let the leader record frontiers past the minimum for every collection.
+    c.sql_query("SELECT * FROM mv", service="mz_old")
+
+    c.kill("mz_old")
+    time.sleep(20)
+
+    c.up("mz_new")
+    c.await_mz_deployment_status(
+        DeploymentStatus.READY_TO_PROMOTE, "mz_new", timeout=300
+    )
+    c.promote_mz("mz_new", retire_mz_service=None)
+    c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new", sleep_time=None)
+    assert c.sql_query("SELECT n FROM mv", service="mz_new") == [(3,)]
+
+
 def workflow_ddl_detection_with_id_pool(c: Composition) -> None:
     """Verify that DDL detection works correctly with batch-allocated user IDs.
 
