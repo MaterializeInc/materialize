@@ -68,11 +68,7 @@ pub struct MapBuildFromRecordList {
         value_type: Box::new(self.value_type.clone()),
         custom_id: None,
     }
-    .nullable(true),
-    // The hand-written impl declared a nullable output that introduces NULLs and can
-    // error, although the body does neither. The properties are kept as declared.
-    introduces_nulls = true,
-    could_error = true
+    .nullable(false)
 )]
 fn map_build_from_record_list<'a>(
     &self,

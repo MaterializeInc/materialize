@@ -163,16 +163,15 @@ pub struct RecordGet(pub usize);
 
 // The unary tail ORs the input's nullability onto whatever the expression returns,
 // so the expression hands back the field's own column type unchanged.
+// The `Datum` output keeps `introduces_nulls` on, because a nullable field yields NULL for a
+// record that is itself not NULL.
 #[sqlfunc(
     RecordGet,
     skip_display = true,
     output_type_expr = match &input_type.scalar_type {
         SqlScalarType::Record { fields, .. } => fields[self.0].1.clone(),
         other => unreachable!("RecordGet on non-record input: {other:?}"),
-    },
-    // The `Datum` output keeps `introduces_nulls` on: a nullable field yields NULL for a
-    // record that is itself not NULL.
-    could_error = true
+    }
 )]
 fn record_get<'a>(&self, a: DatumList<'a>) -> Datum<'a> {
     a.iter().nth(self.0).unwrap()
