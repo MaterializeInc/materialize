@@ -13,14 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Swap-backed extents: the backing store for the buffer pool on nodes whose
-//! whole disk is provisioned as swap.
+//! The extent type and the swap-backed arena: the backing store for the
+//! buffer pool on nodes whose whole disk is provisioned as swap.
 //!
 //! An extent is a slot in the pool-owned [`ExtentArena`] holding the stored
 //! bytes of one chunk, produced by the chunk's [`ExtentCodec`] (lz4 in
 //! practice). "Write" encodes into the slot. The slot stays resident,
 //! forming the compressed-but-resident middle tier of the pool's ladder,
-//! until the pool's RSS target forces [`SwapExtent::pageout`], which pushes
+//! until the pool's RSS target forces [`Extent::pageout`], which pushes
 //! the pages to the swap device with `MADV_PAGEOUT`. "Read" issues
 //! `MADV_WILLNEED` ahead of the decode (and makes the pages resident
 //! again); "free" returns the slot to the arena with its pages discarded,
@@ -148,44 +148,52 @@ impl ExtentArena {
 
 /// One chunk's compressed backing copy.
 #[derive(Debug)]
-pub(crate) struct SwapExtent {
-    ptr: *mut u8,
+pub(crate) struct Extent {
     /// Byte size of the backing allocation (the extent's class size, or the
     /// heap layout on the fallback path): the granule the resident
     /// accounting and the pageout operate on.
     alloc_size: usize,
     comp_len: usize,
     /// Whether the extent's pages are (engine-)resident: set at write and by
-    /// [`SwapExtent::read_into`], cleared by a [`SwapExtent::pageout`] whose
+    /// [`Extent::read_into`], cleared by a [`Extent::pageout`] whose
     /// residency observation found the whole range gone. Drives the pool's
     /// `extent_resident_bytes` accounting; mutated only under the owning
     /// chunk's state mutex.
     resident: bool,
     /// Consecutive pageout passes whose observation found pages still
-    /// resident. Reset by [`SwapExtent::read_into`]. At
+    /// resident. Reset by [`Extent::read_into`]. At
     /// [`PAGEOUT_RETRY_CAP`] the extent stops being advised out.
     incomplete_passes: u8,
-    backing: Backing,
+    home: Home,
 }
 
 /// Where an extent's bytes live.
 #[derive(Debug)]
-enum Backing {
+enum Home {
     /// A slot in the pool's extent arena.
     Arena {
         arena: Arc<ExtentArena>,
         class: usize,
         slot: u32,
+        ptr: *mut u8,
     },
     /// Global-allocator fallback for an exhausted class. Never paged out:
     /// `MADV_PAGEOUT` over allocator-owned pages leaves swap-entry PTEs on
     /// freed ranges for the allocator to recycle into unrelated
     /// allocations, which is the failure the arena exists to avoid.
-    Heap { layout: Layout },
+    Heap { ptr: *mut u8, layout: Layout },
+}
+
+impl Home {
+    fn ptr(&self) -> *mut u8 {
+        match self {
+            Home::Arena { ptr, .. } | Home::Heap { ptr, .. } => *ptr,
+        }
+    }
 }
 
 /// Retention policy for the thread-local compression scratch across
-/// [`SwapExtent::write`] calls.
+/// [`Extent::write`] calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Scratch {
     /// Keep the grown scratch for the next job: for spill threads, whose
@@ -202,7 +210,7 @@ pub(crate) enum Scratch {
 // by the region allocator, or a heap allocation); nothing else holds a
 // pointer into it, so moving the owner across threads is sound. All access
 // goes through the owning chunk's state mutex.
-unsafe impl Send for SwapExtent {}
+unsafe impl Send for Extent {}
 
 /// lz4 codec for the pool's own tests, mirroring the production codec that
 /// lives with the chunk implementation: a little-endian `u32` body-length
@@ -240,11 +248,11 @@ impl ExtentCodec for TestLz4Codec {
     }
 }
 
-impl SwapExtent {
+impl Extent {
     /// Encodes `data` through `codec` into a fresh extent, preferring an
     /// arena slot and degrading to the heap when the payload's class is
     /// exhausted. The pages stay resident; the pool's RSS-target
-    /// enforcement decides when [`SwapExtent::pageout`] pushes them to the
+    /// enforcement decides when [`Extent::pageout`] pushes them to the
     /// device.
     ///
     /// Encoding goes through a reused thread-local scratch buffer so the
@@ -260,7 +268,7 @@ impl SwapExtent {
         data: &[u64],
         codec: &dyn ExtentCodec,
         scratch: Scratch,
-    ) -> SwapExtent {
+    ) -> Extent {
         use std::cell::RefCell;
         thread_local! {
             static SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -275,15 +283,15 @@ impl SwapExtent {
                 "codec output exceeds the extent-store bound",
             );
 
-            let (ptr, alloc_size, backing) = match arena.alloc(comp_len) {
+            let (home, alloc_size) = match arena.alloc(comp_len) {
                 Some((class, slot)) => (
-                    arena.regions[class].slot_ptr(slot),
-                    arena.classes[class],
-                    Backing::Arena {
+                    Home::Arena {
                         arena: Arc::clone(arena),
                         class,
                         slot,
+                        ptr: arena.regions[class].slot_ptr(slot),
                     },
+                    arena.classes[class],
                 ),
                 None => {
                     arena.fallbacks.fetch_add(1, Ordering::Relaxed);
@@ -294,7 +302,7 @@ impl SwapExtent {
                     if ptr.is_null() {
                         std::alloc::handle_alloc_error(layout);
                     }
-                    (ptr, layout.size(), Backing::Heap { layout })
+                    (Home::Heap { ptr, layout }, layout.size())
                 }
             };
             // The slack past `comp_len` is deliberately never touched: only
@@ -308,7 +316,7 @@ impl SwapExtent {
             // sized to it). The source is the scratch buffer, which cannot
             // alias a fresh allocation.
             unsafe {
-                std::ptr::copy_nonoverlapping(buf.as_ptr(), ptr, comp_len);
+                std::ptr::copy_nonoverlapping(buf.as_ptr(), home.ptr(), comp_len);
             }
             if scratch == Scratch::Shrink {
                 buf.clear();
@@ -317,15 +325,18 @@ impl SwapExtent {
                 // it; measure the realloc traffic before tuning.
                 buf.shrink_to_fit();
             }
-            SwapExtent {
-                ptr,
+            Extent {
                 alloc_size,
                 comp_len,
                 resident: true,
                 incomplete_passes: 0,
-                backing,
+                home,
             }
         })
+    }
+
+    fn ptr(&self) -> *mut u8 {
+        self.home.ptr()
     }
 
     /// The byte size of the extent's allocation: the granule the resident
@@ -342,13 +353,13 @@ impl SwapExtent {
 
     /// Whether the extent's pageout retry budget is exhausted: consecutive
     /// incomplete passes reached [`PAGEOUT_RETRY_CAP`], so callers stop
-    /// calling [`SwapExtent::pageout`] until a read resets the budget.
+    /// calling [`Extent::pageout`] until a read resets the budget.
     /// Heap-fallback extents are permanently capped: they are never advised
     /// out and stay counted resident until freed.
     pub(crate) fn pageout_capped(&self) -> bool {
-        match self.backing {
-            Backing::Heap { .. } => true,
-            Backing::Arena { .. } => self.incomplete_passes >= PAGEOUT_RETRY_CAP,
+        match self.home {
+            Home::Heap { .. } => true,
+            Home::Arena { .. } => self.incomplete_passes >= PAGEOUT_RETRY_CAP,
         }
     }
 
@@ -361,12 +372,12 @@ impl SwapExtent {
     /// whole extent counted, which is the safe direction, and the retry
     /// budget exists exactly for such transient pins.
     ///
-    /// Callers must not invoke this on a [`SwapExtent::pageout_capped`]
+    /// Callers must not invoke this on a [`Extent::pageout_capped`]
     /// extent.
     pub(crate) fn pageout(&mut self) -> bool {
         crate::soft_assert_no_log!(!self.pageout_capped());
-        region::pageout(self.ptr, self.alloc_size);
-        if region::nonresident(self.ptr, self.alloc_size) {
+        region::pageout(self.ptr(), self.alloc_size);
+        if region::nonresident(self.ptr(), self.alloc_size) {
             self.resident = false;
             self.incomplete_passes = 0;
             true
@@ -383,7 +394,7 @@ impl SwapExtent {
 
     /// Hints the kernel to swap the extent's pages back in ahead of a read.
     pub(crate) fn prefetch(&self) {
-        region::willneed(self.ptr, self.alloc_size);
+        region::willneed(self.ptr(), self.alloc_size);
     }
 
     /// Decodes the extent through `codec` into `dst`, which must be exactly
@@ -399,7 +410,7 @@ impl SwapExtent {
     /// extent's `body_len`-byte body into `dst`. The range must lie within
     /// the body, and `body_len` must be the body's exact length (the codec
     /// validates it against the stored form). Residency effects are those
-    /// of [`SwapExtent::read_into`] regardless of the range: the stored
+    /// of [`Extent::read_into`] regardless of the range: the stored
     /// form is one whole codec block, so any read faults and decodes the
     /// entire extent, and a sub-range only narrows the final copy. A
     /// backend whose stored form is rangeable (file extents reading with
@@ -420,7 +431,7 @@ impl SwapExtent {
         self.prefetch();
         // SAFETY: the extent exclusively owns its backing, and the first
         // `comp_len` bytes were initialized by `write`.
-        let buf = unsafe { std::slice::from_raw_parts(self.ptr, self.comp_len) };
+        let buf = unsafe { std::slice::from_raw_parts(self.ptr(), self.comp_len) };
         let end = offset
             .checked_add(dst.len())
             .expect("range end overflows usize");
@@ -460,10 +471,15 @@ fn heap_layout(comp_len: usize) -> Layout {
     Layout::array::<u8>(comp_len).expect("valid extent layout")
 }
 
-impl Drop for SwapExtent {
+impl Drop for Extent {
     fn drop(&mut self) {
-        match &self.backing {
-            Backing::Arena { arena, class, slot } => {
+        match &self.home {
+            Home::Arena {
+                arena,
+                class,
+                slot,
+                ptr,
+            } => {
                 // Discarding the pages also drops any copy on the swap
                 // device (`MADV_DONTNEED` frees an anonymous range's swap
                 // entries), so the slot returns to the free list with no
@@ -472,15 +488,15 @@ impl Drop for SwapExtent {
                 // SAFETY: the extent exclusively owns the slot and is being
                 // dropped, so no reference into it exists.
                 unsafe {
-                    region::dontneed(self.ptr, self.alloc_size);
+                    region::dontneed(*ptr, self.alloc_size);
                 }
                 arena.regions[*class].free(*slot, false);
             }
-            Backing::Heap { layout } => {
+            Home::Heap { ptr, layout } => {
                 // SAFETY: `ptr` was returned by `alloc` with exactly this
                 // `layout` in `write` and is deallocated exactly once, here.
                 unsafe {
-                    std::alloc::dealloc(self.ptr, *layout);
+                    std::alloc::dealloc(*ptr, *layout);
                 }
             }
         }
@@ -545,7 +561,7 @@ mod tests {
     fn round_trip() {
         let arena = arena();
         let data: Vec<u64> = (0..10_000).map(|i| i * 37).collect();
-        let mut extent = SwapExtent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
+        let mut extent = Extent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
         assert!(extent.comp_len() > 4);
         extent.prefetch();
         let mut out = vec![0u64; data.len()];
@@ -557,7 +573,7 @@ mod tests {
     fn compressible_data_shrinks() {
         let arena = arena();
         let data = vec![42u64; 100_000];
-        let mut extent = SwapExtent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
+        let mut extent = Extent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
         assert!(extent.comp_len() < data.len() * 8 / 4);
         let mut out = vec![0u64; data.len()];
         extent.read_into(&TEST_CODEC, bytemuck::cast_slice_mut(&mut out));
@@ -571,7 +587,7 @@ mod tests {
     fn allocation_is_sized_to_payload() {
         let arena = arena();
         let data = vec![7u64; 100_000];
-        let extent = SwapExtent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
+        let extent = Extent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
         let page = region::page_size();
         assert!(extent.alloc_size() >= extent.comp_len());
         assert_eq!(extent.alloc_size() % page, 0, "class is a page multiple");
@@ -608,10 +624,10 @@ mod tests {
         // larger class is empty.
         let arena = Arc::new(ExtentArena::new(region::page_size()).expect("arena creation"));
         let data = vec![3u64; 64];
-        let a = SwapExtent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
+        let a = Extent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
         assert_eq!(arena.fallbacks(), 0);
         assert!(!a.pageout_capped(), "arena extents start with retry budget");
-        let mut b = SwapExtent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
+        let mut b = Extent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
         assert_eq!(arena.fallbacks(), 1, "second same-class write degrades");
         assert!(b.pageout_capped(), "heap extents are never advised out");
         assert!(b.is_resident());
@@ -620,7 +636,7 @@ mod tests {
         assert_eq!(out, data);
         // Freeing the arena extent frees its slot for the next write.
         drop(a);
-        let c = SwapExtent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
+        let c = Extent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
         assert_eq!(arena.fallbacks(), 1, "freed slot is reused, no fallback");
         drop(c);
         drop(b);
@@ -634,7 +650,7 @@ mod tests {
         let arena = arena();
         let data: Vec<u64> = (0..10_000u64).map(|i| i.wrapping_mul(0x9E37)).collect();
         let bytes: &[u8] = bytemuck::cast_slice(&data);
-        let mut extent = SwapExtent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
+        let mut extent = Extent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
         let mut full = vec![0u8; bytes.len()];
         extent.read_into(&TEST_CODEC, &mut full);
         assert_eq!(full, bytes);
@@ -658,7 +674,7 @@ mod tests {
     fn ranged_read_out_of_bounds_panics() {
         let arena = arena();
         let data = vec![5u64; 64];
-        let mut extent = SwapExtent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
+        let mut extent = Extent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
         let mut out = vec![0u8; 16];
         extent.read_range_into(&TEST_CODEC, 64 * 8, 64 * 8 - 8, &mut out);
     }
@@ -668,7 +684,7 @@ mod tests {
     fn wrong_destination_length_panics() {
         let arena = arena();
         let data = vec![1u64; 16];
-        let mut extent = SwapExtent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
+        let mut extent = Extent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
         let mut out = vec![0u64; 8];
         extent.read_into(&TEST_CODEC, bytemuck::cast_slice_mut(&mut out));
     }
@@ -677,7 +693,7 @@ mod tests {
     fn pageout_is_observed_not_trusted() {
         let arena = arena();
         let data = vec![9u64; 10_000];
-        let mut extent = SwapExtent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
+        let mut extent = Extent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
         assert!(extent.is_resident());
         region::fake_residency::decline_next(1);
         assert!(!extent.pageout(), "declined pass reports incomplete");
@@ -691,7 +707,7 @@ mod tests {
     fn pageout_retry_cap_and_read_reset() {
         let arena = arena();
         let data: Vec<u64> = (0..10_000).collect();
-        let mut extent = SwapExtent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
+        let mut extent = Extent::write(&arena, &data, &TEST_CODEC, Scratch::Shrink);
         region::fake_residency::decline_next(u64::MAX);
         let mut passes = 0u8;
         while !extent.pageout_capped() {
