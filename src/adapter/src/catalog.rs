@@ -93,7 +93,7 @@ use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
-pub use crate::catalog::observations::CatalogReadSet;
+pub use crate::catalog::observations::{CatalogReadRecorder, CatalogReadSet};
 pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
 pub use crate::catalog::state::CatalogState;
 pub use crate::catalog::transact::{
@@ -114,6 +114,7 @@ mod migrate;
 mod apply;
 pub(crate) mod cluster_state;
 mod observations;
+mod observed_item;
 mod open;
 mod state;
 mod timeline;
@@ -269,6 +270,7 @@ impl Catalog {
 #[derive(Debug)]
 pub struct ConnCatalog<'a> {
     state: Cow<'a, CatalogState>,
+    read_recorder: Option<CatalogReadRecorder>,
     /// Because we don't have any way of removing items from the catalog
     /// temporarily, we allow the ConnCatalog to pretend that a set of items
     /// don't exist during resolution.
@@ -301,7 +303,23 @@ impl ConnCatalog<'_> {
 
     /// Returns a system-role view of this catalog snapshot.
     pub fn for_system_session(&self) -> ConnCatalog<'_> {
-        self.state.for_system_session()
+        let mut catalog = self.state.for_system_session();
+        catalog.read_recorder = self.read_recorder.clone();
+        catalog
+    }
+
+    /// Attaches a statement's read recorder to this catalog view.
+    pub fn with_read_recorder(mut self, recorder: CatalogReadRecorder) -> Self {
+        debug_assert!(self.read_recorder.is_none());
+        self.read_recorder = Some(recorder);
+        self
+    }
+
+    fn item_view<'a>(&self, item: &'a dyn SqlCatalogItem) -> CatalogItemRef<'a> {
+        match &self.read_recorder {
+            Some(recorder) => recorder.item(item),
+            None => CatalogRef::Borrowed(item),
+        }
     }
 
     /// Prevent planning from resolving item with the provided ID. Instead,
@@ -2135,7 +2153,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         if self.unresolvable_ids.contains(&r.id()) {
             Err(SqlCatalogError::UnknownItem(name.to_string()))
         } else {
-            Ok(CatalogRef::Borrowed(r))
+            Ok(self.item_view(r))
         }
     }
 
@@ -2156,7 +2174,7 @@ impl SessionCatalog for ConnCatalog<'_> {
                 alternative: None,
             })
         } else {
-            Ok(CatalogRef::Borrowed(r))
+            Ok(self.item_view(r))
         }
     }
 
@@ -2173,16 +2191,16 @@ impl SessionCatalog for ConnCatalog<'_> {
                 name: name.to_string(),
             })
         } else {
-            Ok(CatalogRef::Borrowed(r))
+            Ok(self.item_view(r))
         }
     }
 
     fn get_system_type(&self, name: &str) -> CatalogItemRef<'_> {
-        CatalogRef::Borrowed(self.state.get_system_type(name))
+        self.item_view(self.state.get_system_type(name))
     }
 
     fn try_get_item(&self, id: &CatalogItemId) -> Option<CatalogItemRef<'_>> {
-        Some(CatalogRef::Borrowed(self.state.try_get_entry(id)?))
+        Some(self.item_view(self.state.try_get_entry(id)?))
     }
 
     fn try_get_item_by_global_id(
@@ -2197,15 +2215,18 @@ impl SessionCatalog for ConnCatalog<'_> {
                     .iter()
                     .find(|(_version, gid)| *gid == id)
                     .expect("catalog out of sync, mismatched GlobalId");
-                entry.at_version(RelationVersionSelector::Specific(*version))
+                self.item_view(entry)
+                    .at_version(RelationVersionSelector::Specific(*version))
             }
-            _ => entry.at_version(RelationVersionSelector::Latest),
+            _ => self
+                .item_view(entry)
+                .at_version(RelationVersionSelector::Latest),
         };
         Some(entry)
     }
 
     fn get_item(&self, id: &CatalogItemId) -> CatalogItemRef<'_> {
-        CatalogRef::Borrowed(self.state.get_entry(id))
+        self.item_view(self.state.get_entry(id))
     }
 
     fn get_item_by_global_id(
@@ -2220,9 +2241,12 @@ impl SessionCatalog for ConnCatalog<'_> {
                     .iter()
                     .find(|(_version, gid)| *gid == id)
                     .expect("catalog out of sync, mismatched GlobalId");
-                entry.at_version(RelationVersionSelector::Specific(*version))
+                self.item_view(&entry)
+                    .at_version(RelationVersionSelector::Specific(*version))
             }
-            _ => entry.at_version(RelationVersionSelector::Latest),
+            _ => self
+                .item_view(&entry)
+                .at_version(RelationVersionSelector::Latest),
         };
         entry
     }
@@ -2238,13 +2262,13 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn get_item_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>> {
         self.state
             .get_item_by_name(name, &self.conn_id)
-            .map(|item| -> CatalogItemRef<'_> { CatalogRef::Borrowed(item) })
+            .map(|item| self.item_view(item))
     }
 
     fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>> {
         self.state
             .get_type_by_name(name, &self.conn_id)
-            .map(|item| -> CatalogItemRef<'_> { CatalogRef::Borrowed(item) })
+            .map(|item| self.item_view(item))
     }
 
     fn get_cluster(&self, id: ClusterId) -> &dyn mz_sql::catalog::CatalogCluster<'_> {
