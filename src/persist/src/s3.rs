@@ -30,6 +30,7 @@ use aws_sdk_s3::operation::get_object::GetObjectOutput;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
 use aws_types::region::Region;
+use aws_types::request_id::RequestId;
 use bytes::{Bytes, BytesMut};
 use futures_util::stream::FuturesOrdered;
 use futures_util::{FutureExt, StreamExt};
@@ -422,6 +423,11 @@ impl Blob for S3Blob {
                 Err(anyhow!(err).context("s3 get meta err"))?
             }
         };
+        let first_request_id = if diagnose {
+            first_part.request_id().map(str::to_owned)
+        } else {
+            None
+        };
 
         // The object's total size comes from `Content-Range`, which s3 returns
         // for any request that names a part. Its denominator is the length of
@@ -597,7 +603,7 @@ impl Blob for S3Blob {
             // headers as well as body reads. Do not sum concurrent part timings.
             tracing::debug!(
                 target: "mz_persist_client::listen_diagnostics",
-                key, num_requests, ?header_elapsed, ?header_poll_elapsed,
+                key, ?first_request_id, num_requests, ?header_elapsed, ?header_poll_elapsed,
                 ?remaining_elapsed, ?remaining_poll_elapsed,
                 elapsed = ?start_overall.elapsed(),
                 "slow s3 blob read completed"
