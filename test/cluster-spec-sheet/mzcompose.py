@@ -598,7 +598,8 @@ class ClusterScalingScenario(ABC):
 
     Lifecycle: `setup()` builds load-generator clusters / sources /
     tables, `materialize_views()` lists persist objects to hydrate,
-    `run()` measures, `drop()` cleans up.
+    `run()` measures, `drop()` cleans up before each `setup()`, and
+    `teardown()` runs once after the last scale point.
     """
 
     # Bump this version in the individual test if it changes in a way that
@@ -617,6 +618,9 @@ class ClusterScalingScenario(ABC):
 
     def drop(self) -> list[str]:
         return []
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        pass
 
     def materialize_views(self) -> list[str]:
         """Returns names of the persist objects that setup initializes."""
@@ -2169,7 +2173,8 @@ class CopyFromStdinEnvdStrongScalingScenario(ClusterScalingScenario):
 
 class SourceIngestionScenario(ClusterScalingScenario):
     # 1.1.0: MySQL RDS instance type changed
-    VERSION: str = "1.1.0"
+    # 1.2.0: MySQL table rebuilt with OPTIMIZE TABLE
+    VERSION: str = "1.2.0"
 
     def name(self) -> str:
         return "source_ingestion"
@@ -2190,10 +2195,13 @@ class SourceIngestionScenario(ClusterScalingScenario):
         #   lpad((random()*10000000000)::bigint::text, 10, '0') as customer_phone
         # from generate_series(1, :N) as gs;
         # analyze tbl;
+        # Parameter group: rds.logical_replication = 1, max_slot_wal_keep_size = 20480
 
         # MySQL (RDS)
         # CREATE USER 'materialize'@'%' IDENTIFIED BY '...';
-        # create table tbl (customer_id int, region_id int, customer_name text, customer_email text, customer_phone text);
+        # CREATE DATABASE admin;
+        # USE admin;
+        # create table tbl (customer_id int NOT NULL PRIMARY KEY, region_id int, customer_name text, customer_email text, customer_phone text);
         # INSERT INTO tbl
         # SELECT
         #   n AS customer_id,
@@ -2221,6 +2229,7 @@ class SourceIngestionScenario(ClusterScalingScenario):
         #         UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) h
         # ) nums
         # WHERE n BETWEEN 1 AND 50000000;
+        # OPTIMIZE TABLE tbl;
 
         # Kafka (Confluent)
         # node /usr/local/bin/datagen -f avro -n 50000000 -w 0 -p qa_cluster_spec_sheet -s table.json
@@ -2279,6 +2288,18 @@ class SourceIngestionScenario(ClusterScalingScenario):
             f"CREATE SECRET IF NOT EXISTS csr_password AS '{csr_password}';",
             "CREATE CONNECTION csr_conn TO CONFLUENT SCHEMA REGISTRY (URL 'https://psrc-e0919.us-east-2.aws.confluent.cloud', USERNAME = SECRET csr_username, PASSWORD = SECRET csr_password);",
         ]
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        # NOTE: Tearing down the region does not drop its sources, so a
+        # Postgres source still present leaks its replication slot, which
+        # retains WAL until the upstream disk fills. `DROP SOURCE` drops the
+        # slot in a background task that retries for up to 60s
+        # (`drop_replication_slots_and_secrets` in the adapter), so wait that
+        # long before the region can go.
+        _best_effort_drop(
+            runner, "DROP SOURCE IF EXISTS pg_source CASCADE", "pg_source"
+        )
+        time.sleep(60)
 
     def run(self, runner: ScenarioRunner) -> None:
         runner.measure(
@@ -3200,6 +3221,11 @@ class ClusterObjectLimitsScenario(Scenario):
 
 class _ClusterSizeSweepBase(Scenario):
     """Common ``scale_points`` for sweeps over `REPLICA_SCALES` cluster sizes."""
+
+    _workload: ClusterScalingScenario
+
+    def teardown(self, runner: ScenarioRunner) -> None:
+        self._workload.teardown(runner)
 
     def scale_points(
         self, target: "BenchTarget", max_scale: int
