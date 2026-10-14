@@ -16,13 +16,14 @@ use std::sync::LazyLock;
 
 use dynfmt::{Format, SimpleCurlyFormat};
 use itertools::Itertools;
+use mz_expr::func;
 use mz_expr::func::variadic::{JsonbBuildObject, RecordCreate};
 use mz_expr::func::{CastArrayToJsonb, CastListToJsonb};
-use mz_expr::{CastFailureMode, func};
 use mz_ore::soft_panic_or_log;
 use mz_repr::{
     ColumnName, Datum, Row, SqlColumnType, SqlRelationType, SqlScalarBaseType, SqlScalarType,
 };
+use mz_sql_parser::ast::CastFailureMode;
 
 use crate::catalog::TypeCategory;
 use crate::plan::error::PlanError;
@@ -92,14 +93,20 @@ struct CastTemplate(
 impl CastTemplate {
     /// Builds a template from a builder of the erroring cast.
     ///
-    /// Under [`CastFailureMode::NullFallback`] the template emits the same
-    /// stages with each one that could error wrapped in `TryCast`, so a
-    /// failure at any stage yields NULL. A stage that cannot error is emitted as
-    /// is, so a cast that cannot fail plans exactly as `CAST` does and keeps its
-    /// nullability. That requires the builder to apply only unary functions to its
-    /// input, which [`extract_unary_stages_for_try_cast`] verifies; a builder of any other shape
-    /// yields `None` under `NullFallback` and must use
-    /// [`CastTemplate::strict_only`] instead.
+    /// Under [`CastFailureMode::NullFallback`] the builder is run once on a
+    /// placeholder of the input type, and its result must be that placeholder
+    /// wrapped in zero or more `CallUnary` nodes with nothing else in between.
+    /// The template then emits those stages with each one that could error
+    /// wrapped in `TryCast`, so a failure at any stage yields NULL, while a
+    /// stage that cannot error is emitted as is and keeps its nullability.
+    ///
+    /// A builder whose result has any other shape, for example one that
+    /// compares or branches on its input, makes `TRY_CAST` report that the
+    /// cast cannot fall back to NULL, even when the strict cast cannot error.
+    /// `test_try_cast_wraps_every_stage_of_every_cast` in `mz_adapter` plans
+    /// every entry of the cast table in both modes and fails on such a
+    /// builder. A template whose builder has another shape on purpose uses
+    /// [`CastTemplate::strict_only`].
     fn new<T, C>(t: T) -> CastTemplate
     where
         T: Fn(&ExprContext, CastContext, &SqlScalarType, &SqlScalarType) -> Option<C>
@@ -116,7 +123,7 @@ impl CastTemplate {
                     let stages = extract_unary_stages_for_try_cast(from_ty, cast)?;
                     Some(Box::new(move |mut expr: HirScalarExpr| {
                         for stage in stages {
-                            expr = expr.call_unary(UnaryFunc::try_cast(stage));
+                            expr = expr.call_unary(UnaryFunc::try_cast_if_fallible(stage));
                         }
                         expr
                     }))
@@ -145,17 +152,24 @@ impl CastTemplate {
     }
 }
 
-/// Extracts a sequence of `UnaryFunc`s from a cast, returning `None` if the cast
-/// is not a sequence of `UnaryFunc`s.
+/// The unary functions a strict cast from `from` applies to its input,
+/// innermost first, or `None` if the cast has any other shape. See
+/// [`CastTemplate::new`] for the shape a cast must have.
 ///
-/// These stages must propagate nulls: f(g(e)) == try[f](try[g](e)) only when
-/// f and g return null on a null input. (As of 2026-09-15, this is true of all
-/// casts that are sequences of `UnaryFunc` stages.)
+/// Every stage after the first must propagate NULLs, so that the NULL a
+/// failed stage produces flows through the rest of the chain unchanged:
+/// `f(g(e))` matches `try[f](try[g](e))` only when `f` returns NULL on a NULL
+/// input. A violation is reported as a planner bug rather than refused
+/// silently, since every cast function propagates NULLs and a new one that
+/// does not is a bug in that function.
 fn extract_unary_stages_for_try_cast(
     from: &SqlScalarType,
     cast: impl FnOnce(HirScalarExpr) -> HirScalarExpr,
 ) -> Option<Vec<UnaryFunc>> {
-    // dummy argument (built manually to avoid an assert)
+    // Templates never inspect their input, so a dummy of the input type serves
+    // to discover the stages they apply. Built directly because
+    // `HirScalarExpr::literal` asserts that the datum inhabits the type, which
+    // `Datum::Dummy` never does.
     let sentinel = HirScalarExpr::Literal(
         Row::pack([Datum::Dummy]),
         from.clone().nullable(false),

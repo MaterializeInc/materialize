@@ -1688,7 +1688,7 @@ mod tests {
             Not(_) => arg.scalar_type == ReprScalarType::Bool,
             IsNull(_) => true,
             TryParseMonotonicIso8601Timestamp(_) => arg.scalar_type == ReprScalarType::String,
-            TryCast(f) => unary_typecheck(&f.inner, arg),
+            TryCast(f) => unary_typecheck(f.inner(), arg),
             _ => false,
         }
     }
@@ -1719,7 +1719,7 @@ mod tests {
                 cast.could_error(),
                 "{cast} never errors, so wrapping it is pointless"
             );
-            UnaryFunc::try_cast(cast.clone())
+            UnaryFunc::try_cast_if_fallible(cast.clone())
         }));
         funcs
     }

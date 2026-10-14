@@ -219,10 +219,10 @@ differences, each of which is reported when the statement is planned:
   [`mz_aclitem`](../../types/mz_aclitem/), other than those between the `oid`
   alias types and the integer types.
 
-- An `ARRAY`, `LIST`, or `ROW` constructor written directly inside `TRY_CAST`
-  is typed on its own before the conversion, where `CAST` would type it from
-  the target. Its elements must therefore already agree on a type, and an
-  empty constructor needs an explicit type:
+- A non-empty `ARRAY`, `LIST`, or `ROW` constructor written directly inside
+  `TRY_CAST` is typed on its own before the conversion, where `CAST` would
+  type it from the target. Its elements must therefore already agree on a
+  type:
 
   ```mzsql
   -- With a text column s, CAST(ARRAY[s, 2] AS int[]) plans, but this does not:
@@ -230,13 +230,15 @@ differences, each of which is reported when the statement is planned:
   SELECT TRY_CAST(ARRAY[s, 2] AS int[]) FROM t;
   -- Give the elements a common type instead.
   SELECT TRY_CAST(ARRAY[s, 2::text] AS int[]) FROM t;
-  SELECT TRY_CAST(ARRAY[]::text[] AS int[]);
   ```
 
-- A `MAP` constructor written directly inside `TRY_CAST` is rejected. It would
-  be typed on its own like the other constructors, and there is no cast
-  between two [`map`](../../types/map/) types to convert it afterward. Convert
-  it with `CAST` or `::` instead.
+  An empty constructor has no elements to convert, so it takes its type from
+  the target as it does under `CAST`.
+
+- A non-empty `MAP` constructor written directly inside `TRY_CAST` is
+  rejected. It would be typed on its own like the other constructors, and
+  there is no cast between two [`map`](../../types/map/) types to convert it
+  afterward. Convert it with `CAST` or `::` instead.
 
 ## Examples
 

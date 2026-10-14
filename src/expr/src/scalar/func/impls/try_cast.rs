@@ -15,23 +15,16 @@ use serde::{Deserialize, Serialize};
 use crate::scalar::func::{LazyUnaryFunc, UnaryFunc};
 use crate::{Eval, EvalError, MirScalarExpr};
 
-/// What a cast does when the value cannot be converted to the target type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum CastFailureMode {
-    /// The cast raises an error.
-    Error,
-    /// The cast evaluates to `NULL`. Each cast function is wrapped in
-    /// [`TryCast`], so errors raised while evaluating the cast's argument
-    /// still propagate.
-    NullFallback,
-}
-
 /// Wraps a cast function so that its errors become `NULL`.
 ///
 /// The argument is evaluated first, and its errors propagate. Only errors
 /// raised by `inner` itself are swallowed. Because the wrapper is strict in its
 /// argument and never errors, it is safe for the optimizer to treat it like
 /// any other infallible unary function.
+///
+/// `inner` can error: [`UnaryFunc::try_cast_if_fallible`] is the only constructor, and it
+/// returns a function that cannot error unwrapped. The wrapper's nullability
+/// relies on this, since a wrapped function always has a NULL outcome.
 #[derive(
     Ord,
     PartialOrd,
@@ -44,7 +37,14 @@ pub enum CastFailureMode {
     Hash
 )]
 pub struct TryCast<E = MirScalarExpr> {
-    pub inner: Box<UnaryFunc<E>>,
+    inner: Box<UnaryFunc<E>>,
+}
+
+impl<E> TryCast<E> {
+    /// The wrapped function.
+    pub fn inner(&self) -> &UnaryFunc<E> {
+        &self.inner
+    }
 }
 
 /// Evaluates to the first column of the row it is given.
@@ -85,11 +85,11 @@ impl<E: Eval> LazyUnaryFunc for TryCast<E> {
             Ok(datum) => Ok(datum),
             // An internal error means the planner handed `inner` a datum of
             // the wrong kind. No cast reports it for bad user data, so it is
-            // a planner bug, and swallowing it would hide that from CI. Soft
+            // a planner bug, and swallowing it silently would hide that. Soft
             // assertions are off in production, where the row becomes NULL
-            // like any other failure and nothing is logged.
+            // like any other failure and the error is logged instead.
             Err(EvalError::Internal(message)) => {
-                mz_ore::soft_panic_no_log!(
+                mz_ore::soft_panic_or_log!(
                     "TRY_CAST swallowed an internal error from {}: {message}",
                     self.inner
                 );
@@ -108,7 +108,7 @@ impl<E: Eval> LazyUnaryFunc for TryCast<E> {
     }
 
     fn introduces_nulls(&self) -> bool {
-        self.inner.could_error() || self.inner.introduces_nulls()
+        true
     }
 
     fn could_error(&self) -> bool {
@@ -146,7 +146,7 @@ impl<E: Eval> UnaryFunc<E> {
     /// Wraps `inner` in [`TryCast`] if it could error, so that its errors
     /// become NULL. A function that cannot error has nothing to fall back
     /// from and is returned as is, keeping its nullability.
-    pub fn try_cast(inner: UnaryFunc<E>) -> UnaryFunc<E> {
+    pub fn try_cast_if_fallible(inner: UnaryFunc<E>) -> UnaryFunc<E> {
         if inner.could_error() {
             UnaryFunc::TryCast(TryCast {
                 inner: Box::new(inner),
@@ -187,14 +187,16 @@ impl<E> fmt::Display for TryCast<E> {
 mod tests {
     use mz_repr::{Datum, ReprScalarType, RowArena};
 
-    use crate::scalar::func::{CastInt64ToInt32, CastStringToInt32, CastStringToInt64, TryCast};
+    use crate::scalar::func::{CastInt64ToInt32, CastStringToInt32, CastStringToInt64};
     use crate::{Eval, EvalError, MirScalarExpr, UnaryFunc};
 
     fn try_cast(inner: impl Into<UnaryFunc>) -> UnaryFunc {
-        TryCast {
-            inner: Box::new(inner.into()),
-        }
-        .into()
+        let func = UnaryFunc::try_cast_if_fallible(inner.into());
+        assert!(
+            matches!(func, UnaryFunc::TryCast(_)),
+            "test needs a fallible cast"
+        );
+        func
     }
 
     fn eval(expr: &MirScalarExpr) -> Result<Datum<'_>, EvalError> {
