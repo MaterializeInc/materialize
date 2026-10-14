@@ -583,49 +583,29 @@ fn unary_samples() -> Vec<Sample<UnaryFunc>> {
         // the wrapped function, so the samples cover the branches that differ:
         // a fallible parse, a narrowing cast with an inverse (which the wrapper
         // must not inherit), a nullable output the wrapper only forces nullable,
-        // a container cast whose element cast lives inside the wrapper, and a
-        // wrapper around a function that cannot error, which the planner never
-        // emits but the type allows.
+        // and a container cast whose element cast lives inside the wrapper.
         unary(
-            TryCast {
-                inner: Box::new(CastStringToInt32.into()),
-            },
+            UnaryFunc::try_cast_if_fallible(CastStringToInt32),
             SqlScalarType::String,
         ),
         unary(
-            TryCast {
-                inner: Box::new(CastInt64ToInt32.into()),
-            },
+            UnaryFunc::try_cast_if_fallible(CastInt64ToInt32),
             SqlScalarType::Int64,
         )
         .labeled("narrowing"),
         unary(
-            TryCast {
-                inner: Box::new(CastJsonbToNumeric(None).into()),
-            },
+            UnaryFunc::try_cast_if_fallible(CastJsonbToNumeric(None)),
             SqlScalarType::Jsonb,
         )
         .labeled("jsonb"),
         unary(
-            TryCast {
-                inner: Box::new(
-                    CastList1ToList2 {
-                        return_ty: list_type(SqlScalarType::Int32),
-                        cast_expr: column(0),
-                    }
-                    .into(),
-                ),
-            },
+            UnaryFunc::try_cast_if_fallible(CastList1ToList2 {
+                return_ty: list_type(SqlScalarType::Int32),
+                cast_expr: column(0),
+            }),
             list_type(SqlScalarType::Int64),
         )
         .labeled("list"),
-        unary(
-            TryCast {
-                inner: Box::new(CastInt32ToInt64.into()),
-            },
-            SqlScalarType::Int32,
-        )
-        .labeled("infallible"),
         unary(
             CastStringToArray {
                 return_ty: array_type(SqlScalarType::Int32),

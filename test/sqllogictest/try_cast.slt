@@ -98,9 +98,8 @@ SELECT TRY_CAST(ROW('100000', 'a') AS rec2)::text, TRY_CAST(ROW('1', 'a') AS rec
 ----
 NULL (1,a)
 
-# Because the literal is typed on its own, its elements must agree on a type
-# (CAST would coerce them all to the target's element type), and an empty
-# literal needs its own type annotation.
+# Because a non-empty literal is typed on its own, its elements must agree on
+# a type (CAST would coerce them all to the target's element type).
 statement error ARRAY types text and integer cannot be matched
 SELECT TRY_CAST(ARRAY[s, 2] AS int4[]) FROM (VALUES ('1')) AS v(s)
 
@@ -109,12 +108,22 @@ SELECT TRY_CAST(ARRAY[s, 2::text] AS int4[])::text FROM (VALUES ('1')) AS v(s)
 ----
 {1,2}
 
-statement error cannot determine type of empty array
-SELECT TRY_CAST(ARRAY[] AS int4[])
+# An empty literal has no element casts, so it is typed from the target as
+# under CAST.
+query TTT
+SELECT TRY_CAST(ARRAY[] AS int4[])::text, TRY_CAST(LIST[] AS int4 list)::text, TRY_CAST(MAP[] AS map[text=>int4])::text
+----
+{} {} {}
 
-# There is no cast between map types, so a MAP constructor has no whole-value
-# cast to fall back on and is rejected rather than converted element by element.
-statement error MAP constructor as the argument of TRY_CAST not yet supported
+query TTT
+SELECT pg_typeof(TRY_CAST(ARRAY[] AS int4[])), pg_typeof(TRY_CAST(LIST[] AS int4 list)), pg_typeof(TRY_CAST(MAP[] AS map[text=>int4]))
+----
+integer[] integer␠list map[text=>integer]
+
+# There is no cast between map types, so a non-empty MAP constructor has no
+# whole-value cast to fall back on and is rejected rather than converted
+# element by element.
+statement error non-empty MAP constructor as the argument of TRY_CAST not yet supported
 SELECT TRY_CAST(MAP['k' => '1'] AS map[text=>int4])
 
 query T
@@ -279,6 +288,91 @@ EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT TRY_CAST('x' AS int4), TRY_CAS
 Explained Query (fast path):
   Constant
     - (null, 7)
+
+Target cluster: quickstart
+
+EOF
+
+# How TRY_CAST plans, over columns so that nothing folds. A single fallible
+# stage is wrapped; a cast that cannot fail is planned as the plain cast
+# function, exactly as CAST plans it; and a multi-stage cast wraps only the
+# stages that can fail, whichever position they are in. Explaining every
+# multi-stage chain the cast table produces showed none with two fallible
+# stages, so no plan nests one try_cast inside another.
+statement ok
+CREATE TABLE tn (i8 int8, i4 int4, v int2vector)
+
+# Single fallible stage.
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT TRY_CAST(i8 AS int4) FROM tn
+----
+Project (#3)
+  Map (try_cast[bigint_to_integer](#0{i8}))
+    Get materialize.public.tn
+
+Target cluster: quickstart
+
+EOF
+
+# Infallible, so no wrapper: the plan is the plain cast.
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT TRY_CAST(i4 AS int8) FROM tn
+----
+Project (#3)
+  Map (integer_to_bigint(#1{i4}))
+    Get materialize.public.tn
+
+Target cluster: quickstart
+
+EOF
+
+# Two stages through oid: the first can fail and is wrapped, the second cannot.
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT TRY_CAST(i8 AS regclass) FROM tn
+----
+Project (#3)
+  Map (oidtoregclass(try_cast[bigint_to_oid](#0{i8})))
+    Get materialize.public.tn
+
+Target cluster: quickstart
+
+EOF
+
+# Two stages, with the fallible one second: the element cast of the array.
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT TRY_CAST(v AS int8[]) FROM tn
+----
+Project (#3)
+  Map (try_cast[arraytoarray](int2vectortoarray(#2{v})))
+    Get materialize.public.tn
+
+Target cluster: quickstart
+
+EOF
+
+# Two stages through text, neither of which can fail: an explicit cast to
+# char(n) truncates, so the plan is the same as for CAST.
+query T multiline
+EXPLAIN RAW PLAN FOR SELECT TRY_CAST(i4 AS char(3)) FROM tn
+----
+Project (#3)
+  Map (text_to_char[len=3, fail_on_len=false](integer_to_text(#1{i4})))
+    Get materialize.public.tn
+
+Target cluster: quickstart
+
+EOF
+
+# The chain survives optimization over a column, where it cannot fold.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT TRY_CAST(i8 AS regclass) FROM tn
+----
+Explained Query:
+  Project (#3)
+    Map (oidtoregclass(try_cast[bigint_to_oid](#0{i8})))
+      ReadStorage materialize.public.tn
+
+Source materialize.public.tn
 
 Target cluster: quickstart
 

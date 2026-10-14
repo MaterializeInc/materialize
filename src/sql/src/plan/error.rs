@@ -429,6 +429,9 @@ impl PlanError {
             Self::ShowCreateViewOnMaterializedView(_) => {
                 Some("Use SHOW CREATE MATERIALIZED VIEW to show a materialized view.".into())
             }
+            Self::TryCastUnsupported { .. } => {
+                Some("Use CAST, which supports this cast but reports an error when it fails.".into())
+            }
             Self::ExplainViewOnMaterializedView(_) => {
                 Some("Use EXPLAIN [...] MATERIALIZED VIEW to explain a materialized view.".into())
             }
@@ -668,7 +671,7 @@ impl fmt::Display for PlanError {
             Self::TryCastUnsupported { from, to } => {
                 write!(
                     f,
-                    "TRY_CAST cannot fall back to NULL for the cast from {from} to {to}; use CAST instead"
+                    "TRY_CAST cannot fall back to NULL for the cast from {from} to {to}"
                 )
             }
             Self::InvalidCast { name, ccx, from, to } =>{

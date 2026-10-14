@@ -4312,15 +4312,16 @@ fn plan_cast(
     data_type: &ResolvedDataType,
     failure_mode: CastFailureMode,
 ) -> Result<CoercibleScalarExpr, PlanError> {
-    let (name, failure_mode) = match failure_mode {
-        CastFailureMode::Error => ("CAST", mz_expr::CastFailureMode::Error),
+    let name = match failure_mode {
+        CastFailureMode::Error => "CAST",
         CastFailureMode::NullFallback => {
             ecx.qcx.scx.require_feature_flag(&vars::ENABLE_TRY_CAST)?;
-            ("TRY_CAST", mz_expr::CastFailureMode::NullFallback)
+            "TRY_CAST"
         }
     };
     let to_scalar_type = scalar_type_from_sql(ecx.qcx.scx, data_type)?;
-    let expr = match (expr, failure_mode) {
+    let keeps_hint = |empty: bool| failure_mode == CastFailureMode::Error || empty;
+    let expr = match expr {
         // Special case a direct cast of an ARRAY, LIST, or MAP expression so
         // we can pass in the target type as a type hint. This is
         // a limited form of the coercion that we do for string literals
@@ -4331,26 +4332,28 @@ fn plan_cast(
         // See: https://github.com/postgres/postgres/blob/31f403e95/src/backend/parser/parse_expr.c#L2762-L2768
         //
         // The hint makes the element casts part of the literal, where a
-        // failure mode cannot reach them. Under `NullFallback` an ARRAY or
-        // LIST literal is planned on its own instead, so the cast that gets
-        // wrapped is the whole-value one, and a bad element yields NULL for
-        // the whole value just as it does for a non-literal source. A MAP
-        // literal has no whole-value cast to fall back on, since there is no
-        // cast between map types, so under `NullFallback` it is rejected
-        // rather than converted with the hint's element-level strictness.
-        (Expr::Array(exprs), mz_expr::CastFailureMode::Error) => {
+        // failure mode cannot reach them. Under `NullFallback` a non-empty
+        // ARRAY or LIST literal is planned on its own instead, so the cast
+        // that gets wrapped is the whole-value one, and a bad element yields
+        // NULL for the whole value just as it does for a non-literal source.
+        // An empty literal has no element casts, so it keeps the hint, which
+        // is the only thing that can type it. A non-empty MAP literal has no
+        // whole-value cast to fall back on, since there is no cast between
+        // map types, so under `NullFallback` it is rejected rather than
+        // converted with the hint's element-level strictness.
+        Expr::Array(exprs) if keeps_hint(exprs.is_empty()) => {
             plan_array(ecx, exprs, Some(&to_scalar_type))?
         }
-        (Expr::List(exprs), mz_expr::CastFailureMode::Error) => {
+        Expr::List(exprs) if keeps_hint(exprs.is_empty()) => {
             plan_list(ecx, exprs, Some(&to_scalar_type))?
         }
-        (Expr::Map(exprs), mz_expr::CastFailureMode::Error) => {
+        Expr::Map(exprs) if keeps_hint(exprs.is_empty()) => {
             plan_map(ecx, exprs, Some(&to_scalar_type))?
         }
-        (Expr::Map(_), mz_expr::CastFailureMode::NullFallback) => {
-            bail_unsupported!("MAP constructor as the argument of TRY_CAST")
+        Expr::Map(_) => {
+            bail_unsupported!("non-empty MAP constructor as the argument of TRY_CAST")
         }
-        (expr, _) => plan_expr(ecx, expr)?,
+        expr => plan_expr(ecx, expr)?,
     };
     let ecx = &ecx.with_name(name);
     // A string literal reaches its cast through coercion, so the failure mode
