@@ -18,6 +18,7 @@ use mz_cluster_client::metrics::{ControllerMetrics, WallclockLagMetrics};
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::cast::CastFrom;
 use mz_ore::metric;
+use mz_ore::metrics::phase::{Mode, Phase, PhaseRegistry};
 use mz_ore::metrics::raw::UIntGaugeVec;
 use mz_ore::metrics::{
     CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, HistogramVec,
@@ -39,6 +40,7 @@ type Histogram = DeleteOnDropHistogram<Vec<String>>;
 /// Compute controller metrics.
 #[derive(Debug, Clone)]
 pub struct ComputeControllerMetrics {
+    qps: Arc<QpsPhases>,
     // compute protocol
     commands_total: IntCounterVec,
     command_message_bytes_total: IntCounterVec,
@@ -78,6 +80,7 @@ impl ComputeControllerMetrics {
     /// Create a metrics instance registered into the given registry.
     pub fn new(metrics_registry: &MetricsRegistry, shared: ControllerMetrics) -> Self {
         ComputeControllerMetrics {
+            qps: Arc::new(QpsPhases::new(metrics_registry)),
             commands_total: metrics_registry.register(metric!(
                 name: "mz_compute_commands_total",
                 help: "The total number of compute commands sent.",
@@ -236,6 +239,7 @@ impl ComputeControllerMetrics {
             .get_delete_on_drop_metric(labels);
 
         InstanceMetrics {
+            qps: Arc::clone(&self.qps),
             instance_id,
             metrics: self.clone(),
             replica_count,
@@ -258,6 +262,7 @@ impl ComputeControllerMetrics {
 /// Per-instance metrics
 #[derive(Debug)]
 pub struct InstanceMetrics {
+    pub(crate) qps: Arc<QpsPhases>,
     instance_id: ComputeInstanceId,
     metrics: ComputeControllerMetrics,
 
@@ -287,6 +292,26 @@ pub struct InstanceMetrics {
     pub response_recv_count: IntCounter,
     /// Gauge tracking the number of connected replicas.
     pub connected_replica_count: UIntGauge,
+}
+
+#[derive(Debug)]
+pub(crate) struct QpsPhases {
+    pub sync_queue: Phase,
+    pub sync_work: Phase,
+    pub sync_resume: Phase,
+    pub result_resume: Phase,
+}
+
+impl QpsPhases {
+    fn new(registry: &MetricsRegistry) -> Self {
+        let phases = PhaseRegistry::new(registry, "mz_compute_controller", Mode::from_env());
+        Self {
+            sync_queue: phases.phase("sync_queue"),
+            sync_work: phases.phase("sync_work"),
+            sync_resume: phases.phase("sync_resume"),
+            result_resume: phases.phase("result_resume"),
+        }
+    }
 }
 
 impl InstanceMetrics {

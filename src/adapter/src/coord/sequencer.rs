@@ -665,6 +665,7 @@ impl Coordinator {
                                     tx: tx.take(),
                                     outer_ctx_extra: Some(extra.defuse()),
                                 },
+                                Default::default(), // Internal replay, not frontend enqueue.
                             );
                             if response_barriers.is_empty() {
                                 self.internal_cmd_tx
@@ -792,6 +793,7 @@ impl Coordinator {
             || format!("execute_single_statement:{conn_id}"),
             async move {
                 let Ok(Response {
+                    qps_resume,
                     result,
                     session,
                     otel_ctx,
@@ -800,6 +802,7 @@ impl Coordinator {
                     // Coordinator went away.
                     return;
                 };
+                qps_resume.finish();
                 otel_ctx.attach_as_parent();
                 let (sub_tx, sub_rx) = oneshot::channel();
                 let _ = internal_cmd_tx.send(Message::Command(
@@ -809,11 +812,13 @@ impl Coordinator {
                         session,
                         tx: sub_tx,
                     },
+                    Default::default(), // Internal transaction, not frontend enqueue.
                 ));
                 let Ok(commit_response) = sub_rx.await else {
                     // Coordinator went away.
                     return;
                 };
+                commit_response.qps_resume.finish();
                 assert!(matches!(
                     commit_response.session.transaction(),
                     TransactionStatus::Default

@@ -119,7 +119,11 @@ impl Handle {
 #[derive(Debug, Clone)]
 pub struct Client {
     build_info: &'static BuildInfo,
-    inner_cmd_tx: mpsc::UnboundedSender<(OpenTelemetryContext, Command)>,
+    inner_cmd_tx: mpsc::UnboundedSender<(
+        OpenTelemetryContext,
+        Command,
+        mz_ore::metrics::phase::PhaseGuard,
+    )>,
     id_alloc: IdAllocator<IdAllocatorInnerBitSet>,
     now: NowFn,
     metrics: Metrics,
@@ -130,7 +134,11 @@ pub struct Client {
 impl Client {
     pub(crate) fn new(
         build_info: &'static BuildInfo,
-        cmd_tx: mpsc::UnboundedSender<(OpenTelemetryContext, Command)>,
+        cmd_tx: mpsc::UnboundedSender<(
+            OpenTelemetryContext,
+            Command,
+            mz_ore::metrics::phase::PhaseGuard,
+        )>,
         metrics: Metrics,
         now: NowFn,
         environment_id: EnvironmentId,
@@ -639,9 +647,9 @@ Issue a SQL query to get started. Need help?
 
     #[instrument(level = "debug")]
     pub(crate) fn try_send(&self, cmd: Command) -> bool {
-        self.inner_cmd_tx
-            .send((OpenTelemetryContext::obtain(), cmd))
-            .is_ok()
+        let otel_ctx = OpenTelemetryContext::obtain();
+        let queued = self.metrics.qps.command_queue(&cmd);
+        self.inner_cmd_tx.send((otel_ctx, cmd, queued)).is_ok()
     }
 
     #[instrument(level = "debug")]
@@ -741,8 +749,15 @@ impl SessionClient {
         &mut self,
         name: &str,
     ) -> Result<&PreparedStatement, AdapterError> {
-        let catalog = self.catalog_snapshot("get_prepared_statement").await;
-        Coordinator::verify_prepared_statement(&catalog, self.session(), name)?;
+        let phases = Arc::clone(&self.inner().metrics().qps);
+        let catalog = phases
+            .prepared_catalog
+            .time(self.catalog_snapshot("get_prepared_statement"))
+            .await;
+        let verify = phases.prepared_verify.start();
+        let verified = Coordinator::verify_prepared_statement(&catalog, self.session(), name);
+        verify.finish();
+        verified?;
         Ok(self
             .session()
             .get_prepared_statement_unverified(name)
@@ -760,7 +775,11 @@ impl SessionClient {
         sql: String,
         param_types: Vec<Option<SqlScalarType>>,
     ) -> Result<(), AdapterError> {
-        let catalog = self.catalog_snapshot("prepare").await;
+        let phases = Arc::clone(&self.inner().metrics().qps);
+        let catalog = phases
+            .prepare_catalog
+            .time(self.catalog_snapshot("prepare"))
+            .await;
 
         // Note: This failpoint is used to simulate a request outliving the external connection
         // that made it.
@@ -774,8 +793,11 @@ impl SessionClient {
             tokio::time::sleep(Duration::from_secs(1)).await;
         };
 
-        let (desc, query) =
-            Coordinator::describe_prepared(&catalog, self.session(), stmt.clone(), param_types)?;
+        let describe = phases.prepare_describe.start();
+        let described =
+            Coordinator::describe_prepared(&catalog, self.session(), stmt.clone(), param_types);
+        describe.finish();
+        let (desc, query) = described?;
         let now = self.now();
         let state_revision = StateRevision {
             catalog_revision: catalog.transient_revision(),
@@ -794,14 +816,21 @@ impl SessionClient {
         stmt: Statement<Raw>,
         sql: String,
     ) -> Result<(), AdapterError> {
-        let catalog = self.catalog_snapshot("declare").await;
+        let phases = Arc::clone(&self.inner().metrics().qps);
+        let catalog = phases
+            .declare_catalog
+            .time(self.catalog_snapshot("declare"))
+            .await;
         let param_types = vec![];
-        let (desc, query) = Coordinator::describe_prepared(
+        let describe = phases.declare_describe.start();
+        let described = Coordinator::describe_prepared(
             &catalog,
             self.session(),
             Some(stmt.clone()),
             param_types,
-        )?;
+        );
+        describe.finish();
+        let (desc, query) = described?;
         let params = vec![];
         let result_formats = vec![mz_pgwire_common::Format::Text; desc.arity()];
         let now = self.now();
@@ -1427,6 +1456,7 @@ impl SessionClient {
                     drop(guarded_rx);
 
                     let res = res.expect("sender dropped");
+                    res.qps_resume.finish();
                     let status = res.result.is_ok().then_some("success").unwrap_or("error");
                     if let Err(err) = res.result.as_ref() {
                         if name_hint.should_trace_errors() {

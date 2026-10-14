@@ -86,14 +86,17 @@ impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
 
         // If we were not able to send a message, we must clean up the session
         // ourselves. Return it to the caller for disposal.
+        let otel_ctx = OpenTelemetryContext::obtain();
+        let qps_resume = session.metrics().qps_response_resume.start();
         if let Err(res) = self
             .tx
             .take()
             .expect("tx will always be `Some` unless `self` has been consumed")
             .send(Response {
+                qps_resume,
                 result,
                 session,
-                otel_ctx: OpenTelemetryContext::obtain(),
+                otel_ctx,
             })
         {
             // If the coordinator is gone too, the process is shutting down and there is no
@@ -104,6 +107,7 @@ impl<T: Transmittable + std::fmt::Debug> ClientTransmitter<T> {
                     conn_id: res.session.conn_id().clone(),
                     tx: None,
                 },
+                Default::default(), // Not a frontend command queue sample.
             ));
             if send_res.is_err() {
                 tracing::warn!("coordinator gone, could not clean up session");

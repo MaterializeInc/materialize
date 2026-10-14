@@ -9,6 +9,7 @@
 
 //! Completion of read-only transactions whose resources belong to the session.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use mz_repr::Timestamp;
@@ -25,6 +26,8 @@ pub(crate) async fn complete_read_only_transaction(
     cancel: &mut watch::Receiver<()>,
     completion: ReadOnlyCompletion,
 ) -> Result<ExecuteResponse, AdapterError> {
+    let phases = Arc::clone(&client.coordinator_client().metrics().qps);
+    let completion_timer = phases.local_completion_total.start();
     // Cancellation while idle must not poison a later completion. Keep the session
     // intact across awaits so dropping this future still leaves teardown with its owner.
     cancel.borrow_and_update();
@@ -35,8 +38,13 @@ pub(crate) async fn complete_read_only_transaction(
         .inc();
     let result = async {
         session.apply_external_metadata_updates();
-        let catalog = client.catalog_snapshot("end_transaction").await;
+        let catalog = phases
+            .local_completion_catalog
+            .time(client.catalog_snapshot("end_transaction"))
+            .await;
+        let roles_timer = phases.local_completion_roles.start();
         mz_sql::rbac::check_session_roles(&catalog.for_session(session), session)?;
+        roles_timer.finish();
 
         if let Some(context) = &completion.timestamp {
             match session.vars().transaction_isolation() {
@@ -47,8 +55,13 @@ pub(crate) async fn complete_read_only_transaction(
                             .metrics()
                             .frontend_transaction_waits
                             .inc();
-                        let oracle = client.ensure_oracle(timeline.clone()).await?;
-                        wait_for_read_timestamp(&**oracle, *timestamp, cancel).await?;
+                        phases
+                            .local_completion_oracle
+                            .time(async {
+                                let oracle = client.ensure_oracle(timeline.clone()).await?;
+                                wait_for_read_timestamp(&**oracle, *timestamp, cancel).await
+                            })
+                            .await?;
                     }
                 }
                 IsolationLevel::StrongSessionSerializable => {
@@ -69,6 +82,7 @@ pub(crate) async fn complete_read_only_transaction(
     }
     .await;
 
+    let cleanup_timer = phases.local_completion_cleanup.start();
     let action = if result.is_ok() {
         completion.action
     } else {
@@ -76,6 +90,8 @@ pub(crate) async fn complete_read_only_transaction(
     };
     let _ = session.clear_transaction();
     let params = session.vars_mut().end_transaction(action);
+    cleanup_timer.finish();
+    completion_timer.finish();
     result?;
     Ok(match action {
         EndTransactionAction::Commit => ExecuteResponse::TransactionCommitted { params },

@@ -97,6 +97,7 @@ impl From<InstanceShutDown> for AcquireReadHoldsError {
 #[derive(Clone, derivative::Derivative)]
 #[derivative(Debug)]
 pub struct InstanceClient {
+    qps: Arc<crate::metrics::QpsPhases>,
     /// A sender for commands for the instance.
     command_tx: mpsc::UnboundedSender<Command>,
     /// A sender for read hold changes for collections installed on the instance.
@@ -135,16 +136,23 @@ impl InstanceClient {
     {
         let (tx, rx) = oneshot::channel();
         let otel_ctx = OpenTelemetryContext::obtain();
+        let qps = Arc::clone(&self.qps);
+        let queued = qps.sync_queue.start();
         self.command_tx
             .send(Box::new(move |instance| {
+                queued.finish();
+                let work = qps.sync_work.start();
                 let _span = debug_span!("instance_client::call_sync").entered();
                 otel_ctx.attach_as_parent();
                 let result = f(instance);
-                let _ = tx.send(result);
+                work.finish();
+                let _ = tx.send((result, qps.sync_resume.start()));
             }))
             .map_err(|_send_error| InstanceShutDown)?;
 
-        rx.await.map_err(|_| InstanceShutDown)
+        let (result, resume) = rx.await.map_err(|_| InstanceShutDown)?;
+        resume.finish();
+        Ok(result)
     }
 
     pub(super) fn spawn(
@@ -162,6 +170,7 @@ impl InstanceClient {
         read_only: bool,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
+        let qps = Arc::clone(&metrics.qps);
 
         let read_hold_tx: read_holds::ChangeTx = {
             let command_tx = command_tx.clone();
@@ -195,6 +204,7 @@ impl InstanceClient {
         );
 
         Self {
+            qps,
             command_tx,
             read_hold_tx,
         }
@@ -234,7 +244,7 @@ impl InstanceClient {
         map_filter_project: mz_expr::SafeMfpPlan,
         target_read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
-        peek_response_tx: oneshot::Sender<PeekResponse>,
+        peek_response_tx: oneshot::Sender<(PeekResponse, mz_ore::metrics::phase::PhaseGuard)>,
     ) -> Result<(), PeekError> {
         self.call_sync(move |i| {
             i.peek(

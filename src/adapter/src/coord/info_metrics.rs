@@ -287,6 +287,7 @@ impl Coordinator {
                 let send = internal_cmd_tx.send(Message::Command(
                     OpenTelemetryContext::obtain(),
                     Command::CatalogSnapshot { tx },
+                    Default::default(), // Background metrics collection.
                 ));
                 // Bail if the coordinator has gone away.
                 if send.is_err() {
