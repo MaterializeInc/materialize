@@ -717,8 +717,8 @@ fn eval_unmaterializable_func(
             pack_1d_array(names.iter().map(|n| Datum::from(n.as_str())).collect())
         }
         UnmaterializableFunc::MzUptime => {
-            // Derived from the statement's wall time so that every occurrence in
-            // a plan folds to the same literal. Rewrites that duplicate a
+            // Derived from the transaction's wall time so that every occurrence
+            // in a plan folds to the same literal. Rewrites that duplicate a
             // subtree, such as the `INTERSECT` lowering, rely on the copies
             // being identical, and differing literals there produce negative
             // multiplicities. Clamped at zero because the wall clock can step
