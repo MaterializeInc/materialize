@@ -153,11 +153,6 @@ pub enum PlanError {
     UnsupportedRangeElementType {
         element_type_name: String,
     },
-    /// The cast exists, but `TRY_CAST` cannot turn its failures into NULL.
-    TryCastUnsupported {
-        from: String,
-        to: String,
-    },
     InvalidTable {
         name: String,
     },
@@ -664,12 +659,6 @@ impl fmt::Display for PlanError {
             Self::InvalidSecret(i) => write!(f, "{} is not a secret", i.full_name_str()),
             Self::InvalidTemporarySchema => {
                 write!(f, "cannot create temporary item in non-temporary schema")
-            }
-            Self::TryCastUnsupported { from, to } => {
-                write!(
-                    f,
-                    "TRY_CAST cannot fall back to NULL for the cast from {from} to {to}; use CAST instead"
-                )
             }
             Self::InvalidCast { name, ccx, from, to } =>{
                 write!(

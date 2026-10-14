@@ -656,7 +656,6 @@ impl<'a> Parser<'a> {
                 Ok(Expr::Cast {
                     expr: Box::new(Expr::Value(Value::String(parser.parse_literal_string()?))),
                     data_type,
-                    failure_mode: CastFailureMode::Error,
                 })
             }
         }));
@@ -680,10 +679,7 @@ impl<'a> Parser<'a> {
             }
             (Token::Keyword(MAP), Some(Token::LBracket) | Some(Token::LParen)) => self.parse_map(),
             (Token::Keyword(CASE), _) => self.parse_case_expr(),
-            (Token::Keyword(CAST), _) => self.parse_cast_expr(CastFailureMode::Error),
-            (Token::Keyword(TRY_CAST), Some(Token::LParen)) => {
-                self.parse_cast_expr(CastFailureMode::NullFallback)
-            }
+            (Token::Keyword(CAST), _) => self.parse_cast_expr(),
             (Token::Keyword(COALESCE), Some(Token::LParen)) => {
                 self.parse_homogenizing_function(HomogenizingFunction::Coalesce)
             }
@@ -1008,9 +1004,8 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parses the argument list of `CAST(...)` or `TRY_CAST(...)`, the keyword
-    /// having already been consumed.
-    fn parse_cast_expr(&mut self, failure_mode: CastFailureMode) -> Result<Expr<Raw>, ParserError> {
+    /// Parse a SQL CAST function e.g. `CAST(expr AS FLOAT)`
+    fn parse_cast_expr(&mut self) -> Result<Expr<Raw>, ParserError> {
         // Whether `expr` is safe to print directly to the left of a Postgres-style
         // `::<type>` cast without wrapping it in parentheses. `Expr::Cast` /
         // `Expr::Collate` print as the postfix forms `<inner>::<type>` /
@@ -1028,11 +1023,7 @@ impl<'a> Parser<'a> {
                 | Expr::HomogenizingFunction { .. }
                 | Expr::NullIf { .. }
                 | Expr::Subquery { .. }
-                | Expr::Parameter(..)
-                | Expr::Cast {
-                    failure_mode: CastFailureMode::NullFallback,
-                    ..
-                } => true,
+                | Expr::Parameter(..) => true,
                 Expr::Cast { expr, .. } | Expr::Collate { expr, .. } => safe_before_pg_cast(expr),
                 _ => false,
             }
@@ -1047,23 +1038,24 @@ impl<'a> Parser<'a> {
         //     CAST(<expr> OP <expr> AS <type>)
         // to
         //     <expr> OP <expr>::<type>
-        // (because we print an erroring Expr::Cast always as a Postgres-style
-        // cast, i.e. `::`) which could incorrectly change the meaning of the
-        // expression as the `::` binds tightly. To be safe, we wrap the inner
+        // (because we print Expr::Cast always as a Postgres-style cast, i.e. `::`)
+        // which could incorrectly change the meaning of the expression
+        // as the `::` binds tightly. To be safe, we wrap the inner
         // expression in parentheses
         //    (<expr> OP <expr>)::<type>
         // unless the inner expression is of a kind that we know is
-        // safe to follow with a `::` without wrapping. `TRY_CAST(...)` prints
-        // in its function-like form, which delimits its operand itself.
-        let expr = match failure_mode {
-            CastFailureMode::Error if !safe_before_pg_cast(&expr) => Expr::Nested(Box::new(expr)),
-            CastFailureMode::Error | CastFailureMode::NullFallback => expr,
-        };
-        Ok(Expr::Cast {
-            expr: Box::new(expr),
-            data_type,
-            failure_mode,
-        })
+        // safe to follow with a `::` without wrapping.
+        if safe_before_pg_cast(&expr) {
+            Ok(Expr::Cast {
+                expr: Box::new(expr),
+                data_type,
+            })
+        } else {
+            Ok(Expr::Cast {
+                expr: Box::new(Expr::Nested(Box::new(expr))),
+                data_type,
+            })
+        }
     }
 
     /// Parse a SQL EXISTS expression e.g. `WHERE EXISTS(SELECT ...)`.
@@ -1512,15 +1504,9 @@ impl<'a> Parser<'a> {
 
         // If the expression that is being cast can end with a type name, then let's parenthesize
         // it. Otherwise, the `[...]` would melt into the type name (making it an array type).
-        // Specifically, the only expressions whose printing can end with a type name are `::`
-        // casts, so check for that.
-        if matches!(
-            expr,
-            Expr::Cast {
-                failure_mode: CastFailureMode::Error,
-                ..
-            }
-        ) {
+        // Specifically, the only expressions whose printing can end with a type name are casts, so
+        // check for that.
+        if matches!(expr, Expr::Cast { .. }) {
             Ok(Expr::Subscript {
                 expr: Box::new(Expr::Nested(Box::new(expr))),
                 positions,
@@ -1724,7 +1710,6 @@ impl<'a> Parser<'a> {
         Ok(Expr::Cast {
             expr: Box::new(expr),
             data_type: self.parse_data_type()?,
-            failure_mode: CastFailureMode::Error,
         })
     }
 
