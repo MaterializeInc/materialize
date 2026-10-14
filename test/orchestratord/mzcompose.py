@@ -308,6 +308,28 @@ def stop_and_remove_container(container_name: str) -> None:
         pass
 
 
+REGISTRY_PROXY_IMAGE = "registry:2"
+
+
+def pull_registry_proxy_image(max_attempts: int = 5) -> None:
+    # Docker Hub sporadically answers 502 Bad Gateway (on the token endpoint or
+    # on blob downloads), which made the implicit pull in `docker run` fail
+    # with exit status 125 before any test ran, so pull explicitly with retries.
+    delay = 2
+    for attempt in range(1, max_attempts + 1):
+        try:
+            spawn.runv(["docker", "pull", REGISTRY_PROXY_IMAGE])
+            return
+        except subprocess.CalledProcessError:
+            if attempt == max_attempts:
+                raise
+            print(
+                f"Pulling {REGISTRY_PROXY_IMAGE} failed (attempt {attempt}/{max_attempts}), retrying in {delay}s"
+            )
+            time.sleep(delay)
+            delay *= 2
+
+
 def start_registry_proxy(
     *,
     container_name: str,
@@ -339,7 +361,7 @@ def start_registry_proxy(
             "-v",
             cache_dir,
             *env,
-            "registry:2",
+            REGISTRY_PROXY_IMAGE,
         ]
     )
 
@@ -396,6 +418,7 @@ def recreate_kind_cluster() -> None:
     stop_and_remove_container("proxy-dockerhub")
     stop_and_remove_container("proxy-ghcr")
 
+    pull_registry_proxy_image()
     start_registry_proxy(
         container_name="proxy-dockerhub",
         cache_dir=f"{MZ_ROOT}/misc/kind/cache/dockerhub:/var/lib/registry",
