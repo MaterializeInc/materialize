@@ -388,7 +388,7 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "enable_compute_sync_mv_sink_shared_batches",
+            "enable_compute_mv_sink_shared_batches",
             "true",
             ["true", "false"],
         ),

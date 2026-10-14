@@ -286,8 +286,8 @@ pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
 
 /// Coalesce the parts written by the workers in one process into a single shared batch per batch
 /// interval, instead of each worker writing its own batch.
-pub const ENABLE_SYNC_MV_SINK_SHARED_BATCHES: Config<bool> = Config::new(
-    "enable_compute_sync_mv_sink_shared_batches",
+pub const ENABLE_MV_SINK_SHARED_BATCHES: Config<bool> = Config::new(
+    "enable_compute_mv_sink_shared_batches",
     false,
     "Coalesce the parts written by the workers in one process into a single shared batch per \
      batch interval in the MV sink.",
@@ -839,7 +839,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_ERROR_DISTINCT)
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_SYNC_MV_SINK)
-        .add(&ENABLE_SYNC_MV_SINK_SHARED_BATCHES)
+        .add(&ENABLE_MV_SINK_SHARED_BATCHES)
         .add(&MV_SINK_SHARED_BATCH_MAX_BYTES)
         .add(&ENABLE_CORRECTION_V2)
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)

@@ -17,7 +17,7 @@
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET enable_compute_sync_mv_sink_shared_batches = true
+ALTER SYSTEM SET enable_compute_mv_sink_shared_batches = true
 
 # Multiple workers in one process, so the sink coalesces their parts.
 > CREATE CLUSTER shared_batches SIZE 'scale=1,workers=4'
@@ -132,7 +132,7 @@ ALTER SYSTEM RESET compute_mv_sink_shared_batch_max_bytes
 
 # With sharing disabled, every worker writes its own batch.
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET enable_compute_sync_mv_sink_shared_batches = false
+ALTER SYSTEM SET enable_compute_mv_sink_shared_batches = false
 
 > DELETE FROM t WHERE k IN (1, 2)
 
@@ -158,7 +158,7 @@ ALTER SYSTEM SET enable_compute_sync_mv_sink_shared_batches = false
 25001
 
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET enable_compute_sync_mv_sink_shared_batches = true
+ALTER SYSTEM SET enable_compute_mv_sink_shared_batches = true
 
 # A write with no net change must not corrupt the view. Workers that end up
 # with no data for the interval must still finish their shared batch, since any
@@ -180,5 +180,5 @@ ALTER SYSTEM SET enable_compute_sync_mv_sink_shared_batches = true
 > DROP CLUSTER shared_batches
 
 $ postgres-execute connection=mz_system
-ALTER SYSTEM RESET enable_compute_sync_mv_sink_shared_batches
+ALTER SYSTEM RESET enable_compute_mv_sink_shared_batches
 ALTER SYSTEM RESET enable_compute_sync_mv_sink

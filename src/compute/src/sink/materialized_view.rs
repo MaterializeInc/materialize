@@ -123,7 +123,7 @@ use std::sync::Arc;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use mz_compute_types::dyncfgs::{
-    ENABLE_SYNC_MV_SINK_SHARED_BATCHES, MV_SINK_ADVANCE_PERSIST_FRONTIERS,
+    ENABLE_MV_SINK_SHARED_BATCHES, MV_SINK_ADVANCE_PERSIST_FRONTIERS,
     MV_SINK_SHARED_BATCH_MAX_BYTES,
 };
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
@@ -848,7 +848,7 @@ mod write {
             let shared_batch_writer = SharedBatchWriter::new(
                 &persist_api,
                 &writer,
-                ENABLE_SYNC_MV_SINK_SHARED_BATCHES.handle(&worker_config),
+                ENABLE_MV_SINK_SHARED_BATCHES.handle(&worker_config),
                 MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config),
             )
             .await;

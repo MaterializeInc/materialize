@@ -53,7 +53,7 @@ use std::sync::Arc;
 
 use differential_dataflow::{Hashable, VecCollection};
 use mz_compute_types::dyncfgs::{
-    ENABLE_SYNC_MV_SINK_SHARED_BATCHES, MV_SINK_ADVANCE_PERSIST_FRONTIERS,
+    ENABLE_MV_SINK_SHARED_BATCHES, MV_SINK_ADVANCE_PERSIST_FRONTIERS,
     MV_SINK_SHARED_BATCH_MAX_BYTES,
 };
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
@@ -660,7 +660,7 @@ mod write {
         let advance_persist_frontiers_at_startup =
             MV_SINK_ADVANCE_PERSIST_FRONTIERS.get(&worker_config);
 
-        let shared_batches_enabled = ENABLE_SYNC_MV_SINK_SHARED_BATCHES.handle(&worker_config);
+        let shared_batches_enabled = ENABLE_MV_SINK_SHARED_BATCHES.handle(&worker_config);
         let shared_batch_max_bytes = MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config);
 
         // Mirror the persist-frontier initialization performed by `State::new` below. With the
