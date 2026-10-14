@@ -578,9 +578,7 @@ mod test {
             UnaryFunc::CastVarCharToString(CastVarCharToString),
             UnaryFunc::Not(Not),
             UnaryFunc::IsLikeMatch(IsLikeMatch(like_pattern::compile("%hi%", false).unwrap())),
-            UnaryFunc::TryCast(TryCast {
-                inner: Box::new(UnaryFunc::CastStringToInt32(CastStringToInt32)),
-            }),
+            UnaryFunc::try_cast_if_fallible(UnaryFunc::CastStringToInt32(CastStringToInt32)),
         ];
         for func in funcs {
             assert!(!func.could_error())

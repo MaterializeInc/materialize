@@ -1387,14 +1387,15 @@ mod scalar {
                 let Some(cast) = UnaryFunc::from_variant_name(&name.to_string()) else {
                     return Err(Error::new(name.span(), "unsupported function name"));
                 };
+                let func = UnaryFunc::try_cast_if_fallible(cast);
+                if !matches!(func, UnaryFunc::TryCast(_)) {
+                    return Err(Error::new(
+                        name.span(),
+                        "try_cast wraps only functions that can error",
+                    ));
+                }
                 let expr = Box::new(parse_expr(&inner)?);
-                Ok(MirScalarExpr::CallUnary {
-                    func: func::TryCast {
-                        inner: Box::new(cast),
-                    }
-                    .into(),
-                    expr,
-                })
+                Ok(MirScalarExpr::CallUnary { func, expr })
             }
             _ => Err(Error::new(
                 ident.span(),

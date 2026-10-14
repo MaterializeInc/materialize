@@ -108,7 +108,7 @@ fn maybe_try_cast(
 ) -> arbitrary::Result<UnaryFunc> {
     let cast = cast.into();
     Ok(if bool::arbitrary(u)? {
-        UnaryFunc::try_cast(cast)
+        UnaryFunc::try_cast_if_fallible(cast)
     } else {
         cast
     })
