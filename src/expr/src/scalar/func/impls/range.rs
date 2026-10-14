@@ -31,7 +31,7 @@ pub struct CastRangeToString {
 }
 
 // TODO? if typeconv was in expr, we could determine the inverse of this cast
-#[sqlfunc(CastRangeToString, sqlname = "rangetostr", preserves_uniqueness = true)]
+#[sqlfunc(CastRangeToString, sqlname = "rangetostr", preserves_uniqueness = super::text_preserves_uniqueness(&self.ty))]
 fn cast_range_to_string<'a>(&self, a: ExcludeNull<Datum<'a>>) -> Result<String, EvalError> {
     let mut buf = String::new();
     stringify_datum(&mut buf, *a, &self.ty)?;

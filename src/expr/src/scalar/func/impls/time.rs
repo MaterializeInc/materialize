@@ -21,8 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
 
-// Not uniqueness-preserving: a time keeps nanoseconds, but its text form is
-// rounded to microseconds.
+// Not uniqueness-preserving: see `text_preserves_uniqueness`.
 #[sqlfunc(
     sqlname = "time_to_text",
     preserves_uniqueness = false,
