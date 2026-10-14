@@ -868,6 +868,9 @@ async fn snapshot_output(
     let oid = info.desc.oid;
     let snapshot_lsn = snapshot_info.snapshot_lsn;
     let statistics = &config.statistics[&info.export_id];
+
+    pg_snapshot_failpoint_pause(&info.desc.name).await;
+
     if let Err(err) = verify_schema(oid, info, &snapshot_info.upstream_info) {
         let update = (Err(err.into()), MzOffset::minimum(), Diff::ONE);
         raw_handles.give(output_index, cap, update).await;
@@ -934,6 +937,31 @@ async fn snapshot_output(
     // values as the total is an estimate
     statistics.set_snapshot_records_staged(snapshot_staged);
     Ok(())
+}
+
+/// Test-only pause point, run before any data of `table` is emitted. Configuring the failpoint as
+/// `pg_snapshot_pause=return(<table name>)` holds the snapshot of that table until the failpoint
+/// is deactivated. `return(<table name>:<millis>)` holds it for that long instead, so the snapshot
+/// completes in the same dataflow incarnation. Tables are snapshotted in OID order, so tables
+/// ordered before the paused one complete their snapshots.
+async fn pg_snapshot_failpoint_pause(table: &str) {
+    let held_since = std::time::Instant::now();
+    loop {
+        let held = fail::eval("pg_snapshot_pause", |payload| {
+            let (paused_table, millis) = payload
+                .as_deref()
+                .map(|p| p.split_once(':').unwrap_or((p, "")))
+                .unwrap_or_default();
+            paused_table == table
+                && millis.parse::<u64>().map_or(true, |millis| {
+                    held_since.elapsed() < Duration::from_millis(millis)
+                })
+        });
+        match held {
+            Some(true) => tokio::time::sleep(Duration::from_millis(100)).await,
+            _ => break,
+        }
+    }
 }
 
 /// Starts a read-only transaction on the SQL session of `client` at a consistent LSN point by
