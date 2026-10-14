@@ -150,6 +150,68 @@ fn variadic_params(func: &syn::ItemFn) -> darling::Result<(Vec<syn::Type>, Vec<I
     Ok((types, names))
 }
 
+/// The column type expression the output-type method starts from, and the
+/// `introduces_nulls` method if one is generated.
+///
+/// `output_type`, `output_type_expr` and `introduces_nulls` decide both together. A
+/// generic signature that sets neither output modifier derives them from where its
+/// type parameters appear.
+fn output_type_and_introduces_nulls(
+    shape: Shape,
+    mods: &Modifiers,
+    param_types_raw: &[syn::Type],
+    output_ty_raw: &syn::Type,
+    generic_params: &[Ident],
+) -> darling::Result<(TokenStream, Option<TokenStream>)> {
+    let output_type = mods.output_type();
+    let mut output_type_expr = mods.output_type_expr().map(|expr| quote! { #expr });
+    let mut introduces_nulls = mods.introduces_nulls().map(|expr| quote! { #expr });
+
+    if output_type.is_some() && output_type_expr.is_some() {
+        return Err(darling::Error::custom(
+            "output_type and output_type_expr cannot be used together",
+        ));
+    }
+
+    // Derive the output type from where the generic parameters land. This reads the
+    // pre-erasure types, because erasure is what removes those parameters.
+    if !generic_params.is_empty() && output_type.is_none() && output_type_expr.is_none() {
+        if let Some(derived) = signature::derive_output_type_for_generics(
+            param_types_raw,
+            output_ty_raw,
+            generic_params,
+            shape == Shape::Unary,
+        )? {
+            output_type_expr = Some(derived);
+            if introduces_nulls.is_none() {
+                let nullable = signature::is_option_wrapped(output_ty_raw);
+                introduces_nulls = Some(quote! { #nullable });
+            }
+        }
+    }
+
+    let column_type = match (output_type, output_type_expr) {
+        (Some(output_type), _) => quote! { <#output_type>::as_column_type() },
+        (None, Some(output_type_expr)) => output_type_expr,
+        (None, None) => quote! { Self::Output::as_column_type() },
+    };
+    // Without an `introduces_nulls` method the trait default reads `Self::Output`,
+    // which an explicit `output_type` replaces.
+    let introduces_nulls = introduces_nulls.or_else(|| {
+        output_type.map(|output_type| {
+            quote! { <#output_type as ::mz_repr::OutputDatumType<'_, ()>>::nullable() }
+        })
+    });
+    let introduces_nulls_fn = introduces_nulls.map(|introduces_nulls| {
+        quote! {
+            fn introduces_nulls(&self) -> bool {
+                #introduces_nulls
+            }
+        }
+    });
+    Ok((column_type, introduces_nulls_fn))
+}
+
 /// Generates the trait impl for one `#[sqlfunc]`-annotated function, together with the
 /// items [`expand`] wraps around it.
 ///
@@ -200,32 +262,6 @@ pub(crate) fn generate(
         Shape::Variadic => variadic_params(func)?,
     };
 
-    let output_type = mods.output_type().cloned();
-    let mut output_type_expr = mods.output_type_expr().cloned();
-    let mut introduces_nulls = mods.introduces_nulls().cloned();
-
-    // Derive the output type from where the generic parameters land. This reads the
-    // pre-erasure types, because erasure is what removes those parameters.
-    if !generic_params.is_empty() && output_type.is_none() && output_type_expr.is_none() {
-        if let Some(derived) = signature::derive_output_type_for_generics(
-            &param_types_raw,
-            output_ty_raw,
-            &generic_params,
-            shape == Shape::Unary,
-        )? {
-            output_type_expr = Some(syn::parse2(derived)?);
-            if introduces_nulls.is_none() {
-                let nullable = signature::is_option_wrapped(output_ty_raw);
-                introduces_nulls = Some(syn::parse_quote!(#nullable));
-            }
-        }
-    }
-
-    if output_type.is_some() && output_type_expr.is_some() {
-        return Err(darling::Error::custom(
-            "output_type and output_type_expr cannot be used together",
-        ));
-    }
     if mods.skip_display() && mods.sqlname().is_some() {
         return Err(darling::Error::custom(
             "sqlname has no effect with skip_display, which suppresses the only impl that reads it",
@@ -259,32 +295,13 @@ pub(crate) fn generate(
         quote! { (#(#param_names),*) }
     };
 
-    let (mut output_type_code, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
-        let introduces_nulls_fn = quote! {
-            fn introduces_nulls(&self) -> bool {
-                <#output_type as ::mz_repr::OutputDatumType<'_, ()>>::nullable()
-            }
-        };
-        (
-            quote! { <#output_type>::as_column_type() },
-            Some(introduces_nulls_fn),
-        )
-    } else {
-        (quote! { Self::Output::as_column_type() }, None)
-    };
-
-    if let Some(output_type_expr) = output_type_expr {
-        output_type_code = quote! { #output_type_expr };
-    }
-
-    if let Some(introduces_nulls) = introduces_nulls {
-        introduces_nulls_fn = Some(quote! {
-            fn introduces_nulls(&self) -> bool {
-                #introduces_nulls
-            }
-        });
-    }
-
+    let (output_type_code, introduces_nulls_fn) = output_type_and_introduces_nulls(
+        shape,
+        &mods,
+        &param_types_raw,
+        output_ty_raw,
+        &generic_params,
+    )?;
     let methods = override_methods(shape, &mods, introduces_nulls_fn);
 
     // Every arity's `call` receives the arena; only `arena` (whether the annotated
