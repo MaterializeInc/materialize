@@ -130,6 +130,12 @@ entire trace.
 Try the approved identity-view-plus-index candidate for catalog MVs, leaving
 retained metrics on direct raw reads. Preserve restricted access to raw catalog
 contents and check actual optimized imports before interpreting the comparison.
+First bootstrap excludes the unadmitted index while planning MVs with fixed
+birth requirements. Resolve whether the correction may also enable other new
+builtin indexes during first planning. Prefer admission when a chosen plan needs
+an unadmitted index, not a publication before every MV. Protect required history
+in the admission transaction and acquire only committed permission. A dry-run
+floor can become stale on conflict. No forced adoption or new bootstrap framework.
 Preserve historical reads, source flow control and existing protection. Compare
 decoding, memory and SQL latency in a short case, then verify promising changes
 through existing restart/handover and original-workload checks.
