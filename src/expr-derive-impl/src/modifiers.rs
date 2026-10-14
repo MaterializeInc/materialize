@@ -10,8 +10,8 @@
 //!
 //! [`Modifiers`] is the parsed attribute and [`reject_inapplicable`] gates it against
 //! the per-arity tables in [`crate::shape`]. Modifiers that feed `Display` or the
-//! output-type body are read by name, and the ones that map onto a trait method are
-//! reached through [`Modifiers::iter`].
+//! output-type body have their own accessors, and the ones that map onto a trait method
+//! are reached through [`Modifiers::iter`].
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -32,7 +32,7 @@ pub(crate) struct Modifiers {
     /// may be infinite. Set `false` for multiplication and division.
     is_infinity_monotone: Option<Expr>,
     /// The SQL name for the function.
-    pub(crate) sqlname: Option<SqlName>,
+    sqlname: Option<SqlName>,
     /// Whether the function preserves uniqueness.
     preserves_uniqueness: Option<Expr>,
     /// The inverse of the function, if it exists.
@@ -42,15 +42,15 @@ pub(crate) struct Modifiers {
     /// Whether the function is an infix operator.
     is_infix_op: Option<Expr>,
     /// The output type of the function, if it cannot be inferred.
-    pub(crate) output_type: Option<syn::Path>,
+    output_type: Option<syn::Path>,
     /// The output type of the function as an expression.
-    pub(crate) output_type_expr: Option<Expr>,
+    output_type_expr: Option<Expr>,
     /// Whether the function could error.
     could_error: Option<Expr>,
     /// Whether the function propagates nulls.
     propagates_nulls: Option<Expr>,
     /// Whether the function introduces nulls.
-    pub(crate) introduces_nulls: Option<Expr>,
+    introduces_nulls: Option<Expr>,
     /// Whether the function is associative.
     is_associative: Option<Expr>,
     /// Whether the function is a noop cast.
@@ -65,13 +65,39 @@ impl Modifiers {
         self.test.unwrap_or(false)
     }
 
+    /// The SQL name the generated `Display` writes, if the call site overrides the
+    /// function's name.
+    pub(crate) fn sqlname(&self) -> Option<&SqlName> {
+        self.sqlname.as_ref()
+    }
+
+    /// The type whose column type is the function's output type, if the call site
+    /// overrides the one derived from the return type.
+    pub(crate) fn output_type(&self) -> Option<&syn::Path> {
+        self.output_type.as_ref()
+    }
+
+    /// An expression computing the function's output column type, if the call site
+    /// overrides the one derived from the return type.
+    pub(crate) fn output_type_expr(&self) -> Option<&Expr> {
+        self.output_type_expr.as_ref()
+    }
+
+    /// The call site's `introduces_nulls`, which `crate::generate::generate` combines
+    /// with the output type instead of emitting it on its own.
+    pub(crate) fn introduces_nulls(&self) -> Option<&Expr> {
+        self.introduces_nulls.as_ref()
+    }
+
     /// The method-producing modifiers that are present, in this method's own fixed
     /// order, which does not match any of the three per-arity tables in
     /// `crate::shape`. A caller that needs table order joins against
     /// `Shape::modifiers()` by `Modifier` instead.
     ///
     /// Modifiers that do not produce a trait method are excluded, because
-    /// `crate::generate::generate` consumes those by name.
+    /// `crate::generate::generate` reads those through their accessors.
+    /// `introduces_nulls` is included so [`reject_inapplicable`] checks it, although
+    /// `crate::generate::generate` builds its method from the output type.
     pub(crate) fn iter(&self) -> impl Iterator<Item = (Modifier, &Expr)> + '_ {
         [
             (Modifier::CouldError, self.could_error.as_ref()),
