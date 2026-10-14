@@ -40,7 +40,7 @@ fn override_methods(
                 .iter()
                 .find(|(candidate, _)| candidate == modifier)
                 .map(|(_, expr)| *expr)?;
-            let name = Ident::new(modifier.name(), proc_macro2::Span::call_site());
+            let name = Ident::new(modifier.name(), Span::call_site());
             let body = ret.body(expr);
             let ret = ret.to_tokens();
             Some(quote! {
@@ -127,25 +127,32 @@ fn expand(e: &Codegen, func: &syn::ItemFn, trait_impl: TokenStream) -> TokenStre
     }
 }
 
-/// A variadic function's parameter names and their pre-erasure types.
-fn variadic_params(func: &syn::ItemFn) -> darling::Result<(Vec<syn::Type>, Vec<Ident>)> {
+/// The SQL arguments' pre-erasure types, and the names `call` binds them to.
+///
+/// Unary and binary bind their inputs positionally as `a` and `b`, ignoring how the
+/// function spells its parameters, while variadic forwards the real names.
+fn sql_params(shape: Shape, func: &syn::ItemFn) -> darling::Result<(Vec<syn::Type>, Vec<Ident>)> {
+    // `crate::sqlfunc::determine_shape` gives unary one SQL argument and binary two.
+    const POSITIONAL: [&str; 2] = ["a", "b"];
     let mut types = Vec::new();
     let mut names = Vec::new();
-    for param in signature::sql_args(func) {
-        match param {
-            syn::FnArg::Typed(pat) => {
+    for (position, param) in signature::sql_args(func).into_iter().enumerate() {
+        let syn::FnArg::Typed(pat) = param else {
+            return Err(darling::Error::custom("unexpected self parameter").with_span(param));
+        };
+        let name = match shape {
+            Shape::Unary | Shape::Binary => Ident::new(POSITIONAL[position], Span::call_site()),
+            Shape::Variadic => {
                 let syn::Pat::Ident(ident) = &*pat.pat else {
                     return Err(
                         darling::Error::custom("unsupported parameter pattern").with_span(&pat.pat)
                     );
                 };
-                names.push(ident.ident.clone());
-                types.push(signature::patch_lifetimes(&pat.ty));
+                ident.ident.clone()
             }
-            syn::FnArg::Receiver(_) => {
-                return Err(darling::Error::custom("unexpected self parameter"));
-            }
-        }
+        };
+        types.push(signature::patch_lifetimes(&pat.ty));
+        names.push(name);
     }
     Ok((types, names))
 }
@@ -215,15 +222,12 @@ fn output_type_and_introduces_nulls(
 /// Generates the trait impl for one `#[sqlfunc]`-annotated function, together with the
 /// items [`expand`] wraps around it.
 ///
-/// `struct_ty` names the generated struct when the call site spells one. `has_self`
-/// says the annotated function takes a receiver, so the trait's `call` dispatches
-/// through it.
+/// `struct_ty` names the generated struct when the call site spells one.
 pub(crate) fn generate(
     shape: Shape,
     func: &syn::ItemFn,
     mods: Modifiers,
     struct_ty: Option<syn::Path>,
-    has_self: bool,
     attr: &TokenStream,
 ) -> darling::Result<TokenStream> {
     reject_inapplicable(shape, &mods)?;
@@ -234,33 +238,16 @@ pub(crate) fn generate(
         .and_then(|ty| ty.segments.last())
         .map_or_else(|| signature::camel_case(fn_name), |seg| seg.ident.clone());
 
-    // Whether the annotated function itself wants the arena, which is independent of
-    // whether the trait's `call` receives one.
+    // A receiver makes `call` dispatch through `self` to a method on a struct defined
+    // at the call site.
+    let has_self = signature::has_receiver(func);
+    // Whether the annotated function takes the arena. The trait's `call` always receives
+    // one.
     let arena = signature::last_is_arena(func);
     let output_ty_raw = signature::output_type(func)?;
     let generic_params = signature::find_generic_type_params(func);
 
-    // Unary and binary bind their inputs positionally, ignoring how the function
-    // spells its parameters, while variadic forwards the real names. A `&self`
-    // receiver occupies position 0, so it offsets where the bound arguments start.
-    let self_offset = usize::from(has_self);
-    let (param_types_raw, param_names) = match shape {
-        Shape::Unary => (
-            vec![signature::arg_type(func, self_offset)?],
-            vec![Ident::new("a", Span::call_site())],
-        ),
-        Shape::Binary => (
-            vec![
-                signature::arg_type(func, self_offset)?,
-                signature::arg_type(func, self_offset + 1)?,
-            ],
-            vec![
-                Ident::new("a", Span::call_site()),
-                Ident::new("b", Span::call_site()),
-            ],
-        ),
-        Shape::Variadic => variadic_params(func)?,
-    };
+    let (param_types_raw, param_names) = sql_params(shape, func)?;
 
     if mods.skip_display() && mods.sqlname().is_some() {
         return Err(darling::Error::custom(
@@ -304,9 +291,6 @@ pub(crate) fn generate(
     )?;
     let methods = override_methods(shape, &mods, introduces_nulls_fn);
 
-    // Every arity's `call` receives the arena; only `arena` (whether the annotated
-    // function itself wants it) varies.
-    let arena_param = quote! { , temp_storage: &'a mz_repr::RowArena };
     let arena_arg = if arena {
         quote! { , temp_storage }
     } else {
@@ -329,8 +313,8 @@ pub(crate) fn generate(
 
             fn call<'a>(
                 &self,
-                #destructure: Self::Input<'a>
-                #arena_param
+                #destructure: Self::Input<'a>,
+                temp_storage: &'a mz_repr::RowArena,
             ) -> Self::Output<'a> {
                 #receiver #fn_name(#(#param_names),* #arena_arg)
             }

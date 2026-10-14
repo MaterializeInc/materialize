@@ -76,6 +76,21 @@ fn is_nullable_type(ty: &syn::Type) -> bool {
     false
 }
 
+/// Checks whether a parameter's type is `Variadic<...>` or `OptionalArg<...>`, which
+/// makes the function variadic regardless of parameter count.
+pub(crate) fn is_variadic_arg(arg: &syn::FnArg) -> bool {
+    let syn::FnArg::Typed(pat) = arg else {
+        return false;
+    };
+    let syn::Type::Path(path) = &*pat.ty else {
+        return false;
+    };
+    path.path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "Variadic" || segment.ident == "OptionalArg")
+}
+
 /// Checks if a type is `Variadic<T>`.
 fn is_variadic_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty {
@@ -585,34 +600,6 @@ pub(crate) fn erase_all_generic_params(ty: &syn::Type, generic_names: &[Ident]) 
         ty = erase_generic_param(&ty, gn);
     }
     ty
-}
-
-/// Determines the argument type of the nth argument of the function.
-///
-/// Adds a lifetime `'a` to the argument type if it is a reference type.
-///
-/// Panics if the function has fewer than `nth` arguments. Returns an error if
-/// the parameter is a `self` receiver.
-pub(crate) fn arg_type(arg: &syn::ItemFn, nth: usize) -> Result<syn::Type, syn::Error> {
-    match &arg.sig.inputs[nth] {
-        syn::FnArg::Typed(pat) => {
-            // Patch lifetimes to be 'a if reference
-            if let syn::Type::Reference(r) = &*pat.ty {
-                if r.lifetime.is_none() {
-                    let ty = syn::Type::Reference(syn::TypeReference {
-                        lifetime: Some(Lifetime::new("'a", r.span())),
-                        ..r.clone()
-                    });
-                    return Ok(ty);
-                }
-            }
-            Ok((*pat.ty).clone())
-        }
-        syn::FnArg::Receiver(_) => Err(syn::Error::new(
-            arg.sig.inputs[nth].span(),
-            "unsupported argument type",
-        )),
-    }
 }
 
 /// Recursively patches lifetimes in a type, adding `'a` to references without a lifetime

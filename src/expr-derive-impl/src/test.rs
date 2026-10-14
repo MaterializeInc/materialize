@@ -88,6 +88,23 @@ fn insta_test_unary_ref() {
 
 #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
 #[mz_ore::test]
+fn insta_test_unary_nested_ref() {
+    let attr = quote! {test = true};
+    let item = quote! {
+        fn unary_fn<'a>(a: Option<&str>) -> bool {
+            unimplemented!()
+        }
+    };
+    let (output, input) = super::test_sqlfunc(attr, item);
+    assert!(
+        output.contains("type Input<'a> = Option<&'a str>;"),
+        "a reference nested in a unary parameter must get the trait's lifetime, got:\n{output}"
+    );
+    insta::assert_snapshot!("unary_nested_ref", output, &input);
+}
+
+#[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+#[mz_ore::test]
 fn insta_test_complex_output_type() {
     let attr = quote! {
             is_monotone = (true, true),
