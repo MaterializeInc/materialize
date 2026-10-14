@@ -3726,6 +3726,8 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Numeric) => AggregateFunc::MaxNumeric => Numeric, oid::FUNC_MAX_NUMERIC_OID;
             params!(Interval) => AggregateFunc::MaxInterval => Interval, 2128;
             params!(Time) => AggregateFunc::MaxTime => Time, 2123;
+            params!(ArrayAny) => AggregateFunc::MaxArray => ArrayAny, 2050;
+            params!(ListAny) => AggregateFunc::MaxList => ListAny, oid::FUNC_MAX_LIST_OID;
         },
         "min" => Aggregate {
             params!(Bool) => AggregateFunc::MinBool => Bool, oid::FUNC_MIN_BOOL_OID;
@@ -3748,6 +3750,8 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Numeric) => AggregateFunc::MinNumeric => Numeric, oid::FUNC_MIN_NUMERIC_OID;
             params!(Interval) => AggregateFunc::MinInterval => Interval, 2144;
             params!(Time) => AggregateFunc::MinTime => Time, 2139;
+            params!(ArrayAny) => AggregateFunc::MinArray => ArrayAny, 2051;
+            params!(ListAny) => AggregateFunc::MinList => ListAny, oid::FUNC_MIN_LIST_OID;
         },
         "jsonb_agg" => Aggregate {
             params!(Any) => Operation::unary_ordered(|ecx, e, order_by| {
@@ -6067,6 +6071,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(PgLegacyChar, PgLegacyChar) => BF::from(func::Lt) => Bool, 631;
             params!(PgLegacyName, PgLegacyName) => BF::from(func::Lt) => Bool, 660;
             params!(Jsonb, Jsonb) => BF::from(func::Lt) => Bool, 3242;
+            params!(ListAny, ListAny) => BF::from(func::Lt) => Bool, oid::FUNC_LIST_LT_OID;
             params!(ArrayAny, ArrayAny) => BF::from(func::Lt) => Bool, 1072;
             params!(RecordAny, RecordAny) => BF::from(func::Lt) => Bool, 2990;
             params!(MzTimestamp, MzTimestamp) => BF::from(func::Lt)
@@ -6097,6 +6102,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(PgLegacyChar, PgLegacyChar) => BF::from(func::Lte) => Bool, 632;
             params!(PgLegacyName, PgLegacyName) => BF::from(func::Lte) => Bool, 661;
             params!(Jsonb, Jsonb) => BF::from(func::Lte) => Bool, 3244;
+            params!(ListAny, ListAny) => BF::from(func::Lte) => Bool, oid::FUNC_LIST_LTE_OID;
             params!(ArrayAny, ArrayAny) => BF::from(func::Lte) => Bool, 1074;
             params!(RecordAny, RecordAny) => BF::from(func::Lte) => Bool, 2992;
             params!(MzTimestamp, MzTimestamp) => BF::from(func::Lte)
@@ -6127,6 +6133,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(PgLegacyChar, PgLegacyChar) => BF::from(func::Gt) => Bool, 633;
             params!(PgLegacyName, PgLegacyName) => BF::from(func::Gt) => Bool, 662;
             params!(Jsonb, Jsonb) => BF::from(func::Gt) => Bool, 3243;
+            params!(ListAny, ListAny) => BF::from(func::Gt) => Bool, oid::FUNC_LIST_GT_OID;
             params!(ArrayAny, ArrayAny) => BF::from(func::Gt) => Bool, 1073;
             params!(RecordAny, RecordAny) => BF::from(func::Gt) => Bool, 2991;
             params!(MzTimestamp, MzTimestamp) => BF::from(func::Gt)
@@ -6157,6 +6164,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(PgLegacyChar, PgLegacyChar) => BF::from(func::Gte) => Bool, 634;
             params!(PgLegacyName, PgLegacyName) => BF::from(func::Gte) => Bool, 663;
             params!(Jsonb, Jsonb) => BF::from(func::Gte) => Bool, 3245;
+            params!(ListAny, ListAny) => BF::from(func::Gte) => Bool, oid::FUNC_LIST_GTE_OID;
             params!(ArrayAny, ArrayAny) => BF::from(func::Gte) => Bool, 1075;
             params!(RecordAny, RecordAny) => BF::from(func::Gte) => Bool, 2993;
             params!(MzTimestamp, MzTimestamp) => BF::from(func::Gte)
@@ -6231,6 +6239,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
             params!(PgLegacyChar, PgLegacyChar) => BF::from(func::NotEq) => Bool, 630;
             params!(PgLegacyName, PgLegacyName) => BF::from(func::NotEq) => Bool, 643;
             params!(Jsonb, Jsonb) => BF::from(func::NotEq) => Bool, 3241;
+            params!(ListAny, ListAny) => BF::from(func::NotEq) => Bool, oid::FUNC_LIST_NOT_EQ_OID;
             params!(ArrayAny, ArrayAny) => BF::from(func::NotEq) => Bool, 1071;
             params!(RecordAny, RecordAny) => BF::from(func::NotEq) => Bool, 2989;
             params!(MzTimestamp, MzTimestamp) => BF::from(func::NotEq)
