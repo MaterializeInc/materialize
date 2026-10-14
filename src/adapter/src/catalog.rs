@@ -297,6 +297,11 @@ impl ConnCatalog<'_> {
         &*self.state
     }
 
+    /// Returns a system-role view of this catalog snapshot.
+    pub fn for_system_session(&self) -> ConnCatalog<'_> {
+        self.state.for_system_session()
+    }
+
     /// Prevent planning from resolving item with the provided ID. Instead,
     /// return an error as if the item did not exist.
     ///

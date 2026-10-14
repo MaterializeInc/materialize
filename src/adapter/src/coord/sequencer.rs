@@ -451,7 +451,7 @@ impl Coordinator {
                 }
                 Plan::AlterClusterReplicaRename(plan) => {
                     let result = self
-                        .sequence_alter_cluster_replica_rename(ctx.session(), plan)
+                        .sequence_alter_cluster_replica_rename(&mut ctx, plan)
                         .await;
                     ctx.retire(result);
                 }
