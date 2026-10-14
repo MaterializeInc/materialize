@@ -308,11 +308,15 @@ failing workflows and deadlines.
 Preserve the independent DROP-metric retirement observation and paused-index
 advancement coverage within the explicit protection-lifetime contract. Keep history
 across deployments. The history episode setup can pass while the expected row
-remains absent at the deadline.
-Temporary fixture-enabled cutoff/outcome logs distinguish a missed visit from a
-fresh-cutoff no-op. Keep the assertion and deadline, and remove those logs once
-answered. Earlier sampling and catalog restore costs remain PR observations,
-not additional investigation campaigns.
+remains absent at the deadline. The sampler promises approximate freshness, not
+completion within the fixture's retry budget. Serial visits and per-visit retention
+also exist in the pinned baseline. Delayed collection alone establishes neither
+a semantic regression nor the cause of broader contention. Cleanup rescheduling
+is parked. Do not redesign the collector or extend deadlines to pass this assertion.
+Keep the fixture-timing issue separate from the main catalog-contention repair.
+Temporary cutoff/outcome logs remain until the observed episode is fully accounted
+for. Earlier sampling and catalog restore costs remain PR observations, not
+additional investigation campaigns.
 
 Native ownership, read protection, external-sink safeguards and compatible-version
 warm handover remain required. The outage, targeted DDL and bounded-throughput
