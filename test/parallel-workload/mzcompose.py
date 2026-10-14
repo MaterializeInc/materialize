@@ -176,7 +176,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         #     return
 
 
-def workflow_catalog_transactions(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_catalog_transactions(
+    c: Composition,
+    parser: WorkflowArgumentParser,
+) -> None:
     """Require independent DDL transactions to commit during catalog churn."""
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--rounds", type=int, default=25)

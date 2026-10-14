@@ -31,7 +31,9 @@ def independent_ddl(c: Composition, before_commit: bool, same_schema: bool) -> N
         if not same_schema:
             execute(other, f"CREATE SCHEMA {other_schema}")
         execute(other, f"CREATE VIEW {schema}.original AS SELECT 42 AS value")
-        execute(other, f"CREATE VIEW {schema}.dependent AS SELECT * FROM {schema}.original")
+        execute(
+            other, f"CREATE VIEW {schema}.dependent AS SELECT * FROM {schema}.original"
+        )
         original_id = execute(
             other,
             "SELECT id FROM mz_views WHERE schema_id = "
@@ -50,17 +52,14 @@ def independent_ddl(c: Composition, before_commit: bool, same_schema: bool) -> N
 
         assert execute(other, f"SELECT * FROM {schema}.final").fetchall() == [(42,)]
         assert execute(other, f"SELECT * FROM {schema}.dependent").fetchall() == [(42,)]
-        assert execute(other, f"SELECT * FROM {other_schema}.unrelated").fetchall() == [
-            (7,)
-        ]
-        assert (
-            execute(
-                other,
-                "SELECT id FROM mz_views WHERE schema_id = "
-                f"(SELECT id FROM mz_schemas WHERE name = '{schema}') AND name = 'final'",
-            ).fetchone()
-            == original_id
-        )
+        unrelated = execute(other, f"SELECT * FROM {other_schema}.unrelated").fetchall()
+        assert unrelated == [(7,)]
+        final_id = execute(
+            other,
+            "SELECT id FROM mz_views WHERE schema_id = "
+            f"(SELECT id FROM mz_schemas WHERE name = '{schema}') AND name = 'final'",
+        ).fetchone()
+        assert final_id == original_id
         names = execute(
             other,
             "SELECT name FROM mz_views WHERE schema_id = "
@@ -94,7 +93,9 @@ def hammer(c: Composition, workers: int, rounds: int) -> None:
                 for iteration in range(rounds):
                     if worker == workers:
                         barrier.wait()
-                        execute(conn, f"CREATE VIEW {schema}.churn AS SELECT {iteration}")
+                        execute(
+                            conn, f"CREATE VIEW {schema}.churn AS SELECT {iteration}"
+                        )
                         execute(conn, f"DROP VIEW {schema}.churn")
                         barrier.wait()
                     else:
@@ -122,7 +123,9 @@ def hammer(c: Composition, workers: int, rounds: int) -> None:
             raise
 
     with ThreadPoolExecutor(max_workers=workers + 1) as executor:
-        futures = [executor.submit(worker_loop, worker) for worker in range(workers + 1)]
+        futures = [
+            executor.submit(worker_loop, worker) for worker in range(workers + 1)
+        ]
         failures = [
             error for future in futures if (error := future.exception()) is not None
         ]
@@ -132,15 +135,15 @@ def hammer(c: Composition, workers: int, rounds: int) -> None:
     with c.sql_connection() as conn:
         for worker in range(workers):
             for name in (f"v{worker}", f"d{worker}"):
-                assert execute(conn, f"SELECT * FROM {schema}.{name}").fetchall() == [
-                    (worker,)
-                ]
+                rows = execute(conn, f"SELECT * FROM {schema}.{name}").fetchall()
+                assert rows == [(worker,)]
         names = execute(
             conn,
             "SELECT name FROM mz_views WHERE schema_id = "
             f"(SELECT id FROM mz_schemas WHERE name = '{schema}') ORDER BY name",
         ).fetchall()
-        assert names == sorted(
+        expected = sorted(
             (f"{prefix}{worker}",) for prefix in ("v", "d") for worker in range(workers)
-        ), names
+        )
+        assert names == expected, names
     print(f"Committed {workers * rounds} DDL transactions without client retries")
