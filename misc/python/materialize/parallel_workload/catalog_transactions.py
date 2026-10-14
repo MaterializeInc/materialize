@@ -31,7 +31,9 @@ def independent_ddl(c: Composition, before_commit: bool, same_schema: bool) -> N
         if not same_schema:
             execute(other, f"CREATE SCHEMA {other_schema}")
         execute(other, f"CREATE VIEW {schema}.original AS SELECT 42 AS value")
-        execute(other, f"CREATE VIEW {schema}.dependent AS SELECT * FROM {schema}.original")
+        execute(
+            other, f"CREATE VIEW {schema}.dependent AS SELECT * FROM {schema}.original"
+        )
         original_id = execute(
             other,
             "SELECT id FROM mz_views WHERE schema_id = "
@@ -91,7 +93,9 @@ def hammer(c: Composition, workers: int, rounds: int) -> None:
                 for iteration in range(rounds):
                     if worker == workers:
                         barrier.wait()
-                        execute(conn, f"CREATE VIEW {schema}.churn AS SELECT {iteration}")
+                        execute(
+                            conn, f"CREATE VIEW {schema}.churn AS SELECT {iteration}"
+                        )
                         execute(conn, f"DROP VIEW {schema}.churn")
                         barrier.wait()
                     else:
@@ -119,7 +123,9 @@ def hammer(c: Composition, workers: int, rounds: int) -> None:
             raise
 
     with ThreadPoolExecutor(max_workers=workers + 1) as executor:
-        futures = [executor.submit(worker_loop, worker) for worker in range(workers + 1)]
+        futures = [
+            executor.submit(worker_loop, worker) for worker in range(workers + 1)
+        ]
         failures = [
             error for future in futures if (error := future.exception()) is not None
         ]
