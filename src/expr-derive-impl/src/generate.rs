@@ -20,9 +20,9 @@ use crate::source::sqlfunc_source;
 /// table's order rather than the attribute's order, so the generated code is stable
 /// against how a call site happens to spell its modifiers.
 ///
-/// `introduces_nulls_fn` takes the table's `introduces_nulls` slot. [`generate`]
-/// synthesizes that method from the output type and has already taken the modifier out
-/// of `mods`, so the walk never finds one to build.
+/// `introduces_nulls_fn` fills the table's `introduces_nulls` slot, because
+/// [`generate`] synthesizes that method from the output type and the modifier together.
+/// The walk never builds it from `mods`.
 fn override_methods(
     shape: Shape,
     mods: &Modifiers,
@@ -163,7 +163,7 @@ fn variadic_params(
 pub(crate) fn generate(
     shape: Shape,
     func: &syn::ItemFn,
-    mut mods: Modifiers,
+    mods: Modifiers,
     struct_ty: Option<syn::Path>,
     has_self: bool,
     attr: &TokenStream,
@@ -199,9 +199,9 @@ pub(crate) fn generate(
         Shape::Variadic => variadic_params(func, arena, has_self)?,
     };
 
-    let output_type = mods.output_type.take();
-    let mut output_type_expr = mods.output_type_expr.take();
-    let mut introduces_nulls = mods.introduces_nulls.take();
+    let output_type = mods.output_type().cloned();
+    let mut output_type_expr = mods.output_type_expr().cloned();
+    let mut introduces_nulls = mods.introduces_nulls().cloned();
 
     // Derive the output type from where the generic parameters land. This reads the
     // pre-erasure types, because erasure is what removes those parameters.
@@ -332,8 +332,7 @@ pub(crate) fn generate(
     };
 
     let sqlname = mods
-        .sqlname
-        .as_ref()
+        .sqlname()
         .map_or_else(|| quote! { stringify!(#fn_name) }, |name| quote! { #name });
     let codegen = Codegen {
         struct_name,
