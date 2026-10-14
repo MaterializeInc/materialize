@@ -1466,40 +1466,43 @@ async fn purify_alter_source(
         if_exists,
     } = stmt;
 
-    // Get name.
-    let item = match scx.resolve_item(RawItemName::Name(unresolved_source_name.clone())) {
-        Ok(item) => item,
-        Err(_) if if_exists => {
-            return Ok(PurifiedStatement::PurifiedAlterSource {
-                alter_source_stmt: AlterSourceStatement {
-                    source_name: unresolved_source_name,
-                    action,
-                    if_exists,
-                },
-            });
-        }
-        Err(e) => return Err(e),
+    // Catalog item views are not Send, so release the view before awaiting purification.
+    let (desc, resolved_source_name, partial_name) = {
+        let item = match scx.resolve_item(RawItemName::Name(unresolved_source_name.clone())) {
+            Ok(item) => item,
+            Err(_) if if_exists => {
+                return Ok(PurifiedStatement::PurifiedAlterSource {
+                    alter_source_stmt: AlterSourceStatement {
+                        source_name: unresolved_source_name,
+                        action,
+                        if_exists,
+                    },
+                });
+            }
+            Err(e) => return Err(e),
+        };
+
+        // Ensure it's an ingestion-based and alterable source.
+        let desc = match item.source_desc()? {
+            Some(desc) => desc.clone().into_inline_connection(scx.catalog),
+            None => {
+                sql_bail!("cannot ALTER this type of source")
+            }
+        };
+
+        let source_name = item.name();
+
+        let resolved_source_name = ResolvedItemName::Item {
+            id: item.id(),
+            qualifiers: item.name().qualifiers.clone(),
+            full_name: scx.catalog.resolve_full_name(source_name),
+            print_id: true,
+            version: RelationVersionSelector::Latest,
+        };
+
+        let partial_name = scx.catalog.minimal_qualification(source_name);
+        (desc, resolved_source_name, partial_name)
     };
-
-    // Ensure it's an ingestion-based and alterable source.
-    let desc = match item.source_desc()? {
-        Some(desc) => desc.clone().into_inline_connection(scx.catalog),
-        None => {
-            sql_bail!("cannot ALTER this type of source")
-        }
-    };
-
-    let source_name = item.name();
-
-    let resolved_source_name = ResolvedItemName::Item {
-        id: item.id(),
-        qualifiers: item.name().qualifiers.clone(),
-        full_name: scx.catalog.resolve_full_name(source_name),
-        print_id: true,
-        version: RelationVersionSelector::Latest,
-    };
-
-    let partial_name = scx.catalog.minimal_qualification(source_name);
 
     match action {
         AlterSourceAction::AddSubsources {

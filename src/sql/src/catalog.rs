@@ -232,24 +232,26 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     ///
     /// Note that it is not an error if the named item appears in more than one
     /// of the search schemas. The catalog implementation must choose one.
-    fn resolve_item(&self, item_name: &PartialItemName) -> Result<&dyn CatalogItem, CatalogError>;
+    fn resolve_item(&self, item_name: &PartialItemName)
+    -> Result<CatalogItemRef<'_>, CatalogError>;
 
     /// Performs the same operation as [`SessionCatalog::resolve_item`] but for
     /// functions within the catalog.
     fn resolve_function(
         &self,
         item_name: &PartialItemName,
-    ) -> Result<&dyn CatalogItem, CatalogError>;
+    ) -> Result<CatalogItemRef<'_>, CatalogError>;
 
     /// Performs the same operation as [`SessionCatalog::resolve_item`] but for
     /// types within the catalog.
-    fn resolve_type(&self, item_name: &PartialItemName) -> Result<&dyn CatalogItem, CatalogError>;
+    fn resolve_type(&self, item_name: &PartialItemName)
+    -> Result<CatalogItemRef<'_>, CatalogError>;
 
     /// Resolves `name` to a type or item, preferring the type if both exist.
     fn resolve_item_or_type(
         &self,
         name: &PartialItemName,
-    ) -> Result<&dyn CatalogItem, CatalogError> {
+    ) -> Result<CatalogItemRef<'_>, CatalogError> {
         if let Ok(ty) = self.resolve_type(name) {
             return Ok(ty);
         }
@@ -261,10 +263,10 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// # Panics
     /// - If `name` is not an entry in any system schema
     /// - If more than one system schema has an entry named `name`.
-    fn get_system_type(&self, name: &str) -> &dyn CatalogItem;
+    fn get_system_type(&self, name: &str) -> CatalogItemRef<'_>;
 
     /// Gets an item by its ID.
-    fn try_get_item(&self, id: &CatalogItemId) -> Option<&dyn CatalogItem>;
+    fn try_get_item(&self, id: &CatalogItemId) -> Option<CatalogItemRef<'_>>;
 
     /// Tries to get an item by a [`GlobalId`], returning `None` if the [`GlobalId`] does not
     /// exist.
@@ -278,7 +280,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Gets an item by its ID.
     ///
     /// Panics if `id` does not specify a valid item.
-    fn get_item(&self, id: &CatalogItemId) -> &dyn CatalogItem;
+    fn get_item(&self, id: &CatalogItemId) -> CatalogItemRef<'_>;
 
     /// Gets an item by a [`GlobalId`].
     ///
@@ -288,13 +290,13 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     fn get_item_by_global_id<'a>(&'a self, id: &GlobalId) -> Box<dyn CatalogCollectionItem + 'a>;
 
     /// Gets all items.
-    fn get_items(&self) -> Vec<&dyn CatalogItem>;
+    fn get_items(&self) -> Vec<CatalogItemRef<'_>>;
 
     /// Looks up an item by its name.
-    fn get_item_by_name(&self, name: &QualifiedItemName) -> Option<&dyn CatalogItem>;
+    fn get_item_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>>;
 
     /// Looks up a type by its name.
-    fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<&dyn CatalogItem>;
+    fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>>;
 
     /// Gets a cluster by ID.
     fn get_cluster(&self, id: ClusterId) -> &dyn CatalogCluster<'_>;
@@ -813,6 +815,29 @@ pub trait CatalogClusterReplica<'a>: Debug {
     /// Returns whether or not the replica is internal
     fn internal(&self) -> bool;
 }
+
+/// A borrowed catalog object or an owned view with the same interface.
+#[derive(Debug)]
+pub enum CatalogRef<'a, T: ?Sized> {
+    /// An object borrowed directly from the catalog.
+    Borrowed(&'a T),
+    /// A catalog-specific view of an object.
+    Owned(Box<T>),
+}
+
+impl<T: ?Sized> std::ops::Deref for CatalogRef<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        match self {
+            Self::Borrowed(value) => value,
+            Self::Owned(value) => value,
+        }
+    }
+}
+
+/// An item accessed through a session's catalog view.
+pub type CatalogItemRef<'a> = CatalogRef<'a, dyn CatalogItem + 'a>;
 
 /// An item in a [`SessionCatalog`].
 ///
@@ -1764,8 +1789,8 @@ impl ErrorMessageObjectDescription {
             }
             ObjectId::Role(role_id) => catalog.get_role(role_id).name().to_string(),
             ObjectId::Item(id) => {
-                let name = catalog.get_item(id).name();
-                catalog.resolve_full_name(name).to_string()
+                let item = catalog.get_item(id);
+                catalog.resolve_full_name(item.name()).to_string()
             }
             ObjectId::NetworkPolicy(network_policy_id) => catalog
                 .get_network_policy(network_policy_id)

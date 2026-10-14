@@ -27,7 +27,7 @@ use mz_storage_types::connections::Connection;
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
-    CatalogCluster, CatalogCollectionItem, CatalogDatabase, CatalogItem, CatalogItemType,
+    CatalogCluster, CatalogCollectionItem, CatalogDatabase, CatalogItemRef, CatalogItemType,
     CatalogSchema, ObjectType, SessionCatalog, SystemObjectType,
 };
 use crate::names::{
@@ -787,7 +787,7 @@ impl<'a> StatementContext<'a> {
         self.catalog.get_schema(database_spec, schema_spec)
     }
 
-    pub fn resolve_item(&self, name: RawItemName) -> Result<&dyn CatalogItem, PlanError> {
+    pub fn resolve_item(&self, name: RawItemName) -> Result<CatalogItemRef<'_>, PlanError> {
         match name {
             RawItemName::Name(name) => {
                 let name = normalize::unresolved_item_name(name)?;
@@ -800,7 +800,7 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn get_item(&self, id: &CatalogItemId) -> &dyn CatalogItem {
+    pub fn get_item(&self, id: &CatalogItemId) -> CatalogItemRef<'_> {
         self.catalog.get_item(id)
     }
 
@@ -838,7 +838,7 @@ impl<'a> StatementContext<'a> {
     pub fn resolve_function(
         &self,
         name: UnresolvedItemName,
-    ) -> Result<&dyn CatalogItem, PlanError> {
+    ) -> Result<CatalogItemRef<'_>, PlanError> {
         let name = normalize::unresolved_item_name(name)?;
         Ok(self.catalog.resolve_function(&name)?)
     }

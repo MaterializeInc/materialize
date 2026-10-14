@@ -128,7 +128,7 @@ use prost::Message;
 
 use crate::ast::display::AstDisplay;
 use crate::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError, CatalogItem, CatalogItemType,
+    CatalogCluster, CatalogDatabase, CatalogError, CatalogItem, CatalogItemRef, CatalogItemType,
     CatalogRecordField, CatalogType, CatalogTypeDetails, ObjectType, SystemObjectType,
 };
 use crate::iceberg::IcebergSinkConfigOptionExtracted;
@@ -6003,7 +6003,7 @@ pub fn plan_drop_objects(
             .collect();
         for id in &dropped_items {
             let catalog_item = scx.catalog.get_item(id);
-            ensure_no_blocking_dependents(scx, object_type, catalog_item, &dropped_items)?;
+            ensure_no_blocking_dependents(scx, object_type, &*catalog_item, &dropped_items)?;
         }
     }
 
@@ -6148,7 +6148,7 @@ fn plan_drop_item(
     };
     if !cascade {
         let catalog_item = scx.catalog.get_item(&id);
-        ensure_no_blocking_dependents(scx, object_type, catalog_item, &BTreeSet::new())?;
+        ensure_no_blocking_dependents(scx, object_type, &*catalog_item, &BTreeSet::new())?;
     }
     Ok(Some(id))
 }
@@ -6205,7 +6205,7 @@ fn ensure_no_blocking_dependents(
             continue;
         }
         let dep = scx.catalog.get_item(id);
-        if dependency_prevents_drop(object_type, dep) {
+        if dependency_prevents_drop(object_type, &*dep) {
             return Err(PlanError::DependentObjectsStillExist {
                 object_type: catalog_item.item_type().to_string(),
                 object_name: scx
@@ -6352,7 +6352,7 @@ pub fn plan_drop_owned(
                     let non_owned_dependencies: Vec<_> = used_by
                         .into_iter()
                         .map(|item_id| scx.catalog.get_item(item_id))
-                        .filter(|item| dependency_prevents_drop(item.item_type().into(), *item))
+                        .filter(|item| dependency_prevents_drop(item.item_type().into(), &**item))
                         .filter(|item| !role_ids.contains(&item.owner_id()))
                         .collect();
                     if !non_owned_dependencies.is_empty() {
@@ -6405,7 +6405,7 @@ pub fn plan_drop_owned(
                     let non_owned_dependencies: Vec<_> = schema
                         .item_ids()
                         .map(|item_id| scx.catalog.get_item(&item_id))
-                        .filter(|item| dependency_prevents_drop(item.item_type().into(), *item))
+                        .filter(|item| dependency_prevents_drop(item.item_type().into(), &**item))
                         .filter(|item| !role_ids.contains(&item.owner_id()))
                         .collect();
                     if !non_owned_dependencies.is_empty() {
@@ -8564,7 +8564,7 @@ pub(crate) fn resolve_item_or_type<'a>(
     object_type: ObjectType,
     name: UnresolvedItemName,
     if_exists: bool,
-) -> Result<Option<&'a dyn CatalogItem>, PlanError> {
+) -> Result<Option<CatalogItemRef<'a>>, PlanError> {
     let name = normalize::unresolved_item_name(name)?;
     let catalog_item = match object_type {
         ObjectType::Type => scx.catalog.resolve_type(&name),
