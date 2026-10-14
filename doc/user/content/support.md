@@ -13,7 +13,15 @@ Whether you're building, scaling, or debugging, we're here to help.
 
 ## Materialize Support
 
-We offer multiple support pathways depending on your platform and plan.
+We offer multiple support pathways depending on your platform and plan. For an overview of all support options, see [materialize.com/support](https://materialize.com/support/).
+
+### Help Center
+
+Browse guides and answers to common questions in the [Materialize Help
+Center](https://help.materialize.com/en/).
+
+Signed-in Materialize Cloud users can view their company's tickets in the
+[ticket portal](https://help.materialize.com/en/tickets-portal).
 
 ### Support chat
 
