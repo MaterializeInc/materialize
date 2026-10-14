@@ -365,14 +365,13 @@ async fn upload_with_bounds(
         key: Arc::new(relation_desc.clone()),
         val: Arc::new(UnitSchema),
     };
-    let batch_builder = client
-        .batch_builder::<SourceData, (), Timestamp, i64>(
-            shard_id,
-            write_schemas,
-            Antichain::from_elem(lower),
-            Some(NO_RUN_MERGING),
-        )
-        .await;
+    let batch_builder = client.batch_builder::<SourceData, (), Timestamp, i64>(
+        shard_id,
+        "peek_stash",
+        write_schemas,
+        Antichain::from_elem(lower),
+        Some(NO_RUN_MERGING),
+    );
 
     StashUpload {
         relation_desc,
