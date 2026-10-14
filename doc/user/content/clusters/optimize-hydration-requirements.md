@@ -54,7 +54,7 @@ hydration time at the cost of a higher peak.
   parameters](/self-managed-deployments/configuration-system-parameters/) for
   other ways to set it.
 
-- On Materialize Cloud, [contact our team](/support/) to have it configured
+- On Materialize Cloud, [contact our team](https://materialize.com/support/) to have it configured
   for your cluster.
 
 ## Reuse arrangements across consumers
