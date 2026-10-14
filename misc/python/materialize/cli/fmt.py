@@ -124,7 +124,7 @@ def _buf_cmd(*, check: bool) -> list[str]:
 
 
 def _black_cmd(*, check: bool) -> list[str]:
-    args = "--check --quiet" if check else "--quiet"
+    args = "--check --diff" if check else "--quiet"
     return [
         "bash",
         "-c",
