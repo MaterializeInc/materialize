@@ -359,9 +359,7 @@ impl Coordinator {
                 replicas,
                 tx,
             } => {
-                // Hydration only: this signal drives the burst strategy's
-                // linger, whose durable `steady_hydrated_at` stamp means exactly
-                // "hydration was observed". The cut-over gate is `ReadyReplicas`.
+                // A burst is created for unhydrated objects, not for replay lag.
                 let checks =
                     self.start_readiness_checks(cluster_id, replicas, None, &BTreeSet::new());
                 Self::finish_readiness_checks(checks, tx);
@@ -372,8 +370,8 @@ impl Coordinator {
                 reference,
                 tx,
             } => {
-                // Tests hold cut-over while arranging a hydrated but lagging
-                // replacement, then release this to exercise the real probe.
+                // Tests hold readiness checks while arranging hydrated but
+                // lagging replicas, then release this to exercise the real probe.
                 fail::fail_point!("cluster_controller_hold_readiness", |_| ());
                 let checks = self.start_readiness_checks(
                     cluster_id,
@@ -1117,12 +1115,12 @@ fn memory_burst(
     let mz_cluster_controller::ctx::BurstRecord {
         burst_size,
         linger_duration,
-        steady_hydrated_at,
+        steady_ready_at,
     } = record;
     mz_catalog::memory::objects::BurstState {
         burst_size: burst_size.clone(),
         linger_duration: *linger_duration,
-        steady_hydrated_at: *steady_hydrated_at,
+        steady_ready_at: *steady_ready_at,
     }
 }
 
