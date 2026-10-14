@@ -1,0 +1,105 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+"""Reads whose placement the interactive compute runtime changes.
+
+The benchmark's clusterd container runs two runtimes when its image supports the option, so
+these run against a two-runtime replica on this build and against whatever the other build's
+image provides, which is what the comparison should measure. The point lookup and the
+`CREATE INDEX` plus first read are `FastPathFilterIndex` and `CreateIndex` in the main
+scenario set, which run on the same container and so already measure those shapes.
+"""
+
+from materialize.feature_benchmark.action import Action, TdAction
+from materialize.feature_benchmark.measurement_source import MeasurementSource, Td
+from materialize.feature_benchmark.scenario import Scenario
+
+
+class InteractiveRuntime(Scenario):
+    """Group parent."""
+
+
+class PeekDataflowJoin(InteractiveRuntime):
+    """A join over two indexed views, repeated. Neither input can take the fast path, so each
+    query builds a peek dataflow that imports both indexes, which is the cost of a temporary
+    dataflow on the runtime that serves it."""
+
+    SCALE = 5
+    REPEAT = 10
+
+    def init(self) -> list[Action]:
+        return [
+            self.table_ten(),
+            TdAction(f"""
+> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
+
+> CREATE MATERIALIZED VIEW v2 AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
+
+> CREATE DEFAULT INDEX ON v1
+
+> CREATE DEFAULT INDEX ON v2
+
+> SELECT count(*) FROM v1 JOIN v2 USING (f1)
+{self.n()}
+"""),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        joins = "\n".join(
+            f"> SELECT count(*) FROM v1 JOIN v2 USING (f1)\n{self.n()}\n"
+            for _ in range(self.REPEAT)
+        )
+        return Td(f"""
+> SELECT 1
+  /* A */
+1
+
+{joins}
+
+> SELECT 1
+  /* B */
+1
+""")
+
+
+class IntrospectionRead(InteractiveRuntime):
+    """A read of a per-replica introspection relation, repeated. The interactive runtime serves it
+    from the maintenance runtime's published logging index."""
+
+    REPEAT = 100
+
+    def init(self) -> list[Action]:
+        return [
+            self.table_ten(),
+            TdAction(f"""
+> CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
+
+> CREATE DEFAULT INDEX ON v1
+
+> SELECT count(*) = {self.n()} FROM v1
+true
+"""),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        reads = "\n".join(
+            "> SELECT count(*) > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes\ntrue\n"
+            for _ in range(self.REPEAT)
+        )
+        return Td(f"""
+> SELECT 1
+  /* A */
+1
+
+{reads}
+
+> SELECT 1
+  /* B */
+1
+""")
