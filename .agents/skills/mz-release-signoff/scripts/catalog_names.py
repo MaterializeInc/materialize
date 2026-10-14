@@ -17,7 +17,7 @@ which matters because it runs against arbitrary git refs during a sign-off.
 import re
 import sys
 
-NAME = re.compile(r"^- name: '?(.+?)'?$")
+NAME = re.compile(r"^- name: (['\"]?)(.+?)\1$")
 
 
 def main() -> None:
@@ -25,7 +25,7 @@ def main() -> None:
     for line in sys.stdin:
         match = NAME.match(line.rstrip("\n"))
         if match:
-            names.add(match.group(1))
+            names.add(match.group(2))
     for name in sorted(names):
         print(name)
 

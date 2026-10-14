@@ -21,7 +21,7 @@ SKILL = pathlib.Path(".agents/skills/mz-release-signoff")
 CATALOG = pathlib.Path("doc/user/data/metrics.yml")
 ALLOWLIST = SKILL / "scripts" / "metrics-allowlist.txt"
 
-CATALOG_NAME = re.compile(r"^- name: '?(.+?)'?$")
+CATALOG_NAME = re.compile(r"^- name: (['\"]?)(.+?)\1$")
 BACKTICKED = re.compile(r"`([^`]+)`")
 CANDIDATE = re.compile(r"\b(mz_[a-z0-9_]+)\b")
 # Markdown allows a fence to open with backticks or tildes and to be indented by
@@ -49,7 +49,7 @@ def catalog_names():
     for line in CATALOG.read_text().splitlines():
         match = CATALOG_NAME.match(line)
         if match:
-            name = match.group(1)
+            name = match.group(2)
             (globs if "*" in name else exact).add(name)
     # A base name is resolvable when any member of its family is catalogued.
     bases = {
