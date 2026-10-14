@@ -223,22 +223,13 @@ impl Shape {
             Shape::Unary => quote! {
                 output.nullable(nullable || (propagates_nulls && input_type.nullable))
             },
-            Shape::Binary => quote! {
+            Shape::Binary | Shape::Variadic => quote! {
                 let non_nullable_input_is_nullable = false #(#checks)*;
                 let inputs_nullable = input_types.iter().any(|it| it.nullable);
                 let is_null = nullable
                     || non_nullable_input_is_nullable
                     || (propagates_nulls && inputs_nullable);
                 output.nullable(is_null)
-            },
-            Shape::Variadic => quote! {
-                let non_nullable_input_is_nullable = false #(#checks)*;
-                let inputs_nullable = input_types.iter().any(|it| it.nullable);
-                output.nullable(
-                    nullable
-                    || non_nullable_input_is_nullable
-                    || (propagates_nulls && inputs_nullable)
-                )
             },
         }
     }
