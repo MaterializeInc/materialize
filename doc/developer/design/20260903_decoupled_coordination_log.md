@@ -327,6 +327,9 @@ for system-cluster collections. Its logged zero is a readiness fallback, not a r
 execution observation. The existing capture cannot distinguish missing reports
 from unhydrated execution or establish lost progress across restart. Use existing
 runtime observations in the same failing workflow before changing readiness.
+The fixture records compute-owned hydration counts only after a failed wait,
+with a bounded scrape that preserves the original failure. A passing scratch
+run with hydrated compute and usable observations does not explain the CI failures.
 
 Preserve the independent DROP-metric retirement observation and paused-index
 advancement coverage within the explicit protection-lifetime contract. Keep history
