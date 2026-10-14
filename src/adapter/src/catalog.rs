@@ -74,7 +74,8 @@ use mz_sql::catalog::{
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
     PUBLIC_ROLE_NAME, PartialItemName, QualifiedItemName, QualifiedSchemaName,
-    ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
+    RawDatabaseSpecifier, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
+    SystemObjectId,
 };
 use mz_sql::plan::{Plan, PlanNotice, StatementDesc};
 use mz_sql::rbac;
@@ -83,7 +84,9 @@ use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use mz_sql::session::vars::SystemVars;
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
+use mz_storage_types::connections::inline::{
+    ConnectionResolver, InlinedConnection, IntoInlineConnection,
+};
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 use tokio::sync::MutexGuard;
@@ -111,6 +114,8 @@ pub(crate) mod consistency;
 mod migrate;
 
 mod apply;
+#[cfg(test)]
+mod boundary_tests;
 pub(crate) mod cluster_state;
 mod name_observations;
 mod observations;
@@ -296,6 +301,31 @@ pub struct ConnCatalog<'a> {
 }
 
 impl ConnCatalog<'_> {
+    pub fn resolve_target_cluster(
+        &self,
+        target: TargetCluster,
+        session: &Session,
+    ) -> Result<mz_sql::catalog::CatalogClusterRef<'_>, AdapterError> {
+        match target {
+            TargetCluster::CatalogServer => {
+                Ok(self.resolve_cluster(Some(MZ_CATALOG_SERVER_CLUSTER.name))?)
+            }
+            TargetCluster::Active => {
+                Catalog::check_active_cluster_access(session)?;
+                Ok(self.resolve_cluster(None)?)
+            }
+            TargetCluster::Transaction(id) => {
+                let exists = self.observe("transaction cluster exists", move |state| {
+                    state.clusters_by_id.contains_key(&id)
+                });
+                if !exists {
+                    return Err(AdapterError::ConcurrentClusterDrop);
+                }
+                Ok(self.get_cluster(id))
+            }
+        }
+    }
+
     pub fn conn_id(&self) -> &ConnectionId {
         &self.conn_id
     }
@@ -377,7 +407,25 @@ impl ConnectionResolver for ConnCatalog<'_> {
         &self,
         id: CatalogItemId,
     ) -> mz_storage_types::connections::Connection<InlinedConnection> {
-        self.state().resolve_connection(id)
+        use mz_storage_types::connections::Connection::*;
+
+        match self
+            .get_item(&id)
+            .connection()
+            .expect("catalog out of sync")
+        {
+            Kafka(conn) => Kafka(conn.into_inline_connection(self)),
+            Postgres(conn) => Postgres(conn.into_inline_connection(self)),
+            Csr(conn) => Csr(conn.into_inline_connection(self)),
+            GlueSchemaRegistry(conn) => GlueSchemaRegistry(conn.into_inline_connection(self)),
+            Ssh(conn) => Ssh(conn),
+            Aws(conn) => Aws(conn),
+            AwsPrivatelink(conn) => AwsPrivatelink(conn),
+            Gcp(conn) => Gcp(conn),
+            MySql(conn) => MySql(conn.into_inline_connection(self)),
+            SqlServer(conn) => SqlServer(conn.into_inline_connection(self)),
+            IcebergCatalog(conn) => IcebergCatalog(conn.into_inline_connection(self)),
+        }
     }
 }
 
@@ -1082,6 +1130,11 @@ impl Catalog {
     }
 
     pub fn active_cluster(&self, session: &Session) -> Result<&Cluster, AdapterError> {
+        Self::check_active_cluster_access(session)?;
+        Ok(self.resolve_cluster(session.vars().cluster())?)
+    }
+
+    fn check_active_cluster_access(session: &Session) -> Result<(), AdapterError> {
         // TODO(benesch): this check here is not sufficiently protective. It'd
         // be very easy for a code path to accidentally avoid this check by
         // calling `resolve_cluster(session.vars().cluster())`.
@@ -1094,8 +1147,7 @@ impl Catalog {
                 SYSTEM_USER.name
             );
         }
-        let cluster = self.resolve_cluster(session.vars().cluster())?;
-        Ok(cluster)
+        Ok(())
     }
 
     pub fn state(&self) -> &CatalogState {
@@ -2458,12 +2510,20 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_system_privileges(&self) -> &PrivilegeMap {
-        &self.state.system_privileges
+        self.get_privileges(&SystemObjectId::System)
+            .expect("system privileges exist")
     }
 
     fn get_default_privileges(
         &self,
     ) -> Vec<(&DefaultPrivilegeObject, Vec<&DefaultPrivilegeAclItem>)> {
+        if let Some(recorder) = &self.read_recorder {
+            recorder.record(
+                "default privileges",
+                Arc::clone(&self.state.default_privileges),
+                |state| Arc::clone(&state.default_privileges),
+            );
+        }
         self.state
             .default_privileges
             .iter()
@@ -2471,20 +2531,53 @@ impl SessionCatalog for ConnCatalog<'_> {
             .collect()
     }
 
-    fn find_available_name(&self, name: QualifiedItemName) -> QualifiedItemName {
-        self.state.find_available_name(name, &self.conn_id)
+    fn find_available_name(&self, mut name: QualifiedItemName) -> QualifiedItemName {
+        let original = name.item.clone();
+        let mut suffix = 0;
+        while self.get_item_by_name(&name).is_some() {
+            suffix += 1;
+            name.item = format!("{original}{suffix}");
+        }
+        name
     }
 
     fn resolve_full_name(&self, name: &QualifiedItemName) -> FullItemName {
-        self.state.resolve_full_name(name, Some(&self.conn_id))
+        let database = match &name.qualifiers.database_spec {
+            ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
+            ResolvedDatabaseSpecifier::Id(id) => {
+                RawDatabaseSpecifier::Name(self.get_database(id).name().to_owned())
+            }
+        };
+        let schema = match &name.qualifiers.schema_spec {
+            SchemaSpecifier::Temporary => mz_repr::namespaces::MZ_TEMP_SCHEMA.to_owned(),
+            SchemaSpecifier::Id(_) => self
+                .get_schema(&name.qualifiers.database_spec, &name.qualifiers.schema_spec)
+                .name()
+                .schema
+                .clone(),
+        };
+        FullItemName {
+            database,
+            schema,
+            item: name.item.clone(),
+        }
     }
 
     fn resolve_full_schema_name(&self, name: &QualifiedSchemaName) -> FullSchemaName {
-        self.state.resolve_full_schema_name(name)
+        let database = match &name.database {
+            ResolvedDatabaseSpecifier::Ambient => RawDatabaseSpecifier::Ambient,
+            ResolvedDatabaseSpecifier::Id(id) => {
+                RawDatabaseSpecifier::Name(self.get_database(id).name().to_owned())
+            }
+        };
+        FullSchemaName {
+            database,
+            schema: name.schema.clone(),
+        }
     }
 
     fn resolve_item_id(&self, global_id: &GlobalId) -> CatalogItemId {
-        self.state.get_entry_by_global_id(global_id).id()
+        self.get_item_by_global_id(global_id).id()
     }
 
     fn resolve_global_id(
@@ -2492,10 +2585,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         item_id: &CatalogItemId,
         version: RelationVersionSelector,
     ) -> GlobalId {
-        self.state
-            .get_entry(item_id)
-            .at_version(version)
-            .global_id()
+        self.get_item(item_id).at_version(version).global_id()
     }
 
     fn config(&self) -> &mz_sql::catalog::CatalogConfig {
@@ -2519,44 +2609,59 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_owner_id(&self, id: &ObjectId) -> Option<RoleId> {
-        self.state().get_owner_id(id, self.conn_id())
+        match id {
+            ObjectId::Cluster(id) => Some(self.get_cluster(*id).owner_id()),
+            ObjectId::ClusterReplica((cluster, replica)) => {
+                Some(self.get_cluster_replica(*cluster, *replica).owner_id())
+            }
+            ObjectId::Database(id) => Some(self.get_database(id).owner_id()),
+            ObjectId::Schema((database, schema)) => {
+                Some(self.get_schema(database, schema).owner_id())
+            }
+            ObjectId::Item(id) => Some(self.get_item(id).owner_id()),
+            ObjectId::NetworkPolicy(id) => Some(self.get_network_policy(id).owner_id()),
+            ObjectId::Role(_) => None,
+        }
     }
 
     fn get_privileges(&self, id: &SystemObjectId) -> Option<&PrivilegeMap> {
-        match id {
-            SystemObjectId::System => Some(&self.state.system_privileges),
-            SystemObjectId::Object(ObjectId::Cluster(id)) => {
-                Some(self.state.clusters_by_id[id].privileges())
-            }
-            SystemObjectId::Object(ObjectId::Database(id)) => {
-                Some(self.state.database_by_id[id].privileges())
-            }
-            SystemObjectId::Object(ObjectId::Schema((database_spec, schema_spec))) => {
-                // For temporary schemas that haven't been created yet (lazy creation),
-                // we return None - the RBAC check will need to handle this case.
-                self.state
-                    .try_get_schema(database_spec, schema_spec, &self.conn_id)
-                    .map(|schema| schema.privileges())
-            }
-            SystemObjectId::Object(ObjectId::Item(id)) => {
-                Some(self.state.get_entry(id).privileges())
-            }
-            SystemObjectId::Object(ObjectId::NetworkPolicy(id)) => {
-                Some(self.state.get_network_policy(id).privileges())
-            }
-            SystemObjectId::Object(ObjectId::ClusterReplica(_))
-            | SystemObjectId::Object(ObjectId::Role(_)) => None,
+        let privileges = self.state.try_get_privileges(id, &self.conn_id);
+        if let Some(recorder) = &self.read_recorder {
+            let id = id.clone();
+            let conn_id = self.conn_id.clone();
+            recorder.record("object privileges", privileges.cloned(), move |state| {
+                state.try_get_privileges(&id, &conn_id).cloned()
+            });
         }
+        privileges
     }
 
     fn object_dependents(&self, ids: &Vec<ObjectId>) -> Vec<ObjectId> {
         let mut seen = BTreeSet::new();
-        self.state.object_dependents(ids, &self.conn_id, &mut seen)
+        let answer = self.state.object_dependents(ids, &self.conn_id, &mut seen);
+        if let Some(recorder) = &self.read_recorder {
+            let ids = ids.clone();
+            let conn_id = self.conn_id.clone();
+            recorder.record("object dependents", Some(answer.clone()), move |state| {
+                ids.iter()
+                    .all(|id| state.dependency_root_exists(id, &conn_id))
+                    .then(|| state.object_dependents(&ids, &conn_id, &mut BTreeSet::new()))
+            });
+        }
+        answer
     }
 
     fn item_dependents(&self, id: CatalogItemId) -> Vec<ObjectId> {
         let mut seen = BTreeSet::new();
-        self.state.item_dependents(id, &mut seen)
+        let answer = self.state.item_dependents(id, &mut seen);
+        if let Some(recorder) = &self.read_recorder {
+            recorder.record("item dependents", Some(answer.clone()), move |state| {
+                state
+                    .try_get_entry(&id)
+                    .map(|_| state.item_dependents(id, &mut BTreeSet::new()))
+            });
+        }
+        answer
     }
 
     fn all_object_privileges(&self, object_type: mz_sql::catalog::SystemObjectType) -> AclMode {
@@ -2564,11 +2669,17 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_object_type(&self, object_id: &ObjectId) -> mz_sql::catalog::ObjectType {
-        self.state.get_object_type(object_id)
+        match object_id {
+            ObjectId::Item(id) => self.get_item(id).item_type().into(),
+            _ => self.state.get_object_type(object_id),
+        }
     }
 
     fn get_system_object_type(&self, id: &SystemObjectId) -> mz_sql::catalog::SystemObjectType {
-        self.state.get_system_object_type(id)
+        match id {
+            SystemObjectId::Object(id) => SystemObjectType::Object(self.get_object_type(id)),
+            SystemObjectId::System => mz_sql::catalog::SystemObjectType::System,
+        }
     }
 
     /// Returns a [`PartialItemName`] with the minimum amount of qualifiers to unambiguously resolve
@@ -2658,7 +2769,19 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn get_item_comments(&self, id: &CatalogItemId) -> Option<&BTreeMap<Option<usize>, String>> {
         let comment_id = self.state.get_comment_id(ObjectId::Item(*id));
-        self.state.comments.get_object_comments(comment_id)
+        let comments = self.state.comments.get_object_comments(comment_id);
+        if let Some(recorder) = &self.read_recorder {
+            let id = *id;
+            recorder.record("item comments", Some(comments.cloned()), move |state| {
+                state.try_get_entry(&id).map(|entry| {
+                    state
+                        .comments
+                        .get_object_comments(entry.comment_object_id())
+                        .cloned()
+                })
+            });
+        }
+        comments
     }
 
     fn is_cluster_size_cc(&self, size: &str) -> bool {
