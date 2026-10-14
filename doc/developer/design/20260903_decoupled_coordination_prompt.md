@@ -127,22 +127,46 @@ remain separate from catalog protection lifetime. Do not tune them, statement
 deadlines or publication cadence, weaken safety checks, or invent scheduling
 guarantees to turn an unexplained failure green.
 
-Follow repository instructions and skills. Use a dedicated scratch worker for
-focused compilation, tests, reproductions and profiling, rather than waiting for
-broad CI on every debugging iteration. The shared editing VM stays lightweight.
-Use bin/scratch with misc/scratch/decoupled-coordination.json: one ARM64 worker,
+Debugging and verification
+
+Separate diagnosis from acceptance. On disposable scratch environments, use
+smaller check subsets, shorter runs and reversible A/B patches to answer a
+specific question. Choose a hypothesis and distinguishing measurement before
+each run. Confirm that a reduced case retains the relevant cost or failure.
+These routine experiments need no renewed approval within the approved resource
+budget. Trying a candidate does not require proving its benefit beforehand or
+making it ready to land. Keep ineffective experiments out of the landing history.
+
+Use existing metrics, CPU/heap profiles and narrow diagnostics before adding
+instrumentation. Check the effective runtime configuration, not just CLI flags.
+Keep owned fixture services available for direct inspection when useful, then
+use clean state for fresh comparisons. Reuse the run recipe and capture related
+observations together rather than requiring a full run for each measurement.
+Triage other failures without letting unrelated fixture issues displace the
+main blocker.
+
+Unchanged-workload requirements in the handoff apply to acceptance, not these
+exploratory runs. Keep correctness checks, Persist leases, statement deadlines
+and the 1s publication cadence intact. A reduced or differently resourced pass
+does not close the original failure. Verify a promising repair against the
+original workload, concurrency and resource budget before claiming resolution.
+
+Follow repository instructions and skills. Use the dedicated scratch worker for
+focused builds, reproductions and profiling. The shared editing VM stays lightweight.
+Use bin/scratch with misc/scratch/decoupled-coordination.json: one x86_64 worker,
 16 vCPUs, 64 GiB RAM and 500 GiB disk. Reuse its checkout and build caches, keep
 the default 36-hour expiry, and record its ID and expiry with the run evidence.
 Preserve useful results before expiry. Ask before increasing size, count or lifetime.
+Run bounded work and analysis through an established remote session where practical
+to avoid repeated authentication gates. Reconnection still requires valid access.
 
 Keep canonical edits in this workspace. Sync an explicit Git commit to an idle,
 clean worker checkout: bin/scratch push force-checks out the supplied revision.
 Do not overwrite remote work or change source under a running build/test.
-Use repository build/test defaults, adjusting concurrency from observed resource
+Use repository build defaults, adjusting concurrency from observed resource
 pressure rather than arbitrary caps. Keep unrelated heavy workloads off the worker
-during reproductions. Use the repository's entry points and matching-architecture
-CI artifacts where available. Diagnose a faithful focused reproduction, not
-another acceptance suite.
+during measurements. Use repository entry points and matching-architecture CI
+artifacts where available, not a new debugging framework or acceptance suite.
 
 Keep regular draft-PR CI for broad integration and final combined verification.
 Verify changed contracts at their boundaries and use existing regressions where
