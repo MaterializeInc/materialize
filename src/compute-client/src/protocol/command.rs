@@ -87,16 +87,14 @@ pub enum ComputeCommand {
     /// allows the replica to hoist `UpdateConfiguration` commands during reconciliation.
     ///
     /// Configuration parameters that should not be applied globally, but only to specific
-    /// dataflows or peeks, should be added to the [`DataflowDescription`] or [`Peek`] types,
+    /// dataflows or peeks, should be added to the [`RenderDataflowDescription`] or [`Peek`] types,
     /// rather than as [`ComputeParameters`].
-    ///
-    /// [`DataflowDescription`]: mz_compute_types::dataflows::DataflowDescription
     UpdateConfiguration(Box<ComputeParameters>),
 
     /// `CreateDataflow` instructs the replica to create a dataflow according to the given
-    /// [`DataflowDescription`].
+    /// [`RenderDataflowDescription`].
     ///
-    /// The [`DataflowDescription`] must have the following properties:
+    /// The [`RenderDataflowDescription`] must have the following properties:
     ///
     ///   * Dataflow imports are valid:
     ///     * Imported storage collections specified in [`source_imports`] exist and are readable by
@@ -135,11 +133,10 @@ pub enum ComputeCommand {
     /// the compute controller should eventually send a `Schedule` command for each sent
     /// `CreateDataflow` command.
     ///
-    /// [`DataflowDescription`]: mz_compute_types::dataflows::DataflowDescription
-    /// [`objects_to_build`]: mz_compute_types::dataflows::DataflowDescription::objects_to_build
-    /// [`source_imports`]: mz_compute_types::dataflows::DataflowDescription::source_imports
-    /// [`index_imports`]: mz_compute_types::dataflows::DataflowDescription::index_imports
-    /// [`as_of`]: mz_compute_types::dataflows::DataflowDescription::as_of
+    /// [`objects_to_build`]: RenderDataflowDescription::objects_to_build
+    /// [`source_imports`]: RenderDataflowDescription::source_imports
+    /// [`index_imports`]: RenderDataflowDescription::index_imports
+    /// [`as_of`]: RenderDataflowDescription::as_of
     /// [`Frontiers`]: super::response::ComputeResponse::Frontiers
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
     /// [`CopyToResponse`]: super::response::ComputeResponse::CopyToResponse

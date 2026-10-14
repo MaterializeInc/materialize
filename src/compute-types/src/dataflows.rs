@@ -510,10 +510,9 @@ where
     }
 }
 
-impl<S, O> DataflowDescription<RenderPlan, S, O>
+impl<S> RenderDataflowDescription<S>
 where
     S: Clone + PartialEq,
-    O: Clone + PartialEq,
 {
     /// Determine if a dataflow description is compatible with this dataflow description.
     ///
