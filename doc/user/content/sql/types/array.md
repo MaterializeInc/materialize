@@ -153,7 +153,7 @@ the array has only 0 or 1 dimensions, i.e. you can cast `integer[]` to `integer
 list`, as long as the array is empty or does not contain any arrays itself.
 
 ```mzsql
-SELECT pg_typeof('{1,2,3}`::integer[]::integer list);
+SELECT pg_typeof('{1,2,3}'::integer[]::integer list);
 ```
 ```
 integer list
