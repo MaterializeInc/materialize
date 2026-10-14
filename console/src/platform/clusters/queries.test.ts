@@ -8,7 +8,10 @@
 // by the Apache License, Version 2.0.
 
 import { renderHook, waitFor } from "@testing-library/react";
+import { createStore } from "jotai";
+import parse from "postgres-interval";
 
+import { DatabaseObject } from "~/api/materialize/objects";
 import { ErrorCode, MzDataType } from "~/api/materialize/types";
 import {
   buildColumns,
@@ -18,11 +21,14 @@ import {
 import server from "~/api/mocks/server";
 import { roleQueryKeys } from "~/platform/roles/queries";
 import { getQueryClient } from "~/queryClient";
+import { allObjects } from "~/store/allObjects";
 import { createProviderWrapper } from "~/test/utils";
 
 import {
+  buildFreshnessData,
   clusterQueryKeys,
   useClusterLineageIds,
+  useFreshnessObjects,
   useOwners,
   useReplicaOfflineEvents,
 } from "./queries";
@@ -281,5 +287,137 @@ describe("useReplicaOfflineEvents", () => {
     await waitFor(() =>
       expect(result.current).toEqual([offlineEvent("u1"), offlineEvent("u2")]),
     );
+  });
+});
+
+const buildObject = (
+  overrides: Partial<DatabaseObject> & { id: string },
+): DatabaseObject =>
+  ({
+    name: "orders_mv",
+    objectType: "materialized-view",
+    schemaId: "u1",
+    schemaName: "public",
+    databaseId: "u1",
+    databaseName: "materialize",
+    sourceType: null,
+    isWebhookTable: "false",
+    clusterId: "u1",
+    clusterName: "quickstart",
+    ...overrides,
+  }) as DatabaseObject;
+
+async function renderFreshnessObjects(initial: DatabaseObject[]) {
+  const store = createStore();
+  store.set(allObjects, {
+    data: initial,
+    error: undefined,
+    snapshotComplete: true,
+  });
+  const ProviderWrapper = await createProviderWrapper({ store });
+  // Counted so a test can wait for the re-render the subscribe causes. Without
+  // that wait an identity assertion passes before anything has happened.
+  const renders = { count: 0 };
+  const view = renderHook(
+    () => {
+      renders.count += 1;
+      return useFreshnessObjects("u1");
+    },
+    { wrapper: ProviderWrapper },
+  );
+  return { ...view, store, renders };
+}
+
+describe("useFreshnessObjects", () => {
+  it("keeps its identity when an object on another cluster changes", async () => {
+    // `useAllObjects` emits a new array for any change in the environment. A
+    // new array here rebuilds the stats and rows chain behind it, so a cluster
+    // nobody is looking at would re-render the page.
+    const mine = buildObject({ id: "u10" });
+    const { result, store, renders } = await renderFreshnessObjects([
+      mine,
+      buildObject({ id: "u20", clusterId: "u2", name: "elsewhere" }),
+    ]);
+
+    const first = result.current;
+    expect(first).toHaveLength(1);
+    const before = renders.count;
+
+    store.set(allObjects, {
+      data: [
+        mine,
+        buildObject({ id: "u20", clusterId: "u2", name: "renamed" }),
+      ],
+      error: undefined,
+      snapshotComplete: true,
+    });
+
+    // The subscribe emitted, so the hook ran again. What it returns must be
+    // the array it returned last time.
+    await waitFor(() => expect(renders.count).toBeGreaterThan(before));
+    expect(result.current).toBe(first);
+  });
+
+  it("changes identity when one of its own objects is renamed", async () => {
+    const { result, store } = await renderFreshnessObjects([
+      buildObject({ id: "u10", name: "before" }),
+    ]);
+
+    const first = result.current;
+    store.set(allObjects, {
+      data: [buildObject({ id: "u10", name: "after" })],
+      error: undefined,
+      snapshotComplete: true,
+    });
+
+    await waitFor(() => expect(result.current[0].objectName).toBe("after"));
+    expect(result.current).not.toBe(first);
+  });
+
+  it("keeps a name that contains control characters intact", async () => {
+    const { result } = await renderFreshnessObjects([
+      buildObject({ id: "u10", name: "orders\u0001u2" }),
+      buildObject({ id: "u11", name: "\u0002" }),
+    ]);
+
+    expect(result.current.map((o) => [o.objectId, o.objectName])).toEqual([
+      ["u10", "orders\u0001u2"],
+      ["u11", "\u0002"],
+    ]);
+  });
+});
+
+describe("buildFreshnessData", () => {
+  // Newest first, so a builder that trusts row order fails. Three bins a
+  // minute apart, with the newest reading the healthiest.
+  const readings = [
+    { bucketStart: new Date(180_000), objectId: "u1", lag: parse("00:00:01") },
+    { bucketStart: new Date(120_000), objectId: "u1", lag: parse("00:00:05") },
+    { bucketStart: new Date(60_000), objectId: "u1", lag: parse("00:10:00") },
+  ];
+  const objects = [
+    {
+      objectId: "u1",
+      objectName: "orders_mv",
+      schemaName: "public",
+      databaseName: "materialize",
+      objectType: "materialized-view",
+    },
+  ];
+
+  it("runs time forwards whatever order the rows arrive in", () => {
+    const data = buildFreshnessData(readings, objects);
+
+    expect(data.startTime).toBe(60_000);
+    expect(data.endTime).toBe(180_000);
+    expect(data.historicalData.map((d) => d.timestamp)).toEqual([
+      60_000, 120_000, 180_000,
+    ]);
+  });
+
+  it("reports each object's newest bin as its current lag", () => {
+    const data = buildFreshnessData(readings, objects);
+
+    expect(data.currentData[0].lag).toEqual(parse("00:00:01"));
   });
 });

@@ -27,9 +27,11 @@ function line(
 }
 
 describe("isBreaching", () => {
-  it("treats the threshold as an exclusive floor", () => {
-    expect(isBreaching(line("a", 2.0), 2.0)).toBe(false);
-    expect(isBreaching(line("a", 2.1), 2.0)).toBe(true);
+  it("treats the threshold as an inclusive floor", () => {
+    // A point exactly at the threshold is drawn touching the shaded band, so
+    // counting it as healthy would contradict the picture.
+    expect(isBreaching(line("a", 2.0), 2.0)).toBe(true);
+    expect(isBreaching(line("a", 1.9), 2.0)).toBe(false);
   });
 
   it("never breaches without a value to judge", () => {
