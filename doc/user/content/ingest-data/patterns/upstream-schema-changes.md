@@ -68,8 +68,6 @@ flowchart LR
     style MV fill:#d4edda,stroke:#28a745,color:#155724
 ```
 
-{{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
-
 ## Create the public interface
 
 ### Step 1. Create the source and the first ingesting table
