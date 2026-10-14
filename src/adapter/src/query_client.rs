@@ -277,24 +277,7 @@ impl QueryClient {
         catalog: &Catalog,
         cluster: ComputeInstanceId,
     ) -> ComputeInstanceSnapshot {
-        let mut ids = BTreeSet::new();
-        if let Some(instance) = catalog.try_get_cluster(cluster) {
-            ids.extend(instance.log_indexes.values().copied());
-        }
-        // Cluster bound objects exclude system entries, including builtin
-        // indexes that are valid access paths for catalog queries.
-        ids.extend(
-            catalog
-                .state()
-                .get_entries()
-                .filter_map(|(_, entry)| match entry.item() {
-                    CatalogItem::Index(index) if index.cluster_id == cluster => {
-                        Some(index.global_id())
-                    }
-                    _ => None,
-                }),
-        );
-        ComputeInstanceSnapshot::new_from_parts(cluster, ids)
+        ComputeInstanceSnapshot::new_from_catalog(catalog, cluster)
     }
 
     /// Maintained-plan repair restricts ordinary indexes to observed traces.

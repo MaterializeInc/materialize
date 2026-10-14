@@ -44,7 +44,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::analysis::DerivedBuilder;
 use mz_transform::analysis::monotonic::Monotonic;
 
-use crate::catalog::CatalogState;
+use crate::catalog::{Catalog, CatalogState};
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::optimize::{Optimize, OptimizerCatalog, OptimizerConfig, OptimizerError, view};
 use crate::session::{SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION};
@@ -78,6 +78,25 @@ impl ComputeInstanceSnapshot {
             instance_id,
             collections: Some(collections),
         }
+    }
+
+    /// Offers catalog-declared indexes without asserting execution readiness.
+    pub fn new_from_catalog(catalog: &Catalog, id: ComputeInstanceId) -> Self {
+        let mut indexes = BTreeSet::new();
+        if let Some(cluster) = catalog.try_get_cluster(id) {
+            indexes.extend(cluster.log_indexes.values().copied());
+        }
+        // Cluster bound objects exclude system entries, including builtin indexes.
+        indexes.extend(
+            catalog
+                .state()
+                .get_entries()
+                .filter_map(|(_, entry)| match entry.item() {
+                    CatalogItem::Index(index) if index.cluster_id == id => Some(index.global_id()),
+                    _ => None,
+                }),
+        );
+        Self::new_from_parts(id, indexes)
     }
 
     pub fn new_without_collections(instance_id: ComputeInstanceId) -> Self {
