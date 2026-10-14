@@ -112,6 +112,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `balancerd.defaultResources.requests` | Default resources requested for balancerd's CPU and memory if not set in the Materialize CR | ``{"cpu":"500m","memory":"256Mi"}`` |
 | `balancerd.enabled` | Flag to indicate whether to create balancerd pods for the environments | ``true`` |
 | `balancerd.nodeSelector` | Node selector to use for balancerd pods spawned by the operator | ``{}`` |
+| `balancerd.readinessProbePath` | HTTP path of the balancerd readiness probe. `/api/readyz` fails once a pod reaches `balancerd_connection_high_watermark`, which removes it from the Service endpoints. Use `/api/livez` when the load balancer health-checks `/api/readyz` itself, for example an NLB whose targets the AWS Load Balancer Controller registers from the endpoints: deregistration cuts held sessions after the deregistration delay and excludes the pod from fail-open. | ``"/api/readyz"`` |
 | `balancerd.tolerations` | Tolerations to use for balancerd pods spawned by the operator | ``{}`` |
 | `clusterd.affinity` | Affinity to use for clusterd pods spawned by the operator | ``{}`` |
 | `clusterd.nodeSelector` | Node selector to use for all clusterd pods spawned by the operator | ``{}`` |
@@ -284,7 +285,8 @@ For setup, runtime updates, and verification, see
 Before setting the connection watermarks
 (`balancerd_connection_high_watermark` and `balancerd_connection_low_watermark`),
 confirm that the load balancer in front of balancerd keeps established
-connections open when a backend is not ready. See
+connections open when a backend is not ready, and whether
+`balancerd.readinessProbePath` should be `/api/livez` for it. See
 [Take a nearly full balancerd out of load balancer rotation](https://materialize.com/docs/self-managed-deployments/configuration-system-parameters/#take-a-nearly-full-balancerd-out-of-load-balancer-rotation).
 
 ### Network Policies

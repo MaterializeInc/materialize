@@ -69,6 +69,10 @@ pub struct Config {
     pub balancerd_sql_port: u16,
     pub balancerd_http_port: u16,
     pub balancerd_internal_http_port: u16,
+    /// `/api/readyz` takes a balancerd at its connection high watermark out of
+    /// the Service endpoints. `/api/livez` keeps it in, for load balancers that
+    /// read `/api/readyz` in their own health check instead.
+    pub balancerd_readiness_probe_path: String,
 }
 
 pub struct Context {
@@ -342,14 +346,12 @@ impl Context {
             timeout_seconds: Some(1),
             ..Default::default()
         };
-        // Readiness drives load balancer rotation: a balancerd at its
-        // connection high watermark fails `/api/readyz` and must leave the
-        // Service endpoints within seconds, so this probe is tighter than the
-        // liveness probe below.
+        // Tighter than liveness so that, on `/api/readyz`, a balancerd at its
+        // connection high watermark leaves the Service endpoints within seconds.
         let readiness_probe = Probe {
             http_get: Some(HTTPGetAction {
                 port: IntOrString::Int(self.config.balancerd_internal_http_port.into()),
-                path: Some("/api/readyz".into()),
+                path: Some(self.config.balancerd_readiness_probe_path.clone()),
                 ..Default::default()
             }),
             failure_threshold: Some(2),
@@ -673,6 +675,7 @@ mod tests {
             balancerd_sql_port: 6875,
             balancerd_http_port: 6876,
             balancerd_internal_http_port: 6878,
+            balancerd_readiness_probe_path: "/api/readyz".to_owned(),
         });
         for configmap_name in [None, Some("balancerd-settings".to_owned())] {
             let mut balancer = Balancer::new(
