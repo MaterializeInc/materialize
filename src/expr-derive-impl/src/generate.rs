@@ -235,7 +235,7 @@ pub(crate) fn generate(
         ));
     }
 
-    // Erase generic type params → Datum<'a> for use in the trait impl's associated
+    // Replace generic type params with `Datum<'a>` for use in the trait impl's associated
     // types, where the function's parameters are not in scope.
     let param_types: Vec<syn::Type> = param_types_raw
         .iter()
