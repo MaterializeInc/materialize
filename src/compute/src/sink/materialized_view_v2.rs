@@ -52,12 +52,16 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use differential_dataflow::{Hashable, VecCollection};
-use mz_compute_types::dyncfgs::MV_SINK_ADVANCE_PERSIST_FRONTIERS;
-use mz_dyncfg::ConfigSet;
+use mz_compute_types::dyncfgs::{
+    ENABLE_SYNC_MV_SINK_SHARED_BATCHES_BARRIER, MV_SINK_ADVANCE_PERSIST_FRONTIERS,
+    MV_SINK_SHARED_BATCH_MAX_BYTES,
+};
+use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_ore::cast::CastFrom;
 use mz_persist_client::batch::{Batch, ProtoBatch};
 use mz_persist_client::write::WriteHandle;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_operators::persist::{SharedBatchId, SharedBatches};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use timely::PartialOrder;
@@ -79,6 +83,7 @@ use crate::sink::materialized_view::{
     BatchDescription, BatchesStream, DescsStream, DesiredStreams, OkErr, PersistApi,
     PersistStreams, SharedSinkFrontier, advance, operator_name, persist_source,
 };
+use crate::sink::shared_batch::SharedBatchWriter;
 
 /// Renders an MV sink writing the given desired collection into the `target` persist collection.
 ///
@@ -102,6 +107,7 @@ pub(super) fn persist_sink<'s>(
 
     let persist_api = PersistApi {
         persist_clients: Arc::clone(&compute_state.persist_clients),
+        persist_batches: compute_state.persist_batches.clone(),
         collection: target.clone(),
         shard_name: sink_id.to_string(),
         purpose: format!("MV sink {sink_id}"),
@@ -129,6 +135,7 @@ pub(super) fn persist_sink<'s>(
         descs.clone(),
         read_only_rx,
         Rc::clone(&compute_state.worker_config),
+        compute_state.workers_per_process,
     );
 
     append::render(sink_id, persist_api, descs, batches);
@@ -556,8 +563,8 @@ mod write {
 
     /// A response from the Tokio write task back to the Timely operator.
     struct WriteResponse {
-        /// The written batch, or `None` if the corrections buffer had no updates.
-        batch: Option<ProtoBatch>,
+        /// The written batches, empty if this worker has none to deliver for the interval.
+        batches: Vec<ProtoBatch>,
     }
 
     /// Render the `write` operator.
@@ -578,6 +585,7 @@ mod write {
         descs: DescsStream<'s>,
         mut read_only_rx: watch::Receiver<bool>,
         worker_config: Rc<ConfigSet>,
+        workers_per_process: usize,
     ) -> BatchesStream<'s> {
         let scope = desired.ok.scope();
         let worker_id = scope.index();
@@ -655,6 +663,21 @@ mod write {
         let advance_persist_frontiers_at_startup =
             MV_SINK_ADVANCE_PERSIST_FRONTIERS.get(&worker_config);
 
+        let shared_batch_max_bytes = MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config);
+        // In barrier mode the process-local workers coalesce into exactly one batch per interval.
+        //
+        // NOTE: every process-local worker must render this sink in the same mode and keep it. A
+        // barrier worker waits for a report from each of `workers_per_process` peers, which a
+        // best-effort peer never sends. Reading both settings at render time ensures this, because
+        // dataflow render and config updates arrive as one ordered command stream.
+        let barrier_enabled = ENABLE_SYNC_MV_SINK_SHARED_BATCHES_BARRIER.get(&worker_config);
+        let barrier =
+            (shared_batch_max_bytes.get() > 0 && barrier_enabled).then_some(workers_per_process);
+        // A worker that supersedes a description without writing it must release its barrier slot,
+        // so the shared batch does not wait for a batch this worker will never contribute to.
+        let skip_reporter =
+            barrier.map(|participants| (persist_api.persist_batches.clone(), participants));
+
         // Mirror the persist-frontier initialization performed by `State::new` below. With the
         // flag enabled, `State` advances its Timely-side `persist_frontiers` to `as_of`, opening
         // the `maybe_start_batch` write gate (`desc.lower <= persist_frontiers.frontier()`)
@@ -679,17 +702,18 @@ mod write {
         let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<WriteCommand>();
         let (resp_tx, mut resp_rx) = mpsc::unbounded_channel::<WriteResponse>();
 
-        // Spawn Tokio task that owns the WriteHandle and corrections buffer.
+        // Spawn Tokio task that owns the batch-writing context and corrections buffer.
         let (activator, activation_ack) = ArcActivator::new(scope, &info);
         let write_task_handle = {
             mz_ore::task::spawn(
                 || operator_name(sink_id, "write::batch_writer"),
                 async move {
-                    let writer = persist_api.open_writer().await;
+                    let batch_writer =
+                        BatchWriter::new(&persist_api, shared_batch_max_bytes, barrier).await;
 
                     while let Some(cmd) = cmd_rx.recv().await {
                         corrections =
-                            apply_command(sink_id, corrections, &writer, cmd, &resp_tx).await;
+                            apply_command(sink_id, corrections, &batch_writer, cmd, &resp_tx).await;
                         // Activate the operator to drain logging events and process batch responses.
                         // ArcActivator suppresses redundant activations, so this is cheap.
                         activator.activate();
@@ -728,6 +752,7 @@ mod write {
                 as_of,
                 advance_persist_frontiers_at_startup,
                 read_only,
+                skip_reporter,
             );
 
             // Whether a batch write is currently in flight in the Tokio task.
@@ -807,12 +832,15 @@ mod write {
                     match resp_rx.try_recv() {
                         Ok(resp) => {
                             if let Some((desc, cap)) = batch_in_flight.take() {
-                                if let Some(batch) = resp.batch {
-                                    let mut out = batches_output.activate();
-                                    out.session(&cap).give((desc, batch));
-                                    state.trace("wrote a batch");
-                                } else {
+                                if resp.batches.is_empty() {
                                     state.trace("skipping empty batch");
+                                } else {
+                                    state.trace(format!("wrote {} batches", resp.batches.len()));
+                                    let mut out = batches_output.activate();
+                                    let mut session = out.session(&cap);
+                                    for batch in resp.batches {
+                                        session.give((desc.clone(), batch));
+                                    }
                                 }
                             }
                         }
@@ -842,6 +870,27 @@ mod write {
     /// buffered updates.
     const READ_BACK_CHUNKS_IN_FLIGHT: usize = 4;
 
+    /// The batch-writing context owned by the Tokio write task.
+    ///
+    /// The `writer` cleans up a finished batch when the response channel has already gone away.
+    struct BatchWriter {
+        writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+        shared: SharedBatchWriter,
+    }
+
+    impl BatchWriter {
+        async fn new(
+            persist_api: &PersistApi,
+            shared_batch_max_bytes: ConfigValHandle<usize>,
+            barrier: Option<usize>,
+        ) -> Self {
+            let writer = persist_api.open_writer().await;
+            let shared =
+                SharedBatchWriter::new(persist_api, &writer, shared_batch_max_bytes, barrier).await;
+            Self { writer, shared }
+        }
+    }
+
     /// Apply a single command to the task state, returning the correction buffers.
     ///
     /// `desired` updates enter `corrections` as positive contributions and `persist` updates as
@@ -857,7 +906,7 @@ mod write {
     async fn apply_command(
         sink_id: GlobalId,
         mut corrections: Corrections,
-        writer: &WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+        batch_writer: &BatchWriter,
         cmd: WriteCommand,
         resp_tx: &mpsc::UnboundedSender<WriteResponse>,
     ) -> Corrections {
@@ -914,34 +963,43 @@ mod write {
                         },
                     );
 
-                // Create the builder lazily: an idle sink's descriptions find no corrections.
-                let mut builder = None;
-                while let Some(chunk) = updates_rx.recv().await {
-                    let builder = builder.get_or_insert_with(|| writer.builder(desc.lower.clone()));
-                    for ((k, v), t, d) in &chunk {
-                        builder.add(k, v, t, d).await.expect("valid usage");
-                    }
-                }
+                let batches = write_batches(&batch_writer.shared, &desc, &mut updates_rx).await;
                 let corrections = read_back.await;
 
-                let Some(builder) = builder else {
-                    // No corrections to write.
-                    let _ = resp_tx.send(WriteResponse { batch: None });
-                    return corrections;
-                };
-
-                let batch = builder.finish(desc.upper).await.expect("valid usage");
-                let proto_batch = batch.into_transmittable_batch();
-                if let Err(err) = resp_tx.send(WriteResponse {
-                    batch: Some(proto_batch),
-                }) {
-                    let batch =
-                        writer.batch_from_transmittable_batch(err.0.batch.expect("just sent"));
-                    batch.delete().await;
+                if let Err(err) = resp_tx.send(WriteResponse { batches }) {
+                    for proto_batch in err.0.batches {
+                        let batch = batch_writer
+                            .writer
+                            .batch_from_transmittable_batch(proto_batch);
+                        batch.delete().await;
+                    }
                 }
 
                 corrections
             }
+        }
+    }
+
+    /// Write the updates for `desc` through `writer`, returning the batches this worker delivers.
+    async fn write_batches(
+        writer: &SharedBatchWriter,
+        desc: &BatchDescription,
+        updates_rx: &mut mpsc::Receiver<Vec<((SourceData, ()), Timestamp, StorageDiff)>>,
+    ) -> Vec<ProtoBatch> {
+        // Start the write only once there are updates, since `maybe_start_batch` requests a write
+        // for every ready interval, including idle ones. A worker that never joins a shared batch
+        // cannot be the last holder responsible for delivering it. A barrier waits for every
+        // worker's report, so there every worker starts its write.
+        let mut write = writer.has_barrier().then(|| writer.start(desc));
+        while let Some(chunk) = updates_rx.recv().await {
+            let write = write.get_or_insert_with(|| writer.start(desc));
+            for (kv, t, d) in &chunk {
+                write.push(kv, *t, *d).await;
+            }
+        }
+        match write {
+            Some(write) => write.finish().await,
+            None => Vec::new(),
         }
     }
 
@@ -1027,6 +1085,9 @@ mod write {
         /// batches, so the `WriteBatch` path never sweeps `consolidate_before(upper)` forward;
         /// the forced consolidation stands in for it and is re-armed as long as this holds.
         read_only: bool,
+        /// In shared-batch barrier mode, the [`SharedBatches`] handle and process-local participant
+        /// count used to release a barrier slot when a description is superseded without a write.
+        skip_reporter: Option<(SharedBatches, usize)>,
     }
 
     impl State {
@@ -1036,6 +1097,7 @@ mod write {
             as_of: Antichain<Timestamp>,
             advance_persist_frontiers_at_startup: bool,
             read_only: bool,
+            skip_reporter: Option<(SharedBatches, usize)>,
         ) -> Self {
             // Force a consolidation of corrections after the snapshot updates have been fully
             // processed, to ensure we get rid of those as quickly as possible.
@@ -1049,6 +1111,7 @@ mod write {
                 batch_description: None,
                 force_consolidation_after,
                 read_only,
+                skip_reporter,
             };
 
             // Immediately advance the persist frontier tracking to the `as_of`.
@@ -1175,12 +1238,28 @@ mod write {
             if let Some((prev, _)) = &self.batch_description {
                 if PartialOrder::less_than(&desc.lower, &prev.lower) {
                     self.trace(format!("skipping outdated batch description: {desc:?}"));
+                    // This worker will not write `desc`, so release its barrier slot.
+                    self.note_skip(desc.shared_id);
                     return;
                 }
             }
 
+            // Replacing an unwritten description means this worker will not write it (a written
+            // description is taken out of `batch_description` by `maybe_start_batch`). Release its
+            // barrier slot.
+            if let Some((prev, _)) = &self.batch_description {
+                self.note_skip(prev.shared_id);
+            }
+
             self.batch_description = Some((desc, cap));
             self.trace("set batch description");
+        }
+
+        /// In barrier mode, release the barrier slot for a description this worker will not write.
+        fn note_skip(&self, shared_id: SharedBatchId) {
+            if let Some((shared_batches, participants)) = &self.skip_reporter {
+                shared_batches.note_skip(shared_id, *participants);
+            }
         }
 
         /// Check if a batch can be written and send a write command to the Tokio task if so.

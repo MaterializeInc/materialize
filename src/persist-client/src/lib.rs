@@ -550,10 +550,14 @@ impl PersistClient {
     /// updates is very large. Individual records, however, should be small
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
+    ///
+    /// `max_runs` overrides `persist_batch_max_runs` when `Some`. With `None`, the builder honors
+    /// the configured value, as [WriteHandle::builder] does.
     #[instrument(level = "debug", fields(shard = %shard_id))]
-    pub async fn batch_builder<K, V, T, D>(
+    pub fn batch_builder<K, V, T, D>(
         &self,
         shard_id: ShardId,
+        shard_name: &str,
         write_schemas: Schemas<K, V>,
         lower: Antichain<T>,
         max_runs: Option<usize>,
@@ -565,12 +569,14 @@ impl PersistClient {
         D: Monoid + Ord + Codec64 + Send + Sync,
     {
         let mut compact_cfg = CompactConfig::new(&self.cfg, shard_id);
-        compact_cfg.batch.max_runs = max_runs;
+        if let Some(max_runs) = max_runs {
+            compact_cfg.batch.max_runs = Some(max_runs);
+        }
         WriteHandle::builder_inner(
             &self.cfg,
             compact_cfg,
             Arc::clone(&self.metrics),
-            self.metrics.shards.shard(&shard_id, "peek_stash"),
+            self.metrics.shards.shard(&shard_id, shard_name),
             &self.metrics.user,
             Arc::clone(&self.isolated_runtime),
             Arc::clone(&self.blob),
