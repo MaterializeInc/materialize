@@ -5517,18 +5517,13 @@ impl Coordinator {
         if !self.catalog().state().catalog_read_protection_enabled() {
             return self.instance_snapshot(id);
         }
-        let cluster = self
-            .catalog()
+        self.catalog()
             .try_get_cluster(id)
             .ok_or(InstanceMissing(id))?;
-        let mut indexes: BTreeSet<_> = cluster.log_indexes.values().copied().collect();
-        indexes.extend(cluster.bound_objects.iter().filter_map(|item| {
-            match self.catalog().get_entry(item).item() {
-                CatalogItem::Index(index) => Some(index.global_id()),
-                _ => None,
-            }
-        }));
-        Ok(ComputeInstanceSnapshot::new_from_parts(id, indexes))
+        Ok(ComputeInstanceSnapshot::new_from_catalog(
+            self.catalog(),
+            id,
+        ))
     }
 
     /// Validate an MV pin for legacy controller installation. An explicit pin
