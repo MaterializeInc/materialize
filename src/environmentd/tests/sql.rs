@@ -1189,6 +1189,91 @@ async fn test_subscribe_shutdown() {
     // function exits, things are working correctly.
 }
 
+// A client that disconnects while its SELECT is being optimized ends its session without waiting
+// for the optimizer.
+//
+// The SELECT parks at the `peek_before_optimize` failpoint until the test hands it back, so the
+// optimizer cannot finish first. The test watches the session end through the
+// `mz_active_sessions` gauge rather than through SQL, which would park at the failpoint as well.
+// The failpoint is process-global, so the test relies on running in its own process, as nextest
+// runs it.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[allow(clippy::disallowed_methods)]
+async fn test_peek_optimization_abandoned_on_disconnect() {
+    let server = test_util::TestHarness::default().start().await;
+    let client = server.connect().await.unwrap();
+    client
+        .batch_execute("CREATE TABLE t (a int)")
+        .await
+        .unwrap();
+
+    let user_sessions = || {
+        server
+            .metrics_registry
+            .gather()
+            .into_iter()
+            .find(|family| family.name() == "mz_active_sessions")
+            .and_then(|family| {
+                family
+                    .get_metric()
+                    .iter()
+                    .find(|m| m.get_label().iter().any(|l| l.value() == "user"))
+                    .map(|m| m.get_gauge().value())
+            })
+            .unwrap_or(0.0)
+    };
+
+    let (victim, conn_task) = server.connect().with_handle().await.unwrap();
+    // The optimizer wait also gives up at the statement timeout, which would end the session
+    // without the disconnect being noticed.
+    victim
+        .batch_execute("SET statement_timeout = 0")
+        .await
+        .unwrap();
+    let sessions_before = user_sessions();
+
+    // Arm only once setup is done, so it's the SELECT below that parks.
+    let parked = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    fail::cfg_callback("peek_before_optimize", {
+        let parked = Arc::clone(&parked);
+        let resume = Arc::clone(&resume);
+        move || {
+            parked.wait();
+            resume.wait();
+        }
+    })
+    .unwrap();
+
+    let query = task::spawn(|| "victim_select", async move {
+        victim.query("SELECT * FROM t", &[]).await
+    });
+    task::spawn_blocking(|| "wait_parked", move || parked.wait()).await;
+
+    conn_task.abort_and_wait().await;
+    let session_ended = Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .retry_async(|_| async {
+            if user_sessions() < sessions_before {
+                Ok(())
+            } else {
+                Err(())
+            }
+        })
+        .await
+        .is_ok();
+
+    // Hand the optimizer back before asserting, so a failure does not leave it parked.
+    fail::remove("peek_before_optimize");
+    task::spawn_blocking(|| "resume", move || resume.wait()).await;
+
+    assert!(
+        session_ended,
+        "session still waits for the optimizer after its client disconnected"
+    );
+    assert_err!(query.await);
+}
+
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_subscribe_table_rw_timestamps() {
