@@ -7,6 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -27,8 +28,16 @@ def commit(repo: Path, message: str) -> str:
 
 
 @pytest.fixture
-def history(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+def history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, dict[str, str]]:
     """main: release -> baseline -> after, plus `old` branched from release."""
+    # Git exports GIT_DIR to hooks and to `rebase --exec` in linked worktrees.
+    # Left set, it redirects these commands and `clamp_to_baseline` to the
+    # caller's repository, writing fixture commits and config there.
+    for var in list(os.environ):
+        if var.startswith("GIT_"):
+            monkeypatch.delenv(var)
     git(tmp_path, "init", "--quiet")
     git(tmp_path, "config", "user.email", "test@example.com")
     git(tmp_path, "config", "user.name", "test")
