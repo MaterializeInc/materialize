@@ -5687,6 +5687,19 @@ impl<'a> Parser<'a> {
     fn parse_optional_table_constraint(
         &mut self,
     ) -> Result<Option<TableConstraint<Raw>>, ParserError> {
+        // `PRIMARY`, `UNIQUE`, `FOREIGN` and `CHECK` are also valid column
+        // names, which display unquoted, so they only start a constraint if the
+        // next token fits one. Otherwise, e.g., `(primary int4)` fails to parse.
+        let starts_constraint = match (self.peek_token(), self.peek_nth_token(1)) {
+            (Some(Token::Keyword(CONSTRAINT)), _) => true,
+            (Some(Token::Keyword(PRIMARY | FOREIGN)), Some(Token::Keyword(KEY))) => true,
+            (Some(Token::Keyword(UNIQUE)), Some(Token::LParen | Token::Keyword(NULLS))) => true,
+            (Some(Token::Keyword(CHECK)), Some(Token::LParen)) => true,
+            _ => false,
+        };
+        if !starts_constraint {
+            return Ok(None);
+        }
         let name = if self.parse_keyword(CONSTRAINT) {
             Some(self.parse_identifier()?)
         } else {

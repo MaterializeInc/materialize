@@ -3924,3 +3924,8 @@ CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC CONFIG = "map")
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC CONFIG = map)
 =>
 CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: TopicConfig, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("map")]))) }], key: None, headers: None }, format: None, envelope: None, mode: None, with_options: [] })
+
+parse-statement roundtrip
+CREATE TABLE t ("primary" int4, "unique" int4 UNIQUE, "check" int4, "foreign" int4, PRIMARY KEY ("primary"))
+----
+CREATE TABLE t (primary int4, unique int4 UNIQUE, check int4, foreign int4, PRIMARY KEY (primary))
