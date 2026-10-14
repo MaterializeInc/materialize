@@ -127,24 +127,11 @@ fn expand(e: &Codegen, func: &syn::ItemFn, trait_impl: TokenStream) -> TokenStre
     }
 }
 
-/// A variadic function's parameter names and their pre-erasure types, skipping the
-/// receiver and the trailing `&RowArena`.
-fn variadic_params(
-    func: &syn::ItemFn,
-    arena: bool,
-    has_self: bool,
-) -> darling::Result<(Vec<syn::Type>, Vec<Ident>)> {
-    let start = usize::from(has_self);
-    let end = func.sig.inputs.len() - usize::from(arena);
-    if end == start {
-        return Err(darling::Error::custom(
-            "variadic function must have at least one input parameter",
-        ));
-    }
-
+/// A variadic function's parameter names and their pre-erasure types.
+fn variadic_params(func: &syn::ItemFn) -> darling::Result<(Vec<syn::Type>, Vec<Ident>)> {
     let mut types = Vec::new();
     let mut names = Vec::new();
-    for param in func.sig.inputs.iter().skip(start).take(end - start) {
+    for param in signature::sql_args(func) {
         match param {
             syn::FnArg::Typed(pat) => {
                 let syn::Pat::Ident(ident) = &*pat.pat else {
@@ -210,7 +197,7 @@ pub(crate) fn generate(
                 Ident::new("b", Span::call_site()),
             ],
         ),
-        Shape::Variadic => variadic_params(func, arena, has_self)?,
+        Shape::Variadic => variadic_params(func)?,
     };
 
     let output_type = mods.output_type().cloned();
