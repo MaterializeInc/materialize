@@ -9,6 +9,7 @@
 
 //! An interactive cluster server.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -281,6 +282,23 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     /// The name of this cluster ("compute" or "storage").
     const NAME: &str;
 
+    /// The name recorded on the per-worker Timely tracing span.
+    ///
+    /// Defaults to [`Self::NAME`]. A spec that runs more than one cluster of the same kind in a
+    /// process (for example the maintenance and interactive compute runtimes) overrides this to
+    /// keep their spans distinguishable in the logs.
+    fn cluster_name(&self) -> Cow<'static, str> {
+        Cow::Borrowed(Self::NAME)
+    }
+
+    /// The prefix of the worker threads' OS names, which become `<prefix>:<worker index>`.
+    ///
+    /// Defaults to [`Self::NAME`]. Linux truncates a thread name to 15 bytes, so the prefix has to
+    /// leave room for the worker index.
+    fn thread_name_prefix(&self) -> Cow<'static, str> {
+        Cow::Borrowed(Self::NAME)
+    }
+
     /// Run the given Timely worker.
     fn run_worker(
         &self,
@@ -374,17 +392,19 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
         }
 
         let spec = self.clone();
+        let cluster_name = self.cluster_name();
+        let thread_name_prefix = self.thread_name_prefix();
         let worker_guards = execute_from(builders, other, worker_config, move |timely_worker| {
             let worker_idx = timely_worker.index();
 
             // Per worker tracing span, lets us identify Timely clusters and workers in the logs.
-            let span = info_span!("timely", name = Self::NAME, worker_id = worker_idx);
+            let span = info_span!("timely", name = %cluster_name, worker_id = worker_idx);
             let _span_guard = span.enter();
 
             // Every Timely instance in this process names its threads `timely:work-N`, restarting
             // the index at 0, so storage and compute worker threads collide under the same OS
             // thread name. Rename to disambiguate them for profilers and `top -H`.
-            mz_ore::process::set_current_thread_name(&format!("{}:{worker_idx}", Self::NAME));
+            mz_ore::process::set_current_thread_name(&format!("{thread_name_prefix}:{worker_idx}"));
 
             let _tokio_guard = tokio_executor.enter();
             let client_rx = client_rxs.lock().unwrap()[worker_idx % config.workers]
