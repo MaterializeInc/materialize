@@ -33,6 +33,23 @@ pub(crate) fn last_is_arena(func: &syn::ItemFn) -> bool {
     })
 }
 
+/// The parameters that carry SQL arguments, which excludes a `&self` receiver and a
+/// trailing `&RowArena`.
+pub(crate) fn sql_args(func: &syn::ItemFn) -> Vec<&syn::FnArg> {
+    let end = func.sig.inputs.len() - usize::from(last_is_arena(func));
+    func.sig
+        .inputs
+        .iter()
+        .take(end)
+        .skip(usize::from(has_receiver(func)))
+        .collect()
+}
+
+/// Checks if the function takes a `self` receiver.
+pub(crate) fn has_receiver(func: &syn::ItemFn) -> bool {
+    matches!(func.sig.inputs.first(), Some(syn::FnArg::Receiver(_)))
+}
+
 /// Checks if a parameter type accepts NULL.
 ///
 /// `Option<T>` always accepts NULL. `OptionalArg<T>` delegates to `T`.
@@ -593,7 +610,7 @@ pub(crate) fn arg_type(arg: &syn::ItemFn, nth: usize) -> Result<syn::Type, syn::
         }
         syn::FnArg::Receiver(_) => Err(syn::Error::new(
             arg.sig.inputs[nth].span(),
-            "Unsupported argument type",
+            "unsupported argument type",
         )),
     }
 }
@@ -642,7 +659,7 @@ pub(crate) fn output_type(arg: &syn::ItemFn) -> Result<&syn::Type, syn::Error> {
         syn::ReturnType::Type(_, ty) => Ok(&*ty),
         syn::ReturnType::Default => Err(syn::Error::new(
             arg.sig.output.span(),
-            "Function needs to return a value",
+            "function needs to return a value",
         )),
     }
 }

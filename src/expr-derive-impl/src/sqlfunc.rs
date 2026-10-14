@@ -18,7 +18,7 @@ use quote::quote;
 use crate::generate::generate;
 use crate::modifiers::Modifiers;
 use crate::shape::Shape;
-use crate::signature::last_is_arena;
+use crate::signature;
 
 /// Implementation for the `#[sqlfunc]` macro. The first parameter is the attribute
 /// arguments, the second is the function body. The third parameter indicates
@@ -47,23 +47,13 @@ pub fn sqlfunc(
     let generate_tests = modifiers.generates_test();
     let func = syn::parse2::<syn::ItemFn>(item.clone())?;
 
-    let tokens = match determine_arity(&func) {
-        Arity::Nullary => Err(darling::Error::custom("Nullary functions not supported")),
-        Arity::Unary { has_self } => {
-            generate(Shape::Unary, &func, modifiers, struct_ty, has_self, &attr)
-        }
-        Arity::Binary { has_self } => {
-            generate(Shape::Binary, &func, modifiers, struct_ty, has_self, &attr)
-        }
-        Arity::Variadic { has_self } => generate(
-            Shape::Variadic,
-            &func,
-            modifiers,
-            struct_ty,
-            has_self,
-            &attr,
-        ),
-    }?;
+    let has_self = signature::has_receiver(&func);
+    let Some(shape) = determine_shape(&func) else {
+        return Err(darling::Error::custom(
+            "nullary functions are not supported",
+        ));
+    };
+    let tokens = generate(shape, &func, modifiers, struct_ty, has_self, &attr)?;
 
     let test = (generate_tests && include_test).then(|| generate_test(attr, item, &func.sig.ident));
 
@@ -96,14 +86,6 @@ fn generate_test(_attr: TokenStream, _item: TokenStream, _name: &Ident) -> Token
     quote! {}
 }
 
-/// Arity classification for a function annotated with `#[sqlfunc]`.
-enum Arity {
-    Nullary,
-    Unary { has_self: bool },
-    Binary { has_self: bool },
-    Variadic { has_self: bool },
-}
-
 /// Checks whether a parameter's type is `Variadic<...>` or `OptionalArg<...>`,
 /// which indicates the function should be treated as variadic regardless of
 /// parameter count.
@@ -119,46 +101,21 @@ fn is_variadic_arg(arg: &syn::FnArg) -> bool {
     false
 }
 
-/// Determines the arity of a function annotated with `#[sqlfunc]`.
+/// The shape of a function annotated with `#[sqlfunc]`, or `None` for a function
+/// without SQL arguments.
 ///
-/// Accounts for `&self` receivers, trailing `&RowArena` parameters, and
-/// parameter types like `Variadic<T>` or `OptionalArg<T>` that indicate
-/// variadic dispatch.
-fn determine_arity(func: &syn::ItemFn) -> Arity {
-    let arena = last_is_arena(func);
-    let has_self = matches!(func.sig.inputs.first(), Some(syn::FnArg::Receiver(_)));
-
-    let mut effective_count = func.sig.inputs.len();
-    if arena {
-        effective_count -= 1;
+/// Only the SQL arguments count, so a `&self` receiver and a trailing `&RowArena` are
+/// skipped. A `Variadic<T>` or `OptionalArg<T>` argument makes the function variadic
+/// regardless of how many arguments it has.
+fn determine_shape(func: &syn::ItemFn) -> Option<Shape> {
+    let args = signature::sql_args(func);
+    if args.iter().any(|arg| is_variadic_arg(arg)) {
+        return Some(Shape::Variadic);
     }
-    if has_self {
-        effective_count -= 1;
-    }
-
-    // Check if any effective parameter uses a variadic-typed wrapper.
-    let start = if has_self { 1 } else { 0 };
-    let end = if arena {
-        func.sig.inputs.len() - 1
-    } else {
-        func.sig.inputs.len()
-    };
-    let has_variadic_param = func
-        .sig
-        .inputs
-        .iter()
-        .skip(start)
-        .take(end - start)
-        .any(is_variadic_arg);
-
-    if has_variadic_param || effective_count >= 3 {
-        Arity::Variadic { has_self }
-    } else {
-        match effective_count {
-            0 => Arity::Nullary,
-            1 => Arity::Unary { has_self },
-            2 => Arity::Binary { has_self },
-            _ => unreachable!(),
-        }
+    match args.len() {
+        0 => None,
+        1 => Some(Shape::Unary),
+        2 => Some(Shape::Binary),
+        _ => Some(Shape::Variadic),
     }
 }
