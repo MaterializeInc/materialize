@@ -3488,7 +3488,34 @@ def workflow_caught_up_stability_survives_restart(c: Composition) -> None:
         time.sleep(0.5)
     restarted = time.time()
 
-    c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    try:
+        c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
+    except Exception:
+        # Readiness substitutes zero for missing qualifying observations.
+        # Capture compute-owned counts without replacing the original failure.
+        try:
+            c.exec(
+                "mz_new",
+                "timeout",
+                "5s",
+                "bash",
+                "-c",
+                r"""
+                set -o pipefail
+                date -u
+                ps aux | grep -v grep | grep "cluster_id=s2" |
+                    sed -n 's#.* --internal-http-listen-addr=\([^ ]*\) .*#\1#p' |
+                    while read -r socket; do
+                        echo "System replica metrics: $socket"
+                        curl --fail --silent --show-error --max-time 2 \
+                            --unix-socket "$socket" localhost/metrics |
+                            grep '^mz_compute_collection_count'
+                    done
+                """,
+            )
+        except Exception as error:
+            print(f"Could not capture system replica hydration counts: {error}")
+        raise
     ready_after = time.time() - restarted
 
     assert (
