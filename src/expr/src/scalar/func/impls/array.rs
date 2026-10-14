@@ -80,7 +80,7 @@ impl LazyUnaryFunc for CastArrayToString {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        true
+        super::text_preserves_uniqueness(&self.ty)
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {

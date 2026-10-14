@@ -29,9 +29,10 @@ use crate::func::parse_timezone;
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::func::{EagerUnaryFunc, TimestampLike};
 
+// Not uniqueness-preserving: see `text_preserves_uniqueness`.
 #[sqlfunc(
     sqlname = "timestamp_to_text",
-    preserves_uniqueness = true,
+    preserves_uniqueness = false,
     inverse = to_unary!(super::CastStringToTimestamp(None))
 )]
 fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
@@ -40,9 +41,10 @@ fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
     buf
 }
 
+// Not uniqueness-preserving: see `text_preserves_uniqueness`.
 #[sqlfunc(
     sqlname = "timestamp_with_time_zone_to_text",
-    preserves_uniqueness = true,
+    preserves_uniqueness = false,
     inverse = to_unary!(super::CastStringToTimestampTz(None))
 )]
 fn cast_timestamp_tz_to_string(a: CheckedTimestamp<DateTime<Utc>>) -> String {

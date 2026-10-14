@@ -61,7 +61,7 @@ impl LazyUnaryFunc for CastListToString {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        true
+        super::text_preserves_uniqueness(&self.ty)
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
@@ -137,7 +137,11 @@ impl<E: Eval> LazyUnaryFunc for CastListToJsonb<E> {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        true
+        // NOTE: `to_jsonb` maps distinct elements to the same JSONB value, for
+        // example `time` and timestamp elements through their text form, which
+        // rounds nanoseconds away. This cast is therefore not
+        // uniqueness-preserving.
+        false
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
