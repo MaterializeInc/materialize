@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from materialize import mzbuild, spawn, ui
+from materialize.antithesis import images as antithesis_images
 from materialize.ci_util.upload_debug_symbols_to_s3 import (
     DEBUGINFO_BINS,
     upload_debuginfo_to_s3,
@@ -39,18 +40,25 @@ def main() -> None:
     try:
         coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
         sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
+        antithesis = ui.env_is_truthy("CI_ANTITHESIS")
 
         repo = mzbuild.Repository(
             Path("."),
             coverage=coverage,
             sanitizer=sanitizer,
+            antithesis=antithesis,
             image_registry="materialize",
         )
 
         # Build and push any images that are not already available on Docker Hub,
         # so they are accessible to other build agents.
         print("--- Acquiring mzbuild images")
-        deps = repo.resolve_dependencies(image for image in repo if image.publish)
+        if antithesis:
+            deps = repo.resolve_dependencies(
+                repo.images[name] for name in antithesis_images.IMAGES
+            )
+        else:
+            deps = repo.resolve_dependencies(image for image in repo if image.publish)
         # An image's registry visibility is the same across every build step, so
         # only verify it from the primary x86_64 build. That keeps the anonymous
         # registry-API load to one set of queries per pipeline instead of one per
@@ -58,7 +66,10 @@ def main() -> None:
         # build, so we run it concurrently with the slow build+push and join it
         # below before reporting success.
         check_public = (
-            repo.rd.arch == Arch.X86_64 and not coverage and sanitizer == Sanitizer.none
+            repo.rd.arch == Arch.X86_64
+            and not coverage
+            and sanitizer == Sanitizer.none
+            and not antithesis
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
             public_check = (
