@@ -501,6 +501,30 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
+  - id: cluster-spec-sheet-qps-smoke
+    label: "Cluster spec sheet: QPS sweep smoke test"
+    depends_on: build-x86_64
+    timeout_in_minutes: 20
+    agents:
+      queue: hetzner-x86-64-8cpu-16gb
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster-spec-sheet
+          run: default
+          args:
+            - --cleanup
+            - --target=docker
+            - --max-scale=2
+            - --qps-clusters=2
+            - --qps-concurrencies=1,8
+            - --qps-duration=1
+            - --qps-warmup=1
+            - --qps-protocols=prepared,simple
+            - --system-parameter-default=enable_prepared_query_reuse=true
+            - --system-parameter-default=enable_prepared_query_templates=true
+            - --system-parameter-default=enable_frontend_transaction_completion=true
+            - qps_envd_strong_scaling
+
   - id: zippy-kafka-sources-short
     topics: [cockroach, debezium, iceberg, kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
     label: "Short Zippy"
