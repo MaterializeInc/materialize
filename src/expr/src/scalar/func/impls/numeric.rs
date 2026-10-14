@@ -12,7 +12,7 @@ use std::fmt;
 use dec::{OrderedDecimal, Rounding};
 use mz_expr_derive::sqlfunc;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::{SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{RowArena, SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
@@ -21,7 +21,7 @@ use crate::scalar::func::EagerUnaryFunc;
 #[sqlfunc(
     sqlname = "-",
     preserves_uniqueness = true,
-    inverse = to_unary!(NegNumeric),
+    inverse = NegNumeric,
     is_monotone = true
 )]
 fn neg_numeric(mut a: Numeric) -> Numeric {
@@ -154,7 +154,7 @@ fn sqrt_numeric(mut a: Numeric) -> Result<Numeric, EvalError> {
 #[sqlfunc(
     sqlname = "numeric_to_smallint",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt16ToNumeric(None)),
+    inverse = super::CastInt16ToNumeric(None),
     is_monotone = true
 )]
 pub fn cast_numeric_to_int16(mut a: Numeric) -> Result<i16, EvalError> {
@@ -170,7 +170,7 @@ pub fn cast_numeric_to_int16(mut a: Numeric) -> Result<i16, EvalError> {
 #[sqlfunc(
     sqlname = "numeric_to_integer",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt32ToNumeric(None)),
+    inverse = super::CastInt32ToNumeric(None),
     is_monotone = true
 )]
 pub fn cast_numeric_to_int32(mut a: Numeric) -> Result<i32, EvalError> {
@@ -184,7 +184,7 @@ pub fn cast_numeric_to_int32(mut a: Numeric) -> Result<i32, EvalError> {
 #[sqlfunc(
     sqlname = "numeric_to_bigint",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt64ToNumeric(None)),
+    inverse = super::CastInt64ToNumeric(None),
     is_monotone = true
 )]
 pub fn cast_numeric_to_int64(mut a: Numeric) -> Result<i64, EvalError> {
@@ -198,7 +198,7 @@ pub fn cast_numeric_to_int64(mut a: Numeric) -> Result<i64, EvalError> {
 #[sqlfunc(
     sqlname = "numeric_to_real",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastFloat32ToNumeric(None)),
+    inverse = super::CastFloat32ToNumeric(None),
     is_monotone = true
 )]
 pub fn cast_numeric_to_float32(a: Numeric) -> Result<f32, EvalError> {
@@ -213,7 +213,7 @@ pub fn cast_numeric_to_float32(a: Numeric) -> Result<f32, EvalError> {
 #[sqlfunc(
     sqlname = "numeric_to_double",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastFloat64ToNumeric(None)),
+    inverse = super::CastFloat64ToNumeric(None),
     is_monotone = true
 )]
 pub fn cast_numeric_to_float64(a: Numeric) -> Result<f64, EvalError> {
@@ -228,7 +228,7 @@ pub fn cast_numeric_to_float64(a: Numeric) -> Result<f64, EvalError> {
 #[sqlfunc(
     sqlname = "numeric_to_text",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastStringToNumeric(None))
+    inverse = super::CastStringToNumeric(None)
 )]
 fn cast_numeric_to_string(a: Numeric) -> String {
     let mut buf = String::new();
@@ -239,7 +239,7 @@ fn cast_numeric_to_string(a: Numeric) -> String {
 #[sqlfunc(
     sqlname = "numeric_to_uint2",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUint16ToNumeric(None)),
+    inverse = super::CastUint16ToNumeric(None),
     is_monotone = true
 )]
 fn cast_numeric_to_uint16(mut a: Numeric) -> Result<u16, EvalError> {
@@ -255,7 +255,7 @@ fn cast_numeric_to_uint16(mut a: Numeric) -> Result<u16, EvalError> {
 #[sqlfunc(
     sqlname = "numeric_to_uint4",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUint32ToNumeric(None)),
+    inverse = super::CastUint32ToNumeric(None),
     is_monotone = true
 )]
 fn cast_numeric_to_uint32(mut a: Numeric) -> Result<u32, EvalError> {
@@ -269,7 +269,7 @@ fn cast_numeric_to_uint32(mut a: Numeric) -> Result<u32, EvalError> {
 #[sqlfunc(
     sqlname = "numeric_to_uint8",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUint64ToNumeric(None)),
+    inverse = super::CastUint64ToNumeric(None),
     is_monotone = true
 )]
 fn cast_numeric_to_uint64(mut a: Numeric) -> Result<u64, EvalError> {
@@ -325,7 +325,7 @@ impl EagerUnaryFunc for AdjustNumericScale {
     type Input<'a> = Numeric;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, mut d: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, mut d: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         if numeric::rescale(&mut d, self.0.into_u8()).is_err() {
             return Err(EvalError::NumericFieldOverflow);
         };

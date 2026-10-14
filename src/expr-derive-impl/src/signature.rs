@@ -33,6 +33,23 @@ pub(crate) fn last_is_arena(func: &syn::ItemFn) -> bool {
     })
 }
 
+/// The parameters that carry SQL arguments, which excludes a `&self` receiver and a
+/// trailing `&RowArena`.
+pub(crate) fn sql_args(func: &syn::ItemFn) -> Vec<&syn::FnArg> {
+    let end = func.sig.inputs.len() - usize::from(last_is_arena(func));
+    func.sig
+        .inputs
+        .iter()
+        .take(end)
+        .skip(usize::from(has_receiver(func)))
+        .collect()
+}
+
+/// Checks if the function takes a `self` receiver.
+pub(crate) fn has_receiver(func: &syn::ItemFn) -> bool {
+    matches!(func.sig.inputs.first(), Some(syn::FnArg::Receiver(_)))
+}
+
 /// Checks if a parameter type accepts NULL.
 ///
 /// `Option<T>` always accepts NULL. `OptionalArg<T>` delegates to `T`.
@@ -57,6 +74,21 @@ fn is_nullable_type(ty: &syn::Type) -> bool {
         }
     }
     false
+}
+
+/// Checks whether a parameter's type is `Variadic<...>` or `OptionalArg<...>`, which
+/// makes the function variadic regardless of parameter count.
+pub(crate) fn is_variadic_arg(arg: &syn::FnArg) -> bool {
+    let syn::FnArg::Typed(pat) = arg else {
+        return false;
+    };
+    let syn::Type::Path(path) = &*pat.ty else {
+        return false;
+    };
+    path.path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "Variadic" || segment.ident == "OptionalArg")
 }
 
 /// Checks if a type is `Variadic<T>`.
@@ -306,17 +338,18 @@ pub(crate) fn derive_output_type_for_generics(
     is_unary: bool,
 ) -> darling::Result<Option<TokenStream>> {
     // Find the first generic param that appears in the output.
-    let generic_name = match generic_names
-        .iter()
-        .find(|gn| classify_generic_usage(output_ty, gn) != GenericUsage::Absent)
-    {
-        Some(gn) => gn,
-        None => return Ok(None),
+    let Some((generic_name, output_usage)) = generic_names.iter().find_map(|gn| {
+        let usage = classify_generic_usage(output_ty, gn);
+        (usage != GenericUsage::Absent).then_some((gn, usage))
+    }) else {
+        return Ok(None);
     };
-    derive_output_type_for_generic(input_types, output_ty, generic_name, is_unary)
+    derive_output_type_for_generic(input_types, output_ty, generic_name, output_usage, is_unary)
+        .map(Some)
 }
 
-/// Derives an `output_type_expr` for a single generic parameter.
+/// Derives an `output_type_expr` for a single generic parameter, which appears in the
+/// output type as `output_usage`.
 ///
 /// Uses `SqlContainerType` trait calls instead of matching on specific container
 /// type names. The generated code calls `<Container as SqlContainerType>::unwrap_element_type()`
@@ -325,13 +358,9 @@ fn derive_output_type_for_generic(
     input_types: &[syn::Type],
     output_ty: &syn::Type,
     generic_name: &Ident,
+    output_usage: GenericUsage,
     is_unary: bool,
-) -> darling::Result<Option<TokenStream>> {
-    let output_usage = classify_generic_usage(output_ty, generic_name);
-    if output_usage == GenericUsage::Absent {
-        return Ok(None);
-    }
-
+) -> darling::Result<TokenStream> {
     let nullable = is_option_wrapped(output_ty);
 
     // Find the first input parameter that has T in a container.
@@ -355,9 +384,9 @@ fn derive_output_type_for_generic(
     }
 
     let (pos, source_usage) = container_input.ok_or_else(|| {
-        darling::Error::custom(
-            "generic parameter T appears in the output type but not in any input type",
-        )
+        darling::Error::custom(format!(
+            "generic parameter {generic_name} appears in the output type but not in any input type",
+        ))
     })?;
 
     // Generate the base expression to access the input type.
@@ -454,7 +483,7 @@ fn derive_output_type_for_generic(
         }
     };
 
-    Ok(Some(expr))
+    Ok(expr)
 }
 
 /// Generates a token stream that extracts the T-level SQL type from an input
@@ -570,34 +599,6 @@ pub(crate) fn erase_all_generic_params(ty: &syn::Type, generic_names: &[Ident]) 
     ty
 }
 
-/// Determines the argument type of the nth argument of the function.
-///
-/// Adds a lifetime `'a` to the argument type if it is a reference type.
-///
-/// Panics if the function has fewer than `nth` arguments. Returns an error if
-/// the parameter is a `self` receiver.
-pub(crate) fn arg_type(arg: &syn::ItemFn, nth: usize) -> Result<syn::Type, syn::Error> {
-    match &arg.sig.inputs[nth] {
-        syn::FnArg::Typed(pat) => {
-            // Patch lifetimes to be 'a if reference
-            if let syn::Type::Reference(r) = &*pat.ty {
-                if r.lifetime.is_none() {
-                    let ty = syn::Type::Reference(syn::TypeReference {
-                        lifetime: Some(Lifetime::new("'a", r.span())),
-                        ..r.clone()
-                    });
-                    return Ok(ty);
-                }
-            }
-            Ok((*pat.ty).clone())
-        }
-        syn::FnArg::Receiver(_) => Err(syn::Error::new(
-            arg.sig.inputs[nth].span(),
-            "Unsupported argument type",
-        )),
-    }
-}
-
 /// Recursively patches lifetimes in a type, adding `'a` to references without a lifetime
 /// and recursing into generic arguments and tuples.
 pub(crate) fn patch_lifetimes(ty: &syn::Type) -> syn::Type {
@@ -642,7 +643,7 @@ pub(crate) fn output_type(arg: &syn::ItemFn) -> Result<&syn::Type, syn::Error> {
         syn::ReturnType::Type(_, ty) => Ok(&*ty),
         syn::ReturnType::Default => Err(syn::Error::new(
             arg.sig.output.span(),
-            "Function needs to return a value",
+            "function needs to return a value",
         )),
     }
 }

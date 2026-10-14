@@ -373,7 +373,7 @@ fn array_fill<'a>(
 pub struct ArrayIndex {
     pub offset: i64,
 }
-#[sqlfunc(ArrayIndex, sqlname = "array_index", introduces_nulls = true)]
+#[sqlfunc(ArrayIndex, sqlname = "array_index")]
 fn array_index<'a, T: FromDatum<'a>>(
     &self,
     array: Array<'a, T>,
@@ -598,48 +598,36 @@ impl fmt::Display for RangeCreate {
     }
 }
 
-impl EagerVariadicFunc for RangeCreate {
-    type Input<'a> = (Datum<'a>, Datum<'a>, Datum<'a>);
-    type Output<'a> = Result<Datum<'a>, EvalError>;
-
-    fn call<'a>(
-        &self,
-        (lower, upper, flags_datum): Self::Input<'a>,
-        temp_storage: &'a RowArena,
-    ) -> Self::Output<'a> {
-        let flags = match flags_datum {
-            Datum::Null => {
-                return Err(EvalError::InvalidRange(
-                    InvalidRangeError::NullRangeBoundFlags,
-                ));
-            }
-            o => o.unwrap_str(),
-        };
-
-        let (lower_inclusive, upper_inclusive) = parse_range_bound_flags(flags)?;
-
-        let mut range = Range::new(Some((
-            RangeBound::new(lower, lower_inclusive),
-            RangeBound::new(upper, upper_inclusive),
-        )));
-
-        range.canonicalize()?;
-
-        Ok(temp_storage.make_datum(|row| {
-            row.push_range(range).expect("errors already handled");
-        }))
-    }
-
-    fn output_type(&self, _input_types: &[SqlColumnType]) -> SqlColumnType {
-        SqlScalarType::Range {
-            element_type: Box::new(self.elem_type.clone()),
+#[sqlfunc(
+    RangeCreate,
+    skip_display = true,
+    output_type_expr = "SqlScalarType::Range { element_type: Box::new(self.elem_type.clone()) }.nullable(false)"
+)]
+fn range_create<'a>(
+    &self,
+    lower: Datum<'a>,
+    upper: Datum<'a>,
+    flags_datum: Datum<'a>,
+) -> Result<Range<Datum<'a>>, EvalError> {
+    let flags = match flags_datum {
+        Datum::Null => {
+            return Err(EvalError::InvalidRange(
+                InvalidRangeError::NullRangeBoundFlags,
+            ));
         }
-        .nullable(false)
-    }
+        o => o.unwrap_str(),
+    };
 
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
+    let (lower_inclusive, upper_inclusive) = parse_range_bound_flags(flags)?;
+
+    let mut range = Range::new(Some((
+        RangeBound::new(lower, lower_inclusive),
+        RangeBound::new(upper, upper_inclusive),
+    )));
+
+    range.canonicalize()?;
+
+    Ok(range)
 }
 
 #[sqlfunc(sqlname = "datediff")]
@@ -1013,8 +1001,7 @@ fn record_create<'a>(
 }
 
 #[sqlfunc(
-    output_type_expr = "input_types[0].scalar_type.unwrap_list_nth_layer_type(input_types.len() - 1).clone().nullable(true)",
-    introduces_nulls = true
+    output_type_expr = "input_types[0].scalar_type.unwrap_list_nth_layer_type(input_types.len() - 1).clone().nullable(true)"
 )]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
@@ -1304,8 +1291,7 @@ fn pad_leading(
 }
 
 #[sqlfunc(
-    output_type_expr = "SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)",
-    introduces_nulls = true
+    output_type_expr = "SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)"
 )]
 fn regexp_match<'a>(
     haystack: &'a str,

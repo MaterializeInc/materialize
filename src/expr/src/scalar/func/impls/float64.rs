@@ -14,7 +14,7 @@ use mz_expr_derive::sqlfunc;
 use mz_ore::cast::TryCastFrom;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::adt::timestamp::CheckedTimestamp;
-use mz_repr::{SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{RowArena, SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
@@ -24,7 +24,7 @@ use crate::scalar::func::EagerUnaryFunc;
 #[sqlfunc(
     sqlname = "-",
     preserves_uniqueness = false,
-    inverse = to_unary!(NegFloat64),
+    inverse = NegFloat64,
     is_monotone = true
 )]
 fn neg_float64(a: f64) -> f64 {
@@ -59,7 +59,7 @@ fn floor_float64(a: f64) -> f64 {
 #[sqlfunc(
     sqlname = "double_to_smallint",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt16ToFloat64),
+    inverse = super::CastInt16ToFloat64,
     is_monotone = true
 )]
 fn cast_float64_to_int16(a: f64) -> Result<i16, EvalError> {
@@ -76,7 +76,7 @@ fn cast_float64_to_int16(a: f64) -> Result<i16, EvalError> {
 #[sqlfunc(
     sqlname = "double_to_integer",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt32ToFloat64),
+    inverse = super::CastInt32ToFloat64,
     is_monotone = true
 )]
 fn cast_float64_to_int32(a: f64) -> Result<i32, EvalError> {
@@ -97,7 +97,7 @@ fn cast_float64_to_int32(a: f64) -> Result<i32, EvalError> {
 #[sqlfunc(
     sqlname = "f64toi64",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt64ToFloat64),
+    inverse = super::CastInt64ToFloat64,
     is_monotone = true
 )]
 fn cast_float64_to_int64(a: f64) -> Result<i64, EvalError> {
@@ -118,7 +118,7 @@ fn cast_float64_to_int64(a: f64) -> Result<i64, EvalError> {
 #[sqlfunc(
     sqlname = "double_to_real",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastFloat32ToFloat64),
+    inverse = super::CastFloat32ToFloat64,
     is_monotone = true
 )]
 fn cast_float64_to_float32(a: f64) -> Result<f32, EvalError> {
@@ -137,7 +137,7 @@ fn cast_float64_to_float32(a: f64) -> Result<f32, EvalError> {
 #[sqlfunc(
     sqlname = "double_to_text",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastStringToFloat64)
+    inverse = super::CastStringToFloat64
 )]
 fn cast_float64_to_string(a: f64) -> String {
     let mut s = String::new();
@@ -148,7 +148,7 @@ fn cast_float64_to_string(a: f64) -> String {
 #[sqlfunc(
     sqlname = "double_to_uint2",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUint16ToFloat64),
+    inverse = super::CastUint16ToFloat64,
     is_monotone = true
 )]
 fn cast_float64_to_uint16(a: f64) -> Result<u16, EvalError> {
@@ -165,7 +165,7 @@ fn cast_float64_to_uint16(a: f64) -> Result<u16, EvalError> {
 #[sqlfunc(
     sqlname = "double_to_uint4",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUint32ToFloat64),
+    inverse = super::CastUint32ToFloat64,
     is_monotone = true
 )]
 fn cast_float64_to_uint32(a: f64) -> Result<u32, EvalError> {
@@ -182,7 +182,7 @@ fn cast_float64_to_uint32(a: f64) -> Result<u32, EvalError> {
 #[sqlfunc(
     sqlname = "double_to_uint8",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUint64ToFloat64),
+    inverse = super::CastUint64ToFloat64,
     is_monotone = true
 )]
 fn cast_float64_to_uint64(a: f64) -> Result<u64, EvalError> {
@@ -217,7 +217,7 @@ impl EagerUnaryFunc for CastFloat64ToNumeric {
     type Input<'a> = f64;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         if a.is_infinite() {
             return Err(EvalError::InfinityOutOfDomain(
                 "casting double precision to numeric".into(),

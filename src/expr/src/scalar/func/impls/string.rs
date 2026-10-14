@@ -39,7 +39,7 @@ use crate::{Eval, EvalError, MirScalarExpr, UnaryFunc, like_pattern};
 #[sqlfunc(
     sqlname = "text_to_boolean",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastBoolToString)
+    inverse = super::CastBoolToString
 )]
 fn cast_string_to_bool<'a>(a: &'a str) -> Result<bool, EvalError> {
     strconv::parse_bool(a).err_into()
@@ -51,7 +51,7 @@ fn cast_string_to_bool<'a>(a: &'a str) -> Result<bool, EvalError> {
     // collapse to 'a'::"char"), so inverse-cast canonicalization of
     // `c::text = lit` would silently change results.
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastPgLegacyCharToString)
+    inverse = super::CastPgLegacyCharToString
 )]
 fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
     PgLegacyChar(a.as_bytes().get(0).copied().unwrap_or(0))
@@ -70,7 +70,7 @@ fn cast_string_to_pg_legacy_name<'a>(a: &'a str) -> PgLegacyName<String> {
     // `b::text = lit` would otherwise rewrite to a comparison that ignores
     // the actual textual form.
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastBytesToString)
+    inverse = super::CastBytesToString
 )]
 fn cast_string_to_bytes<'a>(a: &'a str) -> Result<Vec<u8>, EvalError> {
     strconv::parse_bytes(a).err_into()
@@ -79,7 +79,7 @@ fn cast_string_to_bytes<'a>(a: &'a str) -> Result<Vec<u8>, EvalError> {
 #[sqlfunc(
     sqlname = "text_to_smallint",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt16ToString)
+    inverse = super::CastInt16ToString
 )]
 fn cast_string_to_int16<'a>(a: &'a str) -> Result<i16, EvalError> {
     strconv::parse_int16(a).err_into()
@@ -88,7 +88,7 @@ fn cast_string_to_int16<'a>(a: &'a str) -> Result<i16, EvalError> {
 #[sqlfunc(
     sqlname = "text_to_integer",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt32ToString)
+    inverse = super::CastInt32ToString
 )]
 fn cast_string_to_int32<'a>(a: &'a str) -> Result<i32, EvalError> {
     strconv::parse_int32(a).err_into()
@@ -97,7 +97,7 @@ fn cast_string_to_int32<'a>(a: &'a str) -> Result<i32, EvalError> {
 #[sqlfunc(
     sqlname = "text_to_bigint",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastInt64ToString)
+    inverse = super::CastInt64ToString
 )]
 fn cast_string_to_int64<'a>(a: &'a str) -> Result<i64, EvalError> {
     strconv::parse_int64(a).err_into()
@@ -106,7 +106,7 @@ fn cast_string_to_int64<'a>(a: &'a str) -> Result<i64, EvalError> {
 #[sqlfunc(
     sqlname = "text_to_real",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastFloat32ToString)
+    inverse = super::CastFloat32ToString
 )]
 fn cast_string_to_float32<'a>(a: &'a str) -> Result<f32, EvalError> {
     strconv::parse_float32(a).err_into()
@@ -115,7 +115,7 @@ fn cast_string_to_float32<'a>(a: &'a str) -> Result<f32, EvalError> {
 #[sqlfunc(
     sqlname = "text_to_double",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastFloat64ToString)
+    inverse = super::CastFloat64ToString
 )]
 fn cast_string_to_float64<'a>(a: &'a str) -> Result<f64, EvalError> {
     strconv::parse_float64(a).err_into()
@@ -124,7 +124,7 @@ fn cast_string_to_float64<'a>(a: &'a str) -> Result<f64, EvalError> {
 #[sqlfunc(
     sqlname = "text_to_oid",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastOidToString)
+    inverse = super::CastOidToString
 )]
 fn cast_string_to_oid<'a>(a: &'a str) -> Result<Oid, EvalError> {
     Ok(Oid(strconv::parse_oid(a)?))
@@ -133,7 +133,7 @@ fn cast_string_to_oid<'a>(a: &'a str) -> Result<Oid, EvalError> {
 #[sqlfunc(
     sqlname = "text_to_uint2",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUint16ToString)
+    inverse = super::CastUint16ToString
 )]
 fn cast_string_to_uint16(a: &str) -> Result<u16, EvalError> {
     strconv::parse_uint16(a).err_into()
@@ -142,7 +142,7 @@ fn cast_string_to_uint16(a: &str) -> Result<u16, EvalError> {
 #[sqlfunc(
     sqlname = "text_to_uint4",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUint32ToString)
+    inverse = super::CastUint32ToString
 )]
 fn cast_string_to_uint32(a: &str) -> Result<u32, EvalError> {
     strconv::parse_uint32(a).err_into()
@@ -151,13 +151,13 @@ fn cast_string_to_uint32(a: &str) -> Result<u32, EvalError> {
 #[sqlfunc(
     sqlname = "text_to_uint8",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUint64ToString)
+    inverse = super::CastUint64ToString
 )]
 fn cast_string_to_uint64(a: &str) -> Result<u64, EvalError> {
     strconv::parse_uint64(a).err_into()
 }
 
-#[sqlfunc(preserves_uniqueness = true, inverse = to_unary!(Reverse))]
+#[sqlfunc(preserves_uniqueness = true, inverse = Reverse)]
 fn reverse<'a>(a: &'a str) -> String {
     a.chars().rev().collect()
 }
@@ -179,7 +179,7 @@ impl EagerUnaryFunc for CastStringToNumeric {
     type Input<'a> = &'a str;
     type Output<'a> = Result<Numeric, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         let mut d = strconv::parse_numeric(a)?;
         if let Some(scale) = self.0 {
             if numeric::rescale(&mut d.0, scale.into_u8()).is_err() {
@@ -207,7 +207,7 @@ impl fmt::Display for CastStringToNumeric {
 #[sqlfunc(
     sqlname = "text_to_date",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastDateToString)
+    inverse = super::CastDateToString
 )]
 fn cast_string_to_date<'a>(a: &'a str) -> Result<Date, EvalError> {
     strconv::parse_date(a).err_into()
@@ -216,7 +216,7 @@ fn cast_string_to_date<'a>(a: &'a str) -> Result<Date, EvalError> {
 #[sqlfunc(
     sqlname = "text_to_time",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastTimeToString)
+    inverse = super::CastTimeToString
 )]
 fn cast_string_to_time<'a>(a: &'a str) -> Result<NaiveTime, EvalError> {
     strconv::parse_time(a).err_into()
@@ -239,7 +239,7 @@ impl EagerUnaryFunc for CastStringToTimestamp {
     type Input<'a> = &'a str;
     type Output<'a> = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         let out = strconv::parse_timestamp(a)?;
         let updated = out.round_to_precision(self.0)?;
         Ok(updated)
@@ -292,7 +292,7 @@ impl EagerUnaryFunc for CastStringToTimestampTz {
     type Input<'a> = &'a str;
     type Output<'a> = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         let out = strconv::parse_timestamptz(a)?;
         let updated = out.round_to_precision(self.0)?;
         Ok(updated)
@@ -316,7 +316,7 @@ impl fmt::Display for CastStringToTimestampTz {
 #[sqlfunc(
     sqlname = "text_to_interval",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastIntervalToString)
+    inverse = super::CastIntervalToString
 )]
 fn cast_string_to_interval<'a>(a: &'a str) -> Result<Interval, EvalError> {
     strconv::parse_interval(a).err_into()
@@ -325,7 +325,7 @@ fn cast_string_to_interval<'a>(a: &'a str) -> Result<Interval, EvalError> {
 #[sqlfunc(
     sqlname = "text_to_uuid",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastUuidToString)
+    inverse = super::CastUuidToString
 )]
 fn cast_string_to_uuid<'a>(a: &'a str) -> Result<Uuid, EvalError> {
     strconv::parse_uuid(a).err_into()
@@ -696,7 +696,7 @@ impl EagerUnaryFunc for CastStringToChar {
     type Input<'a> = &'a str;
     type Output<'a> = Result<Char<String>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         let s = format_str_trim(a, self.length, self.fail_on_len).map_err(|_| {
             assert!(self.fail_on_len);
             EvalError::StringValueTooLong {
@@ -878,7 +878,7 @@ impl EagerUnaryFunc for CastStringToVarChar {
     type Input<'a> = &'a str;
     type Output<'a> = Result<VarChar<&'a str>, EvalError>;
 
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, a: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         let s =
             mz_repr::adt::varchar::format_str(a, self.length, self.fail_on_len).map_err(|_| {
                 assert!(self.fail_on_len);
@@ -1015,7 +1015,7 @@ impl fmt::Display for CastStringToInt2Vector {
 #[sqlfunc(
     sqlname = "text_to_jsonb",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastJsonbToString)
+    inverse = super::CastJsonbToString
 )]
 // TODO(jamii): it would be much more efficient to skip the intermediate repr::jsonb::Jsonb.
 fn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
@@ -1120,7 +1120,7 @@ impl EagerUnaryFunc for IsLikeMatch {
     type Input<'a> = &'a str;
     type Output<'a> = bool;
 
-    fn call<'a>(&self, haystack: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, haystack: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         self.0.is_match(haystack)
     }
 
@@ -1157,7 +1157,7 @@ impl EagerUnaryFunc for IsRegexpMatch {
     type Input<'a> = &'a str;
     type Output<'a> = bool;
 
-    fn call<'a>(&self, haystack: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(&self, haystack: Self::Input<'a>, _temp_storage: &'a RowArena) -> Self::Output<'a> {
         self.0.is_match(haystack)
     }
 

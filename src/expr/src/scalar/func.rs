@@ -187,7 +187,6 @@ func_name! {
     ListLengthMax => "list_length_max",
     MapBuildFromRecordList => "map_build_from_record_list",
     PadChar => "pad_char",
-    variadic::RangeCreate => "range_create",
     RecordGet => "record_get",
     RegexpMatch => "regexp_match",
     RegexpReplace => "regexp_replace",
@@ -1810,8 +1809,7 @@ fn range_intersection<T: Copy + Ord>(l: Range<T>, r: Range<T>) -> Range<T> {
     output_type_expr = "input_types[0].scalar_type.without_modifiers().nullable(true)",
     is_infix_op = true,
     sqlname = "-",
-    propagates_nulls = true,
-    introduces_nulls = false
+    propagates_nulls = true
 )]
 fn range_difference<'a>(
     l: Range<Datum<'a>>,
@@ -1820,7 +1818,7 @@ fn range_difference<'a>(
     Ok(l.difference(&r)?)
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "=", negate = "Some(NotEq.into())")]
+#[sqlfunc(is_infix_op = true, sqlname = "=", negate = NotEq)]
 fn eq<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     // SQL equality demands that if either input is null, then the result should be null. However,
     // we don't need to handle this case here; it is handled when `BinaryFunc::eval` checks
@@ -1828,7 +1826,7 @@ fn eq<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     a == b
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "!=", negate = "Some(Eq.into())")]
+#[sqlfunc(is_infix_op = true, sqlname = "!=", negate = Eq)]
 fn not_eq<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     a != b
 }
@@ -1837,7 +1835,7 @@ fn not_eq<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "<",
-    negate = "Some(Gte.into())"
+    negate = Gte
 )]
 fn lt<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     a < b
@@ -1847,7 +1845,7 @@ fn lt<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "<=",
-    negate = "Some(Gt.into())"
+    negate = Gt
 )]
 fn lte<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     a <= b
@@ -1857,7 +1855,7 @@ fn lte<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = ">",
-    negate = "Some(Lte.into())"
+    negate = Lte
 )]
 fn gt<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     a > b
@@ -1867,7 +1865,7 @@ fn gt<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = ">=",
-    negate = "Some(Lt.into())"
+    negate = Lt
 )]
 fn gte<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     a >= b
@@ -2113,8 +2111,7 @@ fn jsonb_concat<'a>(
     output_type_expr = "SqlScalarType::Jsonb.nullable(true)",
     is_infix_op = true,
     sqlname = "-",
-    propagates_nulls = true,
-    introduces_nulls = true
+    propagates_nulls = true
 )]
 fn jsonb_delete_int64<'a>(a: Datum<'a>, i: i64, temp_storage: &'a RowArena) -> Datum<'a> {
     match a {
@@ -2141,8 +2138,7 @@ fn jsonb_delete_int64<'a>(a: Datum<'a>, i: i64, temp_storage: &'a RowArena) -> D
     output_type_expr = "SqlScalarType::Jsonb.nullable(true)",
     is_infix_op = true,
     sqlname = "-",
-    propagates_nulls = true,
-    introduces_nulls = true
+    propagates_nulls = true
 )]
 fn jsonb_delete_string<'a>(a: Datum<'a>, k: &str, temp_storage: &'a RowArena) -> Datum<'a> {
     match a {
@@ -2158,11 +2154,7 @@ fn jsonb_delete_string<'a>(a: Datum<'a>, k: &str, temp_storage: &'a RowArena) ->
     }
 }
 
-#[sqlfunc(
-    sqlname = "extractiv",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
+#[sqlfunc(sqlname = "extractiv", propagates_nulls = true)]
 fn date_part_interval_numeric(units: &str, b: Interval) -> Result<Numeric, EvalError> {
     match units.parse() {
         Ok(units) => Ok(date_part_interval_inner::<Numeric>(units, b)?),
@@ -2170,11 +2162,7 @@ fn date_part_interval_numeric(units: &str, b: Interval) -> Result<Numeric, EvalE
     }
 }
 
-#[sqlfunc(
-    sqlname = "date_partiv",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
+#[sqlfunc(sqlname = "date_partiv", propagates_nulls = true)]
 fn date_part_interval_f64(units: &str, b: Interval) -> Result<f64, EvalError> {
     match units.parse() {
         Ok(units) => Ok(date_part_interval_inner::<f64>(units, b)?),
@@ -2182,11 +2170,7 @@ fn date_part_interval_f64(units: &str, b: Interval) -> Result<f64, EvalError> {
     }
 }
 
-#[sqlfunc(
-    sqlname = "extractt",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
+#[sqlfunc(sqlname = "extractt", propagates_nulls = true)]
 fn date_part_time_numeric(units: &str, b: chrono::NaiveTime) -> Result<Numeric, EvalError> {
     match units.parse() {
         Ok(units) => Ok(date_part_time_inner::<Numeric>(units, b)?),
@@ -2194,11 +2178,7 @@ fn date_part_time_numeric(units: &str, b: chrono::NaiveTime) -> Result<Numeric, 
     }
 }
 
-#[sqlfunc(
-    sqlname = "date_partt",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
+#[sqlfunc(sqlname = "date_partt", propagates_nulls = true)]
 fn date_part_time_f64(units: &str, b: chrono::NaiveTime) -> Result<f64, EvalError> {
     match units.parse() {
         Ok(units) => Ok(date_part_time_inner::<f64>(units, b)?),
@@ -2680,7 +2660,7 @@ fn text_concat_binary(a: &str, b: &str, temp_storage: &RowArena) -> Result<Strin
     Ok(buf)
 }
 
-#[sqlfunc(propagates_nulls = true, introduces_nulls = false)]
+#[sqlfunc(propagates_nulls = true)]
 fn like_escape<'a>(
     pattern: &str,
     b: &str,
@@ -3005,11 +2985,7 @@ fn trim_trailing<'a>(a: &'a str, trim_chars: &str) -> &'a str {
     a.trim_end_matches(|c| trim_chars.contains(c))
 }
 
-#[sqlfunc(
-    sqlname = "array_length",
-    propagates_nulls = true,
-    introduces_nulls = true
-)]
+#[sqlfunc(sqlname = "array_length", propagates_nulls = true)]
 fn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {
     let i = match usize::try_from(b) {
         Ok(0) | Err(_) => return Ok(None),
@@ -3106,8 +3082,7 @@ fn array_upper<'a>(a: Array<'a>, i: i64) -> Result<Option<i32>, EvalError> {
 #[sqlfunc(
     is_infix_op = true,
     sqlname = "array_contains",
-    propagates_nulls = true,
-    introduces_nulls = false
+    propagates_nulls = true
 )]
 fn array_contains<'a>(a: Datum<'a>, array: Array<'a>) -> bool {
     array.elements().iter().any(|e| e == a)

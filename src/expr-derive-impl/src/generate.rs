@@ -11,7 +11,7 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 
-use crate::modifiers::{Modifiers, reject_inapplicable};
+use crate::modifiers::Modifiers;
 use crate::shape::{Modifier, Shape};
 use crate::signature;
 use crate::source::sqlfunc_source;
@@ -28,7 +28,6 @@ fn override_methods(
     mods: &Modifiers,
     mut introduces_nulls_fn: Option<TokenStream>,
 ) -> Vec<TokenStream> {
-    let present: Vec<_> = mods.iter().collect();
     shape
         .modifiers()
         .iter()
@@ -36,15 +35,13 @@ fn override_methods(
             if *modifier == Modifier::IntroducesNulls {
                 return introduces_nulls_fn.take();
             }
-            let expr = present
-                .iter()
-                .find(|(candidate, _)| candidate == modifier)
-                .map(|(_, expr)| *expr)?;
-            let name = Ident::new(modifier.name(), proc_macro2::Span::call_site());
-            let ret = ret.to_tokens();
+            let expr = mods.get(*modifier)?;
+            let name = Ident::new(modifier.name(), Span::call_site());
+            let body = ret.body(expr);
+            let ret = ret.tokens();
             Some(quote! {
                 fn #name(&self) -> #ret {
-                    #expr
+                    #body
                 }
             })
         })
@@ -61,11 +58,14 @@ struct Codegen {
     /// The registry's record of this function's source, generated as members of the
     /// `FuncName` impl.
     source: TokenStream,
+    /// Suppresses the generated `Display` impl, so a call site whose SQL name
+    /// depends on struct state can supply its own.
+    skip_display: bool,
 }
 
 /// Wraps an arity's trait impl with the parts every arity shares: the unit-struct
-/// definition (unless `has_self`), the `Display` impl, the `FuncName` impl, and the
-/// annotated function itself.
+/// definition (unless `has_self`), the `Display` impl (unless `skip_display`), the
+/// `FuncName` impl, and the annotated function itself.
 fn expand(e: &Codegen, func: &syn::ItemFn, trait_impl: TokenStream) -> TokenStream {
     let func_name = &func.sig.ident;
     let Codegen {
@@ -73,12 +73,17 @@ fn expand(e: &Codegen, func: &syn::ItemFn, trait_impl: TokenStream) -> TokenStre
         has_self,
         sqlname,
         source,
+        skip_display,
     } = e;
 
-    let display_impl = quote! {
-        impl std::fmt::Display for #struct_name {
-            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(#sqlname)
+    let display_impl = if *skip_display {
+        quote! {}
+    } else {
+        quote! {
+            impl std::fmt::Display for #struct_name {
+                fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    f.write_str(#sqlname)
+                }
             }
         }
     };
@@ -118,122 +123,122 @@ fn expand(e: &Codegen, func: &syn::ItemFn, trait_impl: TokenStream) -> TokenStre
     }
 }
 
-/// A variadic function's parameter names and their pre-erasure types, skipping the
-/// receiver and the trailing `&RowArena`.
-fn variadic_params(
-    func: &syn::ItemFn,
-    arena: bool,
-    has_self: bool,
-) -> darling::Result<(Vec<syn::Type>, Vec<Ident>)> {
-    let start = usize::from(has_self);
-    let end = func.sig.inputs.len() - usize::from(arena);
-    if end == start {
-        return Err(darling::Error::custom(
-            "variadic function must have at least one input parameter",
-        ));
-    }
-
+/// The SQL arguments' pre-erasure types, and the names `call` binds them to.
+///
+/// Unary and binary bind their inputs positionally as `a` and `b`, ignoring how the
+/// function spells its parameters, while variadic forwards the real names.
+fn sql_params(shape: Shape, func: &syn::ItemFn) -> darling::Result<(Vec<syn::Type>, Vec<Ident>)> {
+    // `crate::sqlfunc::determine_shape` gives unary one SQL argument and binary two.
+    const POSITIONAL: [&str; 2] = ["a", "b"];
     let mut types = Vec::new();
     let mut names = Vec::new();
-    for param in func.sig.inputs.iter().skip(start).take(end - start) {
-        match param {
-            syn::FnArg::Typed(pat) => {
+    for (position, param) in signature::sql_args(func).into_iter().enumerate() {
+        let syn::FnArg::Typed(pat) = param else {
+            return Err(darling::Error::custom("unexpected self parameter").with_span(param));
+        };
+        let name = match shape {
+            Shape::Unary | Shape::Binary => Ident::new(POSITIONAL[position], Span::call_site()),
+            Shape::Variadic => {
                 let syn::Pat::Ident(ident) = &*pat.pat else {
                     return Err(
                         darling::Error::custom("unsupported parameter pattern").with_span(&pat.pat)
                     );
                 };
-                names.push(ident.ident.clone());
-                types.push(signature::patch_lifetimes(&pat.ty));
+                ident.ident.clone()
             }
-            syn::FnArg::Receiver(_) => {
-                return Err(darling::Error::custom("unexpected self parameter"));
+        };
+        types.push(signature::patch_lifetimes(&pat.ty));
+        names.push(name);
+    }
+    Ok((types, names))
+}
+
+/// The column type expression the output-type method starts from, and the
+/// `introduces_nulls` method if one is generated.
+///
+/// `output_type`, `output_type_expr` and `introduces_nulls` decide both together. A
+/// generic signature that sets neither output modifier derives them from where its
+/// type parameters appear.
+fn output_type_and_introduces_nulls(
+    shape: Shape,
+    mods: &Modifiers,
+    param_types_raw: &[syn::Type],
+    output_ty_raw: &syn::Type,
+    generic_params: &[Ident],
+) -> darling::Result<(TokenStream, Option<TokenStream>)> {
+    let output_type = mods.output_type();
+    let mut output_type_expr = mods.output_type_expr().map(|expr| quote! { #expr });
+    let mut introduces_nulls = mods
+        .get(Modifier::IntroducesNulls)
+        .map(|expr| quote! { #expr });
+
+    // Derive the output type from where the generic parameters land. This reads the
+    // pre-erasure types, because erasure is what removes those parameters.
+    if !generic_params.is_empty() && output_type.is_none() && output_type_expr.is_none() {
+        if let Some(derived) = signature::derive_output_type_for_generics(
+            param_types_raw,
+            output_ty_raw,
+            generic_params,
+            shape == Shape::Unary,
+        )? {
+            output_type_expr = Some(derived);
+            if introduces_nulls.is_none() {
+                let nullable = signature::is_option_wrapped(output_ty_raw);
+                introduces_nulls = Some(quote! { #nullable });
             }
         }
     }
-    Ok((types, names))
+
+    let column_type = match (output_type, output_type_expr) {
+        (Some(output_type), _) => quote! { <#output_type>::as_column_type() },
+        (None, Some(output_type_expr)) => output_type_expr,
+        (None, None) => quote! { Self::Output::as_column_type() },
+    };
+    // Without an `introduces_nulls` method the trait default reads `Self::Output`,
+    // which an explicit `output_type` replaces.
+    let introduces_nulls = introduces_nulls.or_else(|| {
+        output_type.map(|output_type| {
+            quote! { <#output_type as ::mz_repr::OutputDatumType<'_, ()>>::nullable() }
+        })
+    });
+    let introduces_nulls_fn = introduces_nulls.map(|introduces_nulls| {
+        quote! {
+            fn introduces_nulls(&self) -> bool {
+                #introduces_nulls
+            }
+        }
+    });
+    Ok((column_type, introduces_nulls_fn))
 }
 
 /// Generates the trait impl for one `#[sqlfunc]`-annotated function, together with the
 /// items [`expand`] wraps around it.
 ///
-/// `struct_ty` names the generated struct when the call site spells one, which only
-/// the variadic arity accepts. `has_self` says the annotated function takes a
-/// receiver, so the trait's `call` dispatches through it.
+/// `struct_ty` names the generated struct when the call site spells one.
 pub(crate) fn generate(
     shape: Shape,
     func: &syn::ItemFn,
     mods: Modifiers,
     struct_ty: Option<syn::Path>,
-    has_self: bool,
     attr: &TokenStream,
 ) -> darling::Result<TokenStream> {
-    reject_inapplicable(shape, &mods)?;
-
     let fn_name = &func.sig.ident;
     let struct_name = struct_ty
         .as_ref()
         .and_then(|ty| ty.segments.last())
         .map_or_else(|| signature::camel_case(fn_name), |seg| seg.ident.clone());
 
-    // Whether the annotated function itself wants the arena, which is independent of
-    // whether the trait's `call` receives one.
+    // A receiver makes `call` dispatch through `self` to a method on a struct defined
+    // at the call site.
+    let has_self = signature::has_receiver(func);
+    mods.validate(shape, has_self)?;
+    // Whether the annotated function takes the arena. The trait's `call` always receives
+    // one.
     let arena = signature::last_is_arena(func);
     let output_ty_raw = signature::output_type(func)?;
     let generic_params = signature::find_generic_type_params(func);
 
-    // Unary and binary bind their inputs positionally, ignoring how the function
-    // spells its parameters, while variadic forwards the real names.
-    let (param_types_raw, param_names) = match shape {
-        Shape::Unary => (
-            vec![signature::arg_type(func, 0)?],
-            vec![Ident::new("a", Span::call_site())],
-        ),
-        Shape::Binary => (
-            vec![signature::arg_type(func, 0)?, signature::arg_type(func, 1)?],
-            vec![
-                Ident::new("a", Span::call_site()),
-                Ident::new("b", Span::call_site()),
-            ],
-        ),
-        Shape::Variadic => variadic_params(func, arena, has_self)?,
-    };
-
-    let output_type = mods.output_type().cloned();
-    let mut output_type_expr = mods.output_type_expr().cloned();
-    let mut introduces_nulls = mods.introduces_nulls().cloned();
-
-    // Derive the output type from where the generic parameters land. This reads the
-    // pre-erasure types, because erasure is what removes those parameters.
-    if !generic_params.is_empty() && output_type.is_none() && output_type_expr.is_none() {
-        if let Some(derived) = signature::derive_output_type_for_generics(
-            &param_types_raw,
-            output_ty_raw,
-            &generic_params,
-            shape == Shape::Unary,
-        )? {
-            output_type_expr = Some(syn::parse2(derived)?);
-            if introduces_nulls.is_none() {
-                let nullable = signature::is_option_wrapped(output_ty_raw);
-                introduces_nulls = Some(syn::parse_quote!(#nullable));
-            }
-        }
-    }
-
-    // TODO: these two conflict checks construct their error with `unknown_field`,
-    // which renders as "Unknown field: <message>", while every other modifier
-    // legality error in the crate uses `Error::custom`. The message text is pinned
-    // by a snapshot, so changing the constructor requires updating that snapshot.
-    if output_type.is_some() && output_type_expr.is_some() {
-        return Err(darling::Error::unknown_field(
-            "output_type and output_type_expr cannot be used together",
-        ));
-    }
-    if output_type_expr.is_some() && introduces_nulls.is_none() {
-        return Err(darling::Error::unknown_field(
-            "output_type_expr requires introduces_nulls",
-        ));
-    }
+    let (param_types_raw, param_names) = sql_params(shape, func)?;
 
     // Replace generic type params with `Datum<'a>` for use in the trait impl's associated
     // types, where the function's parameters are not in scope.
@@ -255,39 +260,15 @@ pub(crate) fn generate(
         quote! { (#(#param_names),*) }
     };
 
-    let (mut output_type_code, mut introduces_nulls_fn) = if let Some(output_type) = output_type {
-        let introduces_nulls_fn = quote! {
-            fn introduces_nulls(&self) -> bool {
-                <#output_type as ::mz_repr::OutputDatumType<'_, ()>>::nullable()
-            }
-        };
-        (
-            quote! { <#output_type>::as_column_type() },
-            Some(introduces_nulls_fn),
-        )
-    } else {
-        (quote! { Self::Output::as_column_type() }, None)
-    };
-
-    if let Some(output_type_expr) = output_type_expr {
-        output_type_code = quote! { #output_type_expr };
-    }
-
-    if let Some(introduces_nulls) = introduces_nulls {
-        introduces_nulls_fn = Some(quote! {
-            fn introduces_nulls(&self) -> bool {
-                #introduces_nulls
-            }
-        });
-    }
-
+    let (output_type_code, introduces_nulls_fn) = output_type_and_introduces_nulls(
+        shape,
+        &mods,
+        &param_types_raw,
+        output_ty_raw,
+        &generic_params,
+    )?;
     let methods = override_methods(shape, &mods, introduces_nulls_fn);
 
-    let arena_param = if shape.takes_arena() {
-        quote! { , temp_storage: &'a mz_repr::RowArena }
-    } else {
-        quote! {}
-    };
     let arena_arg = if arena {
         quote! { , temp_storage }
     } else {
@@ -310,8 +291,8 @@ pub(crate) fn generate(
 
             fn call<'a>(
                 &self,
-                #destructure: Self::Input<'a>
-                #arena_param
+                #destructure: Self::Input<'a>,
+                temp_storage: &'a mz_repr::RowArena,
             ) -> Self::Output<'a> {
                 #receiver #fn_name(#(#param_names),* #arena_arg)
             }
@@ -339,6 +320,7 @@ pub(crate) fn generate(
         has_self,
         sqlname,
         source: sqlfunc_source(attr, func, &param_types_raw, output_ty_raw, &param_types),
+        skip_display: mods.skip_display(),
     };
     Ok(expand(&codegen, func, trait_impl))
 }

@@ -1,6 +1,6 @@
 ---
 source: src/expr-derive-impl/src/lib.rs
-expression: "#[sqlfunc(\n    could_error = true,\n    output_type = i16,\n    inverse = None,\n    is_monotone = true,\n    preserves_uniqueness = true,\n    is_eliminable_cast = false,\n    sqlname = \"unary_all_modifiers\",\n)]\nfn unary_all_modifiers<'a>(a: Datum<'a>) -> Datum<'a> {\n    a\n}\n"
+expression: "#[sqlfunc(\n    could_error = true,\n    output_type = i16,\n    inverse = UnaryAllModifiers,\n    is_monotone = true,\n    preserves_uniqueness = true,\n    is_eliminable_cast = false,\n    sqlname = \"unary_all_modifiers\",\n)]\nfn unary_all_modifiers<'a>(a: Datum<'a>) -> Datum<'a> {\n    a\n}\n"
 ---
 #[derive(
     Ord,
@@ -18,7 +18,11 @@ pub struct UnaryAllModifiers;
 impl crate::func::EagerUnaryFunc for UnaryAllModifiers {
     type Input<'a> = Datum<'a>;
     type Output<'a> = Datum<'a>;
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
+    fn call<'a>(
+        &self,
+        a: Self::Input<'a>,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output<'a> {
         unary_all_modifiers(a)
     }
     fn output_sql_type(
@@ -38,7 +42,7 @@ impl crate::func::EagerUnaryFunc for UnaryAllModifiers {
         <i16 as ::mz_repr::OutputDatumType<'_, ()>>::nullable()
     }
     fn inverse(&self) -> Option<crate::UnaryFunc> {
-        None
+        Some(crate::UnaryFunc::from(UnaryAllModifiers))
     }
     fn is_monotone(&self) -> bool {
         true
@@ -59,7 +63,7 @@ impl crate::func::FuncName for UnaryAllModifiers {
     const NAME: &'static str = stringify!(unary_all_modifiers);
     #[cfg(feature = "func-registry")]
     const SQLFUNC: Option<crate::func::SqlFuncSource> = Some(crate::func::SqlFuncSource {
-        decl: "#[sqlfunc(could_error = true, output_type = i16, inverse = None, is_monotone = true, preserves_uniqueness = true, is_eliminable_cast = false, sqlname = \"unary_all_modifiers\",)] fn unary_all_modifiers<'a>(a: Datum<'a>) -> Datum<'a>",
+        decl: "#[sqlfunc(could_error = true, output_type = i16, inverse = UnaryAllModifiers, is_monotone = true, preserves_uniqueness = true, is_eliminable_cast = false, sqlname = \"unary_all_modifiers\",)] fn unary_all_modifiers<'a>(a: Datum<'a>) -> Datum<'a>",
         signature: "fn(Datum<'a>) -> Datum<'a>",
         body_fingerprint: 14373755090808246356u64,
     });

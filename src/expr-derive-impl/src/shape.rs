@@ -26,8 +26,8 @@ pub(crate) enum Shape {
 /// A modifier that maps directly onto one optional trait method.
 ///
 /// Modifiers that do not produce a trait method, such as `sqlname`, `output_type`,
-/// `output_type_expr`, and `test`, are absent: `crate::generate::generate` handles
-/// those explicitly because they feed `Display`, the output-type body, or the
+/// `output_type_expr`, `test`, and `skip_display`, are absent: `crate::generate::generate`
+/// handles those explicitly because they feed `Display`, the output-type body, or the
 /// expansion decision instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Modifier {
@@ -45,6 +45,21 @@ pub(crate) enum Modifier {
 }
 
 impl Modifier {
+    /// Every method-producing modifier.
+    pub(crate) const ALL: [Modifier; 11] = [
+        Modifier::CouldError,
+        Modifier::IntroducesNulls,
+        Modifier::IsMonotone,
+        Modifier::IsInfixOp,
+        Modifier::PropagatesNulls,
+        Modifier::Inverse,
+        Modifier::PreservesUniqueness,
+        Modifier::IsEliminableCast,
+        Modifier::Negate,
+        Modifier::IsInfinityMonotone,
+        Modifier::IsAssociative,
+    ];
+
     /// The attribute key, which is also the generated method name.
     pub(crate) fn name(&self) -> &'static str {
         match self {
@@ -73,7 +88,7 @@ pub(crate) enum ReturnTy {
 }
 
 impl ReturnTy {
-    pub(crate) fn to_tokens(&self) -> TokenStream {
+    pub(crate) fn tokens(&self) -> TokenStream {
         match self {
             ReturnTy::Bool => quote! { bool },
             ReturnTy::BoolPair => quote! { (bool, bool) },
@@ -81,12 +96,20 @@ impl ReturnTy {
             ReturnTy::OptBinaryFunc => quote! { Option<crate::BinaryFunc> },
         }
     }
+
+    /// The method body for a modifier whose value is `expr`. A function-valued
+    /// modifier names the function, and the body converts it into the enum.
+    pub(crate) fn body(&self, expr: &syn::Expr) -> TokenStream {
+        match self {
+            ReturnTy::Bool | ReturnTy::BoolPair => quote! { #expr },
+            ReturnTy::OptUnaryFunc => quote! { Some(crate::UnaryFunc::from(#expr)) },
+            ReturnTy::OptBinaryFunc => quote! { Some(crate::BinaryFunc::from(#expr)) },
+        }
+    }
 }
 
-// `crate::generate::override_methods` walks these tables in order to generate each
-// arity's override methods. The order here therefore determines the method order
-// in the generated code, which the insta snapshots under `sqlfunc.rs` pin exactly,
-// so it is load-bearing, not cosmetic.
+// `crate::generate::override_methods` walks these tables in order, so they also fix
+// the method order in the generated code, which the snapshots in `crate::test` pin.
 const UNARY_MODIFIERS: &[(Modifier, ReturnTy)] = &[
     (Modifier::CouldError, ReturnTy::Bool),
     (Modifier::IntroducesNulls, ReturnTy::Bool),
@@ -124,6 +147,13 @@ impl Shape {
             Shape::Binary => BINARY_MODIFIERS,
             Shape::Variadic => VARIADIC_MODIFIERS,
         }
+    }
+
+    /// Whether this arity's table lists `modifier`.
+    pub(crate) fn accepts(&self, modifier: Modifier) -> bool {
+        self.modifiers()
+            .iter()
+            .any(|(candidate, _)| *candidate == modifier)
     }
 
     pub(crate) fn label(&self) -> &'static str {
@@ -168,14 +198,6 @@ impl Shape {
         }
     }
 
-    /// Whether the trait's `call` receives a `&'a RowArena`.
-    pub(crate) fn takes_arena(&self) -> bool {
-        match self {
-            Shape::Unary => false,
-            Shape::Binary | Shape::Variadic => true,
-        }
-    }
-
     /// The tail of the output-type method, which sets the nullability of the
     /// `output` column type the caller computed.
     ///
@@ -190,25 +212,24 @@ impl Shape {
     /// some input is nullable, because the optimizer short-circuits an all-NULL call.
     pub(crate) fn nullability(&self, checks: &[TokenStream]) -> TokenStream {
         match self {
+            // NOTE: unary omits the non-nullable-position term the other two arities
+            // carry. That is sound only because `PropagatesNulls` is absent from
+            // `UNARY_MODIFIERS`, so a unary `propagates_nulls` is always
+            // `!Input::nullable()`, which is what the position check tests for every
+            // parameter type in the tree.
+            // Adding `PropagatesNulls` to the unary table without also adding the term
+            // here lets `propagates_nulls = false` report a non-nullable output for an
+            // input the evaluation layer short-circuits to NULL.
             Shape::Unary => quote! {
                 output.nullable(nullable || (propagates_nulls && input_type.nullable))
             },
-            Shape::Binary => quote! {
+            Shape::Binary | Shape::Variadic => quote! {
                 let non_nullable_input_is_nullable = false #(#checks)*;
                 let inputs_nullable = input_types.iter().any(|it| it.nullable);
                 let is_null = nullable
                     || non_nullable_input_is_nullable
                     || (propagates_nulls && inputs_nullable);
                 output.nullable(is_null)
-            },
-            Shape::Variadic => quote! {
-                let non_nullable_input_is_nullable = false #(#checks)*;
-                let inputs_nullable = input_types.iter().any(|it| it.nullable);
-                output.nullable(
-                    nullable
-                    || non_nullable_input_is_nullable
-                    || (propagates_nulls && inputs_nullable)
-                )
             },
         }
     }
@@ -218,21 +239,18 @@ impl Shape {
 mod tests {
     use super::{Modifier, Shape};
 
-    fn has(shape: Shape, m: Modifier) -> bool {
-        shape
-            .modifiers()
-            .iter()
-            .any(|(candidate, _)| *candidate == m)
-    }
-
     #[mz_ore::test]
     fn unary_accepts_inverse_and_rejects_negate() {
-        assert!(has(Shape::Unary, Modifier::Inverse));
-        assert!(has(Shape::Unary, Modifier::PreservesUniqueness));
-        assert!(has(Shape::Unary, Modifier::IsEliminableCast));
-        assert!(!has(Shape::Unary, Modifier::Negate));
-        assert!(!has(Shape::Unary, Modifier::IsInfixOp));
-        assert!(!has(Shape::Unary, Modifier::PropagatesNulls));
-        assert!(!has(Shape::Unary, Modifier::IsAssociative));
+        assert!(Shape::Unary.accepts(Modifier::Inverse));
+        assert!(Shape::Unary.accepts(Modifier::PreservesUniqueness));
+        assert!(Shape::Unary.accepts(Modifier::IsEliminableCast));
+        assert!(!Shape::Unary.accepts(Modifier::Negate));
+        assert!(!Shape::Unary.accepts(Modifier::IsInfixOp));
+        assert!(
+            !Shape::Unary.accepts(Modifier::PropagatesNulls),
+            "Shape::nullability omits unary's non-nullable-position term on the strength of \
+             this absence"
+        );
+        assert!(!Shape::Unary.accepts(Modifier::IsAssociative));
     }
 }
