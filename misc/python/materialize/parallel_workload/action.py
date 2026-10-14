@@ -1588,7 +1588,7 @@ class DeleteAction(Action):
             for t in exe.db.tables
             if t != table and (not t.temp or t in exe.temp_objects)
         ]
-        # TODO: Drop the RepeatRow gate once STG-36 is fixed.
+        # TODO: Drop the RepeatRow gate once DB-217 is fixed.
         # DELETE .. USING lowers to a semijoin whose DistinctBy can leave the
         # target table with a net-negative row, and every later reader of that
         # table then surfaces the corruption. Tolerating that class outside

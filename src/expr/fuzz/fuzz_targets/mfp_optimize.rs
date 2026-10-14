@@ -443,7 +443,7 @@ fn eval_raw(mfp: &MapFilterProject, row: &Row) -> Option<Option<Row>> {
 /// into the plan (CLU-137), and memoization may hoist a fallible subexpression
 /// shared under the `And`/`Or` into a mapped column that is evaluated eagerly,
 /// surfacing the error. Both outcomes are legal for `optimize`, because
-/// `AND`/`OR` evaluation order is undefined (STG-54), so such a row constrains
+/// `AND`/`OR` evaluation order is undefined (SQL-795), so such a row constrains
 /// nothing. See `run` for the two mechanisms side by side.
 ///
 /// NOTE: this deliberately evaluates *every* operand of an `And`/`Or`, even
@@ -729,7 +729,7 @@ fn run(u: &mut Unstructured) -> arbitrary::Result<()> {
     // memoization hoists a fallible subexpression shared under an `And`/`Or`
     // into a mapped column that `evaluate_inner` runs eagerly, surfacing the
     // absorbed error. The latter is not a bug: `AND`/`OR` evaluation order is
-    // undefined, in Materialize as in Postgres (STG-54), so the surfaced error
+    // undefined, in Materialize as in Postgres (SQL-795), so the surfaced error
     // is a legal outcome of the same plan.
     //
     // Non-temporal mode handles both row-precisely, skipping exactly the rows
