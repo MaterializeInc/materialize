@@ -330,8 +330,7 @@ INSERT INTO excl_not_null VALUES (5, NULL, 'e');
 30 1
 <null> 2
 
-# The unique constraint should be implicitly excluded since the column it depends upon has been
-# made nullable
+# The unique constraint still needs to be explicitly excluded if you want to drop the constraint.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER TABLE excl_not_null DROP CONSTRAINT unq_u;
 INSERT INTO excl_not_null VALUES (6, 60, 'f');
