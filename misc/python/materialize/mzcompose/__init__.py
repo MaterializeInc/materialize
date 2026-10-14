@@ -184,6 +184,9 @@ def get_minimal_system_parameters(
         # benchmarks measure.
         config["storage_persist_sink_description_lookahead"] = "2s"
 
+    if version >= MzVersion.parse_mz("v26.47.0-dev"):
+        config["compute_temporal_bucketing_min_width"] = "1s"
+
     if sanitizer_enabled():
         config["with_0dt_deployment_max_wait"] = "18000s"
 

@@ -3093,6 +3093,11 @@ class FlipFlagsAction(Action):
             "65536",
             "2097152",
         ]
+        self.flags_with_values["compute_temporal_bucketing_min_width"] = [
+            "0ms",
+            "1s",
+            "10s",
+        ]
         self.flags_with_values["enable_compute_error_distinct"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_arrangement_dictionary_compression_alpha"] = (
