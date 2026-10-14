@@ -11,7 +11,9 @@
 
 use std::cmp;
 use std::fmt::{Debug, Formatter};
+use std::future::poll_fn;
 use std::ops::Range;
+use std::pin::pin;
 use std::sync::Arc;
 use std::sync::atomic::{self, AtomicU64};
 use std::time::{Duration, Instant};
@@ -325,6 +327,10 @@ impl Blob for S3Blob {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let start_overall = Instant::now();
         let path = self.get_path(key);
+        let diagnose = tracing::enabled!(
+            target: "mz_persist_client::listen_diagnostics",
+            tracing::Level::DEBUG
+        );
 
         // S3 advises that it's fastest to download large objects along the part
         // boundaries they were originally uploaded with [1].
@@ -374,16 +380,39 @@ impl Blob for S3Blob {
 
         // Fetch our first header, this tells us how many more are left.
         let header_start = Instant::now();
-        let object = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(&path)
-            .part_number(1)
-            .send()
-            .await;
-        let elapsed = header_start.elapsed();
-        min_header_elapsed.observe(elapsed, "s3 download first part header");
+        let mut header_poll_elapsed = Duration::ZERO;
+        let object = {
+            let request = self
+                .client
+                .get_object()
+                .bucket(&self.bucket)
+                .key(&path)
+                .part_number(1)
+                .send();
+            let mut request = pin!(request);
+            // Poll intervals include OS descheduling. They distinguish time inside
+            // this future's polls from time between polls, not CPU from network work.
+            if diagnose {
+                poll_fn(|cx| {
+                    let started = Instant::now();
+                    let result = request.as_mut().poll_unpin(cx);
+                    header_poll_elapsed += started.elapsed();
+                    result
+                })
+                .await
+            } else {
+                request.await
+            }
+        };
+        let header_elapsed = header_start.elapsed();
+        min_header_elapsed.observe(header_elapsed, "s3 download first part header");
+        if diagnose && object.is_err() && header_elapsed >= Duration::from_millis(20) {
+            tracing::debug!(
+                target: "mz_persist_client::listen_diagnostics",
+                key, ?header_elapsed, ?header_poll_elapsed,
+                "slow s3 first header failed"
+            );
+        }
 
         let first_part = match object {
             Ok(object) => object,
@@ -514,7 +543,19 @@ impl Blob for S3Blob {
 
         // Await on all of our parts requests.
         let mut segments = vec![];
-        while let Some(result) = body_futures.next().await {
+        let remaining_start = Instant::now();
+        let mut remaining_poll_elapsed = Duration::ZERO;
+        while let Some(result) = if diagnose {
+            poll_fn(|cx| {
+                let started = Instant::now();
+                let result = body_futures.poll_next_unpin(cx);
+                remaining_poll_elapsed += started.elapsed();
+                result
+            })
+            .await
+        } else {
+            body_futures.next().await
+        } {
             // Download failure, we failed to fetch the body from S3.
             let mut part_body = result
                 .inspect_err(|e| {
@@ -528,6 +569,7 @@ impl Blob for S3Blob {
             // Collect all of our segments.
             segments.append(&mut part_body);
         }
+        let remaining_elapsed = remaining_start.elapsed();
 
         // A store that reports neither the part count nor a range it honors
         // hands back less than the object. Fail the get here rather than let
@@ -550,6 +592,17 @@ impl Blob for S3Blob {
             start_overall.elapsed(),
             num_requests
         );
+        if diagnose && start_overall.elapsed() >= Duration::from_millis(20) {
+            // With multiple parts, the remaining interval includes their
+            // headers as well as body reads. Do not sum concurrent part timings.
+            tracing::debug!(
+                target: "mz_persist_client::listen_diagnostics",
+                key, num_requests, ?header_elapsed, ?header_poll_elapsed,
+                ?remaining_elapsed, ?remaining_poll_elapsed,
+                elapsed = ?start_overall.elapsed(),
+                "slow s3 blob read completed"
+            );
+        }
         Ok(Some(SegmentedBytes::from(segments)))
     }
 
