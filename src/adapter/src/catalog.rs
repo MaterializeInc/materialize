@@ -1066,6 +1066,15 @@ impl Catalog {
         self.state.resolve_full_name(name, conn_id)
     }
 
+    /// See [`CatalogState::try_resolve_full_name`].
+    pub fn try_resolve_full_name(
+        &self,
+        name: &QualifiedItemName,
+        conn_id: Option<&ConnectionId>,
+    ) -> Option<FullItemName> {
+        self.state.try_resolve_full_name(name, conn_id)
+    }
+
     pub fn try_get_entry(&self, id: &CatalogItemId) -> Option<&CatalogEntry> {
         self.state.try_get_entry(id)
     }

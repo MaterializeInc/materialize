@@ -421,7 +421,7 @@ impl Coordinator {
     async fn create_materialized_view_optimize(
         &mut self,
         CreateMaterializedViewOptimize {
-            validity,
+            mut validity,
             plan,
             resolved_ids,
             explain_ctx,
@@ -472,10 +472,14 @@ impl Coordinator {
             self.optimizer_metrics(),
         );
 
+        let catalog = self.owned_catalog();
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize create materialized view",
             move || {
+                // Test-only synchronization point: parks the optimization, so a
+                // test can drop a dependency before the next stage.
+                fail::fail_point!("create_materialized_view_optimize");
                 span.in_scope(|| {
                     let mut pipeline = || -> Result<(
                         optimize::materialized_view::LocalMirPlan,
@@ -499,6 +503,16 @@ impl Coordinator {
 
                     let stage = match pipeline() {
                         Ok((local_mir_plan, global_mir_plan, global_lir_plan)) => {
+                            // The finish stage acquires read holds on the dataflow's imports,
+                            // which can include indexes that the statement doesn't name.
+                            let imports = dataflow_import_id_bundle(
+                                global_lir_plan.df_desc(),
+                                plan.materialized_view.cluster_id,
+                            );
+                            validity.extend_dependencies(
+                                &catalog,
+                                imports.iter().map(|id| catalog.resolve_item_id(&id)),
+                            );
                             if let ExplainContext::Plan(explain_ctx) = explain_ctx {
                                 let (_, df_meta) = global_lir_plan.unapply();
                                 CreateMaterializedViewStage::Explain(
@@ -722,7 +736,16 @@ impl Coordinator {
         let (mut df_desc, raw_df_meta) = global_lir_plan.unapply();
         let df_meta = {
             let system_catalog = self.catalog().for_system_session();
-            let full_name = self.catalog().resolve_full_name(&name, None);
+            // The plan's validity doesn't cover the schema, so only DDL
+            // serialization keeps a `DROP SCHEMA` from landing during the
+            // off-thread optimization.
+            let full_name = self
+                .catalog()
+                .try_resolve_full_name(&name, None)
+                .ok_or_else(|| AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "schema",
+                    dependency_id: name.qualifiers.schema_spec.to_string(),
+                })?;
             let transient_items = btreemap! {
                 global_id => TransientItem::new(
                     Some(full_name.into_parts()),
@@ -952,7 +975,13 @@ impl Coordinator {
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
         let session_catalog = self.catalog().for_session(session);
         let expr_humanizer = {
-            let full_name = self.catalog().resolve_full_name(&name, None);
+            let full_name = self
+                .catalog()
+                .try_resolve_full_name(&name, None)
+                .ok_or_else(|| AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "schema",
+                    dependency_id: name.qualifiers.schema_spec.to_string(),
+                })?;
             let transient_items = btreemap! {
                 global_id => TransientItem::new(
                     Some(full_name.into_parts()),
