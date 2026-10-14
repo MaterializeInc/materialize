@@ -68,7 +68,13 @@ pub struct MapBuildFromRecordList {
         value_type: Box::new(self.value_type.clone()),
         custom_id: None,
     }
-    .nullable(false)
+    .nullable(true),
+    // NOTE: The body never returns NULL, but a non-nullable output changes the column
+    // types of existing materialized views that call this function. A Kafka sink with
+    // Avro on such a view regenerates its schema on upgrade, and the schema registry
+    // rejects the narrowed schema as incompatible, which stalls the sink. Iceberg sinks
+    // require nullability to match the table exactly (`field_is_compatible`).
+    introduces_nulls = true
 )]
 fn map_build_from_record_list<'a>(
     &self,
