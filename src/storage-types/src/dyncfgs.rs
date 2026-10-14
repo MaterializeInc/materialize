@@ -545,10 +545,11 @@ pub const SINK_ENSURE_TOPIC_CONFIG: Config<&'static str> = Config::new(
 ///
 /// A nonzero value also switches the Postgres snapshot operator to emitting its rewind requests
 /// as soon as the snapshot bound is known instead of after the copy completes, so the replication
-/// stream is read while the snapshot runs. Replication data received during the snapshot is staged
-/// in the dataflow until the snapshot completes, which is the many-timestamp shape the lookahead
-/// groups. The two are one setting because reading the stream concurrently without the grouping
-/// keeps one batch builder per timestamp resident until each reaches the blob target size.
+/// stream is read while the snapshot runs, and lets each export's frontier advance once it has no
+/// snapshot data left to emit. Replication data received for an export that is still snapshotting
+/// is staged in the dataflow until its snapshot completes, which is the many-timestamp shape the
+/// lookahead groups. The two are one setting because reading the stream concurrently without the
+/// grouping keeps one batch builder per timestamp resident until each reaches the blob target size.
 pub const STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD: Config<Duration> = Config::new(
     "storage_persist_sink_description_lookahead",
     Duration::ZERO,

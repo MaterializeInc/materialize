@@ -90,6 +90,7 @@ use mz_postgres_util::{Client, Sql, execute, query_opt, simple_query_opt, sql};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_storage_types::dyncfgs::PG_SCHEMA_VALIDATION_INTERVAL;
 use mz_storage_types::dyncfgs::PG_SOURCE_VALIDATE_TIMELINE;
+use mz_storage_types::dyncfgs::STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
@@ -162,9 +163,20 @@ pub(crate) fn render<'scope>(
     let op_name = format!("ReplicationReader({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope.clone());
 
+    // Read at render time, matching the value the persist sink reads in the same dataflow build.
+    // A read in the async body can observe an `UpdateConfiguration` sequenced after this dataflow's
+    // creation and disagree with the sink because the `ConfigSet` is updated in place.
+    // A nonzero lookahead is the switch, see `STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD`.
+    let concurrent_replication = !STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD
+        .get(config.config.config_set())
+        .is_zero();
+
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
-    // One data output port per source export, in output index order. All data port capabilities
-    // are managed in lockstep, so every export observes the same frontier.
+    // One data output port per source export, in output index order. With concurrent
+    // replication enabled a port holds the minimum capability only while its export has a
+    // pending rewind and advances with the stream otherwise. When disabled all ports are
+    // managed in lockstep and hold the minimum until every rewind resolves, so every export
+    // observes the same frontier.
     let export_count = config.source_exports.len();
     let mut data_outputs = Vec::with_capacity(export_count);
     let mut data_streams = Vec::with_capacity(export_count);
@@ -603,9 +615,17 @@ pub(crate) fn render<'scope>(
                 if will_yield {
                     trace!(%id, "timely-{worker_id} yielding at lsn={data_upper}");
                     rewinds.retain(|_, req| data_upper <= req.snapshot_lsn);
-                    // As long as there are pending rewinds we can't downgrade our data
-                    // capabilities since we must be able to produce data at offset 0.
-                    if rewinds.is_empty() {
+                    // A port with a pending rewind must stay at the minimum capability since
+                    // negated rewind data for its export is emitted at offset 0.
+                    if concurrent_replication {
+                        // Every other port advances with the stream, so exports that need no
+                        // rewind make progress while a snapshot runs.
+                        for (output_index, cap_set) in data_cap_sets.iter_mut().enumerate() {
+                            if !rewinds.contains_key(&output_index) {
+                                cap_set.downgrade([&data_upper]);
+                            }
+                        }
+                    } else if rewinds.is_empty() {
                         for cap_set in data_cap_sets.iter_mut() {
                             cap_set.downgrade([&data_upper]);
                         }

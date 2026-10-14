@@ -166,6 +166,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
+use bytes::Bytes;
 use differential_dataflow::AsCollection;
 use futures::{StreamExt as _, TryStreamExt};
 use mz_ore::cast::CastFrom;
@@ -188,7 +189,9 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::vec::Broadcast;
-use timely::dataflow::operators::{CapabilitySet, Concat, ConnectLoop, Feedback, Operator};
+use timely::dataflow::operators::{
+    Capability, CapabilitySet, Concat, ConnectLoop, Feedback, Operator,
+};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Timestamp;
 use tokio_postgres::error::SqlState;
@@ -352,8 +355,10 @@ pub(crate) fn render<'scope>(
 
     let (feedback_handle, feedback_data) = scope.feedback(Default::default());
 
-    // One data output port per source export, in output index order. All data port capabilities
-    // are managed in lockstep, so every export observes the same frontier.
+    // One data output port per source export, in output index order. With concurrent
+    // replication enabled each port is held at the minimum only while this operator still has
+    // snapshot data to emit for that export. When disabled all ports are held until the
+    // entire snapshot completes, so every export observes the same frontier.
     let export_count = config.source_exports.len();
     let mut raw_handles = Vec::with_capacity(export_count);
     let mut raw_streams = Vec::with_capacity(export_count);
@@ -432,6 +437,19 @@ pub(crate) fn render<'scope>(
                 definite_error_cap_set,
             ]: &mut [_; 4] = caps.try_into().unwrap();
             let mut raw_handles = SharedFuel::new(raw_handles);
+
+            // This operator only ever emits snapshot data for the exports it snapshots. With
+            // concurrent replication the ports of all other exports are closed up front, so
+            // their frontiers are determined by the replication operator alone and they make
+            // progress while the snapshot runs. Ports of snapshotted exports close one by one
+            // as each export's copy finishes on this worker.
+            if concurrent_replication {
+                for (output_index, cap_set) in data_cap_sets.iter_mut().enumerate() {
+                    if !all_outputs.contains(&output_index) {
+                        *cap_set = CapabilitySet::new();
+                    }
+                }
+            }
 
             let connection_config = connection
                 .connection
@@ -661,12 +679,7 @@ pub(crate) fn render<'scope>(
                 });
                 invalid_lsn.map_or(Ok(info), Err)
             });
-            let SnapshotInfo {
-                snapshot_id,
-                snapshot_lsn,
-                table_block_counts,
-                upstream_info,
-            } = match snapshot_info {
+            let snapshot_info = match snapshot_info {
                 Ok(info) => info,
                 Err(err) => {
                     for (&oid, outputs) in tables_to_snapshot.iter() {
@@ -692,11 +705,13 @@ pub(crate) fn render<'scope>(
                     return Ok(());
                 }
             };
+            let snapshot_lsn = snapshot_info.snapshot_lsn;
 
             // Snapshot leader is already in identified transaction but all other workers need to enter it.
             if !is_snapshot_leader {
+                let snapshot_id = &snapshot_info.snapshot_id;
                 trace!(%id, "timely-{worker_id} using snapshot id {snapshot_id:?}");
-                use_snapshot(&client, &snapshot_id).await?;
+                use_snapshot(&client, snapshot_id).await?;
             }
 
             // Since all workers snapshot all tables (each with different ctid ranges), we only
@@ -726,81 +741,21 @@ pub(crate) fn render<'scope>(
                 emit_rewinds(rewind_cap_set);
             }
 
-            for (&oid, outputs) in tables_to_snapshot.iter() {
-                for (&output_index, info) in outputs.iter() {
-                    if let Err(err) = verify_schema(oid, info, &upstream_info) {
-                        let update = (Err(err.into()), MzOffset::minimum(), Diff::ONE);
-                        raw_handles
-                            .give(output_index, &data_cap_sets[output_index][0], update)
-                            .await;
-                        continue;
-                    }
-
-                    // Get estimated block count from the broadcasted table statistics
-                    let block_count = table_block_counts.get(&oid).copied().unwrap_or(0);
-
-                    // Calculate this worker's ctid range based on estimated blocks.
-                    // When estimated_blocks is 0 (PG < 14 or empty table), fall back to
-                    // single-worker mode using responsible_for to pick the worker.
-                    let Some(ctid_range) = worker_ctid_range(&config, block_count, oid) else {
-                        // This worker has no work for this table (more workers than blocks)
-                        trace!(
-                            %id,
-                            "timely-{worker_id} no ctid range assigned for table {:?}({oid})",
-                            info.desc.name
-                        );
-                        continue;
-                    };
-
-                    trace!(
-                        %id,
-                        "timely-{worker_id} snapshotting table {:?}({oid}) output {output_index} \
-                         @ {snapshot_lsn} with ctid range {:?}",
-                        info.desc.name,
-                        ctid_range
-                    );
-
-                    let namespace = Sql::ident(&info.desc.namespace);
-                    let table = Sql::ident(&info.desc.name);
-                    let column_list =
-                        Sql::join(info.desc.columns.iter().map(|c| Sql::ident(&c.name)), ",");
-
-                    let ctid_filter = match ctid_range.end_block {
-                        Some(end) => sql!(
-                            "WHERE ctid >= '({},0)'::tid AND ctid < '({},0)'::tid",
-                            ctid_range.start_block,
-                            end
-                        ),
-                        None => sql!(
-                            "WHERE ctid >= '({},0)'::tid",
-                            ctid_range.start_block
-                        ),
-                    };
-                    let query = sql!(
-                        "COPY (SELECT {} FROM {}.{} {}) TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
-                        column_list,
-                        namespace,
-                        table,
-                        ctid_filter
-                    );
-                    let mut stream = pin!(client.copy_out_simple(query.as_str()).await?);
-
-                    let mut snapshot_staged = 0;
-                    while let Some(bytes) = stream.try_next().await? {
-                        let update = (Ok(bytes), MzOffset::minimum(), Diff::ONE);
-                        raw_handles
-                            .give(output_index, &data_cap_sets[output_index][0], update)
-                            .await;
-                        snapshot_staged += 1;
-                        if snapshot_staged % 1000 == 0 {
-                            let stat = &export_statistics[&(oid, output_index)];
-                            stat.set_snapshot_records_staged(snapshot_staged);
-                        }
-                    }
-                    // final update for snapshot_staged, using the staged
-                    // values as the total is an estimate
-                    let stat = &export_statistics[&(oid, output_index)];
-                    stat.set_snapshot_records_staged(snapshot_staged);
+            for (&output_index, info) in tables_to_snapshot.values().flatten() {
+                snapshot_output(
+                    &config,
+                    &client,
+                    &mut raw_handles,
+                    &data_cap_sets[output_index][0],
+                    output_index,
+                    info,
+                    &snapshot_info,
+                )
+                .await?;
+                // A transient error above returns with the capability still held, which keeps a
+                // partially copied export from advancing.
+                if concurrent_replication {
+                    data_cap_sets[output_index] = CapabilitySet::new();
                 }
             }
 
@@ -892,6 +847,93 @@ pub(crate) fn render<'scope>(
         errors,
         button.press_on_drop(),
     )
+}
+
+/// Copies this worker's share of the table of `info` to the data output `output_index` at
+/// `cap`. A schema mismatch is emitted as a definite error in place of the table's rows.
+async fn snapshot_output(
+    config: &RawSourceCreationConfig,
+    client: &Client,
+    raw_handles: &mut SharedFuel<
+        MzOffset,
+        CapacityContainerBuilder<Vec<(Result<Bytes, DataflowError>, MzOffset, Diff)>>,
+    >,
+    cap: &Capability<MzOffset>,
+    output_index: usize,
+    info: &SourceOutputInfo,
+    snapshot_info: &SnapshotInfo,
+) -> Result<(), TransientError> {
+    let id = config.id;
+    let worker_id = config.worker_id;
+    let oid = info.desc.oid;
+    let snapshot_lsn = snapshot_info.snapshot_lsn;
+    let statistics = &config.statistics[&info.export_id];
+    if let Err(err) = verify_schema(oid, info, &snapshot_info.upstream_info) {
+        let update = (Err(err.into()), MzOffset::minimum(), Diff::ONE);
+        raw_handles.give(output_index, cap, update).await;
+        return Ok(());
+    }
+
+    // Calculate this worker's ctid range based on estimated blocks.
+    // When estimated_blocks is 0 (PG < 14 or empty table), fall back to
+    // single-worker mode using responsible_for to pick the worker.
+    let block_count = snapshot_info
+        .table_block_counts
+        .get(&oid)
+        .copied()
+        .unwrap_or(0);
+    let Some(ctid_range) = worker_ctid_range(config, block_count, oid) else {
+        // This worker has no work for this table (more workers than blocks)
+        trace!(
+            %id,
+            "timely-{worker_id} no ctid range assigned for table {:?}({oid})",
+            info.desc.name
+        );
+        return Ok(());
+    };
+
+    trace!(
+        %id,
+        "timely-{worker_id} snapshotting table {:?}({oid}) output {output_index} \
+         @ {snapshot_lsn} with ctid range {:?}",
+        info.desc.name,
+        ctid_range
+    );
+
+    let namespace = Sql::ident(&info.desc.namespace);
+    let table = Sql::ident(&info.desc.name);
+    let column_list = Sql::join(info.desc.columns.iter().map(|c| Sql::ident(&c.name)), ",");
+
+    let ctid_filter = match ctid_range.end_block {
+        Some(end) => sql!(
+            "WHERE ctid >= '({},0)'::tid AND ctid < '({},0)'::tid",
+            ctid_range.start_block,
+            end
+        ),
+        None => sql!("WHERE ctid >= '({},0)'::tid", ctid_range.start_block),
+    };
+    let query = sql!(
+        "COPY (SELECT {} FROM {}.{} {}) TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
+        column_list,
+        namespace,
+        table,
+        ctid_filter
+    );
+    let mut stream = pin!(client.copy_out_simple(query.as_str()).await?);
+
+    let mut snapshot_staged = 0;
+    while let Some(bytes) = stream.try_next().await? {
+        let update = (Ok(bytes), MzOffset::minimum(), Diff::ONE);
+        raw_handles.give(output_index, cap, update).await;
+        snapshot_staged += 1;
+        if snapshot_staged % 1000 == 0 {
+            statistics.set_snapshot_records_staged(snapshot_staged);
+        }
+    }
+    // final update for snapshot_staged, using the staged
+    // values as the total is an estimate
+    statistics.set_snapshot_records_staged(snapshot_staged);
+    Ok(())
 }
 
 /// Starts a read-only transaction on the SQL session of `client` at a consistent LSN point by
