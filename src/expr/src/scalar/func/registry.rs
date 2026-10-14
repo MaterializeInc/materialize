@@ -585,27 +585,24 @@ fn unary_samples() -> Vec<Sample<UnaryFunc>> {
         // must not inherit), a nullable output the wrapper only forces nullable,
         // and a container cast whose element cast lives inside the wrapper.
         unary(
-            UnaryFunc::try_cast_if_fallible(CastStringToInt32.into()),
+            UnaryFunc::try_cast_if_fallible(CastStringToInt32),
             SqlScalarType::String,
         ),
         unary(
-            UnaryFunc::try_cast_if_fallible(CastInt64ToInt32.into()),
+            UnaryFunc::try_cast_if_fallible(CastInt64ToInt32),
             SqlScalarType::Int64,
         )
         .labeled("narrowing"),
         unary(
-            UnaryFunc::try_cast_if_fallible(CastJsonbToNumeric(None).into()),
+            UnaryFunc::try_cast_if_fallible(CastJsonbToNumeric(None)),
             SqlScalarType::Jsonb,
         )
         .labeled("jsonb"),
         unary(
-            UnaryFunc::try_cast_if_fallible(
-                CastList1ToList2 {
-                    return_ty: list_type(SqlScalarType::Int32),
-                    cast_expr: column(0),
-                }
-                .into(),
-            ),
+            UnaryFunc::try_cast_if_fallible(CastList1ToList2 {
+                return_ty: list_type(SqlScalarType::Int32),
+                cast_expr: column(0),
+            }),
             list_type(SqlScalarType::Int64),
         )
         .labeled("list"),

@@ -232,8 +232,8 @@ differences, each of which is reported when the statement is planned:
   SELECT TRY_CAST(ARRAY[s, 2::text] AS int[]) FROM t;
   ```
 
-  An empty constructor has no elements to convert, so it takes its type from
-  the target as it does under `CAST`.
+  An empty `ARRAY`, `LIST`, or `MAP` constructor has no elements to convert, so
+  it takes its type from the target as it does under `CAST`.
 
 - A non-empty `MAP` constructor written directly inside `TRY_CAST` is
   rejected. It would be typed on its own like the other constructors, and

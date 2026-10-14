@@ -4320,7 +4320,8 @@ fn plan_cast(
         }
     };
     let to_scalar_type = scalar_type_from_sql(ecx.qcx.scx, data_type)?;
-    let expr = match (expr, failure_mode) {
+    let keeps_hint = |empty: bool| failure_mode == CastFailureMode::Error || empty;
+    let expr = match expr {
         // Special case a direct cast of an ARRAY, LIST, or MAP expression so
         // we can pass in the target type as a type hint. This is
         // a limited form of the coercion that we do for string literals
@@ -4340,19 +4341,19 @@ fn plan_cast(
         // whole-value cast to fall back on, since there is no cast between
         // map types, so under `NullFallback` it is rejected rather than
         // converted with the hint's element-level strictness.
-        (Expr::Array(exprs), mode) if mode == CastFailureMode::Error || exprs.is_empty() => {
+        Expr::Array(exprs) if keeps_hint(exprs.is_empty()) => {
             plan_array(ecx, exprs, Some(&to_scalar_type))?
         }
-        (Expr::List(exprs), mode) if mode == CastFailureMode::Error || exprs.is_empty() => {
+        Expr::List(exprs) if keeps_hint(exprs.is_empty()) => {
             plan_list(ecx, exprs, Some(&to_scalar_type))?
         }
-        (Expr::Map(exprs), mode) if mode == CastFailureMode::Error || exprs.is_empty() => {
+        Expr::Map(exprs) if keeps_hint(exprs.is_empty()) => {
             plan_map(ecx, exprs, Some(&to_scalar_type))?
         }
-        (Expr::Map(_), CastFailureMode::NullFallback) => {
+        Expr::Map(_) => {
             bail_unsupported!("non-empty MAP constructor as the argument of TRY_CAST")
         }
-        (expr, _) => plan_expr(ecx, expr)?,
+        expr => plan_expr(ecx, expr)?,
     };
     let ecx = &ecx.with_name(name);
     // A string literal reaches its cast through coercion, so the failure mode

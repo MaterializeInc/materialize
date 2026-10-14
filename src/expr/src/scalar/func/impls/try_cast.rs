@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use mz_repr::{Datum, RowArena, SqlColumnType};
 use serde::{Deserialize, Serialize};
@@ -22,9 +23,10 @@ use crate::{Eval, EvalError, MirScalarExpr};
 /// argument and never errors, it is safe for the optimizer to treat it like
 /// any other infallible unary function.
 ///
-/// `inner` can error: [`UnaryFunc::try_cast_if_fallible`] is the only constructor, and it
-/// returns a function that cannot error unwrapped. The wrapper's nullability
-/// relies on this, since a wrapped function always has a NULL outcome.
+/// The planner builds wrappers only through [`UnaryFunc::try_cast_if_fallible`],
+/// which leaves an infallible function unwrapped, so a planner-built `inner`
+/// can always error. A deserialized wrapper may hold an infallible `inner`.
+/// The forced-nullable output is then conservative but still correct.
 #[derive(
     Ord,
     PartialOrd,
@@ -87,12 +89,19 @@ impl<E: Eval> LazyUnaryFunc for TryCast<E> {
             // the wrong kind. No cast reports it for bad user data, so it is
             // a planner bug, and swallowing it silently would hide that. Soft
             // assertions are off in production, where the row becomes NULL
-            // like any other failure and the error is logged instead.
+            // like any other failure and the error is logged instead. This
+            // runs per row, so one planner bug over a large collection would
+            // flood the logs and Sentry. The log fires once per process.
             Err(EvalError::Internal(message)) => {
-                mz_ore::soft_panic_or_log!(
-                    "TRY_CAST swallowed an internal error from {}: {message}",
-                    self.inner
-                );
+                static REPORTED: AtomicBool = AtomicBool::new(false);
+                if mz_ore::assert::soft_assertions_enabled()
+                    || !REPORTED.swap(true, Ordering::Relaxed)
+                {
+                    mz_ore::soft_panic_or_log!(
+                        "TRY_CAST swallowed an internal error from {}: {message}",
+                        self.inner
+                    );
+                }
                 Ok(Datum::Null)
             }
             Err(_) => Ok(Datum::Null),
@@ -146,7 +155,8 @@ impl<E: Eval> UnaryFunc<E> {
     /// Wraps `inner` in [`TryCast`] if it could error, so that its errors
     /// become NULL. A function that cannot error has nothing to fall back
     /// from and is returned as is, keeping its nullability.
-    pub fn try_cast_if_fallible(inner: UnaryFunc<E>) -> UnaryFunc<E> {
+    pub fn try_cast_if_fallible(inner: impl Into<UnaryFunc<E>>) -> UnaryFunc<E> {
+        let inner = inner.into();
         if inner.could_error() {
             UnaryFunc::TryCast(TryCast {
                 inner: Box::new(inner),

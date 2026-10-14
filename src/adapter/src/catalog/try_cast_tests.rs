@@ -204,17 +204,26 @@ async fn test_try_cast_wraps_every_stage_of_every_cast() {
                         for (strict_stage, lenient_stage) in
                             strict_funcs.iter().zip_eq(&lenient_funcs)
                         {
-                            match lenient_stage {
-                                UnaryFunc::TryCast(wrapper) => assert!(
-                                    strict_stage.could_error()
-                                        && wrapper.inner() == strict_stage,
-                                    "{source} to {to_name}: TRY_CAST wrapped {strict_stage}, which cannot error"
-                                ),
-                                bare => assert!(
-                                    !strict_stage.could_error() && bare == strict_stage,
-                                    "{source} to {to_name}: TRY_CAST left {strict_stage} unwrapped"
-                                ),
-                            }
+                            let planned = match lenient_stage {
+                                UnaryFunc::TryCast(wrapper) => {
+                                    assert!(
+                                        strict_stage.could_error(),
+                                        "{source} to {to_name}: TRY_CAST wrapped {strict_stage}, which cannot error"
+                                    );
+                                    wrapper.inner()
+                                }
+                                bare => {
+                                    assert!(
+                                        !strict_stage.could_error(),
+                                        "{source} to {to_name}: TRY_CAST left {strict_stage} unwrapped"
+                                    );
+                                    bare
+                                }
+                            };
+                            assert_eq!(
+                                planned, strict_stage,
+                                "{source} to {to_name}: TRY_CAST planned a different stage than CAST"
+                            );
                         }
                     }
                     Err(PlanError::TryCastUnsupported { .. }) => {
