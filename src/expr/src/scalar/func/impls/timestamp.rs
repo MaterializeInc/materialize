@@ -29,9 +29,26 @@ use crate::func::parse_timezone;
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::func::{EagerUnaryFunc, TimestampLike};
 
+/// Reports whether a cast that rounds a timestamp from precision `from` to
+/// precision `to` maps distinct values to distinct values.
+fn precision_cast_preserves_uniqueness(
+    from: Option<TimestampPrecision>,
+    to: Option<TimestampPrecision>,
+) -> bool {
+    // An unspecified `from` precision does not bound the input to microseconds:
+    // `date + time` keeps the time's nanoseconds, and every cast rounds them
+    // away.
+    let Some(from) = from else {
+        return false;
+    };
+    let to_p = to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
+    to_p >= from.into_u8()
+}
+
+// Not uniqueness-preserving: see `text_preserves_uniqueness`.
 #[sqlfunc(
     sqlname = "timestamp_to_text",
-    preserves_uniqueness = true,
+    preserves_uniqueness = false,
     inverse = to_unary!(super::CastStringToTimestamp(None))
 )]
 fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
@@ -40,9 +57,10 @@ fn cast_timestamp_to_string(a: CheckedTimestamp<NaiveDateTime>) -> String {
     buf
 }
 
+// Not uniqueness-preserving: see `text_preserves_uniqueness`.
 #[sqlfunc(
     sqlname = "timestamp_with_time_zone_to_text",
-    preserves_uniqueness = true,
+    preserves_uniqueness = false,
     inverse = to_unary!(super::CastStringToTimestampTz(None))
 )]
 fn cast_timestamp_tz_to_string(a: CheckedTimestamp<DateTime<Utc>>) -> String {
@@ -103,10 +121,7 @@ impl EagerUnaryFunc for CastTimestampToTimestampTz {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
-        let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
-        // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
-        to_p >= from_p
+        precision_cast_preserves_uniqueness(self.from, self.to)
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
@@ -161,10 +176,7 @@ impl EagerUnaryFunc for AdjustTimestampPrecision {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
-        let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
-        // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
-        to_p >= from_p
+        precision_cast_preserves_uniqueness(self.from, self.to)
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
@@ -213,10 +225,7 @@ impl EagerUnaryFunc for CastTimestampTzToTimestamp {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
-        let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
-        // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
-        to_p >= from_p
+        precision_cast_preserves_uniqueness(self.from, self.to)
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {
@@ -271,10 +280,7 @@ impl EagerUnaryFunc for AdjustTimestampTzPrecision {
     }
 
     fn preserves_uniqueness(&self) -> bool {
-        let to_p = self.to.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
-        let from_p = self.from.map(|p| p.into_u8()).unwrap_or(MAX_PRECISION);
-        // If it's getting cast to a higher precision, it should preserve uniqueness but not otherwise.
-        to_p >= from_p
+        precision_cast_preserves_uniqueness(self.from, self.to)
     }
 
     fn inverse(&self) -> Option<crate::UnaryFunc> {

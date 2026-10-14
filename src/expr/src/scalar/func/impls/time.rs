@@ -22,9 +22,10 @@ use serde::{Deserialize, Serialize};
 use crate::EvalError;
 use crate::scalar::func::EagerUnaryFunc;
 
+// Not uniqueness-preserving: see `text_preserves_uniqueness`.
 #[sqlfunc(
     sqlname = "time_to_text",
-    preserves_uniqueness = true,
+    preserves_uniqueness = false,
     inverse = to_unary!(super::CastStringToTime)
 )]
 fn cast_time_to_string(a: NaiveTime) -> String {
@@ -33,9 +34,11 @@ fn cast_time_to_string(a: NaiveTime) -> String {
     buf
 }
 
+// Not uniqueness-preserving: a time keeps nanoseconds, but an interval
+// truncates them to microseconds.
 #[sqlfunc(
     sqlname = "time_to_interval",
-    preserves_uniqueness = true,
+    preserves_uniqueness = false,
     inverse = to_unary!(super::CastIntervalToTime)
 )]
 fn cast_time_to_interval(t: NaiveTime) -> Interval {
