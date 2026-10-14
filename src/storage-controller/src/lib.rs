@@ -1699,7 +1699,7 @@ impl StorageController for Controller {
         // If the write frontier of the sink is strictly larger than its read hold, it must have at
         // least written out its snapshot, and we can skip reading it; otherwise assume we may have
         // to replay from the beginning.
-        // TODO(STG-26): unify this with run_export, if possible
+        // TODO(SS-513): unify this with run_export, if possible
         let with_snapshot = new_description.sink.with_snapshot
             && !PartialOrder::less_than(&new_description.sink.as_of, &cur_export.write_frontier);
 
