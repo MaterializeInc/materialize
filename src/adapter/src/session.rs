@@ -52,7 +52,7 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use crate::catalog::CatalogState;
+use crate::catalog::{CatalogState, DdlTransaction};
 use crate::client::RecordFirstRowStream;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::in_memory_oracle::InMemoryTimestampOracle;
@@ -63,7 +63,6 @@ use crate::error::AdapterError;
 use crate::metrics::{Metrics, SessionMetrics};
 use crate::statement_logging::PreparedStatementLoggingInfo;
 use crate::{AdapterNotice, ExecuteContext};
-use mz_catalog::durable::Snapshot;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
 
@@ -1232,11 +1231,15 @@ impl TransactionStatus {
 
     /// Snapshot of the catalog that reflects DDL operations run in this transaction.
     pub fn catalog_state(&self) -> Option<&CatalogState> {
+        self.ddl_transaction().map(DdlTransaction::state)
+    }
+
+    pub fn ddl_transaction(&self) -> Option<&DdlTransaction> {
         match self.inner() {
             Some(Transaction {
-                ops: TransactionOps::DDL { state, .. },
+                ops: TransactionOps::DDL { transaction, .. },
                 ..
-            }) => Some(state),
+            }) => Some(transaction),
             _ => None,
         }
     }
@@ -1281,10 +1284,8 @@ impl TransactionStatus {
     /// Adds operations to the current transaction. An error is produced if they cannot be merged
     /// (i.e., a timestamp-dependent read cannot be merged to an insert).
     ///
-    /// The `DDL` variant is an exception and does not merge operations, but instead overwrites the
-    /// old ops with the new ops. This is correct because it is only used in conjunction with the
-    /// Dry Run catalog op which returns an error containing all of the ops, and those ops are
-    /// passed to this function which then overwrites.
+    /// DDL operations initialize a catalog transaction. Subsequent statements are staged by the
+    /// catalog, not merged through this method.
     ///
     /// # Panics
     /// If the operations are compatible but the operation metadata doesn't match. Such as reads at
@@ -1387,33 +1388,9 @@ impl TransactionStatus {
                     TransactionOps::SingleStatement { .. } => {
                         return Err(AdapterError::SingleStatementTransaction);
                     }
-                    TransactionOps::DDL {
-                        ops: og_ops,
-                        revision: og_revision,
-                        state: og_state,
-                        side_effects,
-                        snapshot: og_snapshot,
-                    } => match add_ops {
-                        TransactionOps::DDL {
-                            ops: new_ops,
-                            revision: new_revision,
-                            side_effects: mut net_new_side_effects,
-                            state: new_state,
-                            snapshot: new_snapshot,
-                        } => {
-                            if *og_revision != new_revision {
-                                return Err(AdapterError::DDLTransactionRace);
-                            }
-                            // The old og_ops are overwritten, not extended.
-                            if !new_ops.is_empty() {
-                                *og_ops = new_ops;
-                                *og_state = new_state;
-                                *og_snapshot = new_snapshot;
-                            }
-                            side_effects.append(&mut net_new_side_effects);
-                        }
-                        _ => return Err(AdapterError::DDLOnlyTransaction),
-                    },
+                    TransactionOps::DDL { .. } => {
+                        return Err(AdapterError::DDLOnlyTransaction);
+                    }
                 }
             }
             TransactionStatus::Default | TransactionStatus::Failed(_) => {
@@ -1567,10 +1544,7 @@ pub enum TransactionOps {
     /// uses this must return false in `must_serialize_ddl()` because this is serialized instead in
     /// `sequence_plan()` during `COMMIT`.
     DDL {
-        /// Catalog operations that have already run, and must run before each subsequent op.
-        ops: Vec<crate::catalog::Op>,
-        /// In-memory state that reflects the previously applied ops.
-        state: CatalogState,
+        transaction: DdlTransaction,
         /// A list of side effects that should be executed if this DDL transaction commits.
         #[derivative(Debug = "ignore")]
         side_effects: Vec<
@@ -1583,13 +1557,6 @@ pub enum TransactionOps {
                     + Sync,
             >,
         >,
-        /// Transient revision of the `Catalog` when this transaction started.
-        revision: u64,
-        /// Snapshot of the durable transaction state after the last dry run.
-        /// Used to initialize the next dry run's transaction so it starts
-        /// in sync with the accumulated `state`. `None` for the first
-        /// statement in the transaction (before any dry run).
-        snapshot: Option<Snapshot>,
     },
 }
 

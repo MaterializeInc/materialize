@@ -4084,15 +4084,9 @@ mod tests {
         );
     }
 
-    /// Verifies that `transact_incremental_dry_run` processes only new ops
-    /// against the accumulated state, not all ops from scratch. Two paths are
-    /// compared:
-    ///   - Incremental: two separate calls, each with one op
-    ///   - All-at-once: one call with both ops
-    /// Both must produce equivalent catalog state.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
-    async fn test_transact_incremental_dry_run_processes_only_new_ops() {
+    async fn test_ddl_transaction_stages_without_publishing() {
         Catalog::with_debug(|catalog| async move {
             // Resolve default database and schema.
             let database = catalog
@@ -4148,19 +4142,12 @@ mod tests {
 
             let base_state = catalog.state().clone();
 
-            // --- Path A: Incremental (two separate dry-run calls) ---
-
-            // First call: only op_t1, no previous snapshot.
-            let (state_after_t1, snapshot_after_t1) = catalog
-                .transact_incremental_dry_run(
-                    &base_state,
-                    vec![op_t1.clone()],
-                    None,
-                    None,
-                    oracle_write_ts,
-                )
+            let transaction = catalog.start_ddl_transaction().await;
+            let transaction = catalog
+                .stage_ddl_transaction(transaction, vec![op_t1.clone()], None, oracle_write_ts)
                 .await
                 .expect("first dry run");
+            let state_after_t1 = transaction.state();
 
             // After first dry run: t1 exists, t2 does not.
             assert!(
@@ -4180,17 +4167,14 @@ mod tests {
                 "t2 should NOT exist after first dry run"
             );
 
-            // Second call: only op_t2, using state/snapshot from first call.
-            let (state_incremental, _) = catalog
-                .transact_incremental_dry_run(
-                    &state_after_t1,
-                    vec![op_t2.clone()],
-                    None,
-                    Some(snapshot_after_t1),
-                    oracle_write_ts,
-                )
+            let transaction = catalog
+                .stage_ddl_transaction(transaction, vec![op_t2.clone()], None, oracle_write_ts)
                 .await
                 .expect("second dry run");
+            let state_incremental = transaction.state();
+            assert_eq!(transaction.ops().len(), 2);
+            assert!(catalog.state().try_get_entry(&id_t1).is_none());
+            assert!(catalog.state().try_get_entry(&id_t2).is_none());
 
             // After second dry run: both t1 and t2 exist.
             assert!(
@@ -4201,8 +4185,6 @@ mod tests {
                 state_incremental.try_get_entry(&id_t2).is_some(),
                 "t2 should exist in incremental result"
             );
-
-            // --- Path B: All-at-once (single dry-run call with both ops) ---
 
             let (state_all_at_once, _) = catalog
                 .transact_incremental_dry_run(
@@ -4223,8 +4205,6 @@ mod tests {
                 state_all_at_once.try_get_entry(&id_t2).is_some(),
                 "t2 should exist in all-at-once result"
             );
-
-            // --- Compare: both paths produce equivalent items ---
 
             let inc_t1 = state_incremental.try_get_entry(&id_t1).expect("inc t1");
             let all_t1 = state_all_at_once.try_get_entry(&id_t1).expect("all t1");

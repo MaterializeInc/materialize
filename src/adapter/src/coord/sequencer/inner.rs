@@ -2243,18 +2243,11 @@ impl Coordinator {
                         writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
                     }
                     TransactionOps::DDL {
-                        ops,
-                        state: _,
+                        transaction,
                         side_effects,
-                        revision,
-                        snapshot: _,
                     } => {
-                        // Make sure our catalog hasn't changed.
-                        if *revision != self.catalog().transient_revision() {
-                            return Err(AdapterError::DDLTransactionRace);
-                        }
-                        // Commit all of our queued ops.
-                        let ops = std::mem::take(ops);
+                        transaction.check_revision(self.catalog())?;
+                        let ops = transaction.take_ops();
                         let side_effects = std::mem::take(side_effects);
                         self.catalog_transact_with_side_effects(
                             Some(ctx),

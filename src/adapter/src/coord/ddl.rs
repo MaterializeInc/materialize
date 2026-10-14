@@ -268,18 +268,7 @@ impl Coordinator {
     {
         let start = Instant::now();
 
-        let Some(Transaction {
-            ops:
-                TransactionOps::DDL {
-                    ops: txn_ops,
-                    revision: txn_revision,
-                    state: txn_state,
-                    snapshot: txn_snapshot,
-                    side_effects: _,
-                },
-            ..
-        }) = ctx.session().transaction().inner()
-        else {
+        let Some(transaction) = ctx.session().transaction().ddl_transaction() else {
             let result = self
                 .catalog_transact_with_side_effects(Some(ctx), ops, side_effect)
                 .await;
@@ -290,13 +279,12 @@ impl Coordinator {
             return result;
         };
 
-        // Make sure our Catalog hasn't changed since openning the transaction.
-        if self.catalog().transient_revision() != *txn_revision {
+        if let Err(err) = transaction.check_revision(self.catalog()) {
             self.metrics
                 .catalog_transact_seconds
                 .with_label_values(&["catalog_transact_with_ddl_transaction"])
                 .observe(start.elapsed().as_secs_f64());
-            return Err(AdapterError::DDLTransactionRace);
+            return Err(err);
         }
 
         // The per-statement phases of a DDL transaction carry their own labels.
@@ -307,19 +295,14 @@ impl Coordinator {
 
         // Clone what we need from the session before taking &mut below.
         let clone_start = Instant::now();
-        let txn_ops_clone = txn_ops.clone();
-        let txn_state_clone = txn_state.clone();
-        // NOTE: `txn_snapshot` is a deep clone of the durable `Snapshot`, which is
-        // O(catalog size) in allocations, once per statement. `txn_state` next to
-        // it is cheap, `CatalogState` holds its large collections in `imbl` maps.
-        let prev_snapshot = txn_snapshot.clone();
+        let transaction = transaction.clone();
         phase_seconds
             .with_label_values(&["ddl_txn_snapshot_clone"])
             .observe(clone_start.elapsed().as_secs_f64());
 
         // Validate resource limits with all accumulated + new ops (cheap O(N) counting).
         let prep_start = Instant::now();
-        let mut combined_ops = txn_ops_clone;
+        let mut combined_ops = transaction.ops().to_vec();
         combined_ops.extend(ops.iter().cloned());
         let creates_scoped_object = ops.iter().any(|op| {
             matches!(
@@ -354,42 +337,37 @@ impl Coordinator {
         // Get ConnMeta for the session.
         let conn = self.active_conns.get(ctx.session().conn_id());
 
-        // Incremental dry run: process only NEW ops against accumulated state.
-        // If we have a saved snapshot from a previous dry run, use it to
-        // initialize the transaction so it starts in sync with the accumulated
-        // state. Otherwise (first statement), the fresh durable transaction is
-        // already in sync with the real catalog state.
-        let (new_state, new_snapshot) = self
+        let staged = self
             .catalog()
-            .transact_incremental_dry_run(
-                &txn_state_clone,
-                ops.clone(),
-                conn,
-                prev_snapshot,
-                oracle_write_ts,
-            )
+            .stage_ddl_transaction(transaction, ops, conn, oracle_write_ts)
             .wall_time()
             .observe(phase_seconds.with_label_values(&["ddl_txn_dry_run"]))
             .await?;
 
-        // Accumulate ops for eventual COMMIT.
-        let result = ctx
+        let Transaction {
+            ops:
+                TransactionOps::DDL {
+                    transaction,
+                    side_effects,
+                },
+            ..
+        } = ctx
             .session_mut()
             .transaction_mut()
-            .add_ops(TransactionOps::DDL {
-                ops: combined_ops,
-                state: new_state,
-                side_effects: vec![Box::new(side_effect)],
-                revision: self.catalog().transient_revision(),
-                snapshot: Some(new_snapshot),
-            });
+            .inner_mut()
+            .expect("DDL transaction exists")
+        else {
+            unreachable!("DDL transaction exists");
+        };
+        *transaction = staged;
+        side_effects.push(Box::new(side_effect));
 
         self.metrics
             .catalog_transact_seconds
             .with_label_values(&["catalog_transact_with_ddl_transaction"])
             .observe(start.elapsed().as_secs_f64());
 
-        result
+        Ok(())
     }
 
     /// Perform a catalog transaction. [`Coordinator::ship_dataflow`] must be
