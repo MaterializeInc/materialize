@@ -304,6 +304,11 @@ owning async wrappers along nested refresh paths. Nested timings overlap.
 Remove temporary probes after the repair is verified. Use the scratch worker for
 the focused debugging loop and CI for combined verification, keeping the existing
 failing workflows and deadlines.
+Identify the runtime blob backend from the launched service configuration, not
+testdrive's independent Persist arguments. The parallel fixture uses S3-compatible
+MinIO for its catalog. Attribute the measured blob-fetch waits at that backend,
+keeping time inside future polls distinct from between-poll waits. Neither is
+CPU or disk time. Collector scheduling and expansion caching remain parked.
 
 Preserve the independent DROP-metric retirement observation and paused-index
 advancement coverage within the explicit protection-lifetime contract. Keep history

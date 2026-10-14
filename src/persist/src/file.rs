@@ -11,7 +11,6 @@
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -88,43 +87,7 @@ impl FileBlob {
 impl Blob for FileBlob {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let file_path = self.blob_path(&FileBlob::replace_forward_slashes(key));
-        let read = if tracing::enabled!(
-            target: "mz_persist_client::listen_diagnostics",
-            tracing::Level::DEBUG
-        ) {
-            // Match tokio::fs::read's blocking-pool operation, separating its
-            // queue and resumption waits from the file operation. All three
-            // durations include thread descheduling, not just CPU or disk work.
-            let queued = Instant::now();
-            let (result, started, finished) = mz_ore::task::spawn_blocking(
-                || "file-blob-read-diagnostics",
-                move || {
-                    let started = Instant::now();
-                    let result = std::fs::read(file_path);
-                    (result, started, Instant::now())
-                },
-            )
-            .into_tokio_handle()
-            .await
-            .map_err(|_| std::io::Error::other("background task failed"))?;
-            let resumed = Instant::now();
-            if resumed.duration_since(queued) >= Duration::from_millis(10) {
-                tracing::debug!(
-                    target: "mz_persist_client::listen_diagnostics",
-                    key,
-                    queue_elapsed = ?started.duration_since(queued),
-                    read_elapsed = ?finished.duration_since(started),
-                    resume_elapsed = ?resumed.duration_since(finished),
-                    bytes = result.as_ref().ok().map(Vec::len),
-                    failed = result.is_err(),
-                    "slow file blob read completed"
-                );
-            }
-            result
-        } else {
-            fs::read(file_path).await
-        };
-        let buf = match read {
+        let buf = match fs::read(file_path).await {
             Ok(buf) => buf,
             Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
             Err(err) => return Err(err.into()),
