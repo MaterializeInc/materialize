@@ -202,7 +202,7 @@ an autoscaling action is running.
 |----------------|-----------|----------------------------------------------------------------|
 | `cluster_id`   | [`text`]  | The ID of the cluster. Corresponds to [`mz_clusters.id`](../mz_catalog/#mz_clusters). |
 | `strategy`     | [`jsonb`] | **Unstable** The configured autoscaling policy, as JSON. Currently an `on_hydration` sub-policy carrying its `hydration_size` and optional `linger_duration`. |
-| `state`        | [`jsonb`] | **Unstable** The in-flight autoscaling runtime state, as JSON keyed by strategy, or `NULL` when nothing is running. Currently a `burst` key carrying the active hydration burst: its `burst_size`, `linger_duration`, and `steady_hydrated_at`. |
+| `state`        | [`jsonb`] | **Unstable** The in-flight autoscaling runtime state, as JSON keyed by strategy, or `NULL` when nothing is running. Currently a `burst` key carrying the active hydration burst: its `burst_size`, `linger_duration`, and `steady_ready_at`. |
 
 ## `mz_cluster_replica_metrics`
 
@@ -579,8 +579,8 @@ strategies, a row will exist for each.
 | `materialized_view_id` | [`text`]   | The ID of the materialized view. Corresponds to [`mz_catalog.mz_materialized_views.id`](../mz_catalog#mz_materialized_views)  |
 | `type`                 | [`text`]   | `at`, `every`, or `on-commit`. Default: `on-commit`                                           |
 | `interval`             | [`interval`] | The refresh interval of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`.   |
-| `aligned_to`           | [`timestamp with time zone`] | The `ALIGNED TO` option of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`. |
-| `at`                   | [`timestamp with time zone`] | The time of a `REFRESH AT`, or `NULL` if the `type` is not `at`.            |
+| `aligned_to_expression` | [`text`]  | The `ALIGNED TO` expression of a `REFRESH EVERY` option, as it appears in the materialized view's `create_sql`, or `NULL` if the `type` is not `every`. |
+| `at_expression`        | [`text`]   | The time expression of a `REFRESH AT` option, as it appears in the materialized view's `create_sql`, or `NULL` if the `type` is not `at`. |
 
 ## `mz_materialized_view_refreshes`
 
@@ -1632,6 +1632,8 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 [`timestamp with time zone`]: /sql/types/timestamp
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_thinned -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_indexes -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_log_indexes -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_materialized_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_sources -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_tables -->

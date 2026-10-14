@@ -76,23 +76,25 @@
 //!          │concat│              │
 //!          ╰──┬───╯              │
 //!             │ data             │progress
-//!             │ output           │output
+//!             │ outputs          │output
+//!             │ (one per export) │
 //!             v                  v
 //! ```
+//!
+//! Both the snapshot and the replication operators emit one output stream per source export, and
+//! the streams of each export are concatenated pairwise.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use differential_dataflow::AsCollection;
 use itertools::Itertools as _;
 use mz_expr::EvalError;
-use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_postgres_util::schema_change::SchemaChangeError;
 use mz_postgres_util::{Client, PostgresError, Sql, query_opt, simple_query_opt, sql};
-use mz_repr::{Datum, Diff, GlobalId, Row};
+use mz_repr::{Datum, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
 use mz_storage_types::sources::casts::StorageScalarExpr;
 use mz_storage_types::sources::postgres::CastType;
@@ -101,9 +103,7 @@ use mz_storage_types::sources::{
 };
 use mz_timely_util::builder_async::PressOnDropButton;
 use serde::{Deserialize, Serialize};
-use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::Concat;
-use timely::dataflow::operators::core::Partition;
 use timely::dataflow::operators::vec::{Map, ToStream};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp};
@@ -199,24 +199,16 @@ impl SourceRender for PostgresSourceConnection {
             metrics,
         );
 
-        let updates = snapshot_updates.concat(repl_updates);
-        let partition_count = u64::cast_from(config.source_exports.len());
-        let data_streams: Vec<_> = updates
-            .inner
-            .partition::<CapacityContainerBuilder<_>, _, _>(
-                partition_count,
-                |((output, data), time, diff): (
-                    (usize, Result<SourceMessage, DataflowError>),
-                    MzOffset,
-                    Diff,
-                )| {
-                    let output = u64::cast_from(output);
-                    (output, (data, time, diff))
-                },
-            );
+        // Both operators produce one stream per export, in output index order, which matches the
+        // iteration order of `source_exports`.
         let mut data_collections = BTreeMap::new();
-        for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {
-            data_collections.insert(*id, data_stream.as_collection());
+        for ((id, snapshot_updates), repl_updates) in config
+            .source_exports
+            .keys()
+            .zip_eq(snapshot_updates)
+            .zip_eq(repl_updates)
+        {
+            data_collections.insert(*id, snapshot_updates.concat(repl_updates));
         }
 
         let export_ids = config.source_exports.keys().copied();
@@ -464,20 +456,27 @@ struct SlotMetadata {
     /// The address (LSN) up to which the logical slot's consumer has confirmed receiving data.
     /// Data corresponding to the transactions committed before this LSN is not available anymore.
     confirmed_flush_lsn: MzOffset,
+    /// Whether the slot can no longer be read from, which PostgreSQL reports as a `wal_status` of
+    /// `lost`.
+    invalidated: bool,
 }
 
-/// Fetches the minimum LSN at which this slot can safely resume.
+/// Fetches the state of `slot`, waiting for it to finish initializing.
 async fn fetch_slot_metadata(
     client: &Client,
     slot: &str,
     interval: Duration,
 ) -> Result<SlotMetadata, TransientError> {
     loop {
+        // `wal_status` exists on PostgreSQL 13 and later, which are also the only versions that
+        // invalidate slots. Reading it through `to_jsonb` yields NULL on earlier versions instead
+        // of failing the query.
         let Some(row) = query_opt(
             &**client,
             sql!(
-                "SELECT active_pid, confirmed_flush_lsn \
-                 FROM pg_replication_slots WHERE slot_name = $1"
+                "SELECT active_pid, confirmed_flush_lsn, \
+                    to_jsonb(s) ->> 'wal_status' = 'lost' AS invalidated \
+                 FROM pg_replication_slots s WHERE slot_name = $1"
             ),
             &[&slot],
         )
@@ -494,6 +493,7 @@ async fn fetch_slot_metadata(
                 return Ok(SlotMetadata {
                     confirmed_flush_lsn: MzOffset::from(lsn),
                     active_pid: row.get("active_pid"),
+                    invalidated: row.get::<_, Option<bool>>("invalidated").unwrap_or(false),
                 });
             }
             // It can happen that confirmed_flush_lsn is NULL as the slot initializes

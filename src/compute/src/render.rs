@@ -122,12 +122,11 @@ use differential_dataflow::{AsCollection, Collection, Data, VecCollection};
 use futures::FutureExt;
 use futures::channel::oneshot;
 use itertools::Itertools;
-use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
+use mz_compute_types::dataflows::{IndexDesc, RenderDataflowDescription};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
-    ENABLE_COMPUTE_TEMPORAL_BUCKETING, ENABLE_ERROR_DISTINCT, SUBSCRIBE_SNAPSHOT_OPTIMIZATION,
-    TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_ERROR_DISTINCT, SUBSCRIBE_SNAPSHOT_OPTIMIZATION, TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
@@ -211,7 +210,7 @@ impl<T> Drop for PressOnDrop<T> {
 pub fn build_compute_dataflow(
     timely_worker: &mut TimelyWorker,
     compute_state: &mut ComputeState,
-    dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
+    dataflow: RenderDataflowDescription<CollectionMetadata>,
     start_signal: StartSignal,
     until: Antichain<mz_repr::Timestamp>,
     dataflow_expiration: Antichain<mz_repr::Timestamp>,
@@ -1509,9 +1508,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     // Apply per-input temporal bucketing. No-op for `Direct`.
                     // Only consolidating Unions carry non-`Direct` strategies;
                     // see the `Union` arm of `lower_mir_expr_stack_safe`.
-                    let os = if matches!(strategy, ArrangementStrategy::TemporalBucketing)
-                        && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set)
-                    {
+                    let os = if matches!(strategy, ArrangementStrategy::TemporalBucketing) {
                         let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
                             .get(&self.config_set)
                             .try_into()

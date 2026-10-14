@@ -26,8 +26,9 @@
 //! OOM-looping replica can momentarily look hydrated and caught-up, and cutting
 //! over right then drops us straight into a crashing replica. On top of the
 //! per-tick caught-up classification we therefore run a stability gate. A
-//! caught-up cluster is ready only once every replica is `Online` and has had
-//! everything it hosts hydrated for a configurable period.
+//! caught-up cluster is ready only once every replica is `Online` and every
+//! non-exempt replica has had its non-ignored collections hydrated for a
+//! configurable period, capped for young replicas by [`observe_stability`].
 //!
 //! Each replica reports its hydration times in its
 //! `mz_compute_hydration_times_per_worker` introspection log. The log lives in
@@ -35,8 +36,8 @@
 //! environmentd reconciles with the same replica processes and they keep
 //! compatible dataflows, so a DDL-triggered restart does not restart the
 //! period. A dataflow that changed rehydrates and restarts it. The log dies
-//! with the process, so a restarted replica has to hydrate again and then wait
-//! out the full period, and a crash-looping replica never becomes ready.
+//! with the process, so a restarted replica must hydrate again and establish
+//! a new observation period, subject to the young-replica cap.
 //!
 //! Hydration times come from the replica's clock, while the period is measured
 //! against environmentd's. A replica clock that runs ahead only lengthens the
@@ -44,7 +45,8 @@
 //! hosts keeping their clocks in sync.
 //!
 //! A replica without introspection logging cannot report hydration times. It
-//! only has to be `Online`.
+//! only has to be `Online`. Leader-relative exemptions are defined by
+//! [`LeaderHydration::replica_has_unhydrated_collection`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -59,7 +61,10 @@ use mz_adapter_types::dyncfgs::{
     WITH_0DT_CAUGHT_UP_CHECK_ALLOWED_LAG, WITH_0DT_CAUGHT_UP_CHECK_CUTOFF,
     WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
 };
-use mz_catalog::builtin::{MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY};
+use mz_catalog::builtin::{
+    MZ_CATALOG_SERVER_CLUSTER, MZ_CLUSTER_REPLICA_FRONTIERS, MZ_CLUSTER_REPLICA_STATUS_HISTORY,
+    MZ_COMPUTE_HYDRATION_TIMES,
+};
 use mz_catalog::memory::objects::Cluster;
 use mz_compute_client::controller::CollectionReadiness;
 use mz_compute_client::logging::{ComputeLog, LogVariant};
@@ -75,19 +80,14 @@ use tokio::sync::oneshot;
 use tokio::time::MissedTickBehavior;
 
 use crate::PeekClient;
+use crate::command::{CatalogSnapshot, Command};
 use crate::coord::{ClusterReplicaStatuses, Coordinator, Message};
 
-/// How long a check waits for a replica to answer the hydration query.
+/// How long the stability gate waits for an internal query.
 ///
-/// A replica that does not answer in time counts as not hydrated for that
-/// check. Replicas are asked concurrently, so this also bounds how long a check
-/// waits for replicas.
-///
-/// The check drops a query that times out, with the leftovers documented at
-/// [`PeekClient::background_peek`]. We accept those: a stuck replica holds at
-/// most one peek per check, on a log index that barely changes, and an
-/// orphaned registration needs the coordinator to stall at exactly that point.
-const HYDRATION_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+/// Timeout drops the query without canceling its peek. See
+/// [`PeekClient::background_peek`] for the lifetime of retained resources.
+const STABILITY_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Returns a query for when a replica last finished hydrating an export.
 ///
@@ -190,8 +190,7 @@ enum ReplicaHealth {
     NotHydrated,
     /// The replica has been healthy since this wall-clock time.
     HealthySince(EpochMillis),
-    /// The replica is `Online` but cannot report hydration times, so there is
-    /// nothing to wait on.
+    /// The replica is `Online` and exempt from the hydration stability check.
     Exempt,
 }
 
@@ -219,12 +218,11 @@ struct StabilityObservation {
 
 /// Folds the health of a cluster's replicas into the gate's verdict.
 ///
-/// A cluster is stable since the latest of its replicas' healthy-since times.
-/// These can come from replica clocks, which may run ahead of `now`, so they
-/// are clamped to `now`. A replica clock running behind shortens the period by
-/// its skew.
+/// Each replica waits for the configured period, capped at its creation age
+/// when it hydrated. Missing or invalid creation evidence retains the full
+/// period. Replica clocks running behind shorten the wait by their skew.
 fn observe_stability(
-    replicas: &[ReplicaHealth],
+    replicas: &[(ReplicaHealth, Option<EpochMillis>)],
     now: EpochMillis,
     period_ms: u64,
 ) -> StabilityObservation {
@@ -232,13 +230,29 @@ fn observe_stability(
         stable_for_ms: None,
         blocked_by: Some(blocker),
     };
-    if replicas.is_empty() || replicas.contains(&ReplicaHealth::NotOnline) {
+    if replicas.is_empty()
+        || replicas
+            .iter()
+            .any(|(health, _)| *health == ReplicaHealth::NotOnline)
+    {
         return blocked(StabilityBlocker::NotOnline);
     }
     let mut stable_since = EpochMillis::MIN;
-    for health in replicas {
+    let mut within_period = false;
+    for (health, created_at) in replicas {
         match health {
-            ReplicaHealth::HealthySince(since) => stable_since = stable_since.max(*since),
+            ReplicaHealth::HealthySince(since) => {
+                stable_since = stable_since.max(*since);
+                // Freeze the age at hydration. Using its current age makes
+                // the required period grow as quickly as the observed period.
+                let required = match created_at {
+                    Some(created) if created <= since && *since <= now => {
+                        period_ms.min(since - created)
+                    }
+                    _ => period_ms,
+                };
+                within_period |= now.saturating_sub(*since) < required;
+            }
             ReplicaHealth::Exempt => {}
             ReplicaHealth::NotOnline | ReplicaHealth::NotHydrated => {
                 return blocked(StabilityBlocker::NotHydrated);
@@ -248,7 +262,7 @@ fn observe_stability(
     let stable_for_ms = now.saturating_sub(stable_since.min(now));
     StabilityObservation {
         stable_for_ms: Some(stable_for_ms),
-        blocked_by: (stable_for_ms < period_ms).then_some(StabilityBlocker::WithinPeriod),
+        blocked_by: within_period.then_some(StabilityBlocker::WithinPeriod),
     }
 }
 
@@ -256,11 +270,12 @@ fn observe_stability(
 /// for their hydration times and applies the stability gate.
 struct StabilityGate {
     client: PeekClient,
+    replica_created_at: BTreeMap<ReplicaId, EpochMillis>,
 }
 
 impl StabilityGate {
     /// Returns whether `snapshot` shows every cluster ready for promotion.
-    async fn ready(&self, snapshot: CaughtUpSnapshot) -> bool {
+    async fn ready(&mut self, snapshot: CaughtUpSnapshot) -> bool {
         fail::fail_point!("0dt_caught_up_check", |_| false);
         let CaughtUpSnapshot {
             now,
@@ -278,6 +293,17 @@ impl StabilityGate {
             return all_caught_up;
         }
 
+        // Missing evidence keeps the full period. Retry until every queried
+        // user replica has a creation time, since catalog views may hydrate late.
+        if caught_up_clusters.values().any(|cluster| {
+            cluster.replicas.iter().any(|(id, target)| {
+                id.is_user()
+                    && *target == ReplicaTarget::Ask
+                    && !self.replica_created_at.contains_key(id)
+            })
+        }) {
+            self.load_replica_creation_times().await;
+        }
         let answers = self.ask_replicas(&caught_up_clusters).await;
 
         let mut all_ready = true;
@@ -298,7 +324,10 @@ impl StabilityGate {
                 })
                 .collect();
 
-            let replica_health = health.values().copied().collect_vec();
+            let replica_health = health
+                .iter()
+                .map(|(id, health)| (*health, self.replica_created_at.get(id).copied()))
+                .collect_vec();
             let observation = observe_stability(&replica_health, now, stability_period_ms);
             if let Some(reason) = observation.blocked_by {
                 all_ready = false;
@@ -315,6 +344,49 @@ impl StabilityGate {
 
         tracing::info!(%all_ready, "checked caught-up status of clusters");
         all_ready
+    }
+
+    async fn load_replica_creation_times(&mut self) {
+        let query = async {
+            let CatalogSnapshot { catalog } = self
+                .client
+                .call_coordinator(|tx| Command::CatalogSnapshot { tx })
+                .await?;
+            let cluster = catalog.resolve_builtin_cluster(&MZ_CATALOG_SERVER_CLUSTER);
+            let replica = cluster.replicas().next().ok_or_else(|| {
+                crate::AdapterError::Internal("catalog server has no replicas".into())
+            })?;
+            let (cluster_id, replica_id) = (cluster.id, replica.replica_id);
+            drop(catalog);
+            self.client.background_peek(
+                "SELECT replica_id, created_at FROM mz_internal.mz_cluster_replica_history WHERE dropped_at IS NULL",
+                cluster_id, replica_id,
+            ).await
+        };
+        match tokio::time::timeout(STABILITY_QUERY_TIMEOUT, query).await {
+            Ok(Ok(rows)) => {
+                for row in rows {
+                    let mut values = row.iter();
+                    let id = values.next().expect("replica_id");
+                    let created = values.next().expect("created_at");
+                    if id.is_null() || created.is_null() {
+                        continue;
+                    }
+                    if let (Ok(id), Ok(created)) = (
+                        id.unwrap_str().parse::<ReplicaId>(),
+                        u64::try_from(created.unwrap_timestamptz().timestamp_millis()),
+                    ) {
+                        self.replica_created_at.insert(id, created);
+                    }
+                }
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "replica creation query failed; retaining full stability period")
+            }
+            Err(_) => {
+                tracing::warn!("replica creation query timed out; retaining full stability period")
+            }
+        }
     }
 
     /// Asks every [`ReplicaTarget::Ask`] replica, concurrently, when it last
@@ -334,7 +406,7 @@ impl StabilityGate {
                     let sql = sql.clone();
                     async move {
                         let query = client.background_peek(&sql, cluster_id, replica_id);
-                        let answer = tokio::time::timeout(HYDRATION_QUERY_TIMEOUT, query).await;
+                        let answer = tokio::time::timeout(STABILITY_QUERY_TIMEOUT, query).await;
                         let health = match answer {
                             Ok(Ok(rows)) => replica_health(&rows),
                             Ok(Err(error)) => {
@@ -389,8 +461,9 @@ impl Coordinator {
         let period = WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL
             .get(self.catalog().system_config().dyncfgs());
         let internal_cmd_tx = self.internal_cmd_tx.clone();
-        let gate = StabilityGate {
+        let mut gate = StabilityGate {
             client: self.background_peek_client(&self.owned_catalog()),
+            replica_created_at: BTreeMap::new(),
         };
 
         task::spawn(|| "caught_up_check", async move {
@@ -489,9 +562,27 @@ impl Coordinator {
             })
             .collect_vec();
 
-        // The classification only requires each collection to be hydrated on
-        // _some_ replica. The stability gate separately requires every replica
-        // to have hydrated everything it hosts.
+        let leader_hydration = {
+            let item_id = self
+                .catalog()
+                .resolve_builtin_storage_collection(&MZ_COMPUTE_HYDRATION_TIMES);
+            let id = self.catalog().get_entry(&item_id).latest_global_id();
+            match self
+                .controller
+                .storage_collections
+                .snapshot_latest(id)
+                .await
+            {
+                Ok(rows) => LeaderHydration::from_rows(rows),
+                Err(error) => {
+                    tracing::warn!(%error, "cannot read leader hydration; requiring local hydration");
+                    LeaderHydration::default()
+                }
+            }
+        };
+        let leader_unhydrated_collections =
+            leader_hydration.collections_unhydrated_on_all_hosting_replicas(&live_frontiers);
+
         let live_collection_frontiers: BTreeMap<_, _> = live_frontiers
             .into_iter()
             .map(|(oid, _replica_id, upper_ts)| (oid, upper_ts))
@@ -548,6 +639,7 @@ impl Coordinator {
                 cutoff.into(),
                 now.into(),
                 &live_collection_frontiers,
+                &leader_unhydrated_collections,
                 &exclude_collections,
                 &problematic_replicas,
             )
@@ -565,8 +657,12 @@ impl Coordinator {
                     } => Some((
                         cluster_id,
                         CaughtUpCluster {
+                            replicas: self.replica_targets(
+                                cluster_id,
+                                &leader_hydration,
+                                &ignored_compute_collections,
+                            ),
                             ignored_compute_collections,
-                            replicas: self.replica_targets(cluster_id),
                         },
                     )),
                     _ => None,
@@ -588,7 +684,12 @@ impl Coordinator {
     }
 
     /// Classifies the replicas of a cluster for the stability gate.
-    fn replica_targets(&self, cluster_id: ClusterId) -> BTreeMap<ReplicaId, ReplicaTarget> {
+    fn replica_targets(
+        &self,
+        cluster_id: ClusterId,
+        leader: &LeaderHydration,
+        ignored: &BTreeSet<GlobalId>,
+    ) -> BTreeMap<ReplicaId, ReplicaTarget> {
         let cluster = self.catalog().get_cluster(cluster_id);
         let has_hydration_log = cluster
             .log_indexes
@@ -607,7 +708,9 @@ impl Coordinator {
                 let logging = has_hydration_log && replica.config.compute.logging.enabled();
                 let target = if !online {
                     ReplicaTarget::NotOnline
-                } else if !logging {
+                } else if !logging
+                    || leader.replica_has_unhydrated_collection(replica.replica_id, ignored)
+                {
                     ReplicaTarget::Exempt
                 } else {
                     ReplicaTarget::Ask
@@ -624,7 +727,9 @@ impl Coordinator {
     ///
     ///  (1) A cluster is caught-up if all non-transient, non-excluded collections installed on it
     ///      are either caught-up or ignored.
-    ///  (2) A collection is caught-up when it is (a) hydrated and (b) its write frontier is within
+    ///  (2) A collection is caught-up when it is (a) hydrated (waived for compute collections
+    ///      returned by [`LeaderHydration::collections_unhydrated_on_all_hosting_replicas`]),
+    ///      and (b) its write frontier is within
     ///      `allowed_lag` of the "live" frontier, the collection's frontier reported by the leader
     ///      environment.
     ///  (3) A collection is ignored if its "live" frontier is behind `now` by more than `cutoff`.
@@ -643,6 +748,7 @@ impl Coordinator {
         cutoff: Timestamp,
         now: Timestamp,
         live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
+        leader_unhydrated_collections: &BTreeSet<GlobalId>,
         exclude_collections: &BTreeSet<GlobalId>,
         problematic_replicas: &BTreeSet<ReplicaId>,
     ) -> BTreeMap<ClusterId, ClusterCaughtUpStatus> {
@@ -655,6 +761,7 @@ impl Coordinator {
                     cutoff.clone(),
                     now.clone(),
                     live_frontiers,
+                    leader_unhydrated_collections,
                     exclude_collections,
                     problematic_replicas,
                 )
@@ -688,6 +795,7 @@ impl Coordinator {
         cutoff: Timestamp,
         now: Timestamp,
         live_frontiers: &BTreeMap<GlobalId, Antichain<Timestamp>>,
+        leader_unhydrated_collections: &BTreeSet<GlobalId>,
         exclude_collections: &BTreeSet<GlobalId>,
         problematic_replicas: &BTreeSet<ReplicaId>,
     ) -> Result<ClusterCaughtUpStatus, anyhow::Error> {
@@ -851,8 +959,10 @@ impl Coordinator {
                 CollectionType::Storage => self.controller.storage.collection_hydrated(id)?,
             };
 
+            let unhydrated_on_leader = matches!(collection_type, CollectionType::Compute)
+                && leader_unhydrated_collections.contains(&id);
             let readiness = CollectionReadiness::classify(
-                collection_hydrated,
+                collection_hydrated || unhydrated_on_leader,
                 &write_frontier,
                 Some((live_write_frontier, allowed_lag)),
             );
@@ -860,7 +970,8 @@ impl Coordinator {
             // We don't expect collections to get hydrated, ingestions to be
             // started, etc. when they are already at the empty write frontier.
             if live_write_frontier.is_empty() || readiness == CollectionReadiness::Ready {
-                if readiness != CollectionReadiness::Ready
+                // Carry hydration waivers into the per-replica stability check.
+                if (readiness != CollectionReadiness::Ready || !collection_hydrated)
                     && matches!(collection_type, CollectionType::Compute)
                 {
                     ignored_compute_collections.insert(id);
@@ -1048,6 +1159,83 @@ impl Coordinator {
     }
 }
 
+/// The leader's hydration reports, read from its `mz_compute_hydration_times`.
+#[derive(Debug, Default)]
+struct LeaderHydration {
+    hydrated_on_any_replica: BTreeSet<GlobalId>,
+    /// (Collection ID, replica ID) pairs explicitly reported as unhydrated.
+    unhydrated_replica_collections: BTreeSet<(GlobalId, String)>,
+}
+
+impl LeaderHydration {
+    fn from_rows(rows: Vec<Row>) -> Self {
+        let mut leader = Self::default();
+        for row in rows {
+            let mut values = row.iter();
+            let replica = values
+                .next()
+                .expect("missing replica_id")
+                .unwrap_str()
+                .to_owned();
+            let id: GlobalId = values
+                .next()
+                .expect("missing object_id")
+                .unwrap_str()
+                .parse()
+                .expect("valid object ID");
+            if values.next().expect("missing time_ns").is_null() {
+                leader.unhydrated_replica_collections.insert((id, replica));
+            } else {
+                leader.hydrated_on_any_replica.insert(id);
+            }
+        }
+        leader
+    }
+
+    /// Returns the collections that every frontier-hosting leader replica
+    /// explicitly reports unhydrated.
+    ///
+    /// Missing reports or frontiers grant no waiver. A hydrated report from any
+    /// replica vetoes the waiver, even if that replica has no frontier report.
+    fn collections_unhydrated_on_all_hosting_replicas(
+        &self,
+        frontiers: &[(GlobalId, String, Antichain<Timestamp>)],
+    ) -> BTreeSet<GlobalId> {
+        let mut collections = BTreeMap::new();
+        for (id, replica, _) in frontiers {
+            let all_unhydrated = collections.entry(*id).or_insert(true);
+            *all_unhydrated &= !self.hydrated_on_any_replica.contains(id)
+                && self
+                    .unhydrated_replica_collections
+                    .contains(&(*id, replica.clone()));
+        }
+        collections
+            .into_iter()
+            .filter_map(|(id, unhydrated)| unhydrated.then_some(id))
+            .collect()
+    }
+
+    /// Returns whether leader replica `replica_id` explicitly reports at least
+    /// one collection outside `ignored` as unhydrated.
+    ///
+    /// The leader snapshot has per-collection reports, not a separate replica
+    /// hydration signal. The gate uses these as a proxy: a replica is fully
+    /// hydrated only when all its non-ignored collections are hydrated. One
+    /// unhydrated collection therefore waives the incoming replica's stability
+    /// wait, since the leader lacks a fully hydrated counterpart. Missing
+    /// reports grant no exemption.
+    fn replica_has_unhydrated_collection(
+        &self,
+        replica_id: ReplicaId,
+        ignored: &BTreeSet<GlobalId>,
+    ) -> bool {
+        let replica_id = replica_id.to_string();
+        self.unhydrated_replica_collections
+            .iter()
+            .any(|(id, replica)| *replica == replica_id && !ignored.contains(id))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use mz_repr::Datum;
@@ -1058,9 +1246,90 @@ mod tests {
     use ReplicaHealth::{Exempt, HealthySince, NotHydrated, NotOnline};
 
     #[mz_ore::test]
+    fn collection_hydration_waiver_requires_complete_leader_reports() {
+        let frontier = |id, replica: &str| {
+            (
+                GlobalId::User(id),
+                replica.to_owned(),
+                Antichain::from_elem(Timestamp::from(100)),
+            )
+        };
+        let row = |id: &str, replica: &str, time| {
+            Row::pack_slice(&[Datum::String(replica), Datum::String(id), time])
+        };
+        let frontiers = vec![
+            frontier(1, "u10"),
+            frontier(1, "u11"),
+            frontier(2, "u10"),
+            frontier(2, "u11"),
+            frontier(3, "u10"),
+            frontier(3, "u11"),
+            frontier(4, "u10"),
+            frontier(5, "u10"),
+        ];
+        let rows = vec![
+            row("u1", "u10", Datum::Null),
+            row("u1", "u11", Datum::Null),
+            row("u2", "u10", Datum::Null),
+            row("u2", "u11", Datum::UInt64(7)),
+            row("u3", "u10", Datum::Null), // u11 has not reported.
+            row("u4", "u10", Datum::Null),
+            row("u4", "u12", Datum::UInt64(9)),
+            // u5 has no hydration reports. u6 has no frontier.
+            row("u6", "u10", Datum::Null),
+        ];
+        assert_eq!(
+            LeaderHydration::from_rows(rows)
+                .collections_unhydrated_on_all_hosting_replicas(&frontiers),
+            BTreeSet::from([GlobalId::User(1)])
+        );
+        assert!(
+            LeaderHydration::default()
+                .collections_unhydrated_on_all_hosting_replicas(&frontiers)
+                .is_empty()
+        );
+    }
+
+    #[mz_ore::test]
+    fn replica_hydration_exemption_requires_an_unhydrated_collection_report() {
+        let row = |id: &str, replica: &str, time| {
+            Row::pack_slice(&[Datum::String(replica), Datum::String(id), time])
+        };
+        let leader = LeaderHydration::from_rows(vec![
+            row("u1", "u10", Datum::UInt64(7)),
+            row("u2", "u10", Datum::UInt64(7)),
+            row("u1", "u11", Datum::UInt64(7)),
+            row("u2", "u11", Datum::Null),
+            row("u3", "u12", Datum::Null),
+        ]);
+        let none = BTreeSet::new();
+        let replica = ReplicaId::User;
+        assert!(
+            !leader.replica_has_unhydrated_collection(replica(10), &none),
+            "fully hydrated"
+        );
+        assert!(leader.replica_has_unhydrated_collection(replica(11), &none));
+        assert!(
+            !leader.replica_has_unhydrated_collection(
+                replica(12),
+                &BTreeSet::from([GlobalId::User(3)])
+            ),
+            "unhydrated only for an ignored collection"
+        );
+        assert!(
+            !leader.replica_has_unhydrated_collection(replica(13), &none),
+            "no reports"
+        );
+    }
+
+    #[mz_ore::test]
     fn stable_since_latest_replica() {
         let period_ms = 1000;
-        let replicas = [HealthySince(100), HealthySince(500), Exempt];
+        let replicas = [
+            (HealthySince(100), None),
+            (HealthySince(500), None),
+            (Exempt, None),
+        ];
         let observation = observe_stability(&replicas, 1499, period_ms);
         assert_eq!(observation.stable_for_ms, Some(999));
         assert_eq!(observation.blocked_by, Some(StabilityBlocker::WithinPeriod));
@@ -1087,7 +1356,8 @@ mod tests {
             (vec![Exempt, NotHydrated], StabilityBlocker::NotHydrated),
         ] {
             // Even a zero period requires evidence from every replica.
-            let observation = observe_stability(&replicas, 10_000, 0);
+            let evidence = replicas.iter().map(|health| (*health, None)).collect_vec();
+            let observation = observe_stability(&evidence, 10_000, 0);
             assert_eq!(observation.blocked_by, Some(blocker), "{replicas:?}");
             assert_eq!(observation.stable_for_ms, None, "{replicas:?}");
         }
@@ -1095,9 +1365,55 @@ mod tests {
 
     #[mz_ore::test]
     fn replica_clock_ahead_is_clamped() {
-        let observation = observe_stability(&[HealthySince(2000)], 1000, 0);
+        let observation = observe_stability(&[(HealthySince(2000), None)], 1000, 0);
         assert_eq!(observation.stable_for_ms, Some(0));
         assert_eq!(observation.blocked_by, None);
+    }
+
+    #[mz_ore::test]
+    fn young_replica_has_a_fixed_deadline_until_it_rehydrates() {
+        let evidence = [(HealthySince(1010), Some(1000))];
+        assert_eq!(
+            observe_stability(&evidence, 1019, 1000).blocked_by,
+            Some(StabilityBlocker::WithinPeriod)
+        );
+        assert_eq!(observe_stability(&evidence, 1020, 1000).blocked_by, None);
+
+        let restarted = [(HealthySince(1030), Some(1000))];
+        assert_eq!(
+            observe_stability(&restarted, 1059, 1000).blocked_by,
+            Some(StabilityBlocker::WithinPeriod)
+        );
+        assert_eq!(observe_stability(&restarted, 1060, 1000).blocked_by, None);
+    }
+
+    #[mz_ore::test]
+    fn age_cap_does_not_waive_other_replicas_or_missing_health() {
+        let young = (HealthySince(1010), Some(1000));
+        for other in [
+            (HealthySince(1000), Some(0)),
+            (HealthySince(1000), None),
+            (HealthySince(1000), Some(1001)),
+        ] {
+            let replicas = [young, other];
+            assert_eq!(
+                observe_stability(&replicas, 1999, 1000).blocked_by,
+                Some(StabilityBlocker::WithinPeriod)
+            );
+            assert_eq!(observe_stability(&replicas, 2000, 1000).blocked_by, None);
+        }
+        assert_eq!(
+            observe_stability(&[young, (NotOnline, Some(1000))], 2000, 1000).blocked_by,
+            Some(StabilityBlocker::NotOnline)
+        );
+        assert_eq!(
+            observe_stability(&[young, (NotHydrated, Some(1000))], 2000, 1000).blocked_by,
+            Some(StabilityBlocker::NotHydrated)
+        );
+        assert_eq!(
+            observe_stability(&[(HealthySince(3000), Some(3001))], 2000, 1000).blocked_by,
+            Some(StabilityBlocker::WithinPeriod)
+        );
     }
 
     #[mz_ore::test]

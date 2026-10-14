@@ -27,17 +27,21 @@
 
 use std::sync::Arc;
 
+use std::borrow::Cow;
+
 use anyhow::anyhow;
 use axum::Extension;
 use axum::Json;
 use axum::body::Bytes;
 use axum::extract::rejection::{JsonRejection, MissingJsonContentType};
 use axum::response::IntoResponse;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use http::{HeaderMap, HeaderValue, StatusCode, header};
 use mz_adapter_types::dyncfgs::{
     ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL,
-    ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL, MCP_MAX_RESPONSE_SIZE,
-    MCP_REQUEST_TIMEOUT,
+    ENABLE_MCP_DEVELOPER, ENABLE_MCP_DEVELOPER_QUERY_TOOL, ENABLE_MCP_PROTOCOL_2026_07_28,
+    MCP_MAX_RESPONSE_SIZE, MCP_REQUEST_TIMEOUT,
 };
 use mz_ore::cast::CastLossy;
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
@@ -63,7 +67,194 @@ const JSONRPC_VERSION: &str = "2.0";
 
 /// MCP protocol version returned in the `initialize` response.
 /// Spec: <https://modelcontextprotocol.io/specification/2025-11-25>
-const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
+const MCP_PROTOCOL_VERSION: &str = ProtocolVersion::V2025_11_25.as_str();
+
+/// The protocol revision a request is served on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProtocolVersion {
+    /// `initialize` handshake. Also serves 2025-06-18 and earlier clients.
+    V2025_11_25,
+    /// Per-request `_meta`, no handshake.
+    V2026_07_28,
+}
+
+impl ProtocolVersion {
+    /// Picks the revision from the `MCP-Protocol-Version` header's value, not
+    /// its presence: 2025-06-18 and 2025-11-25 clients send the header too.
+    ///
+    /// Anything else falls back to 2025-11-25 on purpose, never a 400. A 400
+    /// with a 2026-07-28 error tells dual-era clients the server speaks that
+    /// revision, so they stop falling back to `initialize`.
+    ///
+    /// Any copy naming 2026-07-28, also inside a comma-joined list, selects it.
+    /// Serving 2025-11-25 there would skip the header check while a proxy that
+    /// reads that copy trusts `Mcp-Name`. `McpHeaders::check_against` then
+    /// refuses the repetition.
+    fn select(values: &[HeaderValue], modern_enabled: bool) -> Self {
+        // Bytes, since a copy with a non-ASCII byte elsewhere still names it.
+        let names_2026_07_28 = values
+            .iter()
+            .flat_map(|value| value.as_bytes().split(|byte| *byte == b','))
+            .any(|version| version.trim_ascii() == Self::V2026_07_28.as_str().as_bytes());
+        if names_2026_07_28 && modern_enabled {
+            Self::V2026_07_28
+        } else {
+            Self::V2025_11_25
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::V2025_11_25 => "2025-11-25",
+            Self::V2026_07_28 => "2026-07-28",
+        }
+    }
+
+    /// Whether this is a modern revision, the spec's term for 2026-07-28 and
+    /// later: no handshake, and each request carries its version and client
+    /// capabilities in `params._meta`, with the method and tool name mirrored in
+    /// headers.
+    fn is_modern(self) -> bool {
+        matches!(self, Self::V2026_07_28)
+    }
+}
+
+/// The body read as untyped JSON, for the 2026-07-28 checks on fields the typed
+/// parse drops. Only 2026-07-28 requests pay for the second read.
+#[derive(Debug, Default, Deserialize)]
+struct RawRequest {
+    params: Option<serde_json::Value>,
+}
+
+impl RawRequest {
+    /// `None` when the body is not a JSON object.
+    fn parse(body: &[u8]) -> Option<Self> {
+        serde_json::from_slice(body).ok()
+    }
+}
+
+/// Checks the `params._meta` fields every 2026-07-28 request must carry: the
+/// protocol version, matching its header, and the client capabilities.
+fn check_request_meta(params: Option<&serde_json::Value>) -> Result<(), McpRequestError> {
+    let invalid = |message: String| McpRequestError::InvalidParams(message);
+    let meta = match params.and_then(|params| params.get("_meta")) {
+        None => return Err(invalid("missing params._meta".into())),
+        Some(serde_json::Value::Object(meta)) => meta,
+        Some(_) => return Err(invalid("params._meta must be an object".into())),
+    };
+
+    let version_key = "io.modelcontextprotocol/protocolVersion";
+    let body_version = match meta.get(version_key) {
+        None => return Err(invalid(format!("missing {version_key} in params._meta"))),
+        Some(serde_json::Value::String(version)) => version,
+        Some(_) => {
+            return Err(invalid(format!(
+                "{version_key} in params._meta must be a string"
+            )));
+        }
+    };
+    // The header check already pinned the header to this version.
+    let header_version = ProtocolVersion::V2026_07_28.as_str();
+    if body_version != header_version {
+        return Err(McpRequestError::HeaderMismatch(format!(
+            "MCP-Protocol-Version header value '{header_version}' does not match body value '{body_version}'"
+        )));
+    }
+
+    let capabilities_key = "io.modelcontextprotocol/clientCapabilities";
+    match meta.get(capabilities_key) {
+        None => Err(invalid(format!(
+            "missing {capabilities_key} in params._meta"
+        ))),
+        Some(serde_json::Value::Object(_)) => Ok(()),
+        Some(_) => Err(invalid(format!(
+            "{capabilities_key} in params._meta must be an object"
+        ))),
+    }
+}
+
+/// The request headers the Streamable HTTP transport defines, with every
+/// occurrence kept: a repeated header is rejected rather than reduced to one.
+struct McpHeaders {
+    protocol_version: Vec<HeaderValue>,
+    method: Vec<HeaderValue>,
+    name: Vec<HeaderValue>,
+}
+
+impl McpHeaders {
+    fn from_map(headers: &HeaderMap) -> Self {
+        let all = |name| headers.get_all(name).iter().cloned().collect();
+        Self {
+            protocol_version: all("mcp-protocol-version"),
+            method: all("mcp-method"),
+            name: all("mcp-name"),
+        }
+    }
+
+    /// Rejects a request whose mirrored headers are missing or disagree with
+    /// the body, so a proxy routing on the headers sees what we execute.
+    fn check_against(&self, method: &McpMethod) -> Result<(), McpRequestError> {
+        let version = header_text(&self.protocol_version, "MCP-Protocol-Version")?;
+        let modern = ProtocolVersion::V2026_07_28.as_str();
+        if version != modern {
+            return Err(McpRequestError::HeaderMismatch(format!(
+                "MCP-Protocol-Version header value '{version}' is not '{modern}'"
+            )));
+        }
+        let header_method = header_text(&self.method, "Mcp-Method")?;
+        // An unknown method's name is not kept after parsing, and it executes
+        // nothing, so only the header's presence is checked.
+        if !matches!(method, McpMethod::Unknown) && header_method != method.to_string() {
+            return Err(McpRequestError::HeaderMismatch(format!(
+                "Mcp-Method header value '{header_method}' does not match body value '{method}'"
+            )));
+        }
+        if let McpMethod::ToolsCall(params) = method {
+            let header_name = decode_mcp_name(header_text(&self.name, "Mcp-Name")?)?;
+            if header_name != params.to_string() {
+                return Err(McpRequestError::HeaderMismatch(format!(
+                    "Mcp-Name header value '{header_name}' does not match body value '{params}'"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn header_text<'a>(values: &'a [HeaderValue], name: &str) -> Result<&'a str, McpRequestError> {
+    let value = match values {
+        [value] => value,
+        [] => {
+            return Err(McpRequestError::HeaderMismatch(format!(
+                "missing {name} header"
+            )));
+        }
+        _ => {
+            return Err(McpRequestError::HeaderMismatch(format!(
+                "repeated {name} header"
+            )));
+        }
+    };
+    value.to_str().map_err(|_| {
+        McpRequestError::HeaderMismatch(format!("{name} header has invalid characters"))
+    })
+}
+
+/// Decodes the `=?base64?...?=` form clients use for names that are not plain
+/// ASCII. Any other value is the name as is.
+fn decode_mcp_name(value: &str) -> Result<Cow<'_, str>, McpRequestError> {
+    let Some(encoded) = value
+        .strip_prefix("=?base64?")
+        .and_then(|rest| rest.strip_suffix("?="))
+    else {
+        return Ok(Cow::Borrowed(value));
+    };
+    let invalid = || McpRequestError::HeaderMismatch("Mcp-Name header has invalid Base64".into());
+    let bytes = BASE64.decode(encoded).map_err(|_| invalid())?;
+    String::from_utf8(bytes)
+        .map(Cow::Owned)
+        .map_err(|_| invalid())
+}
 
 // Discovery uses the lightweight view (no JSON schema computation).
 const DISCOVERY_QUERY: &str = "SELECT * FROM mz_internal.mz_mcp_data_products";
@@ -87,6 +278,10 @@ enum McpRequestError {
     QueryExecutionFailed(String),
     #[error("Internal error: {0}")]
     Internal(#[from] anyhow::Error),
+    #[error("Header mismatch: {0}")]
+    HeaderMismatch(String),
+    #[error("Invalid params: {0}")]
+    InvalidParams(String),
 }
 
 impl McpRequestError {
@@ -98,6 +293,8 @@ impl McpRequestError {
             Self::DataProductNotFound(_) => error_codes::INVALID_PARAMS,
             Self::QueryValidationFailed(_) => error_codes::INVALID_PARAMS,
             Self::QueryExecutionFailed(_) | Self::Internal(_) => error_codes::INTERNAL_ERROR,
+            Self::HeaderMismatch(_) => error_codes::HEADER_MISMATCH,
+            Self::InvalidParams(_) => error_codes::INVALID_PARAMS,
         }
     }
 
@@ -110,6 +307,8 @@ impl McpRequestError {
             Self::QueryValidationFailed(_) => "ValidationError",
             Self::QueryExecutionFailed(_) => "ExecutionError",
             Self::Internal(_) => "InternalError",
+            Self::HeaderMismatch(_) => "HeaderMismatch",
+            Self::InvalidParams(_) => "InvalidParams",
         }
     }
 }
@@ -393,6 +592,7 @@ mod error_codes {
     pub const METHOD_NOT_FOUND: i32 = -32601;
     pub const INVALID_PARAMS: i32 = -32602;
     pub const INTERNAL_ERROR: i32 = -32603;
+    pub const HEADER_MISMATCH: i32 = -32020;
 }
 
 #[derive(Debug, Serialize)]
@@ -459,9 +659,16 @@ pub async fn handle_mcp_agent(
         Ok(request) => request,
         Err(response) => return response,
     };
-    handle_mcp_request(client, request, McpEndpointType::Agent, metrics)
-        .await
-        .into_response()
+    handle_mcp_request(
+        client,
+        request,
+        McpHeaders::from_map(&headers),
+        body,
+        McpEndpointType::Agent,
+        metrics,
+    )
+    .await
+    .into_response()
 }
 
 /// Developer endpoint: exposes system catalog (mz_*) only.
@@ -479,9 +686,16 @@ pub async fn handle_mcp_developer(
         Ok(request) => request,
         Err(response) => return response,
     };
-    handle_mcp_request(client, request, McpEndpointType::Developer, metrics)
-        .await
-        .into_response()
+    handle_mcp_request(
+        client,
+        request,
+        McpHeaders::from_map(&headers),
+        body,
+        McpEndpointType::Developer,
+        metrics,
+    )
+    .await
+    .into_response()
 }
 
 /// Parses a request body the way axum's `Json` extractor does, so every
@@ -567,6 +781,8 @@ fn validate_origin(
 async fn handle_mcp_request(
     mut client: AuthedClient,
     request: McpRequest,
+    mcp_headers: McpHeaders,
+    body: Bytes,
     endpoint_type: McpEndpointType,
     metrics: McpMetrics,
 ) -> impl IntoResponse {
@@ -616,6 +832,10 @@ async fn handle_mcp_request(
     // matches `query_tool_enabled` above.
     let read_data_product_tool_enabled = ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL.get(dyncfgs);
     let max_response_size = MCP_MAX_RESPONSE_SIZE.get(dyncfgs);
+    let protocol = ProtocolVersion::select(
+        &mcp_headers.protocol_version,
+        ENABLE_MCP_PROTOCOL_2026_07_28.get(dyncfgs),
+    );
     let request_timeout = MCP_REQUEST_TIMEOUT.get(dyncfgs);
 
     // Tag MCP-originated sessions so they're distinguishable in
@@ -640,6 +860,7 @@ async fn handle_mcp_request(
         endpoint = %endpoint_type,
         user = %user,
         is_notification = is_notification,
+        ?protocol,
         "MCP request received"
     );
 
@@ -652,6 +873,21 @@ async fn handle_mcp_request(
     }
 
     let request_id = request.id.clone().unwrap_or(serde_json::Value::Null);
+
+    // The transport leaves header rules for notification POSTs undefined, so
+    // only requests are checked. A failed header or `_meta` check is transport
+    // validation, so it gets a 400 even where its JSON-RPC code is -32602.
+    if protocol.is_modern() {
+        let raw = RawRequest::parse(&body).unwrap_or_default();
+        let checked = mcp_headers
+            .check_against(&request.method)
+            .and_then(|()| check_request_meta(raw.params.as_ref()));
+        if let Err(err) = checked {
+            record_request(McpCallStatus::Error(err.error_type()));
+            let response = McpResponse::error(request_id, err.into());
+            return (StatusCode::BAD_REQUEST, Json(response)).into_response();
+        }
+    }
 
     // Spawn task for fault isolation, with a timeout safety net.
     // `abort_on_drop` propagates the timeout to the task itself; without
@@ -2406,6 +2642,38 @@ mod tests {
         }
     }
 
+    #[mz_ore::test]
+    fn test_protocol_version_select() {
+        use ProtocolVersion::*;
+        for (header, enabled, want) in [
+            (&[][..], true, V2025_11_25),
+            (&["2025-11-25"], true, V2025_11_25),
+            (&["2025-06-18"], true, V2025_11_25),
+            (&["2026-07-28"], true, V2026_07_28),
+            (&["2026-07-28"], false, V2025_11_25),
+            (&["not-a-version"], true, V2025_11_25),
+            (&["2026-07-28X"], true, V2025_11_25),
+            (&["2025-11-25", "2026-07-28"], true, V2026_07_28),
+            (&["2025-11-25, 2026-07-28"], true, V2026_07_28),
+            (&["2025-11-25", "2026-07-28"], false, V2025_11_25),
+        ] {
+            let values: Vec<_> = header.iter().map(|v| HeaderValue::from_static(v)).collect();
+            assert_eq!(
+                ProtocolVersion::select(&values, enabled),
+                want,
+                "for {header:?} with the flag {enabled}"
+            );
+        }
+        let non_ascii = HeaderValue::from_bytes(b"2026-07-28\xff").expect("valid header bytes");
+        assert_eq!(ProtocolVersion::select(&[non_ascii], true), V2025_11_25);
+        let non_ascii_list =
+            HeaderValue::from_bytes(b"\xff, 2026-07-28").expect("valid header bytes");
+        assert_eq!(
+            ProtocolVersion::select(&[non_ascii_list], true),
+            V2026_07_28
+        );
+    }
+
     fn json_headers() -> HeaderMap {
         HeaderMap::from_iter([(
             header::CONTENT_TYPE,
@@ -2755,5 +3023,90 @@ mod tests {
             McpRequestError::QueryExecutionFailed("test".to_string()).error_code(),
             error_codes::INTERNAL_ERROR
         );
+        assert_eq!(
+            McpRequestError::HeaderMismatch("test".to_string()).error_code(),
+            error_codes::HEADER_MISMATCH
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_request_meta_check() {
+        let params = |body: &str| {
+            RawRequest::parse(body.as_bytes())
+                .expect("an object")
+                .params
+        };
+        let check =
+            |body: &str| check_request_meta(params(body).as_ref()).map_err(|e| e.error_code());
+        let with_meta = |meta: &str| {
+            format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{{"_meta":{meta}}}}}"#
+            )
+        };
+        assert_eq!(
+            check(&with_meta(
+                r#"{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}"#
+            )),
+            Ok(())
+        );
+        for (meta, want) in [
+            (
+                r#"{"io.modelcontextprotocol/clientCapabilities":{}}"#,
+                error_codes::INVALID_PARAMS,
+            ),
+            (
+                r#"{"io.modelcontextprotocol/protocolVersion":7,"io.modelcontextprotocol/clientCapabilities":{}}"#,
+                error_codes::INVALID_PARAMS,
+            ),
+            (
+                r#"{"io.modelcontextprotocol/protocolVersion":"2025-11-25","io.modelcontextprotocol/clientCapabilities":{}}"#,
+                error_codes::HEADER_MISMATCH,
+            ),
+            (
+                r#"{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}"#,
+                error_codes::INVALID_PARAMS,
+            ),
+            (
+                r#"{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":[]}"#,
+                error_codes::INVALID_PARAMS,
+            ),
+        ] {
+            assert_eq!(check(&with_meta(meta)), Err(want), "for {meta}");
+        }
+        let message = |body: &str| {
+            check_request_meta(params(body).as_ref())
+                .expect_err("must be rejected")
+                .to_string()
+        };
+        assert!(
+            message(&with_meta(
+                r#"{"io.modelcontextprotocol/protocolVersion":7}"#
+            ))
+            .ends_with("must be a string")
+        );
+        assert!(message(&with_meta("[]")).ends_with("params._meta must be an object"));
+        assert_eq!(
+            check(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#),
+            Err(error_codes::INVALID_PARAMS)
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_header_check_rejects_non_ascii() {
+        let headers = McpHeaders {
+            protocol_version: vec![HeaderValue::from_static(
+                ProtocolVersion::V2026_07_28.as_str(),
+            )],
+            method: vec![HeaderValue::from_bytes(b"tools/list\xff").expect("valid header bytes")],
+            name: vec![],
+        };
+        let request = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let method = serde_json::from_str::<McpRequest>(request)
+            .expect("valid request")
+            .method;
+        let err = headers
+            .check_against(&method)
+            .expect_err("non-ASCII Mcp-Method");
+        assert_eq!(err.error_code(), error_codes::HEADER_MISMATCH);
     }
 }

@@ -334,6 +334,8 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 2037  timezone
 2038  timezone
 2049  to_char
+2050  max
+2051  min
 2058  age
 2069  timezone
 2070  timezone
@@ -1258,3 +1260,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17126  mz_object_dependencies_raw
 17127  mz_avg_promotion
 17128  mz_avg_promotion_internal_v1
+17129  mz_builtin_indexes
+17130  mz_builtin_log_indexes
+17131  max
+17132  min

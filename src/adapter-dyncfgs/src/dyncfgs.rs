@@ -86,7 +86,7 @@ pub const ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK: Config<bool> = Config::new(
 pub const WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD: Config<Duration> = Config::new(
     "with_0dt_caught_up_check_stability_period",
     Duration::from_secs(10 * 60), // 10 minutes
-    "How long a cluster must continuously be caught-up and have all replicas healthy before it is considered ready to cut over during a 0dt deployment.",
+    "Required continuous hydration before a caught-up cluster is ready for 0dt cutover. Each non-exempt replica's period is capped at its catalog creation age when it hydrated. Missing creation evidence retains the full period.",
     ParameterScope::Environment,
 );
 
@@ -484,25 +484,24 @@ pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
     ParameterScope::Environment,
 );
 
-/// Whether a replica must be caught up, not merely hydrated, before a graceful
-/// reconfiguration cuts over to it.
+/// Whether replacement compute must catch up before graceful cut-over or
+/// automatic hydration-burst retirement.
 ///
 /// Enabled by default.
 pub const ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE: Config<bool> = Config::new(
     "enable_cluster_reconfiguration_lag_gate",
     true,
-    "Whether a graceful reconfiguration requires its target replicas to be within \
-    cluster_reconfiguration_allowed_lag of the replicas they replace, on top of being hydrated.",
+    "Whether graceful reconfiguration and hydration-burst retirement require surviving replicas \
+    to be within cluster_reconfiguration_allowed_lag of the retiring replicas, on top of being hydrated.",
     ParameterScope::Environment,
 );
 
-/// How far behind a graceful reconfiguration's target replicas may be and still
-/// be cut over to.
+/// Allowed compute lag for graceful reconfiguration and hydration-burst retirement.
 pub const CLUSTER_RECONFIGURATION_ALLOWED_LAG: Config<Duration> = Config::new(
     "cluster_reconfiguration_allowed_lag",
     Duration::from_secs(60),
-    "Maximum allowed lag when determining whether a graceful reconfiguration's target replicas \
-    have caught up with the replicas they replace.",
+    "Maximum allowed lag when determining whether surviving compute replicas \
+    have caught up with replicas retired by graceful reconfiguration or hydration burst.",
     ParameterScope::Environment,
 );
 

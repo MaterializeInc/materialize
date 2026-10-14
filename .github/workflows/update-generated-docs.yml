@@ -74,7 +74,7 @@ jobs:
 
       - name: Run Claude Code to update docs
         id: claude
-        uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea # v1.0.241
+        uses: anthropics/claude-code-action@2dca132ff0e0c4094ce6048b422c6915a071210b # v1.0.247
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           prompt: |
@@ -82,7 +82,7 @@ jobs:
 
             IMPORTANT: You may ONLY create or modify files under doc/developer/generated/.
             Do NOT modify any other files.
-          claude_args: '--allowedTools Edit Read Glob Grep Bash(git log:*) Bash(git diff:*) Bash(find:*) Bash(wc:*) Bash(head:*)'
+          claude_args: '--allowedTools Edit Read Glob Grep "Bash(git log:*)" "Bash(git diff:*)" Bash(find:*) Bash(wc:*) Bash(head:*)'
 
       - name: Check for changes
         id: changes

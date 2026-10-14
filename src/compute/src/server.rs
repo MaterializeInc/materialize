@@ -36,6 +36,7 @@ use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand
 use mz_storage::metrics::StorageMetrics;
 use mz_storage::storage_state::{StorageInstanceContext, StorageState, Worker as StorageWorker};
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
+use mz_storage_operators::persist::SharedBatches;
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
 use timely::progress::Antichain;
@@ -132,6 +133,8 @@ impl ComputeRuntimeRole {
 struct Config {
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
+    /// Shared persist batch state.
+    pub persist_batches: SharedBatches,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
@@ -188,6 +191,7 @@ pub async fn serve(
 ) -> Result<impl Fn() -> Box<dyn ComputeClient> + use<>, Error> {
     let workers_per_process = timely_config.workers;
     let config = Config {
+        persist_batches: SharedBatches::new(),
         persist_clients,
         txns_ctx,
         tracing_handle,
@@ -246,6 +250,7 @@ pub async fn serve_unified(
     };
 
     let config = Config {
+        persist_batches: SharedBatches::new(),
         persist_clients,
         txns_ctx,
         tracing_handle,
@@ -431,6 +436,7 @@ struct Worker<'w> {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<PersistClientCache>,
+    persist_batches: SharedBatches,
     /// Context necessary for rendering txn-wal operators.
     txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
@@ -593,6 +599,7 @@ impl ClusterSpec for Config {
             metrics,
             context: self.context.clone(),
             persist_clients: Arc::clone(&self.persist_clients),
+            persist_batches: self.persist_batches.clone(),
             txns_ctx: self.txns_ctx.clone(),
             compute_state: None,
             tracing_handle: Arc::clone(&self.tracing_handle),
@@ -758,12 +765,26 @@ impl<'w> Worker<'w> {
     fn storage_guest_busy(&self) -> bool {
         self.storage.as_ref().is_some_and(|guest| {
             !guest.client_rx.is_empty()
-                || guest
-                    .conn
-                    .as_ref()
-                    .is_some_and(|conn| !conn.command_rx.is_empty())
+                || (!self.storage_commands_held()
+                    && guest
+                        .conn
+                        .as_ref()
+                        .is_some_and(|conn| !conn.command_rx.is_empty()))
                 || !guest.storage_state.async_worker.is_empty()
         })
+    }
+
+    /// Whether the storage guest must leave external storage commands unread.
+    ///
+    /// Commands are held until compute's `CreateInstance` has initialized logging. Held commands
+    /// do not keep the worker busy. Handling `CreateInstance` releases them.
+    fn storage_commands_held(&self) -> bool {
+        // Storage commands render storage dataflows, and the loggers only observe operators
+        // created after their initialization, so a storage dataflow rendered earlier never
+        // appears in introspection. Nothing orders the storage and compute controller
+        // connections, so the storage controller can connect first. Every storage dataflow
+        // stems from an external storage command, so holding those back suffices.
+        self.compute_state.is_none()
     }
 
     /// Dispatch a storage-internal command from the command channel to
@@ -816,6 +837,7 @@ impl<'w> Worker<'w> {
             }
         }
 
+        let commands_held = self.storage_commands_held();
         let mut worker = StorageWorker {
             timely_worker: &mut *self.timely_worker,
             client_rx: guest.client_rx,
@@ -831,7 +853,12 @@ impl<'w> Worker<'w> {
             worker.handle_async_worker_response(response);
         }
 
-        let Some(mut conn) = guest.conn.take() else {
+        let conn = if commands_held {
+            None
+        } else {
+            guest.conn.take()
+        };
+        let Some(mut conn) = conn else {
             let StorageWorker {
                 timely_worker: _,
                 client_rx,
@@ -906,6 +933,7 @@ impl<'w> Worker<'w> {
         if matches!(&cmd, ComputeCommand::CreateInstance(_)) {
             self.compute_state = Some(ComputeState::new(
                 Arc::clone(&self.persist_clients),
+                self.persist_batches.clone(),
                 self.txns_ctx.clone(),
                 self.metrics.clone(),
                 Arc::clone(&self.tracing_handle),

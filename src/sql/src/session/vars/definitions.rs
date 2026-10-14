@@ -2153,6 +2153,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_try_cast,
+        desc: "TRY_CAST(<expr> AS <type>) syntax",
+        default: true,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_mz_notices,
         desc: "Populate the contents of `mz_internal.mz_notices`",
         default: true,
@@ -2329,12 +2335,6 @@ feature_flags!(
         desc: "When the new WITH ORDINALITY implementation can't be used with a table func, whether to fall back to the legacy implementation or error out.",
         default: false,
         enable_for_item_parsing: true,
-    },
-    {
-        name: enable_frontend_peek_sequencing, // currently, changes only take effect for new sessions
-        desc: "Enables the new peek sequencing code, which does most of its work in the Adapter Frontend instead of the Coordinator main task.",
-        default: true,
-        enable_for_item_parsing: false,
     },
     {
         name: enable_replacement_materialized_views,

@@ -218,6 +218,8 @@ pub const NAMES: &[(u32, &str)] = &[
     (2037, "pg_catalog.timezone"),
     (2038, "pg_catalog.timezone"),
     (2049, "pg_catalog.to_char"),
+    (2050, "pg_catalog.max"),
+    (2051, "pg_catalog.min"),
     (2058, "pg_catalog.age"),
     (2069, "pg_catalog.timezone"),
     (2070, "pg_catalog.timezone"),
@@ -688,6 +690,8 @@ pub const NAMES: &[(u32, &str)] = &[
     (17125, "mz_internal.parse_catalog_item_references"),
     (17127, "mz_unsafe.mz_avg_promotion"),
     (17128, "mz_unsafe.mz_avg_promotion_internal_v1"),
+    (17131, "pg_catalog.max"),
+    (17132, "pg_catalog.min"),
     // END GENERATED
 ];
 

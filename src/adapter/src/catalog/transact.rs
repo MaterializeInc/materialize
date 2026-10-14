@@ -3788,10 +3788,10 @@ mod tests {
             variant: ClusterVariant::Unmanaged,
             workload_class: None,
         };
-        let record = |steady_hydrated_at| BurstState {
+        let record = |steady_ready_at| BurstState {
             burst_size: "large".into(),
             linger_duration: Duration::from_secs(60),
-            steady_hydrated_at,
+            steady_ready_at,
         };
 
         // Lifecycle movements: these writes must declare an audit intent.
@@ -3863,7 +3863,7 @@ mod tests {
         let record = || BurstState {
             burst_size: "large".into(),
             linger_duration: Duration::from_secs(60),
-            steady_hydrated_at: None,
+            steady_ready_at: None,
         };
 
         // No record: nothing to retire, with or without a policy.
@@ -3958,7 +3958,7 @@ mod tests {
         let record = || BurstState {
             burst_size: "large".into(),
             linger_duration: Duration::from_secs(60),
-            steady_hydrated_at: None,
+            steady_ready_at: None,
         };
 
         // A started intent reads the armed record from the new config.

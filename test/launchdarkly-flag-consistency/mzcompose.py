@@ -360,7 +360,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     persist_consensus_connection_pool_ttl_stagger
     persist_expression_cache_force_compaction_fuel
     persist_expression_cache_force_compaction_wait
-    persist_fast_path_order
     persist_fetch_semaphore_cost_adjustment
     persist_gc_fallback_threshold_ms
     persist_gc_min_versions
@@ -476,6 +475,7 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     constraint_based_timestamp_selection
     enable_0dt_deployment
     enable_aws_msk_iam_auth
+    enable_compute_temporal_bucketing
     enable_consolidate_after_union_negate
     enable_continual_task_builtins
     enable_continual_task_transform
@@ -545,16 +545,13 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     # the compiled-in default was changed prematurely. Allowlisted for now to
     # keep the build green; revisit and either reconcile the default or move the
     # flag to a permanent category above.
-    "compute_subscribe_snapshot_optimization",
     "enable_cast_elimination",
     "enable_compute_correction_v2",
     "enable_compute_error_distinct",
-    "enable_compute_temporal_bucketing",
     "enable_new_outer_join_lowering",
     "enable_upsert_v2",
     "enable_variadic_left_join_lowering",
     "persist_batch_delete_enabled",
-    "persist_rollup_use_active_rollup",
 }
 
 # Flags whose served default knowingly differs between LaunchDarkly environments
@@ -568,7 +565,6 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     column_paged_batcher_budget_fraction
     compute_dataflow_max_inflight_bytes
     compute_peek_response_stash_threshold_bytes
-    compute_subscribe_snapshot_optimization
     enable_cluster_schedule_refresh
     enable_column_paged_batcher
     enable_column_paged_batcher_spill
@@ -598,9 +594,8 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     persist_catalog_force_compaction_fuel
     persist_claim_compaction_min_version
     persist_claim_unclaimed_compactions
-    persist_enable_incremental_compaction
+    persist_fast_path_order
     persist_fetch_semaphore_permit_adjustment
-    persist_rollup_use_active_rollup
     persist_txns_data_shard_retryer_initial_backoff
     persist_validate_part_bounds_on_read
     statement_logging_max_data_credit

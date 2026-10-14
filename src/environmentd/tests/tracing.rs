@@ -10,7 +10,6 @@
 #![recursion_limit = "256"]
 
 use mz_environmentd::test_util;
-use mz_ore::collections::CollectionExt;
 use tracing_capture::SharedStorage;
 
 // Test that expected spans are generated for various queries.
@@ -30,23 +29,16 @@ async fn test_expected_spans() {
         // ),
         ("create_view_finish", "CREATE VIEW V AS SELECT 1"),
         ("create_index_finish", "CREATE DEFAULT INDEX i ON v"),
-        ("subscribe_finish", "SUBSCRIBE (SELECT 1)"),
-        ("peek_finish", "SELECT 1"),
-        ("peek_explain_plan", "EXPLAIN SELECT 1"),
+        ("implement_subscribe", "SUBSCRIBE (SELECT 1)"),
+        ("try_frontend_peek_inner", "SELECT 1"),
     ];
 
     let server = test_util::TestHarness::default()
         .with_enable_tracing(true)
         .with_capture(storage.clone())
-        .with_system_parameter_default("opentelemetry_filter".to_string(), "info".to_string())
+        // `try_frontend_peek_inner` is a debug-level span.
+        .with_system_parameter_default("opentelemetry_filter".to_string(), "debug".to_string())
         .start()
-        .await;
-
-    // This test checks for specific functions of the old peek sequencing, so we disable the new
-    // peek sequencing for now.
-    // TODO(peek-seq): Modify the test to check for the new peek sequencing instead of the old one.
-    server
-        .disable_feature_flags(&["enable_frontend_peek_sequencing"])
         .await;
 
     let client = server.connect().await.unwrap();
@@ -74,13 +66,17 @@ async fn test_expected_spans() {
                 .all_spans()
                 .filter_map(|span| (span.metadata().name() == *name).then(|| span.stats()))
                 .collect::<Vec<_>>();
-            let stat = stats.into_element();
-            // TODO: entered and exited can sometimes be > 1 (and so we can't assert == 1). Why does
-            // this happen? It's not bootstrapping, which we know because of the empty span assert
-            // above.
-            assert!(stat.entered > 0, "{name}: {stat:?}");
-            assert!(stat.exited > 0, "{name}: {stat:?}");
-            assert_eq!(stat.is_closed, true, "{name}: {stat:?}");
+            // `try_frontend_peek_inner` runs for every statement that the frontend peek sequencing
+            // takes over, so it can have several instances.
+            assert!(!stats.is_empty(), "{name}: no span");
+            for stat in stats {
+                // TODO: entered and exited can sometimes be > 1 (and so we can't assert == 1). Why
+                // does this happen? It's not bootstrapping, which we know because of the empty span
+                // assert above.
+                assert!(stat.entered > 0, "{name}: {stat:?}");
+                assert!(stat.exited > 0, "{name}: {stat:?}");
+                assert_eq!(stat.is_closed, true, "{name}: {stat:?}");
+            }
         }
     }
 }

@@ -197,8 +197,15 @@ cleanup() {
   # Sort services.log and remove the timestamps we added to prevent having duplicate timestamps in output. For reference:
   # https://github.com/moby/moby/issues/33673
   # https://github.com/moby/moby/issues/31706
-  sort -t"|" -k2 < services.log | sed -E "s/ \| [0-9]{4}-[01][0-9]-[0-3][0-9]T[0-2][0-9]\:[0-5][0-9]:[0-6][0-9]\.[0-9]{9}Z / \| /" | sed "s/^/$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION-/" > services-sorted.log
-  mv services-sorted.log services.log
+  # If sorting fails, for example because sort's temporary files fill up /tmp
+  # on a long run, keep the unsorted services.log. Moving the empty or partial
+  # output over it would lose the logs and trip the empty services.log check.
+  if sort -t"|" -k2 < services.log | sed -E "s/ \| [0-9]{4}-[01][0-9]-[0-3][0-9]T[0-2][0-9]\:[0-5][0-9]:[0-6][0-9]\.[0-9]{9}Z / \| /" | sed "s/^/$BUILDKITE_PLUGIN_MZCOMPOSE_COMPOSITION-/" > services-sorted.log; then
+    mv services-sorted.log services.log
+  else
+    echo "Sorting services.log failed, uploading it unsorted"
+    rm -f services-sorted.log
+  fi
   # shellcheck disable=SC2024
   sudo journalctl --merge --since "$STEP_START_TIMESTAMP" > journalctl-merge.log
   netstat -ant > netstat-ant.log
@@ -444,6 +451,7 @@ cleanup() {
     && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Canary Environment" ] \
     && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Benchmarking Staging Environment" ] \
     && [ "$BUILDKITE_LABEL" != ":rust: Miri test (full)" ] \
+    && [ "$BUILDKITE_LABEL" != "Lean models" ] \
     && [[ ! "$BUILDKITE_LABEL" =~ Terraform\ .* ]] \
     && [[ ! "$BUILDKITE_LABEL" =~ Orchestratord\ .* ]] \
     && [[ ! "$BUILDKITE_LABEL" =~ Cluster\ spec\ sheet.* ]] \

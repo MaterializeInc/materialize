@@ -11,7 +11,9 @@
 
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
+use std::time::Duration;
 
+use mz_adapter_types::compaction::CompactionWindow;
 use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
@@ -19,6 +21,7 @@ use mz_repr::{RelationDesc, SemanticType, SqlScalarType};
 use mz_sql::catalog::{ObjectType, SystemObjectType};
 use mz_sql::rbac;
 use mz_sql::session::user::{MZ_ANALYTICS_ROLE_ID, MZ_SYSTEM_ROLE_ID};
+use mz_sql::session::vars::METRICS_RETENTION;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::{
     MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC, MZ_PREPARED_STATEMENT_HISTORY_DESC,
@@ -453,11 +456,12 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| B
     }),
 });
 
-pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| {
+        BuiltinMaterializedView {
         name: "mz_materialized_view_refresh_strategies",
         schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::TABLE_MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES_OID,
+        oid: oid::MV_MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES_OID,
         desc: RelationDesc::builder()
             .with_column(
                 "materialized_view_id",
@@ -465,14 +469,8 @@ pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinTable> = Laz
             )
             .with_column("type", SqlScalarType::String.nullable(false))
             .with_column("interval", SqlScalarType::Interval.nullable(true))
-            .with_column(
-                "aligned_to",
-                SqlScalarType::TimestampTz { precision: None }.nullable(true),
-            )
-            .with_column(
-                "at",
-                SqlScalarType::TimestampTz { precision: None }.nullable(true),
-            )
+            .with_column("aligned_to_expression", SqlScalarType::String.nullable(true))
+            .with_column("at_expression", SqlScalarType::String.nullable(true))
             .finish(),
         column_comments: BTreeMap::from_iter([
             (
@@ -488,19 +486,63 @@ pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinTable> = Laz
                 "The refresh interval of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`.",
             ),
             (
-                "aligned_to",
-                "The `ALIGNED TO` option of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`.",
+                "aligned_to_expression",
+                "The `ALIGNED TO` expression of a `REFRESH EVERY` option, as it appears in the materialized view's `create_sql`, or `NULL` if the `type` is not `every`.",
             ),
             (
-                "at",
-                "The time of a `REFRESH AT`, or `NULL` if the `type` is not `at`.",
+                "at_expression",
+                "The time expression of a `REFRESH AT` option, as it appears in the materialized view's `create_sql`, or `NULL` if the `type` is not `at`.",
             ),
         ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL materialized_view_id,
+    ASSERT NOT NULL type
+) AS
+WITH
+    items AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql') AS parsed
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'Item'
+    ),
+    user_strategies AS (
+        SELECT
+            i.id AS materialized_view_id,
+            r->>'type' AS type,
+            (r->>'interval')::interval AS interval,
+            r->>'aligned_to' AS aligned_to_expression,
+            r->>'at' AS at_expression
+        FROM
+            items i,
+            jsonb_array_elements(i.parsed->'refresh') AS r
+        WHERE i.parsed->>'type' = 'materialized-view'
+    ),
+    builtin_strategies AS (
+        SELECT
+            's' || (gm.data->'value'->>'catalog_id') AS materialized_view_id,
+            -- Builtin materialized views do not have refresh strategies
+            'on-commit' AS type,
+            NULL::interval AS interval,
+            NULL::text AS aligned_to_expression,
+            NULL::text AS at_expression
+        FROM mz_internal.mz_builtin_materialized_views b
+        JOIN mz_internal.mz_catalog_raw gm ON
+            gm.data->>'kind' = 'GidMapping' AND
+            gm.data->'key'->>'object_type' = b.object_type AND
+            gm.data->'key'->>'schema_name' = b.schema_name AND
+            gm.data->'key'->>'object_name' = b.name
+    )
+SELECT * FROM user_strategies
+UNION ALL
+SELECT * FROM builtin_strategies",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: None,
     }
-});
+    });
 
 pub static MZ_NETWORK_POLICIES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {
@@ -653,6 +695,8 @@ pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
         // because its `LEFT JOIN` against this table yields NULLs for types with
         // no PostgreSQL metadata.
         .with_column("typsend", SqlScalarType::Oid.nullable(false))
+        // NULL for pseudo-types and arrays of them.
+        .with_column("typlen", SqlScalarType::Int16.nullable(true))
         .finish(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: false,
@@ -957,7 +1001,7 @@ pub static MZ_CLUSTER_AUTO_SCALING_STRATEGIES: LazyLock<BuiltinMaterializedView>
                 ),
                 (
                     "state",
-                    "**Unstable** The in-flight autoscaling runtime state, as JSON keyed by strategy, or `NULL` when nothing is running. Currently a `burst` key carrying the active hydration burst: its `burst_size`, `linger_duration`, and `steady_hydrated_at`.",
+                    "**Unstable** The in-flight autoscaling runtime state, as JSON keyed by strategy, or `NULL` when nothing is running. Currently a `burst` key carrying the active hydration burst: its `burst_size`, `linger_duration`, and `steady_ready_at`.",
                 ),
             ]),
             // One row per managed cluster with a strategy configured or a burst
@@ -3791,37 +3835,114 @@ ON mz_internal.mz_metric_sinks (id)",
     is_retained_metrics_object: false,
 };
 
-pub static MZ_HISTORY_RETENTION_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
-        name: "mz_history_retention_strategies",
-        schema: MZ_INTERNAL_SCHEMA,
-        oid: oid::TABLE_MZ_HISTORY_RETENTION_STRATEGIES_OID,
-        desc: RelationDesc::builder()
-            .with_column("id", SqlScalarType::String.nullable(false))
-            .with_column("strategy", SqlScalarType::String.nullable(false))
-            .with_column("value", SqlScalarType::Jsonb.nullable(false))
-            .finish(),
-        column_comments: BTreeMap::from_iter([
-            ("id", "The ID of the object."),
-            (
-                "strategy",
-                "The strategy. `FOR` is the only strategy, and means the object's compaction window is the duration of the `value` field.",
-            ),
-            (
-                "value",
-                "The value of the strategy. For `FOR`, is a number of milliseconds.",
-            ),
-        ]),
-        is_retained_metrics_object: false,
-        access: vec![PUBLIC_SELECT],
-        ontology: Some(Ontology {
-            entity_name: "history_retention",
-            description: "History retention strategy for an object",
-            links: &const { [] },
-            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-        }),
-    }
-});
+pub static MZ_HISTORY_RETENTION_STRATEGIES: LazyLock<BuiltinMaterializedView> = LazyLock::new(
+    || {
+        // Both defaults are compiled in and inlined into the SQL, so changing either
+        // moves this view's fingerprint and needs a replacement migration step.
+        let default_window_millis = u64::from(CompactionWindow::Default.comparable_timestamp());
+        let metrics_retention_millis = METRICS_RETENTION
+            .default_value()
+            .as_any()
+            .downcast_ref::<Duration>()
+            .expect("metrics_retention is a duration")
+            .as_millis();
+        BuiltinMaterializedView {
+            name: "mz_history_retention_strategies",
+            schema: MZ_INTERNAL_SCHEMA,
+            oid: oid::MV_MZ_HISTORY_RETENTION_STRATEGIES_OID,
+            desc: RelationDesc::builder()
+                .with_column("id", SqlScalarType::String.nullable(false))
+                .with_column("strategy", SqlScalarType::String.nullable(false))
+                .with_column("value", SqlScalarType::Jsonb.nullable(false))
+                .finish(),
+            column_comments: BTreeMap::from_iter([
+                ("id", "The ID of the object."),
+                (
+                    "strategy",
+                    "The strategy. `FOR` is the only strategy, and means the object's compaction window is the duration of the `value` field.",
+                ),
+                (
+                    "value",
+                    "The value of the strategy. For `FOR`, is a number of milliseconds.",
+                ),
+            ]),
+            sql: Box::leak(format!("
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL strategy,
+    ASSERT NOT NULL value
+) AS
+WITH
+    items AS (
+        SELECT id, details->'retain_history_millis' AS millis
+        FROM (
+            SELECT
+                mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+                mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql') AS details
+            FROM mz_internal.mz_catalog_raw
+            WHERE data->>'kind' = 'Item'
+        )
+        WHERE details->>'type' IN ('table', 'source', 'subsource', 'index', 'materialized-view')
+    ),
+    builtins AS (
+        SELECT object_type, schema_name, name, is_retained_metrics_object FROM mz_internal.mz_builtin_tables
+        UNION ALL SELECT object_type, schema_name, name, is_retained_metrics_object FROM mz_internal.mz_builtin_sources WHERE type <> 'log'
+        UNION ALL SELECT object_type, schema_name, name, is_retained_metrics_object FROM mz_internal.mz_builtin_indexes
+        UNION ALL SELECT object_type, schema_name, name, is_retained_metrics_object FROM mz_internal.mz_builtin_materialized_views
+    ),
+    builtin_windows AS (
+        /*
+        A builtin has no `create_sql`: it follows the `metrics_retention` system
+        parameter when flagged as a retained-metrics object, and has the default
+        window otherwise. Only a durable override of `metrics_retention` is
+        visible here, one set through `ALTER SYSTEM` or the system parameter
+        sync. A value passed as `--system-parameter-default` never reaches
+        `mz_overridden_system_parameters`, so retained-metrics builtins then
+        report the compiled-in default. No relation exposes effective parameter
+        values yet, see SQL-757.
+        */
+        SELECT
+            's' || (gm.data->'value'->>'catalog_id') AS id,
+            CASE
+                WHEN b.is_retained_metrics_object THEN coalesce(
+                    (
+                        SELECT floor(EXTRACT(EPOCH FROM value::interval) * 1000)::int8
+                        FROM mz_internal.mz_overridden_system_parameters
+                        WHERE name = 'metrics_retention'
+                    ),
+                    {metrics_retention_millis}
+                )
+                ELSE {default_window_millis}::int8
+            END AS millis
+        FROM builtins b
+        JOIN mz_internal.mz_catalog_raw gm ON
+            gm.data->>'kind' = 'GidMapping' AND
+            gm.data->'key'->>'object_type' = b.object_type AND
+            gm.data->'key'->>'schema_name' = b.schema_name AND
+            gm.data->'key'->>'object_name' = b.name
+    ),
+    introspection_indexes AS (
+        SELECT 'si' || (data->'value'->>'catalog_id') AS id
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'ClusterIntrospectionSourceIndex'
+    )
+-- FOR is the only strategy at the moment. We may introduce FROM or others later.
+SELECT id, 'FOR' AS strategy, coalesce(millis, to_jsonb({default_window_millis}::int8)) AS value FROM items
+UNION ALL SELECT id, 'FOR', to_jsonb(millis) FROM builtin_windows
+-- An introspection source index always has the default window.
+UNION ALL SELECT id, 'FOR', to_jsonb({default_window_millis}::int8) FROM introspection_indexes").into_boxed_str()),
+            is_retained_metrics_object: false,
+            access: vec![PUBLIC_SELECT],
+            ontology: Some(Ontology {
+                entity_name: "history_retention",
+                description: "History retention strategy for an object",
+                links: &const { [] },
+                column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+            }),
+        }
+    },
+);
 
 pub static MZ_LICENSE_KEYS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_license_keys",
@@ -4585,6 +4706,7 @@ pub static PG_CLASS_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_column("relowner", SqlScalarType::Oid.nullable(false))
             .with_column("relam", SqlScalarType::Oid.nullable(false))
             .with_column("reltablespace", SqlScalarType::Oid.nullable(false))
+            .with_column("relpages", SqlScalarType::Int32.nullable(false))
             .with_column("reltuples", SqlScalarType::Float32.nullable(false))
             .with_column("reltoastrelid", SqlScalarType::Oid.nullable(false))
             .with_column("relhasindex", SqlScalarType::Bool.nullable(false))
@@ -4615,6 +4737,9 @@ SELECT
     0::pg_catalog.oid AS relam,
     -- MZ doesn't have tablespaces so reltablespace is filled in with 0 implying the default tablespace
     0::pg_catalog.oid AS reltablespace,
+    -- MZ doesn't track relation sizes in pages. Postgres reports 0 for a relation
+    -- that has never been vacuumed or analyzed, which matches reltuples = -1 below.
+    0::pg_catalog.int4 AS relpages,
     -- MZ doesn't support (estimated) row counts currently.
     -- Postgres defines a value of -1 as unknown.
     -1::float4 as reltuples,
@@ -4822,7 +4947,7 @@ SELECT
     mz_types.name AS typname,
     mz_schemas.oid AS typnamespace,
     role_owner.oid AS typowner,
-    NULL::pg_catalog.int2 AS typlen,
+    mz_internal.mz_type_pg_metadata.typlen,
     -- 'a' is used internally to denote an array type, but in postgres they show up
     -- as 'b'.
     (CASE mztype WHEN 'a' THEN 'b' ELSE mztype END)::pg_catalog.char AS typtype,

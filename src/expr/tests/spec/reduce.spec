@@ -703,3 +703,44 @@ types (integer?, integer?, integer?)
 (#0 = #1)
 ((#0 + 1) < 2147483647)
 ((#0 + 1) < #2)
+
+## TryCast wraps a cast function so that its errors become NULL. Errors
+## from the argument still propagate.
+
+reduce
+types (text?)
+try_cast[cast_string_to_int32]("42")
+----
+42
+
+reduce
+types (text?)
+try_cast[cast_string_to_int32]("abc")
+----
+null
+
+reduce
+types (text?)
+try_cast[cast_string_to_int32](null::text)
+----
+null
+
+reduce
+types (bigint?)
+try_cast[cast_int64_to_int32](div_int64(1, 0))
+----
+error("division by zero")
+
+# The wrapper introduces NULLs, so IS NULL must not be pushed through it the
+# way it is for a plain cast.
+reduce
+types (text?)
+((try_cast[cast_string_to_int32](#0)) IS NULL)
+----
+(try_cast[text_to_integer](#0)) IS NULL
+
+reduce
+types (text?)
+((cast_string_to_int32(#0)) IS NULL)
+----
+(#0) IS NULL

@@ -37,11 +37,11 @@ use futures::future::BoxFuture;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_catalog::builtin::{
     BUILTIN_LOOKUP, Builtin, Fingerprint, MZ_CATALOG_RAW, MZ_CATALOG_RAW_DESCRIPTION,
-    MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION,
-    MZ_OBJECT_HYDRATION_HISTORY, MZ_OBJECT_HYDRATION_HISTORY_DESCRIPTION,
-    MZ_REPLICA_HYDRATION_HISTORY, MZ_REPLICA_HYDRATION_HISTORY_DESCRIPTION,
-    MZ_STORAGE_USAGE_BY_SHARD, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
-    RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, MZ_COMPUTE_HYDRATION_TIMES_DESCRIPTION,
+    MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION, MZ_OBJECT_HYDRATION_HISTORY,
+    MZ_OBJECT_HYDRATION_HISTORY_DESCRIPTION, MZ_REPLICA_HYDRATION_HISTORY,
+    MZ_REPLICA_HYDRATION_HISTORY_DESCRIPTION, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::BuiltinItemMigrationConfig;
 use mz_catalog::durable::objects::SystemObjectUniqueIdentifier;
@@ -334,6 +334,15 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_type_pg_metadata",
         ),
+        // `mz_type_pg_metadata` gained a trailing `typlen` column. See the NOTE
+        // above: this version must stay at the workspace's current dev version
+        // until the change ships.
+        MigrationStep::replacement(
+            "26.47.0-dev.0",
+            CatalogItemType::Table,
+            MZ_INTERNAL_SCHEMA,
+            "mz_type_pg_metadata",
+        ),
         // Converting the connection-detail builtin tables to materialized views
         // changes their catalog fingerprint, so each needs an explicit
         // replacement step.
@@ -504,6 +513,44 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             CatalogItemType::MaterializedView,
             MZ_INTERNAL_SCHEMA,
             "mz_replacements",
+        ),
+        // mz_indexes reads builtin indexes from mz_builtin_indexes
+        // and builtin logs from mz_builtin_log_indexes instead of
+        // inlining them, which changes its SQL fingerprint.
+        MigrationStep::replacement(
+            "26.47.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
+        // mz_sources reads builtin sources from mz_builtin_sources
+        // and builtin logs from mz_builtin_log_indexes
+        // instead of inlining them, which changes its SQL fingerprint.
+        MigrationStep::replacement(
+            "26.47.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_sources",
+        ),
+        // Converting mz_history_retention_strategies from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint.
+        MigrationStep::replacement(
+            "26.47.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_history_retention_strategies",
+        ),
+        // Converting mz_materialized_view_refresh_strategies from a builtin table to a
+        // materialized view over mz_catalog_raw changes its catalog
+        // fingerprint. We also change columns:
+        // - aligned_at (timestamptz) -> aligned_to_expression (text)
+        // - at (timestamptz)-> at_expression (text)
+        MigrationStep::replacement(
+            "26.47.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_materialized_view_refresh_strategies",
         ),
     ]
 });
@@ -906,6 +953,10 @@ impl Migration {
             assert_ne!(
                 &*MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, object,
                 "mz_cluster_replica_frontiers cannot be migrated or else the 0dt caught-up gate loses its live-frontier reference"
+            );
+            assert_ne!(
+                &*MZ_COMPUTE_HYDRATION_TIMES_DESCRIPTION, object,
+                "mz_compute_hydration_times cannot be migrated or else the 0dt caught-up gate loses its leader-hydration reference"
             );
 
             let Some(object_info) = self.system_objects.get(object) else {

@@ -16,7 +16,6 @@ use futures::StreamExt;
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::ENABLE_FRONTEND_SUBSCRIBES;
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, ResultSpec, RowSetFinishing};
 use mz_ore::cast::{CastFrom, CastLossy};
@@ -310,6 +309,7 @@ impl PeekClient {
     /// logging slot at the point where the coordinator takes over. Everywhere
     /// else the slot stays armed and `SessionClient::execute` logs the end from
     /// the returned result.
+    #[mz_ore::instrument(level = "debug")]
     async fn try_frontend_peek_inner(
         &mut self,
         session: &mut Session,
@@ -573,10 +573,6 @@ impl PeekClient {
 
         let max_query_result_size = Some(session.vars().max_query_result_size());
 
-        // # From sequence_peek
-
-        // # From peek_validate
-
         let compute_instance_snapshot =
             ComputeInstanceSnapshot::new_without_collections(cluster.id());
 
@@ -633,8 +629,6 @@ impl PeekClient {
         )?;
         session.add_notices(notices);
 
-        // # From peek_linearize_timestamp
-
         let isolation_level = session.vars().transaction_isolation().clone();
         let timeline = Coordinator::get_timeline(&timeline_context);
         let needs_linearized_read_ts =
@@ -648,8 +642,6 @@ impl PeekClient {
             }
             Some(_) | None => None,
         };
-
-        // # From peek_real_time_recency
 
         let vars = session.vars();
         let real_time_recency_ts: Option<Timestamp> = if vars.real_time_recency()
@@ -667,8 +659,6 @@ impl PeekClient {
             None
         };
 
-        // # From peek_timestamp_read_hold
-
         let dataflow_builder =
             DataflowBuilder::new(catalog.state(), compute_instance_snapshot.clone());
         let input_id_bundle = dataflow_builder.sufficient_collections(source_ids.clone());
@@ -681,10 +671,9 @@ impl PeekClient {
         // FreshestTableWrite doesn't matter.)
         //
         // TODO(peek-seq): It's not totally clear to me what the intended semantics are for AS OF
-        // queries inside a transaction: We clearly can't use the transaction timestamp, but the old
-        // peek sequencing still does a timedomain validation. The new peek sequencing does not do
-        // timedomain validation for AS OF queries, which seems more natural. But I'm thinking that
-        // it would be the cleanest to just simply disallow AS OF queries inside transactions.
+        // queries inside a transaction: We clearly can't use the transaction timestamp, and we don't
+        // do timedomain validation for AS OF queries, which seems natural. But I'm thinking that it
+        // would be the cleanest to just simply disallow AS OF queries inside transactions.
         let in_immediate_multi_stmt_txn = session.transaction().in_immediate_multi_stmt_txn(when)
             && !matches!(query_plan, QueryPlan::Subscribe { .. });
 
@@ -882,8 +871,6 @@ impl PeekClient {
                 }
             }
         }
-
-        // # From peek_optimize
 
         let stats = statistics_oracle(
             session,
@@ -1271,8 +1258,6 @@ impl PeekClient {
                 imports,
                 determination,
             } => {
-                // # From peek_explain_pushdown
-
                 let as_of = determination.timestamp_context.antichain();
                 let mz_now = determination
                     .timestamp_context
@@ -1302,7 +1287,6 @@ impl PeekClient {
                 insights_ctx,
             } => {
                 // Continue with normal execution
-                // # From peek_finish
 
                 // The typ here was generated from the HIR SQL type and simply stored in LIR.
                 let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
@@ -1337,8 +1321,6 @@ impl PeekClient {
                         .await?;
                     session.add_notice(AdapterNotice::PlanInsights(insights));
                 }
-
-                // # Now back to peek_finish
 
                 let watch_set = logging.id().map(|logging_id| {
                     WatchSetCreation::new(
@@ -1446,17 +1428,13 @@ impl PeekClient {
 
                 // Add timestamp notice if emit_timestamp_notice is enabled
                 if let Some(determination) = determination_for_notice {
-                    let explanation = self
-                        .call_coordinator(|tx| Command::ExplainTimestamp {
-                            conn_id: session.conn_id().clone(),
-                            session_wall_time: session.pcx().wall_time,
-                            cluster_id: target_cluster_id,
-                            id_bundle: input_id_bundle.clone(),
-                            determination,
-                            tx,
-                        })
-                        .await?;
-                    session.add_notice(AdapterNotice::QueryTimestamp { explanation });
+                    self.add_timestamp_notice(
+                        session,
+                        target_cluster_id,
+                        input_id_bundle.clone(),
+                        determination,
+                    )
+                    .await?;
                 }
 
                 Ok(Some(match copy_to {
@@ -1822,7 +1800,7 @@ enum Execution {
     },
     Subscribe {
         subscribe_plan: SubscribePlan,
-        df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
+        df_desc: mz_compute_types::dataflows::LirDataflowDescription,
         df_meta: DataflowMetainfo,
         optimization_finished_at: EpochMillis,
     },

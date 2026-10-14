@@ -135,7 +135,7 @@ impl DroppedDependency {
 
 #[derive(Clone, Debug)]
 pub struct PeekDataflowPlan {
-    pub(crate) desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
+    pub(crate) desc: mz_compute_types::dataflows::LirDataflowDescription,
     pub(crate) id: GlobalId,
     key: Vec<MirScalarExpr>,
     permutation: Vec<usize>,
@@ -144,7 +144,7 @@ pub struct PeekDataflowPlan {
 
 impl PeekDataflowPlan {
     pub fn new(
-        desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
+        desc: mz_compute_types::dataflows::LirDataflowDescription,
         id: GlobalId,
         typ: &SqlRelationType,
     ) -> Self {
@@ -1398,7 +1398,7 @@ impl crate::coord::Coordinator {
         if let Some(ws) = watch_set {
             self.install_peek_watch_sets(conn_id.clone(), ws)
                 .map_err(|e| {
-                    AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e)
+                    AdapterError::concurrent_dependency_drop_from_compute_lookup_error(e)
                 })?;
         }
 
@@ -1452,7 +1452,7 @@ impl crate::coord::Coordinator {
     /// All errors (setup or execution) are sent through tx.
     pub(crate) async fn implement_copy_to(
         &mut self,
-        df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
+        df_desc: mz_compute_types::dataflows::LirDataflowDescription,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
         source_ids: BTreeSet<GlobalId>,
@@ -1471,7 +1471,7 @@ impl crate::coord::Coordinator {
         // for the error case (no ExecuteContextExtra is created here).
         if let Some(ws) = watch_set {
             if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), ws) {
-                let err = AdapterError::concurrent_dependency_drop_from_watch_set_install_error(e);
+                let err = AdapterError::concurrent_dependency_drop_from_compute_lookup_error(e);
                 send_err(tx, err);
                 return;
             }

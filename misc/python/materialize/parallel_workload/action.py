@@ -1588,7 +1588,7 @@ class DeleteAction(Action):
             for t in exe.db.tables
             if t != table and (not t.temp or t in exe.temp_objects)
         ]
-        # TODO: Drop the RepeatRow gate once STG-36 is fixed.
+        # TODO: Drop the RepeatRow gate once DB-217 is fixed.
         # DELETE .. USING lowers to a semijoin whose DistinctBy can leave the
         # target table with a net-negative row, and every later reader of that
         # table then surfaces the corruption. Tolerating that class outside
@@ -2941,6 +2941,13 @@ class FlipFlagsAction(Action):
         )
         self.flags_with_values["enable_eager_delta_joins"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["kafka_sink_emit_sink_id_header"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["compute_mv_sink_shared_batch_max_bytes"] = [
+            # 0 never shares, 64 KiB, 1 MiB, 128 MiB
+            "0",
+            "65536",
+            "1048576",
+            "134217728",
+        ]
         self.flags_with_values["enable_public_metrics_endpoint"] = BOOLEAN_FLAG_VALUES
         # Applies to replicas provisioned after the flip.
         self.flags_with_values["enable_unified_cluster"] = BOOLEAN_FLAG_VALUES
@@ -3002,6 +3009,7 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_enable_incremental_compaction"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["persist_fast_path_order"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_stats_audit_percent"] = [
             "0",
             "1",
@@ -3085,9 +3093,6 @@ class FlipFlagsAction(Action):
             "65536",
             "2097152",
         ]
-        self.flags_with_values["enable_compute_temporal_bucketing"] = (
-            BOOLEAN_FLAG_VALUES
-        )
         self.flags_with_values["enable_compute_error_distinct"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_arrangement_dictionary_compression_alpha"] = (
@@ -3150,10 +3155,6 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["cluster"] = ["quickstart", "dont_exist"]
-        self.flags_with_values["enable_frontend_peek_sequencing"] = [
-            "true",
-            "false",
-        ]
         self.flags_with_values["enable_frontend_subscribes"] = [
             "true",
             "false",
@@ -3385,6 +3386,8 @@ class FlipFlagsAction(Action):
             "balancerd_sigterm_listen_wait",
             "balancerd_inject_proxy_protocol_header_http",
             "balancerd_max_connections",
+            "balancerd_connection_high_watermark",
+            "balancerd_connection_low_watermark",
             "balancerd_pre_resolved_timeout",
             "balancerd_log_filter",
             "balancerd_opentelemetry_filter",
@@ -3457,7 +3460,6 @@ class FlipFlagsAction(Action):
             "plan_insights_notice_fast_path_clusters_optimize_duration",
             "enable_expression_cache",
             "enable_password_auth",
-            "persist_fast_path_order",
             "enable_mcp_agent",
             "enable_mcp_agent_query_tool",
             "enable_mcp_agent_read_data_product_tool",

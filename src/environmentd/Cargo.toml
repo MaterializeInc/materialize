@@ -17,6 +17,7 @@ askama.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 axum-extra.workspace = true
+base64.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
 chrono.workspace = true
@@ -119,7 +120,6 @@ url.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true
-base64.workspace = true
 bytes.workspace = true
 datadriven.workspace = true
 fallible-iterator.workspace = true

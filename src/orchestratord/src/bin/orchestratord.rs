@@ -211,19 +211,19 @@ pub struct Args {
     #[clap(long)]
     scheduler_name: Option<String>,
 
-    /// The Teleport endpoint to register the environmentd Service against,
-    /// e.g. `materialize.teleport.sh:443`. When unset, orchestratord writes
-    /// no Teleport labels or annotations on the environmentd Service.
+    /// Write the Teleport labels and annotations that `teleport-kube-agent`
+    /// discovers on the environmentd Service. Off by default, and off means the
+    /// Service gains no Teleport label and no Teleport annotation.
     #[clap(
         long,
         requires = "teleport_stack_type",
         requires = "teleport_cluster_name"
     )]
-    teleport_endpoint: Option<String>,
-    /// Required when `--teleport-endpoint` is set.
+    enable_teleport_registration: bool,
+    /// Required when `--enable-teleport-registration` is set.
     #[clap(long)]
     teleport_stack_type: Option<String>,
-    /// Required when `--teleport-endpoint` is set.
+    /// Required when `--enable-teleport-registration` is set.
     #[clap(long)]
     teleport_cluster_name: Option<String>,
     #[clap(long)]
@@ -746,15 +746,14 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             disable_database_network_policies: args.disable_database_network_policies,
             tracing: args.tracing,
             orchestratord_namespace: namespace,
-            teleport: args.teleport_endpoint.map(|endpoint| {
+            teleport: args.enable_teleport_registration.then(|| {
                 controller::materialize::teleport::TeleportConfig {
-                    endpoint,
-                    stack_type: args
-                        .teleport_stack_type
-                        .expect("clap requires --teleport-stack-type with --teleport-endpoint"),
-                    cluster_name: args
-                        .teleport_cluster_name
-                        .expect("clap requires --teleport-cluster-name with --teleport-endpoint"),
+                    stack_type: args.teleport_stack_type.expect(
+                        "clap requires --teleport-stack-type with --enable-teleport-registration",
+                    ),
+                    cluster_name: args.teleport_cluster_name.expect(
+                        "clap requires --teleport-cluster-name with --enable-teleport-registration",
+                    ),
                 }
             }),
         };
@@ -1083,6 +1082,36 @@ mod tests {
         assert_eq!(
             args.webhook_service_namespace.as_deref(),
             Some("materialize")
+        );
+    }
+
+    #[mz_ore::test]
+    fn teleport_label_args_required_with_enable_teleport_registration() {
+        let args = Args::try_parse_from(REQUIRED_ARGS).expect("parses without teleport args");
+        assert!(!args.enable_teleport_registration);
+
+        assert!(
+            Args::try_parse_from(
+                REQUIRED_ARGS
+                    .iter()
+                    .copied()
+                    .chain(["--enable-teleport-registration"])
+            )
+            .is_err(),
+            "--enable-teleport-registration should require the stack type and cluster name"
+        );
+
+        let args = Args::try_parse_from(REQUIRED_ARGS.iter().copied().chain([
+            "--enable-teleport-registration",
+            "--teleport-stack-type=personal",
+            "--teleport-cluster-name=mzcloud-test-us-east-1-0",
+        ]))
+        .expect("parses with the teleport label args");
+        assert!(args.enable_teleport_registration);
+        assert_eq!(args.teleport_stack_type.as_deref(), Some("personal"));
+        assert_eq!(
+            args.teleport_cluster_name.as_deref(),
+            Some("mzcloud-test-us-east-1-0")
         );
     }
 }

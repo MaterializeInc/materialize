@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use arrow::array::{Array, Int64Array};
+use arrow::datatypes::DataType;
 use bytes::Bytes;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
@@ -30,7 +31,7 @@ use mz_ore::instrument;
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::Blob;
 use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
-use mz_persist_types::columnar::{ColumnDecoder, Schema};
+use mz_persist_types::columnar::{ColumnDecoder, Schema, data_type};
 use mz_persist_types::parquet::{CompressionFormat, EncodingConfig};
 use mz_persist_types::part::{Part, PartBuilder};
 use mz_persist_types::schema::SchemaId;
@@ -535,7 +536,17 @@ where
     inline_desc: Description<T>,
     inclusive_upper: Antichain<Reverse<T>>,
 
-    records_builder: PartBuilder<K, K::Schema, V, V::Schema>,
+    part_builder: PartBuilder<K, K::Schema, V, V::Schema>,
+    finished_parts: Vec<Part>,
+    /// The accumulated size of `finished_parts`.
+    ///
+    /// Tracked incrementally because `Part::goodbytes` rebuilds an `ArrayOrd` per key and value
+    /// column on every call, and parts accumulate until they reach the blob target size. Summing
+    /// the vector on each `add`/`add_part` would make a flush window quadratic in the number of
+    /// parts it holds.
+    finished_parts_goodbytes: usize,
+    /// The key and value data types of the write schemas, resolved on the first `add_part`.
+    part_data_types: Option<(DataType, DataType)>,
     pub(crate) builder: BatchBuilderInternal<K, V, T, D>,
 }
 
@@ -557,8 +568,44 @@ where
         Self {
             inline_desc,
             inclusive_upper: Antichain::new(),
-            records_builder,
+            part_builder: records_builder,
+            finished_parts: vec![],
+            finished_parts_goodbytes: 0,
+            part_data_types: None,
             builder,
+        }
+    }
+
+    fn in_progress_goodbytes(&self) -> usize {
+        self.part_builder.goodbytes() + self.finished_parts_goodbytes
+    }
+
+    fn push_finished_part(&mut self, part: Part) {
+        self.finished_parts_goodbytes += part.goodbytes();
+        self.finished_parts.push(part);
+    }
+
+    fn finish_part_builder(&mut self) {
+        if self.part_builder.len() > 0 {
+            let part = self.part_builder.finish_and_replace(
+                &*self.builder.write_schemas.key,
+                &*self.builder.write_schemas.val,
+            );
+            self.push_finished_part(part);
+        }
+    }
+
+    async fn flush_parts(&mut self) -> bool {
+        self.finish_part_builder();
+        if let Some(part) = Part::concat(&self.finished_parts).expect("type aligned") {
+            self.builder
+                .flush_part(self.inline_desc.clone(), part)
+                .await;
+            self.finished_parts.clear();
+            self.finished_parts_goodbytes = 0;
+            true
+        } else {
+            false
         }
     }
 
@@ -592,10 +639,7 @@ where
             }
         }
 
-        let updates = self.records_builder.finish();
-        self.builder
-            .flush_part(self.inline_desc.clone(), updates)
-            .await;
+        self.flush_parts().await;
 
         self.builder
             .finish(Description::new(
@@ -604,6 +648,58 @@ where
                 self.inline_desc.since().clone(),
             ))
             .await
+    }
+
+    /// Adds the given encoded part to the batch. Its key and value data types must match this
+    /// builder's write schemas.
+    ///
+    /// Every update timestamp in the part must be greater or equal to `lower` that was given when
+    /// creating this [BatchBuilder].
+    ///
+    /// Parts accumulate until they reach the configured blob target size and are then concatenated
+    /// into one flushed part, so an individual `part` must stay well below persist's
+    /// `KEY_VAL_DATA_MAX_LEN`: a single oversized part is flushed on its own, but nothing splits
+    /// it.
+    pub async fn add_part(&mut self, part: Part) -> Result<Added, InvalidUsage<T>> {
+        for time in part.time.values() {
+            let ts = T::decode(time.to_le_bytes());
+            if !self.inline_desc.lower().less_equal(&ts) {
+                return Err(InvalidUsage::UpdateNotBeyondLower {
+                    ts,
+                    lower: self.inline_desc.lower().clone(),
+                });
+            }
+            self.inclusive_upper.insert(Reverse(ts));
+        }
+
+        let schemas = &self.builder.write_schemas;
+        let (key_type, val_type) = self.part_data_types.get_or_insert_with(|| {
+            (
+                data_type::<K>(&schemas.key).expect("valid type"),
+                data_type::<V>(&schemas.val).expect("valid type"),
+            )
+        });
+        assert_eq!(*key_type, *part.key.data_type());
+        assert_eq!(*val_type, *part.val.data_type());
+
+        self.finish_part_builder();
+
+        let mut flushed = false;
+        if self.in_progress_goodbytes() + part.goodbytes() > self.builder.parts.cfg.blob_target_size
+        {
+            flushed |= self.flush_parts().await;
+        }
+        self.push_finished_part(part);
+        if self.in_progress_goodbytes() > self.builder.parts.cfg.blob_target_size {
+            flushed |= self.flush_parts().await;
+        }
+
+        let added = if flushed {
+            Added::RecordAndParts
+        } else {
+            Added::Record
+        };
+        Ok(added)
     }
 
     /// Adds the given update to the batch.
@@ -625,24 +721,13 @@ where
         }
         self.inclusive_upper.insert(Reverse(ts.clone()));
 
-        let added = {
-            self.records_builder
-                .push(key, val, ts.clone(), diff.clone());
-            if self.records_builder.goodbytes() >= self.builder.parts.cfg.blob_target_size {
-                let part = self.records_builder.finish_and_replace(
-                    self.builder.write_schemas.key.as_ref(),
-                    self.builder.write_schemas.val.as_ref(),
-                );
-                Some(part)
-            } else {
-                None
-            }
-        };
+        let mut flushed = false;
+        self.part_builder.push(key, val, ts.clone(), diff.clone());
+        if self.in_progress_goodbytes() >= self.builder.parts.cfg.blob_target_size {
+            flushed |= self.flush_parts().await;
+        }
 
-        let added = if let Some(full_batch) = added {
-            self.builder
-                .flush_part(self.inline_desc.clone(), full_batch)
-                .await;
+        let added = if flushed {
             Added::RecordAndParts
         } else {
             Added::Record
@@ -763,9 +848,8 @@ where
         Ok(batch)
     }
 
-    /// Flushes the current part to Blob storage, first consolidating and then
-    /// columnar encoding the updates. It is the caller's responsibility to
-    /// chunk `current_part` to be no greater than
+    /// Flushes the current part to Blob storage, first columnar encoding the updates.
+    /// It is the caller's responsibility to chunk `current_part` to be no greater than
     /// [BatchBuilderConfig::blob_target_size], and must absolutely be less than
     /// [mz_persist::indexed::columnar::KEY_VAL_DATA_MAX_LEN]
     pub async fn flush_part(&mut self, part_desc: Description<T>, columnar: Part) {
@@ -1545,6 +1629,7 @@ mod tests {
     use crate::cfg::BATCH_BUILDER_MAX_OUTSTANDING_PARTS;
     use crate::internal::paths::{BlobKey, PartialBlobKey};
     use crate::tests::{all_ok, new_test_client};
+    use mz_persist_types::codec_impls::StringSchema;
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
@@ -1674,6 +1759,108 @@ mod tests {
                 _ => panic!("unparseable blob key"),
             }
         }
+    }
+
+    fn string_part(updates: &[((&str, &str), u64, i64)]) -> Part {
+        let mut builder = PartBuilder::new(&StringSchema, &StringSchema);
+        for ((k, v), t, d) in updates {
+            builder.push(&k.to_string(), &v.to_string(), *t, *d);
+        }
+        builder.finish()
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn batch_builder_add_part_before_lower() {
+        let client = new_test_client(&ConfigUpdates::default()).await;
+        let (write, _) = client
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+        let mut builder = write.builder(Antichain::from_elem(2));
+        let part = string_part(&[(("1", "one"), 2, 1), (("2", "two"), 1, 1)]);
+        match builder.add_part(part).await {
+            Err(InvalidUsage::UpdateNotBeyondLower { ts, .. }) => assert_eq!(ts, 1),
+            other => panic!("expected UpdateNotBeyondLower, got {other:?}"),
+        }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
+    async fn batch_builder_add_part_flushing() {
+        let small = || string_part(&[(("1", "one"), 1, 1)]);
+        let big = string_part(&[
+            (("2", "two"), 1, 1),
+            (("3", "three"), 1, 1),
+            (("4", "four"), 1, 1),
+            (("5", "five"), 1, 1),
+        ]);
+        let small_bytes = small().goodbytes();
+        assert!(
+            big.goodbytes() > 2 * small_bytes,
+            "big part must exceed the target"
+        );
+
+        let cache = PersistClientCache::new_no_metrics();
+        // Two small parts fit the target exactly. Disable inline writes so every flushed part is
+        // a separate blob that `part_count` sees.
+        cache.cfg.set_config(&BLOB_TARGET_SIZE, 2 * small_bytes);
+        cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cache.cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
+        let client = cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("client construction failed");
+        let (mut write, mut read) = client
+            .expect_open::<String, String, u64, i64>(ShardId::new())
+            .await;
+
+        let mut builder = write.builder(Antichain::from_elem(0));
+        // Parts accumulate while they fit the target.
+        let added = builder.add_part(small()).await.expect("valid usage");
+        assert!(matches!(added, Added::Record), "first part accumulates");
+        let added = builder.add_part(small()).await.expect("valid usage");
+        assert!(
+            matches!(added, Added::Record),
+            "second part fits the target"
+        );
+        // The third would exceed the target, so the first two flush together.
+        let added = builder.add_part(small()).await.expect("valid usage");
+        assert!(matches!(added, Added::RecordAndParts), "third part flushes");
+        // An oversized part flushes the accumulated part first, and then on its own.
+        let added = builder.add_part(big).await.expect("valid usage");
+        assert!(
+            matches!(added, Added::RecordAndParts),
+            "oversized part flushes"
+        );
+        let added = builder.add_part(small()).await.expect("valid usage");
+        assert!(
+            matches!(added, Added::Record),
+            "accounting resets after a flush"
+        );
+
+        let batch = builder
+            .finish(Antichain::from_elem(2))
+            .await
+            .expect("valid usage");
+        // [small, small], [small], [big], [small]
+        assert_eq!(batch.batch.part_count(), 4);
+        write
+            .append_batch(batch, Antichain::from_elem(0), Antichain::from_elem(2))
+            .await
+            .expect("valid usage")
+            .expect("unexpected upper");
+        let mut expected = vec![
+            (("1".to_owned(), "one".to_owned()), 1, 4),
+            (("2".to_owned(), "two".to_owned()), 1, 1),
+            (("3".to_owned(), "three".to_owned()), 1, 1),
+            (("4".to_owned(), "four".to_owned()), 1, 1),
+            (("5".to_owned(), "five".to_owned()), 1, 1),
+        ];
+        expected.sort();
+        assert_eq!(
+            read.expect_snapshot_and_fetch(1).await,
+            all_ok(&expected, 1)
+        );
     }
 
     #[mz_ore::test(tokio::test)]

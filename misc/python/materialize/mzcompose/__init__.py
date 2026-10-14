@@ -134,13 +134,13 @@ def get_minimal_system_parameters(
         ),
         "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
+        "enable_try_cast": "true",
         # Introspection goldens depend on the replica topology, so tests need
         # one consistent value rather than a varying one.
         "enable_unified_cluster": (
             "true" if version >= MzVersion.parse_mz("v26.43.0-dev") else "false"
         ),
         "enable_compute_error_distinct": "true",
-        "enable_compute_temporal_bucketing": "true",
         "enable_union_cancellation_after_relation_cse": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
@@ -203,6 +203,14 @@ def get_minimal_system_parameters(
             "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
         )
 
+    # Frontend peek sequencing's flag, which current versions no longer have
+    # because the frontend always sequences peeks. Older binaries that have it
+    # still read it, so pin the value CI has been running them with.
+    if version < MzVersion.parse_mz("v26.47.0-dev"):
+        config["enable_frontend_peek_sequencing"] = (
+            "true" if version >= MzVersion.parse_mz("v26.9.0-dev") else "false"
+        )
+
     # The `WITH (WAIT ...)` graceful-reconfiguration surface. Always accepted
     # from v26.42 on. Older binaries still gate it behind this feature flag, so
     # pin it on for them: the tests that use the surface no longer enable it
@@ -210,6 +218,12 @@ def get_minimal_system_parameters(
     # against the old binary.
     if version < MzVersion.parse_mz("v26.42.0-dev"):
         config["enable_zero_downtime_cluster_reconfiguration"] = "true"
+
+    # Temporal bucketing is unconditional from v26.47 on. Older binaries still
+    # read this flag and default it off, so pin it on for them to keep benchmark
+    # baselines and mixed-version runs bucketing like current versions.
+    if version < MzVersion.parse_mz("v26.47.0-dev"):
+        config["enable_compute_temporal_bucketing"] = "true"
 
     return config
 
@@ -375,13 +389,14 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "enable_password_auth",
-            "true",
-            ["true", "false"],
+            "compute_mv_sink_shared_batch_max_bytes",
+            "1048576",
+            # 0 never shares, 64 KiB, 1 MiB, 128 MiB
+            ["0", "65536", "1048576", "134217728"],
         ),
         VariableSystemParameter(
-            "enable_frontend_peek_sequencing",
-            "true" if version >= MzVersion.parse_mz("v26.9.0-dev") else "false",
+            "enable_password_auth",
+            "true",
             ["true", "false"],
         ),
         VariableSystemParameter(
@@ -849,6 +864,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "balancerd_sigterm_listen_wait",
     "balancerd_inject_proxy_protocol_header_http",
     "balancerd_max_connections",
+    "balancerd_connection_high_watermark",
+    "balancerd_connection_low_watermark",
     "balancerd_pre_resolved_timeout",
     "balancerd_log_filter",
     "balancerd_opentelemetry_filter",

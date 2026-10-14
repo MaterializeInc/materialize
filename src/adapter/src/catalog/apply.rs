@@ -1527,7 +1527,7 @@ impl CatalogState {
     pub(super) fn set_physical_plan(
         &mut self,
         id: GlobalId,
-        plan: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
+        plan: mz_compute_types::dataflows::LirDataflowDescription,
     ) {
         let item_id = self.entry_by_global_id[&id];
         let entry = self.get_entry_mut(&item_id);

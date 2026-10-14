@@ -21,7 +21,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
+use mz_compute_types::dyncfgs::TEMPORAL_BUCKETING_SUMMARY;
 use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_compute_types::plan::{ArrangementStrategy, AvailableCollections};
 use mz_dyncfg::ConfigSet;
@@ -101,8 +101,8 @@ pub struct Context<'scope, T: RenderTimestamp> {
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Creates a new empty Context.
-    pub fn for_dataflow_in<Plan>(
-        dataflow: &DataflowDescription<Plan, CollectionMetadata>,
+    pub fn for_dataflow_in<Plan, O>(
+        dataflow: &DataflowDescription<Plan, CollectionMetadata, O>,
         scope: Scope<'scope, T>,
         compute_state: &ComputeState,
         until: Antichain<mz_repr::Timestamp>,
@@ -1079,9 +1079,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             } else {
                 ArrangementStrategy::Direct
             };
-            let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing)
-                && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
-            {
+            let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing) {
                 let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
                     .get(config_set)
                     .try_into()
@@ -1112,9 +1110,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 } else {
                     strategy
                 };
-                let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing)
-                    && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(config_set)
-                {
+                let oks = if matches!(effective_strategy, ArrangementStrategy::TemporalBucketing) {
                     let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
                         .get(config_set)
                         .try_into()

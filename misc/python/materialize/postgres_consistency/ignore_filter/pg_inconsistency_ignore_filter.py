@@ -814,7 +814,7 @@ class PgPostExecutionInconsistencyIgnoreFilter(
             return YesIgnore("Caused by a different precision")
 
         if query_template.limit == 0:
-            return YesIgnore("STG-54: LIMIT 0 does not swallow errors")
+            return YesIgnore("SQL-795: LIMIT 0 does not swallow errors")
 
         if (
             query_template.matches_any_expression(
