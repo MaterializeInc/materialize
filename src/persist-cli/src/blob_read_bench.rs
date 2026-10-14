@@ -7,24 +7,31 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Concurrent [S3Blob] reads against an S3-compatible store, comparing HTTP
-//! clients that do and don't offer HTTP/2.
+//! Concurrent [S3Blob] reads, plus a steady stream of PUTs through the same
+//! client, against an S3-compatible store, comparing HTTP clients that do and
+//! don't offer HTTP/2.
 
 use std::collections::BTreeMap;
 use std::error::Error as _;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
 use aws_sdk_s3::config::AsyncSleep;
+use aws_smithy_runtime_api::box_error::BoxError;
+use aws_smithy_runtime_api::client::connector_metadata::ConnectorMetadata;
 use aws_smithy_runtime_api::client::http::{
-    HttpClient, HttpConnector, HttpConnectorFuture, HttpConnectorSettings, SharedHttpConnector,
+    HttpClient, HttpConnector, HttpConnectorFuture, HttpConnectorSettings, SharedHttpClient,
+    SharedHttpConnector,
 };
 use aws_smithy_runtime_api::client::orchestrator::{HttpRequest, HttpResponse};
 use aws_smithy_runtime_api::client::result::ConnectorError;
-use aws_smithy_runtime_api::client::runtime_components::RuntimeComponents;
+use aws_smithy_runtime_api::client::runtime_components::{
+    RuntimeComponents, RuntimeComponentsBuilder,
+};
 use aws_smithy_types::body::SdkBody;
+use aws_smithy_types::config_bag::ConfigBag;
 use bytes::Bytes;
 use futures::{StreamExt, TryStreamExt};
 use hyper_rustls::{ConfigBuilderExt, HttpsConnector};
@@ -51,8 +58,9 @@ enum Command {
     /// Writes test objects with `S3Blob::set`, so objects over the multipart
     /// threshold are uploaded in parts, like production blobs.
     Upload(UploadArgs),
-    /// Reads the test objects with N concurrent readers for each N, and
-    /// reports latency, throughput and errors.
+    /// Reads the test objects with N concurrent readers for each N, while
+    /// writing small objects at a steady rate, and reports latency,
+    /// throughput and errors.
     Read(ReadArgs),
 }
 
@@ -102,15 +110,29 @@ struct ReadArgs {
     /// in-flight get finishes.
     #[clap(long, value_parser = humantime::parse_duration, default_value = "30s")]
     duration: Duration,
+    /// PUTs started per second during each round. 0 turns them off.
+    #[clap(long, default_value_t = 10)]
+    puts_per_sec: u32,
+    #[clap(long, default_value_t = 1024)]
+    put_size_kib: usize,
+    /// A PUT that takes longer than this counts as stalled.
+    #[clap(long, value_parser = humantime::parse_duration, default_value = "10s")]
+    put_stall: Duration,
 }
+
+/// PUTs cycle through this many keys under [PUT_KEY_PREFIX], overwriting old
+/// ones, so they don't pile up in the bucket.
+const PUT_KEYS: usize = 100;
+/// Keeps PUT objects out of the keys that readers fetch.
+const PUT_KEY_PREFIX: &str = "put/";
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum ClientKind {
     /// `mz_aws_util::http_client`, the client production uses.
     Sdk,
-    /// [HyperHttpClient] offering HTTP/1.1 and HTTP/2.
+    /// This module's hyper client, offering HTTP/1.1 and HTTP/2.
     H2,
-    /// [HyperHttpClient] offering only HTTP/1.1.
+    /// This module's hyper client, offering only HTTP/1.1.
     H1,
 }
 
@@ -126,6 +148,7 @@ async fn open(
     store: &StoreArgs,
     client: ClientKind,
     registry: &MetricsRegistry,
+    header_waits: &Arc<HeaderWaits>,
 ) -> Result<S3Blob, anyhow::Error> {
     let knobs =
         PersistConfig::new_default_configs(&mz_persist_client::BUILD_INFO, SYSTEM_TIME.clone());
@@ -140,16 +163,27 @@ async fn open(
         S3BlobMetrics::new(registry),
     )
     .await?;
-    let config = match client {
-        ClientKind::Sdk => config,
-        ClientKind::H2 => config.with_http_client(HyperHttpClient::new(true)?),
-        ClientKind::H1 => config.with_http_client(HyperHttpClient::new(false)?),
+    let http_client = match client {
+        ClientKind::Sdk => SharedHttpClient::new(mz_aws_util::http_client()),
+        ClientKind::H2 => SharedHttpClient::new(HyperHttpClient::new(true)?),
+        ClientKind::H1 => SharedHttpClient::new(HyperHttpClient::new(false)?),
     };
+    let config = config.with_http_client(TimedHttpClient {
+        inner: http_client,
+        waits: Arc::clone(header_waits),
+    });
     Ok(S3Blob::open(config).await?)
 }
 
 async fn upload(args: UploadArgs) -> Result<(), anyhow::Error> {
-    let blob = Arc::new(open(&args.store, ClientKind::Sdk, &MetricsRegistry::new()).await?);
+    let blob = open(
+        &args.store,
+        ClientKind::Sdk,
+        &MetricsRegistry::new(),
+        &Arc::default(),
+    )
+    .await?;
+    let blob = Arc::new(blob);
     let objects: Vec<_> = args
         .sizes_mib
         .iter()
@@ -180,22 +214,76 @@ struct ReaderStats {
     errors: BTreeMap<String, u64>,
 }
 
+#[derive(Debug, Default)]
+struct PutStats {
+    latencies: Vec<Duration>,
+    stalled: usize,
+    errors: BTreeMap<String, u64>,
+}
+
 async fn read(args: ReadArgs) -> Result<(), anyhow::Error> {
     let registry = MetricsRegistry::new();
-    let blob = Arc::new(open(&args.store, args.client, &registry).await?);
+    let header_waits = Arc::new(HeaderWaits::default());
+    let blob = Arc::new(open(&args.store, args.client, &registry, &header_waits).await?);
     let mut keys = Vec::new();
-    blob.list_keys_and_metadata("", &mut |meta| keys.push(meta.key.to_owned()))
-        .await?;
+    blob.list_keys_and_metadata("", &mut |meta| {
+        if !meta.key.starts_with(PUT_KEY_PREFIX) {
+            keys.push(meta.key.to_owned());
+        }
+    })
+    .await?;
     if keys.is_empty() {
         bail!("no objects under prefix {}", args.store.prefix);
     }
     let keys = Arc::new(keys);
+    let mut put_data = vec![0; args.put_size_kib * 1024];
+    rand::fill(&mut put_data[..]);
+    let put_data = Bytes::from(put_data);
+    let next_put = Arc::new(AtomicUsize::new(0));
 
     for &concurrency in &args.concurrency {
         let read_timeouts_before = read_timeouts(&registry);
+        header_waits.take();
         let next_key = Arc::new(AtomicUsize::new(0));
         let start = Instant::now();
         let deadline = start + args.duration;
+        let putter = (args.puts_per_sec > 0).then(|| {
+            let blob = Arc::clone(&blob);
+            let put_data = put_data.clone();
+            let next_put = Arc::clone(&next_put);
+            let period = Duration::from_secs(1) / args.puts_per_sec;
+            let put_stall = args.put_stall;
+            mz_ore::task::spawn(|| "blob_read_bench_putter", async move {
+                // Each PUT runs in its own task, so a stalled one doesn't
+                // delay the next.
+                let mut puts = Vec::new();
+                let mut ticker = tokio::time::interval(period);
+                while Instant::now() < deadline {
+                    ticker.tick().await;
+                    let n = next_put.fetch_add(1, Ordering::Relaxed) % PUT_KEYS;
+                    let key = format!("{PUT_KEY_PREFIX}{n}");
+                    let blob = Arc::clone(&blob);
+                    let put_data = put_data.clone();
+                    puts.push(mz_ore::task::spawn(|| "blob_read_bench_put", async move {
+                        let put_start = Instant::now();
+                        let result = blob.set(&key, put_data).await;
+                        (put_start.elapsed(), result)
+                    }));
+                }
+                let mut stats = PutStats::default();
+                for put in puts {
+                    let (elapsed, result) = put.await;
+                    if elapsed > put_stall {
+                        stats.stalled += 1;
+                    }
+                    match result {
+                        Ok(()) => stats.latencies.push(elapsed),
+                        Err(err) => *stats.errors.entry(err.to_string()).or_default() += 1,
+                    }
+                }
+                stats
+            })
+        });
         let readers: Vec<_> = (0..concurrency)
             .map(|_| {
                 let blob = Arc::clone(&blob);
@@ -232,33 +320,140 @@ async fn read(args: ReadArgs) -> Result<(), anyhow::Error> {
             }
         }
         let elapsed = start.elapsed();
-        total.latencies.sort();
-        let percentile = |p: usize| {
-            total
-                .latencies
-                .get(total.latencies.len().saturating_sub(1) * p / 100)
-                .copied()
-                .unwrap_or_default()
+        let puts = match putter {
+            Some(putter) => putter.await,
+            None => PutStats::default(),
         };
+
+        // Read timeouts count PUTs as well as GETs.
         println!(
-            "client={:?} concurrency={} elapsed={:.1}s gets={} errors={} read_timeouts={} \
-             p50={:?} p99={:?} max={:?} MiB/s={:.1}",
+            "client={:?} concurrency={} elapsed={:.1}s read_timeouts={} get_MiB/s={:.1}",
             args.client,
             concurrency,
             elapsed.as_secs_f64(),
-            total.latencies.len(),
-            total.errors.values().sum::<u64>(),
             read_timeouts(&registry) - read_timeouts_before,
-            percentile(50),
-            percentile(99),
-            percentile(100),
             f64::cast_lossy(total.bytes) / (1024.0 * 1024.0) / elapsed.as_secs_f64(),
         );
+        println!(
+            "  gets: {} errors={}",
+            summary(total.latencies),
+            total.errors.values().sum::<u64>(),
+        );
+        println!(
+            "  puts: {} errors={} stalled(>{:?})={}",
+            summary(puts.latencies),
+            puts.errors.values().sum::<u64>(),
+            args.put_stall,
+            puts.stalled,
+        );
+        for (method, waits) in header_waits.take() {
+            println!("  {method} wait for headers: {}", summary(waits));
+        }
         for (err, count) in &total.errors {
-            println!("  {count}x {err}");
+            println!("  get error {count}x: {err}");
+        }
+        for (err, count) in &puts.errors {
+            println!("  put error {count}x: {err}");
         }
     }
     Ok(())
+}
+
+/// Count, p50, p99 and max of `samples`.
+fn summary(mut samples: Vec<Duration>) -> String {
+    samples.sort();
+    let percentile = |p: usize| {
+        samples
+            .get(samples.len().saturating_sub(1) * p / 100)
+            .copied()
+            .unwrap_or_default()
+    };
+    format!(
+        "n={} p50={:?} p99={:?} max={:?}",
+        samples.len(),
+        percentile(50),
+        percentile(99),
+        percentile(100),
+    )
+}
+
+/// Per HTTP method, the time from each request reaching the HTTP client until
+/// its response head arrives or it fails. Includes waiting for a connection,
+/// or for a free stream on a shared HTTP/2 connection. Each SDK retry is a
+/// separate request.
+#[derive(Debug, Default)]
+struct HeaderWaits(Mutex<BTreeMap<String, Vec<Duration>>>);
+
+impl HeaderWaits {
+    fn record(&self, method: String, wait: Duration) {
+        let mut waits = self.0.lock().expect("lock poisoned");
+        waits.entry(method).or_default().push(wait);
+    }
+
+    fn take(&self) -> BTreeMap<String, Vec<Duration>> {
+        std::mem::take(&mut *self.0.lock().expect("lock poisoned"))
+    }
+}
+
+/// Wraps an [HttpClient] to record [HeaderWaits].
+#[derive(Debug)]
+struct TimedHttpClient {
+    inner: SharedHttpClient,
+    waits: Arc<HeaderWaits>,
+}
+
+impl HttpClient for TimedHttpClient {
+    fn http_connector(
+        &self,
+        settings: &HttpConnectorSettings,
+        components: &RuntimeComponents,
+    ) -> SharedHttpConnector {
+        SharedHttpConnector::new(TimedConnector {
+            inner: self.inner.http_connector(settings, components),
+            waits: Arc::clone(&self.waits),
+        })
+    }
+
+    fn validate_base_client_config(
+        &self,
+        runtime_components: &RuntimeComponentsBuilder,
+        cfg: &ConfigBag,
+    ) -> Result<(), BoxError> {
+        self.inner
+            .validate_base_client_config(runtime_components, cfg)
+    }
+
+    fn validate_final_config(
+        &self,
+        runtime_components: &RuntimeComponents,
+        cfg: &ConfigBag,
+    ) -> Result<(), BoxError> {
+        self.inner.validate_final_config(runtime_components, cfg)
+    }
+
+    fn connector_metadata(&self) -> Option<ConnectorMetadata> {
+        self.inner.connector_metadata()
+    }
+}
+
+#[derive(Debug)]
+struct TimedConnector {
+    inner: SharedHttpConnector,
+    waits: Arc<HeaderWaits>,
+}
+
+impl HttpConnector for TimedConnector {
+    fn call(&self, request: HttpRequest) -> HttpConnectorFuture {
+        let method = request.method().to_owned();
+        let waits = Arc::clone(&self.waits);
+        let start = Instant::now();
+        let response = self.inner.call(request);
+        HttpConnectorFuture::new(async move {
+            let response = response.await;
+            waits.record(method, start.elapsed());
+            response
+        })
+    }
 }
 
 /// The SDK's read timeout firings so far: the `mz_persist_s3_read_timeouts`

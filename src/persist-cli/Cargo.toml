@@ -33,6 +33,7 @@ humantime.workspace = true
 hyper.workspace = true
 hyper-rustls.workspace = true
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "tokio"] }
+mz-aws-util = { path = "../aws-util" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
