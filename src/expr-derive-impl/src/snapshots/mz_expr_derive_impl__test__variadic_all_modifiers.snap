@@ -1,5 +1,5 @@
 ---
-source: src/expr-derive-impl/src/lib.rs
+source: src/expr-derive-impl/src/test.rs
 expression: "#[sqlfunc(\n    could_error = true,\n    output_type = i16,\n    is_infix_op = true,\n    is_monotone = true,\n    is_associative = true,\n    propagates_nulls = true,\n    sqlname = \"variadic_all_modifiers\",\n)]\nfn variadic_all_modifiers<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {\n    datums.into_iter().next().unwrap_or(Datum::Null)\n}\n"
 ---
 #[derive(
@@ -37,11 +37,9 @@ impl crate::func::variadic::EagerVariadicFunc for VariadicAllModifiers {
         let nullable = output.nullable;
         let non_nullable_input_is_nullable = false;
         let inputs_nullable = input_types.iter().any(|it| it.nullable);
-        output
-            .nullable(
-                nullable || non_nullable_input_is_nullable
-                    || (propagates_nulls && inputs_nullable),
-            )
+        let is_null = nullable || non_nullable_input_is_nullable
+            || (propagates_nulls && inputs_nullable);
+        output.nullable(is_null)
     }
     fn could_error(&self) -> bool {
         true
