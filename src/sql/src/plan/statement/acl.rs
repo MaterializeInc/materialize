@@ -482,17 +482,21 @@ fn plan_update_privilege(
                 GrantTargetSpecificationInner::All(GrantTargetAllSpecification::AllDatabases {
                     databases,
                 }) => {
-                    let schema_ids = databases
+                    let databases: Vec<_> = databases
                         .iter()
                         .map(|database| scx.get_database(database.database_id()))
+                        .collect();
+                    let schemas: Vec<_> = databases
+                        .iter()
                         .flat_map(|database| database.schemas().into_iter())
+                        .collect();
+                    let schema_ids = schemas
+                        .iter()
                         .filter(|schema| !schema.id().is_temporary())
                         .map(|schema| (schema.database().clone(), schema.id().clone()).into());
 
-                    let item_ids = databases
+                    let item_ids = schemas
                         .iter()
-                        .map(|database| scx.get_database(database.database_id()))
-                        .flat_map(|database| database.schemas().into_iter())
                         .flat_map(|schema| schema.item_ids())
                         .map(|item_id| item_id.into());
 
@@ -503,13 +507,18 @@ fn plan_update_privilege(
                 }
                 GrantTargetSpecificationInner::All(GrantTargetAllSpecification::AllSchemas {
                     schemas,
-                }) => schemas
-                    .into_iter()
-                    .map(|schema| scx.get_schema(schema.database_spec(), schema.schema_spec()))
-                    .flat_map(|schema| schema.item_ids())
-                    .map(|item_id| item_id.into())
-                    .filter(|object_id| object_type_filter(object_id, &object_type, scx))
-                    .collect(),
+                }) => {
+                    let schemas: Vec<_> = schemas
+                        .into_iter()
+                        .map(|schema| scx.get_schema(schema.database_spec(), schema.schema_spec()))
+                        .collect();
+                    schemas
+                        .iter()
+                        .flat_map(|schema| schema.item_ids())
+                        .map(|item_id| item_id.into())
+                        .filter(|object_id| object_type_filter(object_id, &object_type, scx))
+                        .collect()
+                }
                 GrantTargetSpecificationInner::Objects { names } => {
                     let mut ids = Vec::with_capacity(names.len());
                     for name in names {
@@ -842,7 +851,7 @@ pub fn plan_reassign_owned(
             .filter_map(|object_id| scx.catalog.get_owner_id(object_id))
             .collect::<BTreeSet<_>>()
             .into_iter()
-            .map(|role_id| scx.catalog.get_role(&role_id).name().quoted());
+            .map(|role_id| scx.catalog.get_role(&role_id).name().quoted().to_string());
         sql_bail!(
             "cannot reassign objects owned by role {} because they are required by the database system",
             owners.join(", "),

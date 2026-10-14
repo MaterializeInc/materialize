@@ -13,7 +13,6 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::convert;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -69,7 +68,7 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemRef, CatalogItemType as SqlCatalogItemType,
-    CatalogNetworkPolicy, CatalogRef, CatalogRole, CatalogSchema, DefaultPrivilegeAclItem,
+    CatalogNetworkPolicy, CatalogRef, CatalogSchema, DefaultPrivilegeAclItem,
     DefaultPrivilegeObject, EnvironmentId, SessionCatalog, SystemObjectType,
 };
 use mz_sql::names::{
@@ -1971,6 +1970,12 @@ impl SessionCatalog for ConnCatalog<'_> {
             .and_then(|portals| portals.get(portal_name).map(|portal| &portal.desc))
     }
 
+    fn active_database_name(&self) -> Option<&str> {
+        self.database
+            .as_ref()
+            .map(|id| self.state.database_by_id[id].name.as_str())
+    }
+
     fn active_database(&self) -> Option<&DatabaseId> {
         self.database.as_ref()
     }
@@ -1986,24 +1991,28 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn resolve_database(
         &self,
         database_name: &str,
-    ) -> Result<&dyn mz_sql::catalog::CatalogDatabase, SqlCatalogError> {
-        Ok(self.state.resolve_database(database_name)?)
+    ) -> Result<mz_sql::catalog::CatalogDatabaseRef<'_>, SqlCatalogError> {
+        Ok(CatalogRef::Borrowed(
+            self.state.resolve_database(database_name)?,
+        ))
     }
 
-    fn get_database(&self, id: &DatabaseId) -> &dyn mz_sql::catalog::CatalogDatabase {
-        self.state
-            .database_by_id
-            .get(id)
-            .expect("database doesn't exist")
+    fn get_database(&self, id: &DatabaseId) -> mz_sql::catalog::CatalogDatabaseRef<'_> {
+        CatalogRef::Borrowed(
+            self.state
+                .database_by_id
+                .get(id)
+                .expect("database doesn't exist"),
+        )
     }
 
-    // `as` is ok to use to cast to a trait object.
-    #[allow(clippy::as_conversions)]
-    fn get_databases(&self) -> Vec<&dyn CatalogDatabase> {
+    fn get_databases(&self) -> Vec<mz_sql::catalog::CatalogDatabaseRef<'_>> {
         self.state
             .database_by_id
             .values()
-            .map(|database| database as &dyn CatalogDatabase)
+            .map(|database| -> mz_sql::catalog::CatalogDatabaseRef<'_> {
+                CatalogRef::Borrowed(database)
+            })
             .collect()
     }
 
@@ -2011,47 +2020,45 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         database_name: Option<&str>,
         schema_name: &str,
-    ) -> Result<&dyn mz_sql::catalog::CatalogSchema, SqlCatalogError> {
-        Ok(self.state.resolve_schema(
+    ) -> Result<mz_sql::catalog::CatalogSchemaRef<'_>, SqlCatalogError> {
+        Ok(CatalogRef::Borrowed(self.state.resolve_schema(
             self.database.as_ref(),
             database_name,
             schema_name,
             &self.conn_id,
-        )?)
+        )?))
     }
 
     fn resolve_schema_in_database(
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_name: &str,
-    ) -> Result<&dyn mz_sql::catalog::CatalogSchema, SqlCatalogError> {
-        Ok(self
-            .state
-            .resolve_schema_in_database(database_spec, schema_name, &self.conn_id)?)
+    ) -> Result<mz_sql::catalog::CatalogSchemaRef<'_>, SqlCatalogError> {
+        Ok(CatalogRef::Borrowed(
+            self.state
+                .resolve_schema_in_database(database_spec, schema_name, &self.conn_id)?,
+        ))
     }
 
     fn get_schema(
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
-    ) -> &dyn CatalogSchema {
-        self.state
-            .get_schema(database_spec, schema_spec, &self.conn_id)
+    ) -> mz_sql::catalog::CatalogSchemaRef<'_> {
+        CatalogRef::Borrowed(
+            self.state
+                .get_schema(database_spec, schema_spec, &self.conn_id),
+        )
     }
 
-    // `as` is ok to use to cast to a trait object.
-    #[allow(clippy::as_conversions)]
-    fn get_schemas(&self) -> Vec<&dyn CatalogSchema> {
-        self.get_databases()
-            .into_iter()
-            .flat_map(|database| database.schemas().into_iter())
-            .chain(
-                self.state
-                    .ambient_schemas_by_id
-                    .values()
-                    .chain(self.state.temporary_namespaces.schemas())
-                    .map(|schema| schema as &dyn CatalogSchema),
-            )
+    fn get_schemas(&self) -> Vec<mz_sql::catalog::CatalogSchemaRef<'_>> {
+        self.state
+            .database_by_id
+            .values()
+            .flat_map(|database| database.schemas_by_id.values())
+            .chain(self.state.ambient_schemas_by_id.values())
+            .chain(self.state.temporary_namespaces.schemas())
+            .map(|schema| -> mz_sql::catalog::CatalogSchemaRef<'_> { CatalogRef::Borrowed(schema) })
             .collect()
     }
 
@@ -2070,9 +2077,9 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn resolve_role(
         &self,
         role_name: &str,
-    ) -> Result<&dyn mz_sql::catalog::CatalogRole, SqlCatalogError> {
+    ) -> Result<mz_sql::catalog::CatalogRoleRef<'_>, SqlCatalogError> {
         match self.state.try_get_role_by_name(role_name) {
-            Some(role) => Ok(role),
+            Some(role) => Ok(CatalogRef::Borrowed(role)),
             None => Err(SqlCatalogError::UnknownRole(role_name.into())),
         }
     }
@@ -2080,28 +2087,26 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn resolve_network_policy(
         &self,
         policy_name: &str,
-    ) -> Result<&dyn mz_sql::catalog::CatalogNetworkPolicy, SqlCatalogError> {
+    ) -> Result<mz_sql::catalog::CatalogNetworkPolicyRef<'_>, SqlCatalogError> {
         match self.state.try_get_network_policy_by_name(policy_name) {
-            Some(policy) => Ok(policy),
+            Some(policy) => Ok(CatalogRef::Borrowed(policy)),
             None => Err(SqlCatalogError::UnknownNetworkPolicy(policy_name.into())),
         }
     }
 
-    fn try_get_role(&self, id: &RoleId) -> Option<&dyn CatalogRole> {
-        Some(self.state.roles_by_id.get(id)?)
+    fn try_get_role(&self, id: &RoleId) -> Option<mz_sql::catalog::CatalogRoleRef<'_>> {
+        Some(CatalogRef::Borrowed(self.state.roles_by_id.get(id)?))
     }
 
-    fn get_role(&self, id: &RoleId) -> &dyn mz_sql::catalog::CatalogRole {
-        self.state.get_role(id)
+    fn get_role(&self, id: &RoleId) -> mz_sql::catalog::CatalogRoleRef<'_> {
+        CatalogRef::Borrowed(self.state.get_role(id))
     }
 
-    fn get_roles(&self) -> Vec<&dyn CatalogRole> {
-        // `as` is ok to use to cast to a trait object.
-        #[allow(clippy::as_conversions)]
+    fn get_roles(&self) -> Vec<mz_sql::catalog::CatalogRoleRef<'_>> {
         self.state
             .roles_by_id
             .values()
-            .map(|role| role as &dyn CatalogRole)
+            .map(|role| -> mz_sql::catalog::CatalogRoleRef<'_> { CatalogRef::Borrowed(role) })
             .collect()
     }
 
@@ -2116,34 +2121,36 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn get_network_policy(
         &self,
         id: &NetworkPolicyId,
-    ) -> &dyn mz_sql::catalog::CatalogNetworkPolicy {
-        self.state.get_network_policy(id)
+    ) -> mz_sql::catalog::CatalogNetworkPolicyRef<'_> {
+        CatalogRef::Borrowed(self.state.get_network_policy(id))
     }
 
-    fn get_network_policies(&self) -> Vec<&dyn mz_sql::catalog::CatalogNetworkPolicy> {
-        // `as` is ok to use to cast to a trait object.
-        #[allow(clippy::as_conversions)]
+    fn get_network_policies(&self) -> Vec<mz_sql::catalog::CatalogNetworkPolicyRef<'_>> {
         self.state
             .network_policies_by_id
             .values()
-            .map(|policy| policy as &dyn CatalogNetworkPolicy)
+            .map(|policy| -> mz_sql::catalog::CatalogNetworkPolicyRef<'_> {
+                CatalogRef::Borrowed(policy)
+            })
             .collect()
     }
 
     fn resolve_cluster(
         &self,
         cluster_name: Option<&str>,
-    ) -> Result<&dyn mz_sql::catalog::CatalogCluster<'_>, SqlCatalogError> {
-        Ok(self
-            .state
-            .resolve_cluster(cluster_name.unwrap_or_else(|| self.active_cluster()))?)
+    ) -> Result<mz_sql::catalog::CatalogClusterRef<'_>, SqlCatalogError> {
+        Ok(CatalogRef::Borrowed(self.state.resolve_cluster(
+            cluster_name.unwrap_or_else(|| self.active_cluster()),
+        )?))
     }
 
     fn resolve_cluster_replica(
         &self,
         cluster_replica_name: &QualifiedReplica,
-    ) -> Result<&dyn CatalogClusterReplica<'_>, SqlCatalogError> {
-        Ok(self.state.resolve_cluster_replica(cluster_replica_name)?)
+    ) -> Result<mz_sql::catalog::CatalogClusterReplicaRef<'_>, SqlCatalogError> {
+        Ok(CatalogRef::Borrowed(
+            self.state.resolve_cluster_replica(cluster_replica_name)?,
+        ))
     }
 
     fn resolve_item(&self, name: &PartialItemName) -> Result<CatalogItemRef<'_>, SqlCatalogError> {
@@ -2193,8 +2200,9 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_items(&self) -> Vec<CatalogItemRef<'_>> {
-        self.get_schemas()
-            .into_iter()
+        let schemas = self.get_schemas();
+        schemas
+            .iter()
             .flat_map(|schema| schema.item_ids())
             .map(|id| self.get_item(&id))
             .collect()
@@ -2250,15 +2258,17 @@ impl SessionCatalog for ConnCatalog<'_> {
         .map(|id| self.item_view(self.state.get_entry(&id)))
     }
 
-    fn get_cluster(&self, id: ClusterId) -> &dyn mz_sql::catalog::CatalogCluster<'_> {
-        &self.state.clusters_by_id[&id]
+    fn get_cluster(&self, id: ClusterId) -> mz_sql::catalog::CatalogClusterRef<'_> {
+        CatalogRef::Borrowed(&self.state.clusters_by_id[&id])
     }
 
-    fn get_clusters(&self) -> Vec<&dyn mz_sql::catalog::CatalogCluster<'_>> {
+    fn get_clusters(&self) -> Vec<mz_sql::catalog::CatalogClusterRef<'_>> {
         self.state
             .clusters_by_id
             .values()
-            .map(|cluster| convert::identity::<&dyn mz_sql::catalog::CatalogCluster>(cluster))
+            .map(|cluster| -> mz_sql::catalog::CatalogClusterRef<'_> {
+                CatalogRef::Borrowed(cluster)
+            })
             .collect()
     }
 
@@ -2266,15 +2276,19 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-    ) -> &dyn mz_sql::catalog::CatalogClusterReplica<'_> {
-        let cluster = self.get_cluster(cluster_id);
-        cluster.replica(replica_id)
+    ) -> mz_sql::catalog::CatalogClusterReplicaRef<'_> {
+        let cluster = &self.state.clusters_by_id[&cluster_id];
+        CatalogRef::Borrowed(cluster.replica(replica_id).expect("catalog out of sync"))
     }
 
-    fn get_cluster_replicas(&self) -> Vec<&dyn mz_sql::catalog::CatalogClusterReplica<'_>> {
-        self.get_clusters()
-            .into_iter()
-            .flat_map(|cluster| cluster.replicas().into_iter())
+    fn get_cluster_replicas(&self) -> Vec<mz_sql::catalog::CatalogClusterReplicaRef<'_>> {
+        self.state
+            .clusters_by_id
+            .values()
+            .flat_map(|cluster| cluster.replicas())
+            .map(|replica| -> mz_sql::catalog::CatalogClusterReplicaRef<'_> {
+                CatalogRef::Borrowed(replica)
+            })
             .collect()
     }
 
@@ -2347,10 +2361,10 @@ impl SessionCatalog for ConnCatalog<'_> {
         match id {
             SystemObjectId::System => Some(&self.state.system_privileges),
             SystemObjectId::Object(ObjectId::Cluster(id)) => {
-                Some(self.get_cluster(*id).privileges())
+                Some(self.state.clusters_by_id[id].privileges())
             }
             SystemObjectId::Object(ObjectId::Database(id)) => {
-                Some(self.get_database(id).privileges())
+                Some(self.state.database_by_id[id].privileges())
             }
             SystemObjectId::Object(ObjectId::Schema((database_spec, schema_spec))) => {
                 // For temporary schemas that haven't been created yet (lazy creation),
@@ -2363,7 +2377,7 @@ impl SessionCatalog for ConnCatalog<'_> {
                 Some(self.state.get_entry(id).privileges())
             }
             SystemObjectId::Object(ObjectId::NetworkPolicy(id)) => {
-                Some(self.get_network_policy(id).privileges())
+                Some(self.state.get_network_policy(id).privileges())
             }
             SystemObjectId::Object(ObjectId::ClusterReplica(_))
             | SystemObjectId::Object(ObjectId::Role(_)) => None,
