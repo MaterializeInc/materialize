@@ -470,6 +470,13 @@ fn record_type() -> SqlScalarType {
     }
 }
 
+fn time_record_type() -> SqlScalarType {
+    SqlScalarType::Record {
+        fields: [("a".into(), SqlScalarType::Time.nullable(false))].into(),
+        custom_id: None,
+    }
+}
+
 fn list_type(element: SqlScalarType) -> SqlScalarType {
     SqlScalarType::List {
         element_type: Box::new(element),
@@ -866,6 +873,43 @@ fn unary_samples() -> Vec<Sample<UnaryFunc>> {
             },
         )
         .labeled("widening"),
+        // Text rounds `time` elements to microseconds, so these casts do not
+        // preserve uniqueness.
+        unary(
+            CastArrayToString {
+                ty: array_type(SqlScalarType::Time),
+            },
+            array_type(SqlScalarType::Time),
+        )
+        .labeled("time"),
+        unary(
+            CastListToString {
+                ty: list_type(SqlScalarType::Time),
+            },
+            list_type(SqlScalarType::Time),
+        )
+        .labeled("time"),
+        unary(
+            CastMapToString {
+                ty: map_type(SqlScalarType::Time),
+            },
+            map_type(SqlScalarType::Time),
+        )
+        .labeled("time"),
+        unary(
+            CastRangeToString {
+                ty: range_type(SqlScalarType::Time),
+            },
+            range_type(SqlScalarType::Time),
+        )
+        .labeled("time"),
+        unary(
+            CastRecordToString {
+                ty: time_record_type(),
+            },
+            time_record_type(),
+        )
+        .labeled("time"),
         // Units below the most significant ones are not monotone.
         unary(
             ExtractInterval(DateTimeUnits::Month),

@@ -1479,6 +1479,40 @@ Target cluster: quickstart
 
 EOF
 
+# Casts between timestamp types round to the target precision, which drops the
+# nanoseconds of an unbounded-precision input.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (keys) AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW cpu_146_to_timestamptz AS SELECT ts::timestamptz FROM (SELECT DISTINCT DATE '2000-01-01' + t AS ts FROM cpu_146)
+----
+materialize.public.cpu_146_to_timestamptz:
+  Project (#1) // { keys: "()" }
+    Map (timestamp_to_timestamp_with_time_zone(#0{ts})) // { keys: "([0])" }
+      Distinct project=[(2000-01-01 + #0{t})] // { keys: "([0])" }
+        ReadStorage materialize.public.cpu_146 // { keys: "()" }
+
+Source materialize.public.cpu_146
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (keys) AS VERBOSE TEXT FOR
+CREATE MATERIALIZED VIEW cpu_146_to_timestamp AS SELECT ts::timestamp FROM (SELECT DISTINCT (DATE '2000-01-01' + t)::timestamptz AS ts FROM cpu_146)
+----
+materialize.public.cpu_146_to_timestamp:
+  Project (#1) // { keys: "()" }
+    Map (timestamp_with_time_zone_to_timestamp(#0{ts})) // { keys: "([0])" }
+      Distinct project=[timestamp_to_timestamp_with_time_zone((2000-01-01 + #0{t}))] // { keys: "([0])" }
+        ReadStorage materialize.public.cpu_146 // { keys: "()" }
+
+Source materialize.public.cpu_146
+
+Target cluster: quickstart
+
+EOF
+
 statement ok
 DROP TABLE cpu_146
 
