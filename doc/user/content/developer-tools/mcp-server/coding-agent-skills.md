@@ -32,21 +32,14 @@ You can install the Materialize agent skills in one of two ways:
   the Agent Skills standard.
 
 Choose one method. Installing the skills with both the plugin and `npx skills`
-results in duplicate copies of each skill.
+results in duplicate copies of each skill. If you already have the skills
+installed, see [Migrate an existing
+installation](#migrate-an-existing-installation).
 
 ### Install as a plugin
 
 When you install the skills as a plugin, they are namespaced under the plugin
 name, for example `materialize:mz-dbt`.
-
-If you already installed the skills with `npx skills`, remove them before you
-install the plugin. The command lists both the current and the previous skill
-names, and skips any you don't have. Run it in each project where you installed
-them, or add `-g` if you installed them globally:
-
-```bash
-npx skills remove mz-docs mz-dbt mz-debug-freshness mz-deploy mz-health-check mz-ontology-design mz-optimize-memory mz-terraform-provider mz-terraform-self-managed materialize-docs materialize-dbt materialize-debug-freshness materialize-terraform-provider materialize-terraform-self-managed mcp-developer-analysis
-```
 
 #### Claude Code
 
@@ -96,7 +89,7 @@ To install the skills, run:
 npx skills add MaterializeInc/agent-skills
 ```
 
-#### Upgrade skills
+#### Update
 
 We publish upgrades to the Materialize agent skills weekly, so check back
 regularly to pick up the latest documentation and reference material. To upgrade
@@ -111,20 +104,6 @@ repository:
 
 ```bash
 npx skills update
-```
-
-#### Migrate from the previous skill names
-
-All skills now use the `mz-` prefix: `materialize-docs` is now `mz-docs`, and
-`mcp-developer-analysis` is now `mz-health-check`. If you installed the
-skills before the rename, remove the old copies and install the skills again,
-so each skill appears once under its new name. Run these in each project where
-you installed them, or add `-g` to both commands if you installed them
-globally:
-
-```bash
-npx skills remove materialize-docs materialize-dbt materialize-debug-freshness materialize-terraform-provider materialize-terraform-self-managed mcp-developer-analysis
-npx skills add MaterializeInc/agent-skills
 ```
 
 ## Skills
@@ -178,6 +157,39 @@ and want to cover them all at once, you can broaden the path to
 
 Claude Code's `auto` permission mode also removes the prompts, but applies to
 all tools rather than just this directory.
+
+## Migrate an existing installation
+
+If you installed the Materialize agent skills before the plugin was available,
+or before the skills were renamed, follow the steps below so that each skill
+appears exactly once. Run the `npx skills` commands in each project where you
+installed the skills, or add `-g` if you installed them globally.
+
+### Switch from `npx skills` to the plugin
+
+Remove the skills that `npx skills` installed, then [install the
+plugin](#install-as-a-plugin). The command below lists both the current and the
+previous skill names, and skips any you don't have:
+
+```bash
+npx skills remove mz-docs mz-dbt mz-debug-freshness mz-deploy mz-health-check mz-ontology-design mz-optimize-memory mz-terraform-provider mz-terraform-self-managed materialize-docs materialize-dbt materialize-debug-freshness materialize-terraform-provider materialize-terraform-self-managed mcp-developer-analysis
+```
+
+If you granted Claude Code read access to `~/.claude/skills/mz-docs`, replace
+it with the plugin's cache directory as described in [Reduce permission
+prompts](#reduce-permission-prompts-claude-code).
+
+### Update renamed skills
+
+All skills use the `mz-` prefix. For example, `materialize-docs` is now
+`mz-docs`, and `mcp-developer-analysis` is now `mz-health-check`. If you
+installed the skills with `npx skills` before the rename, remove the old copies
+and install the skills again:
+
+```bash
+npx skills remove materialize-docs materialize-dbt materialize-debug-freshness materialize-terraform-provider materialize-terraform-self-managed mcp-developer-analysis
+npx skills add MaterializeInc/agent-skills
+```
 
 ## Related Pages
 
