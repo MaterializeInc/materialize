@@ -124,10 +124,19 @@ captured revision, actual committed change and rejecting branch before a repair.
 CI138634 passes Kafka RTR and verifies both catalog and adapter diagnostic emission,
 but captures no rejection.
 Remove those diagnostics once the mutation is identified. Keep the transaction guard.
-Zippy's growing hydration wait is accompanied by
-increasing raw catalog decode work across independent imports. These measurements
-are not CPU time or unique replay volume. Preserve historical reads and source
-flow control when assessing a repair at that boundary.
+Raw catalog decoding is repeated across independent imports. A direct shared raw
+index would inherit retained metric consumers' reconstruction windows for its
+entire trace.
+Try the approved identity-view-plus-index candidate for catalog MVs, leaving
+retained metrics on direct raw reads. Preserve restricted access to raw catalog
+contents and check actual optimized imports before interpreting the comparison.
+Preserve historical reads, source flow control and existing protection. Compare
+decoding, memory and SQL latency in a short case, then verify promising changes
+through existing restart/handover and original-workload checks.
+Use a reduced case and reversible cache-capacity comparison to distinguish
+retained payload from other process memory before choosing a memory repair.
+Keep the driver file-descriptor issue parked. SQL completion and actual
+per-object compaction-bound advancement still need separate verification.
 Do not attribute these to the acknowledgement bug or claim lifecycle changes solve
 them without correlated evidence. Detailed captures and verification are in the PR.
 
