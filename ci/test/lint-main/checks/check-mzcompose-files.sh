@@ -58,6 +58,7 @@ check_default_workflow_references_others() {
         -not -wholename "./test/canary-environment/mzcompose.py" `# Only run manually` \
         -not -wholename "./test/ssh-connection/mzcompose.py" `# Handled differently` \
         -not -wholename "./test/scalability/mzcompose.py" `# Other workflows are for manual usage` \
+        -not -wholename "./test/parallel-workload/mzcompose.py" `# Catalog workflows run as dedicated CI steps` \
         -not -wholename "./test/testdrive-old-kafka-src-syntax/mzcompose.py" `# Other workflow is run separately` \
         -not -wholename "./test/terraform/mzcompose.py" `# Handled differently` \
         -not -wholename "./test/cluster-spec-sheet/mzcompose.py" `# Handled differently` \
