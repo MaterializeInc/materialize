@@ -93,6 +93,7 @@ use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
+pub use crate::catalog::observations::CatalogReadSet;
 pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
 pub use crate::catalog::state::CatalogState;
 pub use crate::catalog::transact::{
@@ -112,6 +113,7 @@ mod migrate;
 
 mod apply;
 pub(crate) mod cluster_state;
+mod observations;
 mod open;
 mod state;
 mod timeline;
