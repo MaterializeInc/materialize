@@ -1,6 +1,6 @@
 ---
 title: "Handle upstream schema changes"
-description: "How to add a column, or drop a column, from your source MySQL database, without any downtime in Materialize"
+description: "How to add a column, drop a column, or drop a constraint in your source MySQL database, without any downtime in Materialize"
 
 menu:
     main:
@@ -18,6 +18,7 @@ seamlessly, specifically:
 
 - Adding a column in the upstream database.
 - Dropping a column in the upstream database.
+- Dropping a `PRIMARY KEY` or `UNIQUE` constraint in the upstream database.
 
 This guide walks you through how to handle these changes without any downtime in Materialize.
 
@@ -36,7 +37,7 @@ CREATE DATABASE mydb;
 USE mydb;
 
 CREATE TABLE t1 (
-    a INT
+    a INT PRIMARY KEY
 );
 
 INSERT INTO t1 (a) VALUES (10);
@@ -193,4 +194,78 @@ can clean up the old objects:
 DROP TABLE v2.t1;
 DROP MATERIALIZED VIEW v2.matview;
 DROP SCHEMA v2;
+```
+
+## Handle upstream constraint drop
+
+{{< warn-if-unreleased "v26.46" >}}
+
+{{< public-preview >}}
+Excluding constraints with `EXCLUDE CONSTRAINTS` or `EXCLUDE ALL CONSTRAINTS`
+{{< /public-preview >}}
+
+Materialize ignores foreign key and `CHECK` constraints. As such, you can add or
+drop them without affecting ingestion. To handle changes in `PRIMARY KEY`,
+`UNIQUE`, and `NOT NULL` constraints, follow the steps below.
+
+### A. Exclude the constraint in Materialize
+
+To drop a `PRIMARY KEY`, `UNIQUE`, or `NOT NULL` constraint, first create a new
+`v4` schema in Materialize and recreate table `t1` in the new schema, excluding
+the constraint you intend to drop. In this example, we'll drop the primary key.
+
+MySQL identifies `PRIMARY KEY` and `UNIQUE` constraints by their index name. The
+primary key's index is always named `PRIMARY`, and a `UNIQUE` constraint uses
+the name of its index. The constraint name is a string literal and must match
+the upstream index name exactly, including case. To list the index names of a
+table, run `SHOW INDEX FROM t1;` in your MySQL database.
+
+```mzsql
+CREATE SCHEMA v4;
+
+CREATE TABLE v4.t1
+    FROM SOURCE my_source (REFERENCE mydb.t1) WITH (EXCLUDE CONSTRAINTS ('PRIMARY'));
+```
+
+Materialize does not record the excluded constraint as a key of `v4.t1`.
+
+`EXCLUDE CONSTRAINTS` only accepts `PRIMARY KEY` and `UNIQUE` constraint
+names. A `NOT NULL` constraint on a specific column cannot be excluded by
+name. To drop a `NOT NULL` constraint safely, use `EXCLUDE ALL CONSTRAINTS`
+instead, which records no constraints at all: the table has no keys and every
+column is nullable, so any later constraint drop is safe.
+
+```mzsql
+CREATE SCHEMA v4;
+
+CREATE TABLE v4.t1
+    FROM SOURCE my_source (REFERENCE mydb.t1) WITH (EXCLUDE ALL CONSTRAINTS);
+```
+
+{{< note >}}
+
+{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
+
+{{< /note >}}
+
+### B. Drop the constraint in your upstream MySQL database
+
+In your upstream MySQL database, drop the primary key from table `t1`:
+
+```sql
+ALTER TABLE t1 DROP PRIMARY KEY;
+```
+
+Dropping the primary key will have no effect on `v4.t1` in Materialize, provided
+you completed step A before dropping it. However, the drop affects `v3.t1` from
+our earlier example, which still records the primary key as a key. When you
+attempt to read from it, Materialize will report an error that the constraint
+was dropped upstream.
+
+Once you have finished migrating any views and queries from `v3` to `v4`, you
+can clean up the old objects:
+
+```mzsql
+DROP TABLE v3.t1;
+DROP SCHEMA v3;
 ```
