@@ -483,19 +483,32 @@ impl Context {
     }
 
     /// Hands `spec.replicas` to [`REPLICAS_HANDOVER_MANAGER`] at its live value
-    /// while [`FIELD_MANAGER`] still owns it.
+    /// while [`FIELD_MANAGER`] still owns it, creating the Deployment with
+    /// `initial_replicas` first if it does not exist yet.
     ///
     /// NOTE: Dropping a field from an apply when no other manager owns it
     /// deletes it, which defaults the Deployment to 1 replica. An autoscaler
     /// cannot become a co-owner first, because each of its writes triggers a
-    /// reconcile whose forced apply reclaims the field.
+    /// reconcile whose forced apply reclaims the field. The handover apply is
+    /// not forced, so a concurrent scale by the autoscaler conflicts and the
+    /// reconcile retries.
     async fn release_replicas(
         &self,
         deployment_api: &Api<Deployment>,
-        name: &str,
+        deployment: &Deployment,
+        initial_replicas: i32,
     ) -> Result<(), Error> {
-        let Some(existing) = get_resource(deployment_api, name).await? else {
-            return Ok(());
+        let name = deployment.name_unchecked();
+        let existing = match get_resource(deployment_api, &name).await? {
+            Some(existing) => existing,
+            None => {
+                // The handover apply carries no selector or template, so it
+                // cannot create the Deployment. Create it with the initial
+                // count under FIELD_MANAGER, then hand that count over below.
+                let mut seeded = deployment.clone();
+                seeded.spec.as_mut().unwrap().replicas = Some(initial_replicas);
+                apply_resource(deployment_api, &seeded).await?
+            }
         };
         if !owns_replicas(&existing) {
             return Ok(());
@@ -503,7 +516,7 @@ impl Context {
         let replicas = existing.spec.and_then(|spec| spec.replicas);
         deployment_api
             .patch(
-                name,
+                &name,
                 &PatchParams::apply(REPLICAS_HANDOVER_MANAGER),
                 &Patch::Apply(serde_json::json!({
                     "apiVersion": "apps/v1",
@@ -663,8 +676,9 @@ impl k8s_controller::Context for Context {
         let step = metadata.step("deployment");
         let deployment = self.create_deployment_object(balancer)?;
         self.fix_deployment(&deployment_api, &deployment).await?;
+        // Must precede the apply that omits `replicas`; see `release_replicas`.
         if balancer.replicas().is_none() {
-            self.release_replicas(&deployment_api, &deployment.name_unchecked())
+            self.release_replicas(&deployment_api, &deployment, balancer.initial_replicas())
                 .await?;
         }
         trace!("creating new balancerd deployment");
@@ -750,6 +764,7 @@ mod tests {
             });
             let deployment = context.create_deployment_object(&balancer).unwrap();
             assert_eq!(deployment.spec.unwrap().replicas, expected);
+            assert_eq!(balancer.initial_replicas(), 3);
         }
     }
 

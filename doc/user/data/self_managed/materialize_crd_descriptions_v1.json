@@ -45,7 +45,7 @@
       {
         "name": "balancerdExternallyScaled",
         "type": "Bool",
-        "description": "Leave the balancerd Deployment's replica count unset so an external\nautoscaler, such as a HorizontalPodAutoscaler, can own it.\n`balancerd_replicas` is ignored when this is true.",
+        "description": "Leave the balancerd Deployment's replica count to an external\nautoscaler, such as a HorizontalPodAutoscaler. `balancerd_replicas`\nthen only seeds the count when the Deployment is first created.\n\nThis field is excluded from the rollout hash and changes will not trigger a rollout.",
         "default": null,
         "required": false,
         "deprecated": false

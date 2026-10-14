@@ -178,9 +178,9 @@ pub mod v1alpha1 {
         pub console_resource_requirements: Option<ResourceRequirements>,
         /// Number of balancerd pods to create.
         pub balancerd_replicas: Option<i32>,
-        /// Leave the balancerd Deployment's replica count unset so an external
-        /// autoscaler, such as a HorizontalPodAutoscaler, can own it.
-        /// `balancerd_replicas` is ignored when this is true.
+        /// Leave the balancerd Deployment's replica count to an external
+        /// autoscaler, such as a HorizontalPodAutoscaler. `balancerd_replicas`
+        /// then only seeds the count when the Deployment is first created.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub balancerd_externally_scaled: Option<bool>,
         /// Number of console pods to create.
@@ -1502,9 +1502,11 @@ pub mod v1 {
         ///
         /// This field is excluded from the rollout hash and changes will not trigger a rollout.
         pub balancerd_replicas: Option<i32>,
-        /// Leave the balancerd Deployment's replica count unset so an external
-        /// autoscaler, such as a HorizontalPodAutoscaler, can own it.
-        /// `balancerd_replicas` is ignored when this is true.
+        /// Leave the balancerd Deployment's replica count to an external
+        /// autoscaler, such as a HorizontalPodAutoscaler. `balancerd_replicas`
+        /// then only seeds the count when the Deployment is first created.
+        ///
+        /// This field is excluded from the rollout hash and changes will not trigger a rollout.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub balancerd_externally_scaled: Option<bool>,
         /// Number of console pods to create.
@@ -2946,6 +2948,49 @@ mod tests {
             });
             let v1 = super::convert_v1alpha1_to_v1(subset.clone()).unwrap();
             assert_eq!(v1["spec"]["balancerdConfigmapName"], value);
+            let roundtrip = super::convert_v1_to_v1alpha1(v1).unwrap();
+            assert_eq!(roundtrip, subset);
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn balancerd_externally_scaled_preserves_rollout_hash_and_conversion() {
+        let mut mz = super::v1::Materialize {
+            spec: super::v1::MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v26.0.0".to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta::default(),
+            status: None,
+        };
+        let hash = mz.generate_rollout_hash();
+        // Omitting the new field also preserves hashes calculated by older operators.
+        assert!(
+            serde_json::to_value(&mz.spec)
+                .unwrap()
+                .get("balancerdExternallyScaled")
+                .is_none()
+        );
+        mz.spec.balancerd_externally_scaled = Some(true);
+        assert_eq!(mz.generate_rollout_hash(), hash);
+        let alpha = Materialize::from(mz.clone());
+        assert_eq!(alpha.spec.balancerd_externally_scaled, Some(true));
+        assert_eq!(
+            super::v1::Materialize::from(alpha)
+                .spec
+                .balancerd_externally_scaled,
+            Some(true),
+        );
+        for value in [serde_json::json!(true), serde_json::Value::Null] {
+            let subset = serde_json::json!({
+                "apiVersion": "materialize.cloud/v1alpha1",
+                "kind": "Materialize",
+                "metadata": {"name": "mz"},
+                "spec": {"balancerdExternallyScaled": value},
+            });
+            let v1 = super::convert_v1alpha1_to_v1(subset.clone()).unwrap();
+            assert_eq!(v1["spec"]["balancerdExternallyScaled"], value);
             let roundtrip = super::convert_v1_to_v1alpha1(v1).unwrap();
             assert_eq!(roundtrip, subset);
         }
