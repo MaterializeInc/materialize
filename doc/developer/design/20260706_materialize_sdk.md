@@ -460,15 +460,16 @@ except a take-over. If the stored text is the new text, the write applied. If it
 is still the expected text, the SDK sends the same write again, and only one of
 the two can apply. Otherwise another write came in between, and the SDK tells
 why as described below. A snapshot write, or a change staged for a multi-view
-cut, commits no frontier and leaves the text unchanged, so a read cannot settle
-it, and the SDK always sends it again. That is safe, because each such write
-replaces a row of an older generation, and within its own generation is applied
-only over an older stored change of its key, as turbopuffer writes are. A copy
-that lands late then skips any newer change of the key instead of overwriting
-it, and applying it twice changes nothing. A take-over whose result is unknown
-takes over again from what it reads, because two workers that start from the
-same checkpoint write the same take-over, and a read cannot tell whose landed.
-It stops once a take-over is known to have applied.
+cut, commits no frontier and leaves the text unchanged, so a read cannot tell
+whether it applied, and the SDK sends it again while the checkpoint read back is
+still the expected one. That is safe, because each such write replaces a row of
+an older generation, and within its own generation is applied only over an older
+stored change of its key, as turbopuffer writes are. A copy that lands late then
+skips any newer change of the key instead of overwriting it, and applying it
+twice changes nothing. A take-over whose result is unknown takes over again from
+what it reads, because two workers that start from the same checkpoint write the
+same take-over, and a read cannot tell whose landed. It stops once a take-over
+is known to have applied.
 
 The target is the recommended store, because writing data and checkpoint in one
 transaction gives exactly-once state (R1, R5). There the sink implements the
@@ -494,16 +495,16 @@ or last wrote. When the condition fails, the SDK reads the checkpoint back and
 compares it with the expected one to tell why. A newer epoch means a newer
 worker took over, and this one gets a typed `Fenced` error and stops. A higher
 generation under the same epoch means the owner restarted the snapshot, and the
-write is `Superseded`. If the stored checkpoint is the expected one after this
-commit, an earlier attempt landed and only its response was lost, so the batch
-counts as committed. Anything else, including a change to the fingerprints
-alone, is `Diverged`, because no write of this worker explains it. Without the
-fence, a second instance of one sink would overwrite the first one's progress.
-Because a take-over is a compare-and-set too, a commit by the old owner between
-the new owner's read and its write makes the take-over fail and read again,
-instead of being overwritten. Under `transactional`, the compare-and-set runs in
-the same transaction as the data, so a batch that was already committed rolls
-back as a whole instead of being applied twice.
+write is `Superseded`. If the stored checkpoint is the one this write would
+leave, an earlier attempt landed and only its response was lost, so the write
+counts as applied. Anything else, including a change to the fingerprints alone,
+is `Diverged`, because no write of this worker explains it. Without the fence, a
+second instance of one sink would overwrite the first one's progress. Because a
+take-over is a compare-and-set too, a commit by the old owner between the new
+owner's read and its write makes the take-over fail and read again, instead of
+being overwritten. Under `transactional`, the compare-and-set runs in the same
+transaction as the data, so a batch that was already committed rolls back as a
+whole instead of being applied twice.
 
 Every durable subscription will require an explicit `sink_id`, which is its
 checkpoint identity. It is chosen by the user and stays stable across restarts,
