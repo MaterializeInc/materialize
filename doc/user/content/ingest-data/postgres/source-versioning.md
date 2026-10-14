@@ -216,11 +216,11 @@ CREATE TABLE v4.T
 
 Materialize does not record the excluded constraint as a key of `v4.T`.
 
+#### Excluding nullability constraints
+
 `EXCLUDE CONSTRAINTS` only accepts `PRIMARY KEY` and `UNIQUE` constraint
-names. A `NOT NULL` constraint on a specific column cannot be excluded by
-name. To drop `NOT NULL` constraints safely, use `EXCLUDE ALL NOT NULL
-CONSTRAINTS`. Every column is ingested as nullable, while `PRIMARY KEY` and
-`UNIQUE` constraints are still recorded:
+names. Individual `NOT NULL` constraints cannot be excluded by name. To drop
+`NOT NULL` constraints safely, use `EXCLUDE ALL NOT NULL CONSTRAINTS`:
 
 ```sql
 CREATE SCHEMA v4;
@@ -228,19 +228,25 @@ CREATE TABLE v4.T
     FROM SOURCE my_source(REFERENCE public.T) WITH (EXCLUDE ALL NOT NULL CONSTRAINTS);
 ```
 
-Columns in a `PRIMARY KEY` remain `NOT NULL`, unless the primary key is also
-excluded with `EXCLUDE CONSTRAINTS`. Columns in a `UNIQUE` constraint become
-nullable, so Materialize no longer uses that constraint as a key when
-optimizing queries. The exception is a `UNIQUE NULLS NOT DISTINCT` constraint
-(PostgreSQL 15+), which Materialize still uses as a key. Dropping a `PRIMARY
-KEY` or `UNIQUE` constraint upstream still puts the table into an error state
-unless that constraint is also excluded. The two options combine:
+Note that when excluding `NOT NULL` constraints:
 
-```sql
-CREATE TABLE v4.T
-    FROM SOURCE my_source(REFERENCE public.T)
-    WITH (EXCLUDE ALL NOT NULL CONSTRAINTS, EXCLUDE CONSTRAINTS ('t_pkey'));
-```
+- Primary key columns remain `NOT NULL`, unless the primary key is also
+  excluded with `EXCLUDE CONSTRAINTS`.
+- Columns in a `UNIQUE` constraint become nullable. This means Materialize no
+  longer uses that constraint as a key when optimizing queries, which might
+  reduce query performance. `UNIQUE NULLS NOT DISTINCT` constraints
+  (PostgreSQL 15+) are still used as keys.
+- `PRIMARY KEY` and `UNIQUE` constraints are still recorded. Dropping one
+  upstream still puts the table into an error state unless it is also
+  excluded:
+
+  ```sql
+  CREATE TABLE v4.T
+      FROM SOURCE my_source(REFERENCE public.T)
+      WITH (EXCLUDE ALL NOT NULL CONSTRAINTS, EXCLUDE CONSTRAINTS ('t_pkey'));
+  ```
+
+#### Excluding all constraints
 
 To record no constraints at all, use `EXCLUDE ALL CONSTRAINTS`: the table has
 no keys and every column is nullable, so any later constraint drop is safe.
