@@ -1554,7 +1554,7 @@ fn plan_source_export_desc(
                             } else if !(*nulls_not_distinct || !*nullable) {
                                 // Non-primary key unique constraints are only keys if all of their
                                 // columns are `NOT NULL` or the constraint is `NULLS NOT DISTINCT`.
-                                continue 'c;
+                                break 'c;
                             }
 
                             key.push(i);
