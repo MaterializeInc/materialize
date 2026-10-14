@@ -189,8 +189,6 @@ has been altered.
 
 ## Handle upstream constraint drop
 
-{{< warn-if-unreleased "v26.47" >}}
-
 {{< public-preview >}}
 Excluding constraints with `EXCLUDE CONSTRAINTS`, `EXCLUDE ALL NOT NULL CONSTRAINTS`, or `EXCLUDE ALL CONSTRAINTS`
 {{< /public-preview >}}
