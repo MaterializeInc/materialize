@@ -207,7 +207,7 @@ fn classify_generic_usage(ty: &syn::Type, generic_name: &Ident) -> GenericUsage 
                         }
                     });
                     if has_generic_arg {
-                        // Build the erased container type path (T → Datum<'a>).
+                        // Build the erased container type path, with `T` replaced by `Datum<'a>`.
                         let erased = erase_generic_param(ty, generic_name);
                         if let syn::Type::Path(erased_path) = erased {
                             return GenericUsage::InContainer(erased_path);
@@ -231,7 +231,7 @@ fn classify_generic_usage(ty: &syn::Type, generic_name: &Ident) -> GenericUsage 
         syn::Type::Reference(r) => classify_generic_usage(&r.elem, generic_name),
         syn::Type::Tuple(t) => {
             // Prefer container usages over bare. For example, `(T, DatumList<'_, T>)`
-            // should classify as `InDatumList`, not `Bare`.
+            // should classify as `InContainer`, not `Bare`.
             let mut best = GenericUsage::Absent;
             for elem in &t.elems {
                 let usage = classify_generic_usage(elem, generic_name);
@@ -240,7 +240,7 @@ fn classify_generic_usage(ty: &syn::Type, generic_name: &Ident) -> GenericUsage 
                     (GenericUsage::Bare, u) if *u != GenericUsage::Absent => best = usage.clone(),
                     _ => {
                         if usage != GenericUsage::Absent && usage != best {
-                            // Conflicting container usages — cannot resolve.
+                            // Conflicting container usages cannot be resolved.
                             return GenericUsage::Bare;
                         }
                     }
@@ -345,7 +345,7 @@ fn derive_output_type_for_generic(
                 break;
             }
             GenericUsage::Bare => {
-                // Bare T in input — not a container, keep looking for a container.
+                // A bare `T` is a fallback. Keep looking for a container.
                 if container_input.is_none() {
                     container_input = Some((i, usage));
                 }
@@ -404,10 +404,10 @@ fn derive_output_type_for_generic(
         quote! {}
     };
 
-    // Now generate the output_type_expr based on the combination of
-    // source container and output usage.
+    // The expression depends on how `T` appears in the output and in the source
+    // input.
     let expr = match (&output_usage, &source_usage) {
-        // Output is bare T, source is a container → unwrap element type via trait.
+        // Output is bare `T` and the source is a container: unwrap the element type.
         (GenericUsage::Bare, GenericUsage::InContainer(in_container)) => {
             let in_c = elide_lifetimes(in_container);
             quote! {
@@ -419,7 +419,7 @@ fn derive_output_type_for_generic(
                 }
             }
         }
-        // Output is bare T, source is bare T → forward input type directly.
+        // Output and source are both bare `T`: forward the input type.
         (GenericUsage::Bare, GenericUsage::Bare) => {
             quote! {
                 {
@@ -428,8 +428,8 @@ fn derive_output_type_for_generic(
                 }
             }
         }
-        // Output is a container, source is a container (same or different) →
-        // unwrap from input container, wrap into output container via traits.
+        // Output and source are both containers, the same or different ones: unwrap
+        // the element from the input container and wrap it into the output container.
         (GenericUsage::InContainer(out_container), GenericUsage::InContainer(in_container)) => {
             let out_c = elide_lifetimes(out_container);
             let in_c = elide_lifetimes(in_container);
@@ -444,7 +444,7 @@ fn derive_output_type_for_generic(
                 }
             }
         }
-        // Other cases — user must provide explicit output_type_expr.
+        // Any other combination needs an explicit `output_type_expr`.
         _ => {
             return Err(darling::Error::custom(format!(
                 "cannot auto-derive output_type_expr: output uses T as {:?} but \
