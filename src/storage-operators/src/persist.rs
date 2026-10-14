@@ -85,10 +85,9 @@ impl SharedBatches {
     /// that there will be _precisely_ one batch across all workers, however.
     ///
     /// The batch's description is fixed by whichever caller creates it, so every caller sharing a
-    /// `shared_batch_id` must pass the same `shard_id`, `lower`, and `upper`. Callers derive them
-    /// from a single broadcast description, and the assertions below hold them to it: a caller
-    /// whose description disagreed would otherwise have its updates silently written under someone
-    /// else's bounds.
+    /// `shared_batch_id` must pass the same `shard_id`, `lower`, and `upper`, or the assertions
+    /// below panic. Without them, a caller with a different description would write its updates
+    /// under another caller's bounds.
     pub fn builder(
         &self,
         shared_batch_id: SharedBatchId,
@@ -106,9 +105,9 @@ impl SharedBatches {
         if inner.states.len() > inner.last_retained_len * 2 {
             // Probe the count rather than `upgrade()`: the temporary strong reference an upgrade
             // creates can make a concurrent `SharedBatchBuilder::finish` see a strong count above
-            // one and hand the batch to nobody, which seals the interval with no data. A stale
-            // count is harmless in both directions, since zero cannot become live again and a
-            // stale non-zero only keeps a dead entry until the next sweep.
+            // one and hand the batch to nobody, which seals the interval with no data. A count of
+            // zero cannot become live again, and a stale non-zero count only keeps a dead entry
+            // until the next sweep.
             inner.states.retain(|_, weak| weak.strong_count() > 0);
             inner.last_retained_len = inner.states.len();
         }
@@ -190,12 +189,8 @@ struct BatchState {
 /// [Self::push] to that builder, but the last handle to call [Self::finish] will receive a batch
 /// containing all the data.
 ///
-/// Note that it's quite important to call [Self::finish], even if you haven't pushed anything
-/// into the batch, in case you're holding the last builder for a shared batch.
-///
 /// Dropping the last handle instead aborts the builder task. Parts it already uploaded stay in blob
-/// until persist's leaked-blob cleanup collects them. That is the teardown path, not a path any
-/// caller should take deliberately.
+/// until persist's leaked-blob cleanup collects them.
 pub struct SharedBatchBuilder {
     batch_id: SharedBatchId,
     shard_id: ShardId,
@@ -228,9 +223,8 @@ impl SharedBatchBuilder {
     /// Fetch the results of the batch builder from the shared state, if any.
     ///
     /// Only the last builder to call this method will obtain the resulting batch, and that batch
-    /// will include all data written by all workers.
-    /// This means that, for any batch interval that we actually want to append, all workers
-    /// must call finish even if they did not push any batches themselves.
+    /// will include all data written by all workers. Every handle must call this, also when it
+    /// pushed nothing, since any handle may be the last one.
     pub async fn finish(self) -> Option<Batch<SourceData, (), Timestamp, StorageDiff>> {
         let state = Arc::into_inner(self.state)?;
         drop(state.tx); // The task only finishes the batch once the channel is closed.

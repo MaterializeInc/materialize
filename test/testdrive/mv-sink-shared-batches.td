@@ -160,9 +160,8 @@ ALTER SYSTEM SET enable_compute_mv_sink_shared_batches = false
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_compute_mv_sink_shared_batches = true
 
-# A write with no net change must not corrupt the view. Workers that end up
-# with no data for the interval must still finish their shared batch, since any
-# one of them may be the last holder responsible for delivering the batch.
+# A write with no net change must not corrupt the view, including on workers
+# with no data for the interval.
 > DELETE FROM t WHERE false
 
 > (SELECT bucket, cnt, s FROM mv_v1)

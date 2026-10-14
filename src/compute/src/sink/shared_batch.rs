@@ -14,10 +14,9 @@
 //! share `desc.shared_id`, because the `mint` operator broadcasts one description.
 //!
 //! One task per process encodes and uploads a shared batch, so routing large intervals through it
-//! serializes work the workers otherwise do in parallel, which measurably slows hydration. Each
-//! worker therefore stages its updates and hands them to the shared batch only if they stay below a
-//! size threshold. Past the threshold, it writes its own batch, whose parts are large enough on
-//! their own.
+//! serializes work the workers otherwise do in parallel. Each worker therefore stages its updates
+//! and hands them to the shared batch only if they stay below a size threshold. Past the
+//! threshold, it writes its own batch.
 
 use std::sync::Arc;
 
@@ -61,8 +60,7 @@ impl SharedBatchWriter {
             shard_name: persist_api.shard_name.clone(),
             // Parts carry the id of the schema they were written under, and a part written under
             // none cannot be decoded through the shard's schema registry. The handle resolves the
-            // registered id for this sink's schema, so take it from there rather than assembling
-            // an unregistered `Schemas`.
+            // registered id for this sink's schema.
             schemas: Schemas {
                 id: writer.schema_id(),
                 key: Arc::new(persist_api.collection.relation_desc.clone()),
@@ -119,9 +117,8 @@ impl SharedBatchWriter {
 /// updates reach the size threshold and writes the worker's own batch after. With sharing disabled,
 /// all updates go to the worker's own batch.
 ///
-/// The caller must [`finish`](Self::finish) it, also when it pushed nothing: only the last
-/// worker to finish receives the shared batch, and any worker holding a write may be that last
-/// one and thus responsible for delivering all workers' data.
+/// The caller must [`finish`](Self::finish) it, also when it pushed nothing (see
+/// [`SharedBatchBuilder::finish`]).
 pub(super) struct SharedBatchWrite<'a> {
     writer: &'a SharedBatchWriter,
     desc: BatchDescription,
