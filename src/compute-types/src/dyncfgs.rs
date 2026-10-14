@@ -284,23 +284,14 @@ pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
-/// Coalesce the parts written by the workers in one process into a single shared batch per batch
-/// interval, instead of each worker writing its own batch.
-pub const ENABLE_MV_SINK_SHARED_BATCHES: Config<bool> = Config::new(
-    "enable_compute_mv_sink_shared_batches",
-    false,
-    "Coalesce the parts written by the workers in one process into a single shared batch per \
-     batch interval in the MV sink.",
-    ParameterScope::Environment,
-);
-
-/// The size of a worker's updates for one batch interval at which the MV sink stops contributing
-/// them to the shared batch and writes the worker's own batch instead.
+/// The size of a worker's updates for one batch interval below which the MV sink coalesces them
+/// with the other workers in its process into a single shared batch. Past it, the worker writes
+/// its own batch. Zero disables sharing.
 pub const MV_SINK_SHARED_BATCH_MAX_BYTES: Config<usize> = Config::new(
     "compute_mv_sink_shared_batch_max_bytes",
-    1024 * 1024,
-    "The size of a worker's updates for one batch interval at which the MV sink stops \
-     contributing them to the shared batch and writes the worker's own batch instead.",
+    0,
+    "The size of a worker's updates for one batch interval below which the MV sink coalesces \
+     them into a batch shared by the workers in one process. Zero disables sharing.",
     ParameterScope::Environment,
 );
 
@@ -839,7 +830,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_ERROR_DISTINCT)
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_SYNC_MV_SINK)
-        .add(&ENABLE_MV_SINK_SHARED_BATCHES)
         .add(&MV_SINK_SHARED_BATCH_MAX_BYTES)
         .add(&ENABLE_CORRECTION_V2)
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)

@@ -388,11 +388,6 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "enable_compute_mv_sink_shared_batches",
-            "true",
-            ["true", "false"],
-        ),
-        VariableSystemParameter(
             "compute_mv_sink_shared_batch_max_bytes",
             "1048576",
             # 0 never shares, 64 KiB, 1 MiB, 128 MiB

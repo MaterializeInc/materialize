@@ -123,8 +123,7 @@ use std::sync::Arc;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use mz_compute_types::dyncfgs::{
-    ENABLE_MV_SINK_SHARED_BATCHES, MV_SINK_ADVANCE_PERSIST_FRONTIERS,
-    MV_SINK_SHARED_BATCH_MAX_BYTES,
+    MV_SINK_ADVANCE_PERSIST_FRONTIERS, MV_SINK_SHARED_BATCH_MAX_BYTES,
 };
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_dyncfg::ConfigSet;
@@ -849,7 +848,6 @@ mod write {
             let shared_batch_writer = SharedBatchWriter::new(
                 &persist_api,
                 &writer,
-                ENABLE_MV_SINK_SHARED_BATCHES.handle(&worker_config),
                 MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config),
             )
             .await;
@@ -966,7 +964,7 @@ mod write {
     struct State {
         sink_id: GlobalId,
         worker_id: usize,
-        /// Coalesces batches across the workers in this process while enabled.
+        /// Coalesces batches across the workers in this process.
         shared_batch_writer: SharedBatchWriter,
         /// Contains `desired - persist`, reflecting the updates we would like to commit to
         /// `persist` in order to "correct" it to track `desired`. This collection is only modified

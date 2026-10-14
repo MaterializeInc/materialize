@@ -53,8 +53,7 @@ use std::sync::Arc;
 
 use differential_dataflow::{Hashable, VecCollection};
 use mz_compute_types::dyncfgs::{
-    ENABLE_MV_SINK_SHARED_BATCHES, MV_SINK_ADVANCE_PERSIST_FRONTIERS,
-    MV_SINK_SHARED_BATCH_MAX_BYTES,
+    MV_SINK_ADVANCE_PERSIST_FRONTIERS, MV_SINK_SHARED_BATCH_MAX_BYTES,
 };
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_ore::cast::CastFrom;
@@ -660,7 +659,6 @@ mod write {
         let advance_persist_frontiers_at_startup =
             MV_SINK_ADVANCE_PERSIST_FRONTIERS.get(&worker_config);
 
-        let shared_batches_enabled = ENABLE_MV_SINK_SHARED_BATCHES.handle(&worker_config);
         let shared_batch_max_bytes = MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config);
 
         // Mirror the persist-frontier initialization performed by `State::new` below. With the
@@ -693,12 +691,7 @@ mod write {
             mz_ore::task::spawn(
                 || operator_name(sink_id, "write::batch_writer"),
                 async move {
-                    let batch_writer = BatchWriter::new(
-                        &persist_api,
-                        shared_batches_enabled,
-                        shared_batch_max_bytes,
-                    )
-                    .await;
+                    let batch_writer = BatchWriter::new(&persist_api, shared_batch_max_bytes).await;
 
                     while let Some(cmd) = cmd_rx.recv().await {
                         corrections =
@@ -869,17 +862,10 @@ mod write {
     impl BatchWriter {
         async fn new(
             persist_api: &PersistApi,
-            shared_batches_enabled: ConfigValHandle<bool>,
             shared_batch_max_bytes: ConfigValHandle<usize>,
         ) -> Self {
             let writer = persist_api.open_writer().await;
-            let shared = SharedBatchWriter::new(
-                persist_api,
-                &writer,
-                shared_batches_enabled,
-                shared_batch_max_bytes,
-            )
-            .await;
+            let shared = SharedBatchWriter::new(persist_api, &writer, shared_batch_max_bytes).await;
             Self { writer, shared }
         }
     }
