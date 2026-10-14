@@ -1759,11 +1759,11 @@ impl SessionClient {
         }
 
         // Wait for any in-flight startup builtin-table appends that this plan
-        // depends on. Mirrors the frontend_peek and coordinator sequencer
-        // paths, and is a no-op for plans that don't depend on builtin tables.
+        // depends on. Mirrors the frontend peek sequencing, and is a no-op for
+        // plans that don't depend on builtin tables.
         {
             let session = self.session.as_mut().expect("SessionClient invariant");
-            if let Some((_, wait_future)) =
+            if let Some(wait_future) =
                 crate::coord::appends::waiting_on_startup_appends(&catalog, session, &plan)
             {
                 wait_future.await;

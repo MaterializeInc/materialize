@@ -1623,7 +1623,9 @@ impl From<&ExplainContext> for RequireLinearization {
             ExplainContext::None | ExplainContext::PlanInsightsNotice(_) => {
                 RequireLinearization::Required
             }
-            _ => RequireLinearization::NotRequired,
+            ExplainContext::Plan(_) | ExplainContext::Pushdown | ExplainContext::Timestamp => {
+                RequireLinearization::NotRequired
+            }
         }
     }
 }
