@@ -12,14 +12,14 @@
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
-from psycopg import Connection
+from psycopg import Connection, sql
 
 from materialize.mzcompose.composition import Composition
 
 
 def execute(conn: Connection, statement: str) -> None:
     print(f"{conn.info.backend_pid}: {statement}", flush=True)
-    conn.execute(statement)
+    conn.execute(sql.SQL(statement))
 
 
 def independent_ddl(c: Composition, before_commit: bool, same_schema: bool) -> None:
@@ -32,8 +32,10 @@ def independent_ddl(c: Composition, before_commit: bool, same_schema: bool) -> N
         execute(other, f"CREATE VIEW {schema}.original AS SELECT 42 AS value")
         execute(other, f"CREATE VIEW {schema}.dependent AS SELECT * FROM {schema}.original")
         original_id = other.execute(
-            "SELECT id FROM mz_views WHERE schema_id = "
-            f"(SELECT id FROM mz_schemas WHERE name = '{schema}') AND name = 'original'"
+            sql.SQL(
+                "SELECT id FROM mz_views WHERE schema_id = "
+                f"(SELECT id FROM mz_schemas WHERE name = '{schema}') AND name = 'original'"
+            )
         ).fetchone()
         assert original_id is not None
 
@@ -46,16 +48,29 @@ def independent_ddl(c: Composition, before_commit: bool, same_schema: bool) -> N
             execute(txn, f"ALTER VIEW {schema}.intermediate RENAME TO final")
         execute(txn, "COMMIT")
 
-        assert other.execute(f"SELECT * FROM {schema}.final").fetchall() == [(42,)]
-        assert other.execute(f"SELECT * FROM {schema}.dependent").fetchall() == [(42,)]
-        assert other.execute(f"SELECT * FROM {other_schema}.unrelated").fetchall() == [(7,)]
+        assert other.execute(sql.SQL(f"SELECT * FROM {schema}.final")).fetchall() == [
+            (42,)
+        ]
+        assert other.execute(sql.SQL(f"SELECT * FROM {schema}.dependent")).fetchall() == [
+            (42,)
+        ]
         assert other.execute(
-            "SELECT id FROM mz_views WHERE schema_id = "
-            f"(SELECT id FROM mz_schemas WHERE name = '{schema}') AND name = 'final'"
-        ).fetchone() == original_id
+            sql.SQL(f"SELECT * FROM {other_schema}.unrelated")
+        ).fetchall() == [(7,)]
+        assert (
+            other.execute(
+                sql.SQL(
+                    "SELECT id FROM mz_views WHERE schema_id = "
+                    f"(SELECT id FROM mz_schemas WHERE name = '{schema}') AND name = 'final'"
+                )
+            ).fetchone()
+            == original_id
+        )
         names = other.execute(
-            "SELECT name FROM mz_views WHERE schema_id = "
-            f"(SELECT id FROM mz_schemas WHERE name = '{schema}') ORDER BY name"
+            sql.SQL(
+                "SELECT name FROM mz_views WHERE schema_id = "
+                f"(SELECT id FROM mz_schemas WHERE name = '{schema}') ORDER BY name"
+            )
         ).fetchall()
         expected = [("dependent",), ("final",)]
         if same_schema:
@@ -123,12 +138,14 @@ def hammer(c: Composition, workers: int, rounds: int) -> None:
     with c.sql_connection() as conn:
         for worker in range(workers):
             for name in (f"v{worker}", f"d{worker}"):
-                assert conn.execute(f"SELECT * FROM {schema}.{name}").fetchall() == [
-                    (worker,)
-                ]
+                assert conn.execute(
+                    sql.SQL(f"SELECT * FROM {schema}.{name}")
+                ).fetchall() == [(worker,)]
         names = conn.execute(
-            "SELECT name FROM mz_views WHERE schema_id = "
-            f"(SELECT id FROM mz_schemas WHERE name = '{schema}') ORDER BY name"
+            sql.SQL(
+                "SELECT name FROM mz_views WHERE schema_id = "
+                f"(SELECT id FROM mz_schemas WHERE name = '{schema}') ORDER BY name"
+            )
         ).fetchall()
         assert names == sorted(
             (f"{prefix}{worker}",) for prefix in ("v", "d") for worker in range(workers)
