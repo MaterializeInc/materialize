@@ -231,7 +231,7 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
                 return desc.plan.arity();
             }
         }
-        panic!("GlobalId {} not found in DataflowDesc", id);
+        panic!("GlobalId {} not found in MirDataflowDescription", id);
     }
 
     /// Calls r and s on any sub-members of those types in self. Halts at the first error return.
@@ -605,14 +605,14 @@ where
     }
 }
 
-/// A commonly used name for dataflows contain MIR expressions.
-pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr, ()>;
+/// A dataflow of optimized MIR, as the optimizer builds and rewrites it.
+pub type MirDataflowDescription = DataflowDescription<OptimizedMirRelationExpr>;
 
 /// A dataflow lowered to LIR.
 pub type LirDataflowDescription<S = ()> = DataflowDescription<LirRelationExpr, S>;
 
 /// A dataflow ready to render.
-pub type RenderDataflowDescription<S = ()> = DataflowDescription<RenderPlan, S>;
+pub type RenderDataflowDescription<S> = DataflowDescription<RenderPlan, S>;
 
 /// An index storing processed updates so they can be queried
 /// or reused in other computations
@@ -691,7 +691,7 @@ mod tests {
 
     /// A dataflow importing `READ` and `UNREAD`, building `VIEW` from `plan`, and exporting a
     /// subscribe sink over it.
-    fn dataflow(plan: MirRelationExpr) -> DataflowDesc {
+    fn dataflow(plan: MirRelationExpr) -> MirDataflowDescription {
         let source_import = || SourceImport {
             desc: SourceInstanceDesc {
                 arguments: SourceInstanceArguments { operators: None },
@@ -703,7 +703,7 @@ mod tests {
             upper: Antichain::from_elem(Timestamp::MIN),
         };
 
-        let mut df = DataflowDesc::new("test".to_string());
+        let mut df = MirDataflowDescription::new("test".to_string());
         df.source_imports.insert(READ, source_import());
         df.source_imports.insert(UNREAD, source_import());
         df.objects_to_build.push(BuildDesc {

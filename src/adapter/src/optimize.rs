@@ -66,7 +66,7 @@ use std::fmt::Debug;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::PERSIST_FAST_PATH_ORDER;
 use mz_catalog::memory::objects::{CatalogCollectionEntry, CatalogEntry, Index};
-use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::MirDataflowDescription;
 use mz_compute_types::dyncfgs::SUBSCRIBE_SNAPSHOT_OPTIMIZATION;
 use mz_controller_types::ClusterId;
 use mz_expr::{EvalError, MirRelationExpr, OptimizedMirRelationExpr, UnmaterializableFunc};
@@ -82,9 +82,6 @@ use mz_transform::{MaybeShouldPanic, TransformCtx, TransformError};
 // Alias types
 // -----------
 
-/// A type for a [`DataflowDescription`] backed by `Mir~` plans. Used internally
-/// by the optimizer implementations.
-type MirDataflowDescription = DataflowDescription<OptimizedMirRelationExpr>;
 pub use mz_compute_types::dataflows::LirDataflowDescription;
 
 // Core API

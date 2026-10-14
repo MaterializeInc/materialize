@@ -30,8 +30,14 @@ pub struct SourceInstanceDesc<M, O = MapFilterProject> {
 
 /// Per-source construction arguments.
 ///
-/// `O` is the form of the operators: a [`MapFilterProject`] while the
-/// optimizer may still rewrite them.
+/// `O` is the form of the operators, chosen per phase:
+/// [`MirDataflowDescription`] uses [`MapFilterProject`], which the optimizer
+/// rewrites, and lowered descriptions use the form that
+/// [`LirDataflowDescription`] and [`RenderDataflowDescription`] fix.
+///
+/// [`MirDataflowDescription`]: crate::dataflows::MirDataflowDescription
+/// [`LirDataflowDescription`]: crate::dataflows::LirDataflowDescription
+/// [`RenderDataflowDescription`]: crate::dataflows::RenderDataflowDescription
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceInstanceArguments<O = MapFilterProject> {
     /// Linear operators to be applied record-by-record.

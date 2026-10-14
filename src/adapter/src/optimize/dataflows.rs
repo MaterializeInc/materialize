@@ -23,7 +23,7 @@ use tracing::warn;
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Index, TableDataSource, View};
 use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::{DataflowDesc, DataflowDescription, IndexDesc};
+use mz_compute_types::dataflows::{DataflowDescription, IndexDesc, MirDataflowDescription};
 use mz_controller::Controller;
 use mz_expr::visit::Visit;
 use mz_expr::{
@@ -308,7 +308,7 @@ impl<'a> DataflowBuilder<'a> {
     pub fn import_into_dataflow(
         &mut self,
         id: &GlobalId,
-        dataflow: &mut DataflowDesc,
+        dataflow: &mut MirDataflowDescription,
         features: &OptimizerFeatures,
     ) -> Result<(), OptimizerError> {
         maybe_grow(|| {
@@ -396,7 +396,7 @@ impl<'a> DataflowBuilder<'a> {
         &mut self,
         view_id: &GlobalId,
         view: &OptimizedMirRelationExpr,
-        dataflow: &mut DataflowDesc,
+        dataflow: &mut MirDataflowDescription,
         features: &OptimizerFeatures,
     ) -> Result<(), OptimizerError> {
         for get_id in view.depends_on() {
@@ -410,7 +410,7 @@ impl<'a> DataflowBuilder<'a> {
     // configuration if reoptimization is requested.
     pub fn maybe_reoptimize_imported_views(
         &self,
-        df_desc: &mut DataflowDesc,
+        df_desc: &mut MirDataflowDescription,
         config: &OptimizerConfig,
     ) -> Result<(), OptimizerError> {
         if !config.features.reoptimize_imported_views {
