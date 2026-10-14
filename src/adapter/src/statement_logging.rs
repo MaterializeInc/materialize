@@ -369,8 +369,7 @@ pub struct PreparedStatementEvent {
     pub session_id: Uuid,
 }
 
-/// Throttling state for statement logging, shared across multiple frontend tasks (and currently
-/// also shared with the old peek sequencing).
+/// Throttling state for statement logging, shared across frontend tasks and the coordinator.
 #[derive(Debug)]
 pub struct ThrottlingState {
     /// Inner state protected by a mutex for rate-limiting, because the two inner fields have to be
@@ -566,8 +565,7 @@ impl StatementLoggingFrontend {
     ///
     /// This must only be called once we are committed to logging the prepared statement, i.e.
     /// after the sampling and throttling checks in [`Self::begin_statement_execution`] have
-    /// passed. Mirrors `Coordinator::record_prepared_statement_as_logged` used by the old peek
-    /// sequencing.
+    /// passed. Mirrors `Coordinator::record_prepared_statement_as_logged`.
     fn record_prepared_statement_as_logged(
         &self,
         uuid: Uuid,
@@ -582,7 +580,8 @@ impl StatementLoggingFrontend {
     }
 
     /// Begin statement execution logging from the frontend. (Corresponds to
-    /// `Coordinator::begin_statement_execution`, which is used by the old peek sequencing.)
+    /// `Coordinator::begin_statement_execution`, which logs the statements the coordinator
+    /// sequences.)
     ///
     /// This encapsulates all the statement logging setup:
     /// - Retrieves system config values

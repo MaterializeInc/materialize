@@ -114,7 +114,6 @@ impl StatementLogging {
 
 impl Coordinator {
     /// Helper to write began execution events to pending buffers.
-    /// Can be called from both old and new peek sequencing.
     fn write_began_execution_events(
         &mut self,
         record: StatementBeganExecutionRecord,
