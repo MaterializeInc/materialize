@@ -867,6 +867,37 @@ mod tests {
         );
     }
 
+    proptest::proptest! {
+        #[test]
+        fn the_hard_limit_fails_at_the_first_update_over_it(
+            steps in proptest::collection::vec((0u64..=1, "[a-c]{0,8}"), 1..40),
+            limit in 0usize..400,
+        ) {
+            let mut b = resume(10).with_max_timestamp_bytes(limit);
+            progress(&mut b, 9);
+            let (mut time, mut held, mut over) = (10, 0, None);
+            for (advance, value) in &steps {
+                if *advance == 1 {
+                    time += 1;
+                    held = 0;
+                }
+                let update = insert(time, value);
+                held += update.approx_bytes();
+                if over.is_none() && held > limit {
+                    over = Some(time);
+                }
+                let result = b.push(Message::Update(update));
+                match over {
+                    Some(timestamp) => proptest::prop_assert_eq!(
+                        result,
+                        Err(BatchError::TimestampTooLarge(TimestampTooLarge { timestamp, limit }))
+                    ),
+                    None => proptest::prop_assert_eq!(result, Ok(None)),
+                }
+            }
+        }
+    }
+
     #[test]
     fn the_hard_limit_restarts_with_each_timestamp() {
         let one = insert(10, "a").approx_bytes();
