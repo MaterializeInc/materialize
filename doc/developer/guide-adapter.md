@@ -66,6 +66,32 @@ logic to them. Extend the implications framework instead.
   Representing a new kind may require extending `ParsedStateUpdate` /
   `ParsedStateUpdateKind` first.
 
+### Catalog observation boundaries
+
+Explicit DDL transactions associate observations with operation prefixes.
+Single-statement purification and ALTER CONNECTION option reconstruction associate
+them with a preparation attempt. Retrying preparation starts a fresh recorder.
+Validate captured decisions before their writes, within the catalog transaction,
+even when a stage also checks validity before resuming.
+
+Mutable catalog answers include failed name lookups, comments copied into generated
+schemas, and dependency closures captured in plans. This differs from rename
+replay, which discovers and rewrites dependents from the current catalog state.
+Adding a dependent must not invalidate a rename merely because that dependent was
+absent during preparation.
+
+Builtin identities, startup metadata, and session-local inputs are not mutable
+catalog observations. Humanizer methods serve diagnostics and EXPLAIN, not
+prepared write decisions. Clocks, upstream metadata, and secret-store contents
+are external inputs, not catalog equality predicates. Configuration uses the
+conservative fence documented on `Catalog::new_read_recorder`.
+
+Observation recording does not replace all DDL serialization or read-only plan
+validity. Read-only plans retain stable-ID semantics. Key rotation retains narrow
+definition validation because its secret-store write precedes its catalog write.
+Callers using plain session views outside these preparation paths remain
+untracked and must retain their existing synchronization contracts.
+
 ### Background reconcilers own convergence resource failures
 
 When a catalog mutation writes desired state that a background reconciler

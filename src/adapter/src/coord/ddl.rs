@@ -91,7 +91,7 @@ impl Coordinator {
     pub(crate) async fn catalog_transact_with_side_effects<F>(
         &mut self,
         mut ctx: Option<&mut ExecuteContext>,
-        ops: Vec<catalog::Op>,
+        mut ops: Vec<catalog::Op>,
         side_effect: F,
     ) -> Result<(), AdapterError>
     where
@@ -102,6 +102,9 @@ impl Coordinator {
             + 'static,
     {
         let start = Instant::now();
+        if let Some(ctx) = ctx.as_ref() {
+            ctx.add_catalog_preconditions(&mut ops);
+        }
 
         let (table_updates, catalog_updates) = self
             .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops)
@@ -190,9 +193,12 @@ impl Coordinator {
         &mut self,
         conn_id: Option<&ConnectionId>,
         ctx: Option<&mut ExecuteContext>,
-        ops: Vec<catalog::Op>,
+        mut ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
         let start = Instant::now();
+        if let Some(ctx) = ctx.as_ref() {
+            ctx.add_catalog_preconditions(&mut ops);
+        }
 
         let conn_id = conn_id.or_else(|| ctx.as_ref().map(|ctx| ctx.session().conn_id()));
 

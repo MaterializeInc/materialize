@@ -183,7 +183,9 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyFrom};
-use crate::catalog::{BuiltinTableUpdate, Catalog, OpenCatalogResult};
+use crate::catalog::{
+    BuiltinTableUpdate, Catalog, CatalogReadRecorder, ConnCatalog, OpenCatalogResult,
+};
 use crate::client::{Client, Handle, truncate_sql_for_logging};
 use crate::command::{Command, ExecuteResponse};
 use crate::config::{
@@ -1537,9 +1539,51 @@ pub struct ExecuteContextInner {
     extra: ExecuteContextGuard,
     #[derivative(Debug = "ignore")]
     response_barriers: Vec<BuiltinTableAppendNotify>,
+    catalog_reads: Option<CatalogReadRecorder>,
+}
+
+/// Waits while a test configures the named failpoint with a `return` action.
+async fn catalog_preparation_test_pause(name: &'static str) {
+    let paused = || {
+        fail::fail_point!(name, |_| true);
+        false
+    };
+    // The SQL command that clears the failpoint must be able to use the runtime.
+    while paused() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 impl ExecuteContext {
+    fn begin_catalog_preparation(&mut self, catalog: &Catalog) {
+        // A retry must not retain observations from abandoned preparation.
+        self.catalog_reads = self
+            .session()
+            .transaction()
+            .ddl_transaction()
+            .is_none()
+            .then(|| catalog.new_read_recorder());
+    }
+
+    fn catalog<'a>(&'a self, catalog: &'a Catalog) -> ConnCatalog<'a> {
+        let view = catalog.for_session(self.session());
+        match &self.catalog_reads {
+            Some(reads) => view.with_read_recorder(reads.clone()),
+            None => view,
+        }
+    }
+
+    fn catalog_read_recorder(&self) -> Option<CatalogReadRecorder> {
+        self.catalog_reads.clone()
+    }
+
+    // Validate before the statement's own writes can change its observed values.
+    fn add_catalog_preconditions(&self, ops: &mut Vec<crate::catalog::Op>) {
+        if let Some(reads) = &self.catalog_reads {
+            ops.insert(0, crate::catalog::Op::ValidateReads(reads.snapshot()));
+        }
+    }
+
     pub fn session(&self) -> &Session {
         &self.session
     }
@@ -1580,6 +1624,7 @@ impl ExecuteContext {
                     extra,
                     response_barriers,
                     internal_cmd_tx,
+                    catalog_reads: None,
                 }
                 .into(),
             ),
@@ -1614,6 +1659,7 @@ impl ExecuteContext {
             session,
             extra,
             response_barriers,
+            catalog_reads: _,
         } = *self.inner.take().expect("only consumed by value");
         (tx, internal_cmd_tx, session, extra, response_barriers)
     }
