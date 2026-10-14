@@ -35,9 +35,8 @@ use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Diff, GlobalId, SqlScalarType, Timestamp};
 use mz_sql::ast::{
-    AlterConnectionAction, AlterConnectionStatement, AlterSourceAction, AstInfo, ConstantVisitor,
-    CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement, StatementKind,
-    SubscribeStatement,
+    AlterConnectionAction, AlterConnectionStatement, AlterSourceAction, AstInfo,
+    CreateSourceOptionName, Raw, Statement, StatementKind,
 };
 use mz_sql::catalog::RoleAttributesRaw;
 use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
@@ -49,7 +48,6 @@ use mz_sql::pure::{
     materialized_view_option_contains_temporal, purify_create_materialized_view_options,
 };
 use mz_sql::rbac;
-use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{
     EndTransactionAction, NETWORK_POLICY, OwnedVarInput, STATEMENT_LOGGING_SAMPLE_RATE,
@@ -57,8 +55,7 @@ use mz_sql::session::vars::{
 };
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    CreateMaterializedViewStatement, ExplainPlanStatement, Explainee, InsertStatement,
-    WithOptionValue,
+    CreateMaterializedViewStatement, ExplainPlanStatement, Explainee, WithOptionValue,
 };
 use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
@@ -1237,29 +1234,6 @@ impl Coordinator {
             .query_total
             .with_label_values(&[session_type, stmt_type])
             .inc();
-        match &*stmt {
-            Statement::Subscribe(SubscribeStatement { output, .. })
-            | Statement::Copy(CopyStatement {
-                relation: CopyRelation::Subscribe(SubscribeStatement { output, .. }),
-                ..
-            }) => {
-                self.metrics
-                    .subscribe_outputs
-                    .with_label_values(&[
-                        session_type,
-                        metrics::subscribe_output_label_value(output),
-                    ])
-                    .inc();
-            }
-            _ => {}
-        }
-        let application_name = ApplicationNameHint::from_str(ctx.session().application_name());
-        if let Some(labels) =
-            metrics::as_of_query_label_values(session_type, application_name, &stmt)
-        {
-            self.metrics.as_of_queries.with_label_values(&labels).inc();
-        }
-
         self.handle_execute_inner(stmt, params, ctx).await
     }
 
@@ -1375,33 +1349,33 @@ impl Coordinator {
                     | Statement::Deallocate(_)
                     | Statement::Declare(_)
                     | Statement::Discard(_)
-                    | Statement::Execute(_)
                     | Statement::ExplainPlan(_)
                     | Statement::ExplainPushdown(_)
                     | Statement::ExplainAnalyzeObject(_)
                     | Statement::ExplainAnalyzeCluster(_)
-                    | Statement::ExplainTimestamp(_)
                     | Statement::ExplainSinkSchema(_)
                     | Statement::Fetch(_)
                     | Statement::Prepare(_)
                     | Statement::Rollback(_)
-                    | Statement::Select(_)
                     | Statement::SetTransaction(_)
                     | Statement::Show(_)
                     | Statement::SetVariable(_)
                     | Statement::ResetVariable(_)
                     | Statement::StartTransaction(_)
-                    | Statement::Subscribe(_)
                     | Statement::Raise(_) => {
                         // Always safe.
                     }
 
-                    Statement::Insert(InsertStatement {
-                        source, returning, ..
-                    }) if returning.is_empty() && ConstantVisitor::insert_source(source) => {
-                        // Inserting from constant values statements that do not need to execute on
-                        // any cluster (no RETURNING) is always safe.
-                    }
+                    // `SessionClient::execute_attempts` unrolls `EXECUTE`, and the frontend takes
+                    // over the other statements, so none of them reach the coordinator. Planning one
+                    // below would hit `sequence_plan`'s soft-panicking arm.
+                    Statement::Delete(_)
+                    | Statement::Execute(_)
+                    | Statement::ExplainTimestamp(_)
+                    | Statement::Insert(_)
+                    | Statement::Select(_)
+                    | Statement::Subscribe(_)
+                    | Statement::Update(_) => {}
 
                     // These statements must be kept in-sync with `must_serialize_ddl()`.
                     Statement::AlterObjectRename(_)
@@ -1460,16 +1434,13 @@ impl Coordinator {
                     | Statement::CreateView(_)
                     | Statement::CreateWebhookSource(_)
                     | Statement::CreateNetworkPolicy(_)
-                    | Statement::Delete(_)
                     | Statement::DropObjects(_)
                     | Statement::DropOwned(_)
                     | Statement::GrantPrivileges(_)
                     | Statement::GrantRole(_)
-                    | Statement::Insert(_)
                     | Statement::ReassignOwned(_)
                     | Statement::RevokePrivileges(_)
                     | Statement::RevokeRole(_)
-                    | Statement::Update(_)
                     | Statement::ValidateConnection(_)
                     | Statement::Comment(_)
                     | Statement::ExecuteUnitTest(_) => {
