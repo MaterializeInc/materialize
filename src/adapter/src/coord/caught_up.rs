@@ -80,7 +80,6 @@ use mz_repr::{GlobalId, Row, Timestamp};
 use mz_storage_client::storage_collections::StorageCollections;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::sync::oneshot;
-use tokio::time::MissedTickBehavior;
 
 use crate::PeekClient;
 use crate::catalog::Catalog;
@@ -501,10 +500,14 @@ impl Coordinator {
         };
 
         task::spawn(|| "caught_up_check", async move {
-            let mut interval = tokio::time::interval(period);
-            interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            let mut delay = None;
             loop {
-                interval.tick().await;
+                // Leave a full idle period between attempts, including retries.
+                // An interval would immediately retry a check that outlasted its period.
+                if let Some(delay) = delay {
+                    tokio::time::sleep(delay).await;
+                }
+                delay = Some(period);
                 // Sample the leader before local frontiers and hydration. Slow
                 // Persist reads must not age local evidence or create artificial lag.
                 let leader = match LeaderSnapshot::read(&catalog, &*storage_collections).await {
