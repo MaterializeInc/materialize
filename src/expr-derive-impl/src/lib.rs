@@ -22,15 +22,6 @@ mod sqlfunc;
 
 pub use sqlfunc::sqlfunc;
 
-/// Non-exported version of `sqlfunc` for testing purposes, accepting proc_macro2 token streams.
-#[cfg(any(feature = "test", test))]
-fn sqlfunc_for_test(
-    attr: proc_macro2::TokenStream,
-    item: proc_macro2::TokenStream,
-) -> darling::Result<proc_macro2::TokenStream> {
-    sqlfunc(attr, item, false)
-}
-
 /// Expands `#[sqlfunc(attr)]` on `item` and returns the formatted expansion, or the
 /// formatted errors, along with the formatted input.
 #[cfg(any(feature = "test", test))]
@@ -45,7 +36,7 @@ pub fn test_sqlfunc(
 
     let input = rust_fmt(&format!("#[sqlfunc({attr})]\n{item}"));
     let output = rust_fmt(
-        &sqlfunc_for_test(attr, item)
+        &sqlfunc(attr, item, false)
             .unwrap_or_else(|err| err.write_errors())
             .to_string(),
     );

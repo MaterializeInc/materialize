@@ -131,7 +131,7 @@ fn insta_test_complex_output_type() {
 fn insta_test_binary_arena() {
     let attr = quote! {test = true};
     let item = quote! {
-        fn unary_fn<'a>(a: Datum<'a>, b: u16, temp_storage: &RowArena) -> bool {
+        fn binary_fn<'a>(a: Datum<'a>, b: u16, temp_storage: &RowArena) -> bool {
             unimplemented!()
         }
     };
@@ -199,13 +199,12 @@ fn insta_test_variadic_arena() {
 #[mz_ore::test]
 fn insta_test_variadic_modifiers() {
     let attr = quote! {
-        Greatest,
-        sqlname = "greatest",
+        MaxDatum,
         could_error = false,
         is_monotone = true,
     };
     let item = quote! {
-        fn greatest<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {
+        fn max_datum<'a>(datums: Variadic<Datum<'a>>) -> Datum<'a> {
             datums.into_iter().max().unwrap_or(Datum::Null)
         }
     };
