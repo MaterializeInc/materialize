@@ -288,7 +288,7 @@ pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
 /// interval, instead of each worker writing its own batch.
 pub const ENABLE_SYNC_MV_SINK_SHARED_BATCHES: Config<bool> = Config::new(
     "enable_compute_sync_mv_sink_shared_batches",
-    true,
+    false,
     "Coalesce the parts written by the workers in one process into a single shared batch per \
      batch interval in the MV sink.",
     ParameterScope::Environment,
