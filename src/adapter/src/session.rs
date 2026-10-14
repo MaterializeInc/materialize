@@ -1234,6 +1234,7 @@ impl TransactionStatus {
         self.ddl_transaction().map(DdlTransaction::state)
     }
 
+    /// Returns the speculative catalog transaction, if this transaction executes DDL.
     pub fn ddl_transaction(&self) -> Option<&DdlTransaction> {
         match self.inner() {
             Some(Transaction {
@@ -1544,6 +1545,7 @@ pub enum TransactionOps {
     /// uses this must return false in `must_serialize_ddl()` because this is serialized instead in
     /// `sequence_plan()` during `COMMIT`.
     DDL {
+        /// The catalog views and operations prepared by this transaction.
         transaction: DdlTransaction,
         /// A list of side effects that should be executed if this DDL transaction commits.
         #[derivative(Debug = "ignore")]
