@@ -87,7 +87,7 @@ application) can correlate a data topic with its progress records without
 querying Materialize.
 
 The `materialize-sink-id` header will become generally available, and be added
-to every message, in v26.46.
+to every message, in v26.47.
 
 ### The `HEADERS` option
 
