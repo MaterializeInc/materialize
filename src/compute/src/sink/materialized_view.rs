@@ -475,10 +475,11 @@ impl std::fmt::Debug for BatchDescription {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "({:?}, {:?})@{}",
+            "({:?}, {:?})@{} {:?}",
             self.lower.elements(),
             self.upper.elements(),
             self.append_worker,
+            self.shared_id,
         )
     }
 }
@@ -852,6 +853,8 @@ mod write {
                 MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config),
             )
             .await;
+            // The write operator needs the writer only for its schema id.
+            drop(writer);
             let sink_metrics = persist_api.open_metrics().await;
             let read_only = *read_only_rx.borrow_and_update();
             let mut state = State::new(

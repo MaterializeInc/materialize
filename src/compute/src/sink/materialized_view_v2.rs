@@ -857,10 +857,10 @@ mod write {
     /// batch builder. Together with [`READ_BACK_CHUNK`] this bounds the handoff to a few thousand
     /// buffered updates.
     const READ_BACK_CHUNKS_IN_FLIGHT: usize = 4;
+
     /// The batch-writing context owned by the Tokio write task.
     ///
-    /// The `writer` writes per-worker batches and cleans up a finished batch when the response
-    /// channel has already gone away.
+    /// The `writer` cleans up a finished batch when the response channel has already gone away.
     struct BatchWriter {
         writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         shared: SharedBatchWriter,

@@ -650,7 +650,8 @@ where
             .await
     }
 
-    /// Adds the given part to the batch, encoded with this builder's write schemas.
+    /// Adds the given encoded part to the batch. Its key and value data types must match this
+    /// builder's write schemas.
     ///
     /// Every update timestamp in the part must be greater or equal to `lower` that was given when
     /// creating this [BatchBuilder].

@@ -58,9 +58,7 @@ impl SharedBatchWriter {
             persist_client: persist_api.open_client().await,
             shard_id: persist_api.collection.data_shard,
             shard_name: persist_api.shard_name.clone(),
-            // Parts carry the id of the schema they were written under, and a part written under
-            // none cannot be decoded through the shard's schema registry. The handle resolves the
-            // registered id for this sink's schema.
+            // The handle resolves the registered id for this sink's schema.
             schemas: Schemas {
                 id: writer.schema_id(),
                 key: Arc::new(persist_api.collection.relation_desc.clone()),
@@ -76,9 +74,10 @@ impl SharedBatchWriter {
     pub(super) fn start(&self, desc: &BatchDescription) -> SharedBatchWrite<'_> {
         // Read per interval, so a flag flip applies without re-rendering the sink. Workers may
         // disagree on an interval: each either contributes to the shared batch or writes its own,
-        // and the append operator appends all of them together. A disabled writer joins no shared
-        // batch at all, so turning the flag off also stops the shared builder tasks.
-        let shared = self.enabled.get().then(|| {
+        // and the append operator appends all of them together. A writer that is disabled or has
+        // a threshold of zero joins no shared batch at all, so it starts no shared builder task.
+        let max_bytes = self.max_bytes.get();
+        let shared = (self.enabled.get() && max_bytes > 0).then(|| {
             self.shared_batches.builder(
                 desc.shared_id,
                 self.persist_client.clone(),
@@ -92,7 +91,7 @@ impl SharedBatchWriter {
         SharedBatchWrite {
             writer: self,
             desc: desc.clone(),
-            max_bytes: self.max_bytes.get(),
+            max_bytes,
             staged: PartBuilder::new(&*self.schemas.key, &*self.schemas.val),
             own: None,
             shared,
@@ -178,5 +177,132 @@ impl SharedBatchWrite<'_> {
             .chain(shared)
             .map(|batch| batch.into_transmittable_batch())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_dyncfg::ConfigValHandle;
+    use mz_persist_client::Diagnostics;
+    use mz_repr::{Datum, Row, SqlScalarType};
+    use timely::progress::Antichain;
+
+    use super::*;
+
+    fn desc() -> RelationDesc {
+        RelationDesc::builder()
+            .with_column("a", SqlScalarType::Int64.nullable(false))
+            .finish()
+    }
+
+    fn writer(
+        client: &PersistClient,
+        shared_batches: &SharedBatches,
+        shard_id: ShardId,
+        enabled: bool,
+        max_bytes: usize,
+    ) -> SharedBatchWriter {
+        SharedBatchWriter {
+            persist_client: client.clone(),
+            shard_id,
+            shard_name: "test".to_string(),
+            schemas: Schemas {
+                id: None,
+                key: Arc::new(desc()),
+                val: Arc::new(UnitSchema),
+            },
+            shared_batches: shared_batches.clone(),
+            enabled: ConfigValHandle::disconnected(enabled),
+            max_bytes: ConfigValHandle::disconnected(max_bytes),
+        }
+    }
+
+    fn update(i: i64) -> (SourceData, ()) {
+        (SourceData(Ok(Row::pack_slice(&[Datum::Int64(i)]))), ())
+    }
+
+    async fn update_counts(
+        client: &PersistClient,
+        shard_id: ShardId,
+        batches: Vec<ProtoBatch>,
+    ) -> Vec<usize> {
+        let write = client
+            .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+                shard_id,
+                Arc::new(desc()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("valid usage");
+        batches
+            .into_iter()
+            .map(|proto| {
+                write
+                    .batch_from_transmittable_batch(proto)
+                    .into_hollow_batch()
+                    .len
+            })
+            .collect()
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_shared_batch_write_crosses_threshold() {
+        let client = PersistClient::new_for_tests().await;
+        let shared_batches = SharedBatches::new();
+        let shard_id = ShardId::new();
+        let small = writer(&client, &shared_batches, shard_id, true, usize::MAX);
+        let large = writer(&client, &shared_batches, shard_id, true, 1);
+        let desc = BatchDescription::new(
+            Antichain::from_elem(Timestamp::from(0)),
+            Antichain::from_elem(Timestamp::from(1)),
+            0,
+        );
+
+        let mut small_write = small.start(&desc);
+        let mut large_write = large.start(&desc);
+        small_write.push(&update(0), Timestamp::from(0), 1).await;
+        // The first update moves the staged part to the worker's own batch via `add_part`, and
+        // the second goes there via `add`.
+        large_write.push(&update(1), Timestamp::from(0), 1).await;
+        large_write.push(&update(2), Timestamp::from(0), 1).await;
+
+        let small_batches = small_write.finish().await;
+        assert!(
+            small_batches.is_empty(),
+            "a worker below the threshold that finishes first delivers nothing"
+        );
+        let large_batches = large_write.finish().await;
+        assert_eq!(
+            update_counts(&client, shard_id, large_batches).await,
+            vec![2, 1],
+            "the last worker delivers its own batch and the shared batch"
+        );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_shared_batch_write_not_sharing() {
+        let client = PersistClient::new_for_tests().await;
+        let shared_batches = SharedBatches::new();
+        let shard_id = ShardId::new();
+        let desc = BatchDescription::new(
+            Antichain::from_elem(Timestamp::from(0)),
+            Antichain::from_elem(Timestamp::from(1)),
+            0,
+        );
+        for (enabled, max_bytes) in [(false, usize::MAX), (true, 0)] {
+            let writer = writer(&client, &shared_batches, shard_id, enabled, max_bytes);
+            let mut write = writer.start(&desc);
+            assert!(
+                write.shared.is_none(),
+                "enabled={enabled} max_bytes={max_bytes} joins no shared batch"
+            );
+            write.push(&update(0), Timestamp::from(0), 1).await;
+            assert_eq!(
+                update_counts(&client, shard_id, write.finish().await).await,
+                vec![1],
+                "enabled={enabled} max_bytes={max_bytes} writes one own batch"
+            );
+        }
     }
 }

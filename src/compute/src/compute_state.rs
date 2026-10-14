@@ -215,8 +215,8 @@ pub struct ComputeState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<PersistClientCache>,
-    // A process-global cache of shared persist batch writers. This allows
-    // coalescing writes across local workers without explicit exchanges.
+    /// A process-global cache of shared persist batch writers. This allows
+    /// coalescing writes across local workers without explicit exchanges.
     pub persist_batches: SharedBatches,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,

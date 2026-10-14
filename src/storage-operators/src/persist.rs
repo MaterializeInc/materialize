@@ -85,9 +85,7 @@ impl SharedBatches {
     /// that there will be _precisely_ one batch across all workers, however.
     ///
     /// The batch's description is fixed by whichever caller creates it, so every caller sharing a
-    /// `shared_batch_id` must pass the same `shard_id`, `lower`, and `upper`, or the assertions
-    /// below panic. Without them, a caller with a different description would write its updates
-    /// under another caller's bounds.
+    /// `shared_batch_id` must pass the same `shard_id`, `lower`, and `upper`, or this panics.
     pub fn builder(
         &self,
         shared_batch_id: SharedBatchId,
@@ -118,8 +116,8 @@ impl SharedBatches {
             upper: upper.clone(),
         };
         let state = upgrade_or_init(weak, || {
-            let (tx, mut rx) = tokio::sync::mpsc::channel(4);
-            let task_id = format!("shared-batch-{shared_batch_id:?}-{shard_id}",);
+            let (tx, mut rx) = tokio::sync::mpsc::channel(PARTS_IN_FLIGHT);
+            let task_id = format!("shared-batch-{shared_batch_id:?}-{shard_id}");
             BatchState {
                 desc: desc.clone(),
                 tx,
@@ -151,6 +149,8 @@ impl SharedBatches {
             }
         });
 
+        // A caller with a different description would otherwise write its updates under another
+        // caller's bounds.
         assert_eq!(
             state.desc, desc,
             "shared batch {shared_batch_id:?} requested with conflicting descriptions",
@@ -163,6 +163,10 @@ impl SharedBatches {
         }
     }
 }
+
+/// How many pushed parts a shared batch buffers before [SharedBatchBuilder::push] waits for the
+/// builder task to take them.
+const PARTS_IN_FLIGHT: usize = 4;
 
 /// The bounds a shared batch is built under, fixed by the caller that creates it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -217,7 +221,7 @@ impl SharedBatchBuilder {
             .tx
             .send(BatchCommand::Push(part))
             .await
-            .expect("task failed");
+            .expect("shared batch builder task exited");
     }
 
     /// Fetch the results of the batch builder from the shared state, if any.
@@ -324,6 +328,25 @@ mod tests {
             Antichain::from_elem(0.into()),
             Antichain::from_elem(1.into()),
         )
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[should_panic(expected = "requested with conflicting descriptions")]
+    async fn test_shared_batch_conflicting_descriptions() {
+        let client = PersistClient::new_for_tests().await;
+        let shared = SharedBatches::new();
+        let batch_id = SharedBatchId::new();
+        let shard_id = ShardId::new();
+        let _first = test_builder(&shared, &client, batch_id, shard_id);
+        let _second = shared.builder(
+            batch_id,
+            client,
+            shard_id,
+            "test".to_string(),
+            bool_schemas(),
+            Antichain::from_elem(0.into()),
+            Antichain::from_elem(2.into()),
+        );
     }
 
     // A worker that goes away after pushing, without finishing, leaves its data to whichever
