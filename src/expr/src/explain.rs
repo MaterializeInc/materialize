@@ -14,7 +14,6 @@ use std::fmt::Formatter;
 use std::time::Duration;
 
 use mz_ore::str::{Indent, IndentLike, separated};
-use mz_repr::GlobalId;
 use mz_repr::explain::ExplainError::LinearChainsPlusRecursive;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
@@ -22,6 +21,7 @@ use mz_repr::explain::{
     UnsupportedFormat, UsedIndexes,
 };
 use mz_repr::optimize::OptimizerFeatures;
+use mz_repr::{GlobalId, RelationDesc};
 
 use crate::interpret::{Interpreter, MfpEval, Trace};
 use crate::visit::Visit;
@@ -173,6 +173,9 @@ pub struct ExplainMultiPlan<'a, T> {
     pub sources: Vec<ExplainSource<'a>>,
     // elements of the vector are in topological order
     pub plans: Vec<(String, AnnotatedPlan<'a, T>)>,
+    /// The names and schemas of the exports, if requested with
+    /// [`ExplainConfig::schema`](mz_repr::explain::ExplainConfig::schema).
+    pub export_schemas: Vec<(String, &'a RelationDesc)>,
 }
 
 impl<'a> Explain<'a> for MirRelationExpr {

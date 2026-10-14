@@ -4216,6 +4216,7 @@ pub enum ExplainPlanOptionName {
     RawSyntax,
     Raw, // Listed after the `Raw~` variants to keep the parser happy!
     Redacted,
+    Schema,
     SubtreeSize,
     Timing,
     Types,
@@ -4255,6 +4256,7 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::RawSyntax
             | Self::Raw
             | Self::Redacted
+            | Self::Schema
             | Self::SubtreeSize
             | Self::Timing
             | Self::Types
