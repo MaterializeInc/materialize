@@ -130,7 +130,7 @@ the new version to the side to avoid downtime:
   see [blue/green deployment](/developer-tools/dbt/blue-green-deployments/).
 
 - For a single materialized view, creating and hydrating a [replacement
-  materialized view (public preview) and replacing the existing view in
+  materialized view and replacing the existing view in
   place](/transform-data/updating-materialized-views/replace-materialized-view/)
   may be simpler, but briefly reduces freshness. The replacement materialized
   view can be either on the same or different cluster.

@@ -53,8 +53,6 @@ partitions later by [replacing the materialized
 view](/transform-data/updating-materialized-views/replace-materialized-view/),
 without recreating the objects that depend on it.
 
-{{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
-
 ### 1. Set `REPLICA IDENTITY FULL` on each partition
 
 Materialize requires `REPLICA IDENTITY FULL` on every table it ingests. Setting
