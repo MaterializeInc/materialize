@@ -73,7 +73,7 @@ at which the event described by the message occurred.
 The `materialize-sink-id` header
 {{< /private-preview >}}
 
-When enabled for your region, Materialize also adds a header with key
+When enabled for your environment, Materialize also adds a header with key
 `materialize-sink-id` to each message emitted by the sink. The value of this
 header is the ID of the sink, as shown in
 [`mz_sinks`](/sql/system-catalog/mz_catalog/#mz_sinks). This is the same ID
