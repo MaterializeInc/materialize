@@ -307,8 +307,26 @@ failing workflows and deadlines.
 Identify the runtime blob backend from the launched service configuration, not
 testdrive's independent Persist arguments. The parallel fixture uses S3-compatible
 MinIO for its catalog. Attribute the measured blob-fetch waits at that backend,
-keeping time inside future polls distinct from between-poll waits. Neither is
-CPU or disk time. Collector scheduling and expansion caching remain parked.
+keeping time inside future polls distinct from the remainder, which also includes
+request construction and future destruction. Neither is CPU or disk time.
+`Tasked` polls the measured response on main Tokio, independently of the awaiting
+coordinator. Reused Hyper drivers can belong to main or Persist's runtime.
+Preserve the wrapper's protection against callers that stop polling.
+Exact request-ID correlation shows a short server interval and longer client
+header interval on scratch, but does not identify the delay owner or explain CI.
+The CI138877 parallel-1 seed still times out with ordinary `info` logging on
+actual 8-CPU/16-GB agents in CI138893. Verbose diagnostics are not the sole cause.
+The larger-agent control pass does not isolate logging cost. Use ordinary
+seed and agent selection, and keep broad diagnostics opt-in. S3 timing uses the
+separate `mz_persist::s3_read_diagnostics` target to avoid enabling Listen traffic.
+No scheduling repair is selected.
+Collector scheduling and expansion caching remain parked.
+
+The hydration-restart failure completes bootstrap and then lacks qualifying output
+for system-cluster collections. Its logged zero is a readiness fallback, not a raw
+execution observation. The existing capture cannot distinguish missing reports
+from unhydrated execution or establish lost progress across restart. Use existing
+runtime observations in the same failing workflow before changing readiness.
 
 Preserve the independent DROP-metric retirement observation and paused-index
 advancement coverage within the explicit protection-lifetime contract. Keep history
