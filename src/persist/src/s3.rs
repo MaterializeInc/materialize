@@ -329,7 +329,7 @@ impl Blob for S3Blob {
         let start_overall = Instant::now();
         let path = self.get_path(key);
         let diagnose = tracing::enabled!(
-            target: "mz_persist_client::listen_diagnostics",
+            target: "mz_persist::s3_read_diagnostics",
             tracing::Level::DEBUG
         );
 
@@ -391,8 +391,9 @@ impl Blob for S3Blob {
                 .part_number(1)
                 .send();
             let mut request = pin!(request);
-            // Poll intervals include OS descheduling. They distinguish time inside
-            // this future's polls from time between polls, not CPU from network work.
+            // Poll intervals include OS descheduling. The header interval also
+            // includes request construction and future destruction, so its
+            // remainder is not exclusively scheduler or network wait.
             if diagnose {
                 poll_fn(|cx| {
                     let started = Instant::now();
@@ -409,7 +410,7 @@ impl Blob for S3Blob {
         min_header_elapsed.observe(header_elapsed, "s3 download first part header");
         if diagnose && object.is_err() && header_elapsed >= Duration::from_millis(20) {
             tracing::debug!(
-                target: "mz_persist_client::listen_diagnostics",
+                target: "mz_persist::s3_read_diagnostics",
                 key, ?header_elapsed, ?header_poll_elapsed,
                 "slow s3 first header failed"
             );
@@ -602,7 +603,7 @@ impl Blob for S3Blob {
             // With multiple parts, the remaining interval includes their
             // headers as well as body reads. Do not sum concurrent part timings.
             tracing::debug!(
-                target: "mz_persist_client::listen_diagnostics",
+                target: "mz_persist::s3_read_diagnostics",
                 key, ?first_request_id, num_requests, ?header_elapsed, ?header_poll_elapsed,
                 ?remaining_elapsed, ?remaining_poll_elapsed,
                 elapsed = ?start_overall.elapsed(),

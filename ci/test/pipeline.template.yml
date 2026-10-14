@@ -610,8 +610,6 @@ steps:
     agents:
       # Uses SQL Server, which is not yet available for ARM
       queue: hetzner-x86-64-8cpu-16gb
-      # Keep the logging control on its baseline's actual resource class.
-      instance_type: hetzner-x86-64-8cpu-16gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: platform-checks
@@ -621,8 +619,7 @@ steps:
               --no-external-metadata-store,  # faster
               --no-external-blob-store,  # faster
               --default-replication-factor=1, # faster
-              "--system-param=log_filter=info",
-              "--seed=01a13a05-edf6-40cf-a527-d7355d30c10e"
+              "--seed=$BUILDKITE_JOB_ID"
           ]
 
   - id: native-warm-promotion
