@@ -47,13 +47,12 @@ pub fn sqlfunc(
     let generate_tests = modifiers.generates_test();
     let func = syn::parse2::<syn::ItemFn>(item.clone())?;
 
-    let has_self = signature::has_receiver(&func);
     let Some(shape) = determine_shape(&func) else {
         return Err(darling::Error::custom(
             "nullary functions are not supported",
         ));
     };
-    let tokens = generate(shape, &func, modifiers, struct_ty, has_self, &attr)?;
+    let tokens = generate(shape, &func, modifiers, struct_ty, &attr)?;
 
     let test = (generate_tests && include_test).then(|| generate_test(attr, item, &func.sig.ident));
 
@@ -86,21 +85,6 @@ fn generate_test(_attr: TokenStream, _item: TokenStream, _name: &Ident) -> Token
     quote! {}
 }
 
-/// Checks whether a parameter's type is `Variadic<...>` or `OptionalArg<...>`,
-/// which indicates the function should be treated as variadic regardless of
-/// parameter count.
-fn is_variadic_arg(arg: &syn::FnArg) -> bool {
-    if let syn::FnArg::Typed(pat) = arg {
-        if let syn::Type::Path(path) = &*pat.ty {
-            if let Some(segment) = path.path.segments.last() {
-                let ident = segment.ident.to_string();
-                return ident == "Variadic" || ident == "OptionalArg";
-            }
-        }
-    }
-    false
-}
-
 /// The shape of a function annotated with `#[sqlfunc]`, or `None` for a function
 /// without SQL arguments.
 ///
@@ -109,7 +93,7 @@ fn is_variadic_arg(arg: &syn::FnArg) -> bool {
 /// regardless of how many arguments it has.
 fn determine_shape(func: &syn::ItemFn) -> Option<Shape> {
     let args = signature::sql_args(func);
-    if args.iter().any(|arg| is_variadic_arg(arg)) {
+    if args.iter().any(|arg| signature::is_variadic_arg(arg)) {
         return Some(Shape::Variadic);
     }
     match args.len() {
