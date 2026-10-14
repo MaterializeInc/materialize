@@ -351,8 +351,24 @@ impl ConnCatalog<'_> {
         &self,
         include_temp_schema: bool,
     ) -> Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
-        self.state
-            .effective_search_path(&self.search_path, include_temp_schema)
+        let path = self
+            .state
+            .effective_search_path(&self.search_path, include_temp_schema);
+        if let Some(recorder) = &self.read_recorder {
+            let database_name = self.database_name.clone().into_owned();
+            let raw_path = self.raw_search_path.clone().into_owned();
+            let conn_id = self.conn_id.clone();
+            recorder.record("effective search path", path.clone(), move |state| {
+                let database = state.database_by_name.get(&database_name);
+                let path = state.resolve_search_path_for(
+                    database,
+                    raw_path.iter().map(|name| name.as_str()),
+                    &conn_id,
+                );
+                state.effective_search_path(&path, include_temp_schema)
+            });
+        }
+        path
     }
 }
 
@@ -1972,12 +1988,30 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn active_database_name(&self) -> Option<&str> {
-        self.database
-            .as_ref()
-            .map(|id| self.state.database_by_id[id].name.as_str())
+        let id = *self.active_database()?;
+        let database = &self.state.database_by_id[&id];
+        if let Some(recorder) = &self.read_recorder {
+            recorder.record(
+                "active database name",
+                Some(database.name.clone()),
+                move |state| {
+                    state
+                        .database_by_id
+                        .get(&id)
+                        .map(|database| database.name.clone())
+                },
+            );
+        }
+        Some(database.name.as_str())
     }
 
     fn active_database(&self) -> Option<&DatabaseId> {
+        if let Some(recorder) = &self.read_recorder {
+            let name = self.database_name.clone().into_owned();
+            recorder.record("active database", self.database, move |state| {
+                state.database_by_name.get(&name).copied()
+            });
+        }
         self.database.as_ref()
     }
 
@@ -1986,6 +2020,18 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn search_path(&self) -> &[(ResolvedDatabaseSpecifier, SchemaSpecifier)] {
+        if let Some(recorder) = &self.read_recorder {
+            let database_name = self.database_name.clone().into_owned();
+            let raw_path = self.raw_search_path.clone().into_owned();
+            let conn_id = self.conn_id.clone();
+            recorder.record("search path", self.search_path.clone(), move |state| {
+                state.resolve_search_path_for(
+                    state.database_by_name.get(&database_name),
+                    raw_path.iter().map(|name| name.as_str()),
+                    &conn_id,
+                )
+            });
+        }
         &self.search_path
     }
 
@@ -1993,7 +2039,17 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         database_name: &str,
     ) -> Result<mz_sql::catalog::CatalogDatabaseRef<'_>, SqlCatalogError> {
-        Ok(self.database_view(self.state.resolve_database(database_name)?))
+        if self.read_recorder.is_none() {
+            return self
+                .state
+                .resolve_database(database_name)
+                .map(|database| self.database_view(database));
+        }
+        let name = database_name.to_owned();
+        let id = self.observe("database name", move |state| {
+            state.resolve_database(&name).map(|database| database.id)
+        })?;
+        Ok(self.get_database(&id))
     }
 
     fn get_database(&self, id: &DatabaseId) -> mz_sql::catalog::CatalogDatabaseRef<'_> {
@@ -2006,13 +2062,12 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_databases(&self) -> Vec<mz_sql::catalog::CatalogDatabaseRef<'_>> {
-        self.state
-            .database_by_id
-            .values()
-            .map(|database| -> mz_sql::catalog::CatalogDatabaseRef<'_> {
-                self.database_view(database)
-            })
-            .collect()
+        self.observe("databases", |state| {
+            state.database_by_id.keys().copied().collect::<Vec<_>>()
+        })
+        .into_iter()
+        .map(|id| self.get_database(&id))
+        .collect()
     }
 
     fn resolve_schema(
@@ -2020,15 +2075,32 @@ impl SessionCatalog for ConnCatalog<'_> {
         database_name: Option<&str>,
         schema_name: &str,
     ) -> Result<mz_sql::catalog::CatalogSchemaRef<'_>, SqlCatalogError> {
-        Ok(self.schema_view(
-            self.state.resolve_schema(
-                self.database.as_ref(),
-                database_name,
-                schema_name,
-                &self.conn_id,
-            )?,
-            &self.conn_id,
-        ))
+        if self.read_recorder.is_none() {
+            return self
+                .state
+                .resolve_schema(
+                    self.database.as_ref(),
+                    database_name,
+                    schema_name,
+                    &self.conn_id,
+                )
+                .map(|schema| self.schema_view(schema, &self.conn_id));
+        }
+        let current_database = self.database_name.clone().into_owned();
+        let database_name = database_name.map(str::to_owned);
+        let schema_name = schema_name.to_owned();
+        let conn_id = self.conn_id.clone();
+        let (database, schema) = self.observe("schema name", move |state| {
+            state
+                .resolve_schema(
+                    state.database_by_name.get(&current_database),
+                    database_name.as_deref(),
+                    &schema_name,
+                    &conn_id,
+                )
+                .map(|schema| (schema.name.database, schema.id))
+        })?;
+        Ok(self.get_schema(&database, &schema))
     }
 
     fn resolve_schema_in_database(
@@ -2036,11 +2108,21 @@ impl SessionCatalog for ConnCatalog<'_> {
         database_spec: &ResolvedDatabaseSpecifier,
         schema_name: &str,
     ) -> Result<mz_sql::catalog::CatalogSchemaRef<'_>, SqlCatalogError> {
-        Ok(self.schema_view(
-            self.state
-                .resolve_schema_in_database(database_spec, schema_name, &self.conn_id)?,
-            &self.conn_id,
-        ))
+        if self.read_recorder.is_none() {
+            return self
+                .state
+                .resolve_schema_in_database(database_spec, schema_name, &self.conn_id)
+                .map(|schema| self.schema_view(schema, &self.conn_id));
+        }
+        let database = *database_spec;
+        let name = schema_name.to_owned();
+        let conn_id = self.conn_id.clone();
+        let schema = self.observe("schema name in database", move |state| {
+            state
+                .resolve_schema_in_database(&database, &name, &conn_id)
+                .map(|schema| schema.id)
+        })?;
+        Ok(self.get_schema(&database, &schema))
     }
 
     fn get_schema(
@@ -2056,15 +2138,34 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_schemas(&self) -> Vec<mz_sql::catalog::CatalogSchemaRef<'_>> {
-        self.state
-            .database_by_id
-            .values()
-            .flat_map(|database| database.schemas_by_id.values())
-            .chain(self.state.ambient_schemas_by_id.values())
-            .map(|schema| (&self.conn_id, schema))
-            .chain(self.state.temporary_namespaces.schemas_with_connections())
-            .map(|(conn_id, schema)| self.schema_view(schema, conn_id))
-            .collect()
+        self.observe("schemas", |state| {
+            state
+                .database_by_id
+                .values()
+                .flat_map(|database| database.schemas_by_id.values())
+                .chain(state.ambient_schemas_by_id.values())
+                .map(|schema| {
+                    (
+                        schema.name.database,
+                        schema.id,
+                        mz_catalog::SYSTEM_CONN_ID.clone(),
+                    )
+                })
+                .chain(
+                    state.temporary_namespaces.schemas_with_connections().map(
+                        |(conn_id, schema)| (schema.name.database, schema.id, conn_id.clone()),
+                    ),
+                )
+                .collect::<Vec<_>>()
+        })
+        .into_iter()
+        .map(|(database, schema, conn_id)| {
+            self.schema_view(
+                self.state.get_schema(&database, &schema, &conn_id),
+                &conn_id,
+            )
+        })
+        .collect()
     }
 
     fn get_mz_internal_schema_id(&self) -> SchemaId {
@@ -2083,24 +2184,50 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         role_name: &str,
     ) -> Result<mz_sql::catalog::CatalogRoleRef<'_>, SqlCatalogError> {
-        match self.state.try_get_role_by_name(role_name) {
-            Some(role) => Ok(self.role_view(role)),
-            None => Err(SqlCatalogError::UnknownRole(role_name.into())),
+        if self.read_recorder.is_none() {
+            return self
+                .state
+                .try_get_role_by_name(role_name)
+                .map(|role| self.role_view(role))
+                .ok_or_else(|| SqlCatalogError::UnknownRole(role_name.into()));
         }
+        let name = role_name.to_owned();
+        let id = self
+            .observe("role name", move |state| {
+                state.try_get_role_by_name(&name).map(|role| role.id)
+            })
+            .ok_or_else(|| SqlCatalogError::UnknownRole(role_name.into()))?;
+        Ok(self.get_role(&id))
     }
 
     fn resolve_network_policy(
         &self,
         policy_name: &str,
     ) -> Result<mz_sql::catalog::CatalogNetworkPolicyRef<'_>, SqlCatalogError> {
-        match self.state.try_get_network_policy_by_name(policy_name) {
-            Some(policy) => Ok(self.network_policy_view(policy)),
-            None => Err(SqlCatalogError::UnknownNetworkPolicy(policy_name.into())),
+        if self.read_recorder.is_none() {
+            return self
+                .state
+                .try_get_network_policy_by_name(policy_name)
+                .map(|policy| self.network_policy_view(policy))
+                .ok_or_else(|| SqlCatalogError::UnknownNetworkPolicy(policy_name.into()));
         }
+        let name = policy_name.to_owned();
+        let id = self
+            .observe("network policy name", move |state| {
+                state
+                    .try_get_network_policy_by_name(&name)
+                    .map(|policy| policy.id)
+            })
+            .ok_or_else(|| SqlCatalogError::UnknownNetworkPolicy(policy_name.into()))?;
+        Ok(self.get_network_policy(&id))
     }
 
     fn try_get_role(&self, id: &RoleId) -> Option<mz_sql::catalog::CatalogRoleRef<'_>> {
-        Some(self.role_view(self.state.roles_by_id.get(id)?))
+        let id = *id;
+        self.observe("role by ID", move |state| {
+            state.roles_by_id.get(&id).map(|role| role.id)
+        })
+        .map(|id| self.get_role(&id))
     }
 
     fn get_role(&self, id: &RoleId) -> mz_sql::catalog::CatalogRoleRef<'_> {
@@ -2108,11 +2235,12 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_roles(&self) -> Vec<mz_sql::catalog::CatalogRoleRef<'_>> {
-        self.state
-            .roles_by_id
-            .values()
-            .map(|role| -> mz_sql::catalog::CatalogRoleRef<'_> { self.role_view(role) })
-            .collect()
+        self.observe("roles", |state| {
+            state.roles_by_id.keys().copied().collect::<Vec<_>>()
+        })
+        .into_iter()
+        .map(|id| self.get_role(&id))
+        .collect()
     }
 
     fn mz_system_role_id(&self) -> RoleId {
@@ -2120,7 +2248,14 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn collect_role_membership(&self, id: &RoleId) -> BTreeSet<RoleId> {
-        self.state.collect_role_membership(id)
+        let id = *id;
+        self.observe("role membership", move |state| {
+            state
+                .roles_by_id
+                .get(&id)
+                .map(|_| state.collect_role_membership(&id))
+        })
+        .expect("catalog out of sync")
     }
 
     fn get_network_policy(
@@ -2131,30 +2266,54 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_network_policies(&self) -> Vec<mz_sql::catalog::CatalogNetworkPolicyRef<'_>> {
-        self.state
-            .network_policies_by_id
-            .values()
-            .map(|policy| -> mz_sql::catalog::CatalogNetworkPolicyRef<'_> {
-                self.network_policy_view(policy)
-            })
-            .collect()
+        self.observe("network policies", |state| {
+            state
+                .network_policies_by_id
+                .keys()
+                .copied()
+                .collect::<Vec<_>>()
+        })
+        .into_iter()
+        .map(|id| self.get_network_policy(&id))
+        .collect()
     }
 
     fn resolve_cluster(
         &self,
         cluster_name: Option<&str>,
     ) -> Result<mz_sql::catalog::CatalogClusterRef<'_>, SqlCatalogError> {
-        Ok(self.cluster_view(
-            self.state
-                .resolve_cluster(cluster_name.unwrap_or_else(|| self.active_cluster()))?,
-        ))
+        if self.read_recorder.is_none() {
+            return self
+                .state
+                .resolve_cluster(cluster_name.unwrap_or_else(|| self.active_cluster()))
+                .map(|cluster| self.cluster_view(cluster));
+        }
+        let name = cluster_name
+            .unwrap_or_else(|| self.active_cluster())
+            .to_owned();
+        let id = self.observe("cluster name", move |state| {
+            state.resolve_cluster(&name).map(|cluster| cluster.id)
+        })?;
+        Ok(self.get_cluster(id))
     }
 
     fn resolve_cluster_replica(
         &self,
         cluster_replica_name: &QualifiedReplica,
     ) -> Result<mz_sql::catalog::CatalogClusterReplicaRef<'_>, SqlCatalogError> {
-        Ok(self.replica_view(self.state.resolve_cluster_replica(cluster_replica_name)?))
+        if self.read_recorder.is_none() {
+            return self
+                .state
+                .resolve_cluster_replica(cluster_replica_name)
+                .map(|replica| self.replica_view(replica));
+        }
+        let name = cluster_replica_name.clone();
+        let (cluster, replica) = self.observe("cluster replica name", move |state| {
+            state
+                .resolve_cluster_replica(&name)
+                .map(|replica| (replica.cluster_id, replica.replica_id))
+        })?;
+        Ok(self.get_cluster_replica(cluster, replica))
     }
 
     fn resolve_item(&self, name: &PartialItemName) -> Result<CatalogItemRef<'_>, SqlCatalogError> {
@@ -2267,11 +2426,12 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_clusters(&self) -> Vec<mz_sql::catalog::CatalogClusterRef<'_>> {
-        self.state
-            .clusters_by_id
-            .values()
-            .map(|cluster| -> mz_sql::catalog::CatalogClusterRef<'_> { self.cluster_view(cluster) })
-            .collect()
+        self.observe("clusters", |state| {
+            state.clusters_by_id.keys().copied().collect::<Vec<_>>()
+        })
+        .into_iter()
+        .map(|id| self.get_cluster(id))
+        .collect()
     }
 
     fn get_cluster_replica(
@@ -2284,14 +2444,17 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_cluster_replicas(&self) -> Vec<mz_sql::catalog::CatalogClusterReplicaRef<'_>> {
-        self.state
-            .clusters_by_id
-            .values()
-            .flat_map(|cluster| cluster.replicas())
-            .map(|replica| -> mz_sql::catalog::CatalogClusterReplicaRef<'_> {
-                self.replica_view(replica)
-            })
-            .collect()
+        self.observe("cluster replicas", |state| {
+            state
+                .clusters_by_id
+                .values()
+                .flat_map(|cluster| cluster.replicas())
+                .map(|replica| (replica.cluster_id, replica.replica_id))
+                .collect::<Vec<_>>()
+        })
+        .into_iter()
+        .map(|(cluster, replica)| self.get_cluster_replica(cluster, replica))
+        .collect()
     }
 
     fn get_system_privileges(&self) -> &PrivilegeMap {
