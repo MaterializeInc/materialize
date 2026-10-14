@@ -20,13 +20,6 @@ what latency to expect and what to change when a query is slow.
 Queries that reduce to a constant, such as `SELECT 1`, are answered without
 reading any data or using a cluster.
 
-The examples on this page use the following tables:
-
-```mzsql
-CREATE TABLE orders (id int, customer_id int, amount numeric);
-CREATE TABLE customers (id int, name text);
-```
-
 ## Stages of a query
 
 Every `SELECT` goes through the same stages:
@@ -63,6 +56,9 @@ become [point lookups](/fundamentals/concepts/indexes/#point-lookups) and only
 touch the matching rows.
 
 ```mzsql
+CREATE TABLE orders (id int, customer_id int, amount numeric);
+CREATE TABLE customers (id int, name text);
+
 CREATE VIEW order_totals AS
   SELECT customer_id, sum(amount) AS total FROM orders GROUP BY customer_id;
 CREATE INDEX order_totals_idx ON order_totals (customer_id);
