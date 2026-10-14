@@ -367,9 +367,30 @@ CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName(
 parse-statement
 CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE ALL COLUMNS)
 ----
-error: Expected CONSTRAINTS, found COLUMNS
+error: Expected one of CONSTRAINTS or NOT, found COLUMNS
 CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE ALL COLUMNS)
                                                                    ^
+
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE ALL NOT NULL CONSTRAINTS)
+----
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE ALL NOT NULL CONSTRAINTS)
+=>
+CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("baz")])), with_options: [TableFromSourceOption { name: ExcludeAllNotNullConstraints, value: None }], include_metadata: [], format: None, envelope: None })
+
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE ALL NOT NULL COLUMNS)
+----
+error: Expected CONSTRAINTS, found COLUMNS
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE ALL NOT NULL COLUMNS)
+                                                                            ^
+
+parse-statement
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (ALL COLUMNS NULLABLE)
+----
+error: Expected one of TEXT or EXCLUDE or IGNORE or DETAILS or PARTITION or RETAIN, found ALL
+CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (ALL COLUMNS NULLABLE)
+                                                       ^
 
 parse-statement
 CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (EXCLUDE CONSTRAINTS (foo))

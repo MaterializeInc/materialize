@@ -5454,11 +5454,15 @@ impl<'a> Parser<'a> {
                     }
                 }
                 ALL => {
-                    self.expect_keyword(CONSTRAINTS)?;
-                    TableFromSourceOption {
-                        name: TableFromSourceOptionName::ExcludeAllConstraints,
-                        value: None,
-                    }
+                    let name = match self.expect_one_of_keywords(&[CONSTRAINTS, NOT])? {
+                        CONSTRAINTS => TableFromSourceOptionName::ExcludeAllConstraints,
+                        NOT => {
+                            self.expect_keywords(&[NULL, CONSTRAINTS])?;
+                            TableFromSourceOptionName::ExcludeAllNotNullConstraints
+                        }
+                        _ => unreachable!(),
+                    };
+                    TableFromSourceOption { name, value: None }
                 }
                 _ => unreachable!(),
             },
