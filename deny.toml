@@ -244,6 +244,8 @@ wrappers = [
     "fail",
     "globset",
     "hyper-rustls",
+    # Only via `debug_empty` and `stderr_empty`, which the jq function replaces.
+    "jaq-std",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "launchdarkly-sdk-transport",
