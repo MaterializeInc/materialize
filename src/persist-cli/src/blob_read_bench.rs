@@ -39,6 +39,7 @@ use hyper_util::client::legacy::Client as HyperClient;
 use hyper_util::client::legacy::connect::HttpConnector as TcpConnector;
 use hyper_util::rt::{TokioExecutor, TokioTimer};
 use mz_ore::cast::CastLossy;
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist::location::Blob;
@@ -104,7 +105,7 @@ struct ReadArgs {
     #[clap(long, value_enum)]
     client: ClientKind,
     /// Runs one round per value, in order.
-    #[clap(long, value_delimiter = ',', default_value = "16,64,256,1024")]
+    #[clap(long, value_delimiter = ',', default_value = "16,64,256,512")]
     concurrency: Vec<usize>,
     /// Readers start no new get after this long. A round lasts until every
     /// in-flight get finishes.
@@ -210,6 +211,7 @@ async fn upload(args: UploadArgs) -> Result<(), anyhow::Error> {
 #[derive(Debug, Default)]
 struct ReaderStats {
     latencies: Vec<Duration>,
+    failed_latencies: Vec<Duration>,
     bytes: u64,
     errors: BTreeMap<String, u64>,
 }
@@ -278,7 +280,12 @@ async fn read(args: ReadArgs) -> Result<(), anyhow::Error> {
                     }
                     match result {
                         Ok(()) => stats.latencies.push(elapsed),
-                        Err(err) => *stats.errors.entry(err.to_string()).or_default() += 1,
+                        Err(err) => {
+                            *stats
+                                .errors
+                                .entry(err.display_with_causes().to_string())
+                                .or_default() += 1
+                        }
                     }
                 }
                 stats
@@ -300,9 +307,16 @@ async fn read(args: ReadArgs) -> Result<(), anyhow::Error> {
                                 stats.bytes += u64::try_from(value.len()).expect("fits");
                             }
                             Ok(None) => {
+                                stats.failed_latencies.push(get_start.elapsed());
                                 *stats.errors.entry(format!("{key} missing")).or_default() += 1
                             }
-                            Err(err) => *stats.errors.entry(err.to_string()).or_default() += 1,
+                            Err(err) => {
+                                stats.failed_latencies.push(get_start.elapsed());
+                                *stats
+                                    .errors
+                                    .entry(err.display_with_causes().to_string())
+                                    .or_default() += 1
+                            }
                         }
                     }
                     stats
@@ -314,6 +328,7 @@ async fn read(args: ReadArgs) -> Result<(), anyhow::Error> {
         for reader in readers {
             let stats = reader.await;
             total.latencies.extend(stats.latencies);
+            total.failed_latencies.extend(stats.failed_latencies);
             total.bytes += stats.bytes;
             for (err, count) in stats.errors {
                 *total.errors.entry(err).or_default() += count;
@@ -339,6 +354,7 @@ async fn read(args: ReadArgs) -> Result<(), anyhow::Error> {
             summary(total.latencies),
             total.errors.values().sum::<u64>(),
         );
+        println!("  failed gets: {}", summary(total.failed_latencies));
         println!(
             "  puts: {} errors={} stalled(>{:?})={}",
             summary(puts.latencies),
