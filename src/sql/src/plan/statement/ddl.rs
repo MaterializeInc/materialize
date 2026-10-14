@@ -3432,7 +3432,11 @@ fn plan_sink(
                 .any(|key_columns| key_columns.iter().all(|column| indices.contains(column)));
 
             if !is_valid_key && envelope == SinkEnvelope::Upsert {
-                if key.not_enforced {
+                // Persisted sinks (pcx is None) are re-planned against the keys
+                // the running optimizer derives, which can be fewer than when
+                // the sink was created. Rejecting the key there fails catalog
+                // boot, so only new statements enforce it.
+                if key.not_enforced || scx.pcx.is_none() {
                     scx.catalog
                         .add_notice(PlanNotice::UpsertSinkKeyNotEnforced {
                             key: key_columns.clone(),
