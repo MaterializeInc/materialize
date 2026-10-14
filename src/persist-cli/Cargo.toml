@@ -20,12 +20,19 @@ bench = false
 anyhow.workspace = true
 arrow.workspace = true
 async-trait.workspace = true
+aws-sdk-s3.workspace = true
+aws-smithy-runtime-api = { workspace = true, features = ["client", "http-1x"] }
+aws-smithy-types = { workspace = true, features = ["http-body-1-x"] }
 axum.workspace = true
 bytes = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["env"] }
 differential-dataflow.workspace = true
 futures.workspace = true
+h2.workspace = true
 humantime.workspace = true
+hyper.workspace = true
+hyper-rustls.workspace = true
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "http2", "tokio"] }
 mz-dyncfg = { path = "../dyncfg" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
@@ -39,6 +46,8 @@ mz-txn-wal = { path = "../txn-wal" }
 num_cpus.workspace = true
 num_enum.workspace = true
 prometheus.workspace = true
+rand.workspace = true
+rustls.workspace = true
 serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 timely.workspace = true

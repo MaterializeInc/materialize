@@ -275,6 +275,22 @@ impl S3BlobConfig {
         Ok(Some(config))
     }
 
+    /// Replaces the HTTP client that [S3Blob] sends requests through, keeping
+    /// every other setting. For benchmarking alternative HTTP clients.
+    pub fn with_http_client(
+        mut self,
+        http_client: impl aws_sdk_s3::config::HttpClient + 'static,
+    ) -> Self {
+        let config = self
+            .client
+            .config()
+            .to_builder()
+            .http_client(http_client)
+            .build();
+        self.client = S3Client::from_conf(config);
+        self
+    }
+
     /// Returns a clone of Self with a new v4 uuid prefix.
     pub fn clone_with_new_uuid_prefix(&self) -> Self {
         let mut ret = self.clone();

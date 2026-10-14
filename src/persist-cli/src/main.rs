@@ -21,6 +21,7 @@ use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 
+pub mod blob_read_bench;
 pub mod maelstrom;
 pub mod open_loop;
 pub mod service;
@@ -44,6 +45,7 @@ enum Command {
     Admin(mz_persist_client::cli::admin::AdminArgs),
     Bench(mz_persist_client::cli::bench::BenchArgs),
     Service(crate::service::Args),
+    BlobReadBench(crate::blob_read_bench::Args),
 }
 
 fn main() {
@@ -81,6 +83,7 @@ fn main() {
         Command::Admin(command) => runtime.block_on(mz_persist_client::cli::admin::run(command)),
         Command::Bench(command) => runtime.block_on(mz_persist_client::cli::bench::run(command)),
         Command::Service(args) => runtime.block_on(crate::service::run(args)),
+        Command::BlobReadBench(args) => runtime.block_on(crate::blob_read_bench::run(args)),
     };
 
     if let Err(err) = res {
