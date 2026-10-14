@@ -507,6 +507,14 @@ impl OptimizableExpr for LirScalarExpr {
             Err("LIR expressions do not support temporal predicates".into())
         }
     }
+
+    fn temporal_bound_predicates(lower: Vec<Self>, upper: Vec<Self>) -> Result<Vec<Self>, String> {
+        if lower.is_empty() && upper.is_empty() {
+            Ok(Vec::new())
+        } else {
+            Err("LIR expressions cannot express mz_now()".into())
+        }
+    }
 }
 
 // We need a custom Debug because we don't want to show `None` for name information.

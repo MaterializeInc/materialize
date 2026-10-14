@@ -57,6 +57,14 @@ pub trait OptimizableExpr:
     ///
     /// Returns `(lower_bounds, upper_bounds)` for use in `MfpPlan`.
     fn extract_temporal_bounds(temporal: Vec<Self>) -> Result<(Vec<Self>, Vec<Self>), String>;
+
+    /// The inverse of [`Self::extract_temporal_bounds`]: the predicates
+    /// `mz_now() >= lb` for each lower bound and `mz_now() < ub` for each
+    /// upper bound. Extracting the result yields the same bounds.
+    ///
+    /// Errors if `Self` cannot express `mz_now()` and either list is
+    /// non-empty.
+    fn temporal_bound_predicates(lower: Vec<Self>, upper: Vec<Self>) -> Result<Vec<Self>, String>;
 }
 
 impl OptimizableExpr for MirScalarExpr {
@@ -159,5 +167,16 @@ impl OptimizableExpr for MirScalarExpr {
         }
 
         Ok((lower_bounds, upper_bounds))
+    }
+
+    fn temporal_bound_predicates(lower: Vec<Self>, upper: Vec<Self>) -> Result<Vec<Self>, String> {
+        let mz_now = || MirScalarExpr::CallUnmaterializable(crate::UnmaterializableFunc::MzNow);
+        let lower = lower
+            .into_iter()
+            .map(|lb| mz_now().call_binary(lb, func::Gte));
+        let upper = upper
+            .into_iter()
+            .map(|ub| mz_now().call_binary(ub, func::Lt));
+        Ok(lower.chain(upper).collect())
     }
 }

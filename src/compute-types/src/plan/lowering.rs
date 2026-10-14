@@ -240,6 +240,22 @@ impl Context {
         // source's reads and hoist the shared prefix into the source itself.
         self.refine_source_mfps(&mut dataflow);
 
+        // Source MFPs stay in MIR form, where one temporal bound has several
+        // spellings. Rendering plans them with `MfpPlan::create_from`, and a
+        // pinned dataflow stores them planned, so leave them as planning and
+        // folding back yields them. That form is a fixed point, so the
+        // description equals itself after a pin round trip and reconciles
+        // structurally with a dataflow instantiated from its pinned form.
+        for import in dataflow.source_imports.values_mut() {
+            let operators = &mut import.desc.arguments.operators;
+            if let Some(mfp) = operators.take() {
+                let plan = mfp
+                    .into_plan()
+                    .expect("source operators are plannable, rendering relies on it too");
+                *operators = Some(plan.into_map_filter_project());
+            }
+        }
+
         Ok(dataflow)
     }
 
