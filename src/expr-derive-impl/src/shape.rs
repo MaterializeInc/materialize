@@ -45,6 +45,21 @@ pub(crate) enum Modifier {
 }
 
 impl Modifier {
+    /// Every method-producing modifier.
+    pub(crate) const ALL: [Modifier; 11] = [
+        Modifier::CouldError,
+        Modifier::IntroducesNulls,
+        Modifier::IsMonotone,
+        Modifier::IsInfixOp,
+        Modifier::PropagatesNulls,
+        Modifier::Inverse,
+        Modifier::PreservesUniqueness,
+        Modifier::IsEliminableCast,
+        Modifier::Negate,
+        Modifier::IsInfinityMonotone,
+        Modifier::IsAssociative,
+    ];
+
     /// The attribute key, which is also the generated method name.
     pub(crate) fn name(&self) -> &'static str {
         match self {
@@ -73,7 +88,7 @@ pub(crate) enum ReturnTy {
 }
 
 impl ReturnTy {
-    pub(crate) fn to_tokens(&self) -> TokenStream {
+    pub(crate) fn tokens(&self) -> TokenStream {
         match self {
             ReturnTy::Bool => quote! { bool },
             ReturnTy::BoolPair => quote! { (bool, bool) },
@@ -93,10 +108,8 @@ impl ReturnTy {
     }
 }
 
-// `crate::generate::override_methods` walks these tables in order to generate each
-// arity's override methods. The order here therefore determines the method order
-// in the generated code, which the insta snapshots under `sqlfunc.rs` pin exactly,
-// so it is load-bearing, not cosmetic.
+// `crate::generate::override_methods` walks these tables in order, so they also fix
+// the method order in the generated code, which the snapshots in `crate::test` pin.
 const UNARY_MODIFIERS: &[(Modifier, ReturnTy)] = &[
     (Modifier::CouldError, ReturnTy::Bool),
     (Modifier::IntroducesNulls, ReturnTy::Bool),
@@ -134,6 +147,13 @@ impl Shape {
             Shape::Binary => BINARY_MODIFIERS,
             Shape::Variadic => VARIADIC_MODIFIERS,
         }
+    }
+
+    /// Whether this arity's table lists `modifier`.
+    pub(crate) fn accepts(&self, modifier: Modifier) -> bool {
+        self.modifiers()
+            .iter()
+            .any(|(candidate, _)| *candidate == modifier)
     }
 
     pub(crate) fn label(&self) -> &'static str {
@@ -228,25 +248,18 @@ impl Shape {
 mod tests {
     use super::{Modifier, Shape};
 
-    fn has(shape: Shape, m: Modifier) -> bool {
-        shape
-            .modifiers()
-            .iter()
-            .any(|(candidate, _)| *candidate == m)
-    }
-
     #[mz_ore::test]
     fn unary_accepts_inverse_and_rejects_negate() {
-        assert!(has(Shape::Unary, Modifier::Inverse));
-        assert!(has(Shape::Unary, Modifier::PreservesUniqueness));
-        assert!(has(Shape::Unary, Modifier::IsEliminableCast));
-        assert!(!has(Shape::Unary, Modifier::Negate));
-        assert!(!has(Shape::Unary, Modifier::IsInfixOp));
+        assert!(Shape::Unary.accepts(Modifier::Inverse));
+        assert!(Shape::Unary.accepts(Modifier::PreservesUniqueness));
+        assert!(Shape::Unary.accepts(Modifier::IsEliminableCast));
+        assert!(!Shape::Unary.accepts(Modifier::Negate));
+        assert!(!Shape::Unary.accepts(Modifier::IsInfixOp));
         assert!(
-            !has(Shape::Unary, Modifier::PropagatesNulls),
+            !Shape::Unary.accepts(Modifier::PropagatesNulls),
             "Shape::nullability omits unary's non-nullable-position term on the strength of \
              this absence"
         );
-        assert!(!has(Shape::Unary, Modifier::IsAssociative));
+        assert!(!Shape::Unary.accepts(Modifier::IsAssociative));
     }
 }

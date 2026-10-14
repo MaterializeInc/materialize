@@ -8,10 +8,10 @@
 // by the Apache License, Version 2.0.
 //! The `#[sqlfunc]` attribute's key-value modifiers.
 //!
-//! [`Modifiers`] is the parsed attribute and [`reject_inapplicable`] gates it against
-//! the per-arity tables in [`crate::shape`]. Modifiers that feed `Display` or the
-//! output-type body have their own accessors, and the ones that map onto a trait method
-//! are reached through [`Modifiers::iter`].
+//! [`Modifiers`] is the parsed attribute. [`Modifiers::validate`] checks it before
+//! anything is generated. Modifiers that feed `Display` or the output-type body have
+//! their own accessors, and the ones that map onto a trait method are reached through
+//! [`Modifiers::get`].
 
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -20,9 +20,6 @@ use syn::{Expr, Lit};
 use crate::shape::{Modifier, Shape};
 
 /// Modifiers passed as key-value pairs to the `#[sqlfunc]` macro.
-///
-/// Which arities accept which modifier is declared by the tables in [`crate::shape`],
-/// not here. [`reject_inapplicable`] enforces it.
 #[derive(Debug, Default, darling::FromMeta)]
 pub(crate) struct Modifiers {
     /// Whether the function is monotone with respect to its arguments. Binary functions
@@ -86,67 +83,73 @@ impl Modifiers {
         self.output_type_expr.as_ref()
     }
 
-    /// The call site's `introduces_nulls`, which `crate::generate::generate` combines
-    /// with the output type instead of emitting it on its own.
-    pub(crate) fn introduces_nulls(&self) -> Option<&Expr> {
-        self.introduces_nulls.as_ref()
-    }
-
     /// Whether the call site asked to suppress the generated `Display` impl.
     pub(crate) fn skip_display(&self) -> bool {
         self.skip_display.unwrap_or(false)
     }
 
-    /// The method-producing modifiers that are present, in this method's own fixed
-    /// order, which does not match any of the three per-arity tables in
-    /// `crate::shape`. A caller that needs table order joins against
-    /// `Shape::modifiers()` by `Modifier` instead.
-    ///
-    /// Modifiers that do not produce a trait method are excluded, because
-    /// `crate::generate::generate` reads those through their accessors.
-    /// `introduces_nulls` is included so [`reject_inapplicable`] checks it, although
-    /// `crate::generate::generate` builds its method from the output type.
-    pub(crate) fn iter(&self) -> impl Iterator<Item = (Modifier, &Expr)> + '_ {
-        [
-            (Modifier::CouldError, self.could_error.as_ref()),
-            (Modifier::IntroducesNulls, self.introduces_nulls.as_ref()),
-            (Modifier::IsMonotone, self.is_monotone.as_ref()),
-            (Modifier::IsInfixOp, self.is_infix_op.as_ref()),
-            (Modifier::PropagatesNulls, self.propagates_nulls.as_ref()),
-            (Modifier::Inverse, self.inverse.as_ref()),
-            (
-                Modifier::PreservesUniqueness,
-                self.preserves_uniqueness.as_ref(),
-            ),
-            (Modifier::IsEliminableCast, self.is_eliminable_cast.as_ref()),
-            (Modifier::Negate, self.negate.as_ref()),
-            (
-                Modifier::IsInfinityMonotone,
-                self.is_infinity_monotone.as_ref(),
-            ),
-            (Modifier::IsAssociative, self.is_associative.as_ref()),
-        ]
-        .into_iter()
-        .filter_map(|(modifier, expr)| expr.map(|expr| (modifier, expr)))
-    }
-}
-
-/// Errors if `mods` carries a method-producing modifier `shape` does not accept.
-pub(crate) fn reject_inapplicable(shape: Shape, mods: &Modifiers) -> darling::Result<()> {
-    for (modifier, _) in mods.iter() {
-        let accepted = shape
-            .modifiers()
-            .iter()
-            .any(|(candidate, _)| *candidate == modifier);
-        if !accepted {
-            return Err(darling::Error::custom(format!(
-                "`{}` is not supported for {} functions",
-                modifier.name(),
-                shape.label(),
-            )));
+    /// The expression the call site gave a method-producing modifier, if any.
+    pub(crate) fn get(&self, modifier: Modifier) -> Option<&Expr> {
+        match modifier {
+            Modifier::CouldError => self.could_error.as_ref(),
+            Modifier::IntroducesNulls => self.introduces_nulls.as_ref(),
+            Modifier::IsMonotone => self.is_monotone.as_ref(),
+            Modifier::IsInfixOp => self.is_infix_op.as_ref(),
+            Modifier::PropagatesNulls => self.propagates_nulls.as_ref(),
+            Modifier::Inverse => self.inverse.as_ref(),
+            Modifier::PreservesUniqueness => self.preserves_uniqueness.as_ref(),
+            Modifier::IsEliminableCast => self.is_eliminable_cast.as_ref(),
+            Modifier::Negate => self.negate.as_ref(),
+            Modifier::IsInfinityMonotone => self.is_infinity_monotone.as_ref(),
+            Modifier::IsAssociative => self.is_associative.as_ref(),
         }
     }
-    Ok(())
+
+    /// Errors if a modifier does not apply to `shape`, or conflicts with another
+    /// modifier or with the function's receiver. Reports every problem, each at the
+    /// modifier it concerns.
+    pub(crate) fn validate(&self, shape: Shape, has_self: bool) -> darling::Result<()> {
+        let mut errors = darling::Error::accumulator();
+        for modifier in Modifier::ALL {
+            let Some(expr) = self.get(modifier) else {
+                continue;
+            };
+            if !shape.accepts(modifier) {
+                errors.push(
+                    darling::Error::custom(format!(
+                        "`{}` is not supported for {} functions",
+                        modifier.name(),
+                        shape.label(),
+                    ))
+                    .with_span(expr),
+                );
+            }
+        }
+        if let (Some(_), Some(expr)) = (&self.output_type, &self.output_type_expr) {
+            errors.push(
+                darling::Error::custom("output_type and output_type_expr cannot be used together")
+                    .with_span(expr),
+            );
+        }
+        if self.skip_display() {
+            if let Some(sqlname) = &self.sqlname {
+                errors.push(
+                    darling::Error::custom(
+                        "sqlname has no effect with skip_display, which suppresses the only impl that reads it",
+                    )
+                    .with_span(sqlname),
+                );
+            }
+            // A hand-written `Display` is only needed when the name depends on struct
+            // state, and without `&self` the macro defines a unit struct that has none.
+            if !has_self {
+                errors.push(darling::Error::custom(
+                    "skip_display requires a &self receiver, since a unit struct has no state for a hand-written Display to read",
+                ));
+            }
+        }
+        errors.finish()
+    }
 }
 
 /// A name for the SQL function. It can be either a literal or a macro, thus we

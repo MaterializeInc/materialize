@@ -452,3 +452,19 @@ fn skip_display_rejects_a_unit_struct() {
         "expected the receiver error, got:\n{output}"
     );
 }
+
+#[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+#[mz_ore::test]
+fn validation_reports_every_error() {
+    let (output, _input) = super::test_sqlfunc(
+        quote! { negate = super::Foo, skip_display = true },
+        quote! {
+            fn some_unary<'a>(a: i32) -> i32 { a }
+        },
+    );
+    assert!(
+        output.contains("`negate` is not supported for unary functions")
+            && output.contains("skip_display requires a &self receiver"),
+        "expected both errors, got:\n{output}"
+    );
+}

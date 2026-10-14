@@ -11,7 +11,7 @@
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 
-use crate::modifiers::{Modifiers, reject_inapplicable};
+use crate::modifiers::Modifiers;
 use crate::shape::{Modifier, Shape};
 use crate::signature;
 use crate::source::sqlfunc_source;
@@ -28,7 +28,6 @@ fn override_methods(
     mods: &Modifiers,
     mut introduces_nulls_fn: Option<TokenStream>,
 ) -> Vec<TokenStream> {
-    let present: Vec<_> = mods.iter().collect();
     shape
         .modifiers()
         .iter()
@@ -36,13 +35,10 @@ fn override_methods(
             if *modifier == Modifier::IntroducesNulls {
                 return introduces_nulls_fn.take();
             }
-            let expr = present
-                .iter()
-                .find(|(candidate, _)| candidate == modifier)
-                .map(|(_, expr)| *expr)?;
+            let expr = mods.get(*modifier)?;
             let name = Ident::new(modifier.name(), Span::call_site());
             let body = ret.body(expr);
-            let ret = ret.to_tokens();
+            let ret = ret.tokens();
             Some(quote! {
                 fn #name(&self) -> #ret {
                     #body
@@ -172,13 +168,9 @@ fn output_type_and_introduces_nulls(
 ) -> darling::Result<(TokenStream, Option<TokenStream>)> {
     let output_type = mods.output_type();
     let mut output_type_expr = mods.output_type_expr().map(|expr| quote! { #expr });
-    let mut introduces_nulls = mods.introduces_nulls().map(|expr| quote! { #expr });
-
-    if output_type.is_some() && output_type_expr.is_some() {
-        return Err(darling::Error::custom(
-            "output_type and output_type_expr cannot be used together",
-        ));
-    }
+    let mut introduces_nulls = mods
+        .get(Modifier::IntroducesNulls)
+        .map(|expr| quote! { #expr });
 
     // Derive the output type from where the generic parameters land. This reads the
     // pre-erasure types, because erasure is what removes those parameters.
@@ -230,8 +222,6 @@ pub(crate) fn generate(
     struct_ty: Option<syn::Path>,
     attr: &TokenStream,
 ) -> darling::Result<TokenStream> {
-    reject_inapplicable(shape, &mods)?;
-
     let fn_name = &func.sig.ident;
     let struct_name = struct_ty
         .as_ref()
@@ -241,6 +231,7 @@ pub(crate) fn generate(
     // A receiver makes `call` dispatch through `self` to a method on a struct defined
     // at the call site.
     let has_self = signature::has_receiver(func);
+    mods.validate(shape, has_self)?;
     // Whether the annotated function takes the arena. The trait's `call` always receives
     // one.
     let arena = signature::last_is_arena(func);
@@ -248,19 +239,6 @@ pub(crate) fn generate(
     let generic_params = signature::find_generic_type_params(func);
 
     let (param_types_raw, param_names) = sql_params(shape, func)?;
-
-    if mods.skip_display() && mods.sqlname().is_some() {
-        return Err(darling::Error::custom(
-            "sqlname has no effect with skip_display, which suppresses the only impl that reads it",
-        ));
-    }
-    // A hand-written `Display` is only needed when the name depends on struct state,
-    // and without `&self` the macro defines a unit struct that has none.
-    if mods.skip_display() && !has_self {
-        return Err(darling::Error::custom(
-            "skip_display requires a &self receiver, since a unit struct has no state for a hand-written Display to read",
-        ));
-    }
 
     // Replace generic type params with `Datum<'a>` for use in the trait impl's associated
     // types, where the function's parameters are not in scope.
