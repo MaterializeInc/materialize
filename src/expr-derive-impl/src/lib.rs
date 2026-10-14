@@ -353,6 +353,21 @@ mod test {
 
     #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
+    fn unknown_modifier_is_an_error() {
+        let (output, _input) = super::test_sqlfunc(
+            quote! { not_a_modifier = true },
+            quote! {
+                fn some_unary<'a>(a: i32) -> i32 { a }
+            },
+        );
+        assert!(
+            output.contains("not_a_modifier"),
+            "expected an error naming the unknown modifier, got:\n{output}"
+        );
+    }
+
+    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
+    #[mz_ore::test]
     fn unary_rejects_negate_by_name() {
         let (output, _input) = crate::test_sqlfunc(
             quote! { negate = to_unary!(super::Foo) },

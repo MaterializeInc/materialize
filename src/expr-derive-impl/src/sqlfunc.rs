@@ -43,7 +43,7 @@ pub fn sqlfunc(
         _ => None,
     };
 
-    let modifiers = Modifiers::from_list(&attr_args).unwrap();
+    let modifiers = Modifiers::from_list(&attr_args)?;
     let generate_tests = modifiers.generates_test();
     let func = syn::parse2::<syn::ItemFn>(item.clone())?;
 
