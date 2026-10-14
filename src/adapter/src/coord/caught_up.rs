@@ -538,12 +538,13 @@ impl Coordinator {
                     return;
                 };
                 catalog = Arc::clone(&check.catalog);
+                // Read-only mode rejects catalog transactions and handles leader DDL
+                // by restarting via `check_ddl_changes`. Both revision checks guard
+                // against stale evidence if catalog changes are ever applied in place.
                 if catalog.transient_revision() != leader_revision {
                     continue;
                 }
                 let snapshot = check.run(leader).await;
-                // Catalog changes can remove or replace the objects captured by
-                // this tick. Retry instead of promoting from stale evidence.
                 if gate.ready(snapshot).await && catalog.transient_revision_is_current() {
                     trigger.fire();
                     return;
