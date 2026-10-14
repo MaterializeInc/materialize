@@ -12,6 +12,7 @@ Native Postgres source tests, functional.
 """
 
 import glob
+import threading
 import time
 from textwrap import dedent
 
@@ -493,6 +494,81 @@ def workflow_single_replica_source_notice(
                     f"(SIZE '{size}', BILLED AS 'free', INTERNAL)".encode()
                 )
             expect_notice(mz_system_notices, "c3", '"materialize.public.src3"')
+
+
+def workflow_offset_committed_seed(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Adding a table to a source must not report any other table's
+    `offset_committed` below the value it reported before. The statistics
+    views keep the higher value, so a regression is only visible as an
+    `offset_committed erroneously regressed` error in the clusterd log.
+
+    The added table's snapshot is held open with an ACCESS EXCLUSIVE lock on
+    its primary key index, taken by REINDEX in an open transaction: planning
+    the snapshot COPY opens the index, purification does not. Inserts keep the
+    WAL moving across the DDL so the slot position, which trails the committed
+    LSN by up to one feedback interval, differs from what t1 last reported.
+    """
+    pg_version = get_targeted_pg_version(parser)
+    regression = "offset_committed erroneously regressed"
+
+    def pg_connect() -> Connection:
+        return psycopg.connect(
+            host="localhost",
+            user="postgres",
+            password="postgres",
+            port=c.default_port("postgres"),
+        )
+
+    def insert_until(stop: threading.Event) -> None:
+        with pg_connect() as conn:
+            conn.autocommit = True
+            while not stop.is_set():
+                conn.execute("INSERT INTO t1 (v) VALUES ('tick')")
+                time.sleep(0.02)
+
+    with c.override(
+        create_postgres(pg_version=pg_version),
+        Materialized(
+            volumes_extra=["secrets:/share/secrets"],
+            additional_system_parameter_defaults={
+                "log_filter": "mz_storage::source::postgres=trace,info",
+                # Ship per-worker statistics often, so the value worker 0 holds
+                # when a seed arrives is fresh rather than up to 10s old.
+                "storage_statistics_collection_interval": "100",
+                "storage_statistics_interval": "200",
+                "min_timestamp_interval": "50ms",
+            },
+            default_replication_factor=2,
+        ),
+    ):
+        c.up("materialized", "postgres")
+        c.run_testdrive_files("override/offset-committed-seed-part-1.td")
+
+        # Not committed until the end, so the index lock is held throughout.
+        lock_conn = pg_connect()
+        lock_conn.execute("REINDEX INDEX t2_pkey")
+        stop_inserts = threading.Event()
+        inserter = threading.Thread(target=insert_until, args=(stop_inserts,))
+        inserter.start()
+        try:
+            c.run_testdrive_files(
+                "--no-reset", "override/offset-committed-seed-part-2.td"
+            )
+            # Several statistics ticks for the re-rendered source to report its seeds.
+            time.sleep(5)
+        finally:
+            stop_inserts.set()
+            inserter.join()
+            lock_conn.rollback()
+            lock_conn.close()
+
+        regressions = c.invoke("logs", "materialized", capture=True).stdout.count(
+            regression
+        )
+        assert regressions == 0, f"{regressions} offset_committed regressions logged"
 
 
 def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
