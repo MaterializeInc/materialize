@@ -20,19 +20,18 @@ use mz_row_spine::{ArcOrdValBuilder, ArcOrdValSpine};
 use timely::container::PushInto;
 use timely::progress::Antichain;
 
-use crate::arrangement::manager::{PaddedTrace, TraceBundle};
+use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::error_scan::tests::PEEK_TIMESTAMP;
 use crate::compute_state::index_peek_tests::{
     answering_errors, cancelling_errors, index_peek, ok_row as row, trace_bundle, trivial_finishing,
 };
-use crate::typedefs::RowRowAgent;
 
 use super::*;
 
 type TestTrace = ArcOrdValSpine<Row, Row, Timestamp, Diff>;
 
 /// The ok-trace handle a peek reads through, as [`TraceBundle::oks_errs_mut`] hands it out.
-type OksHandle = PaddedTrace<RowRowAgent<Timestamp, Diff>>;
+type OksHandle = crate::arrangement::manager::OksTrace;
 
 /// How many times a test resumes a suspended scan before it declares the scan stuck.
 ///

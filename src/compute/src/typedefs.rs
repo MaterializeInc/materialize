@@ -22,6 +22,7 @@ use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
 
 use mz_row_spine::RowValBuilder;
 
+use crate::arrangement::manager::{ErrsTrace, OksTrace};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::spines::{ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColValBuilder};
 
@@ -108,7 +109,8 @@ pub type RowValEnter<V, T, R, TEnter> = TraceEnter<TraceFrontier<RowValAgent<V, 
 // Row specialized spines and agents.
 pub type RowRowAgent<T, R> = TraceAgent<RowRowSpine<T, R>>;
 pub type RowRowArrangement<'scope, T> = Arranged<'scope, RowRowAgent<T, Diff>>;
-pub type RowRowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowRowAgent<T, R>>, TEnter>;
+/// An index's `oks` trace, imported into a render scope whose timestamp is `TEnter`.
+pub type ImportedRowRowEnter<TEnter> = TraceEnter<TraceFrontier<OksTrace>, TEnter>;
 // Row specialized spines and agents.
 pub type RowAgent<T, R, DC = ColumnationStack<R>> = TraceAgent<RowSpine<T, R, DC>>;
 pub type RowArrangement<'scope, T> = Arranged<'scope, RowAgent<T, Diff>>;
@@ -120,7 +122,8 @@ pub type ErrBatcher<T, R> = ColKeyBatcher<DataflowErrorSer, T, R>;
 pub type ErrBuilder<T, R> = ColKeyBuilder<DataflowErrorSer, T, R>;
 
 pub type ErrAgent<T, R> = TraceAgent<ErrSpine<T, R>>;
-pub type ErrEnter<T, TEnter> = TraceEnter<TraceFrontier<ErrAgent<T, Diff>>, TEnter>;
+/// An index's `errs` trace, imported into a render scope whose timestamp is `TEnter`.
+pub type ImportedErrEnter<TEnter> = TraceEnter<TraceFrontier<ErrsTrace>, TEnter>;
 
 pub type KeyErrSpine<K, T, R> = ColValSpine<K, DataflowErrorSer, T, R>;
 pub type KeyErrBatcher<K, T, R> = ColValBatcher<K, DataflowErrorSer, T, R>;

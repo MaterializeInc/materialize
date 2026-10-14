@@ -658,6 +658,8 @@ where
             .enter(self.scope)
     }
 
+    /// Imports an index from its trace in `compute_state.traces`, whether this runtime maintains
+    /// it or the process's other compute runtime publishes it.
     pub(crate) fn import_index<'outer>(
         &mut self,
         outer: Scope<'outer, mz_repr::Timestamp>,
@@ -742,7 +744,11 @@ where
             self.update_id(Id::Global(idx.on_id), bundle);
             tokens.insert(
                 idx_id,
-                Rc::new((PressOnDrop(ok_button), PressOnDrop(err_button), token)),
+                Rc::new((
+                    ok_button.map(PressOnDrop),
+                    err_button.map(PressOnDrop),
+                    token,
+                )),
             );
         } else {
             panic!(
@@ -2314,3 +2320,6 @@ impl Pairer {
         (first, second)
     }
 }
+
+#[cfg(test)]
+mod tests;
