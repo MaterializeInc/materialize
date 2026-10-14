@@ -1287,9 +1287,9 @@ fn test_many_bind_params() {
 /// pipeline, one that reads persisted state is either refused or commits as its
 /// own transaction.
 #[mz_ore::test]
-fn test_pgtest_mz_frontend_occ_pipelined_dml() {
+fn test_pgtest_mz_occ_pipelined_dml() {
     pg_test_harness(
-        Path::new("../../test/pgtest-mz/frontend-occ-pipelined-dml.pt"),
+        Path::new("../../test/pgtest-mz/occ-pipelined-dml.pt"),
         true,
         test_util::TestHarness::default,
     );
