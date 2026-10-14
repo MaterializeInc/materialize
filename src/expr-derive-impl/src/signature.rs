@@ -338,17 +338,18 @@ pub(crate) fn derive_output_type_for_generics(
     is_unary: bool,
 ) -> darling::Result<Option<TokenStream>> {
     // Find the first generic param that appears in the output.
-    let generic_name = match generic_names
-        .iter()
-        .find(|gn| classify_generic_usage(output_ty, gn) != GenericUsage::Absent)
-    {
-        Some(gn) => gn,
-        None => return Ok(None),
+    let Some((generic_name, output_usage)) = generic_names.iter().find_map(|gn| {
+        let usage = classify_generic_usage(output_ty, gn);
+        (usage != GenericUsage::Absent).then_some((gn, usage))
+    }) else {
+        return Ok(None);
     };
-    derive_output_type_for_generic(input_types, output_ty, generic_name, is_unary)
+    derive_output_type_for_generic(input_types, output_ty, generic_name, output_usage, is_unary)
+        .map(Some)
 }
 
-/// Derives an `output_type_expr` for a single generic parameter.
+/// Derives an `output_type_expr` for a single generic parameter, which appears in the
+/// output type as `output_usage`.
 ///
 /// Uses `SqlContainerType` trait calls instead of matching on specific container
 /// type names. The generated code calls `<Container as SqlContainerType>::unwrap_element_type()`
@@ -357,13 +358,9 @@ fn derive_output_type_for_generic(
     input_types: &[syn::Type],
     output_ty: &syn::Type,
     generic_name: &Ident,
+    output_usage: GenericUsage,
     is_unary: bool,
-) -> darling::Result<Option<TokenStream>> {
-    let output_usage = classify_generic_usage(output_ty, generic_name);
-    if output_usage == GenericUsage::Absent {
-        return Ok(None);
-    }
-
+) -> darling::Result<TokenStream> {
     let nullable = is_option_wrapped(output_ty);
 
     // Find the first input parameter that has T in a container.
@@ -387,9 +384,9 @@ fn derive_output_type_for_generic(
     }
 
     let (pos, source_usage) = container_input.ok_or_else(|| {
-        darling::Error::custom(
-            "generic parameter T appears in the output type but not in any input type",
-        )
+        darling::Error::custom(format!(
+            "generic parameter {generic_name} appears in the output type but not in any input type",
+        ))
     })?;
 
     // Generate the base expression to access the input type.
@@ -486,7 +483,7 @@ fn derive_output_type_for_generic(
         }
     };
 
-    Ok(Some(expr))
+    Ok(expr)
 }
 
 /// Generates a token stream that extracts the T-level SQL type from an input
