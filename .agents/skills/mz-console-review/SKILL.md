@@ -212,7 +212,7 @@ non-obvious algorithms, and on props whose meaning is subtle.
 * Queries live under `src/api/materialize/...`, not in `platform/`.
 * `staleTime` / `gcTime` are deliberate. If data never goes stale, use `Infinity`, and invalidate on logout or mutation.
 * Refresh derived data by putting its query key in the namespace that mutations already invalidate, rather than polling (a 60s poll means 60s-stale ownership).
-* New code does not use the `useSql*` hooks or `useSqlLazy`, even though `console/CLAUDE.md` recommends `useSqlLazy` for imperative calls. Reads are react-query `useQuery`, writes are `useMutation` with a `mutationFn` that calls the API function and invalidates the affected query keys on success (see `useAlterCluster` in `platform/clusters/queries.ts`).
+* No new `useSql*` hook calls. `console/CLAUDE.md` ("React Query") has the read and write pattern.
 * Global subscribes are hoisted to the route that owns the section, or navigating remounts them and the view jitters.
 * Validate user-supplied parameters at the `build...Query` layer (see the start-time check in `queryHistoryList.ts`), not only in the UI.
 * Anything persisted to localStorage is scoped by organization and region, and cleared on region switch. An unscoped key leaks one tenant's catalog into another session.
