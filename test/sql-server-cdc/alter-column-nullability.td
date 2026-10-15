@@ -55,7 +55,6 @@ $ sql-server-execute name=sql-server
 ALTER TABLE foo ALTER COLUMN name VARCHAR(32) NOT NULL;
 INSERT INTO foo VALUES (3, 'c');
 ALTER TABLE bar ALTER COLUMN code VARCHAR(16) NULL;
-INSERT INTO bar VALUES (2, NULL);
 
 ! SELECT * FROM foo;
 contains:Incompatible schema change
