@@ -4126,6 +4126,90 @@ async fn test_cancel_linearize_reads() {
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
+async fn test_cancel_linearize_commit_discards_set_local() {
+    let server = test_util::TestHarness::default().start().await;
+    server
+        .enable_feature_flags(&["enable_refresh_every_mvs", "allow_real_time_recency"])
+        .await;
+    let client = server.connect().await.unwrap();
+    let client_cancel = client.cancel_token();
+
+    // This test will break in the year 30,000 after Jan 1st. When that happens, increase the year
+    // to fix the test.
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW const_mv WITH (REFRESH AT '30000-01-01 23:59') AS SELECT 2;",
+        )
+        .await
+        .unwrap();
+    client
+        .batch_execute("SET transaction_isolation = 'serializable';")
+        .await
+        .unwrap();
+
+    let (commit_sent_tx, commit_sent_rx) = oneshot::channel();
+    let (tx, rx) = oneshot::channel();
+
+    let read_task = task::spawn(|| "read task", async move {
+        client
+            .batch_execute(
+                "BEGIN;
+                 SET LOCAL transaction_isolation = 'strict serializable';
+                 SET LOCAL real_time_recency = true;",
+            )
+            .await
+            .unwrap();
+        // The since of const_mv is in the year 30,000, so the read's timestamp is too, and COMMIT
+        // waits for the timestamp oracle to catch up.
+        client
+            .query_one("SELECT * FROM const_mv;", &[])
+            .await
+            .unwrap();
+        commit_sent_tx.send(()).unwrap();
+        let err = client.batch_execute("COMMIT;").await.unwrap_err();
+        assert_eq!(err.unwrap_db_error().code(), &SqlState::QUERY_CANCELED);
+        tx.send(()).unwrap();
+        client
+    });
+
+    commit_sent_rx.await.unwrap();
+    let (_, res) = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry_async_with_state(
+            (client_cancel, rx),
+            |_, (client_cancel, mut rx)| async move {
+                client_cancel.cancel_query(postgres::NoTls).await.unwrap();
+                let res = rx.try_recv();
+                ((client_cancel, rx), res)
+            },
+        )
+        .await;
+    res.unwrap();
+    let client = read_task.await;
+
+    // NOTE: This must use the simple query protocol. An extended-protocol query first sends Parse
+    // and Sync, and that Sync ends an empty transaction, which would discard leaked values before
+    // the SHOW runs.
+    let shown: Vec<String> = client
+        .simple_query("SHOW transaction_isolation; SHOW real_time_recency;")
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|m| match m {
+            postgres::SimpleQueryMessage::Row(row) => Some(row.get(0).unwrap().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        ["serializable", "off"],
+        "SET LOCAL values outlived their cancelled transaction"
+    );
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_cancel_linearize_read_then_writes() {
     let server = test_util::TestHarness::default().start().await;
     server

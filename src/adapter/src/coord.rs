@@ -1293,6 +1293,25 @@ pub struct PendingTxn {
     action: EndTransactionAction,
 }
 
+impl PendingTxn {
+    /// Abandons the commit, rolling back the transaction's variable changes, and returns the
+    /// context to retire with an error.
+    ///
+    /// The session's transaction status was cleared when the commit began, so `SET LOCAL` and
+    /// staged values are the only transaction state left. Retiring the context without ending them
+    /// carries them into the session's next transaction.
+    pub(crate) fn abandon(mut self) -> ExecuteContext {
+        // NOTE: The client receives an error, which cannot carry the changed parameters, so a
+        // reverted parameter in the notify set is not announced.
+        let _changed = self
+            .ctx
+            .session_mut()
+            .vars_mut()
+            .end_transaction(EndTransactionAction::Rollback);
+        self.ctx
+    }
+}
+
 #[derive(Debug)]
 /// The response we'll send for a [`PendingTxn`].
 pub enum PendingTxnResponse {
@@ -1352,8 +1371,9 @@ impl PendingReadTxn {
         &self.timestamp_context
     }
 
-    pub(crate) fn take_context(self) -> ExecuteContext {
-        self.txn.ctx
+    /// See [`PendingTxn::abandon`].
+    pub(crate) fn abandon(self) -> ExecuteContext {
+        self.txn.abandon()
     }
 
     /// Alert the client that the read has been linearized.

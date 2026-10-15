@@ -2025,10 +2025,10 @@ impl Coordinator {
         for pending in cancelled {
             match pending {
                 PendingWriteTxn::User {
-                    responder: UserWriteResponder::Session(PendingTxn { ctx, .. }),
+                    responder: UserWriteResponder::Session(pending_txn),
                     ..
                 } => {
-                    maybe_ctx = Some(ctx);
+                    maybe_ctx = Some(pending_txn.abandon());
                 }
                 PendingWriteTxn::User {
                     responder: UserWriteResponder::Internal { result, .. },
@@ -2061,8 +2061,7 @@ impl Coordinator {
         // Cancel reads waiting on being linearized. There is at most one linearized read per
         // session.
         if let Some(pending_read_txn) = self.pending_linearize_read_txns.remove(&conn_id) {
-            let ctx = pending_read_txn.take_context();
-            maybe_ctx = Some(ctx);
+            maybe_ctx = Some(pending_read_txn.abandon());
         }
 
         if let Some(ctx) = maybe_ctx {
