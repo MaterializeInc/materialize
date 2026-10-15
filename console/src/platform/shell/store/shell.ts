@@ -20,6 +20,7 @@ import {
 } from "~/api/materialize/types";
 import storageAvailable from "~/utils/storageAvailable";
 
+import type { ExecutionTime } from "../executionTime";
 import { clearListItemHeights } from "../heightByListItem";
 import { createHistoryId, HistoryId } from "../historyId";
 import { WebSocketFsmState } from "../machines/webSocketFsm";
@@ -75,6 +76,8 @@ export type CommandResult = {
   rows?: unknown[][];
   // Timestamp of when the server sends a `CommandComplete` or 'Error' message
   endTimeMs?: number;
+  // Materialize's own measure of the statement, if the server reported one
+  executionTime?: ExecutionTime;
 };
 
 /**
