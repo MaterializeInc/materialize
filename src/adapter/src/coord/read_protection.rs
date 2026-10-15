@@ -103,9 +103,12 @@ pub(super) enum AdmissionTimelineSource<'a> {
     /// The content transaction determines the new collection's admitted bound.
     /// Its inputs must already be in the catalog, as required by single-statement CREATE.
     Creation(&'a [Op]),
+    /// Initial index selections resolve their bounds in the content transaction.
+    /// Importers' fixed requirements override the ordinary timeline minimum.
+    Bootstrap(&'a BTreeMap<GlobalId, Timestamp>),
 }
 
-/// A pending publication that protects a serving timeline window at admission.
+/// A pending publication that protects a timeline window at admission.
 /// Finish only after a definitive transaction outcome. Cancellation must leave
 /// the publication barrier in place, just like any unresolved catalog write.
 pub(super) struct AdmissionTimelinePublication {
@@ -299,10 +302,12 @@ impl Coordinator {
         source: AdmissionTimelineSource<'_>,
         collections: BTreeSet<GlobalId>,
     ) -> Result<AdmissionTimelinePublication, AdapterError> {
-        let (catalog, creator_ops) = match source {
-            AdmissionTimelineSource::Catalog(state) => (Some(state), None),
-            AdmissionTimelineSource::Creation(ops) => (None, Some(ops)),
+        let (catalog, creator_ops, bootstrap_minimums) = match source {
+            AdmissionTimelineSource::Catalog(state) => (Some(state), None, None),
+            AdmissionTimelineSource::Creation(ops) => (None, Some(ops), None),
+            AdmissionTimelineSource::Bootstrap(minimums) => (None, None, Some(minimums)),
         };
+        let resolve_birth = creator_ops.is_some() || bootstrap_minimums.is_some();
         let candidate = catalog.unwrap_or_else(|| self.catalog().state());
         let mut by_timeline = BTreeMap::new();
         for id in collections {
@@ -343,8 +348,9 @@ impl Coordinator {
                 ),
                 _ => continue,
             };
-            let floor = if creator_ops.is_some() {
-                // This is only an oracle minimum, never an admitted permission.
+            let floor = if resolve_birth {
+                // Creator transactions derive permission from admitted bounds,
+                // not this placeholder.
                 Timestamp::MIN
             } else if let Some(floor) = candidate
                 .collection_compaction_bounds()
@@ -388,7 +394,13 @@ impl Coordinator {
                 } else {
                     bundle.storage_ids.insert(id);
                 }
-                requested.insert(id, floor.max(read_ts));
+                requested.insert(
+                    id,
+                    bootstrap_minimums
+                        .and_then(|minimums| minimums.get(&id))
+                        .copied()
+                        .unwrap_or_else(|| floor.max(read_ts)),
+                );
             }
         }
         let requested = match catalog {
@@ -398,7 +410,7 @@ impl Coordinator {
         };
         let requirements = client
             .protection
-            .prepare_grant_publication(if creator_ops.is_some() {
+            .prepare_grant_publication(if resolve_birth {
                 BTreeMap::new()
             } else {
                 requested.clone()
@@ -409,7 +421,7 @@ impl Coordinator {
             requested,
             inputs,
             requirements,
-            resolve_birth: creator_ops.is_some(),
+            resolve_birth,
         })
     }
 

@@ -3036,9 +3036,8 @@ impl Coordinator {
         } else {
             BTreeMap::new()
         };
-        let planning_revision = self.catalog().transient_revision();
         let mut plan_holds = Vec::new();
-        let uncached_global_exps = self
+        let (uncached_global_exps, admitted_ids, admission_holds) = self
             .bootstrap_dataflow_plans(
                 &entries,
                 candidates,
@@ -3048,6 +3047,9 @@ impl Coordinator {
                 &mut plan_holds,
             )
             .await?;
+        let planning_revision = self.catalog().transient_revision();
+        written_ids.extend(admitted_ids);
+        index_timeline_holds.extend(admission_holds);
         if write_plans {
             prepared.extend(uncached_global_exps.clone());
             prepared.retain(|id, _| {
@@ -3063,97 +3065,18 @@ impl Coordinator {
                     )
             });
             if !prepared.is_empty() {
-                let mut selections = self.catalog().write_plans(prepared).await?;
-                self.check_bootstrap_planning_revision(planning_revision)?;
-                let client = bootstrap_client
-                    .as_ref()
-                    .expect("writable protected bootstrap");
-                // Selection and issuer liveness must be checked atomically. The
-                // aggregate includes every temporary plan-import hold.
-                let publication = if self.controller.replica_owned_compute() {
-                    let indexes = selections
-                        .iter()
-                        .filter_map(|op| match op {
-                            crate::catalog::Op::SetWrittenPlan { id, .. }
-                                if !self
-                                    .catalog()
-                                    .state()
-                                    .collection_compaction_bounds()
-                                    .contains_key(id)
-                                    && self
-                                        .catalog()
-                                        .try_get_entry_by_global_id(id)
-                                        .is_some_and(|entry| {
-                                            matches!(entry.item(), CatalogItem::Index(_))
-                                        }) =>
-                            {
-                                Some(*id)
-                            }
-                            _ => None,
-                        })
-                        .collect();
-                    // The preview opens a durable transaction too. A publisher
-                    // can invalidate its prefix without invalidating the held
-                    // plans, so rebuild the preview after the same checked
-                    // refresh used by the commit path.
-                    let (candidate, _) = loop {
-                        let write_ts = self.get_catalog_write_ts().await.lower_bound();
-                        let result = self
-                            .catalog()
-                            .transact_incremental_dry_run(
-                                self.catalog().state(),
-                                selections.clone(),
-                                None,
-                                None,
-                                write_ts,
-                            )
-                            .await;
-                        match result {
-                            Ok(candidate) => break candidate,
-                            Err(error) => {
-                                self.refresh_bootstrap_catalog_after_conflict(
-                                    error,
-                                    planning_revision,
-                                    &mut builtin_table_updates,
-                                )
-                                .await?;
-                            }
-                        }
-                    };
-                    let publication = self
-                        .prepare_admission_timeline_publication(
-                            Arc::clone(client),
-                            read_protection::AdmissionTimelineSource::Catalog(&candidate),
-                            indexes,
-                        )
-                        .await?;
-                    selections.push(publication.op());
-                    Some(publication)
-                } else {
-                    let requirements = client.protection.prepare_publication(BTreeMap::new());
-                    selections.push(crate::catalog::Op::PublishClientReadRequirements {
-                        incarnation: client.protection.incarnation(),
-                        requirements,
-                    });
-                    None
-                };
-                let result = self
-                    .bootstrap_catalog_transact(selections, &mut builtin_table_updates)
-                    .await;
-                if let Some(publication) = publication {
-                    index_timeline_holds.extend(publication.finish(result.as_ref().ok()));
-                } else {
-                    client.protection.finish_publication(result.is_ok());
-                }
-                if !self
-                    .catalog()
-                    .state()
-                    .client_incarnations()
-                    .contains_key(&client.protection.incarnation())
-                {
-                    mz_ore::halt!("adapter execution was superseded or retired");
-                }
-                result?;
+                index_timeline_holds.extend(
+                    self.commit_bootstrap_plans(
+                        prepared,
+                        bootstrap_client
+                            .as_ref()
+                            .expect("writable protected bootstrap"),
+                        planning_revision,
+                        None,
+                        &mut builtin_table_updates,
+                    )
+                    .await?,
+                );
             }
         }
         drop(plan_holds);
@@ -4427,16 +4350,127 @@ impl Coordinator {
         })
     }
 
+    /// Commits selections and their admission grants before issuing local tokens.
+    /// Fixed importer requirements apply only to initial index admission.
+    async fn commit_bootstrap_plans(
+        &mut self,
+        prepared: BTreeMap<GlobalId, GlobalExpressions>,
+        client: &Arc<crate::query_client::QueryClient>,
+        planning_revision: u64,
+        minimums: Option<&BTreeMap<GlobalId, Timestamp>>,
+        builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+    ) -> Result<ReadHolds, AdapterError> {
+        let prepared_ids = prepared.keys().copied().collect();
+        let mut selections = self.catalog().write_plans(prepared).await?;
+        self.check_bootstrap_planning_revision(planning_revision)?;
+        // Selection and issuer liveness must be checked atomically. The
+        // aggregate includes every temporary plan-import hold.
+        let publication = if let Some(minimums) = minimums {
+            let publication = self
+                .prepare_admission_timeline_publication(
+                    Arc::clone(client),
+                    read_protection::AdmissionTimelineSource::Bootstrap(minimums),
+                    prepared_ids,
+                )
+                .await?;
+            selections.push(publication.op());
+            Some(publication)
+        } else if self.controller.replica_owned_compute() {
+            let indexes = selections
+                .iter()
+                .filter_map(|op| match op {
+                    crate::catalog::Op::SetWrittenPlan { id, .. }
+                        if !self
+                            .catalog()
+                            .state()
+                            .collection_compaction_bounds()
+                            .contains_key(id)
+                            && self.catalog().try_get_entry_by_global_id(id).is_some_and(
+                                |entry| matches!(entry.item(), CatalogItem::Index(_)),
+                            ) =>
+                    {
+                        Some(*id)
+                    }
+                    _ => None,
+                })
+                .collect();
+            // The preview opens a durable transaction too. A publisher
+            // can invalidate its prefix without invalidating the held
+            // plans, so rebuild the preview after the same checked
+            // refresh used by the commit path.
+            let (candidate, _) = loop {
+                let write_ts = self.get_catalog_write_ts().await.lower_bound();
+                let result = self
+                    .catalog()
+                    .transact_incremental_dry_run(
+                        self.catalog().state(),
+                        selections.clone(),
+                        None,
+                        None,
+                        write_ts,
+                    )
+                    .await;
+                match result {
+                    Ok(candidate) => break candidate,
+                    Err(error) => {
+                        self.refresh_bootstrap_catalog_after_conflict(
+                            error,
+                            planning_revision,
+                            builtin_table_updates,
+                        )
+                        .await?;
+                    }
+                }
+            };
+            let publication = self
+                .prepare_admission_timeline_publication(
+                    Arc::clone(client),
+                    read_protection::AdmissionTimelineSource::Catalog(&candidate),
+                    indexes,
+                )
+                .await?;
+            selections.push(publication.op());
+            Some(publication)
+        } else {
+            let requirements = client.protection.prepare_publication(BTreeMap::new());
+            selections.push(crate::catalog::Op::PublishClientReadRequirements {
+                incarnation: client.protection.incarnation(),
+                requirements,
+            });
+            None
+        };
+        let mut holds = ReadHolds::new();
+        let result = self
+            .bootstrap_catalog_transact(selections, builtin_table_updates)
+            .await;
+        if let Some(publication) = publication {
+            holds.extend(publication.finish(result.as_ref().ok()));
+        } else {
+            client.protection.finish_publication(result.is_ok());
+        }
+        if !self
+            .catalog()
+            .state()
+            .client_incarnations()
+            .contains_key(&client.protection.incarnation())
+        {
+            mz_ore::halt!("adapter execution was superseded or retired");
+        }
+        result?;
+        Ok(holds)
+    }
+
     /// Invokes the optimizer on all indexes and materialized views in the catalog and inserts the
     /// resulting dataflow plans into the catalog state.
     ///
     /// `ordered_catalog_entries` must be sorted in dependency order, with dependencies ordered
     /// before their dependants.
     ///
-    /// This method does not perform timestamp selection for the dataflows, nor does it create them
-    /// in the compute controller. Both of these steps happen later during bootstrapping.
+    /// New indexes needed by fixed-frontier plans are admitted before acquiring
+    /// their imports. This does not install dataflows in the compute controller.
     ///
-    /// Returns a map of expressions that were not cached.
+    /// Returns uncached expressions, indexes admitted here, and their protection.
+    /// Retain that protection through dependent selection commits and timeline adoption.
     #[instrument]
     async fn bootstrap_dataflow_plans(
         &mut self,
@@ -4446,8 +4480,15 @@ impl Coordinator {
         bootstrap_client: Option<&Arc<crate::query_client::QueryClient>>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         plan_holds: &mut Vec<ReadHolds>,
-    ) -> Result<BTreeMap<GlobalId, GlobalExpressions>, AdapterError> {
-        let revision = self.catalog().transient_revision();
+    ) -> Result<
+        (
+            BTreeMap<GlobalId, GlobalExpressions>,
+            BTreeSet<GlobalId>,
+            ReadHolds,
+        ),
+        AdapterError,
+    > {
+        let mut revision = self.catalog().transient_revision();
         let mut instance_snapshots: BTreeMap<_, _> = self
             .catalog()
             .clusters()
@@ -4465,6 +4506,9 @@ impl Coordinator {
             })
             .collect();
         let mut uncached_expressions = BTreeMap::new();
+        let mut pending_indexes = BTreeMap::new();
+        let mut admitted_ids = BTreeSet::new();
+        let mut admission_holds = ReadHolds::new();
         for entry in ordered_catalog_entries {
             self.publish_bootstrap_read_protection(bootstrap_client, builtin_table_updates)
                 .await?;
@@ -4492,8 +4536,8 @@ impl Coordinator {
                         .cluster_scoped_optimizer_overrides(cluster_id),
                 );
             let prepare = bootstrap_client.is_some() && !written_ids.contains(&global_id);
-            // Absence is initial admission, not permission to read at MIN. The
-            // selection transaction computes its bound across same-batch imports.
+            // Absence is initial admission, not permission to read at MIN.
+            // A selected pending import must be admitted before acquisition.
             let mut required = if prepare {
                 self.bootstrap_plan_requirement(entry)?
             } else {
@@ -4503,8 +4547,9 @@ impl Coordinator {
             let mut cached = cached_global_exprs.remove(&global_id);
             let expressions = loop {
                 let snapshot = if let Some(required) = required {
-                    // Keep dependency order, but only offer indexes with justified
-                    // permission. Replica installation is deliberately irrelevant.
+                    // Pending selections are candidates, not read permission.
+                    // Admit chosen pending imports before acquiring any holds.
+                    // Replica installation is deliberately irrelevant.
                     let candidates = self
                         .catalog()
                         .get_cluster(cluster_id)
@@ -4534,11 +4579,13 @@ impl Coordinator {
                                 .get(id)
                                 .map_or_else(
                                     || {
-                                        self.catalog()
-                                            .get_cluster(cluster_id)
-                                            .log_indexes
-                                            .values()
-                                            .any(|log| log == id)
+                                        pending_indexes.contains_key(id)
+                                            || self
+                                                .catalog()
+                                                .get_cluster(cluster_id)
+                                                .log_indexes
+                                                .values()
+                                                .any(|log| log == id)
                                     },
                                     |bound| bound.less_equal(&required),
                                 )
@@ -4616,6 +4663,35 @@ impl Coordinator {
                                 .collect(),
                         )]),
                     };
+                    let minimums: BTreeMap<_, _> = bundle
+                        .compute_ids
+                        .values()
+                        .flatten()
+                        .copied()
+                        .filter(|id| pending_indexes.contains_key(id))
+                        .map(|id| (id, requested))
+                        .collect();
+                    if !minimums.is_empty() {
+                        // Admit the complete pending batch: an index may import
+                        // another pending index. Resolve grants in the real
+                        // transaction so concurrent compaction cannot stale a
+                        // previewed floor. These holds bridge to plan protection.
+                        let ids: Vec<_> = pending_indexes.keys().copied().collect();
+                        admission_holds.extend(
+                            self.commit_bootstrap_plans(
+                                std::mem::take(&mut pending_indexes),
+                                client,
+                                revision,
+                                Some(&minimums),
+                                builtin_table_updates,
+                            )
+                            .await?,
+                        );
+                        admitted_ids.extend(ids);
+                        // Only our committed selections may change this revision.
+                        // Conflicting structural updates fail the commit path.
+                        revision = self.catalog().transient_revision();
+                    }
                     let acquired = self
                         .acquire_bootstrap_read_protection(
                             Arc::clone(client),
@@ -4708,6 +4784,18 @@ impl Coordinator {
                 }
                 break expressions;
             };
+            if prepare
+                && self.controller.replica_owned_compute()
+                && matches!(entry.item(), CatalogItem::Index(_))
+                && !self
+                    .catalog()
+                    .state()
+                    .collection_compaction_bounds()
+                    .contains_key(&global_id)
+            {
+                // Cached selections need the same admission as newly built ones.
+                pending_indexes.insert(global_id, expressions.clone());
+            }
             let catalog = self.catalog_mut();
             catalog.set_optimized_plan(global_id, expressions.global_mir);
             catalog.set_physical_plan(global_id, expressions.physical_plan);
@@ -4716,7 +4804,8 @@ impl Coordinator {
                 compute_instance.insert_collection(global_id);
             }
         }
-        Ok(uncached_expressions)
+        self.check_bootstrap_planning_revision(revision)?;
+        Ok((uncached_expressions, admitted_ids, admission_holds))
     }
 
     fn bootstrap_plan_requirement(
