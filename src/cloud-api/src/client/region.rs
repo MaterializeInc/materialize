@@ -80,7 +80,11 @@ impl Client {
     pub async fn get_region(&self, provider: CloudProvider) -> Result<Region, Error> {
         // Send request to the subdomain
         let req = self
-            .build_region_request(Method::GET, ["api", "region"], None, &provider, Some(1))
+            .build_global_request(
+                Method::GET,
+                ["api", "region", &provider.cloud_provider, &provider.name],
+                None,
+            )
             .await?;
 
         match self.send_request::<Region>(req).await {
@@ -147,12 +151,15 @@ impl Client {
         };
 
         let req = self
-            .build_region_request(
+            .build_global_request(
                 Method::PATCH,
-                ["api", "region"],
+                [
+                    "api",
+                    "region",
+                    &cloud_provider.cloud_provider,
+                    &cloud_provider.name,
+                ],
                 None,
-                &cloud_provider,
-                Some(1),
             )
             .await?;
         let req = req.json(&body);
@@ -194,12 +201,15 @@ impl Client {
         };
 
         let req = self
-            .build_region_request(
+            .build_global_request(
                 Method::DELETE,
-                ["api", "region"],
+                [
+                    "api",
+                    "region",
+                    &cloud_provider.cloud_provider,
+                    &cloud_provider.name,
+                ],
                 query,
-                &cloud_provider,
-                Some(1),
             )
             .await?;
         self.send_request::<Empty>(req).await?;
@@ -207,12 +217,15 @@ impl Client {
         // Wait for the environment to be fully deleted
         for _ in 0..600 {
             let req = self
-                .build_region_request(
+                .build_global_request(
                     Method::GET,
-                    ["api", "region"],
+                    [
+                        "api",
+                        "region",
+                        &cloud_provider.cloud_provider,
+                        &cloud_provider.name,
+                    ],
                     None,
-                    &cloud_provider,
-                    Some(1),
                 )
                 .await?;
             let res = self.send_request::<Region>(req).await;
