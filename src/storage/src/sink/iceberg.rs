@@ -2075,7 +2075,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use iceberg::spec::{ListType, PrimitiveType, Type};
+    use iceberg::spec::{ListType, MapType, PrimitiveType, Type};
     use iceberg::writer::file_writer::location_generator::LocationGenerator;
     use mz_repr::SqlScalarType;
     use mz_storage_types::sinks::ICEBERG_UINT64_DECIMAL_PRECISION;
@@ -2403,7 +2403,17 @@ mod tests {
                         element_field: Arc::new(element),
                     })
                 }
-                Type::Map(_) => unimplemented!("no map columns in these fixtures"),
+                Type::Map(m) => {
+                    let mut key = (*m.key_field).clone();
+                    key.id = *next;
+                    *next += 1;
+                    let mut value = (*m.value_field).clone();
+                    value.id = *next;
+                    *next += 1;
+                    key.field_type = Box::new(renumber_type(&key.field_type, next));
+                    value.field_type = Box::new(renumber_type(&value.field_type, next));
+                    Type::Map(MapType::new(Arc::new(key), Arc::new(value)))
+                }
                 primitive => primitive.clone(),
             }
         }
@@ -2414,12 +2424,64 @@ mod tests {
             .expect("valid schema")
     }
 
+    /// Rebuilds `schema` with the element type of the array column `name`
+    /// replaced. Arrays are `struct { items: list<element>, dimensions }`.
+    fn with_array_element_type(schema: &Schema, name: &str, ty: Type) -> Schema {
+        let fields = schema.as_struct().fields().iter().map(|f| {
+            if f.name != name {
+                return Arc::clone(f);
+            }
+            let Type::Struct(array) = &*f.field_type else {
+                panic!("{name} should be an array struct");
+            };
+            let inner = array.fields().iter().map(|inner| {
+                let mut inner = (**inner).clone();
+                if inner.name == "items" {
+                    let Type::List(list) = &*inner.field_type else {
+                        panic!("items should be a list");
+                    };
+                    let mut element = (*list.element_field).clone();
+                    element.field_type = Box::new(ty.clone());
+                    inner.field_type = Box::new(Type::List(ListType {
+                        element_field: Arc::new(element),
+                    }));
+                }
+                Arc::new(inner)
+            });
+            let mut field = (**f).clone();
+            field.field_type = Box::new(Type::Struct(StructType::new(inner.collect())));
+            Arc::new(field)
+        });
+        Schema::builder()
+            .with_fields(fields)
+            .build()
+            .expect("valid schema")
+    }
+
+    /// Rebuilds `schema` with the top-level field's nullability flipped.
+    fn with_field_required(schema: &Schema, name: &str, required: bool) -> Schema {
+        let fields = schema.as_struct().fields().iter().map(|f| {
+            let mut field = (**f).clone();
+            if field.name == name {
+                field.required = required;
+            }
+            Arc::new(field)
+        });
+        Schema::builder()
+            .with_fields(fields)
+            .build()
+            .expect("valid schema")
+    }
+
     /// A REST catalog assigns its own field ids when it creates the table. On
     /// the sink's next start, `load_or_create_table` finds a table whose names,
     /// types and nullability match the schema it would create, but whose ids
-    /// do not, and it must accept it: comparing ids strands every sink over a
-    /// relation with an array, map or record column after a restart (SS-522).
-    /// Flat relations only pass because the two numberings coincide.
+    /// do not, and it must accept it (SS-522). Comparing ids strands every sink
+    /// over a relation with an array column after a restart: arrays nest two
+    /// levels, so the numberings always diverge. A record or map column diverges
+    /// whenever another column follows it, which in MODE APPEND is always the
+    /// case because `_mz_diff` and `_mz_timestamp` are appended. Flat relations
+    /// pass only because the two numberings coincide.
     #[mz_ore::test]
     fn test_is_compatible_accepts_catalog_assigned_field_ids() {
         let desc = mz_repr::RelationDesc::builder()
@@ -2445,14 +2507,16 @@ mod tests {
         assert_ne!(id_of(&catalog, "a.items"), id_of(&expected, "a.items"));
         assert_ne!(id_of(&catalog, "w"), id_of(&expected, "w"));
 
-        assert!(
-            is_compatible(&catalog, &expected),
-            "a table that differs from the expected schema only in field ids must be accepted"
-        );
-
-        // Renumbering must not hide a real difference.
+        // Renumbering must not hide a real difference: a top-level type ...
         let wrong_type = with_field_type(&catalog, "w", Type::Primitive(PrimitiveType::String));
         assert!(!is_compatible(&wrong_type, &expected));
+        // ... a type nested inside the array ...
+        let wrong_element =
+            with_array_element_type(&catalog, "a", Type::Primitive(PrimitiveType::String));
+        assert!(!is_compatible(&wrong_element, &expected));
+        // ... or nullability.
+        let wrong_required = with_field_required(&catalog, "w", true);
+        assert!(!is_compatible(&wrong_required, &expected));
 
         // A flat relation gets identical ids under both schemes, which is why
         // such sinks never hit this.
@@ -2466,6 +2530,13 @@ mod tests {
             &with_catalog_field_ids(&flat_expected),
             &flat_expected
         ));
+
+        // The table the catalog created differs from the expected schema only
+        // in ids, and the sink must accept it.
+        assert!(
+            is_compatible(&catalog, &expected),
+            "a table that differs from the expected schema only in field ids must be accepted"
+        );
     }
 
     #[mz_ore::test]

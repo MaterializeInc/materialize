@@ -12,16 +12,15 @@
 #
 # The REST catalog assigns its own field ids when it creates the table,
 # numbering a struct's direct children before any nested field, while the sink
-# numbers depth-first. The table it creates for `restart_nested` therefore
-# carries different ids for `a.items`, `a.dimensions` and `a.items.element`
-# than the schema the sink derives. Writing works, because the writer uses the
-# table's own schema; on resume the sink compares the two schemas and must not
-# reject a table that differs only in ids. The flat relation is the control:
-# its ids coincide under both schemes.
+# numbers depth-first. The tables it creates for `restart_nested` therefore
+# carry different ids than the schema the sink derives: for `a.items`,
+# `a.items.element` and `w`, and in the append table also `a.dimensions`,
+# because `_mz_diff` and `_mz_timestamp` follow the array. Writing works,
+# because the writer uses the table's own schema; on resume the sink compares
+# the two schemas and must not reject a table that differs only in ids. The
+# flat relation is the control: its ids coincide under both schemes.
 #
 # This file runs before the restart; restart-nested-column-verify.td after.
-
-> CREATE SECRET IF NOT EXISTS restart_access_key_secret AS '${arg.s3-access-key}'
 
 > CREATE CONNECTION restart_polaris TO ICEBERG CATALOG (
     CATALOG TYPE = 'REST',
