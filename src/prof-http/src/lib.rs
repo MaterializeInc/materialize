@@ -36,6 +36,9 @@ cfg_if! {
     }
 }
 
+#[cfg(feature = "alloc-track")]
+mod tracked;
+
 static EXECUTABLE: LazyLock<String> = LazyLock::new(|| {
     {
         env::current_exe()
@@ -56,7 +59,7 @@ mz_http_util::make_handle_static!(
 
 /// Creates a router that serves the profiling endpoints.
 pub fn router(build_info: &'static BuildInfo) -> Router {
-    Router::new()
+    let router = Router::new()
         .route(
             "/",
             routing::get(move |query, headers| handle_get(query, headers, build_info)),
@@ -70,8 +73,39 @@ pub fn router(build_info: &'static BuildInfo) -> Router {
             "/mode",
             routing::get(handle_get_mode).post(handle_post_mode),
         )
-        .route("/heap", routing::get(handle_get_heap))
-        .route("/static/{*path}", routing::get(handle_static))
+        .route(
+            "/heap",
+            routing::get(move || handle_get_heap_any(build_info)),
+        )
+        .route("/static/{*path}", routing::get(handle_static));
+    #[cfg(feature = "alloc-track")]
+    let router = router
+        .route(
+            "/tracked",
+            routing::get(move |query| tracked::handle_get(query, build_info)),
+        )
+        .route(
+            "/tracked/config",
+            routing::get(tracked::handle_get_config).post(tracked::handle_post_config),
+        )
+        .route(
+            "/tracked/allocator",
+            routing::get(tracked::handle_get_allocator),
+        );
+    router
+}
+
+/// Serves the heap profile of the global allocator: the allocation tracker's
+/// live profile when the tracker wraps the global allocator, else jemalloc's.
+async fn handle_get_heap_any(build_info: &'static BuildInfo) -> axum::response::Response {
+    #[cfg(feature = "alloc-track")]
+    if mz_alloc_track::allocator().is_some() {
+        return tracked::handle_get_live_pprof(build_info)
+            .await
+            .into_response();
+    }
+    let _ = build_info;
+    handle_get_heap().await.into_response()
 }
 
 static CPU_PROFILING_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -290,8 +324,11 @@ async fn capture_cpu_profile(
             };
         }
     }
+    #[cfg(feature = "alloc-track")]
+    let tracker_suspended = mz_alloc_track::suspend_unwinding();
     // SAFETY: We ensure above that memory profiling is off.
     // Since we hold the mutex, nobody else can be turning it back on in the intervening time.
+    // The allocation tracker does not unwind until `tracker_suspended` drops.
     let stacks = unsafe {
         mz_prof::time::prof_time(Duration::from_secs(time_secs), sample_freq, merge_threads)
     }
@@ -301,6 +338,8 @@ async fn capture_cpu_profile(
     // Referencing `ctl_lock` here also fails with a compile error if we
     // weren't holding the jemalloc lock across the capture.
     drop(ctl_lock);
+    #[cfg(feature = "alloc-track")]
+    drop(tracker_suspended);
     Ok(stacks)
 }
 
