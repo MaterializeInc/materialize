@@ -10,25 +10,34 @@
 mode cockroach
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_jq = false
+ALTER SYSTEM SET unsafe_enable_unsafe_functions = false
 ----
 COMPLETE 0
 
-statement error the jq function is not available
-SELECT jq('1', '.')
+statement error executing potentially dangerous functions is not supported
+SELECT mz_unsafe.jq('1', '.')
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_jq = true
+ALTER SYSTEM SET unsafe_enable_unsafe_functions = true
+----
+COMPLETE 0
+
+# Views and materialized views that use `mz_unsafe` functions also need this flag.
+statement error cannot create view with unstable dependencies
+CREATE VIEW v AS SELECT mz_unsafe.jq('1', '.')
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
 ----
 COMPLETE 0
 
 query T
-SELECT jq('{"a": [1, 2.5, 3]}', '.a | map(. * 2)')
+SELECT mz_unsafe.jq('{"a": [1, 2.5, 3]}', '.a | map(. * 2)')
 ----
 [2,5,6]
 
 query T
-SELECT jq(
+SELECT mz_unsafe.jq(
   '{"items": [{"name": "pear", "price": 3}, {"name": "fig", "price": 1}, {"name": "kiwi", "price": 2}]}',
   '.items | sort_by(.price) | map(.name)'
 )
@@ -36,64 +45,82 @@ SELECT jq(
 ["fig","kiwi","pear"]
 
 query T
-SELECT jq('{"b": 2, "a": 1}', 'to_entries | map(.key) | join(",")')
+SELECT mz_unsafe.jq('{"b": 2, "a": 1}', 'to_entries | map(.key) | join(",")')
 ----
 "a,b"
 
 # Decimal precision survives when the program does not do arithmetic on it.
 query T
-SELECT jq('{"x": 123456789012345678901234567890.123}', '.x')
+SELECT mz_unsafe.jq('{"x": 123456789012345678901234567890.123}', '.x')
 ----
 123456789012345678901234567890.123
 
 # No output is NULL.
 query T
-SELECT jq('[1, 2, 3]', '.[] | select(. > 5)') IS NULL
+SELECT mz_unsafe.jq('[1, 2, 3]', '.[] | select(. > 5)') IS NULL
 ----
 true
 
-query error jq: program produced more than one value; collect them with \[\.\.\.\]
-SELECT jq('[1, 2, 3]', '.[]')
+query error jq: program produced more than one value
+SELECT mz_unsafe.jq('[1, 2, 3]', '.[]')
 
 query T
-SELECT jq('[1, 2, 3]', '[.[] | select(. > 1)]')
+SELECT mz_unsafe.jq('[1, 2, 3]', '[.[] | select(. > 1)]')
 ----
 [2,3]
 
 query T
-SELECT jq(NULL, '.') IS NULL
+SELECT mz_unsafe.jq(NULL, '.') IS NULL
 ----
 true
 
 # The program must be known when the query is planned.
 query error jq requires a string literal as its second argument
-SELECT jq('1', NULL)
+SELECT mz_unsafe.jq('1', NULL)
 
 query T
-SELECT jq('{"a": 1}', '.' || 'a')
+SELECT mz_unsafe.jq('{"a": 1}', '.' || 'a')
 ----
 1
 
 query error jq: expected term at end of program
-SELECT jq('1', '. +')
+SELECT mz_unsafe.jq('1', '. +')
 
 query error jq: undefined filter now/0
-SELECT jq('1', 'now')
+SELECT mz_unsafe.jq('1', 'now')
 
 query error jq: undefined filter env/0
-SELECT jq('1', 'env')
+SELECT mz_unsafe.jq('1', 'env')
 
 query error jq: cannot import x: module loading not supported
-SELECT jq('1', 'import "x" as x; .')
+SELECT mz_unsafe.jq('1', 'import "x" as x; .')
 
 query error jq: "boom"
-SELECT jq('1', 'error("boom")')
+SELECT mz_unsafe.jq('1', 'error("boom")')
 
 query error jq: program halted with exit code 3
-SELECT jq('1', 'halt_error(3)')
+SELECT mz_unsafe.jq('1', 'halt_error(3)')
 
 query error jq: output NaN is not JSON
-SELECT jq('1', 'nan')
+SELECT mz_unsafe.jq('1', 'nan')
+
+# Resolving a zone name would depend on the host's time zone database.
+query error jq: undefined filter strptime/1
+SELECT mz_unsafe.jq('"2024-07-01 12:00 Europe/London"', 'strptime("%Y-%m-%d %H:%M %Q")')
+
+# Calls with literal arguments are not folded by the optimizer, so programs
+# run on a cluster and not in environmentd.
+query T multiline
+EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT mz_unsafe.jq('1', '.')
+----
+Explained Query:
+  Map (jq["."](1))
+    Constant
+      - ()
+
+Target cluster: quickstart
+
+EOF
 
 statement ok
 CREATE TABLE docs (doc jsonb, prog text)
@@ -105,12 +132,12 @@ INSERT INTO docs VALUES
   ('{"name": "cy"}', '.name')
 
 query error jq requires a string literal as its second argument
-SELECT jq(doc, prog) FROM docs
+SELECT mz_unsafe.jq(doc, prog) FROM docs
 
 # Evaluated per row, through a dataflow.
 statement ok
 CREATE MATERIALIZED VIEW docs_jq AS
-  SELECT jq(doc, '{name: .name | ascii_upcase, langs: (.langs // [] | length)}') AS out FROM docs
+  SELECT mz_unsafe.jq(doc, '{name: .name | ascii_upcase, langs: (.langs // [] | length)}') AS out FROM docs
 
 query T rowsort
 SELECT out FROM docs_jq
@@ -121,7 +148,7 @@ SELECT out FROM docs_jq
 
 # Jaro-Winkler similarity, as an example of an algorithm written in jq.
 query T
-SELECT jq('["MARTHA", "MARHTA"]', $$
+SELECT mz_unsafe.jq('["MARTHA", "MARHTA"]', $$
 def jaro($s; $t):
   ($s | explode) as $a | ($t | explode) as $b
   | ($a | length) as $la | ($b | length) as $lb

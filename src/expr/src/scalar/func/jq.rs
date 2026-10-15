@@ -21,17 +21,17 @@
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::str::FromStr;
 use std::sync::Arc;
 
 use jaq_core::compile::Undefined;
 use jaq_core::load::{self, Arena, File, Loader};
 use jaq_core::native::{Fun, run, v};
 use jaq_core::{Compiler, Ctx, Exn, Vars, data};
-use jaq_json::Val;
+use jaq_json::{Num, Val};
 use mz_expr_derive::sqlfunc;
 use mz_ore::str::StrExt;
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
+use mz_repr::{Datum, Row, RowPacker, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
@@ -49,6 +49,8 @@ const WITHHELD: &[&str] = &[
     "strflocaltime",
     "input",
     "inputs",
+    // Resolves time zone names against the host's time zone database.
+    "strptime",
     "debug_empty",
     "stderr_empty",
 ];
@@ -73,6 +75,7 @@ impl JqProgram {
         })
     }
 
+    /// The program's source text.
     pub fn source(&self) -> &str {
         &self.source
     }
@@ -83,9 +86,7 @@ impl JqProgram {
     /// produces more than one value is an error, as jq's `[...]` collects a
     /// stream into a single array.
     pub fn eval(&self, input: JsonbRef<'_>) -> Result<Option<Jsonb>, EvalError> {
-        // Values cross between Materialize and jaq as JSON text.
-        let input = jaq_json::read::parse_single(input.to_string().as_bytes())
-            .map_err(|e| error(format!("cannot read input: {e:?}")))?;
+        let input = to_val(input.into_datum());
         let ctx = Ctx::<Data>::new(&self.filter.lut, Vars::new([]));
         let mut outputs = self.filter.id.run((ctx, input));
         let output = match outputs.next() {
@@ -94,14 +95,11 @@ impl JqProgram {
         };
         if let Some(next) = outputs.next() {
             next.map_err(exception)?;
-            return Err(error(
-                "program produced more than one value; collect them with [...]",
-            ));
+            return Err(error("program produced more than one value"));
         }
-        let output = output.to_string();
-        let output = Jsonb::from_str(&output)
-            .map_err(|e| error(format!("output {output} is not JSON: {e}")))?;
-        Ok(Some(output))
+        let mut row = Row::default();
+        pack_val(&mut row.packer(), &output, 0).map_err(error)?;
+        Ok(Some(Jsonb::from_row(row)))
     }
 }
 
@@ -232,10 +230,10 @@ fn compile(program: &str) -> Result<Filter, String> {
 
 /// Describes a syntax error at `at`, a suffix of `program`.
 fn syntax_error(program: &str, expected: &str, at: &str) -> String {
-    let offset = load::span(program, at).start;
     if at.is_empty() {
         format!("expected {expected} at end of program")
     } else {
+        let offset = load::span(program, at).start;
         format!("expected {expected} at offset {offset}")
     }
 }
@@ -254,60 +252,106 @@ fn error(msg: impl std::fmt::Display) -> EvalError {
     EvalError::InvalidParameterValue(format!("jq: {msg}").into())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Nesting depth at which output fails to convert. Parsing `jsonb` text
+/// rejects the same depth, through serde_json's recursion limit.
+const MAX_OUTPUT_DEPTH: usize = 128;
 
-    fn run(input: &str, program: &str) -> Result<Option<String>, String> {
-        let input: Jsonb = input.parse().unwrap();
-        let program = JqProgram::new(program).map_err(|e| format!("jq: {e}"))?;
-        program
-            .eval(input.as_ref())
-            .map(|out| out.map(|out| out.to_string()))
-            .map_err(|e| e.to_string())
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // too slow
-    fn jq_eval() {
-        assert_eq!(
-            run(r#"{"a": [1, 2.5, 3]}"#, ".a | map(. * 2)"),
-            Ok(Some("[2,5,6]".into()))
-        );
-        assert_eq!(
-            run(
-                r#"{"b": 2, "a": 1}"#,
-                r#"to_entries | map(.key) | join(",")"#
-            ),
-            Ok(Some(r#""a,b""#.into()))
-        );
-        assert_eq!(
-            run(r#"{"x": 123456789012345678901234567890.123}"#, ".x"),
-            Ok(Some("123456789012345678901234567890.123".into()))
-        );
-        assert_eq!(run("[1, 2, 3]", ".[] | select(. > 5)"), Ok(None));
-        assert_eq!(
-            run("[1, 2, 3]", "[.[] | select(. > 1)]"),
-            Ok(Some("[2,3]".into()))
-        );
-        // Logging filters are kept, as no-ops.
-        assert_eq!(run("[1, 2]", "debug"), Ok(Some("[1,2]".into())));
-        for (program, error) in [
-            (
-                ".[]",
-                "jq: program produced more than one value; collect them with [...]",
-            ),
-            (". +", "jq: expected term at end of program"),
-            ("now", "jq: undefined filter now/0"),
-            ("env", "jq: undefined filter env/0"),
-            (
-                r#"import "x" as x; ."#,
-                "jq: cannot import x: module loading not supported",
-            ),
-            (r#"error("boom")"#, r#"jq: "boom""#),
-            ("halt_error(3)", "jq: program halted with exit code 3"),
-        ] {
-            assert_eq!(run("[1, 2]", program), Err(error.into()), "{program}");
+/// Converts a `jsonb` datum into a jaq value.
+///
+/// Numbers convert as jaq's own JSON reader converts their text: integers to
+/// `Num::Int` or `Num::BigInt`, and everything else to `Num::Dec`, which keeps
+/// the decimal text until arithmetic turns it into a float.
+fn to_val(datum: Datum<'_>) -> Val {
+    mz_ore::stack::maybe_grow(|| match datum {
+        Datum::JsonNull => Val::Null,
+        Datum::True => Val::Bool(true),
+        Datum::False => Val::Bool(false),
+        Datum::Numeric(n) => {
+            // Standard notation has no exponent, so an integer has no `.`.
+            let text = n.into_inner().to_standard_notation_string();
+            let num = if text.contains('.') {
+                None
+            } else {
+                Num::from_str_radix(&text, 10)
+            };
+            Val::Num(num.unwrap_or_else(|| Num::Dec(jaq_json::Rc::new(text))))
         }
-    }
+        Datum::String(s) => Val::utf8_str(s.as_bytes().to_vec()),
+        Datum::List(list) => Val::Arr(jaq_json::Rc::new(list.iter().map(to_val).collect())),
+        Datum::Map(dict) => Val::obj(
+            dict.iter()
+                .map(|(k, v)| (Val::utf8_str(k.as_bytes().to_vec()), to_val(v)))
+                .collect(),
+        ),
+        d => unreachable!("not a jsonb datum: {d:?}"),
+    })
 }
+
+/// Packs a jaq value as a `jsonb` datum, or describes why it is not JSON.
+///
+/// `depth` counts the arrays and objects enclosing `val`. Invalid UTF-8 in
+/// strings is replaced, and among object keys that are equal after
+/// replacement the last one wins, matching how `jsonb` text parses.
+fn pack_val(packer: &mut RowPacker, val: &Val, depth: usize) -> Result<(), String> {
+    let nested = || {
+        let depth = depth + 1;
+        if depth >= MAX_OUTPUT_DEPTH {
+            Err(format!(
+                "output nests {MAX_OUTPUT_DEPTH} or more levels deep"
+            ))
+        } else {
+            Ok(depth)
+        }
+    };
+    mz_ore::stack::maybe_grow(|| {
+        match val {
+            Val::Null => packer.push(Datum::JsonNull),
+            Val::Bool(true) => packer.push(Datum::True),
+            Val::Bool(false) => packer.push(Datum::False),
+            Val::Num(Num::Float(f)) if !f.is_finite() => {
+                return Err(format!("output {} is not JSON", Num::Float(*f)));
+            }
+            Val::Num(n) => {
+                let n = strconv::parse_numeric(&n.to_string()).map_err(|e| e.to_string())?;
+                packer.push(Datum::Numeric(n));
+            }
+            Val::TStr(s) => packer.push(Datum::String(&String::from_utf8_lossy(s))),
+            Val::BStr(_) => return Err("output contains a byte string, which is not JSON".into()),
+            Val::Arr(vals) => {
+                let depth = nested()?;
+                packer.push_list_with(|packer| {
+                    vals.iter().try_for_each(|v| pack_val(packer, v, depth))
+                })?;
+            }
+            Val::Obj(entries) => {
+                let depth = nested()?;
+                let mut entries = entries
+                    .iter()
+                    .map(|(k, v)| match k {
+                        Val::TStr(k) => Ok((String::from_utf8_lossy(k), v)),
+                        _ => Err("output contains an object key that is not a string"),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                // Stable, so the last of several equal keys sorts last.
+                entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+                packer.push_dict_with(|packer| {
+                    for (i, (k, v)) in entries.iter().enumerate() {
+                        if entries.get(i + 1).is_some_and(|(next, _)| next == k) {
+                            // Dropped, but text parsing would still reject it
+                            // if it is not JSON.
+                            pack_val(&mut Row::default().packer(), v, depth)?;
+                            continue;
+                        }
+                        packer.push(Datum::String(k));
+                        pack_val(packer, v, depth)?;
+                    }
+                    Ok::<_, String>(())
+                })?;
+            }
+        }
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+mod tests;

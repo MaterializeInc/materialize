@@ -323,9 +323,6 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "compute_apply_column_demands", "true", ["true", "false"]
         ),
-        # On by default so CI exercises the jq function, which is off in
-        # production while it earns trust.
-        VariableSystemParameter("enable_jq", "true", ["true", "false"]),
         # On by default so CI exercises the columnar merge batcher, which is
         # off in production while it earns trust.
         VariableSystemParameter(

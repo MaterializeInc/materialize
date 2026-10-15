@@ -1880,12 +1880,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_jq,
-        desc: "the jq function",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_envelope_debezium_in_subscribe,
         desc: "`ENVELOPE DEBEZIUM (KEY (..))`",
         default: false,
