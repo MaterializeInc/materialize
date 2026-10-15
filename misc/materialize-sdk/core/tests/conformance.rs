@@ -34,6 +34,7 @@ use materialize_sdk_core::classify::{
 };
 use materialize_sdk_core::decode::{Decoder, Envelope, Message, Row, Update};
 use materialize_sdk_core::identity::{Fingerprint, IdentityChange, compare};
+use materialize_sdk_core::sink::{CheckpointWrite, WriteError};
 use materialize_sdk_core::statement::{Subscribe, fetch_sql};
 use materialize_sdk_core::subscription::{Fetch, PushError, Subscription};
 use serde::Deserialize;
@@ -106,6 +107,7 @@ fn run(function: &str, input: Value) -> Value {
         "resolve_object_check" => resolve(input),
         "resolve_index_check" => resolve_index(input),
         "checkpoint" => checkpoint(input),
+        "checkpoint_write" => checkpoint_write(input),
         "catalog" => catalog(input),
         other => panic!("unknown function {other:?}"),
     }
@@ -511,6 +513,60 @@ fn checkpoint(value: Value) -> Value {
             },
             Err(_) => error("checkpoint"),
         },
+    }
+}
+
+/// Builds one checkpoint write from the stored checkpoint.
+fn checkpoint_write(value: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        current: Value,
+        operation: Operation,
+    }
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "snake_case")]
+    enum Operation {
+        TakeOver,
+        Commit {
+            upper: Frontier,
+        },
+        StartSnapshot {
+            subscriptions: BTreeMap<String, Fingerprint>,
+            as_of: String,
+        },
+        SnapshotWrite,
+        Fingerprints {
+            subscriptions: BTreeMap<String, Fingerprint>,
+        },
+    }
+    let Input { current, operation } = input(value);
+    let Ok(current) = Checkpoint::decode(&current.to_string()) else {
+        return error("checkpoint");
+    };
+    let built = match operation {
+        Operation::TakeOver => CheckpointWrite::take_over(&current).map(|(write, _)| write),
+        Operation::Commit { upper } => {
+            CheckpointWrite::commit(&current, upper).map(|(write, _)| write)
+        }
+        Operation::StartSnapshot {
+            subscriptions,
+            as_of,
+        } => CheckpointWrite::start_snapshot(&current, subscriptions, u64_of(&as_of))
+            .map(|(write, _)| write),
+        Operation::SnapshotWrite => CheckpointWrite::snapshot_write(&current),
+        Operation::Fingerprints { subscriptions } => {
+            CheckpointWrite::fingerprints(&current, subscriptions).map(|(write, _)| write)
+        }
+    };
+    match built {
+        Ok(write) => json!({ "write": write }),
+        Err(WriteError::Checkpoint(CheckpointError::TooLarge { .. })) => {
+            error("checkpoint_too_large")
+        }
+        Err(WriteError::Conflict(conflict)) => json!(conflict),
+        Err(WriteError::Usage(_)) => error("usage"),
+        Err(_) => error("checkpoint"),
     }
 }
 
