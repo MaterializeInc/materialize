@@ -6400,6 +6400,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-alloc-track"
+version = "0.1.0"
+dependencies = [
+ "backtrace",
+ "criterion",
+ "tikv-jemalloc-ctl",
+ "tikv-jemallocator",
+]
+
+[[package]]
 name = "mz-arrow-util"
 version = "0.1.0"
 dependencies = [
@@ -7945,6 +7955,7 @@ dependencies = [
  "libc",
  "lz4_flex 0.14.0",
  "mz-alloc-default",
+ "mz-alloc-track",
  "mz-ore",
  "mz-ore-proc",
  "native-tls",
