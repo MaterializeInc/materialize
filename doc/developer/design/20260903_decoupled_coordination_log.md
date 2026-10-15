@@ -20,9 +20,10 @@ when folding our remaining fixups. Detailed verification belongs in the
 Use the dedicated x86_64 scratch worker for focused builds, tests and
 interactive debugging. The parallel-check workflow requires SQL Server, which
 does not run natively on ARM. Keep the 16-vCPU, 64-GiB, 500-GiB configuration,
-one worker and the default 36-hour lifetime.
-Current worker: `i-05170dbf0b3194844` (`m8i.4xlarge`), expiring
-2026-10-14 22:03:16 UTC. Scratch evidence is copied off-worker under
+one worker, and renew its expiry as needed for this work without asking again.
+Current worker: `i-05170dbf0b3194844` (`m8i.4xlarge`). Last recorded expiry:
+2026-10-14 22:03:16 UTC. Verify and extend it before further work.
+Scratch evidence is copied off-worker under
 `~/.local/share/aj/m2-evidence/scratch/`.
 Launch with `bin/scratch create decoupled-coordination
 --git-rev <commit>`, then reuse that worker and its caches. The shared editing VM
