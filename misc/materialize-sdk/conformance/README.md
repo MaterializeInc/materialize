@@ -124,6 +124,16 @@ apply the operation:
   back after it. It yields `{"settlement": ...}`, with a `conflict` for
   `"conflict"`.
 
+### `checkpoint_write.json`
+
+Input: `current`, a checkpoint in its JSON form, and `operation`: `"take_over"`,
+`{"commit": {"upper"}}`, `{"start_snapshot": {"subscriptions", "as_of"}}`,
+`"snapshot_write"`, or `{"fingerprints": {"subscriptions"}}`. Build the write
+the SDK hands a sink and output `{"write": ...}`, with the `expected` and the
+`new` text and the `kind` with its fields. A commit's range errors are output
+as in `checkpoint.json`, and a write that does not fit the checkpoint, such as
+a snapshot write with no snapshot in progress, as `{"error": "usage"}`.
+
 ### `catalog.json`
 
 Input: one operation:
