@@ -182,8 +182,8 @@ one Postgres transaction. A target with no transaction over the whole cut, such
 as turbopuffer, where only one write request is atomic, gets convergence: once
 the sink has caught up past every write any worker made, the target equals the
 cut at the committed frontier. Before that, readers can see part of a batch, and
-after a crash they can see state newer than the checkpoint (see "turbopuffer
-sink").
+after a crash they can see state newer than the checkpoint (see "Appendix:
+turbopuffer sink").
 
 A user following the happy path cannot commit an unclosed timestamp, cannot
 get the `AS OF` arithmetic wrong, and cannot silently lose or duplicate updates
@@ -309,8 +309,8 @@ separate from writing: it runs in the background into a bounded buffer (see
 "Live streams"), so a target transaction never stays open while the SDK waits
 for Materialize, which can take seconds, or hours for a `REFRESH` view. While a
 snapshot is written into a new incarnation, the SDK hands over later batches
-without a commit each, and commits once the snapshot completes (see "turbopuffer
-sink").
+without a commit each, and commits once the snapshot completes (see "Appendix:
+turbopuffer sink").
 
 The diagram shows a transactional sink.
 
@@ -748,8 +748,8 @@ limits").
 
 A target without that transaction re-snapshots every member, not only the
 expired ones, at one new `AS OF`, into a new incarnation. Readers resolve one
-incarnation for all of a sink's namespaces (see "turbopuffer sink"), so
-re-snapshotting only some members would leave the others behind in namespaces
+incarnation for all of a sink's namespaces (see "Appendix: turbopuffer sink"),
+so re-snapshotting only some members would leave the others behind in namespaces
 readers no longer use. Before durable subscriptions the SDK chooses that `AS OF`
 itself, so the spread between `t_i` values does not arise.
 
@@ -961,8 +961,8 @@ conditions cannot stop that write, because there is no document to compare
 against. A fresh incarnation keeps writes from earlier snapshot attempts out of
 it. Continuing a crashed attempt shares its incarnation and relies on the replay
 and the timestamp conditions. Each incarnation belongs to one snapshot `AS OF`,
-recorded in the checkpoint document before its first write (see "turbopuffer
-sink").
+recorded in the checkpoint document before its first write (see "Appendix:
+turbopuffer sink").
 
 The upsert envelope of `SUBSCRIBE` is stateless per timestamp. It turns one
 timestamp's changes for a key into `upsert`, `delete`, or `key_violation`
@@ -996,259 +996,9 @@ later retraction.
 
 ### turbopuffer sink
 
-The first sink will keep turbopuffer namespaces equal to views. It answers the
-search-index use case and will run against our internal context graph, which
-has no Kafka, so the existing Kafka-based sink does not fit there. The sink will
-write only to namespaces it creates, so every document carries `mz_timestamp`.
-A turbopuffer namespace is a set of documents that are written and searched
-together, roughly a table.
-
-The first version of the sink will be written in Rust on the Rust package and
-will call turbopuffer's HTTP API directly. The tombstone, condition, and
-checkpoint rules below do not depend on the language, so a Python version can
-follow the same design.
-
-The sink will read the upsert envelope keyed by the document id, which must be
-unique in the object (see "Sink module"). With a unique key, one document per
-key is enough and the sink needs no multiplicity count.
-
-turbopuffer's documentation states that one write request to one namespace is
-applied atomically and is durable on return, and that there are no transactions
-across namespaces. Conditional writes compare each stored document with the
-incoming one (`$ref_new`) and silently skip a row whose condition fails. For
-patches, the response counts only the rows whose condition held. An upsert to a
-document that does not exist is applied unconditionally, a patch to one is
-skipped, and in a namespace with vector attributes every upserted document must
-carry every vector.
-
-Plain deletes therefore cannot make writes safe to repeat. If a later batch
-deleted a key, replaying an earlier upsert of that key finds no document and
-recreates it. A stale worker can do the same before it learns it was fenced,
-because conditions are evaluated per document, so its data writes cannot be
-conditioned on the checkpoint.
-
-The sink will write tombstones in place of deletes. A delete will upsert the
-key's document with `deleted = true`, the delete's `mz_timestamp`, and a
-placeholder vector where the namespace requires one. Every upsert, of data or of
-a tombstone, will be conditional on the stored `mz_timestamp` being older than
-the new one. A replayed or stale write of an older change then meets a newer
-document or tombstone and is skipped. Before each request, the sink will net its
-changes to the latest change per key, because a batch spans timestamps and
-turbopuffer rejects a request that names one id twice. The conditions only ever
-let a newer timestamp win, so dropping the older change from a request is safe.
-While tombstones are kept, every write is then safe to repeat and ordered by
-timestamp, so each namespace reaches exactly-once state under at-least-once
-delivery, and a batch can be split across requests.
-
-turbopuffer has no transaction around data and checkpoint, so the sink never
-re-snapshots in place. Tombstones only protect keys the namespace has seen: a
-key deleted before a re-snapshot's `AS OF` has no document and no tombstone, so
-a stale worker's older upsert of it would be applied unconditionally. Every
-re-snapshot, after history loss or a name swap, therefore writes into new
-namespaces, described below.
-
-Searches will filter on `deleted = false`. By default the sink will keep
-tombstones forever, because removing one reopens the hole: an older upsert that
-lands after the tombstone is gone recreates the key, and nothing deletes it
-again until the key changes upstream. Such an upsert can come from a fenced
-worker that was paused, from a live worker's request that timed out and still
-lands later, or from a live worker that resumes and replays changes it had not
-committed yet. A sink can opt into a sweep under one grace period G that the
-deployment must guarantee: every write lands within G after it is sent, a fenced
-worker sends nothing later than G after it was fenced, and a checkpoint read
-lags by less than G. Under that bound, the sweep removes a tombstone only when
-two things hold. Its `mz_timestamp` is below a frontier that the sweeping worker
-has known to be committed for longer than G, which includes the frontier it read
-when it took over. And the worker has held its epoch for longer than twice G,
-counted from when its take-over was known to have applied. A worker never sends
-a change below a frontier it knows is committed, because every resume starts
-there, so all of its earlier writes below that frontier have landed once G has
-passed. Fenced workers send within G of the take-over, and their writes land
-within G after that. Both times are measured on the sweeping worker's own
-monotonic clock, so clock differences between workers do not matter. The SDK
-reads the committed frontier from the checkpoint text for the sink. The
-checkpoint has a frontier only for the active incarnation, because starting a
-snapshot clears it, so the sweep runs only on the active incarnation and only
-while the checkpoint has a frontier. The SDK cannot enforce the bound, because a
-process can pause between its last read of the checkpoint and a write, so the
-sink's docs will state it. G has to exceed the retry budget, the request
-timeout, and the longest pause the deployment can see. A fenced worker learns of
-a take-over only from the checkpoint, so to help meet the bound, it has to read
-the checkpoint at least every quarter of G while it sends writes without a
-commit, such as during a snapshot or a long batch under throttling (deferred
-question 14). A worker that restarts more often than twice G never sweeps,
-so the sink reports a metric while the epoch age holds the sweep back. The sweep
-deletes by filter, and assumes that a delete by filter also sees writes
-turbopuffer has not indexed yet, which the sink build tests before relying on it
-(deferred question 4). A delete by filter is capped at 5 million rows per call,
-so the sweep loops.
-
-Each sink's checkpoint will live in its own checkpoint namespace, as one
-document. A namespace per sink keeps its outstanding writes small while indexing
-keeps up, below the 128 MiB at which turbopuffer's guarantees page says new
-writes stop being visible until they are indexed. turbopuffer's query page says
-strong queries search all unindexed writes, so the two pages differ, and the
-design assumes the worse one. Whether repeated patches to one document count
-against that limit is not documented, so the sink reports a metric when a
-checkpoint read lags (deferred question 4). The setup step creates the document
-with an upsert whose condition no existing document meets, such as `id` being
-null. turbopuffer applies an upsert to a missing document without checking its
-condition, and skips it when the document exists, so this write only creates,
-and a delayed copy of it cannot overwrite a live checkpoint. The setup step then
-reads the document back and fails if it holds anything else. A delayed setup
-write from before a teardown could recreate an identical document. So a teardown
-stops the sink's workers first, a torn-down sink id is not set up again until
-twice the grace period has passed, and the setup step fails if any of the sink's
-namespaces still exist. Workers change the document only with patches, which
-never create a document, so a stale worker cannot recreate a deleted checkpoint.
-The data namespaces hold no reserved documents.
-
-The document holds the SDK's checkpoint text, which the sink treats as opaque,
-the sink's own fields, the active incarnation and the retired incarnations, and
-a `revision`. Only `revision` is filterable, because turbopuffer allows 8 MiB in
-one attribute but only 4 KiB in a value it filters on. The store applies the 1
-MiB default to the whole document and fails with `CheckpointTooLarge` above it.
-Every patch is conditional on `revision` being the value the worker read or last
-wrote, and raises it by one. That makes each patch a compare-and-set on the
-whole document, which meets the general contract (see "Checkpoints and fencing")
-and also protects the sink's fields: a delayed or repeated patch fails after any
-other write, even one that left the checkpoint text unchanged. So a delayed
-retry of an older commit cannot move the frontier back either, which matters
-because the tombstone sweep reads that frontier.
-
-A patch count of zero means that request did not apply. After a lost response,
-or a count of zero on a patch that was sent again, the worker reads the document
-back and applies the rules in "Checkpoints and fencing" to the whole document.
-If it holds what the patch would write, the patch applied. If `revision` is
-unchanged, the worker sends the same patch again. Otherwise another worker wrote
-it, and the SDK tells why from the checkpoint text. A take-over always takes
-over again, as described there. Checkpoint reads use turbopuffer's default
-strong consistency. The checkpoint's safety does not depend on a read being
-current, because every patch is conditional, so a read that lags only delays
-recovery.
-
-Only one write request is atomic, and turbopuffer keeps one version of each
-document. A batch can span several requests, even within one namespace, and a
-cut spans one request per namespace at least. Between those requests a reader
-can see part of a batch: two keys that changed at the same timestamp, one new
-and one old, or one namespace at the new cut and another at the old one.
-Filtering on `mz_timestamp` cannot rebuild an earlier cut, because an upsert
-replaces the earlier version. After a crash, a namespace can also be ahead of the
-checkpoint: a worker may have written changes past the frontier it committed,
-and the next worker skips them as already applied. The checkpoint is a replay
-position, not a statement that the namespace equals one cut. The guarantee for
-turbopuffer is therefore convergence: once the sink has caught up past every
-write any worker made, and turbopuffer has indexed those writes, every namespace
-equals the cut at the committed frontier. The sink does not give readers a
-consistent view before that. The sink's docs will state this, and deferred
-question 5 asks whether that is enough.
-
-Every re-snapshot, after history loss or a name swap (see "Object identity"),
-writes into new namespaces. Namespace names carry an incarnation number, for
-example `articles__i3`. The incarnation number is the checkpoint's generation.
-The SDK raises it for every new snapshot and keeps it when a crashed attempt
-continues, so a number is never given to a different `AS OF`, and it gives the
-generation to the sink. The active incarnation in the checkpoint document is the
-reader contract: a reader looks it up, with a small helper the sink package
-ships, and derives every namespace name from it. Readers never read the
-checkpoint text.
-
-An incarnation belongs to one snapshot `AS OF`. Before a snapshot's first write,
-the SDK writes a checkpoint that raises the generation, records the snapshot's
-`AS OF`, and clears the frontier (see "Sink module"). For the store that write
-is the start of a snapshot, with the old and the new generation, and if the old
-one never completed, its incarnation joins the retired list in the same patch. A
-crashed attempt may continue in the same incarnation, at the same `AS OF` and
-with the same fingerprints, while that `AS OF` is readable, because the retry
-writes every change a stale worker of that attempt could write, so the timestamp
-conditions skip the stale worker's older writes. A retry at another `AS OF`, or
-after the fingerprints changed, starts a new snapshot. The first snapshot
-follows the same rule.
-
-When the snapshot completes, the sink waits until turbopuffer has indexed the
-new namespaces, because a namespace with more than 128 MiB of unindexed writes
-hides later writes from queries for up to about an hour (turbopuffer's
-guarantees page). It then switches readers with one patch: the commit that
-completes the snapshot also makes its incarnation active and retires the old
-one. The switch is atomic for every namespace at once. Until the switch, readers
-keep using the old incarnation, which gets no new changes except delayed writes
-from its earlier writers, and the sink's docs will say so. A stale worker writes
-to the incarnation of its own attempt. A crashed attempt that is continued
-shares that incarnation, and relies on the timestamp conditions and the replay
-to converge.
-
-The reader helper resolves the active incarnation for each query, or caches it
-for less than the grace period. Before the first switch there is no active
-incarnation, and the helper reports that the sink is not ready. When a namespace
-is not found, the helper resolves the incarnation again. If it has not changed,
-the namespace is empty, because turbopuffer creates a namespace only on its
-first write, and an empty view has none.
-
-The retiring worker never sends a write for a generation after the patch that
-retires it, at a switch or at the start of a newer snapshot. A worker deletes a
-retired incarnation's namespaces only once twice the grace period has passed on
-its own monotonic clock since it knew the incarnation was retired, from the
-response to its own retiring patch or from the take-over that read it. By then
-every reader resolves the new incarnation, because reads lag by less than G and
-readers cache for less than G. The grace period therefore applies to cleanup and
-to the reader helper's cache even when the sweep is off. turbopuffer creates a
-namespace on its first write, so without the bound a stale write can recreate a
-deleted namespace, and every later cleanup removes it again, so by default
-retired entries stay on the list. With the sweep on, every write to a retired
-incarnation lands within twice the grace period of the retiring patch: its own
-worker stopped writing to it before that patch, and every older worker was
-fenced before that. So once that wait has passed, a check that finds each of the
-incarnation's namespaces gone is final, and the next commit's patch drops the
-entry. Each entry is one number, and the document limit above applies.
-
-While a snapshot is being written, the sink writes changes after its `AS OF` as
-they arrive instead of buffering them, since the timestamp conditions make the
-order of writes irrelevant, and it commits the frontier only once the snapshot
-is complete. A snapshot can take hours at turbopuffer's embedding limits (see
-below), and buffering those changes would overflow the client buffer and
-restart the snapshot. turbopuffer's `branch_from_namespace` makes an instant
-copy of a namespace, which could let a re-snapshot reuse unchanged vectors
-instead of embedding everything again. That needs its own correctness review and
-is left for after the first version.
-
-turbopuffer can compute embeddings itself. Its native embedding takes an `embed`
-option on a string attribute, names one of the models turbopuffer hosts, bills
-per token, and recomputes the vector on every write of that attribute. The sink
-will use native embedding by default, so neither the sink nor Materialize runs
-embedding code or holds model credentials. A sink that needs a model turbopuffer
-does not host can use a transform instead: Rust code that calls the embedding
-provider and supplies the vector.
-
-Native embedding has limits the sink is built around. A write with embedded
-attributes takes at most 256 rows, a namespace can have at most 4 embedded
-attributes (turbopuffer's limits page), and a new organization gets 1,024
-requests and 2 million tokens per minute for each model (turbopuffer's embedding
-page). A rate-limit response (HTTP 429) counts as throttling, not as a failure:
-the sink paces its writes by tokens, and throttling does not use the retry
-budget, so a long snapshot does not stall. turbopuffer's docs do not say whether
-a patch that leaves the text out keeps the stored vector, or how a tombstone
-without text is treated. The patch path below assumes the first, and the sink
-build tests both before relying on them (deferred question 4).
-
-Either way, embedding cost follows the existing sink's transform model: an
-embedding declares the columns it reads, and is computed only for rows where
-those columns changed. The sink will store a hash of each embedding's source
-columns on the document. For each netted change it will first make a patch of
-the other attributes, leaving out vectors and the text that native embedding
-reads, conditional on the stored `mz_timestamp` being older, every stored source
-hash being equal to the new one, and the document not being a tombstone. The
-patch keeps the stored vectors, which are then known to match the source
-columns. The patch asks for `return_affected_ids`, so the response lists which
-documents were patched. For the others, because a source column changed, the
-document is missing or a tombstone, or a newer version exists, the sink will
-make the conditional upsert with the text for native embedding, or with vectors
-from a transform. Comparing with the stored hash, not with the previous change
-in the stream, stays correct when netting drops intermediate changes and after a
-replay. Snapshot writes skip the patch path, because a patch costs an extra
-query per request and the namespace starts empty. When a crashed attempt
-continues, the conditional upserts skip the documents it already wrote.
-Tombstones carry no text to embed. A replay re-embeds the replayed rows, which
-costs embedding but does not affect correctness.
+The first sink keeps turbopuffer namespaces equal to views. It is one sink that
+meets the Sink API, and nothing in the SDK depends on it. Its design is in
+"Appendix: turbopuffer sink".
 
 ### Durable subscriptions
 
@@ -1733,3 +1483,259 @@ October work, because the doc picks a safe default for each.
     stores its own checkpoint read it during a long write and return `Fenced`,
     through a check the SDK provides because the text is opaque, or should the
     SDK run those reads?
+
+## Appendix: turbopuffer sink
+
+The first sink will keep turbopuffer namespaces equal to views. It answers the
+search-index use case and will run against our internal context graph, which
+has no Kafka, so the existing Kafka-based sink does not fit there. The sink will
+write only to namespaces it creates, so every document carries `mz_timestamp`.
+A turbopuffer namespace is a set of documents that are written and searched
+together, roughly a table.
+
+The first version of the sink will be written in Rust on the Rust package and
+will call turbopuffer's HTTP API directly. The tombstone, condition, and
+checkpoint rules below do not depend on the language, so a Python version can
+follow the same design.
+
+The sink will read the upsert envelope keyed by the document id, which must be
+unique in the object (see "Sink module"). With a unique key, one document per
+key is enough and the sink needs no multiplicity count.
+
+turbopuffer's documentation states that one write request to one namespace is
+applied atomically and is durable on return, and that there are no transactions
+across namespaces. Conditional writes compare each stored document with the
+incoming one (`$ref_new`) and silently skip a row whose condition fails. For
+patches, the response counts only the rows whose condition held. An upsert to a
+document that does not exist is applied unconditionally, a patch to one is
+skipped, and in a namespace with vector attributes every upserted document must
+carry every vector.
+
+Plain deletes therefore cannot make writes safe to repeat. If a later batch
+deleted a key, replaying an earlier upsert of that key finds no document and
+recreates it. A stale worker can do the same before it learns it was fenced,
+because conditions are evaluated per document, so its data writes cannot be
+conditioned on the checkpoint.
+
+The sink will write tombstones in place of deletes. A delete will upsert the
+key's document with `deleted = true`, the delete's `mz_timestamp`, and a
+placeholder vector where the namespace requires one. Every upsert, of data or of
+a tombstone, will be conditional on the stored `mz_timestamp` being older than
+the new one. A replayed or stale write of an older change then meets a newer
+document or tombstone and is skipped. Before each request, the sink will net its
+changes to the latest change per key, because a batch spans timestamps and
+turbopuffer rejects a request that names one id twice. The conditions only ever
+let a newer timestamp win, so dropping the older change from a request is safe.
+While tombstones are kept, every write is then safe to repeat and ordered by
+timestamp, so each namespace reaches exactly-once state under at-least-once
+delivery, and a batch can be split across requests.
+
+turbopuffer has no transaction around data and checkpoint, so the sink never
+re-snapshots in place. Tombstones only protect keys the namespace has seen: a
+key deleted before a re-snapshot's `AS OF` has no document and no tombstone, so
+a stale worker's older upsert of it would be applied unconditionally. Every
+re-snapshot, after history loss or a name swap, therefore writes into new
+namespaces, described below.
+
+Searches will filter on `deleted = false`. By default the sink will keep
+tombstones forever, because removing one reopens the hole: an older upsert that
+lands after the tombstone is gone recreates the key, and nothing deletes it
+again until the key changes upstream. Such an upsert can come from a fenced
+worker that was paused, from a live worker's request that timed out and still
+lands later, or from a live worker that resumes and replays changes it had not
+committed yet. A sink can opt into a sweep under one grace period G that the
+deployment must guarantee: every write lands within G after it is sent, a fenced
+worker sends nothing later than G after it was fenced, and a checkpoint read
+lags by less than G. Under that bound, the sweep removes a tombstone only when
+two things hold. Its `mz_timestamp` is below a frontier that the sweeping worker
+has known to be committed for longer than G, which includes the frontier it read
+when it took over. And the worker has held its epoch for longer than twice G,
+counted from when its take-over was known to have applied. A worker never sends
+a change below a frontier it knows is committed, because every resume starts
+there, so all of its earlier writes below that frontier have landed once G has
+passed. Fenced workers send within G of the take-over, and their writes land
+within G after that. Both times are measured on the sweeping worker's own
+monotonic clock, so clock differences between workers do not matter. The SDK
+reads the committed frontier from the checkpoint text for the sink. The
+checkpoint has a frontier only for the active incarnation, because starting a
+snapshot clears it, so the sweep runs only on the active incarnation and only
+while the checkpoint has a frontier. The SDK cannot enforce the bound, because a
+process can pause between its last read of the checkpoint and a write, so the
+sink's docs will state it. G has to exceed the retry budget, the request
+timeout, and the longest pause the deployment can see. A fenced worker learns of
+a take-over only from the checkpoint, so to help meet the bound, it has to read
+the checkpoint at least every quarter of G while it sends writes without a
+commit, such as during a snapshot or a long batch under throttling (deferred
+question 14). A worker that restarts more often than twice G never sweeps,
+so the sink reports a metric while the epoch age holds the sweep back. The sweep
+deletes by filter, and assumes that a delete by filter also sees writes
+turbopuffer has not indexed yet, which the sink build tests before relying on it
+(deferred question 4). A delete by filter is capped at 5 million rows per call,
+so the sweep loops.
+
+Each sink's checkpoint will live in its own checkpoint namespace, as one
+document. A namespace per sink keeps its outstanding writes small while indexing
+keeps up, below the 128 MiB at which turbopuffer's guarantees page says new
+writes stop being visible until they are indexed. turbopuffer's query page says
+strong queries search all unindexed writes, so the two pages differ, and the
+design assumes the worse one. Whether repeated patches to one document count
+against that limit is not documented, so the sink reports a metric when a
+checkpoint read lags (deferred question 4). The setup step creates the document
+with an upsert whose condition no existing document meets, such as `id` being
+null. turbopuffer applies an upsert to a missing document without checking its
+condition, and skips it when the document exists, so this write only creates,
+and a delayed copy of it cannot overwrite a live checkpoint. The setup step then
+reads the document back and fails if it holds anything else. A delayed setup
+write from before a teardown could recreate an identical document. So a teardown
+stops the sink's workers first, a torn-down sink id is not set up again until
+twice the grace period has passed, and the setup step fails if any of the sink's
+namespaces still exist. Workers change the document only with patches, which
+never create a document, so a stale worker cannot recreate a deleted checkpoint.
+The data namespaces hold no reserved documents.
+
+The document holds the SDK's checkpoint text, which the sink treats as opaque,
+the sink's own fields, the active incarnation and the retired incarnations, and
+a `revision`. Only `revision` is filterable, because turbopuffer allows 8 MiB in
+one attribute but only 4 KiB in a value it filters on. The store applies the 1
+MiB default to the whole document and fails with `CheckpointTooLarge` above it.
+Every patch is conditional on `revision` being the value the worker read or last
+wrote, and raises it by one. That makes each patch a compare-and-set on the
+whole document, which meets the general contract (see "Checkpoints and fencing")
+and also protects the sink's fields: a delayed or repeated patch fails after any
+other write, even one that left the checkpoint text unchanged. So a delayed
+retry of an older commit cannot move the frontier back either, which matters
+because the tombstone sweep reads that frontier.
+
+A patch count of zero means that request did not apply. After a lost response,
+or a count of zero on a patch that was sent again, the worker reads the document
+back and applies the rules in "Checkpoints and fencing" to the whole document.
+If it holds what the patch would write, the patch applied. If `revision` is
+unchanged, the worker sends the same patch again. Otherwise another worker wrote
+it, and the SDK tells why from the checkpoint text. A take-over always takes
+over again, as described there. Checkpoint reads use turbopuffer's default
+strong consistency. The checkpoint's safety does not depend on a read being
+current, because every patch is conditional, so a read that lags only delays
+recovery.
+
+Only one write request is atomic, and turbopuffer keeps one version of each
+document. A batch can span several requests, even within one namespace, and a
+cut spans one request per namespace at least. Between those requests a reader
+can see part of a batch: two keys that changed at the same timestamp, one new
+and one old, or one namespace at the new cut and another at the old one.
+Filtering on `mz_timestamp` cannot rebuild an earlier cut, because an upsert
+replaces the earlier version. After a crash, a namespace can also be ahead of the
+checkpoint: a worker may have written changes past the frontier it committed,
+and the next worker skips them as already applied. The checkpoint is a replay
+position, not a statement that the namespace equals one cut. The guarantee for
+turbopuffer is therefore convergence: once the sink has caught up past every
+write any worker made, and turbopuffer has indexed those writes, every namespace
+equals the cut at the committed frontier. The sink does not give readers a
+consistent view before that. The sink's docs will state this, and deferred
+question 5 asks whether that is enough.
+
+Every re-snapshot, after history loss or a name swap (see "Object identity"),
+writes into new namespaces. Namespace names carry an incarnation number, for
+example `articles__i3`. The incarnation number is the checkpoint's generation.
+The SDK raises it for every new snapshot and keeps it when a crashed attempt
+continues, so a number is never given to a different `AS OF`, and it gives the
+generation to the sink. The active incarnation in the checkpoint document is the
+reader contract: a reader looks it up, with a small helper the sink package
+ships, and derives every namespace name from it. Readers never read the
+checkpoint text.
+
+An incarnation belongs to one snapshot `AS OF`. Before a snapshot's first write,
+the SDK writes a checkpoint that raises the generation, records the snapshot's
+`AS OF`, and clears the frontier (see "Sink module"). For the store that write
+is the start of a snapshot, with the old and the new generation, and if the old
+one never completed, its incarnation joins the retired list in the same patch. A
+crashed attempt may continue in the same incarnation, at the same `AS OF` and
+with the same fingerprints, while that `AS OF` is readable, because the retry
+writes every change a stale worker of that attempt could write, so the timestamp
+conditions skip the stale worker's older writes. A retry at another `AS OF`, or
+after the fingerprints changed, starts a new snapshot. The first snapshot
+follows the same rule.
+
+When the snapshot completes, the sink waits until turbopuffer has indexed the
+new namespaces, because a namespace with more than 128 MiB of unindexed writes
+hides later writes from queries for up to about an hour (turbopuffer's
+guarantees page). It then switches readers with one patch: the commit that
+completes the snapshot also makes its incarnation active and retires the old
+one. The switch is atomic for every namespace at once. Until the switch, readers
+keep using the old incarnation, which gets no new changes except delayed writes
+from its earlier writers, and the sink's docs will say so. A stale worker writes
+to the incarnation of its own attempt. A crashed attempt that is continued
+shares that incarnation, and relies on the timestamp conditions and the replay
+to converge.
+
+The reader helper resolves the active incarnation for each query, or caches it
+for less than the grace period. Before the first switch there is no active
+incarnation, and the helper reports that the sink is not ready. When a namespace
+is not found, the helper resolves the incarnation again. If it has not changed,
+the namespace is empty, because turbopuffer creates a namespace only on its
+first write, and an empty view has none.
+
+The retiring worker never sends a write for a generation after the patch that
+retires it, at a switch or at the start of a newer snapshot. A worker deletes a
+retired incarnation's namespaces only once twice the grace period has passed on
+its own monotonic clock since it knew the incarnation was retired, from the
+response to its own retiring patch or from the take-over that read it. By then
+every reader resolves the new incarnation, because reads lag by less than G and
+readers cache for less than G. The grace period therefore applies to cleanup and
+to the reader helper's cache even when the sweep is off. turbopuffer creates a
+namespace on its first write, so without the bound a stale write can recreate a
+deleted namespace, and every later cleanup removes it again, so by default
+retired entries stay on the list. With the sweep on, every write to a retired
+incarnation lands within twice the grace period of the retiring patch: its own
+worker stopped writing to it before that patch, and every older worker was
+fenced before that. So once that wait has passed, a check that finds each of the
+incarnation's namespaces gone is final, and the next commit's patch drops the
+entry. Each entry is one number, and the document limit above applies.
+
+While a snapshot is being written, the sink writes changes after its `AS OF` as
+they arrive instead of buffering them, since the timestamp conditions make the
+order of writes irrelevant, and it commits the frontier only once the snapshot
+is complete. A snapshot can take hours at turbopuffer's embedding limits (see
+below), and buffering those changes would overflow the client buffer and
+restart the snapshot. turbopuffer's `branch_from_namespace` makes an instant
+copy of a namespace, which could let a re-snapshot reuse unchanged vectors
+instead of embedding everything again. That needs its own correctness review and
+is left for after the first version.
+
+turbopuffer can compute embeddings itself. Its native embedding takes an `embed`
+option on a string attribute, names one of the models turbopuffer hosts, bills
+per token, and recomputes the vector on every write of that attribute. The sink
+will use native embedding by default, so neither the sink nor Materialize runs
+embedding code or holds model credentials. A sink that needs a model turbopuffer
+does not host can use a transform instead: Rust code that calls the embedding
+provider and supplies the vector.
+
+Native embedding has limits the sink is built around. A write with embedded
+attributes takes at most 256 rows, a namespace can have at most 4 embedded
+attributes (turbopuffer's limits page), and a new organization gets 1,024
+requests and 2 million tokens per minute for each model (turbopuffer's embedding
+page). A rate-limit response (HTTP 429) counts as throttling, not as a failure:
+the sink paces its writes by tokens, and throttling does not use the retry
+budget, so a long snapshot does not stall. turbopuffer's docs do not say whether
+a patch that leaves the text out keeps the stored vector, or how a tombstone
+without text is treated. The patch path below assumes the first, and the sink
+build tests both before relying on them (deferred question 4).
+
+Either way, embedding cost follows the existing sink's transform model: an
+embedding declares the columns it reads, and is computed only for rows where
+those columns changed. The sink will store a hash of each embedding's source
+columns on the document. For each netted change it will first make a patch of
+the other attributes, leaving out vectors and the text that native embedding
+reads, conditional on the stored `mz_timestamp` being older, every stored source
+hash being equal to the new one, and the document not being a tombstone. The
+patch keeps the stored vectors, which are then known to match the source
+columns. The patch asks for `return_affected_ids`, so the response lists which
+documents were patched. For the others, because a source column changed, the
+document is missing or a tombstone, or a newer version exists, the sink will
+make the conditional upsert with the text for native embedding, or with vectors
+from a transform. Comparing with the stored hash, not with the previous change
+in the stream, stays correct when netting drops intermediate changes and after a
+replay. Snapshot writes skip the patch path, because a patch costs an extra
+query per request and the namespace starts empty. When a crashed attempt
+continues, the conditional upserts skip the documents it already wrote.
+Tombstones carry no text to embed. A replay re-embeds the replayed rows, which
+costs embedding but does not affect correctness.
