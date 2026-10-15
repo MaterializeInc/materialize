@@ -509,6 +509,13 @@ actual imports. Read acquisition uses that committed protection before fixing a
 transaction timestamp, without requiring an installed trace. Neither a bare
 catalog entry nor an assumed `MIN` establishes a valid frontier.
 
+During bootstrap, earlier pending index selections may be planning candidates,
+but their plans, bounds and creator grants must commit before import acquisition.
+Resolve those grants in the admitting transaction, not from a dry-run floor that
+can become stale on conflict. Retain protection for fixed recovery timestamps
+through dependent selection commits. Newly available indexes do not invalidate
+valid stored selections for the same build.
+
 The creating adapter commits its timeline requirement in the same transaction as
 index or MV output admission and adopts the grant into local tokens before another
 publication. Timeline maintenance does not wait for installation. Bootstrap acquires
