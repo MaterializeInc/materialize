@@ -131,12 +131,15 @@ entire trace.
 Try the approved identity-view-plus-index candidate for catalog MVs, leaving
 retained metrics on direct raw reads. Preserve restricted access to raw catalog
 contents and check actual optimized imports before interpreting the comparison.
-First bootstrap excludes the unadmitted index while planning MVs with fixed
-birth requirements. Resolve whether the correction may also enable other new
-builtin indexes during first planning. Prefer admission when a chosen plan needs
-an unadmitted index, not a publication before every MV. Protect required history
-in the admission transaction and acquire only committed permission. A dry-run
-floor can become stale on conflict. No forced adoption or new bootstrap framework.
+Correct bootstrap admission generally, not only for the shared catalog index.
+Newly selected builtin MV plans may use earlier-planned builtin indexes. Batch
+index admission when a chosen plan needs an unadmitted import, not before every MV.
+Commit the index plan, bound and required protection together before acquiring
+read holds. Preserve fixed recovery timestamps through the dependent plan's commit.
+Resolve creator protection in the admitting transaction, not from a dry-run floor
+that can become stale on conflict. Reuse valid stored plans for the same build.
+Replica installation consumes committed selections, never an uncommitted alternative.
+No forced index adoption or new bootstrap framework.
 Preserve historical reads, source flow control and existing protection. Compare
 decoding, memory and SQL latency in a short case, then verify promising changes
 through existing restart/handover and original-workload checks.
