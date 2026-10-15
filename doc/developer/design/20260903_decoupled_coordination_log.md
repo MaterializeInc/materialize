@@ -125,26 +125,22 @@ captured revision, actual committed change and rejecting branch before a repair.
 CI138634 passes Kafka RTR and verifies both catalog and adapter diagnostic emission,
 but captures no rejection.
 Remove those diagnostics once the mutation is identified. Keep the transaction guard.
-Raw catalog decoding is repeated across independent imports. A direct shared raw
-index would inherit retained metric consumers' reconstruction windows for its
-entire trace.
-Try the approved identity-view-plus-index candidate for catalog MVs, leaving
-retained metrics on direct raw reads. Preserve restricted access to raw catalog
-contents and check actual optimized imports before interpreting the comparison.
-Correct bootstrap admission generally, not only for the shared catalog index.
-Newly selected builtin MV plans may use earlier-planned builtin indexes. Batch
-index admission when a chosen plan needs an unadmitted import, not before every MV.
-Commit the index plan, bound and required protection together before acquiring
-read holds. Preserve fixed recovery timestamps through the dependent plan's commit.
-Resolve creator protection in the admitting transaction, not from a dry-run floor
-that can become stale on conflict. Reuse valid stored plans for the same build.
-Replica installation consumes committed selections, never an uncommitted alternative.
-No forced index adoption or new bootstrap framework.
-Preserve historical reads, source flow control and existing protection. Compare
-decoding, memory and SQL latency in a short case, then verify promising changes
-through existing restart/handover and original-workload checks.
-Use a reduced case and reversible cache-capacity comparison to distinguish
-retained payload from other process memory before choosing a memory repair.
+
+Catalog MVs use the restricted identity view and shared index. Retained metrics
+keep direct raw reads so their reconstruction windows do not pin the shared trace.
+Keep general bootstrap admission atomic across the selected index plan, bound and
+creator protection, including fixed recovery timestamps and same-build plan reuse.
+Replicas execute committed selections, without forced adoption.
+
+The remaining resource-bounded workload failure is aggregate memory exhaustion.
+Attribute growth across the replica population, not only the largest process.
+Use existing cache and spill-pool observations for a bounded comparison before
+choosing a memory repair. Host-derived pool sizing can exceed the parent-cgroup
+budget, but that visibility difference alone does not establish resident ownership
+or causation. Compare actual CI agent resources, not requested queue labels.
+Keep concurrent DDL timeouts distinct from confirmed OOM failures. Preserve
+historical reads, source flow control, protection and the original resource budget.
+Reduced decoding and a larger-host pass do not establish original-workload progress.
 Keep the driver file-descriptor issue parked. SQL completion and actual
 per-object compaction-bound advancement still need separate verification.
 Do not attribute these to the acknowledgement bug or claim lifecycle changes solve
