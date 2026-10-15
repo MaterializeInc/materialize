@@ -889,7 +889,8 @@ impl<'a> ActiveComputeState<'a> {
         }
 
         // The gate is read here as well as at logging initialization, so that turning the feature
-        // off keeps this map empty rather than filling it for a watchdog that is not running.
+        // off stops enforcement immediately. Enabling it on a replica whose logging predates the
+        // flag fills this map without a watchdog to read it, which is harmless.
         if let Some(limit) = dataflow.heap_size_limit {
             // Exceeding a limit fails the query the dataflow serves, and there is no such query
             // behind an index or a materialized view, so the controller only ever sets a limit on

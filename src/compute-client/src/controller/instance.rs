@@ -2342,9 +2342,11 @@ impl Instance {
             "dataflow exceeded its heap size limit",
         );
 
-        if self.subscribes.contains_key(&collection_id) {
+        // The failed subscribe cannot produce more data, so stop tracking it, like one that reached
+        // the empty frontier. Reports from the other replicas running it then find nothing to fail.
+        if let Some(subscribe) = self.subscribes.remove(&collection_id) {
             self.metrics.heap_size_limits_exceeded_total.inc();
-            let frontier = self.subscribes[&collection_id].frontier.clone();
+            let frontier = subscribe.frontier;
             self.deliver_response(ComputeControllerResponse::SubscribeResponse(
                 collection_id,
                 SubscribeBatch {
@@ -2365,13 +2367,15 @@ impl Instance {
             .peeks
             .iter()
             .find(|(_, peek)| peek.read_hold.id() == collection_id)
-            .map(|(uuid, peek)| (*uuid, peek.otel_ctx.clone()));
+            .map(|(uuid, peek)| (*uuid, peek.otel_ctx.clone(), peek.target_replica));
 
         match peek {
+            // A targeted peek's dataflow runs on every replica, but only the target's verdict
+            // counts. `handle_peek_response` would drop the others too, after the metric.
+            Some((_, _, Some(target_replica))) if target_replica != replica_id => {}
             // Routing through `handle_peek_response` keeps the metrics, the peek notification,
-            // and the `CancelPeek` command consistent with a replica-reported peek error, and
-            // applies the replica-targeting filter for targeted peeks.
-            Some((uuid, otel_ctx)) => {
+            // and the `CancelPeek` command consistent with a replica-reported peek error.
+            Some((uuid, otel_ctx, _)) => {
                 self.metrics.heap_size_limits_exceeded_total.inc();
                 self.handle_peek_response(
                     uuid,

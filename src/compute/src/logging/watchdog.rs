@@ -123,41 +123,35 @@ pub(super) fn construct<'scope>(
             let limits = limits.borrow();
 
             let frontier = &frontiers[0];
-            let mut touched = BTreeSet::new();
             while let Some(entry) = pending.first_entry() {
                 if frontier.less_equal(entry.key()) {
                     break;
                 }
+                // Every dataflow is accounted for, including ones without a limit on this worker.
+                // Workers install a dataflow's limit when they process its creation, which they do
+                // at different times, so deltas from a worker that is ahead can arrive before this
+                // worker knows the limit. Dropping them would lose those bytes for good.
                 for (dataflow, diff) in entry.remove() {
-                    // A dataflow's limit is installed before it is rendered, so anything absent
-                    // here will never gain a limit and is not worth accounting for.
-                    if !limits.contains_key(&dataflow) {
-                        continue;
-                    }
                     *totals.entry(dataflow).or_default() += diff;
-                    touched.insert(dataflow);
                 }
             }
 
-            // A dataflow's limit is dropped along with the dataflow, which is the signal that its
-            // accounting can go too. The size updates do balance out to zero on their own, but
-            // only once the drop has worked its way through the logging streams.
-            totals.retain(|dataflow, _| limits.contains_key(dataflow));
+            // A dropped dataflow's size updates retract to zero once the drop has worked its way
+            // through the logging streams, which is when its accounting can go.
+            totals.retain(|_dataflow, total| !total.is_zero());
             reported.retain(|dataflow| limits.contains_key(dataflow));
 
-            if touched.is_empty() {
-                return;
-            }
-
+            // Scan every total on each activation, not only the ones that just changed: a dataflow
+            // can cross its limit before this worker installs the limit, and then see no further
+            // deltas. The logging frontier advances every interval, which bounds the delay.
             let mut exceeded = exceeded.borrow_mut();
-            for dataflow in touched {
-                let Some(&total) = totals.get(&dataflow) else {
+            for (&dataflow, total) in &totals {
+                let Some(&limit) = limits.get(&dataflow) else {
                     continue;
                 };
                 let Ok(heap_size) = u64::try_from(total.into_inner()) else {
                     continue;
                 };
-                let limit = limits[&dataflow];
                 // Strictly greater: a dataflow that lands exactly on its limit is within it.
                 if heap_size > limit && reported.insert(dataflow) {
                     exceeded.insert(dataflow, heap_size);

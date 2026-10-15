@@ -73,7 +73,8 @@ pub struct DataflowDescription<P, S: 'static = (), O = MapFilterProject> {
     ///
     /// Only set on transient dataflows, because exceeding the limit fails the query the dataflow
     /// serves. A query served without a dataflow of its own, such as a fast-path peek reading an
-    /// existing arrangement, has nothing to charge and so carries no limit.
+    /// existing arrangement, has nothing to charge and so carries no limit. `COPY TO` dataflows
+    /// carry no limit either.
     ///
     /// Enforcement is approximate: the replica observes instrumented allocations with a delay, so
     /// a dataflow can exceed the limit before the controller learns about it.

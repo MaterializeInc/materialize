@@ -293,9 +293,8 @@ pub struct InstanceMetrics {
     pub peek_duration_seconds: PeekMetrics<Histogram>,
     /// Counter tracking the number of queries failed for exceeding their heap size limit.
     ///
-    /// Incremented once per report that names a peek or subscribe the controller is still
-    /// tracking, so the reports every other replica running the same dataflow sends do not
-    /// inflate it.
+    /// Incremented once per failed query: only the first report the controller accepts for a
+    /// peek or subscribe counts, so the reports from other replicas do not inflate it.
     pub heap_size_limits_exceeded_total: IntCounter,
     /// Counter tracking the number of sends on the compute response queue.
     pub response_send_count: IntCounter,

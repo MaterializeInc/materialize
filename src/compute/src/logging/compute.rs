@@ -1373,7 +1373,7 @@ impl DemuxHandler<'_, '_, '_> {
     ) {
         let address: Rc<[usize]> = address.into_iter().collect();
         // An operator's address starts at the dataflow that hosts it, so its first element names
-        // the Timely dataflow index the compute controller knows the collection by.
+        // the Timely dataflow index the compute state keys the collection's limit by.
         let Some(&dataflow_id) = address.first() else {
             error!(%operator_id, "arrangement size operator has an empty address");
             return;
