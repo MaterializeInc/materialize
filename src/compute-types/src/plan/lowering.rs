@@ -88,15 +88,14 @@ pub(super) struct Context {
     single_time: bool,
     /// Global ids of the dataflow's source imports.
     source_imports: BTreeSet<GlobalId>,
-    /// MIR `MfpPlan`s pushed onto `Get::Collection` reads of source imports,
-    /// keyed by the `Get`'s `LirId`.
+    /// The MFPs pushed onto `Get::Collection` reads of source imports, as they were
+    /// before planning, keyed by the `Get`'s `LirId`.
     ///
     /// `refine_source_mfps` identifies common parts across sibling reads and pushes the
-    /// common part into the shared source MFP. That pass runs on MIR because
-    /// only MIR can utter the `mz_now()` predicates that temporal bounds fold
-    /// into. Retaining the MIR form here lets it find common parts without
-    /// round-tripping the LIR plans back through MIR.
-    source_get_mfps: BTreeMap<LirId, MfpPlan<MirScalarExpr>>,
+    /// common part into the shared source MFP. Keeping the unplanned form here lets it
+    /// work on `mz_now()` predicates directly, so the composed source MFP is planned
+    /// only once.
+    source_get_mfps: BTreeMap<LirId, MapFilterProject<MirScalarExpr>>,
 }
 
 impl Context {
@@ -240,7 +239,7 @@ impl Context {
         // source's reads and hoist the shared prefix into the source itself.
         self.refine_source_mfps(&mut dataflow);
 
-        Ok(dataflow)
+        dataflow.try_map_source_operators(MfpPlan::create_from)
     }
 
     /// Identifies common parts of the `MapFilterProject`s pushed onto sibling `Get::Collection`
@@ -248,21 +247,19 @@ impl Context {
     /// source's own MFP.
     ///
     /// The reads' MFPs are lowering artifacts (MIR sees only `Get(GlobalId)`),
-    /// so this belongs in lowering. We run on MIR because only MIR can
-    /// utter the `mz_now()` predicates that temporal bounds fold into, so it
-    /// consumes the MIR `MfpPlan`s stashed in [`Self::source_get_mfps`] rather
-    /// than round-tripping the lowered LIR plans back through MIR.
-    fn refine_source_mfps(&mut self, dataflow: &mut LirDataflowDescription) {
+    /// so this belongs in lowering. It works on the reads' unplanned MFPs stashed
+    /// in [`Self::source_get_mfps`]: a pushed-down temporal predicate then arrives
+    /// in the same form as its copy already in the source's MFP, so `optimize`
+    /// merges the two, and the source MFP is planned only once, at the end of
+    /// lowering.
+    fn refine_source_mfps(&mut self, dataflow: &mut DataflowDescription<LirRelationExpr>) {
         for (source_id, source_import) in dataflow.source_imports.iter_mut() {
             let source = &mut source_import.desc;
             let source_id = *source_id;
             let mut identity_present = false;
 
-            // Collect the MIR `MfpPlan`s pushed onto this source's
-            // `Get::Collection` reads. Folding their temporal bounds back into
-            // `mz_now()` predicates (`into_map_filter_project`) lets
-            // `extract_common`'s column remapping apply uniformly across the
-            // whole MFP. Also note identity reads, which block pushdown.
+            // Collect the unplanned MFPs pushed onto this source's
+            // `Get::Collection` reads. Also note identity reads, which block pushdown.
             let mut taken: Vec<(LirId, MapFilterProject<MirScalarExpr>)> = Vec::new();
             for build_desc in dataflow.objects_to_build.iter() {
                 let mut todo = vec![&build_desc.plan];
@@ -272,14 +269,11 @@ impl Context {
                         if *id == Id::Global(source_id) {
                             match plan {
                                 GetPlan::Collection(_) => {
-                                    let mir_plan = self
+                                    let mfp = self
                                         .source_get_mfps
                                         .remove(&expression.lir_id)
-                                        .expect("stashed MIR MfpPlan for source Get::Collection");
-                                    taken.push((
-                                        expression.lir_id,
-                                        mir_plan.into_map_filter_project(),
-                                    ));
+                                        .expect("stashed MFP for source Get::Collection");
+                                    taken.push((expression.lir_id, mfp));
                                 }
                                 GetPlan::PassArrangements => {
                                     identity_present = true;
@@ -452,9 +446,9 @@ impl Context {
                     })
                     .max_by_key(|(key, _val)| key.0.len());
 
-                // A source-import `Get::Collection`'s MIR `MfpPlan`, retained for
+                // A source-import `Get::Collection`'s unplanned MFP, retained for
                 // `refine_source_mfps`. Stashed by `LirId` once the id is allocated below.
-                let mut source_get_mfp: Option<MfpPlan<MirScalarExpr>> = None;
+                let mut source_get_mfp: Option<MapFilterProject<MirScalarExpr>> = None;
 
                 // Determine the plan of action for the `Get` stage.
                 let plan = if let Some(((key, permutation, thinning), val)) = &key_val {
@@ -489,12 +483,15 @@ impl Context {
                             vec![(key.clone(), permutation.clone(), thinning.clone())];
                         GetPlan::Arrangement(key.clone(), None, mfp_mir_to_lir_plan(mfp))
                     } else {
-                        let mir_plan = mfp.into_plan().expect("MFP planning failed");
+                        // `into_plan` optimizes first too, so this changes nothing about
+                        // the plan; it makes the stashed MFP the one that was planned.
+                        mfp.optimize();
                         if let Id::Global(gid) = id {
                             if self.source_imports.contains(gid) {
-                                source_get_mfp = Some(mir_plan.clone());
+                                source_get_mfp = Some(mfp.clone());
                             }
                         }
+                        let mir_plan = mfp.into_plan().expect("MFP planning failed");
                         GetPlan::Collection(mfp_plan_mir_to_lir(mir_plan))
                     }
                 } else {
@@ -523,8 +520,8 @@ impl Context {
                     };
 
                 let lir_id = self.allocate_lir_id();
-                if let Some(mir_plan) = source_get_mfp {
-                    self.source_get_mfps.insert(lir_id, mir_plan);
+                if let Some(mfp) = source_get_mfp {
+                    self.source_get_mfps.insert(lir_id, mfp);
                 }
                 let node = LirRelationNode::Get {
                     id: id.clone(),
