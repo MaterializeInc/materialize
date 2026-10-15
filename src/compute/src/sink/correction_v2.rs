@@ -2441,6 +2441,8 @@ mod tests {
             (3, 60, 20),
             (10, 80, 21),
             (0, 200, 90),
+            // Entirely below the since of 90.
+            (10, 60, 120),
             (85, 300, 300),
         ];
         for (step, (lo, hi, upper)) in steps.into_iter().enumerate() {

@@ -844,7 +844,11 @@ mod write {
                     || batch.persist_frontier.is_some()
                     || batch.force_consolidation
                 {
-                    batch.ok_chain = take_queued_chain(&mut pending_ok, &mut pending_bytes);
+                    batch.ok_chain = take_queued_chain(
+                        &mut pending_ok,
+                        &mut pending_bytes,
+                        state.persist_frontiers.frontier(),
+                    );
                 }
 
                 if !batch.is_empty() {
@@ -883,7 +887,11 @@ mod write {
                     // must reach the write task first.
                     if !pending_ok.is_empty() && state.batch_ready() {
                         let mut flush = BatchUpdates::new();
-                        flush.ok_chain = take_queued_chain(&mut pending_ok, &mut pending_bytes);
+                        flush.ok_chain = take_queued_chain(
+                            &mut pending_ok,
+                            &mut pending_bytes,
+                            state.persist_frontiers.frontier(),
+                        );
                         if !flush.is_empty() {
                             cmd_tx
                                 .send(WriteCommand::Batch(flush))
@@ -902,9 +910,13 @@ mod write {
 
     /// Mint the pending `ok` updates into a queued chain, emptying them. Returns `None` if they
     /// consolidate away.
+    ///
+    /// `persist_frontier` must be the operator's current persist frontier, which every
+    /// `WriteCommand::Batch` sent so far has forwarded to the write task.
     fn take_queued_chain(
         pending: &mut Vec<(Row, Timestamp, Diff)>,
         pending_bytes: &mut usize,
+        persist_frontier: &Antichain<Timestamp>,
     ) -> Option<ConsolidatedChain<Row>> {
         *pending_bytes = 0;
         if pending.is_empty() {
@@ -913,6 +925,22 @@ mod write {
         // Taken, not drained, so the buffer does not keep the capacity of the largest activation
         // for the life of the sink.
         let mut pending = std::mem::take(pending);
+        // The write task advances its `since` to each persist frontier this operator forwards, in
+        // order, and moves updates below the `since` up to it. Advancing them here changes nothing
+        // the task emits, and it keeps a chain out of `insert_chain`'s stale path, which reads
+        // every chunk back out of the pool. Without it, a rehydrating sink, whose persist frontier
+        // passes the as-of before the desired snapshot arrives, would queue its whole snapshot
+        // below the `since`.
+        let Some(&since) = persist_frontier.as_option() else {
+            // An empty frontier means the shard is closed, and the write task discards all
+            // updates.
+            return None;
+        };
+        for (_, time, _) in &mut pending {
+            if *time < since {
+                *time = since;
+            }
+        }
         // Depth 1 is the lowest depth at which the default `column_chunk_compress_min_depth`
         // compresses a spilled chunk, so a queued backlog spills in its smaller form. On a
         // lineitem x4 hydration, depths 0 and 1 measured within run-to-run noise.
@@ -1340,6 +1368,39 @@ mod write {
         use mz_persist_client::metrics::Metrics;
 
         use super::*;
+
+        #[mz_ore::test]
+        // Columnation regions are not Stacked Borrows compliant.
+        #[cfg_attr(miri, ignore)]
+        fn take_queued_chain_advances_to_persist_frontier() {
+            let row = |s: &str| Row::pack_slice(&[mz_repr::Datum::String(s)]);
+            let frontier = Antichain::from_elem(Timestamp::from(10));
+            // `a` cancels once both of its times advance to the frontier.
+            let mut pending = vec![
+                (row("a"), Timestamp::from(3), Diff::ONE),
+                (row("a"), Timestamp::from(7), -Diff::ONE),
+                (row("b"), Timestamp::from(5), Diff::ONE),
+                (row("c"), Timestamp::from(12), Diff::ONE),
+            ];
+            let mut bytes = 1;
+            let chain = take_queued_chain(&mut pending, &mut bytes, &frontier).expect("not empty");
+            assert!(pending.is_empty());
+            assert_eq!(bytes, 0);
+            assert_eq!(
+                chain.into_updates(),
+                vec![
+                    (row("b"), Timestamp::from(10), Diff::ONE),
+                    (row("c"), Timestamp::from(12), Diff::ONE),
+                ],
+            );
+
+            let mut pending = vec![(row("c"), Timestamp::from(12), Diff::ONE)];
+            assert!(
+                take_queued_chain(&mut pending, &mut bytes, &Antichain::new()).is_none(),
+                "a closed shard takes no updates",
+            );
+            assert!(pending.is_empty());
+        }
 
         /// One stall per worker thread would leave scheduling to chance, so oversubscribe: with
         /// more stalls than workers every worker is guaranteed to pick one up.
