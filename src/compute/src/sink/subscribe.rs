@@ -239,15 +239,19 @@ impl SubscribeProtocol {
                 .iter()
                 .rev()
                 .map(|(t, r, d)| (r.as_row_ref(), t, *d));
-            let len = rows[split_at..].len();
-            // We can't estimate the total size of the consolidated bytes exactly without extra work,
-            // so for now we initialize to the length times a small constant factor.
-            let byte_len = len * 32;
+            // Size the consolidated output before packing it. Geometric byte-buffer growth can
+            // otherwise overlap large allocations while the input rows are still resident.
+            let (byte_len, len) = iter::consolidate_update_iter(ship_updates)
+                .fold((0, 0), |(bytes, len), (row, _, _)| {
+                    (bytes + row.byte_len(), len + 1)
+                });
             let mut builder = UpdateCollection::builder(byte_len, len);
-            for update in iter::consolidate_update_iter(ship_updates) {
-                builder.push(update);
+            // Release each input row after copying it, rather than retaining the entire input
+            // alongside the packed output.
+            let ship_updates = rows.drain(split_at..).rev().map(|(t, r, d)| (r, t, d));
+            for (row, time, diff) in iter::consolidate_update_iter(ship_updates) {
+                builder.push((row.as_row_ref(), &time, diff));
             }
-            rows.truncate(split_at);
             builder.build()
         };
         let (keep_errors, ship_errors) = errors.drain(..).partition(|u| upper.less_equal(&u.0));
