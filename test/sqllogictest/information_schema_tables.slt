@@ -154,7 +154,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_index_columns
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_indexes
@@ -290,6 +290,10 @@ VIEW
 materialize
 mz_internal
 mz_builtin_columns
+VIEW
+materialize
+mz_internal
+mz_builtin_index_columns
 VIEW
 materialize
 mz_internal
