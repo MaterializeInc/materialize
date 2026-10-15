@@ -29,10 +29,12 @@ class MarkdownLinkGateTest(unittest.TestCase):
         self.root.mkdir()
         self.page = self.root / "index.md"
 
-    def check(self, content: str, *options: str) -> subprocess.CompletedProcess[str]:
+    def check(
+        self, content: str, *options: str, base_url: str = BASE_URL
+    ) -> subprocess.CompletedProcess[str]:
         self.page.write_text(content)
         return subprocess.run(
-            [sys.executable, str(CHECKER), str(self.root), BASE_URL, *options],
+            [sys.executable, str(CHECKER), str(self.root), base_url, *options],
             capture_output=True,
             text=True,
             check=False,
@@ -57,8 +59,28 @@ class MarkdownLinkGateTest(unittest.TestCase):
         bad_url = BASE_URL.removesuffix("markdown-docs/") + "docs/sql/create-cluster/"
         result = self.check(f"[Malformed]({bad_url})", "--fail-on-links")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("Links with a duplicated /docs/ prefix: 1", result.stdout)
+        self.assertIn(
+            "Links with a repeated base path or /docs/ prefix: 1", result.stdout
+        )
         self.assertIn(bad_url, result.stdout)
+
+    def test_repeated_base_path_fails_link_gate(self) -> None:
+        site_url = BASE_URL.removesuffix("markdown-docs/")
+        bad_url = site_url + "materialize/39470/sql/types/numeric"
+        result = self.check(f"[Malformed]({bad_url})", "--fail-on-links")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "Links with a repeated base path or /docs/ prefix: 1", result.stdout
+        )
+        self.assertIn(bad_url, result.stdout)
+
+    def test_site_at_root_flags_no_link_as_repeated(self) -> None:
+        result = self.check(
+            "[Page](https://example.com/sql/types/numeric)",
+            "--fail-on-links",
+            base_url="https://example.com/markdown-docs/",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
 
 
 if __name__ == "__main__":

@@ -5,8 +5,8 @@
   A link to a page becomes the absolute URL of that page's Markdown, keeping
   any #fragment. Any other link inside the docs, such as an image, becomes an
   absolute URL under the base path. Root-relative links ("/sql/create-cluster/")
-  resolve against the docs root; some data files write them with the base path
-  already included ("/docs/sql/..."). Path-relative links ("../create-role")
+  resolve against the docs root, whether or not they already carry the base path
+  or the production "/docs/" prefix. Path-relative links ("../create-role")
   resolve against the page's own directory, as they do from the HTML page.
   Fragments, absolute URLs, other schemes and <angle-bracket> targets are left
   alone.
@@ -25,8 +25,8 @@
   {{- $path := index (split $target "#") 0 -}}
   {{- $fragment := strings.TrimPrefix $path $target -}}
   {{- if strings.HasPrefix $path "/" -}}
-    {{- /* Data-file links can include the production /docs/ prefix even in a preview build. */ -}}
-    {{- $path = strings.TrimPrefix "/docs/" $path | strings.TrimPrefix "/" | printf "/%s" -}}
+    {{- /* Shortcode links already carry the base path from relURL, and data-file links can carry the production /docs/ prefix in any build. Leaving either in place repeats a prefix in the URL, which 404s. */ -}}
+    {{- $path = strings.TrimPrefix (printf "%s/" $basePath) $path | strings.TrimPrefix "/docs/" | strings.TrimPrefix "/" | printf "/%s" -}}
   {{- else -}}
     {{- $dir := .page.RelPermalink | strings.TrimPrefix $basePath | strings.TrimSuffix "index.md" -}}
     {{- $path = path.Join $dir $path | printf "/%s" | replaceRE `^//` "/" -}}

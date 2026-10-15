@@ -18,7 +18,7 @@ Reads a built markdown-docs tree, the output of
   Agent-Friendly Documentation Spec (https://agentdocsspec.com/spec/web/);
 - links to another Markdown page, by the URL the page is served at, that name
   no file in the tree;
-- links that repeat the /docs/ prefix after the site base path;
+- links that repeat the site's base path, or the /docs/ prefix, after it;
 - root-relative links, such as `/sql/create-cluster`, and path-relative links,
   such as `../create-role`, which do not resolve once the Markdown is read away
   from the site.
@@ -44,6 +44,7 @@ import argparse
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 WARN_CHARS = 50_000
 FAIL_CHARS = 100_000
@@ -91,9 +92,13 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # A /docs/-prefixed source link must lose that prefix before the preview's
-    # base path is added. Otherwise it becomes /materialize/PR/docs/... .
-    docs_base_url = args.base_url.removesuffix("markdown-docs/")
+    # A root-relative source link that still carries the base path, or the
+    # production /docs/ prefix, comes out with that prefix twice, as in
+    # /materialize/PR/materialize/PR/sql/... or /materialize/PR/docs/sql/... .
+    site_url = args.base_url.removesuffix("markdown-docs/")
+    doubled_prefixes = {f"{site_url}docs/"}
+    if base_path := urlparse(site_url).path.lstrip("/"):
+        doubled_prefixes.add(f"{site_url}{base_path}")
 
     pages = sorted(args.root.rglob("*.md"))
     large: list[tuple[int, str]] = []
@@ -115,7 +120,7 @@ def main() -> int:
                 path = target[len(args.base_url) :].split("#", 1)[0]
                 if not (args.root / path).is_file():
                     broken.append((name, target))
-            elif target.startswith(f"{docs_base_url}docs/"):
+            elif target.startswith(tuple(doubled_prefixes)):
                 doubled_prefix.append((name, target))
             elif not NOT_RELATIVE_RE.match(target):
                 relative["root" if target.startswith("/") else "path"] += 1
@@ -130,7 +135,7 @@ def main() -> int:
     print(f"Broken links to Markdown pages: {len(broken)}")
     for name, target in broken:
         print(f"  {name}: {target}")
-    print(f"Links with a duplicated /docs/ prefix: {len(doubled_prefix)}")
+    print(f"Links with a repeated base path or /docs/ prefix: {len(doubled_prefix)}")
     for name, target in doubled_prefix:
         print(f"  {name}: {target}")
     print(
