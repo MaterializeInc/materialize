@@ -14,18 +14,24 @@ import { useLocation } from "react-router-dom";
 
 import { Cluster, Replica } from "~/api/materialize/cluster/clusterList";
 import { ReplicaUtilization } from "~/api/materialize/cluster/replicaUtilization";
+import { buildSqlQueryHandlerV2 } from "~/api/mocks/buildSqlQueryHandler";
+import server from "~/api/mocks/server";
 import { uiPreviewOptInStorageKey } from "~/hooks/useUiPreview";
 import { getStore } from "~/jotai";
 import { allClusters } from "~/store/allClusters";
 import { mockSubscribeState } from "~/test/mockSubscribe";
-import { renderComponent, RenderWithPathname } from "~/test/utils";
+import {
+  MSW_HANDLER_LOADING_WAIT_TIME,
+  renderComponent,
+  RenderWithPathname,
+} from "~/test/utils";
 import {
   formatDate,
   FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
 } from "~/utils/dateFormat";
 
 import ClustersListPage from "./ClustersList";
-import { ReplicaHydrationCounts } from "./queries";
+import { clusterQueryKeys, ReplicaHydrationCounts } from "./queries";
 
 // The per-replica table is a UI preview: its flag must be on AND the user
 // opted in (seeded into localStorage below). The global useFlags mock in
@@ -419,6 +425,64 @@ describe("ClustersList preview gating", () => {
     expect(
       screen.queryByRole("columnheader", { name: "CPU" }),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("ClustersList cluster sizes for the alter menu", () => {
+  const holdClusterSizes = () =>
+    server.use(
+      buildSqlQueryHandlerV2(
+        { queryKey: clusterQueryKeys.availableClusterSizes(), results: [] },
+        { waitTimeMs: MSW_HANDLER_LOADING_WAIT_TIME },
+      ),
+    );
+
+  it("shows the per-replica rows while the sizes load", async () => {
+    holdClusterSizes();
+    await renderClustersList([buildCluster()]);
+
+    expect(rowOrder()).toEqual(["r1", "r2"]);
+  });
+
+  it("shows the classic table's rows while the sizes load", async () => {
+    holdClusterSizes();
+    localStorage.removeItem(
+      uiPreviewOptInStorageKey("clusterListUsageMetrics"),
+    );
+    await renderClustersList([buildCluster()]);
+
+    expect(
+      screen.getByRole("columnheader", { name: "Replicas" }),
+    ).toBeVisible();
+    expect(screen.getByText("compute")).toBeVisible();
+  });
+
+  it("disables Alter cluster while the sizes load", async () => {
+    holdClusterSizes();
+    const user = userEvent.setup();
+    await renderClustersList([buildCluster()]);
+
+    await user.click(
+      screen.getAllByRole("button", { name: "More actions" })[0],
+    );
+
+    expect(
+      await screen.findByRole("menuitem", { name: "Alter cluster" }),
+    ).toBeDisabled();
+  });
+
+  it("enables Alter cluster once the sizes load", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([buildCluster()]);
+
+    await user.click(
+      screen.getAllByRole("button", { name: "More actions" })[0],
+    );
+
+    const alterCluster = await screen.findByRole("menuitem", {
+      name: "Alter cluster",
+    });
+    await waitFor(() => expect(alterCluster).toBeEnabled());
   });
 });
 
