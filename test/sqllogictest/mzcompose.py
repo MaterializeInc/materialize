@@ -662,6 +662,10 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/materialized_views.slt",
         "test/sqllogictest/mz_audit_events.slt",
         "test/sqllogictest/mz_catalog_server_index_accounting.slt",
+        # Lists every user object by id and asserts on exact allocated item ids
+        # and type OIDs, which --auto-index-selects perturbs by creating wrapper
+        # views and indexes.
+        "test/sqllogictest/mz_columns.slt",
         "test/sqllogictest/mztimestamp.slt",
         "test/sqllogictest/name_resolution.slt",
         "test/sqllogictest/not-null-propagation.slt",
@@ -1117,6 +1121,10 @@ def compileSlowSltConfig() -> SltRunConfig:
         # wrapper views. The singlereplica_ prefix also pins it to one replica,
         # since extra replicas shift id allocation and add replica rows.
         "test/sqllogictest/singlereplica_comment_id_collision.slt",
+        # Lists every user object by id and asserts on exact allocated item ids
+        # and type OIDs, which --auto-index-selects perturbs by creating wrapper
+        # views and indexes.
+        "test/sqllogictest/mz_columns.slt",
     }
 
     tests = file_util.resolve_paths_with_wildcard(tests)
