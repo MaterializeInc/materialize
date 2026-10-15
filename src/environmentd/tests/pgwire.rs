@@ -515,6 +515,242 @@ async fn test_startup_params_survive_reset() {
     }
 }
 
+/// The kinds of the execution time notices in `notices` that were not read yet. A notice
+/// precedes its statement's completion message, so it has arrived by the time the statement's
+/// future resolves.
+fn execution_time_kinds(
+    notices: &mut mpsc::UnboundedReceiver<postgres::error::DbError>,
+) -> Vec<String> {
+    let mut kinds = Vec::new();
+    while let Ok(notice) = notices.try_recv() {
+        if *notice.code() == SqlState::from_code("MZ012") {
+            let detail: serde_json::Value = serde_json::from_str(notice.detail().unwrap()).unwrap();
+            kinds.push(detail["kind"].as_str().unwrap().to_string());
+        }
+    }
+    kinds
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
+async fn test_execution_time_notice() {
+    let server = test_util::TestHarness::default().start().await;
+    let (notice_tx, mut notices) = mpsc::unbounded_channel();
+    let mut client = server
+        .connect()
+        .options("--emit_execution_time_notice=on --welcome_message=off")
+        .notice_callback(move |notice| notice_tx.send(notice).unwrap())
+        .await
+        .unwrap();
+
+    client
+        .batch_execute("CREATE TABLE t (a int)")
+        .await
+        .unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["completed"]);
+    // A simple query commits before the last statement's CommandComplete, so its write is
+    // reported as committed. The extended protocol commits at Sync, after CommandComplete.
+    client
+        .batch_execute("INSERT INTO t VALUES (1), (2)")
+        .await
+        .unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["committed"]);
+    client
+        .execute("INSERT INTO t VALUES (3)", &[])
+        .await
+        .unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["staged"]);
+    // A write that returns rows is timed as a write: over the extended protocol a constant
+    // INSERT stages its rows, while a write that reads a table is applied when it executes.
+    client
+        .query("INSERT INTO t VALUES (4) RETURNING a", &[])
+        .await
+        .unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["staged"]);
+    client
+        .simple_query("INSERT INTO t SELECT a FROM t WHERE a = 4 RETURNING a")
+        .await
+        .unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["committed"]);
+    client.simple_query("SELECT a FROM t").await.unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["first_row"]);
+    client
+        .simple_query("SELECT a FROM t WHERE a < 0")
+        .await
+        .unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["empty_result"]);
+
+    client
+        .batch_execute("SET client_min_messages = warning")
+        .await
+        .unwrap();
+    client.simple_query("SELECT a FROM t").await.unwrap();
+    assert!(execution_time_kinds(&mut notices).is_empty());
+    client
+        .batch_execute("RESET client_min_messages")
+        .await
+        .unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["completed"]);
+
+    // A portal executed in steps reports on the step that saw the first row.
+    let txn = client.transaction().await.unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["completed"]);
+    let portal = txn.bind("SELECT a FROM t", &[]).await.unwrap();
+    txn.query_portal(&portal, 1).await.unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["first_row"]);
+    txn.query_portal(&portal, 1).await.unwrap();
+    assert!(execution_time_kinds(&mut notices).is_empty());
+    // Likewise a cursor, on the FETCH that sees the first row.
+    txn.batch_execute("DECLARE rows CURSOR FOR SELECT a FROM t")
+        .await
+        .unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["completed"]);
+    txn.batch_execute("FETCH 1 rows").await.unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["first_row"]);
+    txn.batch_execute("FETCH 1 rows").await.unwrap();
+    assert!(execution_time_kinds(&mut notices).is_empty());
+    txn.commit().await.unwrap();
+    assert_eq!(execution_time_kinds(&mut notices), ["completed"]);
+
+    // SUBSCRIBE reports no execution time, also when fetched through a cursor.
+    let txn = client.transaction().await.unwrap();
+    txn.batch_execute("DECLARE c CURSOR FOR SUBSCRIBE t")
+        .await
+        .unwrap();
+    assert_eq!(
+        execution_time_kinds(&mut notices),
+        ["completed", "completed"]
+    );
+    txn.batch_execute("FETCH 1 c").await.unwrap();
+    assert!(execution_time_kinds(&mut notices).is_empty());
+    txn.rollback().await.unwrap();
+}
+
+// A write that reads a table is applied when it executes, so it reports `committed` even over the
+// extended protocol, whose implicit commit runs at `Sync`, after `CommandComplete`.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[allow(clippy::disallowed_methods)]
+async fn test_execution_time_notice_read_then_write() {
+    let server = test_util::TestHarness::default().start().await;
+    let (notice_tx, mut notices) = mpsc::unbounded_channel();
+    let client = server
+        .connect()
+        .options("--emit_execution_time_notice=on --welcome_message=off")
+        .notice_callback(move |notice| notice_tx.send(notice).unwrap())
+        .await
+        .unwrap();
+
+    client
+        .batch_execute("CREATE TABLE t (a int)")
+        .await
+        .unwrap();
+    client
+        .batch_execute("INSERT INTO t VALUES (1)")
+        .await
+        .unwrap();
+    assert_eq!(
+        execution_time_kinds(&mut notices),
+        ["completed", "committed"]
+    );
+    for write in [
+        "UPDATE t SET a = a + 1",
+        "INSERT INTO t SELECT a FROM t",
+        "DELETE FROM t WHERE a > 1",
+    ] {
+        client.execute(write, &[]).await.unwrap();
+        assert_eq!(execution_time_kinds(&mut notices), ["committed"], "{write}");
+    }
+}
+
+// The execution time notice precedes the completion message of the statement it describes, so a
+// client can attach it to that statement. tokio-postgres runs the notice callback before a
+// statement's future resolves whatever the order, so this test reads the raw messages.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_execution_time_notice_order() {
+    use postgres_protocol::message::backend::Message;
+    use postgres_protocol::message::frontend;
+
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut stream = TcpStream::connect(server.sql_local_addr()).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(120)))
+        .unwrap();
+    let mut buf = BytesMut::new();
+    frontend::startup_message(
+        vec![
+            ("user", "materialize"),
+            ("database", DEFAULT_DATABASE_NAME),
+            (
+                "options",
+                "--welcome_message=off --emit_execution_time_notice=on",
+            ),
+        ],
+        &mut buf,
+    )
+    .unwrap();
+    stream.write_all(&buf).unwrap();
+    read_until_ready(&mut stream);
+
+    // The message type bytes, with an execution time notice as "MZ012" and other notices left out.
+    let tags = |msgs: Vec<Message>| -> Vec<String> {
+        msgs.into_iter()
+            .filter_map(|msg| match msg {
+                Message::NoticeResponse(notice) => {
+                    let code = notice
+                        .fields()
+                        .find(|f| Ok(f.type_() == b'C'))
+                        .unwrap()
+                        .map(|f| String::from_utf8_lossy(f.value_bytes()).into_owned());
+                    code.filter(|code| code == "MZ012")
+                }
+                Message::ParseComplete => Some("1".into()),
+                Message::BindComplete => Some("2".into()),
+                Message::RowDescription(_) => Some("T".into()),
+                Message::DataRow(_) => Some("D".into()),
+                Message::PortalSuspended => Some("s".into()),
+                Message::CommandComplete(_) => Some("C".into()),
+                Message::ReadyForQuery(_) => Some("Z".into()),
+                _ => Some("?".into()),
+            })
+            .collect()
+    };
+    let mut simple_query = |sql: &str| {
+        let mut buf = BytesMut::new();
+        frontend::query(sql, &mut buf).unwrap();
+        stream.write_all(&buf).unwrap();
+        tags(read_until_ready(&mut stream))
+    };
+
+    assert_eq!(simple_query("CREATE TABLE t (a int)"), ["MZ012", "C", "Z"]);
+    assert_eq!(
+        simple_query("INSERT INTO t VALUES (1), (2)"),
+        ["MZ012", "C", "Z"]
+    );
+    assert_eq!(
+        simple_query("SELECT a FROM t"),
+        ["T", "D", "D", "MZ012", "C", "Z"]
+    );
+
+    // A portal executed with a row limit reports before `PortalSuspended`.
+    let mut buf = BytesMut::new();
+    frontend::parse("", "SELECT a FROM t", std::iter::empty(), &mut buf).unwrap();
+    put_frontend_message(&mut buf, b'B', |buf| {
+        buf.put_u8(0); // unnamed portal
+        buf.put_u8(0); // unnamed statement
+        buf.put_u16(0); // no parameter formats
+        buf.put_u16(0); // no parameters
+        buf.put_u16(0); // results in text
+    });
+    frontend::execute("", 1, &mut buf).unwrap();
+    frontend::sync(&mut buf);
+    stream.write_all(&buf).unwrap();
+    assert_eq!(
+        tags(read_until_ready(&mut stream)),
+        ["1", "2", "D", "MZ012", "s", "Z"]
+    );
+}
+
 // SQL-529: DISCARD ALL has to reset session variables over the extended query
 // protocol as well as the simple one. tokio-postgres `execute`/`query` run over
 // the extended protocol, while `batch_execute` runs over the simple one, so the

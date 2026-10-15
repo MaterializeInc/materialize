@@ -481,3 +481,24 @@ http
 ----
 200 OK
 {"results":[{"tag":"SELECT 1","rows":[["1702968637123.056"]],"desc":{"columns":[{"name":"col","type_oid":1184,"type_len":8,"type_mod":-1}]},"notices":[]}]}
+
+# Execution time notices. Each Extended query commits on its own, before its result.
+http fixtiming=true
+{"queries":[{"query":"SET emit_execution_time_notice = on"},{"query":"CREATE TABLE timing_h (a int)"},{"query":"INSERT INTO timing_h VALUES (1)"},{"query":"SELECT a FROM timing_h"}]}
+----
+200 OK
+{"results":[{"ok":"SET","notices":[{"message":"execution time: <DURATION> ms (completed)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>,\"strategy\":null}"}]},{"ok":"CREATE TABLE","notices":[{"message":"execution time: <DURATION> ms (completed)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>,\"strategy\":null}"}]},{"ok":"INSERT 0 1","notices":[{"message":"execution time: <DURATION> ms (committed)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"committed\",\"duration_us\":<DURATION>,\"strategy\":null}"}]},{"tag":"SELECT 1","rows":[["1"]],"desc":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"execution time: <DURATION> ms (first_row)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>,\"strategy\":\"standard\"}"}]}]}
+
+# A write that does not end its group is staged: the group commits after its last statement.
+http fixtiming=true
+{"query":"SET emit_execution_time_notice = on; INSERT INTO timing_h VALUES (2); SELECT 1"}
+----
+200 OK
+{"results":[{"ok":"SET","notices":[{"message":"execution time: <DURATION> ms (completed)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>,\"strategy\":null}"}]},{"ok":"INSERT 0 1","notices":[{"message":"execution time: <DURATION> ms (staged)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"staged\",\"duration_us\":<DURATION>,\"strategy\":null}"}]},{"tag":"SELECT 1","rows":[["1"]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"execution time: <DURATION> ms (first_row)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>,\"strategy\":\"constant\"}"}]}]}
+
+# The implicit commit reverts SET LOCAL, which the result reports after the statement's own value.
+http fixtiming=true
+{"queries":[{"query":"SET emit_execution_time_notice = on"},{"query":"SET LOCAL application_name = 'timing'"}]}
+----
+200 OK
+{"results":[{"ok":"SET","notices":[{"message":"execution time: <DURATION> ms (completed)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>,\"strategy\":null}"}]},{"ok":"SET","notices":[{"message":"execution time: <DURATION> ms (completed)","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>,\"strategy\":null}"}],"parameters":[{"name":"application_name","value":"timing"},{"name":"application_name","value":""}]}]}

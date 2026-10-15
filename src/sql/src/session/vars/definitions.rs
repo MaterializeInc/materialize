@@ -1293,6 +1293,13 @@ pub static EMIT_PLAN_INSIGHTS_NOTICE: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static EMIT_EXECUTION_TIME_NOTICE: VarDefinition = VarDefinition::new(
+    "emit_execution_time_notice",
+    value!(bool; false),
+    "Boolean flag indicating whether to send a NOTICE with the server-side execution time of each statement (Materialize).",
+    true,
+);
+
 pub static EMIT_TIMESTAMP_NOTICE: VarDefinition = VarDefinition::new(
     "emit_timestamp_notice",
     value!(bool; false),

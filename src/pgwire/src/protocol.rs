@@ -27,8 +27,8 @@ use mz_adapter::session::{
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, PeekResponseUnary, metrics,
-    verify_datum_desc,
+    AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, ExecutionTime,
+    ExecutionTimeKind, PeekResponseUnary, metrics, verify_datum_desc,
 };
 use mz_adapter_types::dyncfgs::OIDC_GROUP_CLAIM;
 use mz_auth::Authenticated;
@@ -642,6 +642,8 @@ where
         conn,
         adapter_client,
         txn_needs_commit: false,
+        ends_simple_query: false,
+        reverted_parameters: BTreeMap::new(),
         tokio_metrics_intervals,
     };
 
@@ -854,6 +856,11 @@ where
     conn: &'a mut FramedConn<A>,
     adapter_client: mz_adapter::SessionClient,
     txn_needs_commit: bool,
+    /// Whether the statement being executed is the last one of a simple query, see
+    /// [`StateMachine::commit_before_complete`].
+    ends_simple_query: bool,
+    /// Parameters reverted by `commit_before_complete`, announced by `ready`.
+    reverted_parameters: BTreeMap<&'static str, String>,
     tokio_metrics_intervals: I,
 }
 
@@ -1330,7 +1337,7 @@ where
         let num_stmts = stmts.len();
 
         // Compare with postgres' backend/tcop/postgres.c exec_simple_query.
-        for StatementParseResult { ast: stmt, sql } in stmts {
+        for (idx, StatementParseResult { ast: stmt, sql }) in stmts.into_iter().enumerate() {
             // In an aborted transaction, reject all commands except COMMIT/ROLLBACK.
             if self.is_aborted_txn() && !is_txn_exit_stmt(Some(&stmt)) {
                 self.aborted_txn_error().await?;
@@ -1346,17 +1353,20 @@ where
             // statement.
             self.ensure_transaction(num_stmts, "query").await?;
 
-            match self
+            self.ends_simple_query = idx + 1 == num_stmts;
+            let state = self
                 .one_query(stmt, sql.to_string(), LifecycleTimestamps { received })
-                .await?
-            {
+                .await;
+            self.ends_simple_query = false;
+            match state? {
                 State::Ready => (),
                 State::Drain => break,
                 State::Done => return Ok(State::Done),
             }
         }
 
-        // Implicit transactions are closed at the end of a Query message.
+        // Implicit transactions are closed at the end of a Query message. The last statement
+        // committed already (`commit_before_complete`), unless it did not complete.
         {
             if self.adapter_client.session().transaction().is_implicit() {
                 self.commit_transaction().await?;
@@ -1480,6 +1490,32 @@ where
             }
         }
         Ok(())
+    }
+
+    /// Commits the implicit transaction before the `CommandComplete` of the statement that ends
+    /// a simple query, and returns the commit's error, if any.
+    ///
+    /// Callers must send that error in place of the `CommandComplete`: PostgreSQL's
+    /// `exec_simple_query` commits before the last statement's `CommandComplete`, so a client
+    /// sees the statement's success or the commit's failure, never both.
+    async fn commit_before_complete(&mut self) -> Result<Option<ErrorResponse>, io::Error> {
+        if !self.ends_simple_query || !self.adapter_client.session().transaction().is_implicit() {
+            return Ok(None);
+        }
+        match self
+            .adapter_client
+            .end_transaction(EndTransactionAction::Commit)
+            .await
+        {
+            Ok(ExecuteResponse::TransactionCommitted { params }) => {
+                // Announced with `ReadyForQuery`, after the statement's `CommandComplete`, as
+                // `end_transaction` does when the query's commit follows its last statement.
+                self.reverted_parameters.extend(params);
+                Ok(None)
+            }
+            Ok(_) => Ok(None),
+            Err(err) => Ok(Some(err.into_response(Severity::Error))),
+        }
     }
 
     /// Announces changed parameters, restricted to those the client is told
@@ -1845,6 +1881,9 @@ where
                             },
                         );
                     }
+                    if let Some(err) = self.commit_before_complete().await? {
+                        return self.send_error_and_get_state(err).await;
+                    }
                     self.send(BackendMessage::CommandComplete { tag }).await?;
                     Ok(State::Ready)
                 }
@@ -2098,6 +2137,32 @@ where
         Ok(())
     }
 
+    /// Sends the opted-in execution time of a statement that returns no rows.
+    ///
+    /// A write that its implicit transaction still holds is reported as staged: with the
+    /// extended protocol, the commit runs at `Sync`, after the statement's `CommandComplete`.
+    async fn send_completion_time(
+        &mut self,
+        execute_started: Instant,
+        write: bool,
+    ) -> Result<(), io::Error> {
+        let session = self.adapter_client.session();
+        let kind = if write {
+            ExecutionTimeKind::for_write(session.has_staged_writes())
+        } else {
+            ExecutionTimeKind::Completed
+        };
+        let notice = session.execution_time_notice(ExecutionTime {
+            kind,
+            elapsed: execute_started.elapsed(),
+            strategy: None,
+        });
+        if let Some(notice) = notice {
+            self.send(notice.into_response()).await?;
+        }
+        Ok(())
+    }
+
     #[instrument(level = "debug")]
     async fn sync(&mut self) -> Result<State, io::Error> {
         // Close the current transaction if we are in an implicit transaction.
@@ -2109,6 +2174,8 @@ where
 
     #[instrument(level = "debug")]
     async fn ready(&mut self) -> Result<State, io::Error> {
+        let reverted_parameters = mem::take(&mut self.reverted_parameters);
+        self.send_parameter_statuses(reverted_parameters).await?;
         let txn_state = self.adapter_client.session().transaction().into();
         self.send(BackendMessage::ReadyForQuery(txn_state)).await?;
         self.flush().await
@@ -2128,9 +2195,14 @@ where
         execute_started: Instant,
     ) -> Result<State, io::Error> {
         let mut tag = response.tag();
+        let write = ExecutionTimeKind::is_write(&response, self.adapter_client.session());
 
         macro_rules! command_complete {
             () => {{
+                if let Some(err) = self.commit_before_complete().await? {
+                    return self.send_error_and_get_state(err).await;
+                }
+                self.send_completion_time(execute_started, write).await?;
                 self.send(BackendMessage::CommandComplete {
                     tag: tag
                         .take()
@@ -2271,13 +2343,16 @@ where
                     .send_rows(
                         row_desc,
                         portal_name,
-                        InProgressRows::new(RecordFirstRowStream::new(
-                            rx,
-                            execute_started,
-                            &self.adapter_client,
-                            Some(instance_id),
-                            None,
-                        )),
+                        InProgressRows::new(
+                            RecordFirstRowStream::new(
+                                rx,
+                                execute_started,
+                                &self.adapter_client,
+                                Some(instance_id),
+                                None,
+                            )
+                            .without_execution_time(),
+                        ),
                         max_rows,
                         get_response,
                         fetch_portal_name,
@@ -2705,6 +2780,14 @@ where
             }
         }
 
+        let execution_time = rows.remaining.take_execution_time();
+        let returning_write = self
+            .adapter_client
+            .session()
+            .get_portal_unverified(&portal_name)
+            .and_then(|portal| portal.stmt.as_deref())
+            .is_some_and(ExecutionTimeKind::is_returning_write);
+
         let portal = self
             .adapter_client
             .session()
@@ -2731,8 +2814,6 @@ where
                 .expect("valid fetch portal")
         });
         let response_message = get_response(max_rows, total_sent_rows, fetch_portal);
-        self.send(response_message).await?;
-
         // Attend to metrics if there are no more rows. Only record once per stream
         // to avoid polluting the histogram when an exhausted cursor is FETCHed again.
         if no_more_rows && !metric_recorded {
@@ -2765,8 +2846,35 @@ where
                 .observe(duration.as_secs_f64());
         }
 
+        // Committing clears the session's portals, so this comes after their last use above.
+        let commit_started = Instant::now();
+        let commit_error = match response_message {
+            BackendMessage::CommandComplete { .. } => self.commit_before_complete().await?,
+            _ => None,
+        };
+        let commit = commit_started.elapsed();
+        let state = match commit_error {
+            Some(err) => self.send_error_and_get_state(err).await?,
+            None => {
+                let session = self.adapter_client.session();
+                let notice = execution_time.and_then(|time| {
+                    let time = if returning_write {
+                        time.for_returning_write(session.has_staged_writes(), commit)
+                    } else {
+                        time
+                    };
+                    session.execution_time_notice(time)
+                });
+                if let Some(notice) = notice {
+                    self.send(notice.into_response()).await?;
+                }
+                self.send(response_message).await?;
+                State::Ready
+            }
+        };
+
         Ok((
-            State::Ready,
+            state,
             SendRowsEndedReason::Success {
                 result_size: u64::cast_from(total_sent_bytes),
                 rows_returned: u64::cast_from(total_sent_rows),
@@ -2924,9 +3032,15 @@ where
 
         let tag = format!("COPY {}", count);
         self.send(BackendMessage::CopyDone).await?;
-        self.send(BackendMessage::CommandComplete { tag }).await?;
+        let state = match self.commit_before_complete().await? {
+            Some(err) => self.send_error_and_get_state(err).await?,
+            None => {
+                self.send(BackendMessage::CommandComplete { tag }).await?;
+                State::Ready
+            }
+        };
         Ok((
-            State::Ready,
+            state,
             SendRowsEndedReason::Success {
                 result_size: u64::cast_from(total_sent_bytes),
                 rows_returned: u64::cast_from(count),
@@ -3264,6 +3378,15 @@ where
                 .await;
         }
 
+        if let Some(err) = self.commit_before_complete().await? {
+            self.adapter_client.retire_execute(
+                std::mem::take(ctx_extra),
+                StatementEndedExecutionReason::Errored {
+                    error: err.message.clone(),
+                },
+            );
+            return self.send_error_and_get_state(err).await;
+        }
         let tag = format!("COPY {}", row_count);
         self.send(BackendMessage::CommandComplete { tag }).await?;
 
