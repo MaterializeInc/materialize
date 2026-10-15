@@ -1,0 +1,104 @@
+{
+  "function": "checkpoint_write",
+  "cases": [
+    {
+      "name": "a take-over carries the frontier it read",
+      "input": {
+        "current": {"format": 1, "epoch": "2", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": "take_over"
+      },
+      "expect": {"write": {"kind": "take_over", "frontier": "10", "expected": "{\"epoch\":\"2\",\"format\":1,\"frontier\":\"10\",\"generation\":\"1\",\"snapshot_as_of\":null,\"subscriptions\":{}}", "new": "{\"epoch\":\"3\",\"format\":1,\"frontier\":\"10\",\"generation\":\"1\",\"snapshot_as_of\":null,\"subscriptions\":{}}"}}
+    },
+    {
+      "name": "a commit carries its frontier",
+      "input": {
+        "current": {"format": 1, "epoch": "2", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"commit": {"upper": "20"}}
+      },
+      "expect": {"write": {"kind": "commit", "frontier": "20", "expected": "{\"epoch\":\"2\",\"format\":1,\"frontier\":\"10\",\"generation\":\"1\",\"snapshot_as_of\":null,\"subscriptions\":{}}", "new": "{\"epoch\":\"2\",\"format\":1,\"frontier\":\"20\",\"generation\":\"1\",\"snapshot_as_of\":null,\"subscriptions\":{}}"}}
+    },
+    {
+      "name": "the first commit after a snapshot starts completes the snapshot",
+      "input": {
+        "current": {"format": 1, "epoch": "2", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": {"commit": {"upper": "41"}}
+      },
+      "expect": {"write": {"kind": "complete_snapshot", "frontier": "41", "generation": "2", "expected": "{\"epoch\":\"2\",\"format\":1,\"frontier\":null,\"generation\":\"2\",\"snapshot_as_of\":\"40\",\"subscriptions\":{}}", "new": "{\"epoch\":\"2\",\"format\":1,\"frontier\":\"41\",\"generation\":\"2\",\"snapshot_as_of\":null,\"subscriptions\":{}}"}}
+    },
+    {
+      "name": "starting a snapshot raises the generation",
+      "input": {
+        "current": {"format": 1, "epoch": "2", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"start_snapshot": {"subscriptions": {}, "as_of": "40"}}
+      },
+      "expect": {"write": {"kind": "start_snapshot", "as_of": "40", "old_generation": "1", "generation": "2", "expected": "{\"epoch\":\"2\",\"format\":1,\"frontier\":\"10\",\"generation\":\"1\",\"snapshot_as_of\":null,\"subscriptions\":{}}", "new": "{\"epoch\":\"2\",\"format\":1,\"frontier\":null,\"generation\":\"2\",\"snapshot_as_of\":\"40\",\"subscriptions\":{}}"}}
+    },
+    {
+      "name": "a snapshot write leaves the text unchanged",
+      "input": {
+        "current": {"format": 1, "epoch": "2", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": "snapshot_write"
+      },
+      "expect": {"write": {"kind": "snapshot_write", "generation": "2", "expected": "{\"epoch\":\"2\",\"format\":1,\"frontier\":null,\"generation\":\"2\",\"snapshot_as_of\":\"40\",\"subscriptions\":{}}", "new": "{\"epoch\":\"2\",\"format\":1,\"frontier\":null,\"generation\":\"2\",\"snapshot_as_of\":\"40\",\"subscriptions\":{}}"}}
+    },
+    {
+      "name": "a snapshot write needs a snapshot in progress",
+      "input": {
+        "current": {"format": 1, "epoch": "2", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": "snapshot_write"
+      },
+      "expect": {"error": "usage"}
+    },
+    {
+      "name": "new fingerprints are their own kind of write",
+      "input": {
+        "current": {"format": 1, "epoch": "2", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {
+          "fingerprints": {
+            "subscriptions": {
+              "orders": {
+                "object": {"id": "u7", "database": "db", "schema": "public", "name": "orders"},
+                "shard": "s1",
+                "envelope": {"kind": "diff"},
+                "columns": [{"name": "id", "type_oid": 20, "type_mod": -1, "nullable": false}]
+              }
+            }
+          }
+        }
+      },
+      "expect": {"write": {"kind": "fingerprints", "expected": "{\"epoch\":\"2\",\"format\":1,\"frontier\":\"10\",\"generation\":\"1\",\"snapshot_as_of\":null,\"subscriptions\":{}}", "new": "{\"epoch\":\"2\",\"format\":1,\"frontier\":\"10\",\"generation\":\"1\",\"snapshot_as_of\":null,\"subscriptions\":{\"orders\":{\"columns\":[{\"name\":\"id\",\"nullable\":false,\"type_mod\":-1,\"type_oid\":20}],\"envelope\":{\"kind\":\"diff\"},\"object\":{\"database\":\"db\",\"id\":\"u7\",\"name\":\"orders\",\"schema\":\"public\"},\"shard\":\"s1\"}}}"}}
+    },
+    {
+      "name": "a commit that does not advance is refused",
+      "input": {
+        "current": {"format": 1, "epoch": "2", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"commit": {"upper": "10"}}
+      },
+      "expect": {"conflict": "invalid_range", "lower": "10", "upper": "10"}
+    },
+    {
+      "name": "a commit that does not close the snapshot is refused",
+      "input": {
+        "current": {"format": 1, "epoch": "2", "generation": "2", "frontier": null, "snapshot_as_of": "40", "subscriptions": {}},
+        "operation": {"commit": {"upper": "40"}}
+      },
+      "expect": {"conflict": "snapshot_not_closed", "as_of": "40", "upper": "40"}
+    },
+    {
+      "name": "a commit before the first snapshot started is refused",
+      "input": {
+        "current": {"format": 1, "epoch": "2", "generation": "1", "frontier": null, "snapshot_as_of": null, "subscriptions": {}},
+        "operation": {"commit": {"upper": "10"}}
+      },
+      "expect": {"error": "usage"}
+    },
+    {
+      "name": "a take-over refuses to wrap the epoch",
+      "input": {
+        "current": {"format": 1, "epoch": "18446744073709551615", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
+        "operation": "take_over"
+      },
+      "expect": {"error": "checkpoint"}
+    }
+  ]
+}
