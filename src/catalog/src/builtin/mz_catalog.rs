@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use mz_catalog_protos::objects::CatalogItemType;
 use mz_pgrepr::oid;
 use mz_repr::namespaces::MZ_CATALOG_SCHEMA;
 use mz_repr::{RelationDesc, SemanticType, SqlScalarType};
@@ -22,6 +23,7 @@ use mz_sql::rbac;
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SUPPORT_USER_NAME, SYSTEM_USER_NAME};
 use mz_storage_client::controller::IntrospectionType;
 
+use super::builtin::gid_mapping_object_type;
 use super::{
     BuiltinIndex, BuiltinMaterializedView, BuiltinSource, BuiltinTable, BuiltinType, BuiltinView,
     Cardinality, LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
@@ -608,67 +610,174 @@ WHERE data->>'kind' = 'Schema'",
         }),
     });
 
-pub static MZ_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_columns",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_COLUMNS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false)) // not a key
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("position", SqlScalarType::UInt64.nullable(false))
-        .with_column("nullable", SqlScalarType::Bool.nullable(false))
-        .with_column("type", SqlScalarType::String.nullable(false))
-        .with_column("default", SqlScalarType::String.nullable(true))
-        .with_column("type_oid", SqlScalarType::Oid.nullable(false))
-        .with_column("type_mod", SqlScalarType::Int32.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "id",
-            "The unique ID of the table, source, or view containing the column.",
-        ),
-        ("name", "The name of the column."),
-        (
-            "position",
-            "The 1-indexed position of the column in its containing table, source, or view.",
-        ),
-        ("nullable", "Can the column contain a `NULL` value?"),
-        ("type", "The data type of the column."),
-        ("default", "The default expression of the column."),
-        (
-            "type_oid",
-            "The OID of the type of the column (references `mz_types`).",
-        ),
-        ("type_mod", "The packed type identifier of the column."),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "column",
-        description: "A column of a relation, with its name, position, type, and nullability",
-        links: &const {
-            [OntologyLink {
-                name: "belongs_to_relation",
-                target: "object",
-                properties: LinkProperties::ForeignKey {
-                    source_column: "id",
-                    target_column: "id",
-                    cardinality: Cardinality::ManyToOne,
-                    source_id_type: None,
-                    requires_mapping: None,
-                    nullable: false,
-                    note: Some("id in mz_columns is the relation ID, not a unique column ID"),
-                    extra_key_columns: None,
-                },
-            }]
-        },
-        column_semantic_types: &const {
-            [
-                ("id", SemanticType::CatalogItemId),
-                ("type_oid", SemanticType::OID),
-            ]
-        },
-    }),
+pub static MZ_COLUMNS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    // A user relation's columns are the `ItemColumn` rows its catalog item
+    // records.
+    //
+    // NOTE(benesch): the `mz_columns.type text` field is
+    // wrong. Types do not have a name that can be
+    // represented as a single textual field. There can be
+    // multiple types with the same name in different
+    // schemas and databases. We should eventually deprecate
+    // the `type` field in favor of a new `type_id` field
+    // that can be joined against `mz_types`.
+    //
+    // For now, in the interest of pragmatism, we just use
+    // the type's item name, and accept that there may be
+    // ambiguity if the same type name is used in multiple
+    // schemas. The ambiguity is mitigated by the OID, which
+    // can be joined against `mz_types.oid` to resolve the
+    // ambiguity.
+    //
+    // TODO(SQL-495): `mz_type_name` may be NULL if we ever forget to map an OID
+    // to a name in `mz-pgrepr`. So a type it cannot name reads 'unknown' until
+    // we replace `mz_type_name` with a join on `mz_builtin_types`.
+    let sql = format!(
+        "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL position,
+    ASSERT NOT NULL nullable,
+    ASSERT NOT NULL type,
+    ASSERT NOT NULL type_oid,
+    ASSERT NOT NULL type_mod
+) AS
+WITH
+    items AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            data->'value'->>'name' AS name,
+            (data->'value'->>'oid')::oid AS oid,
+            -- A table's column defaults
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->'column_defaults' AS column_defaults
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'Item'
+    ),
+    user_columns AS (
+        SELECT
+            i.id,
+            c.data->'value'->>'name' AS name,
+            -- Add one since position is 0-indexed
+            (c.data->'key'->>'position')::uint8 + 1::uint8 AS position,
+            (c.data->'value'->>'nullable')::bool AS nullable,
+            coalesce(custom.name, mz_internal.mz_type_name((c.data->'value'->>'type_oid')::oid), 'unknown') AS type,
+            i.column_defaults->>(c.data->'value'->>'name') AS default,
+            coalesce(custom.oid, (c.data->'value'->>'type_oid')::oid) AS type_oid,
+            (c.data->'value'->>'type_mod')::int4 AS type_mod
+        FROM
+            mz_internal.mz_catalog_raw AS c
+            JOIN items AS i ON i.id = mz_internal.parse_catalog_id(c.data->'key'->'id')
+            -- A column may have a custom type from a `CREATE TYPE` item of a list, map or record type.
+            -- We store the catalog ID of the custom type in the catalog and join on items to get its type
+            -- name and OID
+            CROSS JOIN LATERAL (
+                SELECT CASE
+                    WHEN jsonb_typeof(c.data->'value'->'custom_type') = 'object'
+                    THEN mz_internal.parse_catalog_id(c.data->'value'->'custom_type')
+                END
+            ) AS ct(custom_type)
+            LEFT JOIN items AS custom ON custom.id = ct.custom_type
+        WHERE c.data->>'kind' = 'ItemColumn'
+    ),
+    builtin_relations AS (
+        SELECT
+            's' || (data->'value'->>'catalog_id') AS id,
+            data->'key'->>'schema_name' AS schema_name,
+            data->'key'->>'object_name' AS name
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'GidMapping' AND
+            data->'key'->>'object_type' IN ({table}, {source}, {view}, {materialized_view})
+    ),
+    builtin_columns AS (
+        SELECT
+            r.id,
+            b.name,
+            b.position,
+            b.nullable,
+            b.type,
+            b.default,
+            b.type_oid,
+            b.type_mod
+        FROM mz_internal.mz_builtin_columns b
+        JOIN builtin_relations r ON r.schema_name = b.schema_name AND r.name = b.relation_name
+    )
+SELECT * FROM user_columns
+UNION ALL
+SELECT * FROM builtin_columns",
+        table = gid_mapping_object_type(CatalogItemType::Table),
+        source = gid_mapping_object_type(CatalogItemType::Source),
+        view = gid_mapping_object_type(CatalogItemType::View),
+        materialized_view = gid_mapping_object_type(CatalogItemType::MaterializedView),
+    );
+    BuiltinMaterializedView {
+        name: "mz_columns",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_COLUMNS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false)) // not a key
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("position", SqlScalarType::UInt64.nullable(false))
+            .with_column("nullable", SqlScalarType::Bool.nullable(false))
+            .with_column("type", SqlScalarType::String.nullable(false))
+            .with_column("default", SqlScalarType::String.nullable(true))
+            .with_column("type_oid", SqlScalarType::Oid.nullable(false))
+            .with_column("type_mod", SqlScalarType::Int32.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "The unique ID of the table, source, or view containing the column.",
+            ),
+            ("name", "The name of the column."),
+            (
+                "position",
+                "The 1-indexed position of the column in its containing table, source, or view.",
+            ),
+            ("nullable", "Can the column contain a `NULL` value?"),
+            ("type", "The data type of the column."),
+            (
+                "default",
+                "The default expression of the column, or `NULL` if it has none.",
+            ),
+            (
+                "type_oid",
+                "The OID of the type of the column (references `mz_types`).",
+            ),
+            ("type_mod", "The packed type identifier of the column."),
+        ]),
+        sql: Box::leak(sql.into_boxed_str()),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "column",
+            description: "A column of a relation, with its name, position, type, and nullability",
+            links: &const {
+                [OntologyLink {
+                    name: "belongs_to_relation",
+                    target: "object",
+                    properties: LinkProperties::ForeignKey {
+                        source_column: "id",
+                        target_column: "id",
+                        cardinality: Cardinality::ManyToOne,
+                        source_id_type: None,
+                        requires_mapping: None,
+                        nullable: false,
+                        note: Some("id in mz_columns is the relation ID, not a unique column ID"),
+                        extra_key_columns: None,
+                    },
+                }]
+            },
+            column_semantic_types: &const {
+                [
+                    ("id", SemanticType::CatalogItemId),
+                    ("type_oid", SemanticType::OID),
+                ]
+            },
+        }),
+    }
 });
 
 /// User-created indexes, sourced from `mz_catalog_raw` `Item` entries with
