@@ -134,10 +134,15 @@ Replicas execute committed selections, without forced adoption.
 
 The remaining resource-bounded workload failure is aggregate memory exhaustion.
 Attribute growth across the replica population, not only the largest process.
-Use existing cache and spill-pool observations for a bounded comparison before
-choosing a memory repair. Host-derived pool sizing can exceed the parent-cgroup
-budget, but that visibility difference alone does not establish resident ownership
-or causation. Compare actual CI agent resources, not requested queue labels.
+The concrete transient allocation boundary is subscribe row packing and compute
+response serialization during large UPDATEs. Exact packing preallocation and
+incremental input release did not establish an improvement in the reduced
+two-table case. Keep that experiment out of the landing history. Use the captured
+allocation stacks to select the next bounded comparison, then verify a promising
+repair against the original workload and resource budget.
+Preserve consolidation, row ordering, batch frontiers and the wire contract.
+Do not turn this into a transport protocol or memory-policy redesign.
+Compare actual CI agent resources, not requested queue labels.
 Keep concurrent DDL timeouts distinct from confirmed OOM failures. Preserve
 historical reads, source flow control, protection and the original resource budget.
 Reduced decoding and a larger-host pass do not establish original-workload progress.
@@ -145,6 +150,13 @@ Keep the driver file-descriptor issue parked. SQL completion and actual
 per-object compaction-bound advancement still need separate verification.
 Do not attribute these to the acknowledgement bug or claim lifecycle changes solve
 them without correlated evidence. Detailed captures and verification are in the PR.
+
+The metric-sink registration panic has a distinct collector-identity collision.
+Verify independent live sinks and independent teardown while preserving all companion
+observations and same-label predecessor exclusion. Keep this separate from the
+parked collector-scheduling change. No retry-deadline increase is needed.
+Keep the ON REFRESH compaction-driven reactivation assertion open separately from
+the SLT job timeout. Preserve that scheduling contract rather than rewriting its count.
 
 The brittle zero-row OCC timing fixture is retired by design decision. Coverage
 no longer directly tests response ordering in the delayed-oracle race. The
