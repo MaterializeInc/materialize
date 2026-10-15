@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_repr::{SqlScalarType, arb_datum_for_scalar};
+use mz_repr::{Row, SqlScalarType, arb_datum_for_scalar, strconv};
 use proptest::prelude::*;
 use proptest::strategy::Union;
 
@@ -95,16 +95,6 @@ fn jq_withheld_filters_are_undefined() {
     assert!(compile("$ENV").is_err());
 }
 
-fn from_val(val: &Val) -> Result<Jsonb, String> {
-    let mut row = Row::default();
-    pack_val(&mut row.packer(), val, 0)?;
-    Ok(Jsonb::from_row(row))
-}
-
-fn str_val(s: &[u8]) -> Val {
-    Val::utf8_str(s.to_vec())
-}
-
 fn arb_jsonb() -> impl Strategy<Value = Jsonb> {
     arb_datum_for_scalar(SqlScalarType::Jsonb)
         .prop_map(|d| Jsonb::from_row(Row::pack_slice(&[Datum::from(&d)])))
@@ -128,9 +118,9 @@ proptest! {
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
-    fn jq_val_roundtrip(input in arb_input()) {
-        let val = to_val(input.as_ref().into_datum());
-        prop_assert_eq!(from_val(&val), Ok(input));
+    fn jq_identity_roundtrip(input in arb_input()) {
+        let program = JqProgram::new(".").expect("valid program");
+        prop_assert_eq!(program.eval(input.as_ref()), Ok(Some(input)));
     }
 }
 
@@ -153,50 +143,18 @@ fn jq_to_val_numbers() {
 }
 
 #[mz_ore::test]
-fn jq_from_val_rejects_non_json() {
-    let byte_str = Val::byte_str(b"x".to_vec());
-    let cases = [
-        Val::Num(Num::Float(f64::NAN)),
-        Val::Num(Num::Float(f64::INFINITY)),
-        byte_str.clone(),
-        Val::obj([(Val::Null, Val::Null)].into_iter().collect()),
-        // The first of two keys that are equal after invalid UTF-8 is
-        // replaced is dropped, but its value must still be JSON.
-        Val::obj(
-            [(str_val(b"\x80"), byte_str), (str_val(b"\xff"), Val::Null)]
-                .into_iter()
-                .collect(),
-        ),
-    ];
-    for val in cases {
-        assert!(from_val(&val).is_err(), "{val:?}");
+#[cfg_attr(miri, ignore)] // too slow
+fn jq_output_must_be_json() {
+    for program in ["nan", "infinite", r#""x" | tobytes"#, "{(1): 2}"] {
+        let err = run("null", program).expect_err(program);
+        assert!(
+            err.starts_with("jq: output is not JSON"),
+            "{program}: {err}"
+        );
     }
-}
-
-#[mz_ore::test]
-fn jq_from_val_duplicate_keys_last_wins() {
-    let val = Val::obj(
-        [
-            (str_val(b"\x80"), Val::Bool(false)),
-            (str_val(b"\xff"), Val::Bool(true)),
-        ]
-        .into_iter()
-        .collect(),
-    );
-    assert_eq!(from_val(&val), Ok("{\"\u{fffd}\": true}".parse().unwrap()));
-}
-
-#[mz_ore::test]
-fn jq_from_val_depth() {
-    for (depth, ok) in [(MAX_OUTPUT_DEPTH - 1, true), (MAX_OUTPUT_DEPTH, false)] {
-        let mut arr = Val::Null;
-        let mut obj = Val::Null;
-        for _ in 0..depth {
-            arr = Val::Arr(jaq_json::Rc::new(vec![arr]));
-            obj = Val::obj([(str_val(b"k"), obj)].into_iter().collect());
-        }
-        for val in [arr, obj] {
-            assert_eq!(from_val(&val).is_ok(), ok, "depth {depth}");
-        }
-    }
+    // Invalid UTF-8 is replaced. Keys that are equal after replacement keep
+    // the last value, as `jsonb` text parsing does.
+    let split =
+        r#"{("é" | tobytes | .[0:1] | tostring): 1, ("é" | tobytes | .[1:2] | tostring): 2}"#;
+    assert_eq!(run("null", split), Ok(Some("{\"\u{fffd}\":2}".into())));
 }
