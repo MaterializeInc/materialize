@@ -823,15 +823,11 @@ pub const MV_SINK_ADVANCE_PERSIST_FRONTIERS: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
-/// Enables the watchdog dataflow that reports dataflows exceeding their heap size limit.
+/// Enables enforcement of the heap size limits that `max_query_heap_size` supplies.
 ///
-/// Rendering the watchdog costs a small amount of steady-state work per replica, so it is gated
-/// separately from the `max_query_heap_size` session variable that supplies the limits.
-///
-/// The two directions are not symmetric. A replica decides whether to render the watchdog once,
-/// when it initializes its logging dataflow, so enabling this only takes effect on replicas
-/// created afterwards. Disabling it takes effect immediately, because a replica also consults it
-/// when it installs a dataflow's limit, and a limit that is never installed is never enforced.
+/// Enabling takes effect on replicas created afterwards, because a replica renders the watchdog
+/// dataflow only when it initializes logging. Disabling takes effect immediately, including for
+/// dataflows that already carry a limit.
 pub const ENABLE_COMPUTE_HEAP_SIZE_LIMIT: Config<bool> = Config::new(
     "enable_compute_heap_size_limit",
     false,

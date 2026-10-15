@@ -858,8 +858,8 @@ impl ExportState {
 #[derive(Debug)]
 struct ArrangementSizeState {
     /// The Timely dataflow hosting the arrangement, taken from the first element of the
-    /// arrangement operator's address.
-    dataflow_id: usize,
+    /// arrangement operator's address. `None` if the address is empty.
+    dataflow_id: Option<usize>,
     size: isize,
     capacity: isize,
     count: isize,
@@ -1374,10 +1374,10 @@ impl DemuxHandler<'_, '_, '_> {
         let address: Rc<[usize]> = address.into_iter().collect();
         // An operator's address starts at the dataflow that hosts it, so its first element names
         // the Timely dataflow index the compute state keys the collection's limit by.
-        let Some(&dataflow_id) = address.first() else {
+        let dataflow_id = address.first().copied();
+        if dataflow_id.is_none() {
             error!(%operator_id, "arrangement size operator has an empty address");
-            return;
-        };
+        }
         let activator = Activator::new(address, Rc::clone(&self.state.activations));
         let state = ArrangementSizeState {
             dataflow_id,
@@ -1386,11 +1386,14 @@ impl DemuxHandler<'_, '_, '_> {
             count: 0,
         };
         let existing = self.state.arrangement_size.insert(operator_id, state);
+        let ts = self.ts();
         if existing.is_some() {
             error!(%operator_id, "arrangement size operator already registered");
-        }
-        let ts = self.ts();
-        if let Some(output) = &mut self.output.arrangement_dataflows {
+        } else if let (Some(output), Some(dataflow_id)) =
+            (&mut self.output.arrangement_dataflows, dataflow_id)
+        {
+            // Only the first registration maps the operator, because the drop retracts the
+            // mapping once. A second `+1` would double the operator's bytes in the watchdog.
             output.give(((operator_id, dataflow_id), ts, Diff::ONE));
         }
         let existing = self
@@ -1433,8 +1436,10 @@ impl DemuxHandler<'_, '_, '_> {
                 output.give(((operator_id, ()), ts, diff));
             }
 
-            if let Some(output) = &mut self.output.arrangement_dataflows {
-                output.give(((operator_id, state.dataflow_id), ts, Diff::MINUS_ONE));
+            if let (Some(output), Some(dataflow_id)) =
+                (&mut self.output.arrangement_dataflows, state.dataflow_id)
+            {
+                output.give(((operator_id, dataflow_id), ts, Diff::MINUS_ONE));
             }
         }
         self.shared_state

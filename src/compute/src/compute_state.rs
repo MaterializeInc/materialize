@@ -888,9 +888,8 @@ impl<'a> ActiveComputeState<'a> {
                 .insert(id, Rc::clone(&suspension_token));
         }
 
-        // The gate is read here as well as at logging initialization, so that turning the feature
-        // off stops enforcement immediately. Enabling it on a replica whose logging predates the
-        // flag fills this map without a watchdog to read it, which is harmless.
+        // Enabling the flag on a replica whose logging predates it fills this map without a
+        // watchdog to read it, which is harmless.
         if let Some(limit) = dataflow.heap_size_limit {
             // Exceeding a limit fails the query the dataflow serves, and there is no such query
             // behind an index or a materialized view, so the controller only ever sets a limit on
@@ -1533,19 +1532,7 @@ impl<'a> ActiveComputeState<'a> {
         }
     }
 
-    /// Reports dataflows the watchdog found to be over their heap size limit.
-    ///
-    /// The report names the collection rather than the Timely dataflow, because the dataflow index
-    /// is a replica-local detail the controller does not track. A dataflow with a limit is
-    /// transient and therefore exports exactly one collection, but the scan tolerates more.
-    ///
-    /// Reporting is all this does. The replica never drops the offending dataflow on its own
-    /// judgement, because the controller owns which dataflows a replica runs and a self-inflicted
-    /// drop would leave the replica's dataflow set disagreeing with the command history the
-    /// controller reconciles against. The heap size is summed across all of a replica's workers,
-    /// so in a multi-process replica the verdict is reached in one process and there is no
-    /// protocol to carry it to the others. The price is a command round trip before the memory is
-    /// released, which the approximate accounting already concedes.
+    /// Reports each collection whose dataflow the watchdog found over its heap size limit.
     pub fn process_heap_size_limits(&self) {
         let exceeded = std::mem::take(
             &mut *self
@@ -1556,7 +1543,20 @@ impl<'a> ActiveComputeState<'a> {
         if exceeded.is_empty() {
             return;
         }
+        // Disabling the flag also stops enforcement for dataflows installed while it was on.
+        if !ENABLE_COMPUTE_HEAP_SIZE_LIMIT.get(&self.compute_state.worker_config) {
+            return;
+        }
 
+        // The report names the collection, because the dataflow index is replica-local. A
+        // dataflow with a limit is transient and exports exactly one collection, but the scan
+        // tolerates more.
+        //
+        // Reporting is all this does. The replica never drops the offending dataflow itself,
+        // because the controller owns which dataflows a replica runs, and a self-inflicted drop
+        // would diverge from the command history the controller reconciles against. The heap
+        // size is summed across all workers, so in a multi-process replica only one process
+        // reaches the verdict and there is no protocol to carry it to the others.
         let limits = self.compute_state.heap_size_limits.borrow();
         for (&collection_id, state) in self.compute_state.collections.iter() {
             let Some(&heap_size) = exceeded.get(&*state.dataflow_index) else {

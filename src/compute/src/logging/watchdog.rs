@@ -49,7 +49,7 @@ pub(super) struct Inputs<'scope> {
 ///
 /// `limits` maps a Timely dataflow index to the heap size limit in bytes the controller set for
 /// it, and is maintained by the compute state as dataflows come and go. A dataflow whose total
-/// heap size reaches its limit is recorded in `exceeded`, together with the size observed, which
+/// heap size exceeds its limit is recorded in `exceeded`, together with the size observed, which
 /// the worker's main loop drains and turns into controller responses.
 pub(super) fn construct<'scope>(
     scope: Scope<'scope, Timestamp>,
