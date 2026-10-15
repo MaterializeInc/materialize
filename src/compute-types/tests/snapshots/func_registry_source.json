@@ -491,6 +491,7 @@
     "is_null": {"display":"isnull","sqlfunc_decl":"#[sqlfunc(sqlname = \"isnull\", is_monotone = true)] fn is_null<'a>(a: Datum<'a>) -> bool","body_fingerprint":"25f4a93191d65fc3"},
     "is_regexp_match": {"display":"is_regexp_match[\"a+\", case_insensitive=false]","sqlfunc_decl":"#[sqlfunc(IsRegexpMatch, skip_display = true)] fn is_regexp_match<'a>(&self, haystack: &'a str) -> bool","body_fingerprint":"00c554bbff3117ba"},
     "is_true": {"display":"istrue","sqlfunc_decl":"#[sqlfunc(sqlname = \"istrue\")] fn is_true<'a>(a: Datum<'a>) -> bool","body_fingerprint":"0d2708068b853ab5"},
+    "jq": {"display":"jq[\".a\"]","sqlfunc_decl":"#[sqlfunc(Jq, skip_display = true)] fn jq<'a>(&self, input: JsonbRef<'a>) -> Result<Option<Jsonb>, EvalError>","body_fingerprint":"3e78b08bfea59634"},
     "jsonb_array_length": {"display":"jsonb_array_length","sqlfunc_decl":"#[sqlfunc] fn jsonb_array_length<'a>(a: JsonbRef<'a>) -> Result<Option<i32>, EvalError>","body_fingerprint":"9024bfd68fba466b"},
     "jsonb_pretty": {"display":"jsonb_pretty","sqlfunc_decl":"#[sqlfunc] fn jsonb_pretty<'a>(a: JsonbRef<'a>) -> String","body_fingerprint":"cbc164d6df8e2304"},
     "jsonb_strip_nulls": {"display":"jsonb_strip_nulls","sqlfunc_decl":"#[sqlfunc] fn jsonb_strip_nulls<'a>(a: JsonbRef<'a>) -> Jsonb","body_fingerprint":"b9675b3ab9906aa1"},

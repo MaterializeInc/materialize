@@ -695,6 +695,10 @@ fn unary_samples() -> Vec<Sample<UnaryFunc>> {
         ),
         unary(IsRegexpMatch(regex()), SqlScalarType::String),
         unary(RegexpMatch(regex()), SqlScalarType::String),
+        unary(
+            Jq(JqProgram::new(".a").expect("valid program")),
+            SqlScalarType::Jsonb,
+        ),
         unary(RegexpSplitToArray(regex()), SqlScalarType::String),
         // Date and time functions carrying units, time zones and formats.
         unary(
