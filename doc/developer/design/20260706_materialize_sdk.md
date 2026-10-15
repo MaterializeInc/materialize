@@ -299,19 +299,20 @@ key across the batch for keyed targets that only want the final state.
 Progress will be an exclusive frontier: everything below `F` is committed. The
 `- 1` will exist in exactly one function in the protocol core.
 
-Committing and fetching will be separate calls, and the SDK runs the loop. It
-takes the next batch with `next()` and hands it to the sink. With a target that
-has transactions, the sink writes the batch and calls `commit(frontier)` inside
-the target's transaction, and the SDK calls `next()` again only after that
-transaction has committed. With a target that has none, the sink writes the
-batch first and the commit follows (see "Delivery guarantees"). A combined call
-would keep the target transaction open while the SDK waits for Materialize,
-which can take seconds, or hours for a `REFRESH` view. While a snapshot is
-written into a new incarnation, the SDK hands over later batches without a
-commit each, and commits once the snapshot completes (see "turbopuffer sink").
-Fetching does not wait
-for the sink. It runs in the background into a bounded buffer (see "Live
-streams").
+The SDK runs the loop. It takes the next batch with `next()` and hands it to the
+sink's `write` (see "Sink API"). A transactional sink gets the expected and the
+new checkpoint text with the batch and writes both in one target transaction,
+and the SDK calls `next()` again only after `write` returns applied or the
+delivery policy skips the batch. A non-transactional sink gets the batch alone,
+and the SDK commits the checkpoint after `write` returns applied. Fetching is
+separate from writing: it runs in the background into a bounded buffer (see
+"Live streams"), so a target transaction never stays open while the SDK waits
+for Materialize, which can take seconds, or hours for a `REFRESH` view. While a
+snapshot is written into a new incarnation, the SDK hands over later batches
+without a commit each, and commits once the snapshot completes (see "turbopuffer
+sink").
+
+The diagram shows a transactional sink.
 
 ```mermaid
 sequenceDiagram
@@ -325,17 +326,25 @@ sequenceDiagram
     D->>C: rows, one call per FETCH
     Note over C: holds rows until a progress row closes them
     C-->>D: batch below frontier F, each change with its mz_timestamp
-    D->>S: write(batch)
+    D->>S: write(batch, checkpoint: expected, new)
     rect rgba(127, 127, 127, 0.12)
         Note over S,T: one target transaction
         S->>T: write changes
-        S->>T: commit(F), conditional on the checkpoint the worker read
+        S->>T: replace the checkpoint, only if it is still expected
+        S->>T: COMMIT
     end
-    S-->>D: transaction committed
-    Note over D: next() hands over the next batch
+    alt applied
+        S-->>D: applied
+        Note over D: next() hands over the next batch
+    else not applied, unknown, or an error
+        S-->>D: result
+        Note over D: settle the checkpoint, or apply the delivery policy
+    end
     Note over M,T: after a crash or restart
-    D->>T: load checkpoint
-    T-->>D: checkpoint with frontier F
+    D->>S: load(sink_id)
+    S-->>D: checkpoint with frontier F
+    D->>S: commit(take-over)
+    S-->>D: applied, after any retry or settling
     D->>C: resume(F)
     C-->>D: SUBSCRIBE ... AS OF F - 1
     D->>M: DECLARE c CURSOR
@@ -461,31 +470,22 @@ the two can apply. Otherwise another write came in between, and the SDK tells
 why as described below. A snapshot write, or a change staged for a multi-view
 cut, commits no frontier and leaves the text unchanged, so a read cannot tell
 whether it applied, and the SDK sends it again while the checkpoint read back is
-still the expected one. That is safe, because each such write replaces a row of
-an older generation, and within its own generation is applied only over an older
-stored change of its key, as turbopuffer writes are. A copy that lands late then
-skips any newer change of the key instead of overwriting it, and applying it
-twice changes nothing. A take-over whose result is unknown takes over again from
-what it reads, because two workers that start from the same checkpoint write the
-same take-over, and a read cannot tell whose landed. It stops once a take-over
-is known to have applied.
+still the expected one. That is safe because of the repeat-safety rule for
+writes that commit no frontier (see "Sink API"). A take-over whose result is
+unknown takes over again from what it reads, because two workers that start from
+the same checkpoint write the same take-over, and a read cannot tell whose
+landed. It stops once a take-over is known to have applied.
 
 The target is the recommended store, because writing data and checkpoint in one
 transaction gives exactly-once state (R1, R5). There the sink implements the
-store's compare-and-set. When the sink calls `commit(frontier)` inside its
-transaction, the SDK passes the store the expected and the new checkpoint text,
-and the store runs the conditional update in that same transaction. A failed
-condition aborts the whole transaction, so none of the batch is written. Each
-write also tells the store what kind of write it is, with the generations
-involved: a take-over, a commit, the start of a snapshot with the old and the
-new generation, the commit that completes a snapshot, new fingerprints, or a
-snapshot write that commits no frontier and only checks the condition. A store
-that keeps fields of its own, like the turbopuffer store, changes them only
-inside such a write, so its changes never race the worker's commits. A
-Materialize-table store and a local file store will ship for targets with no
-transaction. Neither commits atomically with the target, so both give
-`at_least_once` only. The file store fences only workers on one host that share
-its file, so it is meant for development and single-host deployments.
+store's compare-and-set inside `write`, in the same transaction as the batch
+(see "Sink API"), which also lists the kinds of write. A store that keeps fields
+of its own, like the turbopuffer store, changes them only inside such a write,
+so its changes never race the worker's commits. A Materialize-table store and a
+local file store will ship for sinks that cannot store a checkpoint (see "Sink
+API"). Neither commits atomically with the target, so both give at-least-once
+delivery only. The file store fences only workers on one host that share its
+file, so it is meant for development and single-host deployments.
 
 Each worker start will take the next epoch, with a compare-and-set like any
 other write, so two workers that start at once cannot both take the same epoch.
@@ -501,9 +501,9 @@ is `Diverged`, because no write of this worker explains it. Without the fence, a
 second instance of one sink would overwrite the first one's progress. Because a
 take-over is a compare-and-set too, a commit by the old owner between the new
 owner's read and its write makes the take-over fail and read again, instead of
-being overwritten. Under `transactional`, the compare-and-set runs in the same
-transaction as the data, so a batch that was already committed rolls back as a
-whole instead of being applied twice.
+being overwritten. For a `Transactional` sink, the compare-and-set runs in the
+same transaction as the data, so a batch that was already committed rolls back
+as a whole instead of being applied twice.
 
 Every durable subscription will require an explicit `sink_id`, which is its
 checkpoint identity. It is chosen by the user and stays stable across restarts,
@@ -525,12 +525,13 @@ the shard a reconnect would switch objects silently.
 
 ### Delivery guarantees
 
-The user will choose one of two guarantees. Under `transactional`, the target
-commits the batch and the checkpoint together, so state is exactly once. Under
-`at_least_once`, effects run first and the checkpoint commits after. The SDK
-will provide an idempotency key built from the `sink_id`, `mz_timestamp`, the key columns, and an ordinal within the timestamp. An ordinal
-within the batch would break deduplication, because batch boundaries move
-across a resume.
+A sink's type decides its delivery guarantee (see "Sink API"). A `Transactional`
+sink commits the batch and the checkpoint together, so state is exactly once. A
+`NonTransactional` sink applies the batch first and commits the checkpoint
+after, so delivery is at least once. The SDK will provide an idempotency key
+built from the `sink_id`, `mz_timestamp`, the key columns, and an ordinal within
+the timestamp. An ordinal within the batch would break deduplication, because
+batch boundaries move across a resume.
 
 When delivery fails, a policy will return `retry` (back off and deliver the
 same batch again), `skip` (the user has dead-lettered it, advance past it), or
@@ -539,16 +540,17 @@ exponential backoff from 1s to 1m for ten attempts, then `stall` (R2, R3).
 A sink can mark a delivery error as permanent, such as a request the target will
 never accept. The policy sees that mark: the default policy stalls at once
 instead of retrying, and a policy can still `skip` the batch to a dead-letter. A
-stall sends no new writes. A write whose result is unknown can still apply
-later, and a transaction known to have failed rolls back. Restarting does not
+stall sends no new writes, but a write whose result is unknown can still apply
+later (see "Checkpoints and fencing"). Restarting does not
 cure a permanent failure: a restarted worker replays from the checkpoint it
 finds, which reaches the failing data again unless an unknown write landed in
 the meantime. The stall's error says what blocked it and what an operator can
 change. `skip` moves
 the checkpoint past real data, so it will never be a default and will always be
-logged. When the target cannot take a single row, the sink calls `reject(row,
-error)`, and the rest of the batch commits. The SDK also passes `key_violation`
-rows to `reject` by default (see "Sink module").
+logged. When the target cannot take a single row, the sink returns it as
+rejected, and the rest of the batch commits. The SDK also treats `key_violation`
+rows as rejected by default, without passing them to the sink (see "Sink
+module").
 
 A rejection is reported as a structured warning through the logger the
 application configures, with the sink id, the row's `mz_timestamp`, an error
@@ -736,9 +738,10 @@ re-snapshots each expired member at a new timestamp `t_i` while the others
 resume from the cut, and re-establishes the cut at `t*`, the largest `t_i`.
 Each re-snapshotted member writes its snapshot under a new generation scoped to
 that member. The other members stage their changes as ordinary changes, not as
-replacement state. In one step at `t*`, the SDK makes the new snapshots and every
-member's changes through `t*` visible and sweeps older generations of the
-re-snapshotted members only, so unchanged rows of the other members stay. The
+replacement state. In one step at `t*`, the write that completes the cut makes
+the new snapshots and every member's changes through `t*` visible and hides
+older generations of the re-snapshotted members only, so unchanged rows of the
+other members stay. `sweep_generations` deletes the hidden rows later. The
 live members stage every change from the old cut to `t*`, which spans the whole
 outage, and the catch-up can still hit `max_result_size` (see "Buffering
 limits").
@@ -812,34 +815,142 @@ The WebSocket SQL API supports `SUBSCRIBE` but is experimental. It is the
 natural transport for browsers and functions. The protocol core is
 transport-agnostic, so adding it later will not change the model.
 
-### Sink module
+### Sink API
 
-A sink author will implement three things: open the target, write a batch, and
-optionally `reject` rows the target cannot take. With a target that has
-transactions, the sink calls `commit(frontier)` inside the transaction that
-writes the batch, and implements the store's compare-and-set in that
-transaction (see "Checkpoints and fencing"). With a target that has none, the
-SDK commits after the sink's writes. The SDK will drive everything else:
-snapshot, resume, retry, fencing, and the history-loss policy.
+Every sink will implement one API, and the SDK will call it the same way for
+every target. The SDK drives everything else: fetching, snapshot, resume,
+retry, fencing, and the history-loss policy. Which envelope a sink reads and
+which history-loss policy it allows are configuration the SDK checks at
+startup, not calls. In Rust the API will look like this:
+
+```rust
+trait Sink {
+    fn sink_type(&self) -> SinkType;
+    /// Creates the sink's first checkpoint. Run once, by the setup step.
+    async fn create(&mut self, sink_id: &str, checkpoint: &str) -> WriteResult;
+    async fn load(&mut self, sink_id: &str)
+        -> Result<Option<String>, SinkError>;
+    async fn write(
+        &mut self,
+        batch: &Batch,
+        checkpoint: Option<&CheckpointWrite>,
+    ) -> WriteResult;
+    /// A checkpoint write without a batch.
+    async fn commit(&mut self, checkpoint: &CheckpointWrite) -> WriteResult;
+    async fn sweep_generations(&mut self, generations: &Generations)
+        -> Result<(), SinkError>;
+}
+```
+
+- `SinkType` is `Transactional` or `NonTransactional`. It names what the
+  target can do, and the delivery guarantee follows from it (see "Delivery
+  guarantees").
+- `CheckpointWrite` holds the expected and the new checkpoint text and the kind
+  of write, with what the sink needs from it: a take-over with the frontier it
+  read, a commit with its frontier, the start of a snapshot with its `AS OF`
+  and the old and the new generations, a snapshot write or a change staged for
+  a multi-view cut, which commits no frontier (the expected and the new text
+  are the same), the write that completes a snapshot or a cut with the
+  generations it makes visible, or new fingerprints.
+- A `Batch` carries the current generation of each subscription it holds, and
+  says whether it is part of a snapshot.
+- `Generations` holds the generation of each subscription's last completed
+  snapshot, so that a multi-view re-snapshot sweeps only the members it
+  re-snapshotted (see "Multi-view consistency").
+- `WriteResult` is applied, with the rows the target could not take and an
+  error category for each, or not applied, unknown, or an error. An error can be
+  marked permanent (see "Delivery guarantees").
+
+The SDK guarantees every sink that:
+
+- It makes one call at a time, and hands over a batch only after the one
+  before it applied or the delivery policy skipped it.
+- On first delivery, each incremental batch starts where the one before it
+  ended, and every change keeps its `mz_timestamp`. A snapshot arrives as
+  writes that commit no frontier, followed by the write that completes it (see
+  "Live streams").
+- After a failure or a restart, delivery resumes from the committed checkpoint,
+  so what came after it arrives again, possibly split at other timestamps.
+- A `Transactional` sink gets a checkpoint write with every `write`. The SDK
+  merges the batches of one `commit_interval` into one `write` and splits at
+  `max_commit_bytes` (see "Delivery guarantees").
+- A sink that returns `SinkError::NotSupported` from `load` gets no `create` or
+  `commit` calls. The SDK keeps its checkpoint in the store the user
+  configures, a Materialize table by default or a local file, and refuses such
+  a sink if it is `Transactional`. Any other error from `load` goes to the
+  retry policy and never selects that store, because that would resume from a
+  checkpoint the sink did not write.
+- It calls `sweep_generations` after the write that completes a snapshot, and
+  at every worker start while the checkpoint has a frontier, so a crash in
+  between leaves nothing behind.
+- It applies the store's timeout to `create`, `load`, and `commit`, and a
+  timeout the sink sets to `write`. On a timeout it drops the call, and treats
+  a write as unknown and a `load` as an error for the retry policy, so every
+  call must be safe to drop.
+- A worker learns that it was fenced from a failed checkpoint write, and then
+  stops. How a single long write learns it sooner is deferred question 14.
+
+Each call guarantees the SDK:
+
+- `sink_type` must not change for a sink id. `Transactional` requires that
+  each `write` applies its batch and its checkpoint write together or not at
+  all, and that the checkpoint condition sees the latest committed checkpoint.
+  A target whose transactions cannot do both is `NonTransactional`.
+- `create` fails if a checkpoint exists. `load` returns the latest applied
+  checkpoint, and `None` only for a sink that was never set up, which stops
+  the worker. A sink that cannot store a checkpoint, such as a webhook,
+  returns `SinkError::NotSupported` on every call to `load`. Such a sink
+  cannot switch readers to a new incarnation, so it is for event targets.
+- `write` of a `Transactional` sink applies the batch and replaces the expected
+  checkpoint with the new one, only if the stored one is still the expected
+  one, in one target transaction. It returns applied once the transaction
+  committed, and not applied only when the checkpoint condition failed. Any
+  other failure rolls the transaction back and returns an error. When the
+  response to the `COMMIT` is lost it returns unknown: the batch and the
+  checkpoint applied together or not at all, and the SDK settles which as for
+  any unknown write (see "Checkpoints and fencing").
+- `write` of a `NonTransactional` sink returns applied once the target durably
+  accepted every change it did not return as rejected, or an error. After an
+  error or a timeout, part of the batch may have applied, or may still apply
+  later.
+- Every `NonTransactional` write, and every write that commits no frontier, can
+  apply again or late. A keyed sink must leave the target as if each change
+  applied once and in order. An event sink passes the SDK's idempotency key to
+  the receiver, and a receiver that ignores it sees duplicates.
+- `commit` meets the store contract (see "Checkpoints and fencing"), including
+  for the fields a sink keeps next to the checkpoint. Equal checkpoint text does
+  not show whether those fields changed, so such a sink settles them itself.
+  After a dropped or unknown write it keeps that exact conditional write, and
+  sends it again or reads its whole stored record back before it accepts
+  another write.
+- `sweep_generations` deletes the rows each subscription wrote under a
+  generation older than the one given. Until it returns, readers can still see
+  such rows, for example keys deleted before the snapshot's `AS OF`. A sink
+  whose readers must never see them hides older generations in the write that
+  completes the snapshot. A sink that switched readers to a new incarnation in
+  that write, or that has no keyed state, does nothing here.
+
+### Sink module
 
 Keyed-state targets (caches, search indexes, tables) will read the upsert
 envelope. How they re-snapshot depends on whether the target commits data and
 checkpoint in one transaction.
 
-A target with such a transaction will re-snapshot in place: the SDK writes the
-snapshot under a new generation and, at the end, calls a sweep that removes keys
-from older generations. The checkpoint condition in each transaction rolls back
-a stale worker's writes, so nothing outside the snapshot can reach the target.
-The generation is a counter stored in the checkpoint, raised by a conditional
-commit before each re-snapshot attempt starts, and writes after the snapshot
-carry it too. A snapshot's `AS OF` cannot serve as the generation, because a
-retry can pick the same `AS OF` and a new object after a swap can have an older
-one. With a counter, a re-snapshot that crashed and was retried never reuses a
-generation, and keys only the failed attempt wrote are swept. A target with
-transactions never continues a crashed snapshot. Every attempt takes a new
-generation. That removes keys deleted while the sink was offline, which a plain
-re-snapshot leaves behind. A target that needs the snapshot to appear at once
-will make the new generation visible only at the sweep.
+A target with such a transaction will re-snapshot in place: the sink writes the
+snapshot under a new generation and, at the end, the SDK calls
+`sweep_generations` to remove keys from older generations. The checkpoint
+condition in each transaction rolls back a stale worker's writes, so nothing
+outside the snapshot can reach the target. The generation is a counter stored in
+the checkpoint, raised by a conditional commit before each re-snapshot attempt
+starts, and writes after the snapshot carry it too. A snapshot's `AS OF` cannot
+serve as the generation, because a retry can pick the same `AS OF` and a new
+object after a swap can have an older one. With a counter, a re-snapshot that
+crashed and was retried never reuses a generation, and keys only the failed
+attempt wrote are swept. A target with transactions never continues a crashed
+snapshot. Every attempt takes a new generation. That removes keys deleted while
+the sink was offline, which a plain re-snapshot leaves behind. A target that
+needs the snapshot to appear at once makes the new generation visible, and hides
+the older ones, in the write that completes the snapshot (see "Sink API").
 
 A target without such a transaction will re-snapshot into a new incarnation, a
 fresh namespace, keyspace, or table, and switch readers when the snapshot
@@ -873,11 +984,11 @@ the check needs a server change (see "Materialize-side workstream"). Until it la
 its key as not enforced, the same acknowledgement `CREATE SINK` asks for, and
 the docs will state that a key that is not unique makes deletes wrong.
 
-The SDK will pass `key_violation` rows to `reject` by default, and a sink can
+The SDK will treat `key_violation` rows as rejected by default, and a sink can
 choose `stall` instead, so a key violation never crashes the process.
 
 Event targets (webhooks, queues, notifications) will read the diff envelope
-under `at_least_once`, with the idempotency key above. They will declare what a
+at least once, with the idempotency key above. They will declare what a
 retraction means: ignore it, or call a compensating function. Compensation will
 use a correlation key built from the row's key columns only, because the
 idempotency key includes the timestamp and so differs between an insert and its
@@ -926,7 +1037,7 @@ changes to the latest change per key, because a batch spans timestamps and
 turbopuffer rejects a request that names one id twice. The conditions only ever
 let a newer timestamp win, so dropping the older change from a request is safe.
 While tombstones are kept, every write is then safe to repeat and ordered by
-timestamp, so each namespace reaches exactly-once state under `at_least_once`
+timestamp, so each namespace reaches exactly-once state under at-least-once
 delivery, and a batch can be split across requests.
 
 turbopuffer has no transaction around data and checkpoint, so the sink never
@@ -962,15 +1073,15 @@ while the checkpoint has a frontier. The SDK cannot enforce the bound, because a
 process can pause between its last read of the checkpoint and a write, so the
 sink's docs will state it. G has to exceed the retry budget, the request
 timeout, and the longest pause the deployment can see. A fenced worker learns of
-a take-over only from the checkpoint, so to help meet the bound, the sink reads
+a take-over only from the checkpoint, so to help meet the bound, it has to read
 the checkpoint at least every quarter of G while it sends writes without a
-commit, such as during a snapshot or a long batch under throttling, and stops
-once it sees it was fenced. A worker that restarts more often than twice G never
-sweeps, so the sink reports a metric while the epoch age holds the sweep back.
-The sweep deletes by filter, and assumes that a delete by filter also sees
-writes turbopuffer has not indexed yet, which the sink build tests before
-relying on it (deferred question 4). A delete by filter is capped at 5 million
-rows per call, so the sweep loops.
+commit, such as during a snapshot or a long batch under throttling (deferred
+question 14). A worker that restarts more often than twice G never sweeps,
+so the sink reports a metric while the epoch age holds the sweep back. The sweep
+deletes by filter, and assumes that a delete by filter also sees writes
+turbopuffer has not indexed yet, which the sink build tests before relying on it
+(deferred question 4). A delete by filter is capped at 5 million rows per call,
+so the sweep loops.
 
 Each sink's checkpoint will live in its own checkpoint namespace, as one
 document. A namespace per sink keeps its outstanding writes small while indexing
@@ -1462,7 +1573,7 @@ right, and this design keeps it. The parts that change:
 
 | Strawman | This design | Why |
 | --- | --- | --- |
-| `update()` commits and fetches | `commit()` inside the transaction, `next()` outside | A target transaction must not wait on Materialize |
+| `update()` commits and fetches | `write(batch, checkpoint)` applies both in one target transaction, `next()` outside | A target transaction must not wait on Materialize |
 | `queries` as SQL strings, split at `ENVELOPE` | One table, source, or materialized view plus an envelope, as `CREATE SINK` takes | Resume never reads the snapshot, durable subscription compatibility, no string splicing |
 | One cursor per query | One `AS OF` for all members, release at the minimum frontier | Independent cursors produce torn cuts |
 | Rows stamped with the batch frontier | Every change keeps its `mz_timestamp` | Batches span timestamps |
@@ -1612,3 +1723,13 @@ October work, because the doc picks a safe default for each.
     Live mode does not need it. Owner: product with the database team, before
     durable mode ships. Does `RETAIN HISTORY` leave private preview first, or
     does durable mode ship only where it is enabled?
+14. Fencing during a long write. A worker learns that it was fenced from a
+    failed checkpoint write, but a single write can run for a long time, such
+    as a snapshot under throttling. The turbopuffer tombstone sweep needs a
+    fenced worker to stop sending within G, which a worker meets by reading the
+    checkpoint at least every quarter of G. Until this is answered the sweep
+    stays off, and keeping tombstones, the default, needs no such bound. Owner:
+    DevEx, with review, before the sweep option ships. Should a sink that
+    stores its own checkpoint read it during a long write and return `Fenced`,
+    through a check the SDK provides because the text is opaque, or should the
+    SDK run those reads?
