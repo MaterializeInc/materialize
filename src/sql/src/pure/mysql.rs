@@ -473,7 +473,24 @@ pub(super) async fn purify_source_exports(
                 }
             }
             if exclude_all_not_null_constraints {
+                // Columns of a retained primary key stay NOT NULL. The planner
+                // declares them NOT NULL in the table's `RelationDesc`
+                // regardless of this desc, so a nullable column here would
+                // drop the decoder's NULL check and let a NULL reach persist
+                // in a column it treats as non-nullable, which panics. Schema
+                // verification compares keys by name and columns, so a key
+                // dropped and restored while the source was behind is not
+                // reported, and the NULL rows written in between do arrive.
+                let pk_cols: BTreeSet<&str> = parsed_table
+                    .keys
+                    .iter()
+                    .filter(|k| k.is_primary)
+                    .flat_map(|k| k.columns.iter().map(String::as_str))
+                    .collect();
                 for c in &mut parsed_table.columns {
+                    if pk_cols.contains(c.name.as_str()) {
+                        continue;
+                    }
                     if let Some(column_type) = &mut c.column_type {
                         column_type.nullable = true;
                     }

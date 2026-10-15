@@ -313,3 +313,41 @@ contains:incompatible schema change on public.excl_not_null: UNIQUE constraint "
 hint:WITH (EXCLUDE CONSTRAINTS ('unq_u')) before the upstream drop
 
 > DROP TABLE all_nullable_combo;
+
+#
+# A retained primary key keeps its columns NOT NULL. A NULL that slips past
+# schema verification, because the key was dropped and restored while the
+# source had no replica, is a decode error that the later UPDATE retracts, not
+# a NULL stored in a non-nullable column.
+#
+
+$ mysql-execute name=mysql
+USE public;
+CREATE TABLE pk_gap (id INT PRIMARY KEY, v INT NOT NULL);
+INSERT INTO pk_gap VALUES (1, 10);
+
+> CREATE CLUSTER pk_gap_cluster SIZE '${arg.default-replica-size}';
+> CREATE SOURCE pk_gap_source IN CLUSTER pk_gap_cluster FROM MYSQL CONNECTION mysqc;
+> CREATE TABLE pk_gap FROM SOURCE pk_gap_source (REFERENCE public.pk_gap)
+  WITH (EXCLUDE ALL NOT NULL CONSTRAINTS);
+
+> SELECT * FROM pk_gap;
+1 10
+
+> ALTER CLUSTER pk_gap_cluster SET (REPLICATION FACTOR 0)
+
+$ mysql-execute name=mysql
+USE public;
+ALTER TABLE pk_gap DROP PRIMARY KEY, MODIFY id INT NULL;
+INSERT INTO pk_gap VALUES (NULL, 20);
+UPDATE pk_gap SET id = 2 WHERE id IS NULL;
+ALTER TABLE pk_gap MODIFY id INT NOT NULL, ADD PRIMARY KEY (id);
+
+> ALTER CLUSTER pk_gap_cluster SET (REPLICATION FACTOR 1)
+
+> SELECT * FROM pk_gap;
+1 10
+2 20
+
+> DROP SOURCE pk_gap_source CASCADE;
+> DROP CLUSTER pk_gap_cluster;
