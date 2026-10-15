@@ -262,8 +262,8 @@ The `mz_index_columns` table contains a row for each column in each index in the
 system. For example, an index on `(a, b + 1)` would have two rows in this
 table, one for each of the two columns in the index.
 
-For a given row, if `field_number` is null then `expression` will be nonnull, or
-vice-versa.
+For a given row, if `on_position` is null then `on_expression` will be nonnull,
+or vice-versa.
 
 <!-- RELATION_SPEC mz_catalog.mz_index_columns -->
 Field            | Type        | Meaning
