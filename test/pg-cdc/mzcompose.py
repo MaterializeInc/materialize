@@ -14,6 +14,7 @@ Native Postgres source tests, functional.
 import glob
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from textwrap import dedent
 
 import psycopg
@@ -551,19 +552,21 @@ def workflow_offset_committed_seed(
         lock_conn = pg_connect()
         lock_conn.execute("REINDEX INDEX t2_pkey")
         stop_inserts = threading.Event()
-        inserter = threading.Thread(target=insert_until, args=(stop_inserts,))
-        inserter.start()
-        try:
-            c.run_testdrive_files(
-                "--no-reset", "override/offset-committed-seed-part-2.td"
-            )
-            # Several statistics ticks for the re-rendered source to report its seeds.
-            time.sleep(5)
-        finally:
-            stop_inserts.set()
-            inserter.join()
-            lock_conn.rollback()
-            lock_conn.close()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            inserter = executor.submit(insert_until, stop_inserts)
+            try:
+                c.run_testdrive_files(
+                    "--no-reset", "override/offset-committed-seed-part-2.td"
+                )
+                # Several statistics ticks for the re-rendered source to report its seeds.
+                time.sleep(5)
+            finally:
+                stop_inserts.set()
+                lock_conn.rollback()
+                lock_conn.close()
+                # Re-raises if the inserter died, which would have left the
+                # WAL idle and the run meaningless.
+                inserter.result()
 
         regressions = c.invoke("logs", "materialized", capture=True).stdout.count(
             regression
