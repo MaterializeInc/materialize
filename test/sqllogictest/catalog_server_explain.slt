@@ -4826,6 +4826,88 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_columns";
+----
+mz_catalog.mz_columns:
+  →With
+    cte l0 =
+      →Differential Join %1:mz_catalog_raw[#0{id}] » %0:mz_catalog_raw[parse_catalog_id(((#0{data} -> "key") -> "id"))]
+        after %0:
+          Project: #2, #0, #1, #3
+          Map: case when ("object" = jsonb_typeof(((#2{data} -> "value") -> "custom_type"))) then parse_catalog_id(((#2{data} -> "value") -> "custom_type")) else null end
+        →Arrange (parse_catalog_id(((#0{data} -> "key") -> "id")))
+          →Fused with Child Map/Filter/Project
+            Project: #0
+            Filter: ((#1 -> "id")) IS NOT NULL
+              →Read mz_internal.mz_catalog_raw
+        →Arrange (#0{id})
+          →Fused with Child Map/Filter/Project
+            Project: #3, #4
+            Filter: ("Item" = (#0{data} ->> "kind")) AND (#2) IS NOT NULL
+            Map: (#1 -> "gid"), parse_catalog_id(#2), (parse_catalog_create_sql(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql")) -> "column_defaults")
+              →Read mz_internal.mz_catalog_raw
+    cte l1 =
+      →Differential Join %1:mz_catalog_raw[#0{id}] » %0:l0[#3{custom_type}]
+        →Arrange (#3{custom_type})
+          →Fused with Child Map/Filter/Project
+            Filter: (#3{custom_type}) IS NOT NULL
+              →Read l0
+        →Arrange (#0{id})
+          →Fused with Child Map/Filter/Project
+            Project: #3, #5, #6
+            Filter: ("Item" = (#0{data} ->> "kind")) AND (#2) IS NOT NULL
+            Map: (#1 -> "gid"), parse_catalog_id(#2), (#0{data} -> "value"), (#4 ->> "name"), text_to_oid((#4 ->> "oid"))
+              →Read mz_internal.mz_catalog_raw
+  →Return
+    →Union
+      →Map/Filter/Project
+        Project: #1, #6..=#12
+        Map: (#0{data} -> "value"), (#5 ->> "name"), (text_to_uint8(((#0{data} -> "key") ->> "position")) + 1), text_to_boolean((#5 ->> "nullable")), coalesce(#3{name}, mz_type_name(text_to_oid(((#0{data} -> "value") ->> "type_oid"))), "unknown"), (#2{column_defaults} ->> #6), coalesce(#4{oid}, text_to_oid(((#0{data} -> "value") ->> "type_oid"))), text_to_integer((#5 ->> "type_mod"))
+          →Union
+            →Map/Filter/Project
+              Project: #0..=#4
+              Map: null, null
+                →Consolidating Union
+                  →Negate Diffs
+                    →Differential Join %1[#0] » %0:l0[#3{custom_type}]
+                      →Arrange (#3{custom_type})
+                        →Fused with Child Map/Filter/Project
+                          Filter: ("ItemColumn" = (#0{data} ->> "kind")) AND (#3{custom_type}) IS NOT NULL
+                            →Read l0
+                      →Distinct GroupAggregate
+                        →Fused with Child Map/Filter/Project
+                          Project: #3
+                            →Read l1
+                  →Fused with Child Map/Filter/Project
+                    Project: #0..=#2
+                    Filter: ("ItemColumn" = (#0{data} ->> "kind"))
+                      →Read l0
+            →Fused with Child Map/Filter/Project
+              Project: #0..=#2, #4, #5
+              Filter: ("ItemColumn" = (#0{data} ->> "kind"))
+                →Read l1
+      →Differential Join %1:mz_catalog_raw[#1{schema_name}, #2{name}] » %0[#0{schema_name}, #1{relation_name}]
+        Final closure:
+          Project: #6, #0..=#3, #7, #4, #5
+          Map: null
+        →Arrange (#0{schema_name}, #1{relation_name})
+          →Constant (1932 rows)
+        →Arrange (#1{schema_name}, #2{name})
+          →Fused with Child Map/Filter/Project
+            Project: #5, #3, #2
+            Filter: ("GidMapping" = (#0{data} ->> "kind")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL AND ((#4 = "1") OR (#4 = "2") OR (#4 = "4") OR (#4 = "5"))
+            Map: (#1 ->> "object_name"), (#1 ->> "schema_name"), (#1 ->> "object_type"), ("s" || ((#0{data} -> "value") ->> "catalog_id"))
+              →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#0, #1)
+  map=((#0{data} -> "key"))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_connections";
 ----
 mz_catalog.mz_connections:
@@ -5125,7 +5207,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (49 rows)
+        →Constant (50 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -5470,7 +5552,7 @@ mz_catalog.mz_tables:
           Project: #3, #0, #4, #1, #5, #2, #6, #6, #6
           Map: "s1", null
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (25 rows)
+        →Constant (24 rows)
       →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #5, #4, #6
@@ -5525,7 +5607,7 @@ mz_catalog.mz_views:
           Project: #5, #0, #6, #1, #2, #8, #3, #4, #7
           Map: "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (196 rows)
+        →Constant (197 rows)
       →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #5, #4, #6
@@ -5828,7 +5910,7 @@ mz_internal.mz_materialized_view_refresh_strategies:
         Project: #0..=#3, #3
         Map: "on-commit", null, null
       →Arrange (#1{name}, #0{schema_name})
-        →Constant (49 rows)
+        →Constant (50 rows)
       →Arrange (((#0{data} -> "key") ->> "object_name"), ((#0{data} -> "key") ->> "schema_name"))
         →Fused with Child Map/Filter/Project
           Project: #0
@@ -6012,7 +6094,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1064 rows)
+            →Constant (1076 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -8575,10 +8657,10 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
-EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_indexes";
+EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_columns";
 ----
 Explained Query (fast path):
-  →Constant (82 rows)
+  →Constant (1932 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8608,7 +8690,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (49 rows)
+  →Constant (50 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8628,7 +8710,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_tables";
 ----
 Explained Query (fast path):
-  →Constant (25 rows)
+  →Constant (24 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8638,7 +8720,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_views";
 ----
 Explained Query (fast path):
-  →Constant (196 rows)
+  →Constant (197 rows)
 
 Target cluster: mz_catalog_server
 
@@ -10556,7 +10638,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1064 rows)
+            →Constant (1076 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
