@@ -153,6 +153,10 @@ name = "production"
 url = "s3://materialize-website?region=us-east-1"
 # Sync only the docs, to avoid deleting the marketing website.
 include = "docs/**"
+# Server-side redirects installed by ci/deploy_website/website.sh
+# (`external_redirects`). They have no file in public/, so without this the
+# sync deletes them on every deploy. Keep in sync with that map.
+exclude = "docs/{support,self-managed/v25.2/support}/index.html"
 
 # Per Hugo docs:
 # The pattern syntax is documented here: https://godoc.org/github.com/gobwas/glob#Glob

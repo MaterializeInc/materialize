@@ -38,9 +38,8 @@ declare -A shortlinks=(
 
 # Docs URLs that redirect off the docs site. Hugo aliases stay on the docs
 # site, so these are installed as server-side redirects. Keys are S3 object
-# paths. `hugo deploy` deletes any docs/** object with no file in public/
-# (see [[deployment.targets]] in doc/user/config.toml), so install them after
-# deploy.
+# paths, and each must also be in the `exclude` of [[deployment.targets]] in
+# doc/user/config.toml, or `hugo deploy` deletes it on every deploy.
 declare -A external_redirects=(
     [docs/support/index.html]="https://materialize.com/support/"
     [docs/self-managed/v25.2/support/index.html]="https://materialize.com/support/"
@@ -59,6 +58,13 @@ hugo deploy --maxDeletes -1
 
 touch empty
 
+for src in "${!external_redirects[@]}"; do
+    echo "Installing server-side redirect $src => ${external_redirects[$src]}"
+    # Same as the shortlinks below: replace the object, or website-redirect stays stale.
+    aws s3 rm "s3://materialize-website/$src" || true
+    aws s3 cp empty "s3://materialize-website/$src" --website-redirect "${external_redirects[$src]}"
+done
+
 # Make the alias redirects into server-side redirects rather than client side
 # redirects.
 (
@@ -70,13 +76,6 @@ touch empty
         aws s3 cp ../empty "s3://materialize-website/$src" --website-redirect "$dst"
     done
 )
-
-for src in "${!external_redirects[@]}"; do
-    echo "Installing server-side redirect $src => ${external_redirects[$src]}"
-    # Same as the shortlinks below: replace the object, or website-redirect stays stale.
-    aws s3 rm "s3://materialize-website/$src" || true
-    aws s3 cp empty "s3://materialize-website/$src" --website-redirect "${external_redirects[$src]}"
-done
 
 # NOTE(benesch): this code does not delete old shortlinks. That's fine, because
 # the whole point is that the shortlinks live forever.
