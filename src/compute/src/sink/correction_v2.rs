@@ -147,7 +147,7 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
-use std::sync::atomic::{self, AtomicBool, AtomicUsize};
+use std::sync::atomic::{self, AtomicUsize};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use columnar::bytes::indexed;
@@ -1348,19 +1348,9 @@ impl<D: Data> ConsolidatedChain<D> {
     }
 }
 
-/// Whether the MV sink queues its `ok` updates as [`ConsolidatedChain`]s.
-static COLUMNAR_QUEUE: AtomicBool = AtomicBool::new(false);
-
-/// Set whether the MV sink queues its `ok` updates for the write task as [`ConsolidatedChain`]s.
-/// Consulted at every activation, so changes apply to running sinks.
-pub fn set_columnar_queue(enabled: bool) {
-    COLUMNAR_QUEUE.store(enabled, atomic::Ordering::Relaxed);
-}
-
-/// Whether the MV sink queues its `ok` updates as [`ConsolidatedChain`]s, see
-/// [`set_columnar_queue`].
-pub fn columnar_queue() -> bool {
-    COLUMNAR_QUEUE.load(atomic::Ordering::Relaxed)
+/// Bytes an update occupies: its datum, heap included, plus time and diff.
+pub(crate) fn update_bytes<D: Data>(update: &(D, Timestamp, Diff)) -> usize {
+    update.0.data_bytes() + std::mem::size_of::<(Timestamp, Diff)>()
 }
 
 /// A builder that constructs a [`Chain`] from a stream of updates.
@@ -1769,8 +1759,9 @@ struct Chunk<D: Data> {
     first_time: Timestamp,
     /// Time of the last update, cached likewise.
     last_time: Timestamp,
-    /// The generational depth: 0 for chunks built from staged updates or written by a read,
-    /// one more than the deepest input for chunks written by a bucket's chain merge. The pool
+    /// The generational depth: 0 for chunks built from staged updates or written by a read, the
+    /// minting depth for chunks of a [`ConsolidatedChain`], and one more than the deepest input
+    /// for chunks written by a bucket's chain merge. The pool
     /// treats deeper chunks as colder, and compresses them past the floor set by
     /// [`chunk::set_compress_min_depth`].
     depth: u8,
@@ -2042,11 +2033,6 @@ impl<D: Data> Stage<D> {
         }
     }
 
-    /// Bytes an update occupies: its datum, heap included, plus time and diff.
-    fn update_bytes(update: &(D, Timestamp, Diff)) -> usize {
-        update.0.data_bytes() + std::mem::size_of::<(Timestamp, Diff)>()
-    }
-
     /// Insert a batch of updates, possibly producing a batch of sorted, consolidated updates
     /// ready to be stored.
     ///
@@ -2062,7 +2048,7 @@ impl<D: Data> Stage<D> {
 
         let before = self.snapshot();
 
-        self.bytes += updates.iter().map(Self::update_bytes).sum::<usize>();
+        self.bytes += updates.iter().map(update_bytes).sum::<usize>();
         self.data.append(updates);
 
         let maybe_ready = if self.bytes >= self.chunk_size {

@@ -73,6 +73,12 @@ impl<D: Data> Correction<D> {
         }
     }
 
+    /// Whether this is a [`CorrectionV2`] buffer, the only kind [`Self::insert_chain`] files
+    /// without reading the chain back into owned updates.
+    pub fn is_v2(&self) -> bool {
+        matches!(self, Self::V2(_))
+    }
+
     /// Insert a batch of updates.
     pub fn insert(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
         match self {

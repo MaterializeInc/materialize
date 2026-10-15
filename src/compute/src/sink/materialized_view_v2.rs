@@ -34,8 +34,8 @@
 //!  * **`write`**: per-activation, the Timely closure first appends all observed input data into
 //!    a single `WriteCommand::Batch` and only then sends a `WriteCommand::WriteBatch` (issued from
 //!    `maybe_start_batch` after frontier checks). With the columnar queue, `ok` updates may wait
-//!    on the Timely side across activations, and the closure sends them in a `Batch` of their own
-//!    before any `WriteBatch`. The Tokio task processes commands FIFO, so a `WriteBatch` is
+//!    on the Timely side across activations, and the closure flushes them in a `Batch` before any
+//!    `WriteBatch`. The Tokio task processes commands FIFO, so a `WriteBatch` is
 //!    guaranteed to see every update the Timely closure observed already applied to the
 //!    corrections buffer. Reversing this order would let the task write a batch that is missing
 //!    updates the Timely closure already observed.
@@ -55,7 +55,8 @@ use std::sync::Arc;
 
 use differential_dataflow::{Hashable, VecCollection};
 use mz_compute_types::dyncfgs::{
-    CORRECTION_V2_CHUNK_SIZE, MV_SINK_ADVANCE_PERSIST_FRONTIERS, MV_SINK_SHARED_BATCH_MAX_BYTES,
+    CORRECTION_V2_CHUNK_SIZE, CORRECTION_V2_COLUMNAR_QUEUE, MV_SINK_ADVANCE_PERSIST_FRONTIERS,
+    MV_SINK_SHARED_BATCH_MAX_BYTES,
 };
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_ore::cast::CastFrom;
@@ -504,7 +505,7 @@ mod write {
 
     use mz_timely_util::activator::ArcActivator;
 
-    use crate::sink::correction_v2::{self, ConsolidatedChain, DataBytes};
+    use crate::sink::correction_v2::{self, ConsolidatedChain};
 
     /// Commands sent from the Timely operator to the Tokio write task.
     enum WriteCommand {
@@ -667,9 +668,13 @@ mod write {
         // (snapshot updates not advanced) reproduces the original `UpdateNotBeyondLower` panic.
         let advance_persist_frontiers_at_startup =
             MV_SINK_ADVANCE_PERSIST_FRONTIERS.get(&worker_config);
+        // Only a V2 buffer files a queued chain without reading it back into owned updates, so
+        // queueing in front of V1 would encode and decode every update for nothing.
+        let queue_eligible = corrections.ok.is_v2();
+        let columnar_queue = CORRECTION_V2_COLUMNAR_QUEUE.handle(&worker_config);
         // The bytes of `ok` updates the operator coalesces before minting a queued chain, see
         // `take_queued_chain`.
-        let queue_chain_bytes = CORRECTION_V2_CHUNK_SIZE.get(&worker_config);
+        let queue_chain_bytes = CORRECTION_V2_CHUNK_SIZE.handle(&worker_config);
 
         let shared_batch_max_bytes = MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config);
 
@@ -792,11 +797,11 @@ mod write {
                 // Consolidating here moves the cost of holding queued updates onto this worker,
                 // which slows it to the rate the buffer pool absorbs, and leaves the write task
                 // chains it can file without sorting.
-                let columnar_queue = correction_v2::columnar_queue();
-                if columnar_queue || !pending_ok.is_empty() {
+                let queue = queue_eligible && columnar_queue.get();
+                if queue || !pending_ok.is_empty() {
                     let negated = batch.persist_ok.drain(..).map(|(d, t, r)| (d, t, -r));
                     for update in batch.desired_ok.drain(..).chain(negated) {
-                        pending_bytes += update.0.data_bytes() + size_of::<(Timestamp, Diff)>();
+                        pending_bytes += correction_v2::update_bytes(&update);
                         pending_ok.push(update);
                     }
                 }
@@ -834,8 +839,8 @@ mod write {
                 // which then waits on the heap, so updates ship once they fill a chain or when
                 // the batch carries frontier or consolidation work the write task must see them
                 // for.
-                if !columnar_queue
-                    || pending_bytes >= queue_chain_bytes
+                if !queue
+                    || pending_bytes >= queue_chain_bytes.get()
                     || batch.persist_frontier.is_some()
                     || batch.force_consolidation
                 {
@@ -905,10 +910,13 @@ mod write {
         if pending.is_empty() {
             return None;
         }
+        // Taken, not drained, so the buffer does not keep the capacity of the largest activation
+        // for the life of the sink.
+        let mut pending = std::mem::take(pending);
         // Depth 1 is the lowest depth at which the default `column_chunk_compress_min_depth`
         // compresses a spilled chunk, so a queued backlog spills in its smaller form. On a
         // lineitem x4 hydration, depths 0 and 1 measured within run-to-run noise.
-        let chain = ConsolidatedChain::from_updates(pending, 1);
+        let chain = ConsolidatedChain::from_updates(&mut pending, 1);
         (!chain.is_empty()).then_some(chain)
     }
 
