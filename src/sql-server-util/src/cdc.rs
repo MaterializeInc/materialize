@@ -74,7 +74,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tiberius::numeric::Numeric;
 
-use crate::desc::{SqlServerQualifiedTableName, SqlServerTableRaw};
+use crate::desc::{SqlServerQualifiedTableName, SqlServerTableConstraintRaw, SqlServerTableRaw};
 use crate::inspect::DDLEvent;
 use crate::{Client, SqlServerCdcMetrics, SqlServerError, TransactionIsolationLevel};
 
@@ -351,6 +351,22 @@ impl<'a, M: SqlServerCdcMetrics> CdcStream<'a, M> {
                         }
                     }
 
+                    // Constraint changes are not recorded in `cdc.ddl_history`, so
+                    // re-read every tracked table's constraints whenever the log
+                    // advanced. Dropping or adding a constraint writes to the log,
+                    // so the poll after such a change always sees it.
+                    let constraints = crate::inspect::get_constraints_for_capture_instances(
+                        self.client,
+                        self.capture_instances.keys().map(|instance| instance.as_ref()),
+                    )
+                    .await?;
+                    for instance in self.capture_instances.keys() {
+                        yield CdcEvent::Constraints {
+                            capture_instance: Arc::clone(instance),
+                            constraints: constraints.get(instance).cloned().unwrap_or_default(),
+                        };
+                    }
+
                     // Increment our LSN (`get_changes` is inclusive).
                     //
                     // TODO(sql_server2): We should occassionally check to see how close the LSN we
@@ -456,6 +472,12 @@ pub enum CdcEvent {
         table: SqlServerQualifiedTableName,
         /// DDL event
         ddl_event: DDLEvent,
+    },
+    /// The PRIMARY KEY and UNIQUE constraints currently on the table a capture
+    /// instance tracks, re-read on every poll that found new changes.
+    Constraints {
+        capture_instance: Arc<str>,
+        constraints: Vec<SqlServerTableConstraintRaw>,
     },
 }
 
