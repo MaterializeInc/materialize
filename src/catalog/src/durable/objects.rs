@@ -463,6 +463,27 @@ pub enum ClusterVariant {
     Unmanaged,
 }
 
+impl ClusterVariant {
+    /// The replica sizes a managed cluster references: its size, its
+    /// reconfiguration target's size, and its burst size.
+    pub fn sizes(&self) -> impl Iterator<Item = &str> {
+        let managed = match self {
+            ClusterVariant::Managed(managed) => Some(managed),
+            ClusterVariant::Unmanaged => None,
+        };
+        managed.into_iter().flat_map(|managed| {
+            [
+                Some(&managed.size),
+                managed.reconfiguration.as_ref().map(|r| &r.target.size),
+                managed.burst.as_ref().map(|b| &b.burst_size),
+            ]
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialOrd, PartialEq, Eq, Ord)]
 pub struct ClusterVariantManaged {
     pub size: String,
@@ -697,6 +718,16 @@ pub enum ReplicaLocation {
         billed_as: Option<String>,
         pending: bool,
     },
+}
+
+impl ReplicaLocation {
+    /// The replica size of a managed location.
+    pub fn size(&self) -> Option<&str> {
+        match self {
+            ReplicaLocation::Managed { size, .. } => Some(size),
+            ReplicaLocation::Unmanaged { .. } => None,
+        }
+    }
 }
 
 impl From<mz_controller::clusters::ReplicaLocation> for ReplicaLocation {

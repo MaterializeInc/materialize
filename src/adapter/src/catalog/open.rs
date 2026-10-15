@@ -1187,25 +1187,15 @@ fn sync_builtin_cluster_replica_sizes(
 
     // Managed clusters can reference a size without having a replica on it, e.g.
     // between refreshes of a scheduled cluster or at replication factor 0.
-    let cluster_sizes = txn
-        .get_clusters()
-        .flat_map(|cluster| match cluster.config.variant {
-            ClusterVariant::Managed(managed) => [
-                Some(managed.size),
-                managed.reconfiguration.map(|r| r.target.size),
-                managed.burst.map(|b| b.burst_size),
-            ],
-            ClusterVariant::Unmanaged => [None, None, None],
-        });
-    let replica_sizes = txn
-        .get_cluster_replicas()
-        .map(|replica| match replica.config.location {
-            ReplicaLocation::Managed { size, .. } => Some(size),
-            ReplicaLocation::Unmanaged { .. } => None,
-        });
-    let in_use: BTreeSet<_> = cluster_sizes.chain(replica_sizes).flatten().collect();
+    let clusters: Vec<_> = txn.get_clusters().collect();
+    let replicas: Vec<_> = txn.get_cluster_replicas().collect();
+    let in_use: BTreeSet<&str> = clusters
+        .iter()
+        .flat_map(|cluster| cluster.config.variant.sizes())
+        .chain(replicas.iter().filter_map(|r| r.config.location.size()))
+        .collect();
     for (name, mut size) in durable_sizes {
-        if !in_use.contains(&name) {
+        if !in_use.contains(name.as_str()) {
             txn.remove_cluster_replica_size(size.id)?;
         } else if !size.allocation.disabled {
             warn!(%name, "cluster replica size removed from config but still in use, disabling it");
