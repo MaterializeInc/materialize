@@ -103,27 +103,16 @@ pub(crate) fn render<'scope>(
             let mut capture_instances: BTreeMap<Arc<str>, Vec<_>> = BTreeMap::new();
             // Export statistics for a given capture instance
             let mut export_statistics: BTreeMap<_, Vec<_>> = BTreeMap::new();
-            // Maps the included columns and the recorded upstream table for each
-            // output index so we can check whether schema updates are valid on a
-            // per-output basis
-            let mut output_schemas: HashMap<u64, (Vec<Arc<str>>, Arc<SqlServerTableDesc>)> =
-                HashMap::new();
+            // Maps the recorded upstream table for each output index so we can
+            // check whether schema updates are valid on a per-output basis
+            let mut upstream_descs: HashMap<u64, Arc<SqlServerTableDesc>> = HashMap::new();
 
             for (export_id, output) in outputs.iter() {
                 let key = output.partition_index;
                 if decoder_map.insert(key, Arc::clone(&output.decoder)).is_some() {
                     panic!("Multiple decoders for output index {}", output.partition_index);
                 }
-                // Collect the included columns from decoder for schema
-                // change validation. The decoder serves as an effective
-                // source of truth for which columns are "included", as we
-                // only care about the columns that are being decoded and
-                // replicated
-                let included_cols = output.decoder.included_column_names();
-                output_schemas.insert(
-                    output.partition_index,
-                    (included_cols, Arc::clone(&output.upstream_desc)),
-                );
+                upstream_descs.insert(output.partition_index, Arc::clone(&output.upstream_desc));
 
                 capture_instances
                     .entry(Arc::clone(&output.capture_instance))
@@ -570,7 +559,7 @@ pub(crate) fn render<'scope>(
                                 table.to_string(),
                             );
                         for partition_idx in partition_indexes {
-                            let (cols, upstream_desc) = output_schemas
+                            let upstream_desc = upstream_descs
                                 .get(partition_idx)
                                 .unwrap_or_else(|| {
                                     panic!(
@@ -578,12 +567,11 @@ pub(crate) fn render<'scope>(
                                          exist: '{partition_idx}'"
                                     )
                                 });
-                            // The DDL text cannot tell a nullability change
-                            // from a type change, so a flagged statement is
-                            // checked against the table's current columns.
+                            // The DDL text is only the trigger. Whether the
+                            // table still decodes is decided by its current
+                            // columns, like the MySQL source does.
                             if !errored_partitions
                                 .contains(partition_idx)
-                                && !ddl_event.is_compatible(cols)
                                 && !upstream_desc.is_compatible_with(&columns)
                             {
                                 let msg = Err(
