@@ -348,6 +348,62 @@ pub struct NetworkPolicyValue {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ClusterReplicaSizeKey {
+    pub id: ClusterReplicaSizeId,
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub enum ClusterReplicaSizeId {
+    System(u64),
+    User(u64),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ClusterReplicaSizeValue {
+    /// The human-readable name of the size.
+    pub name: String,
+    /// The memory limit for each process, in bytes.
+    pub memory_limit: Option<u64>,
+    /// The CPU limit for each process, in nanocpus.
+    pub cpu_limit: Option<u64>,
+    /// The CPU request for each process, in nanocpus.
+    pub cpu_request: Option<u64>,
+    /// The disk limit for each process, in bytes.
+    pub disk_limit: Option<u64>,
+    /// The number of processes in the replica.
+    pub scale: u16,
+    /// The number of worker threads per process.
+    pub workers: u64,
+    /// The number of credits per hour that the replica consumes.
+    pub credits_per_hour: String,
+    /// Whether each process has exclusive access to its CPU cores.
+    pub cpu_exclusive: bool,
+    /// Whether this size represents a modern "cc" size rather than a legacy T-shirt size.
+    pub is_cc: bool,
+    /// The size family, e.g. `D` for `D.1-xsmall`.
+    pub family: Option<String>,
+    /// Whether instances of this type use swap as the spill-to-disk mechanism.
+    pub swap_enabled: bool,
+    /// Whether instances of this type can be created.
+    pub disabled: bool,
+    /// Additional node selectors.
+    pub selectors: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct ServerConfigurationKey {
     pub name: String,
 }
@@ -2000,6 +2056,7 @@ pub enum StateUpdateKind {
     Cluster(Cluster),
     ClusterIntrospectionSourceIndex(ClusterIntrospectionSourceIndex),
     ClusterReplica(ClusterReplica),
+    ClusterReplicaSize(ClusterReplicaSize),
     Comment(Comment),
     Config(Config),
     Database(Database),
@@ -2138,6 +2195,13 @@ pub struct RoleAuth {
 pub struct NetworkPolicy {
     pub key: NetworkPolicyKey,
     pub value: NetworkPolicyValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ClusterReplicaSize {
+    pub key: ClusterReplicaSizeKey,
+    pub value: ClusterReplicaSizeValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

@@ -31,13 +31,18 @@ pub(crate) mod state_update;
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::num::NonZero;
 use std::time::Duration;
 
+use bytesize::ByteSize;
 use mz_audit_log::VersionedEvent;
-use mz_controller::clusters::ReplicaLogging;
+use mz_controller::clusters::{ReplicaAllocation, ReplicaLogging};
 use mz_controller_types::{ClusterId, ReplicaId};
+use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
+use mz_ore::cast::CastFrom;
 use mz_persist_types::ShardId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::cluster_replica_size_id::ClusterReplicaSizeId;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
@@ -298,6 +303,111 @@ impl DurableType for NetworkPolicy {
 
     fn key(&self) -> Self::Key {
         NetworkPolicyKey { id: self.id }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ClusterReplicaSize {
+    pub id: ClusterReplicaSizeId,
+    pub name: String,
+    pub allocation: ReplicaAllocation,
+}
+
+// `ReplicaAllocation` contains a `Numeric`, which is not `Eq` or `Ord`, so
+// compare by the durable representation instead.
+impl PartialEq for ClusterReplicaSize {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for ClusterReplicaSize {}
+
+impl PartialOrd for ClusterReplicaSize {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ClusterReplicaSize {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.clone()
+            .into_key_value()
+            .cmp(&other.clone().into_key_value())
+    }
+}
+
+impl DurableType for ClusterReplicaSize {
+    type Key = ClusterReplicaSizeKey;
+    type Value = ClusterReplicaSizeValue;
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        let ReplicaAllocation {
+            memory_limit,
+            cpu_limit,
+            cpu_request,
+            disk_limit,
+            scale,
+            workers,
+            credits_per_hour,
+            cpu_exclusive,
+            is_cc,
+            family,
+            swap_enabled,
+            disabled,
+            selectors,
+        } = self.allocation;
+        (
+            ClusterReplicaSizeKey { id: self.id },
+            ClusterReplicaSizeValue {
+                name: self.name,
+                memory_limit: memory_limit.map(|m| m.0.as_u64()),
+                cpu_limit: cpu_limit.map(|c| c.as_nanocpus()),
+                cpu_request: cpu_request.map(|c| c.as_nanocpus()),
+                disk_limit: disk_limit.map(|d| d.0.as_u64()),
+                scale: scale.get(),
+                workers: u64::cast_from(workers.get()),
+                credits_per_hour: credits_per_hour.to_string(),
+                cpu_exclusive,
+                is_cc,
+                family,
+                swap_enabled,
+                disabled,
+                selectors,
+            },
+        )
+    }
+
+    fn from_key_value(key: Self::Key, value: Self::Value) -> Self {
+        // CpuLimit is stored in millicpus, so nanocpus round-trip exactly.
+        let cpu = |nanocpus: u64| CpuLimit::from_millicpus(usize::cast_from(nanocpus / 1_000_000));
+        Self {
+            id: key.id,
+            name: value.name,
+            allocation: ReplicaAllocation {
+                memory_limit: value.memory_limit.map(|b| MemoryLimit(ByteSize(b))),
+                cpu_limit: value.cpu_limit.map(cpu),
+                cpu_request: value.cpu_request.map(cpu),
+                disk_limit: value.disk_limit.map(|b| DiskLimit(ByteSize(b))),
+                scale: NonZero::new(value.scale).expect("scale is non-zero"),
+                workers: NonZero::new(usize::cast_from(value.workers))
+                    .expect("workers is non-zero"),
+                credits_per_hour: value
+                    .credits_per_hour
+                    .parse()
+                    .expect("credits_per_hour is a valid numeric"),
+                cpu_exclusive: value.cpu_exclusive,
+                is_cc: value.is_cc,
+                family: value.family,
+                swap_enabled: value.swap_enabled,
+                disabled: value.disabled,
+                selectors: value.selectors,
+            },
+        }
+    }
+
+    fn key(&self) -> Self::Key {
+        ClusterReplicaSizeKey { id: self.id }
     }
 }
 
@@ -1340,6 +1450,8 @@ pub struct Snapshot {
     pub comments: BTreeMap<proto::CommentKey, proto::CommentValue>,
     pub clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
     pub network_policies: BTreeMap<proto::NetworkPolicyKey, proto::NetworkPolicyValue>,
+    pub cluster_replica_sizes:
+        BTreeMap<proto::ClusterReplicaSizeKey, proto::ClusterReplicaSizeValue>,
     pub cluster_replicas: BTreeMap<proto::ClusterReplicaKey, proto::ClusterReplicaValue>,
     pub introspection_sources: BTreeMap<
         proto::ClusterIntrospectionSourceIndexKey,
@@ -1612,6 +1724,30 @@ pub struct NetworkPolicyValue {
     pub(crate) owner_id: RoleId,
     pub(crate) privileges: Vec<MzAclItem>,
     pub(crate) oid: u32,
+}
+
+#[derive(Clone, Copy, PartialOrd, PartialEq, Eq, Ord, Hash, Debug)]
+pub struct ClusterReplicaSizeKey {
+    pub(crate) id: ClusterReplicaSizeId,
+}
+
+/// A [`ReplicaAllocation`] in proto-compatible types, so it can be `Eq` and `Ord`.
+#[derive(Clone, PartialOrd, PartialEq, Eq, Ord, Debug)]
+pub struct ClusterReplicaSizeValue {
+    pub(crate) name: String,
+    pub(crate) memory_limit: Option<u64>,
+    pub(crate) cpu_limit: Option<u64>,
+    pub(crate) cpu_request: Option<u64>,
+    pub(crate) disk_limit: Option<u64>,
+    pub(crate) scale: u16,
+    pub(crate) workers: u64,
+    pub(crate) credits_per_hour: String,
+    pub(crate) cpu_exclusive: bool,
+    pub(crate) is_cc: bool,
+    pub(crate) family: Option<String>,
+    pub(crate) swap_enabled: bool,
+    pub(crate) disabled: bool,
+    pub(crate) selectors: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
