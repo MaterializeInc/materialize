@@ -142,12 +142,29 @@ Concurrent buffer occupancy obscures this difference in the two-table capture.
 The combined repair still OOMs in the original 8-CPU/16-GiB workload before any
 validation starts. SQL completions and finite compaction-bound advancement occur,
 but neither establishes whole-workload progress or physical-since advancement.
-Use the preserved pre-OOM population capture to identify remaining memory owners.
+Pause allocator/cache/pool tuning and preserve its evidence. The recent allocation
+comparisons already contain decoupling and do not establish a regression against
+upstream. The matched pinned-upstream d9a2c5dc40 and branch comparison both OOM,
+using the same 104 checks, seed, concurrency, effective backends and 8-CPU/16-GiB
+budget, with original settings. This does not establish a branch-only memory
+regression. Saved CI evidence shows about 15 GiB of swap, with observed use,
+where scratch prohibits swap. Scratch also derives pool budgets from its 64-GiB
+host despite the 16-GiB parent cap. Its eight selected CPU IDs cover four physical
+cores with SMT, whereas the failing CI host reports eight physical cores.
+Treat its OOM as a separate stress observation, not a CI reproduction. Attribute
+introduced state, allocation churn or overlap only from a valid comparison.
+The largest existing allocation is not necessarily the regression. No further
+tuning campaign or production allocator-policy change.
 Preserve consolidation, row ordering, batch frontiers and the wire contract.
 Do not turn this into a transport protocol or memory-policy redesign.
 Compare actual CI agent resources, not requested queue labels.
-Keep concurrent DDL timeouts distinct from confirmed OOM failures. Preserve
-historical reads, source flow control, protection and the original resource budget.
+Keep the actual CI DDL timeout investigation distinct from confirmed OOM failures.
+Those timeouts have no established OOM cause. Preserve historical reads, source
+flow control, protection and the original resource budget.
+The existing `mz_adapter::frontend_read_then_write=debug` target supplies the
+missing admission and transaction-phase events for a focused failing-workflow
+capture. The current INFO records identify candidates, not successful commits
+or measured lock-hold intervals.
 Reduced decoding and a larger-host pass do not establish original-workload progress.
 Keep the driver file-descriptor issue parked. SQL completion and actual
 per-object compaction-bound advancement still need separate verification.
