@@ -39,8 +39,7 @@ const ErrorBox = ({ message, children, ...flexProps }: ErrorBoxProps) => {
           {message ?? "An unexpected error has occurred"}
         </Alert>
         <Text>
-          Visit our <SupportLink>help center</SupportLink> if the issue
-          persists.
+          <SupportLink>Contact support</SupportLink> if the issue persists.
         </Text>
         {children}
       </VStack>
