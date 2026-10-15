@@ -25,7 +25,8 @@
   {{- $path := index (split $target "#") 0 -}}
   {{- $fragment := strings.TrimPrefix $path $target -}}
   {{- if strings.HasPrefix $path "/" -}}
-    {{- $path = strings.TrimPrefix (printf "%s/" $basePath) $path | printf "/%s" | replaceRE `^//` "/" -}}
+    {{- /* Data-file links can include the production /docs/ prefix even in a preview build. */ -}}
+    {{- $path = strings.TrimPrefix "/docs/" $path | strings.TrimPrefix "/" | printf "/%s" -}}
   {{- else -}}
     {{- $dir := .page.RelPermalink | strings.TrimPrefix $basePath | strings.TrimSuffix "index.md" -}}
     {{- $path = path.Join $dir $path | printf "/%s" | replaceRE `^//` "/" -}}

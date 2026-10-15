@@ -18,6 +18,7 @@ Reads a built markdown-docs tree, the output of
   Agent-Friendly Documentation Spec (https://agentdocsspec.com/spec/web/);
 - links to another Markdown page, by the URL the page is served at, that name
   no file in the tree;
+- links that repeat the /docs/ prefix after the site base path;
 - root-relative links, such as `/sql/create-cluster`, and path-relative links,
   such as `../create-role`, which do not resolve once the Markdown is read away
   from the site.
@@ -29,7 +30,9 @@ It also reports pages carrying Hugo shortcode syntax, such as "{{< tabs >}}",
 outside fenced code blocks: a shortcode that reached the Markdown unrendered.
 
 Prints a summary and exits 1 if any page is over 100,000 characters, any
-link is broken or relative, or any page carries shortcode syntax.
+link is broken or relative, or any page carries shortcode syntax. With
+--fail-on-links, only broken or relative links cause a failure, so known
+oversized pages and unrendered shortcodes remain warnings in CI.
 
 Example usage:
 
@@ -81,11 +84,21 @@ def main() -> int:
     parser.add_argument(
         "base_url", help="the URL the directory is served at, ending in a slash"
     )
+    parser.add_argument(
+        "--fail-on-links",
+        action="store_true",
+        help="fail only for broken or relative links",
+    )
     args = parser.parse_args()
+
+    # A /docs/-prefixed source link must lose that prefix before the preview's
+    # base path is added. Otherwise it becomes /materialize/PR/docs/... .
+    docs_base_url = args.base_url.removesuffix("markdown-docs/")
 
     pages = sorted(args.root.rglob("*.md"))
     large: list[tuple[int, str]] = []
     broken: list[tuple[str, str]] = []
+    doubled_prefix: list[tuple[str, str]] = []
     relative: dict[str, int] = {"root": 0, "path": 0}
     relative_pages: set[str] = set()
     shortcode_pages: list[str] = []
@@ -102,6 +115,8 @@ def main() -> int:
                 path = target[len(args.base_url) :].split("#", 1)[0]
                 if not (args.root / path).is_file():
                     broken.append((name, target))
+            elif target.startswith(f"{docs_base_url}docs/"):
+                doubled_prefix.append((name, target))
             elif not NOT_RELATIVE_RE.match(target):
                 relative["root" if target.startswith("/") else "path"] += 1
                 relative_pages.add(name)
@@ -115,6 +130,9 @@ def main() -> int:
     print(f"Broken links to Markdown pages: {len(broken)}")
     for name, target in broken:
         print(f"  {name}: {target}")
+    print(f"Links with a duplicated /docs/ prefix: {len(doubled_prefix)}")
+    for name, target in doubled_prefix:
+        print(f"  {name}: {target}")
     print(
         f"Relative links: {relative['root']} root-relative and {relative['path']}"
         f" path-relative, on {len(relative_pages)} pages"
@@ -122,7 +140,10 @@ def main() -> int:
     print(f"Pages with unrendered shortcode syntax: {len(shortcode_pages)}")
     for name in shortcode_pages:
         print(f"  {name}")
-    return 1 if over_fail or broken or relative_pages or shortcode_pages else 0
+    failed = bool(broken or doubled_prefix or relative_pages)
+    if not args.fail_on_links:
+        failed = failed or bool(over_fail or shortcode_pages)
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
