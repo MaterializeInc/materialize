@@ -2365,6 +2365,109 @@ mod tests {
         assert!(is_compatible(&legacy, &expected));
     }
 
+    /// Rebuilds `schema` with the field ids a Java-based REST catalog (Polaris,
+    /// the Apache REST fixture) assigns when it creates the table: every direct
+    /// child of a struct is numbered before any nested field, then each child's
+    /// subtree is visited. The sink numbers depth-first, so for any nested type
+    /// the two differ while names, types and nullability stay the same.
+    fn with_catalog_field_ids(schema: &Schema) -> Schema {
+        fn renumber_fields(fields: &[Arc<NestedField>], next: &mut i32) -> Vec<Arc<NestedField>> {
+            let ids: Vec<i32> = fields
+                .iter()
+                .map(|_| {
+                    let id = *next;
+                    *next += 1;
+                    id
+                })
+                .collect();
+            fields
+                .iter()
+                .zip(ids)
+                .map(|(f, id)| {
+                    let mut field = (**f).clone();
+                    field.id = id;
+                    field.field_type = Box::new(renumber_type(&field.field_type, next));
+                    Arc::new(field)
+                })
+                .collect()
+        }
+        fn renumber_type(ty: &Type, next: &mut i32) -> Type {
+            match ty {
+                Type::Struct(s) => Type::Struct(StructType::new(renumber_fields(s.fields(), next))),
+                Type::List(l) => {
+                    let mut element = (*l.element_field).clone();
+                    element.id = *next;
+                    *next += 1;
+                    element.field_type = Box::new(renumber_type(&element.field_type, next));
+                    Type::List(ListType {
+                        element_field: Arc::new(element),
+                    })
+                }
+                Type::Map(_) => unimplemented!("no map columns in these fixtures"),
+                primitive => primitive.clone(),
+            }
+        }
+        let mut next = 1;
+        Schema::builder()
+            .with_fields(renumber_fields(schema.as_struct().fields(), &mut next))
+            .build()
+            .expect("valid schema")
+    }
+
+    /// A REST catalog assigns its own field ids when it creates the table. On
+    /// the sink's next start, `load_or_create_table` finds a table whose names,
+    /// types and nullability match the schema it would create, but whose ids
+    /// do not, and it must accept it: comparing ids strands every sink over a
+    /// relation with an array, map or record column after a restart (SS-522).
+    /// Flat relations only pass because the two numberings coincide.
+    #[mz_ore::test]
+    fn test_is_compatible_accepts_catalog_assigned_field_ids() {
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int64.nullable(true))
+            .with_column(
+                "a",
+                SqlScalarType::Array(Box::new(SqlScalarType::Int64)).nullable(true),
+            )
+            .with_column("w", SqlScalarType::Int64.nullable(true))
+            .finish();
+        let (_, expected) =
+            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+        let catalog = with_catalog_field_ids(&expected);
+
+        // The fixture really is what a catalog hands back: same shape, ids moved.
+        let id_of = |schema: &Schema, name: &str| {
+            schema
+                .field_by_name(name)
+                .unwrap_or_else(|| panic!("field {name} should exist"))
+                .id
+        };
+        assert_eq!(id_of(&catalog, "id"), id_of(&expected, "id"));
+        assert_ne!(id_of(&catalog, "a.items"), id_of(&expected, "a.items"));
+        assert_ne!(id_of(&catalog, "w"), id_of(&expected, "w"));
+
+        assert!(
+            is_compatible(&catalog, &expected),
+            "a table that differs from the expected schema only in field ids must be accepted"
+        );
+
+        // Renumbering must not hide a real difference.
+        let wrong_type = with_field_type(&catalog, "w", Type::Primitive(PrimitiveType::String));
+        assert!(!is_compatible(&wrong_type, &expected));
+
+        // A flat relation gets identical ids under both schemes, which is why
+        // such sinks never hit this.
+        let flat = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int64.nullable(true))
+            .with_column("w", SqlScalarType::Int64.nullable(true))
+            .finish();
+        let (_, flat_expected) =
+            relation_desc_to_iceberg_schema(&flat).expect("schema conversion should succeed");
+        assert!(is_compatible(
+            &with_catalog_field_ids(&flat_expected),
+            &flat_expected
+        ));
+    }
+
     #[mz_ore::test]
     fn test_iceberg_range_schema() {
         // Test full schema conversion with range column
