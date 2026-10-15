@@ -449,7 +449,7 @@ Look for patterns such as:
   low. Use the [time-series correlation
   query](#distinguish-source-driven-vs-computation-driven-spikes) to confirm. If
   freshness degrades on objects that were *not* themselves modified during the
-  deploy, [contact Support](/support/) with the spike time window and audit
+  deploy, [contact Support](https://materialize.com/support/) with the spike time window and audit
   event output.
 
 * **Sink `alter` events**: Sinks being swapped to point to new upstream MVs

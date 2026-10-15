@@ -90,6 +90,12 @@ name = "About"
 weight = 150
 
 [[menu.main]]
+name = "Support"
+parent = "about"
+url = "https://materialize.com/support/"
+weight = 10
+
+[[menu.main]]
 name = "Configure single sign-on"
 parent = "security-sm"
 url = "/self-managed-deployments/sso/"

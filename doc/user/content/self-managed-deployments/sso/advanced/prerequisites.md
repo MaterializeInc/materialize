@@ -18,7 +18,7 @@ carries the `ory` entitlement. Community licenses don't include this
 entitlement, and licenses issued before the entitlement existed will keep
 working for Materialize itself but will be rejected by the Ory registry
 proxy. Contact
-[Materialize support](/support/) to have an
+[Materialize support](https://materialize.com/support/) to have an
 ory-enabled key issued.
 
 ## Allow cluster egress

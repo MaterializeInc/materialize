@@ -62,7 +62,7 @@
   config.toml, which have no page at all.
 
   A header whose children are root-level pages maps to the empty section, which
-  is how faqs/support/license reach the index.
+  is how faqs/license reach the index.
 */ -}}
 {{- $keys := slice -}}
 {{- $groups := slice -}}

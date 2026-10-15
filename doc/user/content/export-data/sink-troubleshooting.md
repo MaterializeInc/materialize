@@ -26,7 +26,7 @@ If your sink reports a status of `stalled`, you likely have a configuration
 issue. The returned `error` field will provide details.
 
 If your sink reports a status of `starting` for more than a few minutes,
-[contact support](/support).
+[contact support](https://materialize.com/support/).
 
 ## How do I monitor sink ingestion progress?
 
