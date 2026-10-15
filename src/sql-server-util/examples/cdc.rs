@@ -139,6 +139,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 capture_instance,
                 table,
                 ddl_event,
+                columns: _,
             } => {
                 tracing::info!(
                     "Schema updated for table {table:?} capture instance {capture_instance} at LSN {:?}",
