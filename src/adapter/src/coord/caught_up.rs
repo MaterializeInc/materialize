@@ -90,24 +90,27 @@ const STABILITY_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Returns a query for when a replica last finished hydrating an export.
 ///
-/// It returns one row: the number of non-transient exports the replica has
-/// reported, how many of them are not in `ignored`, how many of those are not
-/// hydrated on some worker, and the latest time one of those hydrated.
+/// It returns no row if the replica has reported no non-transient export.
+/// Otherwise its one row says whether the export is in `ignored`, which holds
+/// only when every reported export is, and its hydration time: NULL if some
+/// export not in `ignored` is not hydrated on some worker, else the latest
+/// time one of them hydrated.
+///
+/// NOTE: This must stay a fast-path peek, an index scan plus a finishing, so
+/// that it does not install a dataflow on every replica on every tick.
+/// Aggregates would make it a slow-path peek.
 fn hydration_query(ignored: &BTreeSet<GlobalId>) -> String {
-    let checked = if ignored.is_empty() {
-        "true".to_string()
+    let is_ignored = if ignored.is_empty() {
+        "false".to_string()
     } else {
         let ids = ignored.iter().map(|id| format!("'{id}'")).join(", ");
-        format!("export_id NOT IN ({ids})")
+        format!("export_id IN ({ids})")
     };
     format!(
-        "SELECT \
-            count(*), \
-            count(*) FILTER (WHERE {checked}), \
-            count(*) FILTER (WHERE {checked} AND hydrated_at IS NULL), \
-            max(hydrated_at) FILTER (WHERE {checked}) \
+        "SELECT {is_ignored} AS ignored, hydrated_at \
         FROM mz_introspection.mz_compute_hydration_times_per_worker \
-        WHERE export_id NOT LIKE 't%'"
+        WHERE export_id NOT LIKE 't%' \
+        ORDER BY ignored, hydrated_at DESC NULLS FIRST LIMIT 1"
     )
 }
 
@@ -435,24 +438,18 @@ impl StabilityGate {
 /// Interprets the rows of a [`hydration_query`].
 fn replica_health(rows: &[Row]) -> ReplicaHealth {
     let Some(row) = rows.first() else {
+        // The replica has not reported its exports yet.
         return ReplicaHealth::NotHydrated;
     };
     let mut datums = row.iter();
-    let mut count = || datums.next().expect("count column").unwrap_int64();
-    let (reported, checked, unhydrated) = (count(), count(), count());
+    let ignored = datums.next().expect("ignored column");
     let hydrated_at = datums.next().expect("hydrated_at column");
-    if reported == 0 {
-        // The replica has not reported its exports yet.
-        return ReplicaHealth::NotHydrated;
-    }
-    if checked == 0 {
+    if ignored.unwrap_bool() {
         // The classification ignored every export the replica hosts, so no
-        // hydration is left to wait for. Reading this as `NotHydrated` blocks
-        // promotion for good, for example once a stopped leader's frontiers
-        // fall behind `with_0dt_caught_up_check_cutoff`.
+        // hydration is left to wait for.
         return ReplicaHealth::Exempt;
     }
-    if unhydrated > 0 || hydrated_at.is_null() {
+    if hydrated_at.is_null() {
         return ReplicaHealth::NotHydrated;
     }
     let millis = hydrated_at.unwrap_timestamptz().timestamp_millis();
@@ -1437,42 +1434,33 @@ mod tests {
     #[mz_ore::test]
     fn hydration_answer_fails_closed() {
         assert_eq!(
-            replica_health(&answer(3, 2, 0, Some(1000))),
+            replica_health(&answer(false, Some(1000))),
             HealthySince(1000)
         );
         assert_eq!(
-            replica_health(&answer(3, 2, 0, Some(-1))),
+            replica_health(&answer(false, Some(-1))),
             NotHydrated,
             "pre-epoch time"
         );
         assert_eq!(
-            replica_health(&answer(3, 2, 1, Some(1000))),
+            replica_health(&answer(false, None)),
             NotHydrated,
             "an export is not hydrated on some worker"
         );
-        assert_eq!(
-            replica_health(&answer(0, 0, 0, None)),
-            NotHydrated,
-            "nothing reported yet"
-        );
-        assert_eq!(replica_health(&[]), NotHydrated, "no answer");
+        assert_eq!(replica_health(&[]), NotHydrated, "nothing reported yet");
     }
 
     #[mz_ore::test]
     fn replica_with_only_ignored_exports_is_exempt() {
-        assert_eq!(replica_health(&answer(33, 0, 0, None)), Exempt);
+        assert_eq!(replica_health(&answer(true, Some(1000))), Exempt);
+        assert_eq!(replica_health(&answer(true, None)), Exempt);
     }
 
-    fn answer(reported: i64, checked: i64, unhydrated: i64, hydrated_at: Option<i64>) -> Vec<Row> {
+    fn answer(ignored: bool, hydrated_at: Option<i64>) -> Vec<Row> {
         let hydrated_at = hydrated_at.map_or(Datum::Null, |millis| {
             let time = chrono::DateTime::from_timestamp_millis(millis).expect("valid time");
             Datum::TimestampTz(CheckedTimestamp::from_timestamplike(time).expect("in range"))
         });
-        vec![Row::pack_slice(&[
-            Datum::Int64(reported),
-            Datum::Int64(checked),
-            Datum::Int64(unhydrated),
-            hydrated_at,
-        ])]
+        vec![Row::pack_slice(&[Datum::from(ignored), hydrated_at])]
     }
 }

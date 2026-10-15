@@ -3414,12 +3414,16 @@ def workflow_caught_up_leader_stopped_past_cutoff(c: Composition) -> None:
     `with_0dt_caught_up_check_cutoff`, so the caught-up check ignores every
     compute collection. A replica with only ignored exports has no hydration
     left to report and must not hold up promotion.
+
+    A zero cutoff puts every frozen leader frontier behind 'now' by the first
+    check, which stands in for a leader stopped longer than the real cutoff
+    without waiting on the wall clock.
     """
     c.down(destroy_volumes=True)
     c.up("mz_old")
 
     c.sql(
-        "ALTER SYSTEM SET with_0dt_caught_up_check_cutoff = '10s'",
+        "ALTER SYSTEM SET with_0dt_caught_up_check_cutoff = '0s'",
         service="mz_old",
         port=6877,
         user="mz_system",
@@ -3433,11 +3437,32 @@ def workflow_caught_up_leader_stopped_past_cutoff(c: Composition) -> None:
         """,
         service="mz_old",
     )
-    # Let the leader record frontiers past the minimum for every collection.
-    c.sql_query("SELECT * FROM mv", service="mz_old")
+
+    # The leader must record a frontier for each new collection on every
+    # replica before it stops. A collection without one is compared against
+    # 'now' instead, with no cutoff, and its frozen inputs fall behind that
+    # comparison for good after `with_0dt_caught_up_check_allowed_lag`.
+    for _ in range(120):
+        recorded = c.sql_query(
+            """
+            SELECT count(*) = 2 * (
+                SELECT count(*) FROM mz_cluster_replicas r
+                JOIN mz_clusters c ON c.id = r.cluster_id
+                WHERE c.name = 'quickstart'
+            )
+            FROM mz_cluster_replica_frontiers f
+            JOIN mz_objects o ON o.id = f.object_id
+            WHERE o.name IN ('mv', 'mv_idx') AND f.write_frontier > 0::mz_timestamp
+            """,
+            service="mz_old",
+        )
+        if recorded[0][0]:
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError("leader never recorded frontiers for mv and mv_idx")
 
     c.kill("mz_old")
-    time.sleep(20)
 
     c.up("mz_new")
     c.await_mz_deployment_status(
