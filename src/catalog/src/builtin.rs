@@ -1194,7 +1194,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_SCHEMAS),
         Builtin::MaterializedView(&MZ_COLUMNS),
         Builtin::MaterializedView(&MZ_INDEXES),
-        Builtin::Table(&MZ_INDEX_COLUMNS),
+        Builtin::MaterializedView(&MZ_INDEX_COLUMNS),
         Builtin::MaterializedView(&MZ_TABLES),
         Builtin::MaterializedView(&MZ_SOURCES),
         Builtin::MaterializedView(&MZ_SOURCE_REFERENCES),
