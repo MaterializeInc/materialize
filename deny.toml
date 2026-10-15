@@ -312,10 +312,6 @@ version = 2
 ignore = [
     # Consider `encoding_rs` instead of `encoding` (unmaintained)
     "RUSTSEC-2021-0153",
-    # `proc-macro-error2` (the maintained fork of `proc-macro-error`) is now also
-    # unmaintained. Pulled in transitively via `tabled` -> `tabled_derive`. No
-    # safe upgrade is available.
-    "RUSTSEC-2026-0173",
     # `derivative` is unmaintained; consider using an alternative (unmaintained)
     "RUSTSEC-2024-0388",
     # The creator of the crate `paste` has stated in the [`README.md`](https://github.com/dtolnay/paste/blob/master/README.md) that this project is not longer maintained as well as archived the repository
@@ -328,11 +324,6 @@ ignore = [
     # Allows private key leakage through timing information
     # rsa is required through iceberg-storage-opendal
     "RUSTSEC-2023-0071",
-    # `launchdarkly-server-sdk` requires `lru ^0.16.3` in its latest release.
-    "RUSTSEC-2026-0253",
-    # `unsafe-libyaml` is unmaintained. Pulled in by `serde_yaml`, which
-    # `mz-debug` and `mz-metrics-catalog` use directly.
-    "RUSTSEC-2024-0449",
 ]
 
 # Must be manually kept in sync with about.toml.

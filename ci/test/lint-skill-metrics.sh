@@ -32,7 +32,7 @@ set -euo pipefail
 
 ci_uncollapsed_heading "Linting mz-release-signoff metric names"
 
-try python3 .agents/skills/mz-release-signoff/scripts/lint_metrics.py
+try bin/pyactivate .agents/skills/mz-release-signoff/scripts/lint_metrics.py
 
 try python3 -m doctest .agents/skills/mz-release-signoff/scripts/build-range-query.py
 

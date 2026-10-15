@@ -35,6 +35,7 @@ if [[ $# -ne 2 ]]; then
     exit 2
 fi
 
+root=$(git rev-parse --show-toplevel)
 before=$1
 after=$2
 
@@ -42,7 +43,7 @@ after=$2
 # on the extractor's own ordering.
 names() {
     git show "$1:doc/user/data/metrics.yml" \
-        | python3 "$(dirname "$0")/catalog_names.py" \
+        | "$root/bin/pyactivate" "$root/.agents/skills/mz-release-signoff/scripts/catalog_names.py" \
         | LC_ALL=C sort
 }
 
