@@ -1,0 +1,267 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_alter_table_add_column = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_index_options = true
+----
+COMPLETE 0
+
+# Every index has at least one key.
+query I
+SELECT count(*)
+FROM mz_catalog.mz_indexes i
+WHERE NOT EXISTS (SELECT FROM mz_catalog.mz_index_columns c WHERE c.index_id = i.id)
+----
+0
+
+# Every key belongs to an existing index.
+query I
+SELECT count(DISTINCT c.index_id)
+FROM mz_catalog.mz_index_columns c
+WHERE NOT EXISTS (SELECT FROM mz_catalog.mz_indexes i WHERE i.id = c.index_id)
+----
+0
+
+# Positions are 1-based and contiguous, and a key is either a column or an
+# expression.
+query I
+SELECT count(*)
+FROM (
+    SELECT
+        index_id,
+        count(*) AS n,
+        min(index_position) AS lo,
+        max(index_position) AS hi,
+        count(*) FILTER (
+            WHERE (on_position IS NULL AND on_expression IS NULL)
+               OR (on_position IS NOT NULL AND on_expression IS NOT NULL)
+        ) AS malformed
+    FROM mz_catalog.mz_index_columns
+    GROUP BY index_id
+)
+WHERE lo <> 1 OR hi <> n OR malformed > 0
+----
+0
+
+# A column key is a column of the indexed relation and has its nullability.
+query I
+SELECT count(*)
+FROM mz_catalog.mz_index_columns ic
+JOIN mz_catalog.mz_indexes i ON i.id = ic.index_id
+LEFT JOIN mz_catalog.mz_columns c ON c.id = i.on_id AND c.position = ic.on_position
+WHERE ic.on_position IS NOT NULL AND (c.id IS NULL OR c.nullable <> ic.nullable)
+----
+0
+
+# --- Builtin indexes and introspection source indexes -------------------------
+
+query TITT
+SELECT i.name, ic.index_position, c.name, ic.nullable
+FROM mz_catalog.mz_index_columns ic
+JOIN mz_catalog.mz_indexes i ON i.id = ic.index_id
+JOIN mz_catalog.mz_columns c ON c.id = i.on_id AND c.position = ic.on_position
+WHERE
+    i.id LIKE 's%' AND
+    i.name IN (
+        'mz_tables_ind',
+        'mz_columns_ind',
+        'mz_cluster_replica_history_ind',
+        'mz_object_dependencies_ind',
+        'mz_source_statistics_with_history_ind'
+    )
+ORDER BY i.name, ic.index_position
+----
+mz_cluster_replica_history_ind  1  dropped_at  true
+mz_columns_ind  1  name  false
+mz_object_dependencies_ind  1  object_id  false
+mz_source_statistics_with_history_ind  1  id  false
+mz_source_statistics_with_history_ind  2  replica_id  true
+mz_tables_ind  1  schema_id  false
+
+query TITT
+SELECT i.name, ic.index_position, c.name, ic.nullable
+FROM mz_catalog.mz_index_columns ic
+JOIN mz_catalog.mz_indexes i ON i.id = ic.index_id
+JOIN mz_catalog.mz_columns c ON c.id = i.on_id AND c.position = ic.on_position
+WHERE
+    i.id LIKE 'si%' AND
+    i.cluster_id = (SELECT id FROM mz_catalog.mz_clusters WHERE name = 'quickstart') AND
+    i.name IN (
+        'mz_active_peeks_per_worker_u1_primary_idx',
+        'mz_arrangement_batches_raw_u1_primary_idx',
+        'mz_compute_error_counts_raw_u1_primary_idx'
+    )
+ORDER BY i.name, ic.index_position
+----
+mz_active_peeks_per_worker_u1_primary_idx  1  id  false
+mz_active_peeks_per_worker_u1_primary_idx  2  worker_id  false
+mz_arrangement_batches_raw_u1_primary_idx  1  operator_id  false
+mz_arrangement_batches_raw_u1_primary_idx  2  worker_id  false
+mz_compute_error_counts_raw_u1_primary_idx  1  export_id  false
+mz_compute_error_counts_raw_u1_primary_idx  2  worker_id  false
+
+# --- User indexes -------------------------------------------------------------
+
+statement ok
+CREATE TABLE indexed_table (a int, b text NOT NULL)
+
+statement ok
+CREATE INDEX indexed_table_idx ON indexed_table (a, b)
+
+# A no-op cast, a parenthesized column and a positional reference are reported as
+# columns in the `on` column. Every other key is reported as the expression written,
+# with the nullability decided by the planner.
+statement ok
+CREATE INDEX indexed_table_expr_idx ON indexed_table (
+    abs(a),
+    a + 1,
+    coalesce(a, 0),
+    a::int4,
+    a::text,
+    upper(b),
+    b || 'x',
+    -a,
+    a IS NULL,
+    CASE WHEN a > 0 THEN a END,
+    2,
+    (a),
+    'x'
+)
+
+statement ok
+CREATE DEFAULT INDEX ON indexed_table
+
+statement ok
+CREATE INDEX indexed_table_retain_idx ON indexed_table (b) WITH (RETAIN HISTORY FOR '1h')
+
+statement ok
+CREATE VIEW indexed_view AS SELECT a, b, a + 1 AS a_plus_one FROM indexed_table
+
+statement ok
+CREATE DEFAULT INDEX ON indexed_view
+
+statement ok
+CREATE MATERIALIZED VIEW indexed_materialized_view AS SELECT a, b FROM indexed_table
+
+statement ok
+CREATE INDEX indexed_materialized_view_idx ON indexed_materialized_view (b)
+
+statement ok
+CREATE SOURCE auction_source IN CLUSTER quickstart FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+
+statement ok
+CREATE INDEX bids_idx ON bids (auction_id, amount)
+
+# An index on a builtin relation
+simple conn=mz_system,user=mz_system
+CREATE INDEX mz_tables_name_idx IN CLUSTER quickstart ON mz_catalog.mz_tables (name)
+----
+COMPLETE 0
+
+# An index keeps referring to the version of its table it was created on.
+statement ok
+ALTER TABLE indexed_table ADD COLUMN c int
+
+statement ok
+CREATE INDEX indexed_table_c_idx ON indexed_table (c, a)
+
+# For on_expression, mask the IDs since catalog IDs aren't stable
+query TIITTT
+SELECT
+    i.name,
+    ic.index_position,
+    ic.on_position,
+    c.name,
+    regexp_replace(ic.on_expression, '\[[su][0-9]+', '[<id>', 'g'),
+    ic.nullable
+FROM mz_catalog.mz_index_columns ic
+JOIN mz_catalog.mz_indexes i ON i.id = ic.index_id
+LEFT JOIN mz_catalog.mz_columns c ON c.id = i.on_id AND c.position = ic.on_position
+WHERE i.id LIKE 'u%' AND i.name IN (
+    'bids_idx',
+    'indexed_materialized_view_idx',
+    'indexed_table_c_idx',
+    'indexed_table_expr_idx',
+    'indexed_table_idx',
+    'indexed_table_primary_idx',
+    'indexed_table_retain_idx',
+    'indexed_view_primary_idx',
+    'mz_tables_name_idx'
+)
+ORDER BY i.name, ic.index_position
+----
+bids_idx  1  3  auction_id  NULL  false
+bids_idx  2  4  amount  NULL  false
+indexed_materialized_view_idx  1  2  b  NULL  false
+indexed_table_c_idx  1  3  c  NULL  true
+indexed_table_c_idx  2  1  a  NULL  true
+indexed_table_expr_idx  1  NULL  NULL  pg_catalog.abs(a)  true
+indexed_table_expr_idx  2  NULL  NULL  a␠+␠1  true
+indexed_table_expr_idx  3  NULL  NULL  COALESCE(a,␠0)  false
+indexed_table_expr_idx  4  1  a  NULL  true
+indexed_table_expr_idx  5  NULL  NULL  a::[<id>␠AS␠pg_catalog.text]  true
+indexed_table_expr_idx  6  NULL  NULL  pg_catalog.upper(b)  false
+indexed_table_expr_idx  7  NULL  NULL  b␠||␠'x'  false
+indexed_table_expr_idx  8  NULL  NULL  -␠a  true
+indexed_table_expr_idx  9  NULL  NULL  a␠IS␠NULL  false
+indexed_table_expr_idx  10  NULL  NULL  CASE␠WHEN␠a␠>␠0␠THEN␠a␠END  true
+indexed_table_expr_idx  11  2  b  NULL  false
+indexed_table_expr_idx  12  1  a  NULL  true
+indexed_table_expr_idx  13  NULL  NULL  'x'  false
+indexed_table_idx  1  1  a  NULL  true
+indexed_table_idx  2  2  b  NULL  false
+indexed_table_primary_idx  1  1  a  NULL  true
+indexed_table_primary_idx  2  2  b  NULL  false
+indexed_table_retain_idx  1  2  b  NULL  false
+indexed_view_primary_idx  1  1  a  NULL  true
+indexed_view_primary_idx  2  2  b  NULL  false
+indexed_view_primary_idx  3  3  a_plus_one  NULL  true
+mz_tables_name_idx  1  4  name  NULL  false
+
+# --- Retraction ---------------------------------------------------------------
+
+statement ok
+DROP INDEX indexed_table_expr_idx
+
+statement ok
+DROP TABLE indexed_table CASCADE
+
+# The DROP cascades to indexed_view and indexed_materialized_view and to the
+# indexes on all three. A row that survived would have an index_id that no index
+# has anymore.
+query I
+SELECT count(*)
+FROM mz_catalog.mz_index_columns c
+WHERE NOT EXISTS (SELECT FROM mz_catalog.mz_indexes i WHERE i.id = c.index_id)
+----
+0
+
+# The drop itself took effect.
+query I
+SELECT count(*) FROM mz_catalog.mz_indexes
+WHERE name IN (
+    'indexed_materialized_view_idx',
+    'indexed_table_c_idx',
+    'indexed_table_expr_idx',
+    'indexed_table_idx',
+    'indexed_table_primary_idx',
+    'indexed_table_retain_idx',
+    'indexed_view_primary_idx'
+)
+----
+0
