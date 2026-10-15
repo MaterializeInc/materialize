@@ -162,7 +162,7 @@ Field            | Type        | Meaning
 `position`       | [`uint8`]   | The 1-indexed position of the column in its containing table, source, or view.
 `nullable`       | [`boolean`] | Can the column contain a `NULL` value?
 `type`           | [`text`]    | The data type of the column.
-`default`        | [`text`]    | The default expression of the column.
+`default`        | [`text`]    | The default expression of the column, or `NULL` if it has none.
 `type_oid`       | [`oid`]     | The OID of the type of the column (references `mz_types`).
 `type_mod`       | [`integer`] | The packed type identifier of the column.
 
