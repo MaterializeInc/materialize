@@ -182,7 +182,7 @@ WHERE object_id = (SELECT id FROM mz_tables WHERE name = 'lg_tbl')
 
 # --- builtin edges ---------------------------------------------------------------
 
-# mz_catalog.mz_indexes is itself a materialized view over mz_catalog_raw.
+# mz_catalog.mz_indexes is itself a materialized view over mz_catalog_shared.
 # Its edge comes from the VALUES inlined at generation time, joined to
 # GidMapping rows at query time.
 query T
@@ -193,7 +193,7 @@ JOIN mz_schemas os ON os.id = o.schema_id
 JOIN mz_objects r ON r.id = dep.referenced_object_id
 JOIN mz_schemas rs ON rs.id = r.schema_id
 WHERE os.name = 'mz_catalog' AND o.name = 'mz_indexes'
-  AND rs.name = 'mz_internal' AND r.name = 'mz_catalog_raw'
+  AND rs.name = 'mz_internal' AND r.name = 'mz_catalog_shared'
 ----
 1
 
