@@ -542,6 +542,13 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
                 stmt.with_options.iter().map(|o| (&o.name, &o.value)),
                 IndexOptionName::RetainHistory,
             )?;
+            let key_parts: Vec<_> = stmt
+                .key_parts
+                .iter()
+                .flatten()
+                .map(|expr| json!(expr.to_ast_string_simple()))
+                .collect();
+            info.insert("key_parts", json!(key_parts));
             "index"
         }
         CreateType(_) => "type",
@@ -2039,6 +2046,16 @@ mod tests {
             r#"CREATE TABLE "t" FROM SOURCE [u1 AS "materialize"."public"."s"] (REFERENCE = "t")"#;
         let out = super::item_details(sql).expect("ok");
         assert_eq!(out["column_defaults"], json!(null));
+    }
+
+    #[mz_ore::test]
+    fn item_details_reports_index_key_parts() {
+        let sql = r#"CREATE INDEX "t_idx" IN CLUSTER [u1] ON [u4 AS "materialize"."public"."t"] ("pg_catalog"."abs"("a"), "a" + 1, COALESCE("a", 0), 2)"#;
+        let out = super::item_details(sql).expect("ok");
+        assert_eq!(
+            out["key_parts"],
+            json!(["pg_catalog.abs(a)", "a + 1", "COALESCE(a, 0)", "2"])
+        );
     }
 
     /// Every error here is fatal to the whole of `mz_tables`/`mz_views`, not to
