@@ -666,6 +666,7 @@ def compileFastSltConfig() -> SltRunConfig:
         # and type OIDs, which --auto-index-selects perturbs by creating wrapper
         # views and indexes.
         "test/sqllogictest/mz_columns.slt",
+        "test/sqllogictest/mz_index_columns.slt",
         "test/sqllogictest/mztimestamp.slt",
         "test/sqllogictest/name_resolution.slt",
         "test/sqllogictest/not-null-propagation.slt",
@@ -1125,6 +1126,7 @@ def compileSlowSltConfig() -> SltRunConfig:
         # and type OIDs, which --auto-index-selects perturbs by creating wrapper
         # views and indexes.
         "test/sqllogictest/mz_columns.slt",
+        "test/sqllogictest/mz_index_columns.slt",
     }
 
     tests = file_util.resolve_paths_with_wildcard(tests)
