@@ -176,8 +176,8 @@ pub(crate) fn render<'scope>(
         .flat_map(|(_, outputs)| outputs.values().map(|o| o.resume_upper.clone()))
         .collect::<Vec<_>>();
     metrics.tables.set(u64::cast_from(output_uppers.len()));
-    // Same uppers as output_uppers for table/subsource exports because it's their source. Key difference is
-    // it also includes the source's resume upper for the legacy syntax.
+    // Same values as output_uppers above (output_uppers is derived from source_resume_uppers), but it contains an additional
+    // entry for the top-level source when legacy syntax is used.
     let resume_lsns: BTreeMap<GlobalId, MzOffset> = config
         .source_resume_uppers
         .iter()
