@@ -135,11 +135,14 @@ Replicas execute committed selections, without forced adoption.
 The remaining resource-bounded workload failure is aggregate memory exhaustion.
 Attribute growth across the replica population, not only the largest process.
 The concrete transient allocation boundary is subscribe row packing and compute
-response serialization during large UPDATEs. Exact packing preallocation and
-incremental input release did not establish an improvement in the reduced
-two-table case. Keep that experiment out of the landing history. Use the captured
-allocation stacks to select the next bounded comparison, then verify a promising
-repair against the original workload and resource budget.
+response serialization during large UPDATEs. A single-UPDATE comparison supports
+reducing the packing buffer from 448 MiB to 224 MiB through exact preallocation
+and incremental input release, with serialization still allocating 224 MiB.
+Concurrent buffer occupancy obscures this difference in the two-table capture.
+The combined repair still OOMs in the original 8-CPU/16-GiB workload before any
+validation starts. SQL completions and finite compaction-bound advancement occur,
+but neither establishes whole-workload progress or physical-since advancement.
+Use the preserved pre-OOM population capture to identify remaining memory owners.
 Preserve consolidation, row ordering, batch frontiers and the wire contract.
 Do not turn this into a transport protocol or memory-policy redesign.
 Compare actual CI agent resources, not requested queue labels.
