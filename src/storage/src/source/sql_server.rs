@@ -106,21 +106,12 @@ pub enum DefiniteError {
     IncompatibleConstraintChange(#[from] SchemaChangeError),
 }
 
-impl DefiniteError {
-    fn hint(&self) -> Option<String> {
-        match self {
-            DefiniteError::IncompatibleConstraintChange(err) => err.hint(),
-            _ => None,
-        }
-    }
-}
-
 impl From<DefiniteError> for DataflowError {
     fn from(val: DefiniteError) -> Self {
         let msg = val.to_string().into();
         DataflowError::SourceError(Box::new(SourceError {
             error: SourceErrorDetails::Other(msg),
-            hint: val.hint().map(Into::into),
+            hint: None,
         }))
     }
 }

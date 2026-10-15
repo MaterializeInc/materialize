@@ -70,50 +70,38 @@ impl std::fmt::Display for KeyRef {
 }
 
 impl SchemaChange {
-    /// The recovery steps for a dropped constraint on `schema.name`: the
-    /// statements from [`SchemaChange::recreate_hint`], and how to make a
-    /// planned drop a non-event with `EXCLUDE CONSTRAINTS`. Other changes
-    /// carry no hint.
+    /// The recovery steps for a dropped constraint on `schema.name`, including
+    /// the statements to run. Other changes carry no hint.
     pub fn hint(&self, schema: &str, name: &str) -> Option<String> {
-        let recreate = self.recreate_hint(schema, name)?;
-        let key = match self {
-            SchemaChange::KeyDropped { key } | SchemaChange::KeyAltered { key } => key,
-            _ => return Some(recreate),
+        let recreate = |with_clause: Option<&str>| {
+            let mut hint = format!(
+                "To keep ingesting without this constraint, recreate the table in a new \
+                 versioned schema, then swap your views to the new table:\n  CREATE SCHEMA v2;\n  \
+                 CREATE TABLE v2.{}\n  FROM SOURCE <source> (REFERENCE {}.{})",
+                escape::escape_identifier(name),
+                escape::escape_identifier(schema),
+                escape::escape_identifier(name),
+            );
+            if let Some(with_clause) = with_clause {
+                hint.push_str(&format!("\n  WITH ({with_clause})"));
+            }
+            hint.push(';');
+            hint
         };
-        Some(format!(
-            "{recreate}\nTo make a planned constraint drop a non-event, create the table with \
-             WITH (EXCLUDE CONSTRAINTS ({})) before the upstream drop.",
-            escape::escape_literal(&key.name),
-        ))
-    }
-
-    /// The statements that recreate `schema.name` in a new versioned schema
-    /// without the dropped constraint. This is the whole hint for sources whose
-    /// `CREATE TABLE .. FROM SOURCE` has no `EXCLUDE CONSTRAINTS` option. Other
-    /// changes carry no hint.
-    pub fn recreate_hint(&self, schema: &str, name: &str) -> Option<String> {
-        let with_clause = match self {
-            SchemaChange::KeyDropped { .. } | SchemaChange::KeyAltered { .. } => None,
-            SchemaChange::NotNullDropped { .. } => Some("EXCLUDE ALL CONSTRAINTS"),
+        match self {
+            SchemaChange::KeyDropped { key } | SchemaChange::KeyAltered { key } => Some(format!(
+                "{}\nTo make a planned constraint drop a non-event, create the table with \
+                 WITH (EXCLUDE CONSTRAINTS ({})) before the upstream drop.",
+                recreate(None),
+                escape::escape_literal(&key.name),
+            )),
+            SchemaChange::NotNullDropped { .. } => Some(recreate(Some("EXCLUDE ALL CONSTRAINTS"))),
             SchemaChange::TableDropped
             | SchemaChange::TableRenamed
             | SchemaChange::ColumnDropped { .. }
             | SchemaChange::ColumnMoved { .. }
             | SchemaChange::ColumnTypeChanged { .. }
-            | SchemaChange::DescriptionFailed(_) => return None,
-        };
-        let mut hint = format!(
-            "To keep ingesting without this constraint, recreate the table in a new \
-             versioned schema, then swap your views to the new table:\n  CREATE SCHEMA v2;\n  \
-             CREATE TABLE v2.{}\n  FROM SOURCE <source> (REFERENCE {}.{})",
-            escape::escape_identifier(name),
-            escape::escape_identifier(schema),
-            escape::escape_identifier(name),
-        );
-        if let Some(with_clause) = with_clause {
-            hint.push_str(&format!("\n  WITH ({with_clause})"));
+            | SchemaChange::DescriptionFailed(_) => None,
         }
-        hint.push(';');
-        Some(hint)
     }
 }

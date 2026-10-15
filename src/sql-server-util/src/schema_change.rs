@@ -24,16 +24,6 @@ pub struct SchemaChangeError {
     pub change: SchemaChange,
 }
 
-impl SchemaChangeError {
-    /// The recovery steps, as the `HINT` of the error.
-    ///
-    /// SQL Server sources reject `EXCLUDE CONSTRAINTS`, so only the steps that
-    /// recreate the table are given.
-    pub fn hint(&self) -> Option<String> {
-        self.change.recreate_hint(&self.schema_name, &self.name)
-    }
-}
-
 impl From<&SqlServerTableConstraint> for KeyRef {
     fn from(constraint: &SqlServerTableConstraint) -> Self {
         KeyRef {

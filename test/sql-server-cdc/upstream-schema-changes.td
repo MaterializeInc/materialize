@@ -200,10 +200,6 @@ ALTER TABLE uq DROP CONSTRAINT uq_wallet;
 
 ! SELECT * FROM uq;
 contains:incompatible schema change on dbo.uq: UNIQUE constraint "uq_wallet" (wallet) was dropped upstream
-hint:CREATE TABLE v2."uq"
-
-> SELECT details->'hints'->>0 LIKE '%CREATE TABLE v2."uq"%' FROM mz_internal.mz_source_statuses WHERE name = 'uq';
-true
 
 $ sql-server-execute name=sql-server
 CREATE TABLE multi (id INT NOT NULL CONSTRAINT multi_pk PRIMARY KEY, a INT NOT NULL, b INT NOT NULL, c INT NOT NULL, CONSTRAINT multi_uq_a UNIQUE (a), CONSTRAINT multi_uq_bc UNIQUE (b, c));
@@ -237,7 +233,6 @@ INSERT INTO multi VALUES (2, 20, 100, 1000);
 
 ! SELECT * FROM multi;
 contains:incompatible schema change on dbo.multi: UNIQUE constraint "multi_uq_bc" (b, c) was dropped upstream
-hint:CREATE TABLE v2."multi"
 
 # A constraint over an excluded column was never recorded as a key, so dropping
 # it is a non-event.
@@ -259,7 +254,6 @@ INSERT INTO alt VALUES (2, 10, 200);
 
 ! SELECT * FROM alt;
 contains:incompatible schema change on dbo.alt: UNIQUE constraint "alt_uq" (a) was renamed or recreated upstream
-hint:CREATE TABLE v2."alt"
 
 # A table tracked by two capture instances: both exports see the table's
 # constraints, so neither reports a phantom dropped key, and a real drop is

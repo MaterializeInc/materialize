@@ -199,7 +199,6 @@ ALTER TABLE alter_drop_unique DROP CONSTRAINT alter_drop_unique_f1_key;
 
 ! SELECT f1 FROM alter_drop_unique;
 contains:incompatible schema change on dbo.alter_drop_unique: UNIQUE constraint "alter_drop_unique_f1_key" (f1) was dropped upstream
-hint:CREATE TABLE v2."alter_drop_unique"
 
 
 #
