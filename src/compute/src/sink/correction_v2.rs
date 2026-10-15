@@ -147,7 +147,7 @@ use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
-use std::sync::atomic::{self, AtomicBool, AtomicU8, AtomicUsize};
+use std::sync::atomic::{self, AtomicBool, AtomicUsize};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use columnar::bytes::indexed;
@@ -1350,22 +1350,17 @@ impl<D: Data> ConsolidatedChain<D> {
 
 /// Whether the MV sink queues its `ok` updates as [`ConsolidatedChain`]s.
 static COLUMNAR_QUEUE: AtomicBool = AtomicBool::new(false);
-/// The generational depth hint of chunks minted for the MV sink's write queue.
-static QUEUE_DEPTH: AtomicU8 = AtomicU8::new(1);
 
-/// Set whether the MV sink queues its `ok` updates for the write task as [`ConsolidatedChain`]s,
-/// and the depth hint their chunks are minted at. Consulted at every activation, so changes apply
-/// to running sinks.
-pub fn set_columnar_queue(enabled: bool, depth: u8) {
+/// Set whether the MV sink queues its `ok` updates for the write task as [`ConsolidatedChain`]s.
+/// Consulted at every activation, so changes apply to running sinks.
+pub fn set_columnar_queue(enabled: bool) {
     COLUMNAR_QUEUE.store(enabled, atomic::Ordering::Relaxed);
-    QUEUE_DEPTH.store(depth, atomic::Ordering::Relaxed);
 }
 
-/// The columnar queue setting: `Some(depth)` when enabled, see [`set_columnar_queue`].
-pub fn columnar_queue() -> Option<u8> {
-    COLUMNAR_QUEUE
-        .load(atomic::Ordering::Relaxed)
-        .then(|| QUEUE_DEPTH.load(atomic::Ordering::Relaxed))
+/// Whether the MV sink queues its `ok` updates as [`ConsolidatedChain`]s, see
+/// [`set_columnar_queue`].
+pub fn columnar_queue() -> bool {
+    COLUMNAR_QUEUE.load(atomic::Ordering::Relaxed)
 }
 
 /// A builder that constructs a [`Chain`] from a stream of updates.

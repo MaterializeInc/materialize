@@ -357,9 +357,6 @@ def get_variable_system_parameters(
             "compute_correction_v2_columnar_queue", "true", ["true", "false"]
         ),
         VariableSystemParameter(
-            "compute_correction_v2_queue_depth", "1", ["0", "1", "2"]
-        ),
-        VariableSystemParameter(
             "compute_peek_response_stash_threshold_bytes",
             # 1 MiB, an in-between value
             "1048576",

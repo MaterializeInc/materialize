@@ -584,7 +584,6 @@ impl ComputeState {
             mz_timely_util::columnar::chunk::set_compress_min_depth(compress_min_depth);
             crate::sink::correction_v2::set_columnar_queue(
                 CORRECTION_V2_COLUMNAR_QUEUE.get(config),
-                u8::try_from(CORRECTION_V2_QUEUE_DEPTH.get(config)).unwrap_or(u8::MAX),
             );
         }
 

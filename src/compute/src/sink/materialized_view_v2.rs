@@ -792,8 +792,8 @@ mod write {
                 // Consolidating here moves the cost of holding queued updates onto this worker,
                 // which slows it to the rate the buffer pool absorbs, and leaves the write task
                 // chains it can file without sorting.
-                let queue_depth = correction_v2::columnar_queue();
-                if queue_depth.is_some() || !pending_ok.is_empty() {
+                let columnar_queue = correction_v2::columnar_queue();
+                if columnar_queue || !pending_ok.is_empty() {
                     let negated = batch.persist_ok.drain(..).map(|(d, t, r)| (d, t, -r));
                     for update in batch.desired_ok.drain(..).chain(negated) {
                         pending_bytes += update.0.data_bytes() + size_of::<(Timestamp, Diff)>();
@@ -834,13 +834,12 @@ mod write {
                 // which then waits on the heap, so updates ship once they fill a chain or when
                 // the batch carries frontier or consolidation work the write task must see them
                 // for.
-                if queue_depth.is_none()
+                if !columnar_queue
                     || pending_bytes >= queue_chain_bytes
                     || batch.persist_frontier.is_some()
                     || batch.force_consolidation
                 {
-                    batch.ok_chain =
-                        take_queued_chain(&mut pending_ok, &mut pending_bytes, queue_depth);
+                    batch.ok_chain = take_queued_chain(&mut pending_ok, &mut pending_bytes);
                 }
 
                 if !batch.is_empty() {
@@ -879,8 +878,7 @@ mod write {
                     // must reach the write task first.
                     if !pending_ok.is_empty() && state.batch_ready() {
                         let mut flush = BatchUpdates::new();
-                        flush.ok_chain =
-                            take_queued_chain(&mut pending_ok, &mut pending_bytes, queue_depth);
+                        flush.ok_chain = take_queued_chain(&mut pending_ok, &mut pending_bytes);
                         if !flush.is_empty() {
                             cmd_tx
                                 .send(WriteCommand::Batch(flush))
@@ -897,19 +895,20 @@ mod write {
         batches_output_stream
     }
 
-    /// Mint the pending `ok` updates into a queued chain at the queue's depth hint, emptying them.
-    /// Returns `None` if they consolidate away.
+    /// Mint the pending `ok` updates into a queued chain, emptying them. Returns `None` if they
+    /// consolidate away.
     fn take_queued_chain(
         pending: &mut Vec<(Row, Timestamp, Diff)>,
         pending_bytes: &mut usize,
-        depth: Option<u8>,
     ) -> Option<ConsolidatedChain<Row>> {
         *pending_bytes = 0;
         if pending.is_empty() {
             return None;
         }
-        // With the queue switched off since the updates arrived, the default hint applies.
-        let chain = ConsolidatedChain::from_updates(pending, depth.unwrap_or(1));
+        // Depth 1 is the lowest depth at which the default `column_chunk_compress_min_depth`
+        // compresses a spilled chunk, so a queued backlog spills in its smaller form. On a
+        // lineitem x4 hydration, depths 0 and 1 measured within run-to-run noise.
+        let chain = ConsolidatedChain::from_updates(pending, 1);
         (!chain.is_empty()).then_some(chain)
     }
 
