@@ -1266,3 +1266,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17132  min
 17138  jq
 17139  mz_builtin_columns
+17140  mz_builtin_index_columns
