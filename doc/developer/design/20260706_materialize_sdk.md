@@ -64,11 +64,10 @@ upgrade the upper catches up and the window slides with it, so a one-hour
 window can expire during a one-hour outage. A `REFRESH EVERY` view's upper
 jumps to the next refresh, so a sink that is down across a refresh can lose
 history however short the downtime. Retention belongs to the view's owner, and
-any `ALTER` changes every sink's margin without telling it. `RETAIN HISTORY` on
-materialized views is also in private preview
-(`doc/user/data/examples/create_materialized_view.yml`). Until durable
-subscriptions land, the SDK depends on a preview feature, and sinks built on it
-will raise demand for that feature.
+any `ALTER` changes every sink's margin without telling it. `RETAIN HISTORY` is
+also in private preview (`doc/user/data/examples/create_materialized_view.yml`),
+and durable mode needs it until durable subscriptions land (deferred question
+13).
 
 A connected subscribe holds its input readable up to what it has emitted, not up
 to what the consumer has committed. The data between those two points needs
@@ -1385,6 +1384,9 @@ program.
    against the unique keys Materialize infers, with the same `NOT ENFORCED`
    escape as `CREATE SINK`, or expose those keys in the catalog so the SDK can
    check them. Until then, a sink's key is unchecked.
+10. `RETAIN HISTORY` out of private preview for tables, sources, and
+    materialized views, unless durable subscriptions (#38468) land first.
+    Durable mode needs one of the two (deferred question 13).
 
 The server-side buffering bound (#37905) has landed and needs no further work.
 
@@ -1604,3 +1606,9 @@ October work, because the doc picks a safe default for each.
     package starts. Do they agree that the Python package takes over its
     transactional sinks and sink interface, and that the "build your own sink"
     guide moves to the SDK (see "Extend mz-sink-sdk")?
+13. Retention before durable subscriptions. Durable mode will refuse to start
+    on an object whose retention is below the commit lag, and without
+    `RETAIN HISTORY`, which is in private preview, retention is one second.
+    Live mode does not need it. Owner: product with the database team, before
+    durable mode ships. Does `RETAIN HISTORY` leave private preview first, or
+    does durable mode ship only where it is enabled?
