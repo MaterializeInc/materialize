@@ -6386,9 +6386,13 @@ dependencies = [
 name = "mz-alloc"
 version = "0.0.0"
 dependencies = [
+ "libc",
+ "mz-alloc-track",
  "mz-ore",
  "mz-prof",
  "mz-prof-http",
+ "tikv-jemalloc-ctl",
+ "tikv-jemalloc-sys",
  "tikv-jemallocator",
 ]
 
