@@ -87,11 +87,12 @@ use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_postgres_util::PostgresError;
 use mz_postgres_util::{Client, Sql, execute, query_opt, simple_query_opt, sql};
-use mz_repr::{Datum, DatumVec, Diff, Row};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row};
 use mz_storage_types::dyncfgs::PG_SCHEMA_VALIDATION_INTERVAL;
 use mz_storage_types::dyncfgs::PG_SOURCE_VALIDATE_TIMELINE;
 use mz_storage_types::dyncfgs::STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD;
 use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sources::SourceTimestamp;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
@@ -197,6 +198,16 @@ pub(crate) fn render<'scope>(
         .flat_map(|(_, outputs)| outputs.values().map(|o| o.resume_upper.clone()))
         .collect::<Vec<_>>();
     metrics.tables.set(u64::cast_from(output_uppers.len()));
+    // Same values as output_uppers above (output_uppers is derived from source_resume_uppers), but it contains an additional
+    // entry for the top-level source when legacy syntax is used.
+    let resume_lsns: BTreeMap<GlobalId, MzOffset> = config
+        .source_resume_uppers
+        .iter()
+        .filter_map(|(id, upper)| {
+            let upper = Antichain::from_iter(upper.iter().map(MzOffset::decode_row));
+            Some((*id, upper.into_option()?))
+        })
+        .collect();
 
     let reader_table_info = table_info.clone();
     let (button, transient_errors) = builder.build_fallible(move |caps| {
@@ -336,8 +347,11 @@ pub(crate) fn render<'scope>(
             // If we don't set "offset_committed" now, it'll be stuck at 0 (the default value)
             // until we finish processing the table snapshot. If the snapshot is large, that could be a long time.
             // This confuses the ingestion lag calculation in the UI, causing it to yield erroneously high values.
-            for stat in config.statistics.values() {
-                stat.set_offset_committed(resume_lsn.offset);
+            for (id, stat) in config.statistics.iter() {
+                let lsn = resume_lsns
+                    .get(id)
+                    .map_or(resume_lsn, |lsn| (*lsn).max(resume_lsn));
+                stat.set_offset_committed(lsn.offset);
             }
             tracing::info!(
                 %id,
