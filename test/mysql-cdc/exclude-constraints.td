@@ -49,6 +49,9 @@ INSERT INTO stall_tbl VALUES (1, 'a');
 CREATE TABLE excl_combo (id INT PRIMARY KEY, u INT NOT NULL, val VARCHAR(64) NOT NULL, UNIQUE KEY uq_u (u));
 INSERT INTO excl_combo VALUES (1, 10, 'a');
 
+CREATE TABLE excl_not_null (id INT PRIMARY KEY, u INT NOT NULL, val VARCHAR(64) NOT NULL, UNIQUE KEY unq_u (u));
+INSERT INTO excl_not_null VALUES (1, 10, 'a');
+
 > CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqc;
 
 #
@@ -215,3 +218,98 @@ contains:not available
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_exclude_constraints_option = true
+
+#
+# EXCLUDE ALL NOT NULL CONSTRAINTS: keys and uniqueness remain, but every column nullable, so
+# DROP NOT NULL is a non-event.
+#
+
+> CREATE TABLE all_nullable
+  FROM SOURCE mz_source (REFERENCE public.excl_not_null)
+  WITH (EXCLUDE ALL NOT NULL CONSTRAINTS);
+
+> SELECT create_sql LIKE '%EXCLUDE ALL NOT NULL CONSTRAINTS%' FROM (SHOW CREATE TABLE all_nullable);
+true
+
+> CREATE DEFAULT INDEX ON all_nullable;
+> SELECT key FROM (SHOW INDEXES ON all_nullable);
+{id}
+
+# All columns except id should be nullable, but id is a PK and cannot be NULL
+> SELECT name, nullable FROM mz_columns WHERE id = (SELECT id FROM mz_tables WHERE name = 'all_nullable');
+id false
+u true
+val true
+
+> CREATE TABLE all_nullable_combo
+  FROM SOURCE mz_source (REFERENCE public.excl_not_null)
+  WITH (EXCLUDE ALL NOT NULL CONSTRAINTS, EXCLUDE CONSTRAINTS ('PRIMARY'));
+
+> CREATE DEFAULT INDEX ON all_nullable_combo;
+> SELECT key FROM (SHOW INDEXES ON all_nullable_combo);
+{id,u,val}
+
+> SELECT name, nullable FROM mz_columns WHERE id = (SELECT id FROM mz_tables WHERE name = 'all_nullable_combo');
+id true
+u true
+val true
+
+$ mysql-execute name=mysql
+USE public;
+ALTER TABLE excl_not_null MODIFY val VARCHAR(64) NULL;
+INSERT INTO excl_not_null VALUES (2, 20, NULL);
+
+> SELECT * FROM all_nullable;
+1 10 a
+2 20 <null>
+
+> SELECT * FROM all_nullable_combo;
+1 10 a
+2 20 <null>
+
+$ mysql-execute name=mysql
+USE public;
+ALTER TABLE excl_not_null DROP PRIMARY KEY;
+INSERT INTO excl_not_null VALUES (3, 30, 'c');
+
+! SELECT * FROM all_nullable;
+contains:incompatible schema change on public.excl_not_null: PRIMARY KEY constraint "PRIMARY" (id) was dropped upstream
+hint:WITH (EXCLUDE CONSTRAINTS ('PRIMARY')) before the upstream drop
+
+> DROP TABLE all_nullable;
+
+> SELECT * FROM all_nullable_combo;
+1 10 a
+2 20 <null>
+3 30 c
+
+$ mysql-execute name=mysql
+USE public;
+ALTER TABLE excl_not_null MODIFY u INT NULL;
+INSERT INTO excl_not_null VALUES (4, NULL, 'd');
+INSERT INTO excl_not_null VALUES (5, NULL, 'e');
+
+> SELECT * FROM all_nullable_combo;
+1 10 a
+2 20 <null>
+3 30 c
+4 <null> d
+5 <null> e
+
+> SELECT u, COUNT(*) FROM all_nullable_combo GROUP BY u;
+10 1
+20 1
+30 1
+<null> 2
+
+# The unique constraint still needs to be explicitly excluded if you want to drop the constraint.
+$ mysql-execute name=mysql
+USE public;
+ALTER TABLE excl_not_null DROP INDEX unq_u;
+INSERT INTO excl_not_null VALUES (6, 60, 'f');
+
+! SELECT * FROM all_nullable_combo;
+contains:incompatible schema change on public.excl_not_null: UNIQUE constraint "unq_u" (u) was dropped upstream
+hint:WITH (EXCLUDE CONSTRAINTS ('unq_u')) before the upstream drop
+
+> DROP TABLE all_nullable_combo;

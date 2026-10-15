@@ -343,6 +343,7 @@ pub(super) async fn purify_source_exports(
     // purified, as `CREATE TABLE .. FROM SOURCE` does, since constraint names
     // are validated against that single table's keys. Enforced below.
     filter_constraints: &FilterConstraints,
+    exclude_all_not_null_constraints: bool,
     unresolved_source_name: &UnresolvedItemName,
     initial_gtid_set: String,
     reference_policy: &SourceReferencePolicy,
@@ -468,6 +469,13 @@ pub(super) async fn purify_source_exports(
                         if let Some(column_type) = &mut c.column_type {
                             column_type.nullable = true;
                         }
+                    }
+                }
+            }
+            if exclude_all_not_null_constraints {
+                for c in &mut parsed_table.columns {
+                    if let Some(column_type) = &mut c.column_type {
+                        column_type.nullable = true;
                     }
                 }
             }
