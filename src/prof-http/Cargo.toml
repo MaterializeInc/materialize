@@ -22,6 +22,7 @@ mappings.workspace = true
 mime.workspace = true
 mz-build-info = { path = "../build-info", default-features = false }
 mz-http-util = { path = "../http-util", default-features = false }
+mz-alloc-track = { path = "../alloc-track", optional = true }
 mz-ore = { path = "../ore", default-features = false, features = ["panic"] }
 mz-prof = { path = "../prof", default-features = false }
 jemalloc_pprof = { workspace = true, optional = true }
@@ -48,3 +49,5 @@ default = []
 dev-web = []
 # Whether to enable profiling features that depend on jemalloc.
 jemalloc = ["mz-prof/jemalloc", "jemalloc_pprof"]
+# Whether to serve profiles from the allocation tracker.
+alloc-track = ["dep:mz-alloc-track", "mz-prof/alloc-track", "mz-ore/async"]
