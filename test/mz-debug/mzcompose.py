@@ -41,43 +41,33 @@ SERVICES = [
 
 
 def _heap_profile_inuse(port: int) -> tuple[int, int]:
-    """Dumps the jemalloc heap profile and returns
-    `(total in-use sampled bytes, number of sampled stacks)`.
+    """Dumps the allocation tracker's live heap profile and returns
+    `(total estimated in-use bytes, number of sampled stacks)`.
 
-    The `dump_jeheap` action returns the raw jemalloc profile in `jeprof` text
-    format. Each sampled stack is a line starting with `@` followed by a
-    `t*: <objs>: <bytes> [...]` line whose `<bytes>` is the in-use bytes charged
-    to that stack. The leading global `t*:` summary line has no preceding `@`
-    and is therefore ignored, so stacks are not double counted.
+    The `mzfg` format is a header, a blank line, one `<addrs> <weight>
+    [<annotation>]` line per stack, a blank line, and the symbol table.
     """
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/prof/",
-        data=b"action=dump_jeheap",
+        f"http://127.0.0.1:{port}/prof/tracked?view=live&format=mzfg",
         headers={
-            "Content-Type": "application/x-www-form-urlencoded",
             # The internal listener runs with no authenticator, but the
             # profiling route group still requires an authenticated identity.
             # `mz_system` is accepted on the internal listener without a
             # password.
             "x-materialize-user": "mz_system",
         },
-        method="POST",
     )
     with urllib.request.urlopen(request, timeout=60) as response:
         text = response.read().decode("utf-8", "replace")
 
+    stacks = text.split("\n\n")[1]
     total_bytes = 0
     num_stacks = 0
-    pending_stack = False
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("@"):
-            pending_stack = True
+    for line in stacks.splitlines():
+        parts = line.split(" ")
+        if len(parts) >= 2:
+            total_bytes += int(float(parts[1]))
             num_stacks += 1
-        elif pending_stack and line.startswith("t*:"):
-            # Format: `t*: <objs>: <bytes> [<cum objs>: <cum bytes>]`.
-            total_bytes += int(line.split()[2])
-            pending_stack = False
     return total_bytes, num_stacks
 
 
@@ -89,8 +79,8 @@ def _assert_cpu_capture_preserves_heap_profile(
     """
     # Plant long-lived allocations in environmentd's heap. Each view definition
     # embeds a ~512 KiB literal that the catalog holds verbatim. We stay under
-    # the 1 MiB statement-batch limit and well above jemalloc's 512 KiB average
-    # sampling interval so that the allocations are reliably sampled.
+    # the 1 MiB statement-batch limit and well above the tracker's 512 KiB
+    # average sampling interval so that the allocations are reliably sampled.
     ballast = "x" * (512 * 1024)
     for i in range(16):
         c.sql(

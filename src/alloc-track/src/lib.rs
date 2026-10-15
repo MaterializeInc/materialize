@@ -17,8 +17,9 @@
 //!
 //! [`TrackingAlloc`] wraps any [`GlobalAlloc`] and reports heap events to
 //! [`on_alloc`] and [`on_free`]. Other memory sources, such as the buffer pool
-//! in `mz_ore::pool`, report through the same hooks with their own [`Space`],
-//! so one [`snapshot`] attributes all of them to call stacks.
+//! in `mz_ore::pool` and C allocations interposed by `mz_alloc`, report
+//! through the same hooks with their own [`Space`], so one [`snapshot`]
+//! attributes all of them to call stacks.
 //!
 //! Allocations are sampled as a Poisson process over allocated bytes with
 //! mean [`sample_interval`] (default 512 KiB, jemalloc's
@@ -62,6 +63,8 @@ pub use registry::{FreeSite, Site, Snapshot, reset_history, snapshot};
 pub enum Space {
     /// Allocations through the global allocator.
     Heap,
+    /// Allocations through C's `malloc` family.
+    CHeap,
     /// Buffer pool slots, sized by their payload.
     PoolSlot,
     /// Buffer pool extent arena slots, sized by their stored length.
@@ -73,6 +76,7 @@ impl Space {
     pub fn name(&self) -> &'static str {
         match self {
             Space::Heap => "heap",
+            Space::CHeap => "c_heap",
             Space::PoolSlot => "pool_slot",
             Space::PoolExtent => "pool_extent",
         }
