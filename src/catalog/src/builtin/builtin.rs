@@ -9,6 +9,8 @@
 
 //! Constant builtin views exposing information about builtin objects.
 
+use std::borrow::Cow;
+
 use itertools::Itertools;
 use mz_catalog_protos::objects::CatalogItemType;
 use mz_ore::collections::CollectionExt;
@@ -42,10 +44,36 @@ pub(super) fn builtins(
     // The generated views above, and `mz_builtin_views` itself, are listed in
     // `mz_builtin_views` with placeholder SQL rather than their real
     // definitions. See `make_builtin_views`.
+    //
+    // `mz_builtin_columns` lists the columns of every builtin relation,
+    // `mz_builtin_views` and itself included, and `mz_builtin_views` lists it.
+    // Both need only the other's identity and declared desc, so the columns
+    // view is built in two steps around the views view.
+    let mut columns = builtin_columns_view();
     let views: &'static BuiltinView = Box::leak(Box::new(make_builtin_views(
         builtin_items,
-        [log_indexes, sources, materialized_views, tables, indexes],
+        [
+            log_indexes,
+            sources,
+            materialized_views,
+            tables,
+            indexes,
+            &columns,
+        ],
     )));
+    make_builtin_columns_sql(
+        builtin_items,
+        [
+            log_indexes,
+            sources,
+            materialized_views,
+            tables,
+            indexes,
+            views,
+        ],
+        &mut columns,
+    );
+    let columns: &'static BuiltinView = Box::leak(Box::new(columns));
 
     // Creation order: `mz_builtin_sources` reads `mz_builtin_log_indexes`, so
     // the latter has to exist first.
@@ -55,6 +83,7 @@ pub(super) fn builtins(
         materialized_views,
         tables,
         indexes,
+        columns,
         views,
     ]
     .into_iter()
@@ -425,7 +454,7 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, col_list, privileges)"
 /// declared keys rely on.
 fn make_builtin_views(
     builtin_items: &[Builtin<NameReference>],
-    generated: [&BuiltinView; 5],
+    generated: [&BuiltinView; 6],
 ) -> BuiltinView {
     let iter = builtin_items.iter().filter_map(|b| match b {
         Builtin::View(x) => Some(*x),
@@ -504,10 +533,104 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, definition, privileges, crea
     view
 }
 
+/// `mz_internal.mz_builtin_columns` without its SQL, which
+/// `make_builtin_columns_sql` fills in.
+fn builtin_columns_view() -> BuiltinView {
+    BuiltinView {
+        name: "mz_builtin_columns",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_BUILTIN_COLUMNS_OID,
+        desc: RelationDesc::builder()
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("relation_name", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("position", SqlScalarType::UInt64.nullable(false))
+            .with_column("nullable", SqlScalarType::Bool.nullable(false))
+            .with_column("type", SqlScalarType::String.nullable(false))
+            .with_column("default", SqlScalarType::String.nullable(true))
+            .with_column("type_oid", SqlScalarType::Oid.nullable(false))
+            .with_column("type_mod", SqlScalarType::Int32.nullable(false))
+            // No single column is unique, so the optimizer derives no key
+            // from the generated VALUES list (`verify_builtin_descs`
+            // enforces that the declared keys match).
+            .finish(),
+        column_comments: Default::default(),
+        sql: "",
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+}
+
+/// Fills in the SQL of `mz_internal.mz_builtin_columns`: one VALUES row per
+/// column of every builtin relation, the `mz_builtin_*` views and `mz_columns`
+/// itself.
+fn make_builtin_columns_sql(
+    builtin_items: &[Builtin<NameReference>],
+    generated: [&BuiltinView; 6],
+    columns: &mut BuiltinView,
+) {
+    // Map to |(schema, relation, desc, default)
+    let relations = builtin_items
+        .iter()
+        .filter_map(|b| match b {
+            Builtin::Table(t) => Some((t.schema, t.name, Cow::Borrowed(&t.desc), true)),
+            Builtin::Source(s) => Some((s.schema, s.name, Cow::Borrowed(&s.desc), false)),
+            Builtin::Log(l) => Some((l.schema, l.name, Cow::Owned(l.variant.desc()), false)),
+            Builtin::View(v) => Some((v.schema, v.name, Cow::Borrowed(&v.desc), false)),
+            Builtin::MaterializedView(mv) => {
+                Some((mv.schema, mv.name, Cow::Borrowed(&mv.desc), false))
+            }
+            Builtin::Type(_) | Builtin::Func(_) | Builtin::Index(_) | Builtin::Connection(_) => {
+                None
+            }
+        })
+        .chain(
+            generated
+                .iter()
+                .copied()
+                .chain([&*columns])
+                .map(|v| (v.schema, v.name, Cow::Borrowed(&v.desc), false)),
+        );
+    let values = relations
+        .flat_map(|(schema, relation, desc, is_table)| {
+            let schema = escaped_string_literal(schema);
+            let relation = escaped_string_literal(relation);
+            desc.iter()
+                .enumerate()
+                .map(|(i, (name, typ))| {
+                    let pg_type = mz_pgrepr::Type::from(&typ.scalar_type);
+                    // Map into (schema_name, relation_name, name, position, nullable, type, default, type_oid, type_mod)
+                    format!(
+                        "({schema}, {relation}, {}, {}, {}, {}, {}, {}, {})",
+                        escaped_string_literal(name.as_str()),
+                        // Columns are 1-positioned
+                        i + 1,
+                        typ.nullable,
+                        escaped_string_literal(pg_type.name()),
+                        // Every column of a builtin table has the `NULL` string default that
+                        // `TableDataSource::TableWrites` gives it, and other relations
+                        // are a NULL value.
+                        if is_table { "'NULL'" } else { "NULL" },
+                        pg_type.oid(),
+                        pg_type.typmod(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .join(",");
+    // DEFAULT is a SQL keyword, thus we must quote it
+    let sql = format!(
+        "
+SELECT schema_name, relation_name, name, position::uint8 AS position, nullable, type, \"default\", type_oid::oid AS type_oid, type_mod
+FROM (VALUES {values}) AS v(schema_name, relation_name, name, position, nullable, type, \"default\", type_oid, type_mod)"
+    );
+    columns.sql = Box::leak(sql.into_boxed_str());
+}
+
 /// The `object_type` of a builtin's `GidMapping` record in `mz_catalog_raw`, as a
 /// SQL literal spelled the way `->>` renders it, so that catalog views can join
 /// the record on it without hardcoding the enum's discriminants.
-fn gid_mapping_object_type(item_type: CatalogItemType) -> String {
+pub(super) fn gid_mapping_object_type(item_type: CatalogItemType) -> String {
     // `mz_catalog_raw` rows are built with `serde_json::to_value`, so this is
     // the exact value `->>` renders.
     let repr =
