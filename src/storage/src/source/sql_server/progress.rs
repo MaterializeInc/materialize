@@ -101,8 +101,8 @@ pub(crate) fn render<'scope>(
             // increment here to match known_offset calculation below
             let next_upstream_lsn: Lsn = get_max_lsn(&mut client).await?.increment();
 
-            // Seed `offset_committed` from the resumption LSN, or if not set, from the
-            // upstream's current max LSN. Otherwise, it stays at the default 0 until the
+            // Seed each export's `offset_committed` from its own resumption LSN, or if not set,
+            // from the upstream's current max LSN. Otherwise, it stays at the default 0 until the
             // initial snapshot durably commits and the first resume upper arrives, which
             // for a large snapshot can be a long time. During that window the ingestion-lag
             // calculation subtracts 0 from the (large) upstream LSN and reports an
@@ -113,16 +113,25 @@ pub(crate) fn render<'scope>(
             // is a very obscure edge case where a user has a CDC enabled table, creates a new one
             // and configures a source for at least the second table immediately after, without
             // performing any DML operations.
-            let seeded_lsn = outputs
-                .values()
+            //
+            // A seed shared across exports, such as their minimum, would report an export that
+            // is ahead of the slowest one below the value it last reported.
+            let seeded_lsns: BTreeMap<GlobalId, Lsn> = outputs
+                .iter()
                 // resume_lsn_or will panic if info resume_upper is empty
-                .map(|info| info.resume_lsn_or(next_upstream_lsn))
+                .map(|(id, info)| (*id, info.resume_lsn_or(next_upstream_lsn)))
+                .collect();
+            let min_seeded_lsn = seeded_lsns
+                .values()
                 .min()
+                .copied()
                 .unwrap_or(next_upstream_lsn);
+            let seeded_lsn =
+                |id: &GlobalId| seeded_lsns.get(id).copied().unwrap_or(min_seeded_lsn);
 
-            for stat in config.statistics.values() {
+            for (id, stat) in config.statistics.iter() {
                 stat.set_offset_known(next_upstream_lsn.abbreviate());
-                stat.set_offset_committed(seeded_lsn.abbreviate());
+                stat.set_offset_committed(seeded_lsn(id).abbreviate());
             }
 
 
@@ -209,7 +218,7 @@ pub(crate) fn render<'scope>(
                         for (id, upper) in &uppers.exports {
                             let stat = config.statistics.get(id);
                             if let (Some(lsn), Some(stat)) = (upper.as_option(), stat) {
-                                let lsn = std::cmp::max(*lsn, seeded_lsn);
+                                let lsn = std::cmp::max(*lsn, seeded_lsn(id));
                                 stat.set_offset_committed(lsn.abbreviate());
                             }
                         }
