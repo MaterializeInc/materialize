@@ -9,7 +9,7 @@
 
 import { HStack, Tag } from "@chakra-ui/react";
 import React from "react";
-import { Navigate, Route, useParams } from "react-router-dom";
+import { Navigate, Route, useParams, useSearchParams } from "react-router-dom";
 
 import { PageHeading, PageTabStrip, Tab } from "~/layouts/BaseLayout";
 import ClusterReplicas from "~/platform/clusters/ClusterReplicas";
@@ -22,9 +22,17 @@ import { assert, pluralize } from "~/util";
 import { ClusterMetrics } from "./ClusterMetrics";
 import { ClusterObjects } from "./ClusterObjects";
 import { CLUSTER_OBJECT_TYPES } from "./clusterObjectTypes";
+import { ClusterWorkers } from "./ClusterWorkers";
+import { replicaSearch, WORKERS_TAB_PATH } from "./tabLinks";
+import { REPLICA_SEARCH_PARAM } from "./useSelectedReplica";
 
-const TABS: Tab[] = [
-  { label: "Metrics", href: "..", end: true },
+// The Metrics and Workers tabs share a replica choice, so their links carry it.
+const tabs = (replicaName: string | undefined): Tab[] => [
+  { label: "Metrics", href: `..${replicaSearch(replicaName)}`, end: true },
+  {
+    label: "Workers",
+    href: `../${WORKERS_TAB_PATH}${replicaSearch(replicaName)}`,
+  },
   { label: "Objects", href: "../objects" },
   // TODO: drop this tab once the cluster configuration drawer manages replicas.
   { label: "Replicas", href: "../replicas" },
@@ -65,12 +73,15 @@ const ClusterTitle = ({
 /** The redesigned page's part of the shared header: its title row and tabs. */
 export const ClusterPageHeader = () => {
   const { clusterId, clusterName } = useParams<ClusterParams>();
+  const [searchParams] = useSearchParams();
   assert(clusterId);
   assert(clusterName);
   return (
     <>
       <ClusterTitle name={clusterName} clusterId={clusterId} />
-      <PageTabStrip tabData={TABS} />
+      <PageTabStrip
+        tabData={tabs(searchParams.get(REPLICA_SEARCH_PARAM) ?? undefined)}
+      />
     </>
   );
 };
@@ -85,6 +96,10 @@ const ClusterPage = () => {
   return (
     <SentryRoutes>
       <Route index element={<ClusterMetrics key={clusterName} />} />
+      <Route
+        path={WORKERS_TAB_PATH}
+        element={<ClusterWorkers key={clusterName} />}
+      />
       <Route
         path="objects"
         element={<Navigate to={CLUSTER_OBJECT_TYPES[0].path} replace />}

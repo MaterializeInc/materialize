@@ -173,11 +173,15 @@ export interface BusiestProcess {
   otherCount: number;
 }
 
-// A busiest process within this factor of the others' mean reads as even.
-const EVEN_RATIO = 1.25;
+/** A busiest process or worker within this factor of the others' mean reads as even. */
+export const EVEN_RATIO = 1.25;
 // Near idle, a gap too small to matter is still a large ratio (0.3% against
 // 0.1% is 3×), so a lead also has to clear this many percentage points.
 const MIN_LEAD_POINTS = 5;
+
+/** Names the processes a busiest one is compared with. */
+export const otherProcessesLabel = (count: number) =>
+  count === 1 ? "the other process" : `the other ${count} processes`;
 
 /** Whether the busiest process leads the others by enough to name it. */
 export const standsOut = (busiest: BusiestProcess | undefined) =>

@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import React from "react";
+
 import { SchemaObject } from "~/api/materialize";
 import {
   relativeDatabasePath,
@@ -162,12 +164,15 @@ export interface WorkflowGraphPathParams {
 
 export function useBuildWorkflowGraphPath() {
   const regionSlug = useRegionSlug();
-  return (params: WorkflowGraphPathParams) =>
-    `${objectExplorerObjectPath(regionSlug, {
-      ...params.databaseObject,
-      objectName: params.databaseObject.name,
-      objectType: params.type,
-    })}/workflow`;
+  return React.useCallback(
+    (params: WorkflowGraphPathParams) =>
+      `${objectExplorerObjectPath(regionSlug, {
+        ...params.databaseObject,
+        objectName: params.databaseObject.name,
+        objectType: params.type,
+      })}/workflow`,
+    [regionSlug],
+  );
 }
 
 export const relativeQueryHistoryPath = (executionId: string) =>
