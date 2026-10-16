@@ -27,13 +27,23 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 ### TRY_CAST {#v26.47-try-cast}
 `TRY_CAST(<expr> AS <type>)` evaluates an expression once and attempts to cast it to the target type, producing `NULL` instead of an error when the value cannot be converted, and a failure anywhere inside a nested value yields `NULL` for the whole cast. Bad values in an ingest pipeline can therefore be turned into `NULL` in place rather than failing the statement. Casts between a few Materialize-internal types, such as `regclass` and `mz_aclitem`, are not supported.
 
+### Safely drop upstream `NOT NULL` constraints in your Postgres sources {#v26.47-exclude-not-null-constraints}
+Materialize now allows you to `EXCLUDE ALL NOT NULL CONSTRAINTS` when creating a table from a Postgres source. Every column is ingested as nullable, so you can drop `NOT NULL` constraints upstream without causing your table to error. `PRIMARY KEY` and `UNIQUE` constraints are still recorded, and primary key columns remain `NOT NULL`.
+
+```mzsql
+CREATE TABLE orders
+  FROM SOURCE pg_source (REFERENCE public.orders)
+  WITH (EXCLUDE ALL NOT NULL CONSTRAINTS);
+```
+
+For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/postgres/) for PostgreSQL and the guide on [handling upstream constraint drops](/ingest-data/postgres/source-versioning/#handle-upstream-constraint-drop).
+
 ### Improvements {#v26.47-improvements}
 - **Zero-downtime upgrades wait less before promoting**: A rollout no longer imposes a full stability wait on a replica created during that rollout — the wait is capped at how old the replica was when it hydrated on the incoming generation — and no longer waits on collections or replicas that the deployment being replaced has not hydrated either.
 - **Lower connection balancer memory per connection**: An idle TLS connection through the connection balancer now holds 44.0 KB of heap instead of 68.3 KB (20.5 KB instead of 44.7 KB without TLS), because the buffers and authentication state needed only during startup are released once the connection is proxied, so a self-managed deployment running the 256 MiB default is no longer killed for running out of memory at roughly 3,800 of its 5,000 permitted connections.
 - **Metadata for JDBC-based tools**: `pg_class.relpages`, `pg_am.amcanorder`, `pg_type.typlen`, and `pg_attribute.attlen` are now populated, so pgjdbc clients that call `DatabaseMetaData.getIndexInfo` — including the AWS Glue Data Catalog crawler — no longer abort on a missing column, and tools that read identifier length limits from `typlen`, such as Trino's PostgreSQL connector, see `63` instead of `-1` and can push joins down.
 - **Temporal bucketing in every deployment**: Views and indexes over temporal filters are now maintained with temporal bucketing in the emulator and in self-managed deployments, which previously ran without it, lowering the cost of maintaining windowed temporal workloads there.
 - **Incremental compaction on by default**: Persisted data is now compacted incrementally by default in self-managed deployments and the emulator, as Materialize Cloud has done in every environment since 2026-10-13, and no migration is needed because batches written by older versions are still compacted the previous way.
-- **`ALL COLUMNS NULLABLE` for PostgreSQL source tables**: `CREATE TABLE ... FROM SOURCE` now accepts an `ALL COLUMNS NULLABLE` option against PostgreSQL sources, which ignores the upstream `NOT NULL` constraints, treats them as droppable, and makes the corresponding Materialize columns nullable.
 - **`min` and `max` over arrays and lists**: `min` and `max` now accept arrays and lists, lists gain the `<>`, `<`, `<=`, `>`, and `>=` operators they were missing, and arrays holding the same elements in differently shaped dimensions now order the way PostgreSQL's `array_cmp` orders them, which also changes `<`, `ORDER BY`, `greatest`, and `least` for those arrays.
 - **Refresh strategy columns report their source expressions**: In `mz_internal.mz_materialized_view_refresh_strategies`, the `aligned_to` and `at` columns are renamed to `aligned_to_expression` and `at_expression` and now return `text` holding the expression as it appears in the materialized view's `create_sql`, rather than a resolved `timestamp with time zone`.
 
