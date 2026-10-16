@@ -20,6 +20,34 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.47.0
+*Released to Materialize Cloud: 2026-10-22* <br>
+*Released to Materialize Self-Managed: 2026-10-23* <br>
+
+### TRY_CAST {#v26.47-try-cast}
+`TRY_CAST(<expr> AS <type>)` evaluates an expression once and attempts to cast it to the target type, producing `NULL` instead of an error when the value cannot be converted, and a failure anywhere inside a nested value yields `NULL` for the whole cast. Bad values in an ingest pipeline can therefore be turned into `NULL` in place rather than failing the statement. Casts between a few Materialize-internal types, such as `regclass` and `mz_aclitem`, are not supported.
+
+### Improvements {#v26.47-improvements}
+- **Zero-downtime upgrades wait less before promoting**: A rollout no longer imposes a full stability wait on a replica created during that rollout — the wait is capped at how old the replica was when it hydrated on the incoming generation — and no longer waits on collections or replicas that the deployment being replaced has not hydrated either.
+- **Lower connection balancer memory per connection**: An idle TLS connection through the connection balancer now holds 44.0 KB of heap instead of 68.3 KB (20.5 KB instead of 44.7 KB without TLS), because the buffers and authentication state needed only during startup are released once the connection is proxied, so a self-managed deployment running the 256 MiB default is no longer killed for running out of memory at roughly 3,800 of its 5,000 permitted connections.
+- **Metadata for JDBC-based tools**: `pg_class.relpages`, `pg_am.amcanorder`, `pg_type.typlen`, and `pg_attribute.attlen` are now populated, so pgjdbc clients that call `DatabaseMetaData.getIndexInfo` — including the AWS Glue Data Catalog crawler — no longer abort on a missing column, and tools that read identifier length limits from `typlen`, such as Trino's PostgreSQL connector, see `63` instead of `-1` and can push joins down.
+- **Temporal bucketing in every deployment**: Views and indexes over temporal filters are now maintained with temporal bucketing in the emulator and in self-managed deployments, which previously ran without it, lowering the cost of maintaining windowed temporal workloads there.
+- **Incremental compaction on by default**: Persisted data is now compacted incrementally by default in self-managed deployments and the emulator, as Materialize Cloud has done in every environment since 2026-10-13, and no migration is needed because batches written by older versions are still compacted the previous way.
+- **`ALL COLUMNS NULLABLE` for PostgreSQL source tables**: `CREATE TABLE ... FROM SOURCE` now accepts an `ALL COLUMNS NULLABLE` option against PostgreSQL sources, which ignores the upstream `NOT NULL` constraints, treats them as droppable, and makes the corresponding Materialize columns nullable.
+- **`min` and `max` over arrays and lists**: `min` and `max` now accept arrays and lists, lists gain the `<>`, `<`, `<=`, `>`, and `>=` operators they were missing, and arrays holding the same elements in differently shaped dimensions now order the way PostgreSQL's `array_cmp` orders them, which also changes `<`, `ORDER BY`, `greatest`, and `least` for those arrays.
+- **Refresh strategy columns report their source expressions**: In `mz_internal.mz_materialized_view_refresh_strategies`, the `aligned_to` and `at` columns are renamed to `aligned_to_expression` and `at_expression` and now return `text` holding the expression as it appears in the materialized view's `create_sql`, rather than a resolved `timestamp with time zone`.
+
+### Bug Fixes {#v26.47-bug-fixes}
+- Fixed a zero-downtime upgrade never reporting itself ready to promote when the catch-up check ignored every collection a replica hosts, which happens deterministically when resuming an environment that has been stopped for longer than the two-hour cutoff; one staging environment sat in `Applying` for about 6.5 hours.
+- Fixed freshness stalling after an automatic hydration burst was retired, by keeping the burst replicas until a steady replica has caught up within the configured lag allowance and has stayed ready for the whole linger period, rather than retiring them as soon as it finished initial hydration.
+- Fixed up to 40 ms of added latency per parameterized query for clients that write each protocol message in a separate send, such as node-postgres before 8.14.1; in a local A/B test the median dropped from 44.0 ms to 5.7 ms.
+- Fixed `mz_uptime()` producing a slightly different value for each occurrence in a plan, which made queries combining it with `INTERSECT` or `INTERSECT ALL` fail with an internal error or return wrong results; it now returns the uptime as of the start of the transaction, at millisecond resolution.
+- Fixed a crash when a query that emits timestamp notices ran concurrently with a `DROP INDEX` on an index it reads.
+- Fixed SQL Server source ingestion failing to decode an update to a table with a `NOT NULL` large object column when the update did not change that column.
+- Fixed the committed offset reported for a PostgreSQL source jumping backwards across a restart after a new table was added to the source, which produced a run of unexpected error logs.
+- Fixed `mz_cluster_replica_metrics_history` recording `NULL` CPU and memory for the second and later processes of a multi-process cluster replica, whose per-minute metrics fetch timed out on a pooled connection that had been idle.
+- Fixed the connection balancer dropping a query a client sent in the same write as its password, which was read into the startup buffer and never forwarded.
+
 ## v26.45.1
 *Released to Materialize Cloud: 2026-10-08* <br>
 *Released to Materialize Self-Managed: 2026-10-09* <br>
