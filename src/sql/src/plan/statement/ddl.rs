@@ -3309,9 +3309,7 @@ fn plan_sink(
         (CreateSinkConnection::Iceberg { .. }, Some(_), _) => {
             sql_bail!("ENVELOPE is not supported for Iceberg sinks, use MODE instead")
         }
-        // Postgres sinks have no envelope. They mirror the collection into the
-        // target table, and the KEY clause alone decides whether that table is
-        // keyed. The value stored here is inert for them.
+        // Postgres sinks always upsert: the KEY identifies the target row.
         (CreateSinkConnection::Postgres { .. }, None, None) => SinkEnvelope::Upsert,
         (CreateSinkConnection::Postgres { .. }, Some(_), _) => {
             sql_bail!("ENVELOPE is not supported for Postgres sinks")
@@ -3549,13 +3547,15 @@ fn plan_sink(
         (RelationDesc::new(typ, names), key_indices)
     });
 
-    // Postgres sinks are exempt: having no envelope, they have nothing that
-    // demands a key. Without one the target table holds a bag of rows whose
-    // multiplicities the sink maintains exactly.
-    let requires_key = envelope == SinkEnvelope::Upsert
-        && !matches!(connection, CreateSinkConnection::Postgres { .. });
-    if key_desc_and_indices.is_none() && requires_key {
-        return Err(PlanError::UpsertSinkWithoutKey);
+    if key_desc_and_indices.is_none() {
+        if matches!(connection, CreateSinkConnection::Postgres { .. }) {
+            sql_bail!(
+                "Postgres sinks must specify a KEY that is a unique key of the sinked relation"
+            );
+        }
+        if envelope == SinkEnvelope::Upsert {
+            return Err(PlanError::UpsertSinkWithoutKey);
+        }
     }
 
     let CreateSinkOptionExtracted {

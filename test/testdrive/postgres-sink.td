@@ -9,26 +9,15 @@
 
 $ set-arg-default single-replica-cluster=quickstart
 
-# Postgres sinks copy every update into a staging table tagged with the
-# Materialize timestamp and a diff of 1 or -1, then move each completed
-# timestamp into the target table. Assertions on the Postgres side go through
-# `pgsink.wait_for`, which polls until a query returns the expected text,
-# because the sink works asynchronously.
-#
-# `wait_for` is a procedure rather than a function so that it can COMMIT
-# between polls. A function would hold its transaction, and with it ACCESS
-# SHARE on the staging table, for the whole poll loop, which blocks the
-# TRUNCATE a restarting sink runs and turns a failed assertion into a minutes
-# long stall. Each CALL has to be the only statement on its line, since
-# multiple statements in one line share an implicit transaction that a COMMIT
-# inside the procedure is not allowed to end.
+# Assertions on the Postgres side go through `pgsink.wait_for`, which polls
+# until a query returns the expected text, because the sink works
+# asynchronously. It is a procedure so that it can COMMIT between polls, and
+# each CALL has to be the only statement on its line, since statements that
+# share a line share an implicit transaction that the COMMIT may not end.
 
-# The publication is what makes this test cover a target database configured
-# for logical replication. `FOR ALL TABLES` covers every table created after
-# it, including the ones the sink creates, and PostgreSQL rejects DELETE on a
-# published table with no replica identity. The sink deletes from both of its
-# tables on every window, so without the replica identity it sets they would be
-# undeletable and the sink would restart-loop.
+# The publication makes this test cover a target database configured for
+# logical replication. `FOR ALL TABLES` covers every table created after it,
+# and PostgreSQL rejects DELETE on a published table with no replica identity.
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 DROP PUBLICATION IF EXISTS pgsink_all_tables;
@@ -54,8 +43,22 @@ CREATE PROCEDURE pgsink.wait_for(query text, expected text) LANGUAGE plpgsql AS 
   (2, 'tab' || chr(9) || 'nl' || chr(10) || 'bs\ quote''s', -2.25, NULL, NULL, NULL, NULL),
   (3, NULL, NULL, NULL, 'null', NULL, ARRAY[]::int[])
 
-# Postgres sinks have no envelope. KEY is what the user chooses when they want
-# the target table keyed.
+# A Postgres sink needs a KEY, and the KEY has to be a unique key of the
+# relation unless the user says NOT ENFORCED.
+
+! CREATE SINK pgsink_nokey_snk
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM pgsink_t
+  INTO POSTGRES CONNECTION pgsink_conn (SCHEMA = 'pgsink', TABLE = 'target')
+contains:Postgres sinks must specify a KEY
+
+! CREATE SINK pgsink_badkey_snk
+  IN CLUSTER ${arg.single-replica-cluster}
+  FROM pgsink_t
+  INTO POSTGRES CONNECTION pgsink_conn (SCHEMA = 'pgsink', TABLE = 'target')
+  KEY (a)
+contains:upsert key could not be validated as unique
+
 > CREATE SINK pgsink_snk
   IN CLUSTER ${arg.single-replica-cluster}
   FROM pgsink_t
@@ -68,55 +71,45 @@ SELECT id FROM mz_sinks WHERE name = 'pgsink_snk'
 > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink_snk'
 running
 
-# The target table mirrors the source relation and the staging table adds the
-# indexed timestamp and diff columns.
+# The target table mirrors the source relation with the key as its primary
+# key. Staging happens in a session temporary table, so it is the only table
+# the sink creates in the schema.
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 SET TIME ZONE 'UTC';
 CALL pgsink.wait_for('SELECT string_agg(attname || '' '' || format_type(atttypid, atttypmod) || CASE WHEN attnotnull THEN '' not null'' ELSE '''' END, '', '' ORDER BY attnum) FROM pg_attribute WHERE attrelid = ''pgsink.target''::regclass AND attnum > 0 AND NOT attisdropped', 'a integer not null, b text, c numeric(39,2), d timestamp with time zone, e jsonb, f uuid, g integer[]');
-CALL pgsink.wait_for('SELECT string_agg(attname || '' '' || format_type(atttypid, atttypmod) || CASE WHEN attnotnull THEN '' not null'' ELSE '''' END, '', '' ORDER BY attnum) FROM pg_attribute WHERE attrelid = ''pgsink.target_mz_staging_${sink-id}''::regclass AND attnum > 0 AND NOT attisdropped', 'a integer not null, b text, c numeric(39,2), d timestamp with time zone, e jsonb, f uuid, g integer[], mz_timestamp bigint not null, mz_diff smallint not null');
-CALL pgsink.wait_for('SELECT string_agg(indexname, '', '' ORDER BY indexname) FROM pg_indexes WHERE schemaname = ''pgsink'' AND tablename = ''target_mz_staging_${sink-id}''', 'target_mz_staging_${sink-id}_mz_diff_idx, target_mz_staging_${sink-id}_mz_timestamp_idx');
+CALL pgsink.wait_for('SELECT string_agg(a.attname, '', '') FROM pg_index i JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) WHERE i.indrelid = ''pgsink.target''::regclass AND i.indisprimary', 'a');
+CALL pgsink.wait_for('SELECT string_agg(tablename, '', '') FROM pg_tables WHERE schemaname = ''pgsink''', 'target');
 
 # A halted sink is reported here, with its error, rather than being left to
 # time out one of the polls below against an empty target table.
 > SELECT status, error FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink_snk'
 running <null>
 
-# The recorded frontier moving off zero says the apply step committed a window,
-# which separates a broken apply from a broken copy when one of the content
-# assertions below fails.
+# The progress row records the frontier and the epoch of the incarnation that
+# holds the sink.
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink.wait_for('SELECT (mz_frontier > 0)::text FROM materialize.sink_progress WHERE sink_id = ''${sink-id}''', 'true');
+CALL pgsink.wait_for('SELECT (mz_frontier > 0 AND epoch > 0)::text FROM materialize.sink_progress WHERE sink_id = ''${sink-id}''', 'true');
 CALL pgsink.wait_for('SELECT string_agg(sink_id || '' '' || sink_schema || '' '' || sink_table, '', '') FROM materialize.sink_progress', '${sink-id} pgsink target');
 
 # Every column round-trips into the target, including NULLs and text with
-# tabs, newlines, backslashes and quotes. Staging drains as windows are
-# applied.
+# tabs, newlines, backslashes and quotes.
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CALL pgsink.wait_for('SELECT string_agg(a || ''|'' || coalesce(replace(replace(b, chr(9), ''<TAB>''), chr(10), ''<NL>''), ''<NULL>'') || ''|'' || coalesce(c::text, ''<NULL>'') || ''|'' || coalesce(d::text, ''<NULL>'') || ''|'' || coalesce(e::text, ''<NULL>'') || ''|'' || coalesce(f::text, ''<NULL>'') || ''|'' || coalesce(g::text, ''<NULL>''), '' ; '' ORDER BY a) FROM pgsink.target', '1|one|1.50|2024-01-01 00:00:00+00|{"k": 1}|00000000-0000-0000-0000-000000000001|{1,2} ; 2|tab<TAB>nl<NL>bs\ quote''s|-2.25|<NULL>|<NULL>|<NULL>|<NULL> ; 3|<NULL>|<NULL>|<NULL>|null|<NULL>|{}');
-CALL pgsink.wait_for('SELECT count(*)::text FROM pgsink.target_mz_staging_${sink-id}', '0');
 
 > SELECT write_frontier > 0 FROM mz_internal.mz_frontiers WHERE object_id = '${sink-id}'
 true
 
-# An update replaces the row for its key, a delete removes it, and inserting
-# the same key twice leaves one row: the sink is an upsert, so the key the
-# user declared decides how many rows the target holds, even though the
-# Materialize table holds two.
+# An update replaces the row for its key and a delete removes it.
 
 > UPDATE pgsink_t SET b = 'uno' WHERE a = 1
 
 > DELETE FROM pgsink_t WHERE a = 3
 
-> INSERT INTO pgsink_t VALUES
-  (4, 'dup', NULL, NULL, NULL, NULL, NULL),
-  (4, 'dup', NULL, NULL, NULL, NULL, NULL)
-
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink.wait_for('SELECT string_agg(a || ''|'' || coalesce(replace(replace(b, chr(9), ''<TAB>''), chr(10), ''<NL>''), ''<NULL>''), '' ; '' ORDER BY a, b) FROM pgsink.target', '1|uno ; 2|tab<TAB>nl<NL>bs\ quote''s ; 4|dup');
-CALL pgsink.wait_for('SELECT count(*)::text FROM pgsink.target_mz_staging_${sink-id}', '0');
+CALL pgsink.wait_for('SELECT string_agg(a || ''|'' || coalesce(replace(replace(b, chr(9), ''<TAB>''), chr(10), ''<NL>''), ''<NULL>''), '' ; '' ORDER BY a, b) FROM pgsink.target', '1|uno ; 2|tab<TAB>nl<NL>bs\ quote''s');
 
 # An update puts a retraction and an insertion for one key at the same
 # timestamp, so a single window holds both and the apply statement's ordering
@@ -126,48 +119,24 @@ CALL pgsink.wait_for('SELECT count(*)::text FROM pgsink.target_mz_staging_${sink
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CALL pgsink.wait_for('SELECT string_agg(a || ''|'' || coalesce(b, ''<NULL>''), '' ; '' ORDER BY a, b) FROM pgsink.target WHERE a = 1', '1|second');
-CALL pgsink.wait_for('SELECT count(*)::text FROM pgsink.target WHERE a = 1', '1');
 
-# A sink without a KEY matches retractions on every column and counts them, so
-# a genuine duplicate row survives retracting one copy of it. The view projects
-# away the id, which is the only way to retract one of two identical rows.
+# A relation with a natural unique key needs no NOT ENFORCED.
 
-> CREATE TABLE pgsink_kl_src (id int, v text)
+> CREATE MATERIALIZED VIEW pgsink_agg AS SELECT a, count(*) AS n FROM pgsink_t GROUP BY a
 
-> INSERT INTO pgsink_kl_src VALUES (1, 'dup'), (2, 'dup'), (3, 'solo')
-
-> CREATE MATERIALIZED VIEW pgsink_kl AS SELECT v FROM pgsink_kl_src
-
-> CREATE SINK pgsink_kl_snk
+> CREATE SINK pgsink_agg_snk
   IN CLUSTER ${arg.single-replica-cluster}
-  FROM pgsink_kl
-  INTO POSTGRES CONNECTION pgsink_conn (SCHEMA = 'pgsink', TABLE = 'keyless_target')
-
-$ set-from-sql var=kl-sink-id
-SELECT id FROM mz_sinks WHERE name = 'pgsink_kl_snk'
+  FROM pgsink_agg
+  INTO POSTGRES CONNECTION pgsink_conn (SCHEMA = 'pgsink', TABLE = 'agg_target')
+  KEY (a)
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink.wait_for('SELECT string_agg(v, '' ; '' ORDER BY v) FROM pgsink.keyless_target', 'dup ; dup ; solo');
+CALL pgsink.wait_for('SELECT string_agg(a || ''|'' || n, '' ; '' ORDER BY a) FROM pgsink.agg_target', '1|1 ; 2|1');
 
-> DELETE FROM pgsink_kl_src WHERE id = 3
+> DROP SINK pgsink_agg_snk
 
-# Retract one of the two identical rows. The other has to remain.
-> DELETE FROM pgsink_kl_src WHERE id = 1
-
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink.wait_for('SELECT string_agg(v, '' ; '' ORDER BY v) FROM pgsink.keyless_target', 'dup');
-CALL pgsink.wait_for('SELECT count(*)::text FROM pgsink.keyless_target_mz_staging_${kl-sink-id}', '0');
-
-> SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink_kl_snk'
-running
-
-> DROP SINK pgsink_kl_snk
-
-# Restarting the sink truncates the staging table before copying resumes, and
-# the rows already applied are not applied again.
-
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-INSERT INTO pgsink.target_mz_staging_${sink-id} (a, mz_timestamp, mz_diff) VALUES (999, 0, 1);
+# A restart claims a new epoch and resumes from the recorded frontier without
+# applying anything twice.
 
 $ postgres-execute connection=mz_system
 ALTER CLUSTER ${arg.single-replica-cluster} SET (REPLICATION FACTOR 0);
@@ -176,8 +145,8 @@ ALTER CLUSTER ${arg.single-replica-cluster} SET (REPLICATION FACTOR 1);
 > INSERT INTO pgsink_t VALUES (5, 'after restart', NULL, NULL, NULL, NULL, NULL)
 
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-CALL pgsink.wait_for('SELECT string_agg(a || ''|'' || coalesce(b, ''<NULL>''), '' ; '' ORDER BY a, b) FROM pgsink.target WHERE a IN (1, 4, 5, 999)', '1|second ; 4|dup ; 5|after restart');
-CALL pgsink.wait_for('SELECT count(*)::text FROM pgsink.target_mz_staging_${sink-id}', '0');
+CALL pgsink.wait_for('SELECT string_agg(a || ''|'' || coalesce(b, ''<NULL>''), '' ; '' ORDER BY a, b) FROM pgsink.target WHERE a IN (1, 5)', '1|second ; 5|after restart');
+CALL pgsink.wait_for('SELECT (epoch > 1)::text FROM materialize.sink_progress WHERE sink_id = ''${sink-id}''', 'true');
 
 > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink_snk'
 running
@@ -205,6 +174,32 @@ running
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CALL pgsink.wait_for('SELECT count(*)::text FROM pgsink.target WHERE a = 6', '1');
 
+# A progress row claimed by a newer version of the sink fences this one off.
+
+$ postgres-execute connection=mz_system
+ALTER CLUSTER ${arg.single-replica-cluster} SET (REPLICATION FACTOR 0);
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+UPDATE materialize.sink_progress SET sink_version = 999 WHERE sink_id = '${sink-id}';
+
+$ postgres-execute connection=mz_system
+ALTER CLUSTER ${arg.single-replica-cluster} SET (REPLICATION FACTOR 1);
+
+> SELECT status, error ~ 'fenced off by a newer version' FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink_snk'
+stalled true
+
+$ postgres-execute connection=mz_system
+ALTER CLUSTER ${arg.single-replica-cluster} SET (REPLICATION FACTOR 0);
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+UPDATE materialize.sink_progress SET sink_version = 0 WHERE sink_id = '${sink-id}';
+
+$ postgres-execute connection=mz_system
+ALTER CLUSTER ${arg.single-replica-cluster} SET (REPLICATION FACTOR 1);
+
+> SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink_snk'
+running
+
 # A recorded frontier behind the shard means the target database lost writes
 # the sink already committed, and those rows can no longer be replayed. The
 # sink has to say so rather than silently skip them.
@@ -218,11 +213,8 @@ UPDATE materialize.sink_progress SET mz_frontier = 0 WHERE sink_id = '${sink-id}
 $ postgres-execute connection=mz_system
 ALTER CLUSTER ${arg.single-replica-cluster} SET (REPLICATION FACTOR 1);
 
-> SELECT status FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink_snk'
-stalled
-
-> SELECT error ~ 'is behind its progress shard' FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink_snk'
-true
+> SELECT status, error ~ 'is behind its progress shard' FROM mz_internal.mz_sink_statuses WHERE name = 'pgsink_snk'
+stalled true
 
 > DROP SINK pgsink_snk
 
@@ -232,6 +224,7 @@ true
   IN CLUSTER ${arg.single-replica-cluster}
   FROM pgsink_t
   INTO POSTGRES CONNECTION pgsink_conn (SCHEMA = 'pgsink', TABLE = 'envelope_target')
+  KEY (a) NOT ENFORCED
   ENVELOPE UPSERT
 contains:ENVELOPE is not supported for Postgres sinks
 
@@ -239,6 +232,7 @@ contains:ENVELOPE is not supported for Postgres sinks
   IN CLUSTER ${arg.single-replica-cluster}
   FROM pgsink_t
   INTO POSTGRES CONNECTION pgsink_conn (SCHEMA = 'pgsink', TABLE = 'envelope_target')
+  KEY (a) NOT ENFORCED
   ENVELOPE DEBEZIUM
 contains:ENVELOPE is not supported for Postgres sinks
 
