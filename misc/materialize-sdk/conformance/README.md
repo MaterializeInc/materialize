@@ -52,6 +52,15 @@ message is pushed, and `"finish"` reports the end of the stream. The output is
 events it released, or `{"error": kind}` with kind `protocol` or
 `timestamp_too_large`. After an error the batcher fails every later step.
 
+### `append.json`
+
+Input: `start` and `steps`, messages as in `batch.json`. Push every step, and
+append each batch the stream releases onto the first, which the stream's
+batches allow because each continues from the last. The output is the
+appended batch, or `null` if the stream released none. A batch that does not
+continue the one it is appended to is refused, which no single stream
+produces.
+
 ### `latest_by_key.json`
 
 Input: `updates`, in timestamp order at timestamps of one or more. Release them

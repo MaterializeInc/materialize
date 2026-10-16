@@ -23,7 +23,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use materialize_sdk_core::Frontier;
-use materialize_sdk_core::batch::{BatchError, Batcher, Event, Start};
+use materialize_sdk_core::batch::{Batch, BatchError, Batcher, Event, Start};
 use materialize_sdk_core::catalog::{
     CatalogObject, ObjectName, indexes_sql, lookup_sql, parse_indexes, parse_lookup,
     parse_read_frontier, read_frontier_sql, resume_margin,
@@ -98,6 +98,7 @@ fn run(function: &str, input: Value) -> Value {
     match function {
         "decode" => decode(input),
         "batch" => batch(input),
+        "append" => append(input),
         "latest_by_key" => latest_by_key(input),
         "subscribe_sql" => subscribe_sql(input),
         "fetch_sql" => fetch(input),
@@ -210,6 +211,28 @@ fn batch(value: Value) -> Value {
         })
         .collect();
     json!({ "outputs": outputs, "finished": batcher.is_finished() })
+}
+
+/// Appends every batch a stream releases onto the first.
+fn append(value: Value) -> Value {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Input {
+        start: Start,
+        steps: Vec<Message>,
+    }
+    let Input { start, steps } = input(value);
+    let mut batcher = Batcher::new(start, None);
+    let mut appended: Option<Batch> = None;
+    for step in steps {
+        if let Some(Event::Batch(batch)) = batcher.push(step).unwrap() {
+            match &mut appended {
+                None => appended = Some(batch),
+                Some(first) => first.append(batch).unwrap(),
+            }
+        }
+    }
+    json!(appended.map(Event::Batch))
 }
 
 /// Releases `updates`, at timestamps of one or more and in order, as one batch

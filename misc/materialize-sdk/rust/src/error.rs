@@ -55,11 +55,18 @@ pub enum Error {
     /// An option is out of range.
     #[error("invalid option: {0}")]
     InvalidOption(String),
-    /// The consumer left the buffer of `capacity` events full for `waited`.
-    #[error("the consumer fell behind: the buffer of {capacity} events stayed full for {waited:?}")]
+    /// The consumer left no room in the buffer for `waited`. See
+    /// [`crate::LiveOptions::buffer`] and
+    /// [`crate::LiveOptions::max_buffered_bytes`].
+    #[error(
+        "the consumer fell behind: {events} events of {bytes} bytes waited, with no room for \
+         more for {waited:?}"
+    )]
     ConsumerFellBehind {
-        /// The buffer's capacity, in events.
-        capacity: usize,
+        /// The events waiting for the consumer.
+        events: usize,
+        /// Their bytes, in the estimate [`crate::Event::approx_bytes`] gives.
+        bytes: usize,
         /// How long the fetch loop waited for room.
         waited: Duration,
     },

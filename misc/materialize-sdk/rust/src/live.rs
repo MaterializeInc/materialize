@@ -16,13 +16,13 @@
 //! Live subscriptions: changes streamed to the caller as they happen, with no
 //! checkpoint and no resume.
 
-use std::sync::{Arc, OnceLock};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use materialize_sdk_core::statement::fetch_sql;
 use materialize_sdk_core::{Classification, Event, PushError, Row, Start, Subscribe, Subscription};
-use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::sync::{Notify, oneshot};
 use tokio::task::JoinHandle;
 use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::{Client, Config, SimpleQueryMessage, Socket};
@@ -35,6 +35,8 @@ pub struct LiveOptions {
     max_rows: u64,
     fetch_timeout: Duration,
     buffer: usize,
+    max_batch_bytes: usize,
+    max_buffered_bytes: usize,
     max_consumer_wait: Duration,
     max_pending_bytes: Option<usize>,
     max_timestamp_bytes: Option<usize>,
@@ -46,6 +48,11 @@ impl Default for LiveOptions {
             max_rows: 1000,
             fetch_timeout: Duration::from_secs(1),
             buffer: 64,
+            // 64 MiB.
+            max_batch_bytes: 67_108_864,
+            // 4 GiB, about 64 snapshot chunks of the default
+            // `max_pending_bytes`.
+            max_buffered_bytes: 1usize.checked_shl(32).unwrap_or(usize::MAX),
             max_consumer_wait: Duration::from_secs(30),
             // 64 MiB.
             max_pending_bytes: Some(67_108_864),
@@ -70,22 +77,44 @@ impl LiveOptions {
         self
     }
 
-    /// How many events can wait for the consumer. 64 by default.
+    /// How many events can wait for the consumer before each new batch is
+    /// appended to the last batch waiting, so that a slow consumer gets
+    /// fewer, larger batches. An event that cannot be appended still waits,
+    /// within [`LiveOptions::max_buffered_bytes`]. 64 by default.
     ///
-    /// Each event holds at most the memory limit of
-    /// [`LiveOptions::max_pending_bytes`] plus one timestamp's updates, which
-    /// [`LiveOptions::max_timestamp_bytes`] bounds, so the buffer bounds memory
-    /// only together with those limits. Outside the buffer, the fetch loop
-    /// also holds the updates not released yet and the events waiting for
-    /// room, which the same limits bound, and one `FETCH`'s rows, which
-    /// [`LiveOptions::max_rows`] bounds by count and not by bytes.
+    /// Snapshot chunks are never appended, and neither is anything to the
+    /// batch that completes the snapshot, so that changes after the snapshot
+    /// stay apart from it.
     pub fn buffer(mut self, events: usize) -> LiveOptions {
         self.buffer = events;
         self
     }
 
-    /// How long the fetch loop waits, after each `FETCH`, for the consumer to
-    /// take that `FETCH`'s events before the subscription fails with
+    /// The most bytes a batch grows to by appending, in the estimate
+    /// [`Event::approx_bytes`] gives, so that a slow consumer's writes stay
+    /// bounded. 64 MiB by default.
+    pub fn max_batch_bytes(mut self, bytes: usize) -> LiveOptions {
+        self.max_batch_bytes = bytes;
+        self
+    }
+
+    /// The most bytes of updates that can wait for the consumer, in the
+    /// estimate [`Event::approx_bytes`] gives. An event that alone is larger
+    /// still passes once nothing else waits, so zero passes one event at a
+    /// time. 4 GiB by default.
+    ///
+    /// Outside the buffer, the fetch loop also holds one `FETCH`'s events
+    /// while they wait for room, the updates not released yet, which
+    /// [`LiveOptions::max_pending_bytes`] and
+    /// [`LiveOptions::max_timestamp_bytes`] bound, and one `FETCH`'s rows,
+    /// which [`LiveOptions::max_rows`] bounds by count and not by bytes.
+    pub fn max_buffered_bytes(mut self, bytes: usize) -> LiveOptions {
+        self.max_buffered_bytes = bytes;
+        self
+    }
+
+    /// How long the fetch loop waits, after each `FETCH`, for room for that
+    /// `FETCH`'s events before the subscription fails with
     /// [`Error::ConsumerFellBehind`]. 30 seconds by default.
     ///
     /// While it waits, the fetch loop does not fetch, so the backlog grows in
@@ -115,11 +144,10 @@ impl LiveOptions {
     fn validate(&self) -> Result<(), Error> {
         fetch_sql("c", self.max_rows, Some(self.fetch_timeout))
             .map_err(|error| Error::InvalidOption(error.to_string()))?;
-        if self.buffer == 0 || self.buffer > Semaphore::MAX_PERMITS {
-            return Err(Error::InvalidOption(format!(
-                "the buffer must hold between 1 and {} events",
-                Semaphore::MAX_PERMITS
-            )));
+        if self.buffer == 0 {
+            return Err(Error::InvalidOption(
+                "the buffer must hold at least one event".into(),
+            ));
         }
         if let (Some(pending), Some(timestamp)) = (self.max_pending_bytes, self.max_timestamp_bytes)
             && pending >= timestamp
@@ -135,13 +163,13 @@ impl LiveOptions {
 /// A live subscription: a snapshot, then every change, as [`Event`]s.
 ///
 /// A task fetches from the cursor without waiting on the consumer, except for
-/// up to [`LiveOptions::max_consumer_wait`] when the buffer is full, and then
-/// fails with [`Error::ConsumerFellBehind`]. A fetch loop that waited longer
-/// would leave the backlog in Materialize until the server retired the
-/// subscribe.
+/// up to [`LiveOptions::max_consumer_wait`] when an event finds no room in the
+/// buffer, and then fails with [`Error::ConsumerFellBehind`]. A fetch loop
+/// that waited longer would leave the backlog in Materialize until the server
+/// retired the subscribe.
 #[derive(Debug)]
 pub struct LiveSubscription {
-    events: mpsc::Receiver<Event>,
+    queue: Arc<Queue>,
     end: Option<oneshot::Receiver<Result<(), Error>>>,
     learned: Arc<Learned>,
     _task: AbortOnDrop,
@@ -226,17 +254,20 @@ impl LiveSubscription {
             }
         }));
         declare(&client, &mut sub, &mut failure).await?;
-        let capacity = options.buffer;
-        let (events_tx, events) = mpsc::channel(capacity);
+        let queue = Arc::new(Queue::default());
+        // Made before the task, so that a task dropped before it first runs
+        // still closes the queue.
+        let task_queue = CloseOnDrop(Arc::clone(&queue));
         let (end_tx, end) = oneshot::channel();
         let learned = Arc::new(Learned::default());
         let task_learned = Arc::clone(&learned);
         let task = AbortOnDrop(tokio::spawn(async move {
+            let queue = task_queue;
             let result = fetch_loop(
                 &client,
                 sub,
                 &options,
-                &events_tx,
+                &queue.0,
                 &task_learned,
                 &mut failure,
             )
@@ -245,7 +276,7 @@ impl LiveSubscription {
             let _ = end_tx.send(result);
         }));
         Ok(LiveSubscription {
-            events,
+            queue,
             end: Some(end),
             learned,
             _task: task,
@@ -259,10 +290,10 @@ impl LiveSubscription {
     /// [`LiveOptions::max_timestamp_bytes`] delivers none of its events.
     ///
     /// Every batch carries its frontier, and an advance without changes is an
-    /// empty batch, so the latest batch's upper tells how current the stream
-    /// is.
+    /// empty batch, or raises the upper of a batch still waiting, so the
+    /// latest batch's upper tells how current the stream is.
     pub async fn next(&mut self) -> Option<Result<Event, Error>> {
-        if let Some(event) = self.events.recv().await {
+        if let Some(event) = self.queue.take().await {
             return Some(Ok(event));
         }
         match self.end.take()?.await {
@@ -283,6 +314,129 @@ impl LiveSubscription {
     /// first event arrives.
     pub fn as_of(&self) -> Option<u64> {
         self.learned.as_of.get().copied()
+    }
+}
+
+/// The events between the fetch loop and the consumer.
+#[derive(Debug, Default)]
+struct Queue {
+    state: Mutex<Queued>,
+    /// Wakes the consumer after an event arrives or the stream ends.
+    arrived: Notify,
+    /// Wakes the fetch loop after the consumer takes an event.
+    taken: Notify,
+}
+
+#[derive(Debug, Default)]
+struct Queued {
+    /// Each event with its [`Event::approx_bytes`].
+    events: VecDeque<(Event, usize)>,
+    bytes: usize,
+    closed: bool,
+}
+
+impl Queue {
+    /// Queues `event` as [`LiveOptions::buffer`] describes, waiting for room
+    /// until `max_consumer_wait` after `released_at`.
+    async fn put(
+        &self,
+        event: Event,
+        options: &LiveOptions,
+        released_at: Instant,
+    ) -> Result<(), Error> {
+        let bytes = event.approx_bytes();
+        let mut event = Some(event);
+        loop {
+            // Each notification stores a permit while nobody waits, so one
+            // sent between this check and the wait below is not lost.
+            let taken = self.taken.notified();
+            let (events, queued) = {
+                let mut state = self.lock();
+                let fits = state.events.is_empty()
+                    || state.bytes.saturating_add(bytes) <= options.max_buffered_bytes;
+                if fits && let Some(next) = event.take() {
+                    let full = state.events.len() >= options.buffer;
+                    let left = match (state.events.back_mut(), next) {
+                        (Some((Event::Batch(last), last_bytes)), Event::Batch(next))
+                            if full
+                                && !last.is_snapshot()
+                                && last_bytes.saturating_add(bytes) <= options.max_batch_bytes =>
+                        {
+                            match last.append(next) {
+                                Ok(()) => {
+                                    *last_bytes = last_bytes.saturating_add(bytes);
+                                    None
+                                }
+                                Err(next) => Some(Event::Batch(next)),
+                            }
+                        }
+                        (_, next) => Some(next),
+                    };
+                    if let Some(next) = left {
+                        state.events.push_back((next, bytes));
+                    }
+                    state.bytes = state.bytes.saturating_add(bytes);
+                    drop(state);
+                    self.arrived.notify_one();
+                    return Ok(());
+                }
+                (state.events.len(), state.bytes)
+            };
+            let remaining = options
+                .max_consumer_wait
+                .saturating_sub(released_at.elapsed());
+            if tokio::time::timeout(remaining, taken).await.is_err() {
+                return Err(Error::ConsumerFellBehind {
+                    events,
+                    bytes: queued,
+                    waited: released_at.elapsed(),
+                });
+            }
+        }
+    }
+
+    /// The next event, or `None` once the stream ended and every event was
+    /// taken.
+    async fn take(&self) -> Option<Event> {
+        loop {
+            let arrived = self.arrived.notified();
+            {
+                let mut state = self.lock();
+                if let Some((event, bytes)) = state.events.pop_front() {
+                    state.bytes = state.bytes.saturating_sub(bytes);
+                    drop(state);
+                    self.taken.notify_one();
+                    return Some(event);
+                }
+                if state.closed {
+                    return None;
+                }
+            }
+            arrived.await;
+        }
+    }
+
+    fn close(&self) {
+        self.lock().closed = true;
+        self.arrived.notify_one();
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Queued> {
+        // Nothing that can panic runs while the lock is held, other than an
+        // allocation failure, which aborts.
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// Closes the queue when the fetch task ends, also by a panic or an abort, so
+/// that a waiting consumer moves on to the task's result.
+struct CloseOnDrop(Arc<Queue>);
+
+impl Drop for CloseOnDrop {
+    fn drop(&mut self) {
+        self.0.close();
     }
 }
 
@@ -319,7 +473,7 @@ async fn fetch_loop(
     client: &Client,
     mut sub: Subscription,
     options: &LiveOptions,
-    events: &mpsc::Sender<Event>,
+    queue: &Queue,
     learned: &Learned,
     failure: &mut Failure,
 ) -> Result<(), Error> {
@@ -344,26 +498,7 @@ async fn fetch_loop(
         // drains slowly cannot keep the session idle for longer.
         let released_at = Instant::now();
         for event in released {
-            let permit = match events.try_reserve() {
-                Ok(permit) => permit,
-                Err(TrySendError::Closed(())) => return Ok(()),
-                Err(TrySendError::Full(())) => {
-                    let remaining = options
-                        .max_consumer_wait
-                        .saturating_sub(released_at.elapsed());
-                    match tokio::time::timeout(remaining, events.reserve()).await {
-                        Ok(Ok(permit)) => permit,
-                        Ok(Err(_)) => return Ok(()),
-                        Err(_) => {
-                            return Err(Error::ConsumerFellBehind {
-                                capacity: options.buffer,
-                                waited: released_at.elapsed(),
-                            });
-                        }
-                    }
-                }
-            };
-            permit.send(event);
+            queue.put(event, options, released_at).await?;
         }
     }
     // The stream has ended, so a failure to end the transaction changes
@@ -446,4 +581,181 @@ pub(crate) fn message_with_sources(error: &tokio_postgres::Error) -> String {
         source = cause.source();
     }
     message
+}
+
+#[cfg(test)]
+mod tests {
+    use materialize_sdk_core::{Batcher, Change, Frontier, Message, Update};
+
+    use super::*;
+
+    /// `count` contiguous batches with one insert each, at timestamps from 1.
+    fn batches(count: u64) -> Vec<Event> {
+        let start = Start::Resume {
+            frontier: Frontier::new(1).unwrap(),
+        };
+        let mut batcher = Batcher::new(start, None);
+        // The server opens a resumed stream with a progress row at its `AS OF`,
+        // one below the frontier.
+        assert!(
+            batcher
+                .push(Message::Progress { frontier: 0 })
+                .unwrap()
+                .is_none()
+        );
+        let mut events = Vec::new();
+        for t in 1..=count {
+            let update = Update {
+                timestamp: t,
+                change: Change::Diff {
+                    row: vec![Some(t.to_string())],
+                    diff: 1,
+                },
+            };
+            assert!(batcher.push(Message::Update(update)).unwrap().is_none());
+            events.extend(batcher.push(Message::Progress { frontier: t + 1 }).unwrap());
+        }
+        events
+    }
+
+    fn options() -> LiveOptions {
+        LiveOptions::default()
+            .buffer(1)
+            .max_consumer_wait(Duration::from_secs(1))
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn batches_are_appended_while_the_buffer_is_full() {
+        let queue = Queue::default();
+        for event in batches(5) {
+            queue.put(event, &options(), Instant::now()).await.unwrap();
+        }
+        let Some(Event::Batch(batch)) = queue.take().await else {
+            panic!("expected a batch");
+        };
+        assert_eq!(batch.lower(), Some(Frontier::new(1).unwrap()));
+        assert_eq!(batch.upper(), Frontier::new(6).unwrap());
+        let times: Vec<_> = batch.updates().iter().map(|u| u.timestamp).collect();
+        assert_eq!(times, [1, 2, 3, 4, 5]);
+        assert_eq!(queue.lock().bytes, 0);
+        assert!(queue.lock().events.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_chunk_waits_for_room_and_then_falls_behind() {
+        let queue = Queue::default();
+        let [batch] = batches(1).try_into().unwrap();
+        queue.put(batch, &options(), Instant::now()).await.unwrap();
+        let chunk = Event::SnapshotChunk {
+            updates: Vec::new(),
+        };
+        let failed = queue
+            .put(chunk, &options().max_buffered_bytes(0), Instant::now())
+            .await;
+        assert!(
+            matches!(failed, Err(Error::ConsumerFellBehind { events: 1, .. })),
+            "{failed:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn appending_stops_at_the_batch_limit() {
+        let queue = Queue::default();
+        let [first, second, third] = batches(3).try_into().unwrap();
+        let options = options().max_batch_bytes(first.approx_bytes() + second.approx_bytes());
+        for event in [first, second, third] {
+            queue.put(event, &options, Instant::now()).await.unwrap();
+        }
+        let uppers: Vec<_> = std::iter::from_fn(|| queue.lock().events.pop_front())
+            .map(|(event, _)| match event {
+                Event::Batch(batch) => batch.upper(),
+                other @ Event::SnapshotChunk { .. } => panic!("expected a batch, got {other:?}"),
+            })
+            .collect();
+        let frontier = |t| Frontier::new(t).unwrap();
+        assert_eq!(uppers, [frontier(3), frontier(4)]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn nothing_is_appended_to_the_batch_that_completes_the_snapshot() {
+        let mut batcher = Batcher::new(Start::Snapshot { as_of: None }, None);
+        let insert = |t: u64| Update {
+            timestamp: t,
+            change: Change::Diff {
+                row: vec![Some(t.to_string())],
+                diff: 1,
+            },
+        };
+        let mut events = Vec::new();
+        events.extend(batcher.push(Message::Progress { frontier: 10 }).unwrap());
+        for t in [10, 11, 12] {
+            events.extend(batcher.push(Message::Update(insert(t))).unwrap());
+            events.extend(batcher.push(Message::Progress { frontier: t + 1 }).unwrap());
+        }
+        let queue = Queue::default();
+        for event in events {
+            queue.put(event, &options(), Instant::now()).await.unwrap();
+        }
+        let Some(Event::Batch(snapshot)) = queue.take().await else {
+            panic!("expected the snapshot");
+        };
+        assert!(snapshot.is_snapshot());
+        assert_eq!(snapshot.upper(), Frontier::new(11).unwrap());
+        let Some(Event::Batch(later)) = queue.take().await else {
+            panic!("expected the later changes");
+        };
+        assert_eq!(later.upper(), Frontier::new(13).unwrap());
+        assert_eq!(later.updates().len(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn appending_stops_at_the_byte_limit() {
+        let queue = Queue::default();
+        let [first, second] = batches(2).try_into().unwrap();
+        let options = options().max_buffered_bytes(first.approx_bytes());
+        queue.put(first, &options, Instant::now()).await.unwrap();
+        let failed = queue.put(second, &options, Instant::now()).await;
+        assert!(
+            matches!(failed, Err(Error::ConsumerFellBehind { .. })),
+            "{failed:?}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_waiting_producer_continues_once_the_consumer_takes() {
+        let queue = Arc::new(Queue::default());
+        let [batch] = batches(1).try_into().unwrap();
+        queue.put(batch, &options(), Instant::now()).await.unwrap();
+        let producer = Arc::clone(&queue);
+        let chunk = Event::SnapshotChunk {
+            updates: Vec::new(),
+        };
+        let put = tokio::spawn(async move {
+            let options = options().max_buffered_bytes(0);
+            producer.put(chunk, &options, Instant::now()).await
+        });
+        tokio::task::yield_now().await;
+        assert!(matches!(queue.take().await, Some(Event::Batch(_))));
+        put.await.unwrap().unwrap();
+        assert!(matches!(
+            queue.take().await,
+            Some(Event::SnapshotChunk { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn the_consumer_stops_waiting_when_the_producer_task_ends_in_any_way() {
+        let queue = Arc::new(Queue::default());
+        let producer = CloseOnDrop(Arc::clone(&queue));
+        // Aborted before it first runs, as when a runtime shuts down.
+        let task = tokio::spawn(async move {
+            let _producer = producer;
+            std::future::pending::<()>().await;
+        });
+        task.abort();
+        let consumer = Arc::clone(&queue);
+        let taken = tokio::spawn(async move { consumer.take().await });
+        let taken = tokio::time::timeout(Duration::from_secs(10), taken).await;
+        assert!(taken.expect("the consumer kept waiting").unwrap().is_none());
+    }
 }
