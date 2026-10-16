@@ -931,6 +931,19 @@ async fn raw_stream<'a>(
     )
     .await?;
     let min_resume_lsn = slot_metadata.confirmed_flush_lsn;
+    // PROTOTYPE, not for merge: an overcompacted slot means the WAL this export needs is
+    // gone for good, so treat it as a definite error. The caller writes the error to every
+    // export and drops their capabilities, sealing the source instead of restarting forever.
+    if !(resume_lsn == MzOffset::from(0) || min_resume_lsn <= resume_lsn) {
+        error!(
+            "timely-{} ({}) slot overcompacted: requested {resume_lsn}, available {min_resume_lsn}; sealing the source",
+            config.worker_id, config.id
+        );
+        return Ok(Err(DefiniteError::SlotCompactedPastResumePoint(
+            min_resume_lsn,
+            resume_lsn,
+        )));
+    }
     tracing::info!(
         %config.id,
         "started replication using backend PID={:?}. wal_sender_timeout={:?}",
