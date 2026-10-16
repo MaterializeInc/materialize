@@ -43,3 +43,30 @@ cargo test --tests -- --ignored --skip before_a_restart --skip after_a_restart
 ```
 
 `bin/fmt` formats it with the rest of the repository.
+
+## Try it
+
+`rust/examples/postgres_sink.rs` keeps a Postgres table equal to a Materialize
+table, source, or materialized view, with each batch and its checkpoint in one
+Postgres transaction. Once its first snapshot has completed, stop it at any
+point and start it again: it resumes from the checkpoint without a new
+snapshot. From `misc/materialize-sdk`:
+
+```
+MATERIALIZE_URL="host=localhost port=6875 user=materialize" \
+POSTGRES_URL="host=localhost port=5432 user=postgres" \
+SOURCE=materialize.public.orders \
+cargo run --example postgres_sink
+```
+
+The rows land in `mz_rows`, one per sink, snapshot generation, and distinct
+row, as a JSON array of the columns' text with a count. Once the first snapshot
+completes, each sink's rows equal the source. `SINK_ID` names the sink, so several sinks can
+share one Postgres database. To resume after a stop, the source needs history
+that outlasts the stop, for example
+`ALTER TABLE orders SET (RETAIN HISTORY = FOR '1h')`. `RETAIN HISTORY` is in
+private preview and needs `enable_logical_compaction_window`. Both connections
+use TLS when the server offers it, as Materialize Cloud does, and verify its
+certificate against the system's certificate authorities. A server with a
+self-signed certificate needs its CA in `SSL_CERT_FILE`, or `sslmode=disable`
+in its URL.
