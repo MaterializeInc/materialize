@@ -189,7 +189,7 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
     /// created it.
     async fn create_checkpoint(&mut self, text: &str) -> Result<bool, Error> {
         let in_store = self.checkpoint_in_store().await?;
-        let mut attempt = Attempts::new(&self.options);
+        let mut attempt = Attempts::new(&self.options, &self.sink_id);
         let mut lost = false;
         loop {
             let created = if in_store {
@@ -254,7 +254,7 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
             // and its sweep.
             self.sweep(current.generation).await?;
         }
-        let mut reconnects = Attempts::new(&self.options);
+        let mut reconnects = Attempts::new(&self.options, &self.sink_id);
         // An error that can come from the object changing, which the next
         // attempt's identity check resolves.
         let mut unresolved = None;
@@ -266,7 +266,7 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
             match attempt {
                 Err(error) if resumable(&error) || checks_object(&error) => {
                     if progressed(committed, current.frontier) {
-                        reconnects = Attempts::new(&self.options);
+                        reconnects = Attempts::new(&self.options, &self.sink_id);
                     }
                     if checks_object(&error) {
                         unresolved = Some(error.clone());
@@ -439,7 +439,7 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
         if let Some(in_store) = self.in_store {
             return Ok(in_store);
         }
-        let mut attempt = Attempts::new(&self.options);
+        let mut attempt = Attempts::new(&self.options, &self.sink_id);
         loop {
             let loaded = tokio::time::timeout(self.options.store_timeout, self.sink.load()).await;
             match loaded {
@@ -475,7 +475,7 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
     /// set up.
     async fn load_text(&mut self) -> Result<Option<String>, Error> {
         let in_store = self.checkpoint_in_store().await?;
-        let mut attempt = Attempts::new(&self.options);
+        let mut attempt = Attempts::new(&self.options, &self.sink_id);
         loop {
             let loaded = if in_store {
                 tokio::time::timeout(self.options.store_timeout, self.store.load(&self.sink_id))
@@ -507,7 +507,7 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
     /// Takes the checkpoint over from its owner.
     async fn take_over(&mut self) -> Result<Checkpoint, Error> {
         let mut stored = self.load().await?;
-        let mut attempt = Attempts::new(&self.options);
+        let mut attempt = Attempts::new(&self.options, &self.sink_id);
         loop {
             let (write, next) = CheckpointWrite::take_over(&stored).map_err(write_error)?;
             self.check_size(&write).await?;
@@ -591,7 +591,7 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
 
     async fn commit_until_applied(&mut self, write: &CheckpointWrite) -> Result<(), Error> {
         self.check_size(write).await?;
-        let mut attempt = Attempts::new(&self.options);
+        let mut attempt = Attempts::new(&self.options, &self.sink_id);
         loop {
             let result = self.commit(write).await;
             if self.settled(write, result, &mut attempt).await?.is_some() {
@@ -611,7 +611,7 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
         if let Some(write) = checkpoint {
             self.check_size(write).await?;
         }
-        let mut attempt = Attempts::new(&self.options);
+        let mut attempt = Attempts::new(&self.options, &self.sink_id);
         loop {
             let written = tokio::time::timeout(
                 self.options.write_timeout,
@@ -673,7 +673,7 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
     }
 
     async fn sweep(&mut self, generation: u64) -> Result<(), Error> {
-        let mut attempt = Attempts::new(&self.options);
+        let mut attempt = Attempts::new(&self.options, &self.sink_id);
         loop {
             let swept = tokio::time::timeout(
                 self.options.write_timeout,
@@ -717,21 +717,43 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
 struct Attempts {
     left: u32,
     backoff: Duration,
+    /// Throttling backs off on its own, so that it does not lengthen the
+    /// waits after failures.
+    throttle_backoff: Duration,
+    sink_id: String,
 }
 
 impl Attempts {
+    const MIN_BACKOFF: Duration = Duration::from_secs(1);
     const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
-    fn new(options: &DurableOptions) -> Attempts {
+    fn new(options: &DurableOptions, sink_id: &str) -> Attempts {
         Attempts {
             left: options.max_attempts,
-            backoff: Duration::from_secs(1),
+            backoff: Attempts::MIN_BACKOFF,
+            throttle_backoff: Attempts::MIN_BACKOFF,
+            sink_id: sink_id.to_string(),
         }
     }
 
     /// Waits before the next attempt after `error`, or fails with it once it
-    /// is permanent or the attempts run out.
+    /// is permanent or the attempts run out. Throttling waits without using up
+    /// an attempt, for the time the target asked within the backoff's bounds,
+    /// so that a zero does not spin.
     async fn failed(&mut self, error: SinkError) -> Result<(), Error> {
+        if let SinkError::Throttled { retry_after } = error {
+            let wait = match retry_after {
+                Some(wait) => wait.clamp(Attempts::MIN_BACKOFF, Attempts::MAX_BACKOFF),
+                None => {
+                    let wait = self.throttle_backoff;
+                    self.throttle_backoff = wait.saturating_mul(2).min(Attempts::MAX_BACKOFF);
+                    wait
+                }
+            };
+            tracing::info!(sink_id = %self.sink_id, ?wait, "the sink is throttled");
+            tokio::time::sleep(wait).await;
+            return Ok(());
+        }
         if matches!(
             error,
             SinkError::NotSupported
@@ -1009,6 +1031,22 @@ mod tests {
             Err(Error::Sink(_))
         ));
         assert_eq!(d.sink.calls, 3);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn throttling_waits_without_using_up_attempts() {
+        let (write, _, _) = commit();
+        let throttled = |retry_after| WriteResult::Failed(SinkError::Throttled { retry_after });
+        let mut results: Vec<_> = (0..5).map(|_| throttled(None)).collect();
+        results.push(throttled(Some(Duration::from_secs(300))));
+        results.extend([failed(false), failed(false), WriteResult::applied()]);
+        let mut d = durable(results, vec![]);
+        let started = tokio::time::Instant::now();
+        d.commit_until_applied(&write).await.unwrap();
+        assert_eq!(d.sink.calls, 9);
+        // 1 + 2 + 4 + 8 + 16 seconds of throttling backoff, the 300 seconds
+        // the target asked for capped at 60, then 1 + 2 for the failures.
+        assert_eq!(started.elapsed(), Duration::from_secs(31 + 60 + 3));
     }
 
     /// A checkpoint that every write replaces with a compare-and-set.
