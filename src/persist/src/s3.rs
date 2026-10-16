@@ -150,6 +150,9 @@ impl S3BlobConfig {
         }
 
         if let Some(endpoint) = endpoint {
+            if is_google_endpoint(&endpoint) {
+                loader = loader.http_client(mz_aws_util::pooled_http_client());
+            }
             loader = loader.endpoint_url(endpoint)
         }
 
@@ -973,6 +976,20 @@ enum PartSelector {
     Range(Range<u64>),
 }
 
+/// Whether `endpoint`'s host is `googleapis.com` or one of its subdomains, which
+/// covers GCS's global, regional (`storage.<region>.rep.googleapis.com`) and
+/// Private Service Connect (`*.p.googleapis.com`) endpoints.
+fn is_google_endpoint(endpoint: &str) -> bool {
+    let Ok(url) = url::Url::parse(endpoint) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.strip_suffix('.').unwrap_or(host);
+    host == "googleapis.com" || host.ends_with(".googleapis.com")
+}
+
 /// The total size in a `Content-Range` header (`bytes 0-8388607/9711660`), if
 /// the header states one.
 fn parse_content_range_total(content_range: &str) -> Option<u64> {
@@ -1163,6 +1180,21 @@ mod tests {
     use crate::location::tests::blob_impl_test;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn google_endpoints() {
+        assert!(is_google_endpoint("https://storage.googleapis.com"));
+        assert!(is_google_endpoint("https://STORAGE.googleapis.com/"));
+        assert!(is_google_endpoint("https://storage.googleapis.com."));
+        assert!(is_google_endpoint(
+            "https://storage.us-east1.rep.googleapis.com"
+        ));
+        assert!(is_google_endpoint("https://storage-mz.p.googleapis.com"));
+        assert!(!is_google_endpoint("https://notgoogleapis.com"));
+        assert!(!is_google_endpoint("https://googleapis.com.example.com"));
+        assert!(!is_google_endpoint("https://s3.us-east-1.amazonaws.com"));
+        assert!(!is_google_endpoint("not a url"));
+    }
 
     #[mz_ore::test]
     fn content_range_total() {
