@@ -79,7 +79,7 @@ pub async fn system_parameter_sync(
 
         if frontend.is_none() {
             tracing::info!("initializing system parameter frontend");
-            let new_frontend = Arc::new(SystemParameterFrontend::from(&sync_config).await?);
+            let new_frontend = Arc::new(SystemParameterFrontend::from(&sync_config, true).await?);
             // Share the frontend with the coordinator so the create-cluster /
             // create-replica paths can resolve a new object's scoped overrides
             // synchronously, instead of waiting for the next tick.
