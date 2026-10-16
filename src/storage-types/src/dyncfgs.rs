@@ -235,7 +235,7 @@ pub const KAFKA_SINK_BATCH_NUM_MESSAGES: Config<usize> = Config::new(
 /// Environment-scoped because it changes the messages the sink produces.
 pub const KAFKA_SINK_EMIT_SINK_ID_HEADER: Config<bool> = Config::new(
     "kafka_sink_emit_sink_id_header",
-    false,
+    true,
     "Whether Kafka sinks attach a `materialize-sink-id` header to every message they produce.",
     ParameterScope::Environment,
 );

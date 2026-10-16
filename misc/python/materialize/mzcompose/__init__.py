@@ -450,7 +450,6 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "kafka_offset_commit_refresh_interval", "10s", ["1s", "10s", "10min"]
         ),
-        # On by default so CI exercises the sink id header path.
         VariableSystemParameter(
             "kafka_sink_emit_sink_id_header", "true", ["true", "false"]
         ),
