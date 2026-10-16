@@ -1501,13 +1501,9 @@ October work, because the doc picks a safe default for each.
    default and carry a placeholder vector in namespaces with vectors. Owner:
    DevEx, with the first turbopuffer users, during the sink build. Is the
    storage cost and the placeholder vector acceptable, and what grace period
-   should the docs recommend for sinks that opt into the sweep? turbopuffer's
-   docs do not say how native embedding treats a patch that leaves the text
-   attribute out, or a document without text, such as a tombstone, so the sink
-   build has to test both first. It also has to test whether a delete by filter
-   sees writes that are not indexed yet, which the sweep relies on, and whether
-   repeated patches to one checkpoint document count against the 128 MiB of
-   unindexed writes.
+   should the docs recommend for sinks that opt into the sweep? The behaviors
+   the sink relies on were tested against the turbopuffer API (see the
+   appendix).
 5. turbopuffer visibility. The sink documents convergence: once it has caught up
    past every write and turbopuffer has indexed them, each namespace equals the
    cut at the committed frontier. Owner: DevEx, with the first search users. Do
@@ -1652,19 +1648,21 @@ while the checkpoint has a frontier. A worker that restarts more often than
 twice G never sweeps, so the sink reports a metric while the epoch age holds the
 sweep back.
 
-The sweep deletes by filter. It assumes that a delete by filter also sees writes
-turbopuffer has not indexed yet, which the sink build tests before relying on it
-(deferred question 4). A delete by filter is capped at 5 million rows per call,
-so the sweep loops.
+The sweep deletes by filter. A delete by filter sees writes turbopuffer has not
+indexed yet: in tests it removed a tombstone written just before it and spared a
+live version written just before it. A delete by filter is capped at 5 million
+rows per call and sets `rows_remaining` when it stopped early, so the sweep
+loops until the field is absent.
 
 Each sink's checkpoint will live in its own checkpoint namespace, as one
 document. A namespace per sink keeps its outstanding writes small while indexing
-keeps up, below the 128 MiB at which turbopuffer's guarantees page says new
-writes stop being visible until they are indexed. turbopuffer's query page says
-strong queries search all unindexed writes, so the two pages differ, and the
-design assumes the worse one. Whether repeated patches to one document count
-against that limit is not documented, so the sink reports a metric when a
-checkpoint read lags (deferred question 4).
+keeps up. Once a namespace holds more than 128 MiB of unindexed writes,
+eventually consistent queries can miss later writes until they are indexed
+(turbopuffer's query page, which the guarantees page links to). Checkpoint reads
+use the default strong consistency, which searches every unindexed write, and
+in tests strong reads returned the latest of repeated patches to one document
+totaling about 140 MiB. The sink still reports a metric when a checkpoint read
+lags.
 
 The setup step creates the document with an upsert whose condition no existing
 document meets, such as `id` being null. turbopuffer applies an upsert to a
@@ -1751,9 +1749,11 @@ after the fingerprints changed, starts a new snapshot. The first snapshot
 follows the same rule.
 
 When the snapshot completes, the sink waits until turbopuffer has indexed the
-new namespaces, because a namespace with more than 128 MiB of unindexed writes
-hides later writes from queries for up to about an hour (turbopuffer's
-guarantees page). It then switches readers with one patch: the commit that
+new namespaces, because readers that use eventually consistent queries can miss
+writes for up to about an hour once a namespace holds more than 128 MiB of
+unindexed writes (turbopuffer's query page). It reads the backlog from turbopuffer's namespace metadata,
+which in tests reported a backlog late and not at all for a small one, so the
+wait is best effort. It then switches readers with one patch: the commit that
 completes the snapshot also makes its incarnation active and retires the old
 one. The switch is atomic for every namespace at once.
 
@@ -1811,14 +1811,17 @@ Native embedding has limits the sink is built around. A write with embedded
 attributes takes at most 256 rows, a namespace can have at most 4 embedded
 attributes (turbopuffer's limits page), and a new organization gets 1,024
 requests and 2 million tokens per minute for each model (turbopuffer's embedding
-page). A rate-limit response (HTTP 429) counts as throttling, not as a failure:
-the sink paces its writes by tokens, and throttling does not use the retry
-budget, so a long snapshot does not stall.
+page). turbopuffer also answers HTTP 429 to upserts while a namespace's indexing
+backlog is over its limit (turbopuffer's limits page). A rate-limit response
+counts as throttling, not as a failure: the sink paces its writes by tokens, and
+throttling does not use the retry budget, so a long snapshot does not stall.
 
-turbopuffer's docs do not say whether a patch that leaves the text out keeps the
-stored vector, or how a tombstone without text is treated. The patch path below
-assumes the first, and the sink build tests both before relying on them
-(deferred question 4).
+The sink relies on two behaviors that turbopuffer's docs leave out, both tested
+against the API. A patch that leaves the text out keeps the stored vector and
+embeds nothing. A document without the text is refused, so a tombstone carries a
+placeholder vector in the attribute that holds the embedding (`embed_<name>`).
+The sink sets the model's `dims` at setup, so the placeholder's length is known.
+A zero vector is accepted under cosine distance.
 
 Either way, embedding cost follows the existing sink's transform model: an
 embedding declares the columns it reads, and is computed only for rows where
@@ -1829,7 +1832,8 @@ For each netted change the sink will first make a patch of the other attributes,
 leaving out vectors and the text that native embedding reads. The patch is
 conditional on three things:
 
-- the stored `mz_timestamp` being older,
+- the stored `mz_timestamp` not being newer, so that a patch sent again after a
+  lost response applies again,
 - every stored source hash being equal to the new one,
 - the document not being a tombstone.
 
@@ -1844,6 +1848,7 @@ intermediate changes and after a replay.
 
 Snapshot writes skip the patch path, because a patch costs an extra query per
 request and the namespace starts empty. When a crashed attempt continues, the
-conditional upserts skip the documents it already wrote. Tombstones carry no
-text to embed. A replay re-embeds the replayed rows, which costs embedding but
-does not affect correctness.
+conditional upserts skip the documents it already wrote, but turbopuffer bills
+the embedding of a skipped upsert too. Tombstones carry no text, so they embed
+nothing. A replay re-embeds the replayed rows, which costs embedding but does
+not affect correctness.
