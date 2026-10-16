@@ -18,5 +18,8 @@ tokio-postgres.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+openssl.workspace = true
+openssl-probe.workspace = true
+postgres-openssl.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
