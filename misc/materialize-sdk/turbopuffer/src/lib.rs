@@ -34,6 +34,12 @@
 //! writes, the active incarnation equals the view at the committed frontier.
 //! Before that a reader can see part of a batch.
 //!
+//! With [`TurbopufferSink::embed`], turbopuffer embeds the text itself, and
+//! bills by token. A change that leaves every embedded text as it was is
+//! written as a patch that keeps the stored vectors, so only documents with
+//! a changed text are embedded again, with all their texts. A snapshot
+//! embeds every text it writes.
+//!
 //! A write sent again after a timeout skips the requests turbopuffer already
 //! acknowledged, but each timeout still uses up an attempt, so raise
 //! [`materialize_sdk::DurableOptions::write_timeout`] for batches that take
@@ -55,7 +61,8 @@
 //! let materialize: tokio_postgres::Config = "host=localhost port=6875 user=materialize".parse()?;
 //! let turbopuffer = Connection::new("gcp-us-central1", std::env::var("TURBOPUFFER_API_KEY")?);
 //! let sink = TurbopufferSink::new(&turbopuffer, "articles-search", "articles")?
-//!     .full_text_search(["body"]);
+//!     .full_text_search(["body"])
+//!     .embed("body", "nvidia/nemotron-3-embed-8b", 1024);
 //! let mut durable = DurableSink::new("articles-search", sink, DurableOptions::default());
 //! let view = ObjectName {
 //!     database: Some("materialize".into()),
@@ -88,6 +95,7 @@ mod client;
 mod documents;
 #[cfg(test)]
 mod live_tests;
+mod pace;
 mod sink;
 
 pub use client::Connection;

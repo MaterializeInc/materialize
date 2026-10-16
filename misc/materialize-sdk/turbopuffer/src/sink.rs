@@ -15,25 +15,30 @@
 
 //! The sink.
 
-use std::collections::BTreeSet;
-use std::time::Duration;
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use materialize_sdk::core::Checkpoint;
 use materialize_sdk::core::checkpoint::MAX_BYTES;
 use materialize_sdk::{
     CheckpointWrite, Sink, SinkBatch, SinkError, SinkType, WriteKind, WriteResult,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::checkpoint::Checkpoints;
-use crate::client::{Client, Connection};
-use crate::documents::{self, Indexing, Layout};
+use crate::client::{Client, Connection, Failure};
+use crate::documents::{self, Document, Embedding, Indexing, Layout, Limits};
+use crate::pace::{MAX_TOKENS_PER_TEXT, Pacer};
 
 /// The most a request to a data namespace holds. turbopuffer accepts 512 MB,
 /// but a smaller request costs less to send again after a lost response.
 const MAX_REQUEST_BYTES: usize = 16 << 20;
 const MAX_REQUEST_ROWS: usize = 10_000;
+/// The most rows with text to embed that turbopuffer takes in one request.
+/// Rows that carry a vector do not count: a request with 300 placeholder
+/// rows and one text applied in tests.
+const MAX_EMBEDDED_ROWS: usize = 256;
 
 /// Room for the document's fields to grow in one write, on top of their
 /// current size: one more retired incarnation and a longer revision.
@@ -58,7 +63,14 @@ pub struct TurbopufferSink {
     /// acknowledged since the last write that applied in full. Sending an
     /// acknowledged request to the same namespace again changes nothing, so
     /// the resend of a batch after a timeout or throttling skips them.
-    acknowledged: BTreeSet<[u8; 32]>,
+    acknowledged: BTreeMap<[u8; 32], Acknowledged>,
+    pacer: Pacer,
+    /// The namespaces whose embedding settings match the sink's. turbopuffer
+    /// refuses a write that adds an embedded attribute to an existing
+    /// namespace or changes its dimensions, so a mismatch would otherwise
+    /// stop the sink at some later write.
+    matching: BTreeSet<String>,
+    embedded_tokens: u64,
 }
 
 impl TurbopufferSink {
@@ -92,7 +104,10 @@ impl TurbopufferSink {
             max_unindexed_bytes: 64 << 20,
             layout: None,
             request_rows: MAX_REQUEST_ROWS,
-            acknowledged: BTreeSet::new(),
+            acknowledged: BTreeMap::new(),
+            pacer: Pacer::new(2_000_000, 1024),
+            matching: BTreeSet::new(),
+            embedded_tokens: 0,
         })
     }
 
@@ -111,6 +126,41 @@ impl TurbopufferSink {
     ) -> Self {
         self.indexing.full_text_search = columns.into_iter().map(Into::into).collect();
         self
+    }
+
+    /// Has turbopuffer embed the text `column` with `model`, one of the models
+    /// it hosts, into vectors of `dims` dimensions, searched by cosine
+    /// distance in the attribute `embed_<column>`. A namespace embeds at
+    /// most four columns. The sink refuses a namespace that embeds
+    /// differently, so a change here needs a new sink.
+    ///
+    /// turbopuffer refuses an empty text to embed, so a row whose text is
+    /// empty or `NULL` leaves the attribute out and gets a zero vector, which
+    /// ranks last, as does every tombstone.
+    pub fn embed(mut self, column: impl Into<String>, model: impl Into<String>, dims: u32) -> Self {
+        self.indexing.embeddings.push(Embedding {
+            column: column.into(),
+            model: model.into(),
+            dims,
+        });
+        self
+    }
+
+    /// The embedding tokens and requests the sink paces itself to per minute.
+    /// It must allow one document's texts, 32,768 tokens for each embedded
+    /// column. By default 2 million tokens and 1,024 requests, the limits turbopuffer
+    /// gives a new organization for each model. The organization's sinks
+    /// share its limits, so divide them between sinks that embed together.
+    pub fn embedding_rate(mut self, tokens_per_minute: u64, requests_per_minute: usize) -> Self {
+        self.pacer = Pacer::new(tokens_per_minute, requests_per_minute);
+        self
+    }
+
+    /// The embedding tokens turbopuffer reported billing for this sink's
+    /// writes since it was built, including writes whose condition skipped
+    /// them.
+    pub fn embedding_tokens(&self) -> u64 {
+        self.embedded_tokens
     }
 
     /// The most unindexed bytes a new incarnation may hold when readers
@@ -141,10 +191,28 @@ impl TurbopufferSink {
             let columns = fingerprint
                 .payload_columns()
                 .map_err(|e| refuse(e.to_string()))?;
-            Layout::new(&columns, &self.indexing)?;
+            check_rate(&self.pacer, &Layout::new(&columns, &self.indexing)?)?;
         }
         Ok(())
     }
+}
+
+/// Refuses an embedding rate too low for one document, which turbopuffer
+/// would refuse every time.
+fn check_rate(pacer: &Pacer, layout: &Layout) -> Result<(), SinkError> {
+    let columns = u64::try_from(layout.embeddings().len()).unwrap_or(u64::MAX);
+    let needed = columns.saturating_mul(MAX_TOKENS_PER_TEXT);
+    if pacer.tokens_per_minute() < needed {
+        return Err(SinkError::Target {
+            message: format!(
+                "an embedding rate of {} tokens a minute is too low for one document, which \
+                 needs up to {needed}",
+                pacer.tokens_per_minute()
+            ),
+            permanent: true,
+        });
+    }
+    Ok(())
 }
 
 /// The namespace that holds the checkpoint of the sink named `name`.
@@ -210,33 +278,100 @@ impl Sink for TurbopufferSink {
     async fn write(&mut self, batch: &SinkBatch, _: Option<&CheckpointWrite>) -> WriteResult {
         let layout = match &mut self.layout {
             Some(layout) if layout.fits(batch.columns()) => layout,
-            slot => match Layout::new(batch.columns(), &self.indexing) {
+            slot => match Layout::new(batch.columns(), &self.indexing).and_then(|layout| {
+                check_rate(&self.pacer, &layout)?;
+                Ok(layout)
+            }) {
                 Ok(layout) => slot.insert(layout),
                 Err(error) => return WriteResult::Failed(error),
             },
         };
-        let (documents, rejected) = documents::documents(batch, layout);
         let namespace = data_namespace(&self.name, batch.generation());
-        for rows in documents::requests(documents, MAX_REQUEST_BYTES, self.request_rows) {
-            let body = json!({
-                "upsert_rows": rows,
+        if !self.matching.contains(&namespace) {
+            match self.client.embeddings(&namespace).await {
+                Ok(None) => {}
+                Ok(Some(stored)) if stored == layout.embedded() => {
+                    self.matching.insert(namespace.clone());
+                }
+                Ok(Some(stored)) => {
+                    return WriteResult::Failed(SinkError::Target {
+                        message: format!(
+                            "the namespace {namespace} embeds {stored:?}, but the sink embeds {:?}",
+                            layout.embedded()
+                        ),
+                        permanent: true,
+                    });
+                }
+                Err(failure) => return WriteResult::Failed(failure.into_error()),
+            }
+        }
+        let (mut documents, rejected) = documents::documents(batch, layout);
+        let limits = Limits {
+            bytes: MAX_REQUEST_BYTES,
+            rows: self.request_rows,
+            embedded_rows: MAX_EMBEDDED_ROWS.min(self.request_rows),
+            tokens: self.pacer.request_tokens(),
+        };
+        let mut sent = Sent {
+            client: &self.client,
+            namespace: &namespace,
+            acknowledged: &mut self.acknowledged,
+        };
+
+        // A patch costs a query per request, and most snapshot documents are
+        // new to their namespace, so snapshot writes skip it.
+        if !layout.embeddings().is_empty() && !batch.is_snapshot() {
+            let (live, tombstones): (Vec<_>, Vec<_>) =
+                documents.into_iter().partition(|d| !d.is_tombstone());
+            let patches = live.iter().map(|document| {
+                let row = document.patch(layout);
+                Document {
+                    bytes: row.to_string().len(),
+                    row,
+                    tokens: 0,
+                }
+            });
+            let mut patched = BTreeSet::new();
+            for request in documents::requests(patches.collect(), limits) {
+                let body = json!({
+                    "patch_rows": request.into_iter().map(|d| d.row).collect::<Vec<_>>(),
+                    "patch_condition": layout.unchanged_text_condition(),
+                    "return_affected_ids": true,
+                });
+                match sent.send(body).await {
+                    Ok(response) => {
+                        self.embedded_tokens = self.embedded_tokens.saturating_add(response.tokens);
+                        patched.extend(response.patched);
+                    }
+                    Err(failure) => return WriteResult::Failed(failure.into_error()),
+                }
+            }
+            documents = live
+                .into_iter()
+                .filter(|document| document.id().is_none_or(|id| !patched.contains(id)))
+                .chain(tombstones)
+                .collect();
+        }
+
+        for request in documents::requests(documents, limits) {
+            let estimate: u64 = request.iter().map(|document| document.tokens).sum();
+            let mut body = json!({
+                "upsert_rows": request.into_iter().map(|d| d.row).collect::<Vec<_>>(),
                 "upsert_condition": documents::newer_condition(),
                 "schema": layout.schema(),
-            })
-            .to_string();
-            let digest: [u8; 32] = Sha256::new()
-                .chain_update(namespace.as_bytes())
-                .chain_update([0])
-                .chain_update(body.as_bytes())
-                .finalize()
-                .into();
-            if self.acknowledged.contains(&digest) {
-                continue;
+            });
+            if !layout.embeddings().is_empty() {
+                if let Some(body) = body.as_object_mut() {
+                    body.insert("distance_metric".into(), json!("cosine_distance"));
+                }
             }
-            if let Err(failure) = self.client.write(&namespace, body).await {
-                return WriteResult::Failed(failure.into_error());
+            let paced = (estimate > 0).then_some(&mut self.pacer);
+            match sent.send_paced(body, paced, estimate).await {
+                Ok(response) => {
+                    self.embedded_tokens = self.embedded_tokens.saturating_add(response.tokens);
+                }
+                Err(failure) => return WriteResult::Failed(failure.into_error()),
             }
-            self.acknowledged.insert(digest);
         }
         self.acknowledged.clear();
         WriteResult::Applied { rejected }
@@ -270,6 +405,88 @@ impl Sink for TurbopufferSink {
 
     // TODO: Delete retired incarnations once twice the grace period has
     // passed, as the design's appendix describes.
+}
+
+/// What an acknowledged request reported.
+#[derive(Clone, Debug, Default)]
+struct Acknowledged {
+    /// The ids a patch applied to.
+    patched: Vec<String>,
+    /// The tokens it embedded.
+    tokens: u64,
+}
+
+/// Sends the requests of one write to one namespace, skipping those already
+/// acknowledged.
+struct Sent<'a> {
+    client: &'a Client,
+    namespace: &'a str,
+    acknowledged: &'a mut BTreeMap<[u8; 32], Acknowledged>,
+}
+
+impl Sent<'_> {
+    async fn send(&mut self, body: Value) -> Result<Acknowledged, Failure> {
+        self.send_paced(body, None, 0).await
+    }
+
+    /// Sends `body`, unless it was acknowledged, once `pacer` has room for
+    /// `estimate` tokens. Without room it returns throttling.
+    async fn send_paced(
+        &mut self,
+        body: Value,
+        pacer: Option<&mut Pacer>,
+        estimate: u64,
+    ) -> Result<Acknowledged, Failure> {
+        let body = body.to_string();
+        let digest: [u8; 32] = Sha256::new()
+            .chain_update(self.namespace.as_bytes())
+            .chain_update([0])
+            .chain_update(body.as_bytes())
+            .finalize()
+            .into();
+        if let Some(acknowledged) = self.acknowledged.get(&digest) {
+            return Ok(Acknowledged {
+                tokens: 0,
+                ..acknowledged.clone()
+            });
+        }
+        let mut pacer = pacer;
+        let reservation = match pacer
+            .as_deref_mut()
+            .map(|p| p.reserve(Instant::now(), estimate))
+        {
+            Some(Err(wait)) => {
+                return Err(Failure::Throttled {
+                    retry_after: Some(wait),
+                });
+            }
+            Some(Ok(reservation)) => Some(reservation),
+            None => None,
+        };
+        let written = self.client.write(self.namespace, body).await;
+        if let (Some(pacer), Some(reservation)) = (pacer, reservation) {
+            match &written {
+                Ok(response) => {
+                    let tokens = response.performance.embedding_tokens;
+                    pacer.applied(reservation, tokens.unwrap_or(estimate));
+                }
+                Err(Failure::Throttled { .. }) => pacer.refused(reservation),
+                Err(_) => {}
+            }
+        }
+        let response = written?;
+        let tokens = response.performance.embedding_tokens.unwrap_or(0);
+        let acknowledged = Acknowledged {
+            patched: response
+                .patched_ids
+                .iter()
+                .filter_map(|id| id.as_str().map(str::to_string))
+                .collect(),
+            tokens,
+        };
+        self.acknowledged.insert(digest, acknowledged.clone());
+        Ok(acknowledged)
+    }
 }
 
 #[cfg(test)]
