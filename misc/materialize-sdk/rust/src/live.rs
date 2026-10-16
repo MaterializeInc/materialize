@@ -20,7 +20,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use materialize_sdk_core::statement::fetch_sql;
-use materialize_sdk_core::{Event, PushError, Row, Start, Subscribe, Subscription};
+use materialize_sdk_core::{Classification, Event, PushError, Row, Start, Subscribe, Subscription};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -143,7 +143,7 @@ impl LiveOptions {
 pub struct LiveSubscription {
     events: mpsc::Receiver<Event>,
     end: Option<oneshot::Receiver<Result<(), Error>>>,
-    columns: Arc<OnceLock<Vec<String>>>,
+    learned: Arc<Learned>,
     _task: AbortOnDrop,
     _connection: AbortOnDrop,
 }
@@ -180,8 +180,30 @@ impl LiveSubscription {
         T: MakeTlsConnect<Socket>,
         T::Stream: Send + 'static,
     {
+        LiveSubscription::connect_at(
+            config,
+            tls,
+            subscribe,
+            Start::Snapshot { as_of: None },
+            options,
+        )
+        .await
+    }
+
+    /// [`LiveSubscription::connect`], starting at `start`.
+    pub(crate) async fn connect_at<T>(
+        config: &Config,
+        tls: T,
+        subscribe: Subscribe,
+        start: Start,
+        options: LiveOptions,
+    ) -> Result<LiveSubscription, Error>
+    where
+        T: MakeTlsConnect<Socket>,
+        T::Stream: Send + 'static,
+    {
         options.validate()?;
-        let mut sub = Subscription::new(subscribe, Start::Snapshot { as_of: None })?;
+        let mut sub = Subscription::new(subscribe, start)?;
         if let Some(limit) = options.max_pending_bytes {
             sub = sub.with_max_pending_bytes(limit);
         }
@@ -203,19 +225,19 @@ impl LiveSubscription {
                 let _ = failure_tx.send(error);
             }
         }));
-        start(&client, &mut sub, &mut failure).await?;
+        declare(&client, &mut sub, &mut failure).await?;
         let capacity = options.buffer;
         let (events_tx, events) = mpsc::channel(capacity);
         let (end_tx, end) = oneshot::channel();
-        let columns = Arc::new(OnceLock::new());
-        let task_columns = Arc::clone(&columns);
+        let learned = Arc::new(Learned::default());
+        let task_learned = Arc::clone(&learned);
         let task = AbortOnDrop(tokio::spawn(async move {
             let result = fetch_loop(
                 &client,
                 sub,
                 &options,
                 &events_tx,
-                &task_columns,
+                &task_learned,
                 &mut failure,
             )
             .await;
@@ -225,7 +247,7 @@ impl LiveSubscription {
         Ok(LiveSubscription {
             events,
             end: Some(end),
-            columns,
+            learned,
             _task: task,
             _connection: connection,
         })
@@ -254,15 +276,29 @@ impl LiveSubscription {
     /// by its value in the upsert envelope. Set before the first event
     /// arrives.
     pub fn columns(&self) -> Option<&[String]> {
-        self.columns.get().map(Vec::as_slice)
+        self.learned.columns.get().map(Vec::as_slice)
     }
+
+    /// The stream's `AS OF`, at which a snapshot's updates are. Set before the
+    /// first event arrives.
+    pub fn as_of(&self) -> Option<u64> {
+        self.learned.as_of.get().copied()
+    }
+}
+
+/// What the fetch loop learns from the stream, set before it hands over the
+/// first event that depends on it.
+#[derive(Debug, Default)]
+struct Learned {
+    columns: OnceLock<Vec<String>>,
+    as_of: OnceLock<u64>,
 }
 
 /// The server's error on the connection, if any, arrives on this channel.
 type Failure = oneshot::Receiver<tokio_postgres::Error>;
 
 /// Opens the cursor's transaction and declares the cursor.
-async fn start(
+async fn declare(
     client: &Client,
     sub: &mut Subscription,
     failure: &mut Failure,
@@ -284,7 +320,7 @@ async fn fetch_loop(
     mut sub: Subscription,
     options: &LiveOptions,
     events: &mpsc::Sender<Event>,
-    columns: &OnceLock<Vec<String>>,
+    learned: &Learned,
     failure: &mut Failure,
 ) -> Result<(), Error> {
     while !sub.is_finished() {
@@ -299,7 +335,10 @@ async fn fetch_loop(
             PushError::Usage(error) => Error::from(error),
         })?;
         if let Some(payload) = sub.columns() {
-            columns.get_or_init(|| payload.to_vec());
+            learned.columns.get_or_init(|| payload.to_vec());
+        }
+        if let Some(as_of) = sub.as_of() {
+            learned.as_of.get_or_init(|| as_of);
         }
         // One deadline for all of this FETCH's events, so a consumer that
         // drains slowly cannot keep the session idle for longer.
@@ -335,7 +374,7 @@ async fn fetch_loop(
 
 /// Runs `sql` with the simple query protocol, which returns every cell in its
 /// text format, and returns the column names and the rows.
-async fn query(
+pub(crate) async fn query(
     client: &Client,
     sql: &str,
 ) -> Result<(Vec<String>, Vec<Row>), tokio_postgres::Error> {
@@ -369,6 +408,14 @@ async fn failed(sub: &Subscription, error: tokio_postgres::Error, failure: &mut 
 }
 
 fn server_error(sub: &Subscription, error: &tokio_postgres::Error) -> Error {
+    server_error_with(error, |sqlstate, message| sub.classify(sqlstate, message))
+}
+
+/// The error for a failed request, classified by `classify`.
+pub(crate) fn server_error_with(
+    error: &tokio_postgres::Error,
+    classify: impl FnOnce(Option<&str>, &str) -> Classification,
+) -> Error {
     let (sqlstate, message, detail, hint) = match error.as_db_error() {
         Some(db) => (
             Some(db.code().code().to_string()),
@@ -378,7 +425,7 @@ fn server_error(sub: &Subscription, error: &tokio_postgres::Error) -> Error {
         ),
         None => (None, message_with_sources(error), None, None),
     };
-    let classification = sub.classify(sqlstate.as_deref(), &message);
+    let classification = classify(sqlstate.as_deref(), &message);
     Error::Server {
         sqlstate,
         message,

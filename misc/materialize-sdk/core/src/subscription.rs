@@ -326,6 +326,11 @@ impl Subscription {
         self.batcher.progress()
     }
 
+    /// The stream's `AS OF`. See [`Batcher::as_of`].
+    pub fn as_of(&self) -> Option<u64> {
+        self.batcher.as_of()
+    }
+
     /// The memory held for updates not yet released. See
     /// [`Batcher::with_max_pending_bytes`].
     pub fn pending_bytes(&self) -> usize {
