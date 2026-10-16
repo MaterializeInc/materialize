@@ -1186,6 +1186,133 @@ Separately, and not a compaction problem: the import queue is unbounded with no
 backpressure, deliberately, so that maintenance progress is never coupled to a slow reader.
 A long-lived importer that lags holds a second copy of every undrained batch for as long as
 it lags.
+## Simplifying the sharing protocol
+
+The primitive above shares holds through a lock. Readers on the interactive runtime adjust the
+point's accumulations under the state lock, and the writer reads them under the same lock,
+across every point a trace backs, in address order. Several of its rules exist only because a
+hold can be created on the reader's thread at any moment: the admission check in `reader_at`,
+publishing `since` before applying it, the peer-hold reservation and its FIFO pairing, and the
+physical hold an import registers at the chain coverage. This section records two designs that
+remove those rules. The first is general and keeps imports live. The second exploits the
+one-shot-read boundary, removes more, and is the one to land first.
+
+### The general design: per-runtime holds, downgraded over a channel
+
+Both runtimes process the same command stream, so each can derive its own logical hold on a
+shared collection without asking the other. The hold sits at the `as_of` of the collection's
+`CreateDataflow`, moves with every `AllowCompaction` for the id, and releases on the drop. The
+publication point keeps one accumulation per runtime and compacts to their meet, which states
+I1c directly: a collection compacts once every runtime has processed the `AllowCompaction`.
+Only the owner of the accumulation, the writer, reads it.
+
+A reader never creates a hold from nothing. Whichever runtime creates the slot registers both
+runtimes' holds at the slot's `as_of`, because both know what the other will need, and the
+slot is keyed by `(id, as_of)`. Every later hold inside a runtime derives from that runtime's
+hold, and every change after creation is a downgrade. Downgrades travel to the writer over a
+channel, next to the `SyncActivator` that wakes it, and a reader sends the increment at the
+new frontier before the decrement at the old one, so the meet the writer sees never dips below
+a live hold. This is timely's progress-tracking discipline applied to read holds.
+
+What this removes:
+
+* The cross-point lock ordering in `apply_holds`. The meet across points is local arithmetic
+  on the writer's thread.
+* The admission check and its `Err(since)`. A hold derived from a held frontier needs none,
+  and the controller guarantees every `as_of` it sends is at or beyond what it allowed.
+* The ordering rule that publishes `since` before applying it. The writer applies only holds
+  it has already received.
+* `PeerHolds`, its `reserved` queue and `unpublished_peers`. Hold creation is part of slot
+  creation.
+
+The rule has to hold without exception, and the current code breaks it in two places. An
+import mints its physical hold at the chain coverage on the reader's thread
+(`IndexTrace::import_frontier_core` through `SharedReader::fresh_reader`), because the peer
+hold holds nothing physically. Over a channel, the writer can raise its physical frontier past
+that coverage and merge across it before the increment arrives, and a later cut at the
+coverage then lands inside a merged batch. And `peer_bundle`, reached before `publish` has
+taken `peer_holds`, mints the peer hold at the join of `as_of` and a `since` the writer may
+already have passed, because `publish` attaches the trace before it reserves. Today the state
+lock makes both safe. Structural creation at the slot fixes the second, and the first needs
+one of the physical designs below.
+
+Commands carry nothing about physical compaction. A runtime's physical need is wherever its
+imports will cut, which is data-driven and local. Two designs keep the channel sound:
+
+* **A base physical hold per runtime at the last coverage it observed.** Readers register
+  locally, seeded at the current coverage, which is always at or above the base, and the
+  runtime advances the base when it observes a seal. The writer's merging then waits on the
+  reader thread waking: a parked or slow interactive worker stops merges, and the chain grows
+  one batch per seal until it wakes. Today an idle reader costs nothing, because the writer
+  falls back to the chain coverage when no reader holds.
+* **A pinned snapshot log.** A reader cuts only at a published `upper`, and every cut in
+  `mz_join_core` and in differential's join, reduce, count and threshold goes through
+  `batches_through` or `cursor_through` at such an upper. The point publishes
+  `(upper, Arc<[B]>)` snapshots and a reader pins the one it cuts at, so nothing physical
+  flows back and the writer merges freely. The cost moves to memory: pre-merge batches stay
+  alive while a snapshot that names them is pinned.
+
+Neither cost is measured. Two constraints apply to both. Each runtime's accumulation belongs
+to the point rather than to the writer, so it survives a writer generation change on
+reconnect. And the state lock remains for publishing the chain, `upper` and the import queues,
+so the design removes holds from the lock, not the lock.
+
+### The single-time specialization
+
+The one-shot-read boundary makes most of the general design unnecessary. The interactive
+runtime renders only dataflows whose `until` is one step past their `as_of`, enforced by
+`class_fits_shape`, so every interactive read, import or peek, needs the trace at exactly one
+time `T`. Such a read is complete once `upper > T`, and since batches are immutable `Arc`s, a
+snapshot of the chain taken after that point is final. Every interactive read therefore
+becomes: wait until the published `upper` passes `T`, take the chain once, read at `T`, and
+drop it.
+
+What this removes beyond the general design:
+
+* **`ImportQueue` and incremental replay.** An import emits the snapshot at `as_of` and drops
+  its capability. The seed-versus-live filter, the queue clearing on a new writer generation,
+  and the reason an import operator holds its own queue go with it.
+* **Physical holds.** The pinned `Arc`s are the physical hold, for the duration of one read,
+  and the writer merges freely. The snapshot log is unnecessary, because each read needs one
+  snapshot.
+* **Seeding through placeholders.** A read over a slot that is not yet published waits. It
+  does not bind to the point before the trace exists, so attach has nothing to seed.
+* **Long-lived logical holds per read.** A read needs its hold only until it takes its
+  snapshot, because a later merge creates new batches and leaves the pinned ones as they
+  were.
+
+What remains is the interactive runtime's logical hold per shared collection, derived from its
+command stream and downgraded over the channel, the writer-side attachment that mirrors the
+chain into the point, and a published `(upper, chain)` pair readers take a snapshot of. Wakeups
+reuse the seal callback: the interactive worker re-checks its waiting reads whenever it is
+unparked, which the peek sweep already does, so the activators involved stay on the reader's
+thread.
+
+The design generalises to any finite `until`: a read waits until `upper` is at or beyond
+`until` and takes one snapshot. It does not cover an empty `until`, which is the case the
+general design keeps.
+
+The specialization has costs:
+
+* **No overlap before `upper > T`.** The live import feeds the seed batches into the dataflow
+  while the trace has yet to pass `T`. A snapshot import starts the dataflow's work only after
+  it has, which can add up to one tick of the index's `upper` lag to a peek. Not measured.
+* **The boundary becomes load-bearing.** A dataflow with a later `until` rendered on the
+  interactive runtime would silently miss every update after its snapshot. The controller's
+  demotion is a soft assertion with a fallback, so the interactive runtime has to assert the
+  shape before it builds a snapshot import, and fail loudly when it does not hold.
+
+### Owning the trace agent does not simplify the protocol
+
+A spike replaced differential's `TraceAgent` and `TraceBox` with Materialize's own agent, box
+and writer, against a local differential patch that adds a writer associated type to an
+`Agent` trait, a variant of TimelyDataflow/differential-dataflow#916. It removed `SharedSpine`
+and the separate local and remote accumulations, kept every protocol rule this section
+discusses, and grew Materialize by about 650 lines net, including its benchmark. Cursor cost was unchanged at about
+640 ns p50, and maintaining 10M updates was about 1% slower, within noise. The protocol's
+complexity comes from where holds are created, not from who owns the agent, so the change is
+not worth carrying without the simplifications above.
+
 ## The registry
 
 `ArrangementSharingRegistry` (`src/compute/src/sharing.rs`) maps a `GlobalId` to a slot
