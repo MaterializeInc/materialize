@@ -26,8 +26,7 @@
 //! A sink named `articles` keeps its checkpoint in the namespace
 //! `articles__checkpoint`, and each snapshot writes a new incarnation, such as
 //! `articles__i2` (see [`data_namespace`]). Readers switch to an incarnation
-//! once its snapshot completes: the `active` attribute of the checkpoint
-//! document names it.
+//! once its snapshot completes, and [`Reader`] queries the one they use.
 //!
 //! turbopuffer has no transactions across requests, so the guarantee is
 //! convergence: once the sink has caught up and turbopuffer has indexed its
@@ -96,7 +95,9 @@ mod documents;
 #[cfg(test)]
 mod live_tests;
 mod pace;
+mod reader;
 mod sink;
 
 pub use client::Connection;
+pub use reader::{ReadError, Reader};
 pub use sink::{TurbopufferSink, data_namespace};

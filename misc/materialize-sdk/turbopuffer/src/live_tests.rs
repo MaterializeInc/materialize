@@ -33,6 +33,7 @@ use tokio_postgres::NoTls;
 
 use crate::checkpoint::Checkpoints;
 use crate::client::{Client, Connection, Fault};
+use crate::reader::{ReadError, Reader};
 use crate::sink::{TurbopufferSink, checkpoint_namespace, data_namespace};
 
 const STEP: Duration = Duration::from_secs(90);
@@ -794,6 +795,132 @@ async fn embedding_waits_for_room_in_the_rate_limit() {
             .await
             .len(),
         1
+    );
+}
+
+/// Commits `write`, waiting while the sink waits for turbopuffer's index.
+async fn commit_until_applied(sink: &mut TurbopufferSink, write: &CheckpointWrite) {
+    for _ in 0..120 {
+        match sink.commit(write).await {
+            WriteResult::Applied { .. } => return,
+            WriteResult::Failed(SinkError::Throttled { .. }) => {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            other => panic!("expected the commit or a wait, got {other:?}"),
+        }
+    }
+    panic!("the commit never applied");
+}
+
+#[tokio::test]
+#[ignore = "needs TURBOPUFFER_API_KEY"]
+async fn the_reader_follows_the_incarnation_readers_use() {
+    let name = unique("reader");
+    let _cleanup = Cleanup(name.clone());
+    let mut sink = TurbopufferSink::new(&connection(), "s", &name).unwrap();
+    let reader = Reader::new(&connection(), &name).unwrap();
+    let cached = Reader::new(&connection(), &name)
+        .unwrap()
+        .with_cache(Duration::from_secs(3600));
+    assert_eq!(
+        reader.namespace().await,
+        Err(ReadError::NotReady),
+        "no sink yet"
+    );
+
+    let created = Checkpoint::new(BTreeMap::new());
+    assert!(matches!(
+        sink.create(&created.encode().unwrap()).await,
+        WriteResult::Applied { .. }
+    ));
+    let (take_over, taken) = CheckpointWrite::take_over(&created).unwrap();
+    commit_until_applied(&mut sink, &take_over).await;
+    let (start, started) = CheckpointWrite::start_snapshot(&taken, BTreeMap::new(), 5).unwrap();
+    commit_until_applied(&mut sink, &start).await;
+    assert_eq!(
+        reader.namespace().await,
+        Err(ReadError::NotReady),
+        "no snapshot yet"
+    );
+
+    let first = started.generation;
+    let snapshot = vec![upsert(5, "1", "a", "1"), upsert(5, "2", "b", "2")];
+    let snapshot = SinkBatch::new(snapshot, columns(), first, true);
+    assert!(matches!(
+        sink.write(&snapshot, None).await,
+        WriteResult::Applied { .. }
+    ));
+    let (complete, completed) =
+        CheckpointWrite::commit(&started, Frontier::new(6).unwrap()).unwrap();
+    commit_until_applied(&mut sink, &complete).await;
+    let deleted = SinkBatch::new(vec![delete(6, "2")], columns(), first, false);
+    assert!(matches!(
+        sink.write(&deleted, None).await,
+        WriteResult::Applied { .. }
+    ));
+
+    assert_eq!(
+        reader.namespace().await.unwrap(),
+        data_namespace(&name, first)
+    );
+    assert_eq!(
+        cached.namespace().await.unwrap(),
+        data_namespace(&name, first)
+    );
+    let query = json!({"rank_by": ["id", "asc"], "limit": 10});
+    let ids = |response: Option<Value>| -> Vec<Value> {
+        let rows = response.expect("a namespace")["rows"]
+            .as_array()
+            .unwrap()
+            .clone();
+        rows.into_iter().map(|row| row["id"].clone()).collect()
+    };
+    // The tombstone of key 2 is left out.
+    assert_eq!(
+        ids(reader.query(query.clone()).await.unwrap()),
+        [json!("1")]
+    );
+    let filtered = json!({"rank_by": ["id", "asc"], "limit": 10, "filters": ["views", "Gte", 1]});
+    assert_eq!(ids(reader.query(filtered).await.unwrap()), [json!("1")]);
+    let multi = json!({"queries": [query.clone(), {"rank_by": ["id", "desc"], "limit": 1}]});
+    let results = reader.query(multi).await.unwrap().unwrap()["results"].clone();
+    let firsts: Vec<_> = results
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|result| result["rows"][0]["id"].clone())
+        .collect();
+    assert_eq!(firsts, [json!("1"), json!("1")], "{results}");
+    assert_eq!(reader.query(json!([])).await, Err(ReadError::InvalidQuery));
+
+    // A re-snapshot of a view that is now empty writes nothing, so its
+    // incarnation has no namespace and reads as empty.
+    let (restart, restarted) =
+        CheckpointWrite::start_snapshot(&completed, BTreeMap::new(), 7).unwrap();
+    commit_until_applied(&mut sink, &restart).await;
+    let (complete, _) = CheckpointWrite::commit(&restarted, Frontier::new(8).unwrap()).unwrap();
+    commit_until_applied(&mut sink, &complete).await;
+    let second = restarted.generation;
+    assert_eq!(
+        reader.namespace().await.unwrap(),
+        data_namespace(&name, second)
+    );
+    assert_eq!(reader.query(query.clone()).await.unwrap(), None);
+    // A cached reader keeps reading the old incarnation until its cache ends,
+    // or until the old incarnation is gone, when it looks the incarnation up
+    // again.
+    assert_eq!(
+        ids(cached.query(query.clone()).await.unwrap()),
+        [json!("1")]
+    );
+    sink.client
+        .delete_namespace(&data_namespace(&name, first))
+        .await
+        .unwrap();
+    assert_eq!(cached.query(query).await.unwrap(), None);
+    assert_eq!(
+        cached.namespace().await.unwrap(),
+        data_namespace(&name, second)
     );
 }
 

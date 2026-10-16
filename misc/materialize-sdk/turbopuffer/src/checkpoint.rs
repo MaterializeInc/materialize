@@ -30,7 +30,7 @@ use crate::client::{Client, Failure};
 pub(crate) const DOCUMENT_ID: &str = "checkpoint";
 
 /// The layout of the document's attributes. A reader refuses any other.
-const LAYOUT: u64 = 1;
+pub(crate) const LAYOUT: u64 = 1;
 
 /// The checkpoint document.
 #[derive(Clone, Debug, PartialEq, Eq)]
