@@ -2543,20 +2543,30 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_alter_item_rename(
         &mut self,
-        ctx: &mut ExecuteContext,
+        mut ctx: ExecuteContext,
         plan: plan::AlterItemRenamePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) {
         let op = catalog::Op::RenameItem {
             id: plan.id,
             current_full_name: plan.current_full_name,
             to_name: plan.to_name,
         };
-        match self
-            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
-            .await
-        {
-            Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
-            Err(err) => Err(err),
+        // DDL transactions accumulate validated operations for COMMIT.
+        // Only an ordinary rename owns a durable attempt and its retry turn.
+        if ctx.session().transaction().is_ddl() {
+            let result =
+                self.catalog_transact_with_ddl_transaction(&mut ctx, vec![op], |_, _| {
+                    Box::pin(async {})
+                })
+                .await;
+            ctx.retire(result.map(|()| ExecuteResponse::AlteredObject(plan.object_type)));
+        } else {
+            self.sequence_catalog_commit(
+                ctx,
+                vec![op],
+                ExecuteResponse::AlteredObject(plan.object_type),
+            )
+            .await;
         }
     }
 

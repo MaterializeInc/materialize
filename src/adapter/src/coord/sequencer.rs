@@ -505,8 +505,7 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::AlterItemRename(plan) => {
-                    let result = self.sequence_alter_item_rename(&mut ctx, plan).await;
-                    ctx.retire(result);
+                    self.sequence_alter_item_rename(ctx, plan).await;
                 }
                 Plan::AlterSchemaRename(plan) => {
                     let result = self.sequence_alter_schema_rename(&mut ctx, plan).await;
