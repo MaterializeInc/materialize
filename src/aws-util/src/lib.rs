@@ -14,6 +14,9 @@ use aws_smithy_http_client::tls::{self, rustls_provider::CryptoMode};
 use aws_smithy_runtime_api::client::dns::{DnsFuture, ResolveDns, ResolveDnsError};
 use aws_smithy_runtime_api::client::http::{HttpClient, SharedHttpClient};
 
+use crate::http_pool::PooledHttpClient;
+
+mod http_pool;
 #[cfg(feature = "s3")]
 pub mod s3;
 #[cfg(feature = "s3")]
@@ -45,6 +48,15 @@ pub fn http_client() -> impl HttpClient {
     aws_smithy_http_client::Builder::new()
         .tls_provider(tls_provider())
         .build_https()
+}
+
+/// Returns an HTTP client for use with the AWS SDK, like [`http_client`], that
+/// opens more connections to a host as requests to it pile up.
+///
+/// Use it for servers that speak HTTP/2, like GCS. Over HTTP/2, [`http_client`]
+/// sends every request to a host over one connection, which caps throughput.
+pub fn pooled_http_client() -> impl HttpClient {
+    PooledHttpClient::new(|| SharedHttpClient::new(http_client()))
 }
 
 /// Returns an AWS SDK HTTP client whose DNS resolver delegates to

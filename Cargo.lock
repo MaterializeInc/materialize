@@ -6481,6 +6481,7 @@ dependencies = [
  "bytes",
  "bytesize",
  "futures",
+ "http-body-util",
  "mz-ore",
  "pin-project",
  "thiserror 2.0.21",
