@@ -6,6 +6,9 @@
   Arguments (dict):
     page      (required) the Page to link to
     absolute  (optional) prefix the URL with scheme://host
+    atPage    (optional) the copy at <baseURL>/<path>/index.md, next to the
+              page's HTML, that ci/deploy_website/publish-markdown-at-page-urls.sh
+              makes after the Hugo passes
 
   baseURL is a bare path in the production and preview builds ("/docs",
   "/materialize/$PR"), so .Permalink cannot yield an absolute URL. An absolute
@@ -22,7 +25,7 @@
   index.md; drop it so the URL is the same from either pass.
 */ -}}
 {{- $pagePath := .page.RelPermalink | strings.TrimPrefix $basePath | strings.TrimSuffix "index.md" -}}
-{{- $url := printf "%smarkdown-docs/%sindex.md" $basePath $pagePath -}}
+{{- $url := printf "%s%s%sindex.md" $basePath (cond (.atPage | default false) "" "markdown-docs/") $pagePath -}}
 {{- if .absolute -}}
   {{- $url = printf "%s%s" (partial "site-origin.html" .) $url -}}
 {{- end -}}
