@@ -39,6 +39,8 @@ from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.util import PropagatingThread
+from materialize.workload_replay.catalog_server_cost import CatalogServerCost
 from materialize.workload_replay.config import (
     additional_system_parameter_defaults,
     cluster_replica_sizes,
@@ -50,6 +52,22 @@ from materialize.workload_replay.util import (
     print_workload_stats,
     update_captured_workloads_repo,
 )
+
+
+def _materialized(catalog_server_size: str | None = None) -> Materialized:
+    environment_extra = ["MZ_NO_BUILTIN_CONSOLE=0"]
+    if catalog_server_size:
+        environment_extra.append(
+            "MZ_BOOTSTRAP_BUILTIN_CATALOG_SERVER_CLUSTER_REPLICA_SIZE="
+            + catalog_server_size
+        )
+    return Materialized(
+        cluster_replica_size=cluster_replica_sizes,
+        ports=[6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257],
+        environment_extra=environment_extra,
+        additional_system_parameter_defaults=additional_system_parameter_defaults,
+    )
+
 
 SERVICES = [
     SshBastionHost(allow_any_key=True),
@@ -75,12 +93,7 @@ SERVICES = [
     PolarisBootstrap(),
     Polaris(),
     Mz(app_password=""),
-    Materialized(
-        cluster_replica_size=cluster_replica_sizes,
-        ports=[6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257],
-        environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
-        additional_system_parameter_defaults=additional_system_parameter_defaults,
-    ),
+    _materialized(),
     Testdrive(
         seed=1,
         no_reset=True,
@@ -388,6 +401,11 @@ def workflow_console_scalability(
     continuous ingestions and queries provide background load. The suite
     only reports timings. Suite failures do not fail the workflow, the runs
     exist to collect data for determining thresholds.
+
+    mz_catalog_server and environmentd CPU is measured for a baseline with
+    only the replay running, the suite, the k6 ramp, and with `--viewers`
+    each step of a headless viewer sweep. Results land in
+    console/test-results/catalog-server-<workload>.json.
     """
     parser.add_argument(
         "--factor-initial-data",
@@ -427,12 +445,51 @@ def workflow_console_scalability(
         help="skip workloads tagged `settings.large: true`",
     )
     parser.add_argument(
+        "--catalog-server-size",
+        choices=sorted(cluster_replica_sizes),
+        help="replica size for mz_catalog_server, default is the bootstrap size",
+    )
+    parser.add_argument(
+        "--console-bundle",
+        type=lambda value: pathlib.Path(value).resolve(),
+        help="console build to serve instead of the one bundled in the "
+        "materialized image: the dist directory of a `yarn build` with "
+        "CONSOLE_DEPLOYMENT_MODE=flexible-deployment",
+    )
+    parser.add_argument(
+        "--viewers",
+        type=lambda value: [int(n) for n in value.split(",")],
+        default=[],
+        help="comma-separated viewer counts, e.g. 10,25,50: hold that many "
+        "headless console viewers per step and fit catalog_server cost per viewer",
+    )
+    parser.add_argument(
+        "--viewer-path",
+        default="",
+        help="console path the viewers hold, default the mz_catalog_server "
+        "cluster page",
+    )
+    parser.add_argument(
+        "--cost-window",
+        type=int,
+        default=90,
+        help="seconds of each catalog_server cost window (baselines, viewer steps)",
+    )
+    parser.add_argument(
+        "--cost-settle",
+        type=int,
+        default=30,
+        help="seconds to wait before each catalog_server cost window",
+    )
+    parser.add_argument(
         "files",
         nargs="*",
         default=["*.yml"],
         help="run against the specified files",
     )
     args = parser.parse_args()
+    if args.console_bundle and not (args.console_bundle / "index.html").exists():
+        parser.error(f"--console-bundle: no index.html in {args.console_bundle}")
 
     print(f"-- Random seed is {args.seed}")
     random.seed(args.seed)
@@ -498,49 +555,70 @@ def workflow_console_scalability(
         queries_json.unlink(missing_ok=True)
 
         def run_suite() -> None:
-            print(f"+++ Running console scalability suite ({file.stem})")
+            if args.console_bundle:
+                _install_console_bundle(c, args.console_bundle)
+            cost = CatalogServerCost(c, file.stem)
             try:
-                _console_runner_sh(
-                    c,
-                    "yarn test:e2e:scalability --workers=1 --trace=off "
-                    f"--output=test-results/{file.stem}",
-                    user=_HOST_UID_GID,
-                    env={"BASE_URL": "http://materialized:6874"},
-                )
-            except Exception as e:
-                print(
-                    "Console scalability suite failed. Not failing the workflow, "
-                    f"the suite only collects timing data: {e}"
-                )
-            # k6 replays the query set that dump-queries captured above (it
-            # runs first in the suite), isolating server-side concurrency
-            # from browser behavior.
-            if queries_json.exists():
-                print(f"+++ Running console k6 load test ({file.stem})")
-                try:
-                    c.run(
-                        "console-k6",
-                        "run",
-                        "--summary-export=summary.json",
-                        "cluster-detail.ts",
-                        rm=True,
-                        env_extra={"MZ_HTTP_URL": "http://materialized:6876"},
-                    )
-                except Exception as e:
+                time.sleep(args.cost_settle)
+                cost.window("baseline", args.cost_window)
+
+                print(f"+++ Running console scalability suite ({file.stem})")
+                with cost.phase("playwright"):
+                    try:
+                        _console_runner_sh(
+                            c,
+                            "yarn test:e2e:scalability --workers=1 --trace=off "
+                            f"--output=test-results/{file.stem}",
+                            user=_HOST_UID_GID,
+                            env={"BASE_URL": "http://materialized:6874"},
+                        )
+                    except Exception as e:
+                        print(
+                            "Console scalability suite failed. Not failing the "
+                            f"workflow, the suite only collects timing data: {e}"
+                        )
+                # k6 replays the query set that dump-queries captured above (it
+                # runs first in the suite), isolating server-side concurrency
+                # from browser behavior.
+                if queries_json.exists():
+                    print(f"+++ Running console k6 load test ({file.stem})")
+                    with cost.phase("k6"):
+                        try:
+                            c.run(
+                                "console-k6",
+                                "run",
+                                "--summary-export=summary.json",
+                                "cluster-detail.ts",
+                                rm=True,
+                                env_extra={"MZ_HTTP_URL": "http://materialized:6876"},
+                            )
+                        except Exception as e:
+                            print(
+                                "Console k6 load test failed. Not failing the "
+                                f"workflow, it only collects timing data: {e}"
+                            )
+                else:
                     print(
-                        "Console k6 load test failed. Not failing the workflow, "
-                        f"it only collects timing data: {e}"
+                        "dump-queries produced no queries.json, skipping the k6 "
+                        "load test"
                     )
-            else:
-                print(
-                    "dump-queries produced no queries.json, skipping the k6 load test"
+                # Keep per-workload copies, the next workload overwrites the
+                # originals.
+                for name in ("queries", "summary"):
+                    src = k6_dir / f"{name}.json"
+                    if src.exists():
+                        src.rename(k6_dir / f"{name}-{file.stem}.json")
+
+                if args.viewers:
+                    _measure_viewers(c, cost, file.stem, args)
+            finally:
+                cost.report(
+                    MZ_ROOT
+                    / "console"
+                    / "test-results"
+                    / f"catalog-server-{file.stem}.json"
                 )
-            # Keep per-workload copies, the next workload overwrites the
-            # originals.
-            for name in ("queries", "summary"):
-                src = k6_dir / f"{name}.json"
-                if src.exists():
-                    src.rename(k6_dir / f"{name}-{file.stem}.json")
+                cost.close()
 
         try:
             test(
@@ -569,7 +647,89 @@ def workflow_console_scalability(
             except Exception:
                 pass
 
-    c.test_parts(files, run)
+    with c.override(_materialized(args.catalog_server_size)):
+        c.test_parts(files, run)
+
+
+def _install_console_bundle(c: Composition, bundle: pathlib.Path) -> None:
+    """Serve `bundle` in place of the console bundled in the materialized
+    image, which measures a console change without rebuilding materialized."""
+    print(f"-- Serving the console from {bundle}")
+    # The bundled console is owned by root, the container runs as materialize.
+    c.invoke(
+        "exec",
+        "--user",
+        "root",
+        "-T",
+        "materialized",
+        "sh",
+        "-c",
+        "rm -rf /usr/share/nginx/html/*",
+    )
+    c.invoke("cp", f"{bundle}/.", "materialized:/usr/share/nginx/html/")
+
+
+def _measure_viewers(
+    c: Composition, cost: CatalogServerCost, stem: str, args: argparse.Namespace
+) -> None:
+    """Hold each count in `args.viewers` of headless console viewers and
+    measure catalog_server while they are open.
+
+    The viewers spec talks to this function through files in the bind-mounted
+    checkout: it creates the ready file once every viewer has loaded its page,
+    and closes the viewers when the stop file appears.
+    """
+    control = f"test-results/viewers-{stem}"
+    host_control = MZ_ROOT / "console" / control
+    host_control.mkdir(parents=True, exist_ok=True)
+    ready, stop = host_control / "ready", host_control / "stop"
+
+    def hold(viewers: int) -> None:
+        env = {
+            "BASE_URL": "http://materialized:6874",
+            "VIEWERS": str(viewers),
+            "VIEWERS_READY_FILE": f"{control}/ready",
+            "VIEWERS_STOP_FILE": f"{control}/stop",
+        }
+        if args.viewer_path:
+            env["VIEWER_URL"] = "http://materialized:6874" + args.viewer_path
+        try:
+            # A separate output directory, since Playwright empties its
+            # output directory on start and the control files live above it.
+            _console_runner_sh(
+                c,
+                "yarn test:e2e:scalability viewers.spec.ts --workers=1 "
+                f"--trace=off --output={control}/playwright-{viewers}",
+                user=_HOST_UID_GID,
+                env=env,
+            )
+        except Exception as e:
+            print(f"Console viewers failed, no reading for {viewers} viewers: {e}")
+
+    time.sleep(args.cost_settle)
+    cost.window("baseline-before-viewers", args.cost_window)
+    baseline_subscriptions = cost.subscriptions()
+    for viewers in args.viewers:
+        ready.unlink(missing_ok=True)
+        stop.unlink(missing_ok=True)
+        print(f"+++ Holding {viewers} console viewers ({stem})")
+        thread = PropagatingThread(target=hold, args=(viewers,))
+        thread.start()
+        while not ready.exists() and thread.is_alive():
+            time.sleep(1)
+        if ready.exists():
+            time.sleep(args.cost_settle)
+            cost.window(f"viewers-{viewers}", args.cost_window, viewers=viewers)
+        stop.touch()
+        thread.join()
+        # Let the closed viewers' subscribes drain so the next step starts
+        # from the baseline.
+        deadline = time.time() + 60
+        while cost.subscriptions() > baseline_subscriptions and time.time() < deadline:
+            time.sleep(2)
+    time.sleep(args.cost_settle)
+    cost.window("baseline-after-viewers", args.cost_window)
+    cost.fit_viewers(["baseline-before-viewers", "baseline-after-viewers"])
 
 
 def _console_runner_sh(
