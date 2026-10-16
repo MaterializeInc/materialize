@@ -378,8 +378,8 @@ pub(crate) struct McpRequest {
     method: McpMethod,
 }
 
-/// Reads a present `id` as `Some`, `null` included. JSON-RPC makes only a
-/// missing `id` a notification, and `Option` alone would read `null` as `None`.
+/// Wraps a `null` id in `Some`, so it stays a request. A missing `id` is `None`
+/// through `#[serde(default)]` on the field, and only that is a notification.
 fn present_id<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -1176,18 +1176,10 @@ fn answer_parse_failure(
                     McpRequestError::InvalidParams(message),
                 ),
                 (true, Err(err)) => (StatusCode::BAD_REQUEST, err),
-                // Of the methods whose params can fail to parse, 2026-07-28
-                // keeps these two and drops `initialize`.
-                (true, Ok(()))
-                    if !raw
-                        .method()
-                        .is_some_and(|name| matches!(name, "tools/list" | "tools/call")) =>
-                {
-                    (
-                        StatusCode::NOT_FOUND,
-                        McpRequestError::MethodNotFound("unknown method".to_string()),
-                    )
-                }
+                (true, Ok(())) if raw.method() == Some("initialize") => (
+                    StatusCode::NOT_FOUND,
+                    McpRequestError::MethodNotFound("unknown method".to_string()),
+                ),
                 (true, Ok(())) => (StatusCode::OK, McpRequestError::InvalidParams(message)),
             }
         }
@@ -1293,7 +1285,7 @@ async fn handle_mcp_method(
             .await
         }
         // Dual-era clients probe with `server/discover` and fall back to
-        // `initialize` when 2025-11-25 answers it with -32601.
+        // `initialize` when 2025-11-25 answers it with a not found error.
         McpMethod::ServerDiscover(_) if protocol.is_modern() => {
             debug!(endpoint = %endpoint_type, "Processing server/discover");
             handle_discover(
