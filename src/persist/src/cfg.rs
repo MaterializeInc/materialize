@@ -29,7 +29,7 @@ use crate::location::{Blob, Consensus, Determinate, ExternalError};
 use crate::mem::{MemBlob, MemBlobConfig, MemConsensus};
 use crate::metrics::S3BlobMetrics;
 use crate::postgres::{PostgresConsensus, PostgresConsensusConfig};
-use crate::s3::{S3Blob, S3BlobConfig};
+use crate::s3::{BlobHttpPool, S3Blob, S3BlobConfig};
 
 /// Adds the full set of all mz_persist `Config`s.
 pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
@@ -40,6 +40,7 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::hedge::BLOB_HEDGED_GET_MAX_CONCURRENT)
         .add(&crate::hedge::BLOB_HEDGED_GET_BUDGET_RATIO)
         .add(&crate::hedge::BLOB_HEDGED_GET_WARM_INTERVAL)
+        .add(&crate::s3::BLOB_HTTP_POOL)
 }
 
 /// Opens the sibling handle that [crate::hedge::HedgedBlob] runs hedge
@@ -128,6 +129,10 @@ pub trait BlobKnobs: std::fmt::Debug + Send + Sync {
     fn read_timeout(&self) -> Duration;
     /// Whether this is running in a "cc" sized cluster.
     fn is_cc_active(&self) -> bool;
+    /// Which S3 endpoints send requests through a pool of HTTP clients.
+    fn http_pool(&self) -> BlobHttpPool {
+        BlobHttpPool::default()
+    }
 }
 
 impl BlobConfig {
