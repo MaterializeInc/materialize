@@ -39,10 +39,11 @@
 //! a changed text are embedded again, with all their texts. A snapshot
 //! embeds every text it writes.
 //!
-//! A write sent again after a timeout skips the requests turbopuffer already
-//! acknowledged, but each timeout still uses up an attempt, so raise
-//! [`materialize_sdk::DurableOptions::write_timeout`] for batches that take
-//! longer than a minute to write. A commit sends up to three requests, so
+//! A write that has sent requests for 20 seconds stops and returns throttling,
+//! and the SDK sends it again after a second, which skips the requests
+//! turbopuffer already acknowledged. So a batch of any size makes progress, as
+//! long as [`materialize_sdk::DurableOptions::write_timeout`] stays above 20
+//! seconds and one request. A commit sends up to three requests, so
 //! keep [`materialize_sdk::DurableOptions::store_timeout`] above three times
 //! [`Connection::with_request_timeout`], or a slow commit counts as unknown
 //! and is settled by reading the checkpoint back.
