@@ -61,29 +61,29 @@ tables they depend on.
 
 ## Step 2. Update existing sources
 
-The `TIMESTAMP INTERVAL` option of [`CREATE SOURCE`](/sql/create-source/) and
-[`ALTER SOURCE`](/sql/alter-source/) must fall between `min_timestamp_interval`
-and `max_timestamp_interval`. Both default to `1s`, so first lower the minimum:
+For each existing source, reset its interval to the new system default:
+
+```mzsql
+ALTER SOURCE my_source RESET (TIMESTAMP INTERVAL);
+```
+
+Run `ALTER SOURCE` on the source itself, not on its subsources.
+
+To give a source its own interval instead, set the `TIMESTAMP INTERVAL` option
+of [`CREATE SOURCE`](/sql/create-source/) or [`ALTER SOURCE`](/sql/alter-source/).
+An explicit value must fall between `min_timestamp_interval` and
+`max_timestamp_interval`, which both default to `1s`, so first lower the
+minimum:
 
 ```mzsql
 ALTER SYSTEM SET min_timestamp_interval = '250ms';
+ALTER SOURCE my_source SET (TIMESTAMP INTERVAL = '250ms');
 ```
 
-Otherwise, setting a smaller interval on a source fails with an error like:
+Otherwise, the statement fails with an error like:
 
 ```nofmt
 ERROR:  invalid timestamp interval of 250ms, must be in the range [1000ms, 1000ms]
-```
-
-Then, for each existing source, either reset the interval to the new system
-default or set it explicitly:
-
-```mzsql
--- Use the current value of default_timestamp_interval
-ALTER SOURCE my_source RESET (TIMESTAMP INTERVAL);
-
--- Or set an interval for this source only
-ALTER SOURCE my_source SET (TIMESTAMP INTERVAL = '250ms');
 ```
 
 ## Step 3. Verify freshness with SUBSCRIBE
@@ -117,14 +117,18 @@ import psycopg
 
 conn = psycopg.connect("<connection string>", autocommit=True)
 frontiers, delays = [], []
+started = False
 deadline = time.time() + 10
 query = "COPY (SUBSCRIBE (SELECT count(*) FROM my_mv) WITH (PROGRESS, SNAPSHOT = false)) TO STDOUT"
 with conn.cursor().copy(query) as copy:
     for mz_timestamp, mz_progressed, *_ in copy.rows():
         now_ms = time.time() * 1000
         if mz_progressed == "t":
-            frontiers.append(int(mz_timestamp))
-            delays.append(now_ms - int(mz_timestamp))
+            # The first progress row is the subscription's starting frontier, not a tick.
+            if started:
+                frontiers.append(int(mz_timestamp))
+                delays.append(now_ms - int(mz_timestamp))
+            started = True
         if time.time() > deadline:
             break
 
@@ -139,8 +143,8 @@ following:
 
 ```nofmt
 tick interval: 250 ms
-delay at receipt: p50 9 ms, max 66 ms
-worst-case freshness: 317 ms
+delay at receipt: p50 13 ms, max 27 ms
+worst-case freshness: 352 ms
 ```
 
 If the tick interval doesn't match the value you set, check the source's
