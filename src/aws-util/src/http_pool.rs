@@ -193,6 +193,95 @@ impl HttpConnector for PooledConnector {
     }
 }
 
+/// Sends each request through `pooled` or `plain`, as `use_pool` says when the
+/// request is sent.
+#[derive(Debug)]
+pub(crate) struct SwitchedHttpClient {
+    plain: SharedHttpClient,
+    pooled: SharedHttpClient,
+    use_pool: UsePool,
+}
+
+impl SwitchedHttpClient {
+    pub(crate) fn new(
+        plain: SharedHttpClient,
+        pooled: SharedHttpClient,
+        use_pool: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Self {
+        SwitchedHttpClient {
+            plain,
+            pooled,
+            use_pool: UsePool(Arc::new(use_pool)),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct UsePool(Arc<dyn Fn() -> bool + Send + Sync>);
+
+impl std::fmt::Debug for UsePool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("UsePool")
+    }
+}
+
+impl HttpClient for SwitchedHttpClient {
+    fn http_connector(
+        &self,
+        settings: &HttpConnectorSettings,
+        components: &RuntimeComponents,
+    ) -> SharedHttpConnector {
+        SharedHttpConnector::new(SwitchedConnector {
+            plain: self.plain.http_connector(settings, components),
+            pooled: self.pooled.http_connector(settings, components),
+            use_pool: self.use_pool.clone(),
+        })
+    }
+
+    fn validate_base_client_config(
+        &self,
+        runtime_components: &RuntimeComponentsBuilder,
+        cfg: &ConfigBag,
+    ) -> Result<(), BoxError> {
+        self.plain
+            .validate_base_client_config(runtime_components, cfg)?;
+        self.pooled
+            .validate_base_client_config(runtime_components, cfg)
+    }
+
+    fn validate_final_config(
+        &self,
+        runtime_components: &RuntimeComponents,
+        cfg: &ConfigBag,
+    ) -> Result<(), BoxError> {
+        self.plain.validate_final_config(runtime_components, cfg)?;
+        self.pooled.validate_final_config(runtime_components, cfg)
+    }
+
+    fn connector_metadata(&self) -> Option<ConnectorMetadata> {
+        self.plain.connector_metadata()
+    }
+}
+
+/// Asks `use_pool` per request, so a change applies however long the SDK keeps
+/// a connector.
+#[derive(Debug)]
+struct SwitchedConnector {
+    plain: SharedHttpConnector,
+    pooled: SharedHttpConnector,
+    use_pool: UsePool,
+}
+
+impl HttpConnector for SwitchedConnector {
+    fn call(&self, request: HttpRequest) -> HttpConnectorFuture {
+        if (self.use_pool.0)() {
+            self.pooled.call(request)
+        } else {
+            self.plain.call(request)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use aws_smithy_runtime_api::client::orchestrator::HttpResponse;
@@ -317,6 +406,36 @@ mod tests {
         let bytes = body.collect().await.expect("fake body").to_bytes();
         assert_eq!(bytes, "hello");
         assert_eq!(total_in_flight(&pool), 0);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn switch_applies_to_existing_connector() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let use_pool = Arc::new(AtomicBool::new(false));
+        let client = SwitchedHttpClient::new(
+            SharedHttpClient::new(FakeClient { fail: true }),
+            SharedHttpClient::new(FakeClient { fail: false }),
+            {
+                let use_pool = Arc::clone(&use_pool);
+                move || use_pool.load(Ordering::Relaxed)
+            },
+        );
+        let connector = client.http_connector(
+            &HttpConnectorSettings::builder().build(),
+            &RuntimeComponentsBuilder::for_tests()
+                .build()
+                .expect("valid components"),
+        );
+        connector
+            .call(HttpRequest::empty())
+            .await
+            .expect_err("plain client");
+        use_pool.store(true, Ordering::Relaxed);
+        connector
+            .call(HttpRequest::empty())
+            .await
+            .expect("pooled client");
     }
 
     #[mz_ore::test(tokio::test)]

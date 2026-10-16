@@ -28,6 +28,7 @@ use mz_ore::instrument;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::BlobKnobs;
 use mz_persist::retry::Retry;
+use mz_persist::s3::BlobHttpPool;
 use mz_postgres_client::PostgresClientKnobs;
 use proptest_derive::Arbitrary;
 use semver::Version;
@@ -850,6 +851,10 @@ impl BlobKnobs for PersistConfig {
 
     fn is_cc_active(&self) -> bool {
         self.is_cc_active
+    }
+
+    fn http_pool(&self) -> BlobHttpPool {
+        BlobHttpPool::get(self)
     }
 }
 
