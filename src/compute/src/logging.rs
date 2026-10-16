@@ -33,7 +33,6 @@ use ::timely::dataflow::operators::{Capability, CapabilityTrait, InputCapability
 use ::timely::progress::Timestamp as TimelyTimestamp;
 use ::timely::scheduling::Activator;
 use ::timely::{Container, ContainerBuilder};
-use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::trace::Batcher;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_expr::{MirScalarExpr, permutation_for_arrangement};
@@ -56,10 +55,6 @@ pub(super) type OutputSession<'a, 'b, CB> =
 /// An output session for vector-based containers of updates `D`, using a capacity container builder.
 pub(super) type OutputSessionVec<'a, 'b, D> =
     OutputSession<'a, 'b, CapacityContainerBuilder<Vec<D>>>;
-/// An output session for vector-based containers of updates `D`, using a consolidating container
-/// builder.
-pub(super) type OutputSessionConsolidating<'a, 'b, D> =
-    OutputSession<'a, 'b, ConsolidatingContainerBuilder<Vec<D>>>;
 /// An output session for columnar containers of updates `D`, using a column builder.
 pub(super) type OutputSessionColumnar<'a, 'b, D> = OutputSession<'a, 'b, ColumnBuilder<D>>;
 
