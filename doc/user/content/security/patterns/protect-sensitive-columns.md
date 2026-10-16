@@ -186,7 +186,9 @@ ERROR:  Evaluation error: invalid input syntax for type bigint: invalid digit fo
 To reduce this risk, guard expressions on sensitive columns that can fail. For
 example,
 `CASE WHEN ssn ~ '^\d{3}-\d{2}-\d{4}$' THEN replace(ssn, '-', '')::bigint END`
-returns `NULL` for a malformed value instead of an error.
+returns `NULL` for a malformed value instead of an error. Or do the cast with
+[`TRY_CAST`](/sql/functions/cast/#try_cast), which returns `NULL` instead of an
+error: `TRY_CAST(replace(ssn, '-', '') AS bigint)`.
 
 Source errors, such as decoding errors, cannot be guarded this way.
 
