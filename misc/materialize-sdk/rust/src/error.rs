@@ -17,7 +17,12 @@
 
 use std::time::Duration;
 
-use materialize_sdk_core::{Classification, ProtocolError, TimestampTooLarge, UsageError};
+use materialize_sdk_core::{
+    CheckpointError, Classification, CommitConflict, IdentityChange, ProtocolError,
+    TimestampTooLarge, UsageError,
+};
+
+use crate::sink::SinkError;
 
 /// Why a subscription failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -61,4 +66,26 @@ pub enum Error {
     /// The task that fetches from the cursor ended without reporting why.
     #[error("the subscription task ended unexpectedly")]
     TaskEnded,
+    /// A checkpoint write lost to another write, such as a newer worker's
+    /// take-over, which fences this one, or had a wrong range.
+    #[error(transparent)]
+    Conflict(#[from] CommitConflict),
+    /// A checkpoint could not be read or built.
+    #[error(transparent)]
+    Checkpoint(#[from] CheckpointError),
+    /// The sink failed, on every attempt if the failure is not permanent.
+    #[error("the sink failed: {0}")]
+    Sink(SinkError),
+    /// The sink has no checkpoint, because it was never set up.
+    #[error("sink {sink_id:?} has no checkpoint, so run its setup first")]
+    NotSetUp {
+        /// The sink id.
+        sink_id: String,
+    },
+    /// The subscribed object changed in a way that needs an operator.
+    #[error("the subscribed object changed: {change:?}")]
+    ObjectChanged {
+        /// How it changed.
+        change: IdentityChange,
+    },
 }

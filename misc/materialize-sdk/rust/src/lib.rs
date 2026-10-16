@@ -59,18 +59,20 @@
 // standalone SDK cannot depend on.
 #![allow(clippy::disallowed_methods)]
 
+mod durable;
 mod error;
 mod live;
 mod sink;
 mod store;
 
+pub use durable::{DurableOptions, DurableSink, NoStore};
 pub use error::Error;
 pub use live::{LiveOptions, LiveSubscription};
 pub use materialize_sdk_core::catalog::ObjectName;
 pub use materialize_sdk_core::{
-    self as core, Batch, Change, CheckpointWrite, Classification, ErrorKind, Event, Frontier,
-    ObjectRef, ProtocolError, Row, SinkType, Subscribe, Target, TimestampTooLarge, Update,
-    UsageError, WriteKind,
+    self as core, Batch, Change, CheckpointError, CheckpointWrite, Classification, CommitConflict,
+    Envelope, ErrorKind, Event, Frontier, IdentityChange, ObjectRef, ProtocolError, Row, SinkType,
+    Subscribe, Target, TimestampTooLarge, Update, UsageError, WriteKind,
 };
 pub use sink::{Rejected, Sink, SinkBatch, SinkError, WriteResult};
 pub use store::{CheckpointStore, MaterializeStore, checkpoint_table_sql};

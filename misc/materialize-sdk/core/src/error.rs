@@ -52,7 +52,9 @@ pub struct TimestampTooLarge {
 pub struct UsageError(String);
 
 impl UsageError {
-    pub(crate) fn new(message: impl Into<String>) -> UsageError {
+    /// A usage error with `message`, also for a language package's own setup
+    /// checks.
+    pub fn new(message: impl Into<String>) -> UsageError {
         UsageError(message.into())
     }
 }
