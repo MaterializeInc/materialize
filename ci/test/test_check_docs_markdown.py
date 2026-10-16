@@ -82,6 +82,54 @@ class MarkdownLinkGateTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout)
 
+    def test_balanced_fences_pass_and_hide_their_content(self) -> None:
+        content = (
+            "```mzsql\n[Code](/sql/create-cluster/)\n```\n"
+            "- ```\n  {{< tabs >}}\n  ```\n"
+            "> ~~~~\n> ```\n> ~~~~\n"
+            "````markdown\n```mzsql\n```\n````\n"
+        )
+        result = self.check(content)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("Unbalanced or glued code fences: 0", result.stdout)
+
+    def test_fence_opener_after_text_fails_link_gate(self) -> None:
+        content = (
+            "1. Create a connection:   ```mzsql\n"
+            "   CREATE CONNECTION c TO SSH TUNNEL (HOST 'h');\n"
+            "   ```\n"
+            "[Relative](/sql/create-cluster/)\n"
+        )
+        result = self.check(content, "--fail-on-links")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Unbalanced or glued code fences: 1", result.stdout)
+        self.assertIn("index.md:1: fence opener after text", result.stdout)
+        # The closing fence still closes, so the prose after it is checked.
+        self.assertIn("Relative links: 1 root-relative", result.stdout)
+
+    def test_glued_fences_fail_link_gate(self) -> None:
+        content = "```mzsql\nSELECT 1;\n``````nofmt\n 1\n```\n{{< tabs >}}\n"
+        result = self.check(content, "--fail-on-links")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("index.md:3: fences glued together", result.stdout)
+        self.assertIn("Unbalanced or glued code fences: 1", result.stdout)
+        self.assertIn("Pages with unrendered shortcode syntax: 1", result.stdout)
+
+    def test_text_after_closing_fence_fails_link_gate(self) -> None:
+        content = "```mzsql\nSHOW TABLES;\n```The results include {{< tabs >}}\n"
+        result = self.check(content, "--fail-on-links")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("index.md:3: text after a closing fence", result.stdout)
+        self.assertIn("Pages with unrendered shortcode syntax: 1", result.stdout)
+
+    def test_fence_open_at_end_of_page_fails_link_gate(self) -> None:
+        content = "# Example\n\n```shell\nmz-debug --version\n"
+        result = self.check(content, "--fail-on-links")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "index.md:3: fence still open at the end of the page", result.stdout
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
