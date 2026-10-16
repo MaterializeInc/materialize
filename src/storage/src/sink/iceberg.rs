@@ -2372,6 +2372,8 @@ mod tests {
     /// child of a struct is numbered before any nested field, then each child's
     /// subtree is visited. The sink numbers depth-first, so for any nested type
     /// the two differ while names, types and nullability stay the same.
+    #[allow(clippy::disallowed_methods)]
+    #[allow(clippy::match_wildcard_for_single_variants)]
     fn with_catalog_field_ids(schema: &Schema) -> Schema {
         fn renumber_fields(fields: &[Arc<NestedField>], next: &mut i32) -> Vec<Arc<NestedField>> {
             let ids: Vec<i32> = fields
