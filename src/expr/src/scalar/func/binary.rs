@@ -140,6 +140,23 @@ pub(crate) trait EagerBinaryFunc {
     }
 }
 
+/// Evaluates the arguments of a binary function one at a time, in order.
+struct EvalArgs<'a, 'd, E> {
+    exprs: std::array::IntoIter<&'a E, 2>,
+    datums: &'d [Datum<'a>],
+    temp_storage: &'a RowArena,
+}
+
+impl<'a, 'd, E: Eval> Iterator for EvalArgs<'a, 'd, E> {
+    type Item = Result<Datum<'a>, EvalError>;
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.exprs
+            .next()
+            .map(|expr| expr.eval(self.datums, self.temp_storage))
+    }
+}
+
 impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
     fn eval<'a>(
         &'a self,
@@ -154,13 +171,15 @@ impl<T: EagerBinaryFunc> LazyBinaryFunc for T {
         };
         // `try_from_iter` is generic over the iterator, so a closure over `exprs` gives
         // it a fresh type per function and per `Eval` implementor, and the unwrapping is
-        // emitted once for each. Passing the arguments through an array keeps the
-        // iterator type the same everywhere, so it is emitted once per input type.
-        let mut datums = [
-            expr_a.eval(datums, temp_storage),
-            expr_b.eval(datums, temp_storage),
-        ]
-        .into_iter();
+        // emitted once for each. A named iterator type is shared by all functions, so it
+        // is emitted once per input type and `Eval` implementor. Evaluating both
+        // arguments into an array first has the same instantiation count but measured
+        // about 12% slower on `case_literal/if_chain`.
+        let mut datums = EvalArgs {
+            exprs: [*expr_a, *expr_b].into_iter(),
+            datums,
+            temp_storage,
+        };
         let input = match T::Input::try_from_iter(&mut datums) {
             // If we can convert to the input type then we call the function
             Ok(input) => input,
