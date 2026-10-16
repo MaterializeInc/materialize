@@ -32,6 +32,7 @@ ARCH=$(uname -m)
 sudo echo "Preparing to extract mz-debug..."
 curl -L "https://binaries.materialize.com/mz-debug-latest-$ARCH-unknown-linux-gnu.tar.gz" \
 | sudo tar -xzC /usr/local --strip-components=1
+```
 {{</ tab >}}
 {{</ tabs >}}
 

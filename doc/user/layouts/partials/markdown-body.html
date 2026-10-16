@@ -17,6 +17,9 @@
   bin/gen-claude-skill bundle has base path "/", and its links stay as written,
   because there they name directories under the bundle root.
 
+  The link rewrite does not skip fenced code, so ci/test/check-docs-markdown.py
+  fails on a link inside fenced code instead.
+
   Arguments (dict):
     page  (required) the Page whose body to render
 
