@@ -14,6 +14,9 @@
 {{ end }}
 
 <title>{{ $title }}</title>
+{{ if partial "has-markdown.html" . }}
+<link rel="alternate" type="text/markdown" href="{{ partial "markdown-url.html" (dict "page" .) }}" />
+{{ end }}
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="true" />
 <link

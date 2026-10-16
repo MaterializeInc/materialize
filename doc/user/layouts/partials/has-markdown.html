@@ -1,0 +1,9 @@
+{{- /*
+  Returns whether a page has a Markdown rendition on the website. The 404 page
+  has none, and self-managed-docs/* branches build the HTML alone (see
+  ci/deploy_website/website.sh).
+
+  Usage:
+    {{ if partial "has-markdown.html" . }}...{{ end }}
+*/ -}}
+{{- return and (ne .Kind "404") (not (in (urls.Parse site.BaseURL).Path "self-managed")) -}}

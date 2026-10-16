@@ -1,0 +1,19 @@
+{{- /*
+  Returns the URL of an llms.txt index that layouts/index.llmstxt.txt renders:
+  the root index at the root of the docs, or one section's index.
+
+  Arguments (dict):
+    section   (optional) the directory of a section index, such as "sql"
+    absolute  (optional) prefix the URL with scheme://host
+
+  Usage:
+    {{ partial "llms-txt-url.html" (dict) }}
+    {{ partial "llms-txt-url.html" (dict "section" "sql" "absolute" true) }}
+*/ -}}
+{{- $dir := "" -}}
+{{- with .section -}}{{- $dir = printf "/%s" . -}}{{- end -}}
+{{- $url := printf "%s%s/llms.txt" (strings.TrimSuffix "/" (urls.Parse site.BaseURL).Path) $dir -}}
+{{- if .absolute -}}
+  {{- $url = printf "%s%s" (partial "site-origin.html" .) $url -}}
+{{- end -}}
+{{- return $url -}}

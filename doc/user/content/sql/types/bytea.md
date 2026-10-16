@@ -1,6 +1,6 @@
 ---
 title: "bytea type"
-description: "Expresses a Unicode string"
+description: "Expresses a binary string"
 aliases:
     - /sql/types/string
     - /sql/types/varchar

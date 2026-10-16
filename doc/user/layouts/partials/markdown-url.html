@@ -8,10 +8,8 @@
     absolute  (optional) prefix the URL with scheme://host
 
   baseURL is a bare path in the production and preview builds ("/docs",
-  "/materialize/$PR"), so .Permalink cannot yield an absolute URL. When baseURL
-  carries no host of its own, fall back to params.canonicalHost, except under
-  `hugo --environment preview`, where the artifacts serve from
-  preview.materialize.com.
+  "/materialize/$PR"), so .Permalink cannot yield an absolute URL. An absolute
+  URL takes its scheme and host from the site-origin partial.
 
   Usage:
     {{ partial "markdown-url.html" (dict "page" .) }}
@@ -19,16 +17,13 @@
 */ -}}
 {{- $basePath := (urls.Parse site.BaseURL).Path -}}
 {{- if not (strings.HasSuffix $basePath "/") -}}{{- $basePath = printf "%s/" $basePath -}}{{- end -}}
-{{- $pagePath := .page.RelPermalink | strings.TrimPrefix $basePath -}}
+{{- /*
+  In the Markdown pass, RelPermalink already ends in the skill format's
+  index.md; drop it so the URL is the same from either pass.
+*/ -}}
+{{- $pagePath := .page.RelPermalink | strings.TrimPrefix $basePath | strings.TrimSuffix "index.md" -}}
 {{- $url := printf "%smarkdown-docs/%sindex.md" $basePath $pagePath -}}
 {{- if .absolute -}}
-  {{- $parsed := urls.Parse site.BaseURL -}}
-  {{- $origin := site.Params.canonicalHost -}}
-  {{- if $parsed.Host -}}
-    {{- $origin = printf "%s://%s" $parsed.Scheme $parsed.Host -}}
-  {{- else if eq hugo.Environment "preview" -}}
-    {{- $origin = "https://preview.materialize.com" -}}
-  {{- end -}}
-  {{- $url = printf "%s%s" $origin $url -}}
+  {{- $url = printf "%s%s" (partial "site-origin.html" .) $url -}}
 {{- end -}}
 {{- return $url -}}

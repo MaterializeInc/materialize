@@ -15,9 +15,15 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-git clean -ffdX ci/www/public
+git clean -ffdX ci/www/public ci/www/preview
 try hugo --gc --baseURL https://ci.materialize.com/docs --source doc/user --destination ../../ci/www/public/docs
 try hugo --gc --baseURL https://ci.materialize.com/docs --source doc/user --config config.toml,config.skill.toml --disableKinds 404,sitemap,robotsTXT,taxonomy --destination ../../ci/www/public/docs/markdown-docs
+try python3 ci/test/test_check_docs_markdown.py
+try python3 ci/test/check-docs-markdown.py ci/www/public/docs/markdown-docs https://ci.materialize.com/docs/markdown-docs/ --fail-on-links
+# A base path other than /docs, like a preview's, catches link rewrites that
+# confuse the base path with the production /docs/ prefix.
+try hugo --gc --baseURL https://ci.materialize.com/materialize/lint --source doc/user --config config.toml,config.skill.toml --disableKinds 404,sitemap,robotsTXT,taxonomy --destination ../../ci/www/preview/markdown-docs
+try python3 ci/test/check-docs-markdown.py ci/www/preview/markdown-docs https://ci.materialize.com/materialize/lint/markdown-docs/ --fail-on-links
 echo "<!doctype html>" > ci/www/public/index.html
 try htmltest -s ci/www/public -c doc/user/.htmltest.yml
 try ci/test/lint-docs-catalog.sh
