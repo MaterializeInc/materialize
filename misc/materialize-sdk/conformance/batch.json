@@ -1,0 +1,300 @@
+{
+  "function": "batch",
+  "cases": [
+    {
+      "name": "the AS OF releases nothing, and the snapshot is released when its timestamp closes",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "progress", "frontier": "11"},
+          {"message": "update", "timestamp": "12", "op": "diff", "row": ["b"], "diff": "1"},
+          {"message": "progress", "frontier": "13"}
+        ]
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": null,
+              "upper": "11",
+              "snapshot": true,
+              "updates": [{"timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"}]
+            }
+          ],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": "11",
+              "upper": "13",
+              "snapshot": false,
+              "updates": [{"timestamp": "12", "op": "diff", "row": ["b"], "diff": "1"}]
+            }
+          ]
+        ],
+        "finished": false
+      }
+    },
+    {
+      "name": "a snapshot at a requested AS OF",
+      "input": {
+        "start": {"kind": "snapshot", "as_of": "10"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "progress", "frontier": "11"}
+        ]
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": null,
+              "upper": "11",
+              "snapshot": true,
+              "updates": [{"timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"}]
+            }
+          ]
+        ],
+        "finished": false
+      }
+    },
+    {
+      "name": "a snapshot at another AS OF is refused, and every later step too",
+      "input": {
+        "start": {"kind": "snapshot", "as_of": "10"},
+        "steps": [{"message": "progress", "frontier": "11"}, {"message": "progress", "frontier": "12"}]
+      },
+      "expect": {"outputs": [{"error": "protocol"}, {"error": "protocol"}], "finished": false}
+    },
+    {
+      "name": "a resume starts at F - 1 and continues from F",
+      "input": {
+        "start": {"kind": "resume", "frontier": "10"},
+        "steps": [
+          {"message": "progress", "frontier": "9"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "progress", "frontier": "11"}
+        ]
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": "10",
+              "upper": "11",
+              "snapshot": false,
+              "updates": [{"timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"}]
+            }
+          ]
+        ],
+        "finished": false
+      }
+    },
+    {
+      "name": "a resume that starts at F would skip updates at F",
+      "input": {"start": {"kind": "resume", "frontier": "10"}, "steps": [{"message": "progress", "frontier": "10"}]},
+      "expect": {"outputs": [{"error": "protocol"}], "finished": false}
+    },
+    {
+      "name": "a resume that starts below F - 1 would repeat updates",
+      "input": {"start": {"kind": "resume", "frontier": "10"}, "steps": [{"message": "progress", "frontier": "8"}]},
+      "expect": {"outputs": [{"error": "protocol"}], "finished": false}
+    },
+    {
+      "name": "an update below the resume frontier is a duplicate",
+      "input": {
+        "start": {"kind": "resume", "frontier": "10"},
+        "steps": [
+          {"message": "progress", "frontier": "9"},
+          {"message": "update", "timestamp": "9", "op": "diff", "row": ["a"], "diff": "1"}
+        ]
+      },
+      "expect": {"outputs": [[], {"error": "protocol"}], "finished": false}
+    },
+    {
+      "name": "an advance without updates is an empty batch, and a repeated frontier is nothing",
+      "input": {
+        "start": {"kind": "resume", "frontier": "10"},
+        "steps": [
+          {"message": "progress", "frontier": "9"},
+          {"message": "progress", "frontier": "20"},
+          {"message": "progress", "frontier": "20"}
+        ]
+      },
+      "expect": {
+        "outputs": [[], [{"event": "batch", "lower": "10", "upper": "20", "snapshot": false, "updates": []}], []],
+        "finished": false
+      }
+    },
+    {
+      "name": "updates stay pending until a progress row passes them",
+      "input": {
+        "start": {"kind": "resume", "frontier": "10"},
+        "steps": [
+          {"message": "progress", "frontier": "9"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "11", "op": "diff", "row": ["b"], "diff": "1"},
+          {"message": "progress", "frontier": "11"},
+          {"message": "progress", "frontier": "12"}
+        ]
+      },
+      "expect": {"outputs": [[], [], [], {"error": "protocol"}, {"error": "protocol"}], "finished": false}
+    },
+    {
+      "name": "progress follows the updates below it",
+      "input": {
+        "start": {"kind": "resume", "frontier": "10"},
+        "steps": [
+          {"message": "progress", "frontier": "9"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "11", "op": "diff", "row": ["b"], "diff": "1"},
+          {"message": "progress", "frontier": "12"}
+        ]
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": "10",
+              "upper": "12",
+              "snapshot": false,
+              "updates": [
+                {"timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+                {"timestamp": "11", "op": "diff", "row": ["b"], "diff": "1"}
+              ]
+            }
+          ]
+        ],
+        "finished": false
+      }
+    },
+    {
+      "name": "an update before the first progress row is refused",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [{"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"}]
+      },
+      "expect": {"outputs": [{"error": "protocol"}], "finished": false}
+    },
+    {
+      "name": "an update below the latest progress row is refused",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "progress", "frontier": "12"},
+          {"message": "update", "timestamp": "11", "op": "diff", "row": ["a"], "diff": "1"}
+        ]
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [{"event": "batch", "lower": null, "upper": "12", "snapshot": true, "updates": []}],
+          {"error": "protocol"}
+        ],
+        "finished": false
+      }
+    },
+    {
+      "name": "an update out of timestamp order is refused",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "update", "timestamp": "11", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["b"], "diff": "1"}
+        ]
+      },
+      "expect": {"outputs": [[], [], {"error": "protocol"}], "finished": false}
+    },
+    {
+      "name": "progress going back is refused",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [{"message": "progress", "frontier": "10"}, {"message": "progress", "frontier": "9"}]
+      },
+      "expect": {"outputs": [[], {"error": "protocol"}], "finished": false}
+    },
+    {
+      "name": "UP TO caps the frontier and ends the stream",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "14", "op": "diff", "row": ["b"], "diff": "1"},
+          {"message": "progress", "frontier": "100"}
+        ],
+        "up_to": "15"
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [],
+          [
+            {
+              "event": "batch",
+              "lower": null,
+              "upper": "15",
+              "snapshot": true,
+              "updates": [
+                {"timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+                {"timestamp": "14", "op": "diff", "row": ["b"], "diff": "1"}
+              ]
+            }
+          ]
+        ],
+        "finished": true
+      }
+    },
+    {
+      "name": "nothing follows the end of the stream",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "progress", "frontier": "15"},
+          {"message": "progress", "frontier": "16"}
+        ],
+        "up_to": "15"
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [{"event": "batch", "lower": null, "upper": "15", "snapshot": true, "updates": []}],
+          {"error": "protocol"}
+        ],
+        "finished": true
+      }
+    },
+    {
+      "name": "an update at UP TO is refused",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "update", "timestamp": "15", "op": "diff", "row": ["a"], "diff": "1"}
+        ],
+        "up_to": "15"
+      },
+      "expect": {"outputs": [[], {"error": "protocol"}], "finished": false}
+    }
+  ]
+}
