@@ -200,7 +200,9 @@ use tracing::trace;
 
 use crate::metrics::source::postgres::PgSnapshotMetrics;
 use crate::source::RawSourceCreationConfig;
-use crate::source::postgres::replication::{RewindRequest, ensure_replication_prerequisites};
+use crate::source::postgres::replication::{
+    RewindRequest, SnapshotResult, ensure_replication_prerequisites,
+};
 use crate::source::postgres::{
     DefiniteError, ReplicationError, SourceOutputInfo, TransientError, verify_schema,
 };
@@ -345,7 +347,7 @@ pub(crate) fn render<'scope>(
     metrics: PgSnapshotMetrics,
 ) -> (
     Vec<StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>>,
-    StreamVec<'scope, MzOffset, RewindRequest>,
+    StreamVec<'scope, MzOffset, SnapshotResult>,
     StreamVec<'scope, MzOffset, Infallible>,
     StreamVec<'scope, MzOffset, ReplicationError>,
     PressOnDropButton,
@@ -707,6 +709,17 @@ pub(crate) fn render<'scope>(
             };
             let snapshot_lsn = snapshot_info.snapshot_lsn;
 
+            // An export whose schema no longer matches the upstream is not copied. The
+            // replication reader seals it in place of a rewind.
+            let schema_errors: BTreeMap<usize, DefiniteError> = tables_to_snapshot
+                .values()
+                .flatten()
+                .filter_map(|(&output_index, info)| {
+                    let result = verify_schema(info.desc.oid, info, &snapshot_info.upstream_info);
+                    result.err().map(|error| (output_index, error))
+                })
+                .collect();
+
             // Snapshot leader is already in identified transaction but all other workers need to enter it.
             if !is_snapshot_leader {
                 let snapshot_id = &snapshot_info.snapshot_id;
@@ -723,9 +736,24 @@ pub(crate) fn render<'scope>(
                         if !config.responsible_for((oid, *output_index)) {
                             continue;
                         }
-                        trace!(%id, "timely-{worker_id} producing rewind request for table {} output {output_index}", info.desc.name);
-                        let req = RewindRequest { output_index: *output_index, snapshot_lsn };
-                        rewinds_handle.give(&rewind_cap_set[0], req);
+                        let output_index = *output_index;
+                        let result = match schema_errors.get(&output_index) {
+                            Some(error) => SnapshotResult::Seal {
+                                output_index,
+                                error: error.clone(),
+                            },
+                            None => SnapshotResult::Rewind(RewindRequest {
+                                output_index,
+                                snapshot_lsn,
+                            }),
+                        };
+                        tracing::info!(
+                            %id,
+                            "timely-{worker_id} producing snapshot result {:?} for table {} output {output_index}",
+                            &result,
+                            info.desc.name
+                        );
+                        rewinds_handle.give(&rewind_cap_set[0], result);
                     }
                 }
                 *rewind_cap_set = CapabilitySet::new();
@@ -742,16 +770,18 @@ pub(crate) fn render<'scope>(
             }
 
             for (&output_index, info) in tables_to_snapshot.values().flatten() {
-                snapshot_output(
-                    &config,
-                    &client,
-                    &mut raw_handles,
-                    &data_cap_sets[output_index][0],
-                    output_index,
-                    info,
-                    &snapshot_info,
-                )
-                .await?;
+                if !schema_errors.contains_key(&output_index) {
+                    snapshot_output(
+                        &config,
+                        &client,
+                        &mut raw_handles,
+                        &data_cap_sets[output_index][0],
+                        output_index,
+                        info,
+                        &snapshot_info,
+                    )
+                    .await?;
+                }
                 // A transient error above returns with the capability still held, which keeps a
                 // partially copied export from advancing.
                 if concurrent_replication {
@@ -850,7 +880,7 @@ pub(crate) fn render<'scope>(
 }
 
 /// Copies this worker's share of the table of `info` to the data output `output_index` at
-/// `cap`. A schema mismatch is emitted as a definite error in place of the table's rows.
+/// `cap`.
 async fn snapshot_output(
     config: &RawSourceCreationConfig,
     client: &Client,
@@ -870,12 +900,6 @@ async fn snapshot_output(
     let statistics = &config.statistics[&info.export_id];
 
     pg_snapshot_failpoint_pause(&info.desc.name).await;
-
-    if let Err(err) = verify_schema(oid, info, &snapshot_info.upstream_info) {
-        let update = (Err(err.into()), MzOffset::minimum(), Diff::ONE);
-        raw_handles.give(output_index, cap, update).await;
-        return Ok(());
-    }
 
     // Calculate this worker's ctid range based on estimated blocks.
     // When estimated_blocks is 0 (PG < 14 or empty table), fall back to
