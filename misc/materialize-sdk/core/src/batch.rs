@@ -80,6 +80,22 @@ pub enum Event {
     Batch(Batch),
 }
 
+impl Event {
+    /// An estimate of the memory the event's updates hold, in the unit of the
+    /// batcher's memory limit. The estimate of two appended batches is the
+    /// sum of theirs.
+    pub fn approx_bytes(&self) -> usize {
+        let updates = match self {
+            Event::SnapshotChunk { updates } => updates,
+            Event::Batch(batch) => &batch.updates,
+        };
+        updates
+            .iter()
+            .map(Update::approx_bytes)
+            .fold(0, usize::saturating_add)
+    }
+}
+
 /// Every update at a time in `[lower, upper)` that was not in an earlier
 /// event, in timestamp order.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -124,6 +140,19 @@ impl Batch {
     /// Takes the updates, in timestamp order.
     pub fn into_updates(self) -> Vec<Update> {
         self.updates
+    }
+
+    /// Extends this batch with `later`, the batch that continues from its
+    /// upper, so that one batch carries both. Returns `later` unchanged if it
+    /// does not continue from this batch, or if this batch completes the
+    /// snapshot, so that changes after the snapshot stay apart from it.
+    pub fn append(&mut self, later: Batch) -> Result<(), Batch> {
+        if self.snapshot || later.lower != Some(self.upper) {
+            return Err(later);
+        }
+        self.updates.extend(later.updates);
+        self.upper = later.upper;
+        Ok(())
     }
 
     /// The latest change to each key, for targets that keep only the current
@@ -578,6 +607,36 @@ mod tests {
             Some(Event::Batch(batch)) => batch,
             other => panic!("expected a batch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_batch_appends_only_the_batch_that_continues_it() {
+        let mut b = snapshot();
+        progress(&mut b, 10);
+        update(&mut b, insert(10, "a"));
+        let mut snapshot = batch(progress(&mut b, 11));
+        update(&mut b, insert(11, "b"));
+        let mut first = batch(progress(&mut b, 12));
+        update(&mut b, insert(12, "c"));
+        let second = batch(progress(&mut b, 13));
+        let third = batch(progress(&mut b, 14));
+        let bytes = |batch: &Batch| Event::Batch(batch.clone()).approx_bytes();
+        let expected = bytes(&first) + bytes(&second);
+
+        assert_eq!(
+            snapshot.append(first.clone()),
+            Err(first.clone()),
+            "the batch that completes the snapshot"
+        );
+        assert_eq!(first.append(third.clone()), Err(third.clone()), "a gap");
+        first.append(second).unwrap();
+        assert_eq!(first.lower(), Some(frontier(11)));
+        assert_eq!(first.upper(), frontier(13));
+        assert!(!first.is_snapshot());
+        assert_eq!(first.updates(), [insert(11, "b"), insert(12, "c")]);
+        assert_eq!(bytes(&first), expected);
+        first.append(third).unwrap();
+        assert_eq!(first.upper(), frontier(14));
     }
 
     #[test]

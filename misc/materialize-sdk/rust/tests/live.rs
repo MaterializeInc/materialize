@@ -46,7 +46,6 @@ async fn invalid_options_fail_before_connecting() {
     unreachable.host("127.0.0.1").port(1);
     for options in [
         LiveOptions::default().buffer(0),
-        LiveOptions::default().buffer(usize::MAX),
         LiveOptions::default().max_rows(0),
         LiveOptions::default().fetch_timeout(Duration::from_secs(2 * 24 * 60 * 60)),
         LiveOptions::default()
@@ -370,7 +369,10 @@ async fn a_consumer_that_drains_too_slowly_fails_the_subscription() {
     let (subscribe, options) = chunked_snapshot(&admin, "live_slow", 20).await;
     // Each event waits less than the limit, but the FETCH's 20 events together
     // wait far longer, which would hold the session idle in its transaction.
-    let options = options.max_consumer_wait(Duration::from_secs(1));
+    // With no bytes to spare, each chunk waits for the one before it.
+    let options = options
+        .max_buffered_bytes(0)
+        .max_consumer_wait(Duration::from_secs(1));
     let mut live = LiveSubscription::connect(&config(), NoTls, subscribe, options)
         .await
         .unwrap();
@@ -386,7 +388,7 @@ async fn a_consumer_that_drains_too_slowly_fails_the_subscription() {
         }
     };
     assert!(
-        matches!(failure, Error::ConsumerFellBehind { capacity: 1, .. }),
+        matches!(failure, Error::ConsumerFellBehind { events: 1, .. }),
         "{failure:?}"
     );
     assert!(
@@ -395,6 +397,93 @@ async fn a_consumer_that_drains_too_slowly_fails_the_subscription() {
     );
     assert!(next(&mut live).await.is_none());
     execute(&admin, "DROP TABLE materialize.public.live_slow").await;
+}
+
+/// Inserts the ids `1..=count` into `relation`, one timestamp each, while the
+/// consumer is away.
+async fn insert_one_by_one(admin: &Client, relation: &str, count: u32) {
+    for id in 1..=count {
+        execute(admin, &format!("INSERT INTO {relation} VALUES ({id})")).await;
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs a running Materialize at MATERIALIZE_URL"]
+async fn a_slow_consumer_gets_later_batches_appended_instead_of_falling_behind() {
+    let admin = admin().await;
+    let object = table(&admin, "live_append", "(id int)").await;
+    let options = LiveOptions::default()
+        .buffer(1)
+        .max_consumer_wait(Duration::from_secs(1));
+    let mut live =
+        LiveSubscription::connect(&config(), NoTls, Subscribe::object(object.object), options)
+            .await
+            .unwrap();
+    let Some(Ok(Event::Batch(snapshot))) = next(&mut live).await else {
+        panic!("expected the snapshot");
+    };
+    // Away for longer than the fetch loop waits for room, while the stream
+    // releases a batch a second and a batch per insert. The marker inserted
+    // after the pause shows that the stream still runs.
+    insert_one_by_one(&admin, "materialize.public.live_append", 20).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    execute(
+        &admin,
+        "INSERT INTO materialize.public.live_append VALUES (0)",
+    )
+    .await;
+
+    let mut seen = Vec::new();
+    let mut largest = 0;
+    let mut upper = Some(snapshot.upper());
+    while !seen.contains(&"0".to_string()) {
+        match next(&mut live).await {
+            Some(Ok(Event::Batch(batch))) => {
+                assert_eq!(batch.lower(), upper, "each batch continues the last");
+                upper = Some(batch.upper());
+                let inserted = ids(Event::Batch(batch));
+                largest = largest.max(inserted.len());
+                seen.extend(inserted);
+            }
+            other => panic!("expected a batch, got {other:?}"),
+        }
+    }
+    let expected: Vec<String> = (1..=20).chain([0]).map(|id| id.to_string()).collect();
+    assert_eq!(seen, expected, "every insert once, in order");
+    assert!(largest > 1, "some batch holds appended inserts");
+    drop(live);
+    execute(&admin, "DROP TABLE materialize.public.live_append").await;
+}
+
+#[tokio::test]
+#[ignore = "needs a running Materialize at MATERIALIZE_URL"]
+async fn a_consumer_that_leaves_no_room_falls_behind() {
+    let admin = admin().await;
+    let object = table(&admin, "live_full", "(id int)").await;
+    let options = LiveOptions::default()
+        .buffer(1)
+        .max_buffered_bytes(1)
+        .max_consumer_wait(Duration::from_secs(1));
+    let mut live =
+        LiveSubscription::connect(&config(), NoTls, Subscribe::object(object.object), options)
+            .await
+            .unwrap();
+    assert!(matches!(next(&mut live).await, Some(Ok(_))), "the snapshot");
+    insert_one_by_one(&admin, "materialize.public.live_full", 5).await;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let failure = loop {
+        match next(&mut live).await {
+            Some(Ok(_)) => {}
+            Some(Err(error)) => break error,
+            None => panic!("the stream ended without failing"),
+        }
+    };
+    assert!(
+        matches!(failure, Error::ConsumerFellBehind { events: 1, .. }),
+        "{failure:?}"
+    );
+    drop(live);
+    execute(&admin, "DROP TABLE materialize.public.live_full").await;
 }
 
 #[tokio::test]

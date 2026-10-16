@@ -1,0 +1,134 @@
+{
+  "function": "append",
+  "cases": [
+    {
+      "name": "batches that continue each other become one batch, with the first lower and the last upper",
+      "input": {
+        "start": {
+          "kind": "resume",
+          "frontier": "10"
+        },
+        "steps": [
+          {
+            "message": "progress",
+            "frontier": "9"
+          },
+          {
+            "message": "update",
+            "timestamp": "10",
+            "op": "diff",
+            "row": [
+              "a"
+            ],
+            "diff": "1"
+          },
+          {
+            "message": "progress",
+            "frontier": "11"
+          },
+          {
+            "message": "progress",
+            "frontier": "12"
+          },
+          {
+            "message": "update",
+            "timestamp": "12",
+            "op": "diff",
+            "row": [
+              "b"
+            ],
+            "diff": "1"
+          },
+          {
+            "message": "update",
+            "timestamp": "13",
+            "op": "diff",
+            "row": [
+              "a"
+            ],
+            "diff": "-1"
+          },
+          {
+            "message": "progress",
+            "frontier": "14"
+          }
+        ]
+      },
+      "expect": {
+        "event": "batch",
+        "lower": "10",
+        "upper": "14",
+        "snapshot": false,
+        "updates": [
+          {
+            "timestamp": "10",
+            "op": "diff",
+            "row": [
+              "a"
+            ],
+            "diff": "1"
+          },
+          {
+            "timestamp": "12",
+            "op": "diff",
+            "row": [
+              "b"
+            ],
+            "diff": "1"
+          },
+          {
+            "timestamp": "13",
+            "op": "diff",
+            "row": [
+              "a"
+            ],
+            "diff": "-1"
+          }
+        ]
+      }
+    },
+    {
+      "name": "nothing is appended to the batch that completes a snapshot",
+      "input": {
+        "start": {
+          "kind": "snapshot"
+        },
+        "steps": [
+          {
+            "message": "progress",
+            "frontier": "10"
+          },
+          {
+            "message": "update",
+            "timestamp": "10",
+            "op": "diff",
+            "row": [
+              "a"
+            ],
+            "diff": "1"
+          },
+          {
+            "message": "progress",
+            "frontier": "11"
+          },
+          {
+            "message": "update",
+            "timestamp": "11",
+            "op": "diff",
+            "row": [
+              "b"
+            ],
+            "diff": "1"
+          },
+          {
+            "message": "progress",
+            "frontier": "12"
+          }
+        ]
+      },
+      "expect": {
+        "error": "refused"
+      }
+    }
+  ]
+}
