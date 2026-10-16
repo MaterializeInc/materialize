@@ -25,9 +25,9 @@
 //!
 //! Data products are discovered via `mz_internal.mz_mcp_data_products` system view.
 
-use std::sync::Arc;
-
 use std::borrow::Cow;
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::anyhow;
 use axum::Extension;
@@ -57,7 +57,7 @@ use thiserror::Error;
 use tracing::{debug, warn};
 
 use crate::http::AuthedClient;
-use crate::http::mcp_metrics::{McpCallStatus, McpMetrics, ToolCallGuard};
+use crate::http::mcp_metrics::{McpCallStatus, McpMetrics, RequestGuard, ToolCallGuard};
 use crate::http::sql::{SqlRequest, SqlResponse, SqlResult, execute_request};
 
 // To add a new tool: add entry to tools/list, add handler function, add dispatch case.
@@ -276,6 +276,8 @@ enum McpRequestError {
     QueryValidationFailed(String),
     #[error("Query execution failed: {0}")]
     QueryExecutionFailed(String),
+    #[error("Request timed out after {} seconds.", .0.as_secs())]
+    RequestTimeout(Duration),
     #[error("Internal error: {0}")]
     Internal(#[from] anyhow::Error),
     #[error("Header mismatch: {0}")]
@@ -292,7 +294,9 @@ impl McpRequestError {
             Self::ToolNotFound(_) => error_codes::INVALID_PARAMS,
             Self::DataProductNotFound(_) => error_codes::INVALID_PARAMS,
             Self::QueryValidationFailed(_) => error_codes::INVALID_PARAMS,
-            Self::QueryExecutionFailed(_) | Self::Internal(_) => error_codes::INTERNAL_ERROR,
+            Self::QueryExecutionFailed(_) | Self::RequestTimeout(_) | Self::Internal(_) => {
+                error_codes::INTERNAL_ERROR
+            }
             Self::HeaderMismatch(_) => error_codes::HEADER_MISMATCH,
             Self::InvalidParams(_) => error_codes::INVALID_PARAMS,
         }
@@ -300,6 +304,7 @@ impl McpRequestError {
 
     fn error_type(&self) -> &'static str {
         match self {
+            Self::RequestTimeout(_) => "Timeout",
             Self::InvalidJsonRpcVersion => "InvalidRequest",
             Self::MethodNotFound(_) => "MethodNotFound",
             Self::ToolNotFound(_) => "ToolNotFound",
@@ -778,6 +783,36 @@ fn validate_origin(
     Some(StatusCode::FORBIDDEN.into_response())
 }
 
+struct McpEndpointConfig {
+    endpoint_type: McpEndpointType,
+    enabled: bool,
+    query_tool_enabled: bool,
+    read_data_product_tool_enabled: bool,
+    request_timeout: Duration,
+    max_response_size: usize,
+    protocol_2026_07_28_enabled: bool,
+}
+
+impl McpEndpointConfig {
+    fn new(endpoint_type: McpEndpointType, dyncfgs: &mz_dyncfg::ConfigSet) -> Self {
+        Self {
+            endpoint_type,
+            enabled: match endpoint_type {
+                McpEndpointType::Agent => ENABLE_MCP_AGENT.get(dyncfgs),
+                McpEndpointType::Developer => ENABLE_MCP_DEVELOPER.get(dyncfgs),
+            },
+            query_tool_enabled: match endpoint_type {
+                McpEndpointType::Agent => ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs),
+                McpEndpointType::Developer => ENABLE_MCP_DEVELOPER_QUERY_TOOL.get(dyncfgs),
+            },
+            read_data_product_tool_enabled: ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL.get(dyncfgs),
+            request_timeout: MCP_REQUEST_TIMEOUT.get(dyncfgs),
+            max_response_size: MCP_MAX_RESPONSE_SIZE.get(dyncfgs),
+            protocol_2026_07_28_enabled: ENABLE_MCP_PROTOCOL_2026_07_28.get(dyncfgs),
+        }
+    }
+}
+
 async fn handle_mcp_request(
     mut client: AuthedClient,
     request: McpRequest,
@@ -785,11 +820,12 @@ async fn handle_mcp_request(
     body: Bytes,
     endpoint_type: McpEndpointType,
     metrics: McpMetrics,
-) -> impl IntoResponse {
-    let endpoint_label = endpoint_type.as_label();
-    let method_label = request.method.to_string();
-    let record_request =
-        |status: McpCallStatus| metrics.record_request(endpoint_label, &method_label, status);
+) -> axum::response::Response {
+    let mut guard = RequestGuard::new(
+        &metrics,
+        endpoint_type.as_label(),
+        request.method.to_string(),
+    );
 
     // Check the per-endpoint feature flag via a catalog snapshot, similar to frontend_peek.rs.
     // The configured `MCP_REQUEST_TIMEOUT` lives in the snapshot we are about
@@ -804,39 +840,21 @@ async fn handle_mcp_request(
         Ok(catalog) => catalog,
         Err(_elapsed) => {
             warn!(endpoint = %endpoint_type, "MCP catalog snapshot timed out");
-            record_request(McpCallStatus::Timeout);
+            guard.set_status(McpCallStatus::Timeout);
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
     };
-    let dyncfgs = catalog.system_config().dyncfgs();
-    let enabled = match endpoint_type {
-        McpEndpointType::Agent => ENABLE_MCP_AGENT.get(dyncfgs),
-        McpEndpointType::Developer => ENABLE_MCP_DEVELOPER.get(dyncfgs),
-    };
-    if !enabled {
+    let config = McpEndpointConfig::new(endpoint_type, catalog.system_config().dyncfgs());
+    if !config.enabled {
         debug!(endpoint = %endpoint_type, "MCP endpoint disabled by feature flag");
-        record_request(McpCallStatus::EndpointDisabled);
+        guard.set_status(McpCallStatus::EndpointDisabled);
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
-    // Per-endpoint feature flag for the `query` tool. Agent and developer have
-    // independent rollouts; collapsing to one bool keeps the downstream
-    // signatures unchanged since each handler invocation is already bound to a
-    // single endpoint.
-    let query_tool_enabled = match endpoint_type {
-        McpEndpointType::Agent => ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs),
-        McpEndpointType::Developer => ENABLE_MCP_DEVELOPER_QUERY_TOOL.get(dyncfgs),
-    };
-    // Only meaningful on the agent endpoint; the developer endpoint doesn't
-    // expose `read_data_product`. Read it unconditionally so the plumbing
-    // matches `query_tool_enabled` above.
-    let read_data_product_tool_enabled = ENABLE_MCP_AGENT_READ_DATA_PRODUCT_TOOL.get(dyncfgs);
-    let max_response_size = MCP_MAX_RESPONSE_SIZE.get(dyncfgs);
     let protocol = ProtocolVersion::select(
         &mcp_headers.protocol_version,
-        ENABLE_MCP_PROTOCOL_2026_07_28.get(dyncfgs),
+        config.protocol_2026_07_28_enabled,
     );
-    let request_timeout = MCP_REQUEST_TIMEOUT.get(dyncfgs);
 
     // Tag MCP-originated sessions so they're distinguishable in
     // mz_session_history / mz_statement_execution_history. set_default lets a
@@ -852,27 +870,21 @@ async fn handle_mcp_request(
         .set_default(APPLICATION_NAME.name(), VarInput::Flat(app_name))
         .expect("application_name is a known session var");
 
-    let user = client.client.session().user().name.clone();
-    let is_notification = request.id.is_none();
-
     debug!(
         method = %request.method,
         endpoint = %endpoint_type,
-        user = %user,
-        is_notification = is_notification,
+        user = %client.client.session().user().name,
+        is_notification = request.id.is_none(),
         ?protocol,
         "MCP request received"
     );
 
     // No `id` means no reply, which the transport answers 202. SDK clients take
     // any other status as a response to parse and close on the empty body.
-    if is_notification {
-        debug!(method = %request.method, "Received notification (no response will be sent)");
-        record_request(McpCallStatus::Ok);
+    let Some(request_id) = request.id.clone() else {
+        guard.set_status(McpCallStatus::Ok);
         return StatusCode::ACCEPTED.into_response();
-    }
-
-    let request_id = request.id.clone().unwrap_or(serde_json::Value::Null);
+    };
 
     // The transport leaves header rules for notification POSTs undefined, so
     // only requests are checked. A failed header or `_meta` check is transport
@@ -883,151 +895,84 @@ async fn handle_mcp_request(
             .check_against(&request.method)
             .and_then(|()| check_request_meta(raw.params.as_ref()));
         if let Err(err) = checked {
-            record_request(McpCallStatus::Error(err.error_type()));
+            guard.set_status(McpCallStatus::Error(err.error_type()));
             let response = McpResponse::error(request_id, err.into());
             return (StatusCode::BAD_REQUEST, Json(response)).into_response();
         }
     }
 
+    let request_timeout = config.request_timeout;
+    let metrics_inner = metrics.clone();
     // Spawn task for fault isolation, with a timeout safety net.
     // `abort_on_drop` propagates the timeout to the task itself; without
     // it the task orphans and the SQL query keeps running in the
     // background after the client gives up (see database-issues#9947).
-    let metrics_inner = metrics.clone();
-    let result = tokio::time::timeout(
-        request_timeout,
-        mz_ore::task::spawn(|| "mcp_request", async move {
-            handle_mcp_request_inner(
-                &mut client,
-                request,
-                endpoint_type,
-                query_tool_enabled,
-                read_data_product_tool_enabled,
-                max_response_size,
-                metrics_inner,
-            )
-            .await
-        })
-        .abort_on_drop(),
-    )
-    .await;
+    let task = mz_ore::task::spawn(|| "mcp_request", async move {
+        handle_mcp_method(client, &request, config, &metrics_inner).await
+    })
+    .abort_on_drop();
+    let result = tokio::time::timeout(request_timeout, task).await;
 
-    let (response, status_label): (McpResponse, McpCallStatus) = match result {
-        Ok(inner) => inner,
+    let result = match result {
+        Ok(result) => {
+            guard.set_status(call_status(&result));
+            result
+        }
         Err(_elapsed) => {
-            warn!(
-                endpoint = %endpoint_type,
-                timeout = ?request_timeout,
-                "MCP request timed out",
-            );
-            let response = McpResponse::error(
-                request_id,
-                McpRequestError::QueryExecutionFailed(format!(
-                    "Request timed out after {} seconds.",
-                    request_timeout.as_secs(),
-                ))
-                .into(),
-            );
-            (response, McpCallStatus::Timeout)
+            warn!(endpoint = %endpoint_type, timeout = ?request_timeout, "MCP request timed out");
+            guard.set_status(McpCallStatus::Timeout);
+            Err(McpRequestError::RequestTimeout(request_timeout))
         }
     };
-
-    record_request(status_label);
-    (StatusCode::OK, Json(response)).into_response()
-}
-
-async fn handle_mcp_request_inner(
-    client: &mut AuthedClient,
-    request: McpRequest,
-    endpoint_type: McpEndpointType,
-    query_tool_enabled: bool,
-    read_data_product_tool_enabled: bool,
-    max_response_size: usize,
-    metrics: McpMetrics,
-) -> (McpResponse, McpCallStatus) {
-    // Extract request ID (guaranteed to be Some since notifications are filtered earlier)
-    let request_id = request.id.clone().unwrap_or(serde_json::Value::Null);
-
-    let result = handle_mcp_method(
-        client,
-        &request,
-        endpoint_type,
-        query_tool_enabled,
-        read_data_product_tool_enabled,
-        max_response_size,
-        &metrics,
-    )
-    .await;
-
-    let status_label = call_status(&result);
-
-    let response = match result {
-        Ok(result_value) => McpResponse::success(request_id, result_value),
-        Err(e) => {
-            // Log non-trivial errors
+    match result {
+        Ok(result) => Json(McpResponse::success(request_id, result)).into_response(),
+        Err(error) => {
             if !matches!(
-                e,
+                error,
                 McpRequestError::MethodNotFound(_) | McpRequestError::InvalidJsonRpcVersion
             ) {
-                warn!(error = %e, method = %request.method, "MCP method execution failed");
+                warn!(%error, "MCP method execution failed");
             }
-            McpResponse::error(request_id, e.into())
+            Json(McpResponse::error(request_id, error.into())).into_response()
         }
-    };
-
-    (response, status_label)
+    }
 }
 
 async fn handle_mcp_method(
-    client: &mut AuthedClient,
+    mut client: AuthedClient,
     request: &McpRequest,
-    endpoint_type: McpEndpointType,
-    query_tool_enabled: bool,
-    read_data_product_tool_enabled: bool,
-    max_response_size: usize,
+    config: McpEndpointConfig,
     metrics: &McpMetrics,
 ) -> Result<McpResult, McpRequestError> {
-    // Validate JSON-RPC version
     if request.jsonrpc != JSONRPC_VERSION {
         return Err(McpRequestError::InvalidJsonRpcVersion);
     }
 
-    // Handle different MCP methods using pattern matching
-    match &request.method {
-        McpMethod::Initialize(_) => {
-            debug!(endpoint = %endpoint_type, "Processing initialize");
-            handle_initialize(
-                endpoint_type,
-                query_tool_enabled,
-                read_data_product_tool_enabled,
-            )
-        }
-        McpMethod::ToolsList(_) => {
-            debug!(endpoint = %endpoint_type, "Processing tools/list");
-            handle_tools_list(
-                endpoint_type,
-                query_tool_enabled,
-                read_data_product_tool_enabled,
-                max_response_size,
-            )
-        }
+    let result = match &request.method {
+        McpMethod::Initialize(_) => handle_initialize(&config),
+        McpMethod::ToolsList(_) => handle_tools_list(
+            config.endpoint_type,
+            config.query_tool_enabled,
+            config.read_data_product_tool_enabled,
+            config.max_response_size,
+        )?,
         McpMethod::ToolsCall(params) => {
-            debug!(tool = %params, endpoint = %endpoint_type, "Processing tools/call");
             handle_tools_call(
-                client,
+                &mut client,
                 params,
-                endpoint_type,
-                query_tool_enabled,
-                read_data_product_tool_enabled,
-                max_response_size,
+                config.endpoint_type,
+                config.query_tool_enabled,
+                config.read_data_product_tool_enabled,
+                config.max_response_size,
                 metrics,
             )
-            .await
+            .await?
         }
-        McpMethod::Ping(_) | McpMethod::NotificationsInitialized(_) | McpMethod::Unknown => Err(
-            McpRequestError::MethodNotFound("unknown method".to_string()),
-        ),
-    }
+        McpMethod::Ping(_) | McpMethod::NotificationsInitialized(_) | McpMethod::Unknown => {
+            return Err(McpRequestError::MethodNotFound("unknown method".into()));
+        }
+    };
+    Ok(result)
 }
 
 /// Instructions returned in the `initialize` response for each endpoint type.
@@ -1119,24 +1064,20 @@ fn endpoint_instructions(
     }
 }
 
-fn handle_initialize(
-    endpoint_type: McpEndpointType,
-    query_tool_enabled: bool,
-    read_data_product_tool_enabled: bool,
-) -> Result<McpResult, McpRequestError> {
-    Ok(McpResult::Initialize(InitializeResult {
+fn handle_initialize(config: &McpEndpointConfig) -> McpResult {
+    McpResult::Initialize(InitializeResult {
         protocol_version: MCP_PROTOCOL_VERSION.to_string(),
         capabilities: Capabilities { tools: json!({}) },
         server_info: ServerInfo {
-            name: format!("materialize-mcp-{}", endpoint_type),
+            name: format!("materialize-mcp-{}", config.endpoint_type),
             version: env!("CARGO_PKG_VERSION").to_string(),
         },
         instructions: endpoint_instructions(
-            endpoint_type,
-            query_tool_enabled,
-            read_data_product_tool_enabled,
+            config.endpoint_type,
+            config.query_tool_enabled,
+            config.read_data_product_tool_enabled,
         ),
-    }))
+    })
 }
 
 fn handle_tools_list(
@@ -3011,6 +2952,10 @@ mod tests {
 
     #[mz_ore::test]
     fn test_mcp_error_codes() {
+        assert_eq!(
+            McpRequestError::RequestTimeout(Duration::from_secs(1)).error_code(),
+            error_codes::INTERNAL_ERROR
+        );
         assert_eq!(
             McpRequestError::InvalidJsonRpcVersion.error_code(),
             error_codes::INVALID_REQUEST
