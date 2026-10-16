@@ -269,6 +269,12 @@ impl Batcher {
         self.progress
     }
 
+    /// The stream's `AS OF`, from its first progress row, which arrives before
+    /// any update. A snapshot's updates are at this time.
+    pub fn as_of(&self) -> Option<u64> {
+        self.as_of
+    }
+
     /// Accepts the next message of the cursor.
     ///
     /// After an error, every call fails with the same error.
@@ -646,6 +652,16 @@ mod tests {
     fn a_snapshot_at_another_as_of_is_refused() {
         let mut b = Batcher::new(Start::Snapshot { as_of: Some(5) }, None);
         assert!(b.push(Message::Progress { frontier: 6 }).is_err());
+    }
+
+    #[test]
+    fn the_as_of_is_known_from_the_first_progress_row() {
+        let mut b = snapshot();
+        assert_eq!(b.as_of(), None);
+        progress(&mut b, 10);
+        assert_eq!(b.as_of(), Some(10));
+        progress(&mut b, 12);
+        assert_eq!(b.as_of(), Some(10));
     }
 
     #[test]
