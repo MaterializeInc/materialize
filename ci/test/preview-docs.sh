@@ -26,6 +26,7 @@ hugo --gc --environment preview --baseURL "/materialize/$BUILDKITE_PULL_REQUEST"
 # Build skill docs to public/markdown-docs/. --environment preview makes their
 # absolute links point at preview.materialize.com, like the HTML build above.
 hugo --config config.toml,config.skill.toml --gc --environment preview --baseURL "/materialize/$BUILDKITE_PULL_REQUEST" --disableKinds 404,sitemap,robotsTXT,taxonomy
+../../ci/deploy_website/publish-markdown-at-page-urls.sh public "/materialize/$BUILDKITE_PULL_REQUEST"
 
 cat > config.deployment.toml <<EOF
 [[deployment.targets]]
