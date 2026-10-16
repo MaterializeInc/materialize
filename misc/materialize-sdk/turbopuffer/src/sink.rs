@@ -44,6 +44,10 @@ const MAX_EMBEDDED_ROWS: usize = 256;
 /// current size: one more retired incarnation and a longer revision.
 const FIELD_GROWTH_BYTES: usize = 64;
 
+/// How long one write sends requests before it yields, well below the SDK's
+/// default write timeout of a minute.
+const WRITE_SLICE: Duration = Duration::from_secs(20);
+
 /// How long to wait before checking again whether a snapshot is indexed.
 const INDEX_POLL: Duration = Duration::from_secs(5);
 
@@ -59,6 +63,9 @@ pub struct TurbopufferSink {
     layout: Option<Layout>,
     /// The most rows in one request, [`MAX_REQUEST_ROWS`] outside of tests.
     pub(crate) request_rows: usize,
+    /// How long one write sends requests before it yields, [`WRITE_SLICE`]
+    /// outside of tests.
+    pub(crate) write_slice: Duration,
     /// Digests of the namespace and body of each request turbopuffer
     /// acknowledged since the last write that applied in full. Sending an
     /// acknowledged request to the same namespace again changes nothing, so
@@ -98,6 +105,7 @@ impl TurbopufferSink {
             max_unindexed_bytes: 64 << 20,
             layout: None,
             request_rows: MAX_REQUEST_ROWS,
+            write_slice: WRITE_SLICE,
             acknowledged: BTreeMap::new(),
             pacer: Pacer::new(2_000_000, 1024),
             matching: BTreeSet::new(),
@@ -282,6 +290,7 @@ impl Sink for TurbopufferSink {
     }
 
     async fn write(&mut self, batch: &SinkBatch, _: Option<&CheckpointWrite>) -> WriteResult {
+        let started = Instant::now();
         let layout = match &mut self.layout {
             Some(layout) if layout.fits(batch.columns()) => layout,
             slot => match Layout::new(batch.columns(), &self.indexing).and_then(|layout| {
@@ -322,6 +331,9 @@ impl Sink for TurbopufferSink {
             client: &self.client,
             namespace: &namespace,
             acknowledged: &mut self.acknowledged,
+            started,
+            slice: self.write_slice,
+            sent_any: false,
         };
 
         // A patch costs a query per request, and most snapshot documents are
@@ -428,6 +440,9 @@ struct Sent<'a> {
     client: &'a Client,
     namespace: &'a str,
     acknowledged: &'a mut BTreeMap<[u8; 32], Acknowledged>,
+    started: Instant,
+    slice: Duration,
+    sent_any: bool,
 }
 
 impl Sent<'_> {
@@ -456,6 +471,15 @@ impl Sent<'_> {
                 ..acknowledged.clone()
             });
         }
+        // A long write yields as throttling, which the SDK sends again after
+        // a second without using up an attempt, so a batch of any size makes
+        // progress within the SDK's write timeout.
+        if self.sent_any && self.started.elapsed() >= self.slice {
+            return Err(Failure::Throttled {
+                retry_after: Some(Duration::ZERO),
+            });
+        }
+        self.sent_any = true;
         let mut pacer = pacer;
         let reservation = match pacer
             .as_deref_mut()

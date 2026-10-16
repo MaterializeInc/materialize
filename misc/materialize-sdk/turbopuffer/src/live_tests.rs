@@ -924,6 +924,45 @@ async fn the_reader_follows_the_incarnation_readers_use() {
     );
 }
 
+#[tokio::test]
+#[ignore = "needs TURBOPUFFER_API_KEY"]
+async fn a_long_write_yields_and_continues_where_it_stopped() {
+    let name = unique("slice");
+    let _cleanup = Cleanup(name.clone());
+    let mut sink = TurbopufferSink::new(&connection(), "s", &name).unwrap();
+    sink.request_rows = 1;
+    sink.write_slice = Duration::ZERO;
+    let batch = SinkBatch::new(
+        vec![
+            upsert(5, "1", "a", "1"),
+            upsert(5, "2", "b", "2"),
+            upsert(5, "3", "c", "3"),
+        ],
+        columns(),
+        2,
+        false,
+    );
+    // Each call sends one request, then yields before the next.
+    for sent in 1..=2 {
+        match sink.write(&batch, None).await {
+            WriteResult::Failed(SinkError::Throttled { .. }) => {}
+            other => panic!("expected the write to yield, got {other:?}"),
+        }
+        assert_eq!(sink.client.faults.lock().unwrap().sent, sent);
+    }
+    assert!(matches!(
+        sink.write(&batch, None).await,
+        WriteResult::Applied { .. }
+    ));
+    assert_eq!(sink.client.faults.lock().unwrap().sent, 3);
+    assert_eq!(
+        live_documents(&sink.client, &data_namespace(&name, 2))
+            .await
+            .len(),
+        3
+    );
+}
+
 /// Materialize at `MATERIALIZE_URL`.
 fn materialize() -> tokio_postgres::Config {
     std::env::var("MATERIALIZE_URL")
