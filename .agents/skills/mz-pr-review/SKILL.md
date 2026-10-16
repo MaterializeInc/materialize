@@ -118,3 +118,16 @@ The PR should do one thing. If it spans multiple CODEOWNERS areas (e.g. sql-pars
 - Use **nit:** for preferences where reasonable people could disagree.
 - If the PR improves overall codebase health and blocking items are addressed, say so.
 - Do NOT make any changes — this is read-only review.
+
+## Posting to GitHub
+
+Only post when the user asks. The findings go out under the user's name, so the
+user curates them, see [AI-assisted review](/doc/developer/guide-changes.md#ai-assisted-review).
+
+- Create a pending review with line comments. Never submit it, approve, or
+  request changes. The user edits and submits.
+- Post only Blocking and Strong-suggestion findings you are confident in, at
+  most 5. Leave nits in the local report.
+- Keep each comment to a few plain sentences that state the problem and why it
+  matters, so the user can adopt it in their own voice.
+- Do not reply to existing review threads on the user's behalf.
