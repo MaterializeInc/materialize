@@ -81,16 +81,10 @@ impl TurbopufferSink {
         name: impl Into<String>,
     ) -> Result<TurbopufferSink, SinkError> {
         let name = name.into();
-        let valid = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.');
-        if name.is_empty() || name.len() > 100 || name.contains("__") || !name.chars().all(valid) {
-            return Err(SinkError::Target {
-                message: format!(
-                    "{name:?} cannot name turbopuffer namespaces: use up to 100 letters, digits, \
-                     `-`, `_`, and `.`, without `__`"
-                ),
-                permanent: true,
-            });
-        }
+        check_name(&name).map_err(|message| SinkError::Target {
+            message,
+            permanent: true,
+        })?;
         let client = Client::new(connection)?;
         let checkpoints =
             Checkpoints::new(client.clone(), checkpoint_namespace(&name), sink_id.into());
@@ -193,6 +187,18 @@ impl TurbopufferSink {
         }
         Ok(())
     }
+}
+
+/// Refuses a name that cannot prefix the sink's namespaces.
+pub(crate) fn check_name(name: &str) -> Result<(), String> {
+    let valid = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.');
+    if name.is_empty() || name.len() > 100 || name.contains("__") || !name.chars().all(valid) {
+        return Err(format!(
+            "{name:?} cannot name turbopuffer namespaces: use up to 100 letters, digits, `-`, \
+             `_`, and `.`, without `__`"
+        ));
+    }
+    Ok(())
 }
 
 /// Refuses an embedding rate too low for one document, which turbopuffer
