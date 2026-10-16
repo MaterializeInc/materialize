@@ -528,6 +528,275 @@ async fn the_completing_commit_makes_the_snapshot_active_once_indexed() {
     );
 }
 
+const MODEL: &str = "nvidia/nemotron-3-embed-8b";
+
+fn titled(timestamp: u64, id: &str, title: Option<&str>, views: &str) -> Update {
+    Update {
+        timestamp,
+        change: Change::Upsert {
+            key: vec![Some(id.into())],
+            value: vec![title.map(str::to_string), Some(views.into())],
+        },
+    }
+}
+
+async fn vector(client: &Client, namespace: &str, id: &str) -> Vec<f64> {
+    let body = json!({
+        "filters": ["id", "Eq", id],
+        "rank_by": ["id", "asc"],
+        "limit": 1,
+        "include_attributes": ["embed_title"],
+    });
+    let rows = client.query(namespace, &body).await.unwrap().unwrap();
+    let vector = rows[0]["embed_title"].as_array().unwrap();
+    vector.iter().map(|x| x.as_f64().unwrap()).collect()
+}
+
+#[tokio::test]
+#[ignore = "needs TURBOPUFFER_API_KEY"]
+async fn embedded_texts_are_embedded_once_per_change() {
+    let name = unique("embed");
+    let _cleanup = Cleanup(name.clone());
+    let mut sink = TurbopufferSink::new(&connection(), "s", &name)
+        .unwrap()
+        .embed("title", MODEL, 1024);
+    let namespace = data_namespace(&name, 2);
+    let applied = |result: WriteResult| match result {
+        WriteResult::Applied { rejected } => assert!(rejected.is_empty(), "{rejected:?}"),
+        other => panic!("expected applied, got {other:?}"),
+    };
+    let live = |updates| SinkBatch::new(updates, columns(), 2, false);
+
+    let snapshot = SinkBatch::new(
+        vec![
+            titled(5, "1", Some("a cat sleeping on a windowsill"), "1"),
+            titled(5, "2", Some("a dog walking in the rain"), "2"),
+            titled(5, "3", Some("quarterly stock market news"), "3"),
+            titled(5, "4", None, "4"),
+        ],
+        columns(),
+        2,
+        true,
+    );
+    applied(sink.write(&snapshot, None).await);
+    let after_snapshot = sink.embedding_tokens();
+    assert!(after_snapshot > 0);
+    let cat = vector(&sink.client, &namespace, "1").await;
+    assert_eq!(cat.len(), 1024);
+    assert!(
+        vector(&sink.client, &namespace, "4")
+            .await
+            .iter()
+            .all(|x| *x == 0.0)
+    );
+
+    // A change that keeps the text is a patch, which embeds nothing and
+    // keeps the vector.
+    let views = live(vec![titled(
+        6,
+        "1",
+        Some("a cat sleeping on a windowsill"),
+        "10",
+    )]);
+    applied(sink.write(&views, None).await);
+    assert_eq!(sink.embedding_tokens(), after_snapshot);
+    assert_eq!(vector(&sink.client, &namespace, "1").await, cat);
+    assert_eq!(
+        live_documents(&sink.client, &namespace).await["1"]["views"],
+        json!(10)
+    );
+
+    // A patch whose response was lost applies again when it is sent again,
+    // instead of falling through to an upsert that bills embedding.
+    sink.client
+        .faults
+        .lock()
+        .unwrap()
+        .plan
+        .push_back(Fault::Lose);
+    let more_views = live(vec![titled(
+        7,
+        "1",
+        Some("a cat sleeping on a windowsill"),
+        "11",
+    )]);
+    assert!(matches!(
+        sink.write(&more_views, None).await,
+        WriteResult::Failed(_)
+    ));
+    applied(sink.write(&more_views, None).await);
+    assert_eq!(sink.embedding_tokens(), after_snapshot);
+    assert_eq!(
+        live_documents(&sink.client, &namespace).await["1"]["views"],
+        json!(11)
+    );
+
+    // A changed text is embedded again.
+    let dog = vector(&sink.client, &namespace, "2").await;
+    applied(
+        sink.write(
+            &live(vec![titled(
+                7,
+                "2",
+                Some("a puppy splashing in puddles"),
+                "2",
+            )]),
+            None,
+        )
+        .await,
+    );
+    assert!(sink.embedding_tokens() > after_snapshot);
+    assert_ne!(vector(&sink.client, &namespace, "2").await, dog);
+
+    // A value that becomes NULL is cleared by the patch.
+    let cleared = Update {
+        timestamp: 8,
+        change: Change::Upsert {
+            key: vec![Some("2".into())],
+            value: vec![Some("a puppy splashing in puddles".into()), None],
+        },
+    };
+    let tokens = sink.embedding_tokens();
+    applied(sink.write(&live(vec![cleared]), None).await);
+    assert_eq!(sink.embedding_tokens(), tokens);
+    let document = &live_documents(&sink.client, &namespace).await["2"];
+    assert_eq!(document["title"], json!("a puppy splashing in puddles"));
+    assert!(document.get("views").is_none(), "{document}");
+
+    // Tombstones and texts that go away carry placeholders, and a text that
+    // arrives later replaces one.
+    applied(
+        sink.write(
+            &live(vec![
+                delete(8, "3"),
+                titled(8, "4", Some("a kitten chasing a ball of yarn"), "4"),
+                titled(8, "1", None, "10"),
+            ]),
+            None,
+        )
+        .await,
+    );
+    assert!(
+        vector(&sink.client, &namespace, "1")
+            .await
+            .iter()
+            .all(|x| *x == 0.0)
+    );
+    assert!(
+        vector(&sink.client, &namespace, "4")
+            .await
+            .iter()
+            .any(|x| *x != 0.0)
+    );
+    let search = json!({
+        "rank_by": ["title", "ANN", ["Embed", "a small cat playing"]],
+        "filters": ["deleted", "Eq", false],
+        "limit": 3,
+    });
+    let found = sink
+        .client
+        .query(&namespace, &search)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found[0]["id"], json!("4"), "{found:?}");
+    assert!(found.iter().all(|row| row["id"] != json!("3")));
+
+    // A replay of an older change leaves the newer document alone.
+    applied(sink.write(&views, None).await);
+    assert!(
+        vector(&sink.client, &namespace, "1")
+            .await
+            .iter()
+            .all(|x| *x == 0.0)
+    );
+
+    // A sink set up to embed differently refuses the namespace before it
+    // writes to it.
+    let mut other = TurbopufferSink::new(&connection(), "s", &name)
+        .unwrap()
+        .embed("title", MODEL, 512);
+    match other
+        .write(&live(vec![titled(9, "5", Some("x"), "1")]), None)
+        .await
+    {
+        WriteResult::Failed(SinkError::Target { permanent, .. }) => assert!(permanent),
+        result => panic!("expected a refusal, got {result:?}"),
+    }
+    assert_eq!(other.client.faults.lock().unwrap().sent, 0);
+}
+
+#[tokio::test]
+#[ignore = "needs TURBOPUFFER_API_KEY"]
+async fn a_live_write_after_an_empty_snapshot_creates_the_namespace() {
+    let name = unique("empty");
+    let _cleanup = Cleanup(name.clone());
+    let mut sink = TurbopufferSink::new(&connection(), "s", &name)
+        .unwrap()
+        .embed("title", MODEL, 1024);
+    let first = SinkBatch::new(
+        vec![titled(5, "1", Some("hello"), "1")],
+        columns(),
+        2,
+        false,
+    );
+    match sink.write(&first, None).await {
+        WriteResult::Applied { rejected } => assert!(rejected.is_empty()),
+        other => panic!("expected applied, got {other:?}"),
+    }
+    let namespace = data_namespace(&name, 2);
+    assert_eq!(vector(&sink.client, &namespace, "1").await.len(), 1024);
+}
+
+#[tokio::test]
+#[ignore = "needs TURBOPUFFER_API_KEY"]
+async fn embedding_waits_for_room_in_the_rate_limit() {
+    let name = unique("pace");
+    let _cleanup = Cleanup(name.clone());
+    let short = SinkBatch::new(vec![titled(5, "1", Some("a"), "1")], columns(), 2, true);
+    let mut too_low = TurbopufferSink::new(&connection(), "s", &name)
+        .unwrap()
+        .embed("title", MODEL, 1024)
+        .embedding_rate(1, 1024);
+    match too_low.write(&short, None).await {
+        WriteResult::Failed(SinkError::Target { permanent, .. }) => assert!(permanent),
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+
+    // At the lowest rate the sink allows, the second of two long texts waits
+    // for the first to leave the window.
+    let mut sink = TurbopufferSink::new(&connection(), "s", &name)
+        .unwrap()
+        .embed("title", MODEL, 1024)
+        .embedding_rate(32_768, 1024);
+    let long = "word ".repeat(20_000);
+    let batch = SinkBatch::new(
+        vec![
+            titled(5, "1", Some(&long), "1"),
+            titled(5, "2", Some(&long), "2"),
+        ],
+        columns(),
+        2,
+        true,
+    );
+    match sink.write(&batch, None).await {
+        WriteResult::Failed(SinkError::Throttled {
+            retry_after: Some(wait),
+        }) => assert!(
+            wait > Duration::ZERO && wait <= Duration::from_secs(60),
+            "{wait:?}"
+        ),
+        other => panic!("expected a wait, got {other:?}"),
+    }
+    assert_eq!(sink.client.faults.lock().unwrap().sent, 1);
+    assert_eq!(
+        live_documents(&sink.client, &data_namespace(&name, 2))
+            .await
+            .len(),
+        1
+    );
+}
+
 /// Materialize at `MATERIALIZE_URL`.
 fn materialize() -> tokio_postgres::Config {
     std::env::var("MATERIALIZE_URL")

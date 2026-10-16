@@ -15,6 +15,7 @@
 
 //! The parts of turbopuffer's HTTP API the sink uses.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::time::Duration;
 
@@ -133,6 +134,19 @@ pub(crate) struct WriteResponse {
     pub(crate) rows_upserted: u64,
     #[serde(default)]
     pub(crate) rows_patched: u64,
+    /// The ids a patch applied to, when the request asked for them.
+    #[serde(default)]
+    pub(crate) patched_ids: Vec<Value>,
+    #[serde(default)]
+    pub(crate) performance: Performance,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub(crate) struct Performance {
+    /// The tokens turbopuffer embedded, which it bills, also for rows whose
+    /// condition skipped them.
+    #[serde(default)]
+    pub(crate) embedding_tokens: Option<u64>,
 }
 
 /// A turbopuffer client.
@@ -262,8 +276,7 @@ impl Client {
     /// The bytes written to `namespace` that turbopuffer has not indexed
     /// yet, or `None` if the namespace does not exist.
     pub(crate) async fn unindexed_bytes(&self, namespace: &str) -> Result<Option<u64>, Failure> {
-        let path = format!("/v1/namespaces/{namespace}/metadata");
-        let Some(metadata) = self.request(Method::GET, &path, None).await? else {
+        let Some(metadata) = self.metadata(namespace).await? else {
             return Ok(None);
         };
         let index = |field: &str| metadata.get("index").and_then(|index| index.get(field));
@@ -275,6 +288,51 @@ impl Client {
             },
             other => Err(unexpected("metadata", &format!("index status {other:?}"))),
         }
+    }
+
+    /// The model and dimensions of each attribute `namespace` embeds, or
+    /// `None` if the namespace does not exist.
+    pub(crate) async fn embeddings(
+        &self,
+        namespace: &str,
+    ) -> Result<Option<BTreeMap<String, (String, u32)>>, Failure> {
+        let Some(metadata) = self.metadata(namespace).await? else {
+            return Ok(None);
+        };
+        let schema = metadata
+            .get("schema")
+            .and_then(Value::as_object)
+            .ok_or_else(|| unexpected("metadata", "no schema"))?;
+        let mut embeddings = BTreeMap::new();
+        for (column, attribute) in schema {
+            let Some(embed) = attribute.get("embed").filter(|embed| !embed.is_null()) else {
+                continue;
+            };
+            let model = embed.get("model").and_then(Value::as_str);
+            // The vector's type, such as `[1024]f16`, holds the dimensions.
+            let dims = embed
+                .get("attribute")
+                .and_then(Value::as_str)
+                .and_then(|vector| schema.get(vector)?.get("type")?.as_str())
+                .and_then(|kind| kind.strip_prefix('[')?.split(']').next()?.parse().ok());
+            match (model, dims) {
+                (Some(model), Some(dims)) => {
+                    embeddings.insert(column.clone(), (model.to_string(), dims));
+                }
+                _ => {
+                    return Err(unexpected(
+                        "metadata",
+                        &format!("the embedding of {column}"),
+                    ));
+                }
+            }
+        }
+        Ok(Some(embeddings))
+    }
+
+    async fn metadata(&self, namespace: &str) -> Result<Option<Value>, Failure> {
+        let path = format!("/v1/namespaces/{namespace}/metadata");
+        self.request(Method::GET, &path, None).await
     }
 
     /// The names of the namespaces that start with `prefix`.
