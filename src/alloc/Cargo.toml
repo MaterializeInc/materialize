@@ -35,6 +35,10 @@ mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 name = "c_malloc"
 required-features = ["jemalloc"]
 
+[[test]]
+name = "system"
+required-features = ["jemalloc"]
+
 [features]
 default = []
 # Whether to use jemalloc instead of the system allocator, through the sampling
