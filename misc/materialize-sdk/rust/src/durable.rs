@@ -18,13 +18,14 @@
 //! worker fences an older one.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use materialize_sdk_core::catalog::{self, ObjectName};
 use materialize_sdk_core::{
     Change, Checkpoint, CheckpointError, CheckpointWrite, Classification, Envelope, ErrorKind,
-    Event, Fingerprint, Frontier, IdentityChange, Phase, Settlement, SinkType, Start, Subscribe,
-    Update, UsageError, WriteError, classify, compare,
+    Event, Fingerprint, Frontier, IdentityChange, PayloadColumns, Phase, Settlement, SinkType,
+    Start, Subscribe, Update, UsageError, WriteError, classify, compare,
 };
 use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::{Client, Config, Socket};
@@ -178,6 +179,7 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
             return Err(UsageError::new(format!("{object:?} does not exist")).into());
         };
         let fingerprint = found.fingerprint(envelope)?;
+        fingerprint.payload_columns()?;
         let text = Checkpoint::new(BTreeMap::from([(object.name.clone(), fingerprint)]))
             .encode_within(self.max_checkpoint_bytes().await?)?;
         self.create_checkpoint(&text).await
@@ -328,6 +330,8 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
             None => Start::Snapshot { as_of: None },
         };
         let mut started = current.frontier.is_some();
+        let columns = Arc::new(fingerprint.payload_columns()?);
+        let mut checked_columns = false;
         let subscribe = Subscribe::object(fingerprint.object.clone())
             .with_envelope(fingerprint.envelope.clone());
         let mut live =
@@ -336,6 +340,18 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
         let mut last_commit = Instant::now();
         while let Some(event) = live.next().await {
             let event = event?;
+            if !checked_columns {
+                // The object can change between the identity check and the
+                // subscribe. This catches changed names, and the next
+                // reconnect's identity check catches a changed type.
+                let names = columns.key.iter().chain(&columns.value).map(|c| &c.name);
+                if !live.columns().is_some_and(|live| names.eq(live)) {
+                    return Err(Error::ObjectChanged {
+                        change: IdentityChange::SchemaChanged,
+                    });
+                }
+                checked_columns = true;
+            }
             if !started {
                 let as_of = live.as_of().ok_or_else(|| {
                     UsageError::new("the stream released a snapshot before its AS OF")
@@ -349,7 +365,7 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
             }
             match event {
                 Event::SnapshotChunk { updates } => {
-                    let batch = self.batch(updates, current.generation, true);
+                    let batch = self.batch(updates, &columns, current.generation, true);
                     let write = match self.sink.sink_type() {
                         SinkType::Transactional => {
                             Some(CheckpointWrite::snapshot_write(current).map_err(write_error)?)
@@ -371,7 +387,12 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
                     }
                     let (write, next) =
                         CheckpointWrite::commit(current, batch.upper()).map_err(write_error)?;
-                    let batch = self.batch(batch.into_updates(), current.generation, completes);
+                    let batch = self.batch(
+                        batch.into_updates(),
+                        &columns,
+                        current.generation,
+                        completes,
+                    );
                     match self.sink.sink_type() {
                         SinkType::Transactional => {
                             self.write_until_applied(&batch, Some(&write)).await?;
@@ -396,14 +417,20 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
 
     /// A batch of `updates` without their key violations, which the SDK
     /// rejects so that the sink never sees them.
-    fn batch(&self, updates: Vec<Update>, generation: u64, snapshot: bool) -> SinkBatch {
+    fn batch(
+        &self,
+        updates: Vec<Update>,
+        columns: &Arc<PayloadColumns>,
+        generation: u64,
+        snapshot: bool,
+    ) -> SinkBatch {
         let (violations, updates): (Vec<_>, Vec<_>) = updates
             .into_iter()
             .partition(|update| matches!(update.change, Change::KeyViolation { .. }));
         for violation in violations {
             self.warn(Some(violation.timestamp), "key_violation", "sdk");
         }
-        SinkBatch::new(updates, generation, snapshot)
+        SinkBatch::new(updates, Arc::clone(columns), generation, snapshot)
     }
 
     /// Whether the checkpoint lives in the store, which a sink says by

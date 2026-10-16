@@ -28,8 +28,9 @@ use common::{STEP, admin, config, execute, rows};
 use materialize_sdk::core::catalog::ObjectName;
 use materialize_sdk::core::{Checkpoint, CommitConflict, Envelope};
 use materialize_sdk::{
-    Change, CheckpointStore, CheckpointWrite, DurableOptions, DurableSink, Error, LiveOptions,
-    MaterializeStore, Row, Sink, SinkBatch, SinkError, SinkType, WriteResult, checkpoint_table_sql,
+    Change, CheckpointStore, CheckpointWrite, Column, DurableOptions, DurableSink, Error,
+    LiveOptions, MaterializeStore, Row, Sink, SinkBatch, SinkError, SinkType, WriteResult,
+    checkpoint_table_sql,
 };
 use tokio::task::JoinHandle;
 use tokio_postgres::NoTls;
@@ -429,4 +430,72 @@ async fn a_sink_without_a_checkpoint_resumes_from_the_store() {
         events.0.lock().unwrap().iter().all(|b| !b.is_snapshot()),
         "the resume took no new snapshot"
     );
+}
+
+#[tokio::test]
+#[ignore = "needs a running Materialize at MATERIALIZE_URL"]
+async fn batches_name_their_columns_with_the_key_first() {
+    let name = format!("durable_columns_{}", std::process::id());
+    let admin = admin().await;
+    common::table(&admin, &name, "(id int, name text, region text)").await;
+    execute(
+        &admin,
+        &format!("INSERT INTO materialize.public.{name} VALUES (1, 'a', 'eu')"),
+    )
+    .await;
+    let object = ObjectName {
+        database: Some("materialize".into()),
+        schema: "public".into(),
+        name,
+    };
+    let table = ObjectName {
+        database: Some("materialize".into()),
+        schema: "public".into(),
+        name: format!("durable_columns_checkpoints_{}", std::process::id()),
+    };
+    execute(
+        &admin,
+        &format!("DROP TABLE IF EXISTS materialize.public.{}", table.name),
+    )
+    .await;
+    execute(&admin, &checkpoint_table_sql(&table)).await;
+    let store = || async {
+        MaterializeStore::connect(&config(), NoTls, &table)
+            .await
+            .unwrap()
+    };
+    let envelope = Envelope::Upsert {
+        key: vec!["region".into(), "id".into()],
+    };
+    let events = Events::default();
+    DurableSink::new("columns", events.clone(), options())
+        .with_store(store().await)
+        .setup(&config(), NoTls, &object, envelope)
+        .await
+        .unwrap();
+
+    let worker =
+        spawn(DurableSink::new("columns", events.clone(), options()).with_store(store().await));
+    until("the snapshot", || {
+        events
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|batch| !batch.updates().is_empty())
+    })
+    .await;
+    worker.abort();
+    let _ = worker.await;
+
+    let batches = events.0.lock().unwrap();
+    let batch = batches.iter().find(|b| !b.updates().is_empty()).unwrap();
+    let names = |columns: &[Column]| columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&batch.columns().key), ["region", "id"]);
+    assert_eq!(names(&batch.columns().value), ["name"]);
+    let Change::Upsert { key, value } = &batch.updates()[0].change else {
+        panic!("expected an upsert, got {:?}", batch.updates()[0]);
+    };
+    assert_eq!(key, &[Some("eu".to_string()), Some("1".to_string())]);
+    assert_eq!(value, &[Some("a".to_string())]);
 }
