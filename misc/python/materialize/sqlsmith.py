@@ -145,4 +145,6 @@ known_errors = [
     "WITH ORDINALITY or ROWS FROM with ",
     "invalid normalization form",  # Expected with https://github.com/MaterializeInc/materialize/pull/33507
     "invalid catalog JSON",  # `parse_catalog_*` function invoked with an invalid JSON object
+    "jq: ",  # SQLsmith generates arbitrary strings as jq programs, so they fail to parse or evaluate
+    "jq requires a string literal as its second argument",
 ]
