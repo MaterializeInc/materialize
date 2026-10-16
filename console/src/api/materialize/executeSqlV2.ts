@@ -59,7 +59,7 @@ function isCompiledQueryList(queries: unknown): queries is CompiledQueryList {
   return Array.isArray(queries) && queries.every(isCompiledQuery);
 }
 
-function buildExtendedRequestQuery(query: CompiledQuery) {
+export function buildExtendedRequestQuery(query: CompiledQuery) {
   const params = query.parameters.map((param) => {
     return typeof param !== "string" ? JSON.stringify(param) : param;
   });

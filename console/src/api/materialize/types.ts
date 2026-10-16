@@ -19,6 +19,7 @@ export type SessionVariables = {
   cluster_replica?: string | undefined;
   database?: string | undefined;
   search_path?: string | undefined;
+  statement_timeout?: string | undefined;
   transaction_isolation?: string | undefined;
 };
 
