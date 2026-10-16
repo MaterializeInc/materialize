@@ -477,10 +477,11 @@ pub(super) async fn purify_source_exports(
                 // declares them NOT NULL in the table's `RelationDesc`
                 // regardless of this desc, so a nullable column here would
                 // drop the decoder's NULL check and let a NULL reach persist
-                // in a column it treats as non-nullable, which panics. Schema
-                // verification compares keys by name and columns, so a key
-                // dropped and restored while the source was behind is not
-                // reported, and the NULL rows written in between do arrive.
+                // in a column it treats as non-nullable, which panics.
+                // The reason we need this to avoid panics for MySQL sources
+                // and not for Postgres sources is because schemas are compared
+                // by name/column in MySQL. Postgres on the other hand has an OID
+                // that would differ and prevent this case.
                 let pk_cols: BTreeSet<&str> = parsed_table
                     .keys
                     .iter()
