@@ -132,6 +132,7 @@ pub(super) fn persist_sink<'s>(
         descs.clone(),
         read_only_rx,
         Rc::clone(&compute_state.worker_config),
+        &compute_state.metrics,
     );
 
     append::render(sink_id, persist_api, descs, batches);
@@ -499,10 +500,21 @@ mod mint {
 mod write {
     use super::*;
 
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::task::{Context, Poll, Wake, Waker};
+    use std::time::Instant;
+
+    use mz_ore::cast::CastFrom;
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_persist_types::part::{Part, PartBuilder};
     use mz_repr::RelationDesc;
     use mz_timely_util::activator::ArcActivator;
+    use prometheus::IntCounter;
+    use prometheus::core::{AtomicF64, GenericCounter};
+    use timely::scheduling::SyncActivator;
+
+    use crate::metrics::WorkerMetrics;
 
     /// Commands sent from the Timely operator to the Tokio write task. A batch write is a `Start`
     /// followed by its parts and a `Finish`.
@@ -551,6 +563,7 @@ mod write {
         descs: DescsStream<'s>,
         mut read_only_rx: watch::Receiver<bool>,
         worker_config: Rc<ConfigSet>,
+        compute_metrics: &WorkerMetrics,
     ) -> BatchesStream<'s> {
         let scope = desired.ok.scope();
         let worker_id = scope.index();
@@ -618,12 +631,18 @@ mod write {
         let advance_persist_frontiers_at_startup =
             MV_SINK_ADVANCE_PERSIST_FRONTIERS.get(&worker_config);
         let shared_batch_max_bytes = MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config);
-        let key_schema = persist_api.collection.relation_desc.clone();
+        let key_schema = Rc::new(persist_api.collection.relation_desc.clone());
+        let write_metrics = WriteMetrics {
+            wait_seconds: compute_metrics.mv_sink_write_wait_seconds_total.clone(),
+            part_bytes: compute_metrics.mv_sink_write_part_bytes_total.clone(),
+        };
         // The write task decides whether to share a batch, and the operator sizes parts so a
         // shareable batch fits one.
         let task_max_bytes = MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config);
 
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<WriteCommand>(PARTS_IN_FLIGHT);
+        // Batch writes share the one sender in turn, see `batch_in_flight`.
+        let cmd_tx = Rc::new(cmd_tx);
         let (resp_tx, mut resp_rx) = mpsc::unbounded_channel::<WriteResponse>();
 
         // Spawn the Tokio task that hands the operator's parts to persist.
@@ -663,6 +682,11 @@ mod write {
         )
         .abort_on_drop();
 
+        // Wakes the operator when the write task takes a part, so a pending batch write resumes.
+        let waker = Waker::from(Arc::new(ActivateOnWake(
+            scope.worker().sync_activator_for(info.address.to_vec()),
+        )));
+
         // In read-only mode, wake the operator when writes are allowed so the forced
         // consolidation stops re-arming and the batch-write path takes over promptly. Without
         // this the operator only learns of the transition on its next input activation, which an
@@ -685,17 +709,24 @@ mod write {
             // need to hold onto the initial capabilities.
             drop(capabilities);
 
+            let mut corrections = corrections;
             let read_only = *read_only_rx.borrow_and_update();
             let mut state = State::new(
                 sink_id,
                 worker_id,
-                corrections,
+                &mut corrections,
                 as_of,
                 advance_persist_frontiers_at_startup,
                 read_only,
             );
+            // `None` while a batch write holds the corrections.
+            let mut corrections = Some(corrections);
+            // The batch write waiting for the write task to take its parts, if any.
+            let mut write: Option<Pin<Box<dyn Future<Output = Corrections>>>> = None;
 
-            // Whether a batch write is currently in flight in the Tokio task.
+            // Whether a batch write is currently in flight in the Tokio task. Set from the start
+            // of a batch write until the write task answers its `Finish`, so it also covers
+            // `write`.
             let mut batch_in_flight: Option<(BatchDescription, Capability<Timestamp>)> = None;
 
             // On drop, the logger drains remaining events and retracts all logged state.
@@ -709,18 +740,13 @@ mod write {
                 // Acknowledge activation so the Tokio task can activate us again.
                 activation_ack.ack();
 
-                // `desired` updates enter the corrections as positive contributions and `persist`
-                // updates as negative ones, so the buffers hold `desired - persist`, the updates
-                // that bring the shard in line with `desired`.
-                //
-                // NOTE: Inserting here, rather than handing the updates to another thread, keeps
-                // this worker busy for as long as the buffers take to absorb them, which holds back
-                // the operators feeding it. Under memory pressure that is the rate at which the
-                // buffers page out, and without it the updates pile up unbounded in front of them.
-                desired_ok_input.for_each(|_cap, data| state.corrections.ok.insert(data));
-                desired_err_input.for_each(|_cap, data| state.corrections.err.insert(data));
-                persist_ok_input.for_each(|_cap, data| state.corrections.ok.insert_negated(data));
-                persist_err_input.for_each(|_cap, data| state.corrections.err.insert_negated(data));
+                let mut cx = Context::from_waker(&waker);
+                if let Some(pending) = &mut write {
+                    if let Poll::Ready(returned) = pending.as_mut().poll(&mut cx) {
+                        corrections = Some(returned);
+                        write = None;
+                    }
+                }
 
                 descs_input.for_each(|cap, data| {
                     let cap = cap.retain(0);
@@ -729,8 +755,38 @@ mod write {
                     }
                 });
 
-                state.advance_desired_frontiers(frontiers[0].frontier(), frontiers[1].frontier());
-                state.advance_persist_frontiers(frontiers[2].frontier(), frontiers[3].frontier());
+                // NOTE: While a batch write holds the corrections, the data inputs stay unread
+                // and their frontiers unobserved. Timely holds the updates until the write
+                // finishes, and the frontiers are read afresh then, so no batch starts before the
+                // updates it covers are in the corrections. A batch only starts once `desired`
+                // passed its `upper`, so what accumulates meanwhile are updates that arrive
+                // during the write, not the snapshot.
+                if let Some(corrections) = &mut corrections {
+                    // `desired` updates enter the corrections as positive contributions and
+                    // `persist` updates as negative ones, so the buffers hold `desired - persist`,
+                    // the updates that bring the shard in line with `desired`.
+                    //
+                    // NOTE: Inserting here, rather than handing the updates to another thread,
+                    // keeps this worker busy for as long as the buffers take to absorb them, which
+                    // holds back the operators feeding it. Under memory pressure that is the rate
+                    // at which the buffers page out, and without it the updates pile up unbounded
+                    // in front of them.
+                    desired_ok_input.for_each(|_cap, data| corrections.ok.insert(data));
+                    desired_err_input.for_each(|_cap, data| corrections.err.insert(data));
+                    persist_ok_input.for_each(|_cap, data| corrections.ok.insert_negated(data));
+                    persist_err_input.for_each(|_cap, data| corrections.err.insert_negated(data));
+
+                    state.advance_desired_frontiers(
+                        frontiers[0].frontier(),
+                        frontiers[1].frontier(),
+                    );
+                    state.advance_persist_frontiers(
+                        frontiers[2].frontier(),
+                        frontiers[3].frontier(),
+                        corrections,
+                    );
+                    state.maybe_force_consolidation(corrections);
+                }
 
                 // Track read-only mode so the forced consolidation stops re-arming once writes
                 // are allowed and the batch-write path takes over driving consolidation.
@@ -739,8 +795,6 @@ mod write {
                         state.set_read_only(false);
                     }
                 }
-
-                state.maybe_force_consolidation();
 
                 loop {
                     match resp_rx.try_recv() {
@@ -767,8 +821,19 @@ mod write {
 
                 if batch_in_flight.is_none() {
                     if let Some((desc, cap)) = state.maybe_start_batch() {
-                        let part_bytes = PART_BYTES.max(shared_batch_max_bytes.get());
-                        state.send_batch(&desc, &key_schema, part_bytes, &cmd_tx);
+                        let taken = corrections.take().expect("no batch write in flight");
+                        let mut pending = Box::pin(write_batch(
+                            taken,
+                            desc.clone(),
+                            Rc::clone(&key_schema),
+                            PART_BYTES.max(shared_batch_max_bytes.get()),
+                            Rc::clone(&cmd_tx),
+                            write_metrics.clone(),
+                        ));
+                        match pending.as_mut().poll(&mut cx) {
+                            Poll::Ready(returned) => corrections = Some(returned),
+                            Poll::Pending => write = Some(pending),
+                        }
                         batch_in_flight = Some((desc, cap));
                     }
                 }
@@ -782,6 +847,79 @@ mod write {
         });
 
         batches_output_stream
+    }
+
+    /// Counters a batch write reports to.
+    #[derive(Clone)]
+    struct WriteMetrics {
+        wait_seconds: GenericCounter<AtomicF64>,
+        part_bytes: IntCounter,
+    }
+
+    /// Activates an operator when woken.
+    struct ActivateOnWake(SyncActivator);
+
+    impl Wake for ActivateOnWake {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            // The worker may have shut down by the time the write task wakes us.
+            let _ = self.0.activate();
+        }
+    }
+
+    /// Writes the corrections before `desc.upper` as one batch and returns them.
+    ///
+    /// Sends the write task a `Start`, the updates cut into parts of `part_bytes`, and a
+    /// `Finish`. The future is pending while the write task holds [`PARTS_IN_FLIGHT`] parts, so a
+    /// batch never sits in memory as parts in full.
+    async fn write_batch(
+        mut corrections: Corrections,
+        desc: BatchDescription,
+        key_schema: Rc<RelationDesc>,
+        part_bytes: usize,
+        cmd_tx: Rc<mpsc::Sender<WriteCommand>>,
+        metrics: WriteMetrics,
+    ) -> Corrections {
+        let send = async |cmd| {
+            let start = Instant::now();
+            cmd_tx
+                .send(cmd)
+                .await
+                .expect("write task unexpectedly gone");
+            metrics.wait_seconds.inc_by(start.elapsed().as_secs_f64());
+        };
+
+        let upper = &desc.upper;
+        corrections.ok.consolidate_before(upper);
+        corrections.err.consolidate_before(upper);
+
+        send(WriteCommand::Start(desc.clone())).await;
+        let oks = corrections
+            .ok
+            .consolidated_updates_before(upper)
+            .map(|(d, t, r)| (SourceData(Ok(d)), t, r));
+        let errs = corrections
+            .err
+            .consolidated_updates_before(upper)
+            .map(|(d, t, r)| (SourceData(Err(d.deserialize())), t, r));
+        let mut part = PartBuilder::new(&*key_schema, &UnitSchema);
+        for (data, t, r) in oks.chain(errs) {
+            part.push(&data, &(), t, r.into_inner());
+            if part.goodbytes() >= part_bytes {
+                metrics.part_bytes.inc_by(u64::cast_from(part.goodbytes()));
+                let full = part.finish_and_replace(&*key_schema, &UnitSchema);
+                send(WriteCommand::Part(full)).await;
+            }
+        }
+        if part.len() > 0 {
+            metrics.part_bytes.inc_by(u64::cast_from(part.goodbytes()));
+            send(WriteCommand::Part(part.finish())).await;
+        }
+        send(WriteCommand::Finish).await;
+        corrections
     }
 
     /// The batch-writing context owned by the Tokio write task.
@@ -821,8 +959,6 @@ mod write {
     struct State {
         sink_id: GlobalId,
         worker_id: usize,
-        /// The updates that bring the shard in line with `desired`.
-        corrections: Corrections,
         /// The frontiers of the `desired` inputs.
         desired_frontiers: OkErr<Antichain<Timestamp>, Antichain<Timestamp>>,
         /// The frontiers of the `persist` inputs.
@@ -854,7 +990,7 @@ mod write {
         fn new(
             sink_id: GlobalId,
             worker_id: usize,
-            corrections: Corrections,
+            corrections: &mut Corrections,
             as_of: Antichain<Timestamp>,
             advance_persist_frontiers_at_startup: bool,
             read_only: bool,
@@ -866,7 +1002,6 @@ mod write {
             let mut state = Self {
                 sink_id,
                 worker_id,
-                corrections,
                 desired_frontiers: OkErr::new_frontiers(),
                 persist_frontiers: OkErr::new_frontiers(),
                 batch_description: None,
@@ -882,7 +1017,7 @@ mod write {
             // no other writers) would be never if we didn't advance the observed persist frontier
             // to the `as_of`.
             if advance_persist_frontiers_at_startup {
-                state.advance_persist_frontiers(as_of.borrow(), as_of.borrow());
+                state.advance_persist_frontiers(as_of.borrow(), as_of.borrow(), corrections);
             }
 
             state
@@ -923,6 +1058,7 @@ mod write {
             &mut self,
             ok: AntichainRef<Timestamp>,
             err: AntichainRef<Timestamp>,
+            corrections: &mut Corrections,
         ) {
             let ok_advanced = advance(&mut self.persist_frontiers.ok, ok);
             if ok_advanced {
@@ -934,13 +1070,13 @@ mod write {
             }
             if ok_advanced || err_advanced {
                 let since = self.persist_frontiers.frontier().to_owned();
-                self.corrections.ok.advance_since(since.clone());
-                self.corrections.err.advance_since(since);
+                corrections.ok.advance_since(since.clone());
+                corrections.err.advance_since(since);
             }
         }
 
         /// Consolidate the corrections if a forced consolidation is due.
-        fn maybe_force_consolidation(&mut self) {
+        fn maybe_force_consolidation(&mut self, corrections: &mut Corrections) {
             let Some(request) = &self.force_consolidation_after else {
                 return;
             };
@@ -963,8 +1099,8 @@ mod write {
                 } else {
                     None
                 };
-                self.corrections.ok.consolidate_at_since();
-                self.corrections.err.consolidate_at_since();
+                corrections.ok.consolidate_at_since();
+                corrections.err.consolidate_at_since();
             }
         }
 
@@ -1009,55 +1145,6 @@ mod write {
 
             self.trace("write batch description");
             self.batch_description.take()
-        }
-
-        /// Send the corrections before `desc.upper` to the write task, cut into parts of
-        /// `part_bytes`.
-        ///
-        /// Blocks while the write task holds [`PARTS_IN_FLIGHT`] parts, so a batch never sits in
-        /// memory as parts in full. The write task does not depend on this worker to make
-        /// progress, so the wait ends once persist accepts the parts.
-        fn send_batch(
-            &mut self,
-            desc: &BatchDescription,
-            key_schema: &RelationDesc,
-            part_bytes: usize,
-            cmd_tx: &mpsc::Sender<WriteCommand>,
-        ) {
-            let send = |cmd| {
-                cmd_tx
-                    .blocking_send(cmd)
-                    .expect("write task unexpectedly gone")
-            };
-
-            let upper = &desc.upper;
-            self.corrections.ok.consolidate_before(upper);
-            self.corrections.err.consolidate_before(upper);
-
-            send(WriteCommand::Start(desc.clone()));
-            let oks = self
-                .corrections
-                .ok
-                .consolidated_updates_before(upper)
-                .map(|(d, t, r)| (SourceData(Ok(d)), t, r));
-            let errs = self
-                .corrections
-                .err
-                .consolidated_updates_before(upper)
-                .map(|(d, t, r)| (SourceData(Err(d.deserialize())), t, r));
-            let mut part = PartBuilder::new(key_schema, &UnitSchema);
-            for (data, t, r) in oks.chain(errs) {
-                part.push(&data, &(), t, r.into_inner());
-                if part.goodbytes() >= part_bytes {
-                    send(WriteCommand::Part(
-                        part.finish_and_replace(key_schema, &UnitSchema),
-                    ));
-                }
-            }
-            if part.len() > 0 {
-                send(WriteCommand::Part(part.finish()));
-            }
-            send(WriteCommand::Finish);
         }
     }
 }
