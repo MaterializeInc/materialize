@@ -5,8 +5,10 @@ menu:
   main:
     name: "Troubleshoot freshness"
     identifier: freshness-troubleshooting
-    parent: transform-data
-    weight: 85
+    parent: freshness
+    weight: 30
+aliases:
+  - /transform-data/freshness-troubleshooting/
 ---
 
 [Freshness](/fundamentals/concepts/reaction-time/#freshness) measures the time from when a
@@ -15,7 +17,7 @@ a query. This guide can help diagnose why freshness is degraded for an object as
 well as measure freshness across your deployment.
 
 To track freshness for an object over time before a problem occurs, see [Monitor
-freshness](/transform-data/monitor-freshness/).
+freshness](/transform-data/freshness/monitor-freshness/).
 
 ## Key concepts
 
