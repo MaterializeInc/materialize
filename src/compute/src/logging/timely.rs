@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use columnar::{Columnar, Index};
 use columnation::{Columnation, CopyRegion};
+use differential_dataflow::consolidation::consolidate_updates;
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
@@ -471,27 +472,44 @@ struct PendingUpdates {
     schedules_histogram: UpdateSums<ScheduleHistogramDatum>,
 }
 
-/// Sums of diffs per `(timestamp, data)`.
-struct UpdateSums<D>(BTreeMap<(Timestamp, D), Diff>);
+/// Updates buffered in a vector and consolidated in amortized batches.
+struct UpdateSums<D> {
+    updates: Vec<(D, Timestamp, Diff)>,
+    /// The length at which `add` consolidates `updates`.
+    consolidate_at: usize,
+}
 
 impl<D> Default for UpdateSums<D> {
     fn default() -> Self {
-        Self(BTreeMap::new())
+        Self {
+            updates: Vec::new(),
+            consolidate_at: Self::MIN_CONSOLIDATE_AT,
+        }
     }
+}
+
+impl<D> UpdateSums<D> {
+    const MIN_CONSOLIDATE_AT: usize = 1024;
 }
 
 impl<D: Ord + 'static> UpdateSums<D> {
     fn add(&mut self, data: D, time: Timestamp, diff: Diff) {
-        *self.0.entry((time, data)).or_insert(Diff::ZERO) += diff;
+        self.updates.push((data, time, diff));
+        if self.updates.len() >= self.consolidate_at {
+            consolidate_updates(&mut self.updates);
+            // Waiting until the length doubles means at least half of each consolidation's input
+            // is new updates, which amortizes its cost over them.
+            self.consolidate_at = std::cmp::max(Self::MIN_CONSOLIDATE_AT, 2 * self.updates.len());
+        }
     }
 
-    /// Gives the non-zero sums to `session` and clears them.
+    /// Gives the consolidated updates to `session` and clears them, keeping the allocation.
     fn flush(&mut self, mut session: OutputSessionVec<'_, '_, Update<(D, ())>>) {
-        for ((time, data), diff) in std::mem::take(&mut self.0) {
-            if !diff.is_zero() {
-                session.give(((data, ()), time, diff));
-            }
+        consolidate_updates(&mut self.updates);
+        for (data, time, diff) in self.updates.drain(..) {
+            session.give(((data, ()), time, diff));
         }
+        self.consolidate_at = Self::MIN_CONSOLIDATE_AT;
     }
 }
 
