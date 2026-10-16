@@ -42,6 +42,7 @@ The salient points, each linking to its detailed section below.
   * **[Open a draft PR first](#polish-requirements)**, self-review it (a great
     stage to run an [AI review](#ai-assisted-review) too), and make sure it's
     green in CI before you mark it ready and request review from others.
+    Only a human marks a PR ready, [never an agent](#agent-authored-changes).
 
   * **[Test every behavior change](#testing)** — at a bare minimum, one added or
     modified test.
@@ -60,7 +61,7 @@ The salient points, each linking to its detailed section below.
     the *why* behind your comments, and mark non-blocking preferences as "nit:".
 
   * **Lean on [AI for a first pass](#ai-assisted-review)** — but you remain
-    accountable for the approval.
+    accountable for the approval, and for every AI-found comment you post.
 
   * **[Approve PRs that improve overall codebase health](#reviewing-changes)**
     even when they aren't perfect.
@@ -479,6 +480,17 @@ before a human ever looks at the PR. As on the review side, you remain
 accountable for what you ship, so confirm or discard what it flags rather than
 taking its output at face value.
 
+#### Agent-authored changes
+
+An agent may write the code, open the PR, and push to it, but the PR stays a
+draft until you have read the full diff yourself. Marking a PR ready is your
+statement that you understand the change and can answer for every line of it,
+so only a human does it, and only a human requests reviewers. A reviewer who
+asks why the code does something expects an answer from you, not a pointer to
+the agent. Agents make large diffs cheap to produce while reviewing them stays
+expensive, so the [size limits](#pr-size-limits) apply with extra force to
+agent-written PRs.
+
 The self-review is _not_ meant to add a large emotional burden before submitting
 a PR. You should not feel like PRs must be perfect before you can submit them!
 If your reviewers catch obvious typos or todos, that is not a failure—that's
@@ -731,6 +743,17 @@ Two rules:
   * **AI assists; it doesn't replace the human review** the [overview](#overview)
     describes. Mentoring a newcomer and socializing a change with the team are
     things only a teammate can do.
+
+When you post AI findings on someone else's PR, the comments are yours. Have
+the agent leave a pending review rather than submit one, then delete false
+positives and noise, rewrite what remains in your own words, and submit it
+yourself. Post only findings you have checked and would defend. A short list of
+correctness issues helps the author more than a long list of mixed quality, so
+leave style nits to `bin/lint` and to your own judgment. Mention AI assistance
+once in the review body rather than on each comment. The same rule covers
+replies on your own PRs: an agent may draft a reply, but you read it before it
+is posted. Automated reviewers that run without a human in the loop belong in
+CI under a bot account, never under a person's name.
 
 On the author side, the same applies in reverse: make sure you can explain
 everything you're about to ship, especially AI-generated code, before you
