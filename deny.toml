@@ -15,7 +15,14 @@ multiple-versions = "deny"
 # You can use patch directives in the root Cargo.toml to point at a
 # Materialize-maintained fork that avoids the duplicated transitive
 # dependencies.
+
 skip = [
+    # Materialize uses tower-http 0.7.1. kube-client and reqwest still require
+    # 0.6, which currently resolves to 0.6.11. Temporarily exempt that exact
+    # version from duplicate checks. Remove this exception once those
+    # dependencies no longer bring in tower-http 0.6.11.
+    { name = "tower-http", version = "=0.6.11" },
+
     # arrayvec had a significant API change in 0.7
     { name = "arrayvec", version = "0.5.2" },
     # One-time exception for base64 due to its prevalence in the crate graph.
