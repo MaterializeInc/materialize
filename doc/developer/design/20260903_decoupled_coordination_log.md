@@ -21,8 +21,8 @@ Use the dedicated x86_64 scratch worker for focused builds, tests and
 interactive debugging. The parallel-check workflow requires SQL Server, which
 does not run natively on ARM. Keep the 16-vCPU, 64-GiB, 500-GiB configuration,
 one worker, and renew its expiry as needed for this work without asking again.
-Current worker: `i-05170dbf0b3194844` (`m8i.4xlarge`). Last recorded expiry:
-2026-10-14 22:03:16 UTC. Verify and extend it before further work.
+Current worker: `i-014808eeb9469702a`. Last recorded expiry:
+2026-10-16 20:41:55 UTC. Verify and extend it before further work.
 Scratch evidence is copied off-worker under
 `~/.local/share/aj/m2-evidence/scratch/`.
 Launch with `bin/scratch create decoupled-coordination
@@ -161,18 +161,22 @@ Compare actual CI agent resources, not requested queue labels.
 Keep the actual CI DDL timeout investigation distinct from confirmed OOM failures.
 Those timeouts have no established OOM cause. Preserve historical reads, source
 flow control, protection and the original resource budget.
-Statement-correlated traces identify repeated metadata CAS losses followed by
-structural invalidation during the DDL queue wait. Retained retries reacquire
-admission only to release it and enqueue a fresh plan. Examine that redundant
-queue turn without replacing structural validation with dependency existence.
-Allow a stale retained continuation to replan within its newly reacquired turn,
-with fresh certification and full validation. Definitive failed attempts still
-release admission before backoff. Avoid repeated planning loops within one turn.
-Verify successful catalog commits and end-to-end SQL completion in the existing
-failing workload, not just fewer queue trips.
+Retained DDL continuations use their newly reacquired turn for fresh certification
+and full replanning when preparation is already stale at entry. Definitive failed
+attempts and invalidation after work still release admission. Keep that distinction,
+without repeated planning loops or dependency-existence shortcuts.
+Successful individual content commits and SQL responses do not close workload
+starvation. Verify the combined change in existing regressions and keep append
+losses separate from queue amplification.
 Keep coordinator occupancy separate from lock ownership: an inline source
 transaction can delay cleanup of another, already committed admission holder.
-Removing that amplification alone does not establish successful catalog commits.
+Ordinary item rename uses the existing catalog-commit continuation. Verify its
+retry yielding and preserve DDL transaction accumulation, COMMIT and rollback.
+Keep long individual catch-up and post-commit response delays separate: sequential
+client and bounds publication awaits can exclude coordinator command processing
+even after a rename's inline completion finishes. Preserve publication barriers,
+complete-prefix application and definitive submitted-write outcomes. Do not assume
+the late rename explains the earlier MV timeouts.
 Reduced decoding and a larger-host pass do not establish original-workload progress.
 Keep the driver file-descriptor issue parked. SQL completion and actual
 per-object compaction-bound advancement still need separate verification.
