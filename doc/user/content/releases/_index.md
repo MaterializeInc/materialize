@@ -20,6 +20,50 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.46.0
+*Released to Materialize Cloud: 2026-10-15* <br>
+*Released to Materialize Self-Managed: 2026-10-16* <br>
+
+### Kafka sink message attribution {#v26.46-kafka-sink-id-header}
+
+{{< private-preview />}}
+
+Kafka sinks can now attach a `materialize-sink-id` header carrying the sink's ID to every message they produce, so a consumer of a topic that several sinks write to can tell which sink produced each message. For more information, see [`CREATE SINK`: Headers](/sql/create-sink/kafka/#headers).
+
+### Exclude upstream constraints from MySQL source tables {#v26.46-mysql-exclude-constraints}
+
+{{< public-preview />}}
+
+`CREATE TABLE ... FROM SOURCE` now accepts `EXCLUDE CONSTRAINTS` and `EXCLUDE ALL CONSTRAINTS` for MySQL sources, as it already did for PostgreSQL sources. This lets you drop a `PRIMARY KEY`, `UNIQUE`, or `NOT NULL` constraint upstream without stalling ingestion:
+
+- `EXCLUDE CONSTRAINTS` excludes the `PRIMARY KEY` and `UNIQUE` constraints you name.
+- `EXCLUDE ALL CONSTRAINTS` excludes every constraint, including `NOT NULL`, so the table has no keys and every column is nullable.
+
+For more information, see [Handle upstream constraint drop](/ingest-data/mysql/source-versioning/#handle-upstream-constraint-drop).
+
+### Advisory {#v26.46-advisory}
+
+- **Self-Managed: Potential performance regression for upsert sources**: This release may regress the performance of [upsert sources](/ingest-data/#upsert-sources), such as Kafka sources that use `ENVELOPE UPSERT`, in Materialize Self-Managed deployments.
+
+  **Upgrade impact**: If you run Materialize Self-Managed with upsert sources, hold off on upgrading to v26.46.0. Self-Managed deployments without upsert sources require no action.
+
+### Improvements {#v26.46-improvements}
+- **Replication-factor changes during a cluster reconfiguration**: `ALTER CLUSTER ... SET (REPLICATION FACTOR ...)` is now accepted while a graceful reconfiguration is in flight, preserving the dimensions and the deadline you did not name, so you can scale a stuck reconfiguration down to zero or cancel it by restoring the original configuration instead of waiting it out.
+- **Zero-downtime deployment readiness follows replica hydration**: Zero-downtime deployments no longer restart their stability period when the new deployment restarts to pick up DDL changes, and now wait for every replica of a cluster to hydrate before cutting over.
+- **Read-then-write statements no longer take a table write lock**: `DELETE`, `UPDATE`, and `INSERT` statements that read before writing no longer hold a per-table write lock between the read and the write.
+- **Lower memory when ingesting wide schemas**: Sources with wide schemas now need less memory to write their data.
+- **Kafka broker addresses are checked against private IP ranges**: In Materialize Cloud, Kafka connections that reach brokers directly (not through PrivateLink or an SSH tunnel) now fail with `Broker address resolved to a private IP` if a broker resolves to a private address. Existing sources and sinks using such brokers stall the next time they reconnect.
+- **Creating and altering network policies is disabled by default in Self-Managed**: The operator Helm chart now disables `CREATE NETWORK POLICY` and `ALTER NETWORK POLICY`, because self-managed access paths such as port-forwards don't preserve the client IP. Existing policies are still enforced. To manage network policies, set `operator.args.enableDatabaseNetworkPolicies: true`.
+- **Lower `mz_catalog_server` load from open cluster pages**: Open cluster detail pages in the Console put much less load on the `mz_catalog_server` cluster.
+
+### Bug Fixes {#v26.46-bug-fixes}
+- Fixed casts from `"char"` to numbers and other non-string types, which panicked the optimizer during constant folding or crashed the replica running an operator over a `"char"` column; `"char"` to `int4` now yields the byte value, and every other target goes through the text representation.
+- Fixed `EXPLAIN ANALYZE CPU` and `EXPLAIN ANALYZE CLUSTER CPU` counting operators nested inside regions more than once, which reported 1.5x to 3x the real CPU time for joins, reduces, and `TopK`.
+- Fixed `offset_committed` in `mz_source_statistics` reporting the progress of a source's slowest export for every one of its exports, so a subsource or table that is still snapshotting no longer inflates the ingestion lag reported for the others.
+- Fixed `COPY FROM` a URL decoding the response body into the target table when the server answered with a 4xx or 5xx status, which now fails with `server returned HTTP <code>`.
+- Fixed the MCP server returning an HTTP 422 error for a `tools/call` request without the optional `arguments` field.
+- Fixed the MCP server returning an HTTP 422 error, rather than a JSON-RPC "method not found" error, for unsupported methods that include `params`.
+
 ## v26.45.1
 *Released to Materialize Cloud: 2026-10-08* <br>
 *Released to Materialize Self-Managed: 2026-10-09* <br>
