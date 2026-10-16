@@ -40,4 +40,6 @@ try python3 -m doctest .agents/skills/mz-release-signoff/scripts/build-range-que
 # fixtures rather than trusted because the run above exited 0.
 try bin/pyactivate -m pytest -qq .agents/skills/mz-release-signoff/scripts/lint_metrics_test.py
 
+try bin/pyactivate -m pytest -qq .agents/skills/mz-release-signoff/scripts/catalog_diff_test.py
+
 try_status_report
