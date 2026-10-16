@@ -41,4 +41,14 @@ describe("buildSubscribeQuery", () => {
       `SUBSCRIBE ((select "id" from "mz_objects")) WITH (PROGRESS) AS OF AT LEAST TIMESTAMP '${asOfAtLeast.toISOString()}' ENVELOPE UPSERT (KEY ("id"));`,
     );
   });
+
+  it("with up to", () => {
+    const result = buildSubscribeQuery(selectQuery, {
+      upsertKey: "id",
+      upToMs: 1792639991868,
+    }).compile(queryBuilder);
+    expect(result.sql).toEqual(
+      `SUBSCRIBE ((select "id" from "mz_objects")) WITH (PROGRESS) UP TO 1792639991868 ENVELOPE UPSERT (KEY ("id"));`,
+    );
+  });
 });

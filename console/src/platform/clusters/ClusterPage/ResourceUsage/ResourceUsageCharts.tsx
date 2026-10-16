@@ -81,7 +81,7 @@ const CHANGE_TICK_MIN_HEIGHT_PX = 6;
 const CHANGE_TICK_STEP_PX = 2;
 // The most objects a change tick's tooltip names before summarizing the rest.
 const CHANGE_TOOLTIP_OBJECT_LIMIT = 5;
-const TIME_TICK_COUNT = 8;
+export const TIME_TICK_COUNT = 8;
 // Replicas' bars at one time overlap by this share of a bar, so each group
 // reads as one point in time.
 const BAR_OVERLAP = 0.5;
@@ -275,7 +275,7 @@ export const PercentAxis = ({
   );
 };
 
-const ThresholdLine = ({
+export const ThresholdLine = ({
   layout,
   y,
   color,
@@ -749,9 +749,11 @@ export const MemoryChart = ({
 export interface TimeAxisProps {
   width: number;
   xScale: TimeScale;
+  /** Labels each tick. Defaults to the time before the window's end. */
+  tickFormat?: (ms: number) => string;
 }
 
-export const TimeAxis = ({ width, xScale }: TimeAxisProps) => {
+export const TimeAxis = ({ width, xScale, tickFormat }: TimeAxisProps) => {
   const { colors, fonts } = useTheme<MaterializeTheme>();
   const [startDate, endDate] = xScale.domain();
   // Evenly spaced and labeled by time before now, matching `UtilizationGraph`.
@@ -773,7 +775,9 @@ export const TimeAxis = ({ width, xScale }: TimeAxisProps) => {
         stroke={colors.border.secondary}
         strokeWidth={2}
         tickFormat={(value) =>
-          relativeTimeTickFormat(value.valueOf(), startDate, endDate)
+          tickFormat
+            ? tickFormat(value.valueOf())
+            : relativeTimeTickFormat(value.valueOf(), startDate, endDate)
         }
         tickLabelProps={() => ({
           fill: colors.foreground.secondary,

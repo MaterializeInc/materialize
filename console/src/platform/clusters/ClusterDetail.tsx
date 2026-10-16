@@ -25,6 +25,7 @@ import { ClusterDetailBreadcrumbs } from "./ClusterDetailBreadcrumbs";
 import ClusterOverview from "./ClusterOverview";
 import { CLUSTER_OBJECT_TYPES } from "./ClusterPage/clusterObjectTypes";
 import ClusterPage, { ClusterPageHeader } from "./ClusterPage/ClusterPage";
+import { WORKERS_TAB_PATH } from "./ClusterPage/tabLinks";
 import ClusterReplicas from "./ClusterReplicas";
 import IndexList from "./IndexList";
 import MaterializedViewsList from "./MaterializedViewsList";
@@ -71,6 +72,8 @@ const ClassicClusterDetailPage = () => {
       <Route path="sinks" element={<Sinks key={clusterName} />} />
       <Route path="objects" element={<ClassicObjectsRedirect />} />
       <Route path="objects/:objectType" element={<ClassicObjectsRedirect />} />
+      {/* The redesigned Workers tab has no classic counterpart. */}
+      <Route path={WORKERS_TAB_PATH} element={<Navigate to=".." replace />} />
     </SentryRoutes>
   );
 };
