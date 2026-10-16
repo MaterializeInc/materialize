@@ -136,7 +136,7 @@ Used Indexes:
 Target cluster: quickstart
 ```
 
-A `SELECT` with only a `LIMIT`, and no filter or `ORDER BY`, on an object with
+A `SELECT` with only a `LIMIT`, and no filter or `ORDER BY`, on a materialized view or source with
 no index in the cluster may read a few rows directly from storage instead of
 building a dataflow. `EXPLAIN` shows this as `→ReadStorage`. This is useful
 for peeking at data, but because `LIMIT` without `ORDER BY` returns arbitrary
