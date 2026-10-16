@@ -35,9 +35,7 @@ impl Staged for DropObjectsStage {
         ctx: &mut ExecuteContext,
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         if coord.catalog().transient_revision() != self.planning_revision {
-            // Replanning this statement enters ordinary DDL serialization again.
-            // Do not retain its previous guard or lend it to another statement.
-            coord.release_ddl_lock(ctx.session().conn_id());
+            // No attempt has run in this reacquired turn. Replan within it.
             return Err(AdapterError::CatalogSnapshotChanged);
         }
         let committed = match coord

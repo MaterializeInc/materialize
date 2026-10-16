@@ -161,10 +161,18 @@ Compare actual CI agent resources, not requested queue labels.
 Keep the actual CI DDL timeout investigation distinct from confirmed OOM failures.
 Those timeouts have no established OOM cause. Preserve historical reads, source
 flow control, protection and the original resource budget.
-The existing `mz_adapter::frontend_read_then_write=debug` target supplies the
-missing admission and transaction-phase events for a focused failing-workflow
-capture. The current INFO records identify candidates, not successful commits
-or measured lock-hold intervals.
+Statement-correlated traces identify repeated metadata CAS losses followed by
+structural invalidation during the DDL queue wait. Retained retries reacquire
+admission only to release it and enqueue a fresh plan. Examine that redundant
+queue turn without replacing structural validation with dependency existence.
+Allow a stale retained continuation to replan within its newly reacquired turn,
+with fresh certification and full validation. Definitive failed attempts still
+release admission before backoff. Avoid repeated planning loops within one turn.
+Verify successful catalog commits and end-to-end SQL completion in the existing
+failing workload, not just fewer queue trips.
+Keep coordinator occupancy separate from lock ownership: an inline source
+transaction can delay cleanup of another, already committed admission holder.
+Removing that amplification alone does not establish successful catalog commits.
 Reduced decoding and a larger-host pass do not establish original-workload progress.
 Keep the driver file-descriptor issue parked. SQL completion and actual
 per-object compaction-bound advancement still need separate verification.

@@ -56,8 +56,12 @@ Prepared DDL may retain selected plans and input holds across a definitive
 metadata conflict, but not an unfinished protection publication. Recheck the
 planning revision and protection incarnation before reuse, and rebuild creator
 protection for each commit attempt. A DROP cascade requires the full structural
-revision, not merely continued existence of its named dependencies. A same-statement
-replan releases its DDL guard and wakes queued statements before reacquiring it.
+revision, not merely continued existence of its named dependencies. A retained
+continuation that discovers stale preparation immediately after reacquiring DDL
+admission may replan within that turn, using fresh catalog certification and full
+validation. Replanning after work in the turn releases its DDL guard and wakes
+queued statements before reacquiring it. Do not repeat planning loops within one
+turn.
 Queued continuations must reject terminated connections even after their cancel
 watches have been removed.
 
