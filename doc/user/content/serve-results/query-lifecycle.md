@@ -47,7 +47,7 @@ network round trip to your client.
 ## Indexed reads
 
 The query reads directly from an [index](/fundamentals/concepts/indexes/) that
-already holds the results in memory. No new dataflow is built.
+already holds the results. No new dataflow is built.
 
 A query takes this path when it reads a **single** indexed object in the active
 cluster and only filters, projects, or applies scalar functions to it, optionally
