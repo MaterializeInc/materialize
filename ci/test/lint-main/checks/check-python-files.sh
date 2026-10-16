@@ -24,7 +24,14 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
     dbt_files_list=$(mktemp)
     ruff_files_list=$(mktemp)
     trap 'rm -f "$python_files_list" "$dbt_files_list" "$ruff_files_list"' EXIT
-    { git_files 'ci/*.py' 'misc/python/*.py' 'test/*.py'; git_files '**/mzcompose.py' | grep -v -e 'test/' -e 'misc/dbt-materialize/'; } > "$python_files_list"
+    # Type-check every tracked Python file except two kinds. dbt-materialize
+    # keeps compatibility with older Python versions and has its own check
+    # below. The MCP server packages declare dependencies in their own
+    # pyproject.toml that the repository venv does not install, so pyright
+    # cannot resolve their imports.
+    git_files '*.py' \
+        | grep -v -e '^misc/dbt-materialize/' -e '^misc/mcp-materialize/mcp_materialize/' -e '^misc/mcp-materialize/tests/' -e '^misc/mcp-materialize-agents/mcp_materialize_agents/' \
+        > "$python_files_list"
     git_files 'misc/dbt-materialize/*.py' > "$dbt_files_list"
 
     try xargs npx --yes "pyright@$pyright_version" --warnings --threads 4 < "$python_files_list"
