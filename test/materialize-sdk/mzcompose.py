@@ -56,7 +56,19 @@ def cargo_test(c: Composition, env: dict[str, str], *filters: str) -> None:
     each run, because a restart can change them."""
     url = "host=localhost port={} user={} dbname=materialize"
     spawn.runv(
-        ["cargo", "test", "--locked", "--tests", "--", "--ignored", *filters],
+        # Only the Rust package's: the turbopuffer sink's ignored tests need
+        # an API key, and run by hand.
+        [
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "materialize-sdk",
+            "--tests",
+            "--",
+            "--ignored",
+            *filters,
+        ],
         cwd=MZ_ROOT / "misc" / "materialize-sdk",
         env={
             **os.environ,

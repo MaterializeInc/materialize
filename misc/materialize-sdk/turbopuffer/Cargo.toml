@@ -1,0 +1,22 @@
+[package]
+name = "materialize-sdk-turbopuffer"
+description = "Keep turbopuffer namespaces equal to Materialize views."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+materialize-sdk = { path = "../rust" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tokio-postgres.workspace = true
