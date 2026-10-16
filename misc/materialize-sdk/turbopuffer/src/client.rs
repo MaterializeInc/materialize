@@ -260,17 +260,25 @@ impl Client {
         namespace: &str,
         body: &Value,
     ) -> Result<Option<Vec<Value>>, Failure> {
-        let path = format!("/v2/namespaces/{namespace}/query");
-        let Some(mut response) = self
-            .request(Method::POST, &path, Some(body.to_string()))
-            .await?
-        else {
+        let Some(mut response) = self.query_response(namespace, body).await? else {
             return Ok(None);
         };
         match response.get_mut("rows").map(Value::take) {
             Some(Value::Array(rows)) => Ok(Some(rows)),
             other => Err(unexpected("query", &format!("rows are {other:?}"))),
         }
+    }
+
+    /// The response to a query of `namespace`, or `None` if the namespace
+    /// does not exist.
+    pub(crate) async fn query_response(
+        &self,
+        namespace: &str,
+        body: &Value,
+    ) -> Result<Option<Value>, Failure> {
+        let path = format!("/v2/namespaces/{namespace}/query");
+        self.request(Method::POST, &path, Some(body.to_string()))
+            .await
     }
 
     /// The bytes written to `namespace` that turbopuffer has not indexed
