@@ -24,6 +24,12 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-10-15* <br>
 *Released to Materialize Self-Managed: 2026-10-16* <br>
 
+### Kafka sink message attribution {#v26.46-kafka-sink-id-header}
+
+{{< private-preview />}}
+
+Kafka sinks can now attach a `materialize-sink-id` header carrying the sink's ID to every message they produce, so a consumer of a topic that several sinks write to can tell which sink produced each message. For more information, see [`CREATE SINK`: Headers](/sql/create-sink/kafka/#headers).
+
 ### Exclude upstream constraints from MySQL source tables {#v26.46-mysql-exclude-constraints}
 
 {{< public-preview />}}
