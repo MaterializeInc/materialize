@@ -155,6 +155,7 @@ Never regenerate the entire Cargo.lock — bare `cargo update` bumps every semve
 * Push branches to your fork.
 * Pull requests target `main` on `MaterializeInc/materialize`.
 * Each PR should contain one semantic change.
+* Put non-trivial user docs for a new feature in a separate PR. See "Adding documentation for new features" in `doc/user/README.md`.
 
 ## Splitting large branches
 

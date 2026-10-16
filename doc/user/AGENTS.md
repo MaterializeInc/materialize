@@ -104,22 +104,11 @@ appropriate language (`sql` for SQL and `nofmt` for expected output), and
 relative links to repository files. Match nearby front matter and URL naming
 patterns, generally using lowercase, hyphenated paths. Keep examples runnable
 and update related `data/` definitions when changing generated reference
-content. Use `warn-if-unreleased` or `version-added` for features not yet
-deployed.
+content.
 
-Documentation for a new feature should merge with its implementation. Gate
-unreleased material on the release instead of holding the documentation change:
-
-- Use `warn-if-unreleased` or `warn-if-unreleased-inline` for warnings.
-- Use paired `if-released` and `if-unreleased` blocks for conditional content.
-- Set `version-added` on signatures in `data/sql_funcs.yml`.
-
-These mechanisms read the `released`, `date`, and `patch` fields from
-`content/releases/vX.Y.md`, so release warnings disappear when the release page
-is marked as released. The `version` shortcode expands to the latest released
-version. Content in an `if-released` block is hidden in PR previews. Temporarily
-toggle the applicable release page when you need to preview it, and do not
-commit that toggle.
+Put non-trivial documentation for a new feature in its own PR, merged after the
+feature's release rolls out. Before documenting a new feature, read "Adding
+documentation for new features" in `README.md`.
 
 Use `public-preview`, `private-preview`, and `private-preview-inline` for
 maturity callouts.
