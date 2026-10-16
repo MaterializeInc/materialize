@@ -18,6 +18,7 @@
 
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use materialize_sdk_core::checkpoint::MAX_BYTES;
 use materialize_sdk_core::{CheckpointWrite, PayloadColumns, SinkType, Update};
@@ -125,6 +126,15 @@ pub enum SinkError {
         /// Whether every attempt will fail the same way, so that the default
         /// delivery policy stalls at once instead of retrying.
         permanent: bool,
+    },
+    /// The target cannot take the call yet, as after an HTTP 429. The SDK
+    /// waits `retry_after`, or its backoff without one, and sends the call
+    /// again without using up an attempt, so a sink returns this only for a
+    /// limit that passes.
+    #[error("the target is throttling requests")]
+    Throttled {
+        /// How long the target asked to wait.
+        retry_after: Option<Duration>,
     },
 }
 
