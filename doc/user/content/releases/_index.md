@@ -41,6 +41,12 @@ Kafka sinks can now attach a `materialize-sink-id` header carrying the sink's ID
 
 For more information, see [Handle upstream constraint drop](/ingest-data/mysql/source-versioning/#handle-upstream-constraint-drop).
 
+### Advisory {#v26.46-advisory}
+
+- **Self-Managed: Potential performance regression for upsert sources**: This release may regress the performance of [upsert sources](/ingest-data/#upsert-sources), such as Kafka sources that use `ENVELOPE UPSERT`, in Materialize Self-Managed deployments.
+
+  **Upgrade impact**: If you run Materialize Self-Managed with upsert sources, hold off on upgrading to v26.46.0. Self-Managed deployments without upsert sources require no action.
+
 ### Improvements {#v26.46-improvements}
 - **Replication-factor changes during a cluster reconfiguration**: `ALTER CLUSTER ... SET (REPLICATION FACTOR ...)` is now accepted while a graceful reconfiguration is in flight, preserving the dimensions and the deadline you did not name, so you can scale a stuck reconfiguration down to zero or cancel it by restoring the original configuration instead of waiting it out.
 - **Zero-downtime deployment readiness follows replica hydration**: Zero-downtime deployments no longer restart their stability period when the new deployment restarts to pick up DDL changes, and now wait for every replica of a cluster to hydrate before cutting over.
