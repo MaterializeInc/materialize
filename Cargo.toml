@@ -497,7 +497,7 @@ reqwest-retry = "0.9.1"
 rlimit = "0.11.0"
 rocksdb = { version = "0.25.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
-rustls = "0.23.38"
+rustls = "0.23.46"
 rustls-platform-verifier = "0.7.0"
 rpassword = "7.5.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
