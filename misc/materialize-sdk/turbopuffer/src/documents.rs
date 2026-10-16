@@ -26,6 +26,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use materialize_sdk::{Change, Column, PayloadColumns, Rejected, SinkBatch, SinkError, Update};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
+
+use crate::pace::estimate_tokens;
 
 /// The largest id turbopuffer accepts, in bytes.
 const MAX_ID_BYTES: usize = 64;
@@ -37,6 +40,8 @@ const MAX_VALUE_BYTES: usize = 8 << 20;
 const MAX_DOCUMENT_BYTES: usize = 64 << 20;
 /// The most attribute names turbopuffer allows in a namespace.
 const MAX_ATTRIBUTES: usize = 1024;
+/// The longest attribute name turbopuffer allows, in bytes.
+const MAX_NAME_BYTES: usize = 128;
 
 /// The attributes the sink writes on every document. A column with one of
 /// these names, or one turbopuffer reserves, cannot be an attribute.
@@ -48,11 +53,43 @@ pub(crate) fn newer_condition() -> Value {
     json!(["mz_timestamp", "Lt", {"$ref_new": "mz_timestamp"}])
 }
 
-/// Which columns readers filter or search on.
+/// The most embedded attributes turbopuffer allows in a namespace.
+const MAX_EMBEDDINGS: usize = 4;
+/// The most dimensions turbopuffer allows in a dense vector.
+const MAX_DIMS: u32 = 10_752;
+
+/// Which columns readers filter, search, or search by meaning on.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Indexing {
     pub(crate) filterable: BTreeSet<String>,
     pub(crate) full_text_search: BTreeSet<String>,
+    pub(crate) embeddings: Vec<Embedding>,
+}
+
+/// A text column that turbopuffer embeds with one of the models it hosts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Embedding {
+    pub(crate) column: String,
+    pub(crate) model: String,
+    pub(crate) dims: u32,
+}
+
+impl Embedding {
+    /// The attribute turbopuffer stores the vector in.
+    pub(crate) fn vector(&self) -> String {
+        format!("embed_{}", self.column)
+    }
+
+    /// The attribute that holds a hash of the embedded text, so that a write
+    /// can keep a stored vector whose text did not change.
+    pub(crate) fn hash(&self) -> String {
+        format!("mz_hash_{}", self.column)
+    }
+
+    /// The vector of a document without text.
+    fn placeholder(&self) -> Value {
+        Value::from(vec![0.0f64; usize::try_from(self.dims).unwrap_or(0)])
+    }
 }
 
 /// How a column's text becomes an attribute value.
@@ -124,6 +161,7 @@ struct Attribute {
 pub(crate) struct Layout {
     columns: PayloadColumns,
     attributes: Vec<Attribute>,
+    embeddings: Vec<Embedding>,
     schema: Value,
 }
 
@@ -173,6 +211,30 @@ impl Layout {
             if full_text {
                 entry.insert("full_text_search".into(), json!(true));
             }
+            let embedding = indexing.embeddings.iter().find(|e| e.column == column.name);
+            if let Some(embedding) = embedding {
+                if !(1..=MAX_DIMS).contains(&embedding.dims) {
+                    return Err(refuse(format!(
+                        "an embedding has between 1 and {MAX_DIMS} dimensions, not {}",
+                        embedding.dims
+                    )));
+                }
+                if kind != Kind::String {
+                    return Err(refuse(format!(
+                        "the column {:?} is not text, so it cannot be embedded",
+                        column.name
+                    )));
+                }
+                entry.insert(
+                    "embed".into(),
+                    json!({"model": embedding.model, "dims": embedding.dims}),
+                );
+                // A condition can compare only filterable attributes.
+                schema.insert(
+                    embedding.hash(),
+                    json!({"type": "string", "filterable": true}),
+                );
+            }
             schema.insert(column.name.clone(), Value::Object(entry));
             attributes.push(Attribute {
                 name: column.name.clone(),
@@ -182,10 +244,43 @@ impl Layout {
                 position,
             });
         }
-        if schema.len() >= MAX_ATTRIBUTES {
+        // The schema leaves out `id` and the vectors.
+        if schema.len().saturating_add(indexing.embeddings.len()) >= MAX_ATTRIBUTES {
             return Err(refuse(format!(
                 "the view has {} columns, more than a turbopuffer namespace holds",
                 attributes.len()
+            )));
+        }
+        let embedded: Vec<&String> = indexing.embeddings.iter().map(|e| &e.column).collect();
+        if embedded.len() > MAX_EMBEDDINGS {
+            return Err(refuse(format!(
+                "a turbopuffer namespace embeds at most {MAX_EMBEDDINGS} columns"
+            )));
+        }
+        if embedded.iter().collect::<BTreeSet<_>>().len() != embedded.len() {
+            return Err(refuse("a column is embedded twice".into()));
+        }
+        let derived = indexing
+            .embeddings
+            .iter()
+            .flat_map(|e| [e.vector(), e.hash()]);
+        let all_names: BTreeSet<&String> = attributes.iter().map(|a| &a.name).collect();
+        if let Some(column) = embedded.iter().find(|column| !all_names.contains(*column)) {
+            return Err(refuse(format!(
+                "the view has no column {column:?} to embed, other than a key named id"
+            )));
+        }
+        let derived: Vec<String> = derived.collect();
+        if let Some(long) = derived.iter().find(|name| name.len() > MAX_NAME_BYTES) {
+            return Err(refuse(format!(
+                "the attribute {long:?} the sink adds for embedding is over {MAX_NAME_BYTES} \
+                 bytes, so shorten the column's name in the view"
+            )));
+        }
+        if let Some(clash) = derived.iter().find(|name| all_names.contains(name)) {
+            return Err(refuse(format!(
+                "the column {clash:?} clashes with an attribute the sink adds for embedding, \
+                 so rename it in the view"
             )));
         }
         let named = indexing.filterable.iter().chain(&indexing.full_text_search);
@@ -201,6 +296,7 @@ impl Layout {
         Ok(Layout {
             columns: columns.clone(),
             attributes,
+            embeddings: indexing.embeddings.clone(),
             schema: Value::Object(schema),
         })
     }
@@ -213,11 +309,42 @@ impl Layout {
     pub(crate) fn schema(&self) -> &Value {
         &self.schema
     }
+
+    pub(crate) fn embeddings(&self) -> &[Embedding] {
+        &self.embeddings
+    }
+
+    /// The model and dimensions of each embedded column, as
+    /// [`crate::client::Client::embeddings`] reads them back.
+    pub(crate) fn embedded(&self) -> BTreeMap<String, (String, u32)> {
+        self.embeddings
+            .iter()
+            .map(|e| (e.column.clone(), (e.model.clone(), e.dims)))
+            .collect()
+    }
+
+    /// The condition on a patch that keeps the stored vectors: the stored
+    /// document is not newer, is not a tombstone, and has the same hash of
+    /// every embedded text, so its vectors match the new texts.
+    pub(crate) fn unchanged_text_condition(&self) -> Value {
+        // An equal timestamp is the same change, so a patch sent again after
+        // a lost response applies the same values again instead of falling
+        // through to an upsert that bills embedding.
+        let mut conditions = vec![
+            json!(["mz_timestamp", "Lte", {"$ref_new": "mz_timestamp"}]),
+            json!(["deleted", "Eq", false]),
+        ];
+        for embedding in &self.embeddings {
+            let hash = embedding.hash();
+            conditions.push(json!([hash, "Eq", {"$ref_new": hash}]));
+        }
+        json!(["And", conditions])
+    }
 }
 
 fn check_name(column: &Column) -> Result<(), String> {
     let name = &column.name;
-    if RESERVED.contains(&name.as_str()) || name.starts_with('$') || name.len() > 128 {
+    if RESERVED.contains(&name.as_str()) || name.starts_with('$') || name.len() > MAX_NAME_BYTES {
         return Err(format!(
             "the column {name:?} cannot be a turbopuffer attribute, so rename it in the view"
         ));
@@ -225,11 +352,41 @@ fn check_name(column: &Column) -> Result<(), String> {
     Ok(())
 }
 
-/// A document to upsert.
+/// A document to write.
 #[derive(Clone, Debug)]
 pub(crate) struct Document {
     pub(crate) row: Value,
     pub(crate) bytes: usize,
+    /// An estimate of the tokens turbopuffer bills to embed its texts.
+    pub(crate) tokens: u64,
+}
+
+impl Document {
+    pub(crate) fn id(&self) -> Option<&str> {
+        self.row.get("id").and_then(Value::as_str)
+    }
+
+    pub(crate) fn is_tombstone(&self) -> bool {
+        self.row.get("deleted") == Some(&Value::Bool(true))
+    }
+
+    /// The patch that changes every attribute but the embedded texts and
+    /// their vectors, which [`Layout::unchanged_text_condition`] keeps. A
+    /// patch leaves an attribute it omits as it was, so a `NULL` cell is an
+    /// explicit null.
+    pub(crate) fn patch(&self, layout: &Layout) -> Value {
+        let mut row = self.row.clone();
+        if let Some(row) = row.as_object_mut() {
+            for attribute in &layout.attributes {
+                row.entry(attribute.name.clone()).or_insert(Value::Null);
+            }
+            for embedding in layout.embeddings() {
+                row.remove(&embedding.column);
+                row.remove(&embedding.vector());
+            }
+        }
+        row
+    }
 }
 
 /// The documents of `batch`: the latest change of each key that can become a
@@ -283,13 +440,31 @@ fn document(
     let mut row = Map::new();
     row.insert("id".into(), Value::String(id.to_string()));
     row.insert("mz_timestamp".into(), Value::from(update.timestamp));
+    let mut tokens = 0u64;
     match &update.change {
         Change::Upsert { key, value } => {
             row.insert("deleted".into(), Value::Bool(false));
             attributes(&mut row, layout, key, value)?;
+            for embedding in layout.embeddings() {
+                let text = row
+                    .get(&embedding.column)
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let hash = text_hash(text);
+                if text.is_empty() {
+                    row.remove(&embedding.column);
+                    row.insert(embedding.vector(), embedding.placeholder());
+                } else {
+                    tokens = tokens.saturating_add(estimate_tokens(text.len()));
+                }
+                row.insert(embedding.hash(), Value::String(hash));
+            }
         }
         _ => {
             row.insert("deleted".into(), Value::Bool(true));
+            for embedding in layout.embeddings() {
+                row.insert(embedding.vector(), embedding.placeholder());
+            }
         }
     }
     let row = Value::Object(row);
@@ -297,7 +472,19 @@ fn document(
     if bytes > MAX_DOCUMENT_BYTES {
         return Err(("too_large", "the document is over 64 MiB".into()));
     }
-    Ok(Document { row, bytes })
+    Ok(Document { row, bytes, tokens })
+}
+
+/// The hash of a text to embed, empty for no text, so that two documents
+/// without text keep the same placeholder.
+fn text_hash(text: &str) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// The id of the document for `key`: the text of a single key column, or the
@@ -359,25 +546,39 @@ fn reject(index: usize, category: &str, message: &str) -> Rejected {
     }
 }
 
-/// Splits `documents` into requests of at most `max_bytes` and `max_rows`
-/// each. A document larger than `max_bytes` goes in a request of its own.
-pub(crate) fn requests(
-    documents: Vec<Document>,
-    max_bytes: usize,
-    max_rows: usize,
-) -> Vec<Vec<Value>> {
+/// The most one request holds.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Limits {
+    pub(crate) bytes: usize,
+    pub(crate) rows: usize,
+    /// The most rows with text for turbopuffer to embed.
+    pub(crate) embedded_rows: usize,
+    /// The most tokens to embed, so that a request fits in a minute's rate
+    /// limit, which turbopuffer would otherwise refuse every time.
+    pub(crate) tokens: u64,
+}
+
+/// Splits `documents` into requests within `limits`, in order. A document
+/// over a limit goes in a request of its own.
+pub(crate) fn requests(documents: Vec<Document>, limits: Limits) -> Vec<Vec<Document>> {
     let mut requests = Vec::new();
-    let mut current = Vec::new();
-    let mut bytes = 0usize;
+    let mut current: Vec<Document> = Vec::new();
+    let (mut bytes, mut embedded, mut tokens) = (0usize, 0usize, 0u64);
     for document in documents {
+        let embeds = usize::from(document.tokens > 0);
         if !current.is_empty()
-            && (bytes.saturating_add(document.bytes) > max_bytes || current.len() >= max_rows)
+            && (bytes.saturating_add(document.bytes) > limits.bytes
+                || current.len() >= limits.rows
+                || embedded.saturating_add(embeds) > limits.embedded_rows
+                || tokens.saturating_add(document.tokens) > limits.tokens)
         {
             requests.push(std::mem::take(&mut current));
-            bytes = 0;
+            (bytes, embedded, tokens) = (0, 0, 0);
         }
         bytes = bytes.saturating_add(document.bytes);
-        current.push(document.row);
+        embedded = embedded.saturating_add(embeds);
+        tokens = tokens.saturating_add(document.tokens);
+        current.push(document);
     }
     if !current.is_empty() {
         requests.push(current);
@@ -602,25 +803,201 @@ mod tests {
     }
 
     #[test]
-    fn requests_split_by_bytes_and_rows() {
-        let document = |bytes| Document {
+    fn requests_split_by_bytes_rows_and_embedded_rows() {
+        let document = |bytes, tokens| Document {
             row: json!(bytes),
             bytes,
+            tokens,
         };
-        let sizes = |requests: Vec<Vec<Value>>| -> Vec<Vec<u64>> {
+        let sizes = |requests: Vec<Vec<Document>>| -> Vec<Vec<usize>> {
             requests
                 .into_iter()
-                .map(|r| r.iter().map(|v| v.as_u64().unwrap()).collect())
+                .map(|r| r.iter().map(|d| d.bytes).collect())
                 .collect()
         };
+        let limits = |bytes, rows, embedded_rows| Limits {
+            bytes,
+            rows,
+            embedded_rows,
+            tokens: 100,
+        };
         let split = requests(
-            vec![document(4), document(4), document(30), document(1)],
-            10,
-            100,
+            vec![
+                document(4, 0),
+                document(4, 0),
+                document(30, 0),
+                document(1, 0),
+            ],
+            limits(10, 100, 100),
         );
         assert_eq!(sizes(split), [vec![4, 4], vec![30], vec![1]]);
-        let split = requests((0..5).map(|_| document(1)).collect(), 100, 2);
+        let split = requests(
+            (0..5).map(|_| document(1, 0)).collect(),
+            limits(100, 2, 100),
+        );
         assert_eq!(sizes(split), [vec![1, 1], vec![1, 1], vec![1]]);
-        assert!(requests(Vec::new(), 10, 10).is_empty());
+        // Only rows with text to embed count against the embedding limit.
+        let split = requests(
+            vec![
+                document(1, 1),
+                document(2, 0),
+                document(3, 1),
+                document(4, 1),
+            ],
+            limits(100, 100, 2),
+        );
+        assert_eq!(sizes(split), [vec![1, 2, 3], vec![4]]);
+        let split = requests(
+            vec![
+                document(1, 60),
+                document(2, 40),
+                document(3, 1),
+                document(4, 500),
+            ],
+            limits(100, 100, 100),
+        );
+        assert_eq!(sizes(split), [vec![1, 2], vec![3], vec![4]]);
+        assert!(requests(Vec::new(), limits(10, 10, 10)).is_empty());
+    }
+
+    fn embedding(column: &str) -> Embedding {
+        Embedding {
+            column: column.into(),
+            model: "m".into(),
+            dims: 3,
+        }
+    }
+
+    fn embedding_layout() -> Layout {
+        let indexing = Indexing {
+            embeddings: vec![embedding("title")],
+            ..Indexing::default()
+        };
+        Layout::new(&columns(), &indexing).unwrap()
+    }
+
+    #[test]
+    fn embedded_text_carries_its_hash_and_missing_text_a_placeholder() {
+        let layout = embedding_layout();
+        assert_eq!(
+            layout.schema()["title"],
+            json!({"type": "string", "filterable": false, "embed": {"model": "m", "dims": 3}})
+        );
+        assert_eq!(
+            layout.schema()["mz_hash_title"],
+            json!({"type": "string", "filterable": true})
+        );
+        let batch = batch(vec![
+            upsert(1, "1", &[Some("a cat"), None, None, None]),
+            upsert(1, "2", &[None, None, None, None]),
+            upsert(1, "3", &[Some(""), None, None, None]),
+            delete(1, "4"),
+        ]);
+        let (written, rejected) = documents(&batch, &layout);
+        assert!(rejected.is_empty(), "{rejected:?}");
+        let rows: Vec<_> = written.iter().map(|d| d.row.clone()).collect();
+        let hash = text_hash("a cat");
+        assert_eq!(hash.len(), 64);
+        assert_eq!(
+            rows,
+            [
+                json!({"id": "1", "mz_timestamp": 1, "deleted": false, "title": "a cat",
+                       "mz_hash_title": hash}),
+                json!({"id": "2", "mz_timestamp": 1, "deleted": false,
+                       "embed_title": [0.0, 0.0, 0.0], "mz_hash_title": ""}),
+                json!({"id": "3", "mz_timestamp": 1, "deleted": false,
+                       "embed_title": [0.0, 0.0, 0.0], "mz_hash_title": ""}),
+                json!({"id": "4", "mz_timestamp": 1, "deleted": true,
+                       "embed_title": [0.0, 0.0, 0.0]}),
+            ]
+        );
+        let tokens: Vec<_> = written.iter().map(|d| d.tokens).collect();
+        assert_eq!(tokens, [estimate_tokens(5), 0, 0, 0]);
+        // A patch keeps the stored text and vector, so it leaves both out,
+        // and clears what is NULL now.
+        assert_eq!(
+            written[0].patch(&layout),
+            json!({"id": "1", "mz_timestamp": 1, "deleted": false, "mz_hash_title": hash,
+                   "views": null, "score": null, "public": null})
+        );
+        assert_eq!(
+            layout.unchanged_text_condition(),
+            json!(["And", [
+                ["mz_timestamp", "Lte", {"$ref_new": "mz_timestamp"}],
+                ["deleted", "Eq", false],
+                ["mz_hash_title", "Eq", {"$ref_new": "mz_hash_title"}],
+            ]])
+        );
+    }
+
+    #[test]
+    fn each_embedded_text_is_estimated_on_its_own() {
+        let columns = PayloadColumns {
+            key: vec![column("id", 23)],
+            value: vec![column("title", 25), column("body", 25)],
+        };
+        let indexing = Indexing {
+            embeddings: vec![embedding("title"), embedding("body")],
+            ..Indexing::default()
+        };
+        let layout = Layout::new(&columns, &indexing).unwrap();
+        let long = "x".repeat(200_000);
+        let update = Update {
+            timestamp: 1,
+            change: Change::Upsert {
+                key: cells(&[Some("1")]),
+                value: cells(&[Some(&long), Some(&long)]),
+            },
+        };
+        let batch = SinkBatch::new(vec![update], columns, 1, false);
+        let (written, _) = documents(&batch, &layout);
+        assert_eq!(written[0].tokens, 2 * estimate_tokens(long.len()));
+        assert_eq!(
+            estimate_tokens(long.len()),
+            crate::pace::MAX_TOKENS_PER_TEXT
+        );
+    }
+
+    #[test]
+    fn layouts_refuse_embeddings_turbopuffer_would() {
+        let with = |embeddings: Vec<Embedding>| {
+            let indexing = Indexing {
+                embeddings,
+                ..Indexing::default()
+            };
+            Layout::new(&columns(), &indexing)
+        };
+        assert!(with(vec![embedding("views")]).is_err(), "not text");
+        assert!(with(vec![embedding("missing")]).is_err());
+        assert!(
+            with(vec![embedding("id")]).is_err(),
+            "the id is no attribute"
+        );
+        assert!(with(vec![embedding("title"), embedding("title")]).is_err());
+        for dims in [0, MAX_DIMS + 1] {
+            let wide = Embedding {
+                dims,
+                ..embedding("title")
+            };
+            assert!(with(vec![wide]).is_err(), "{dims}");
+        }
+        let clash = PayloadColumns {
+            key: vec![column("id", 23)],
+            value: vec![column("title", 25), column("embed_title", 25)],
+        };
+        let indexing = Indexing {
+            embeddings: vec![embedding("title")],
+            ..Indexing::default()
+        };
+        assert!(Layout::new(&clash, &indexing).is_err());
+        let many = PayloadColumns {
+            key: vec![column("id", 23)],
+            value: (0..5).map(|i| column(&format!("t{i}"), 25)).collect(),
+        };
+        let five = Indexing {
+            embeddings: (0..5).map(|i| embedding(&format!("t{i}"))).collect(),
+            ..Indexing::default()
+        };
+        assert!(Layout::new(&many, &five).is_err());
     }
 }
