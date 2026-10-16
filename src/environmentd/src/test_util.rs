@@ -23,7 +23,7 @@ use anyhow::anyhow;
 use futures::Future;
 use futures::future::{BoxFuture, LocalBoxFuture};
 use headers::{Header, HeaderMapExt};
-use http::Uri;
+use http::{HeaderValue, Uri};
 use hyper::http::header::HeaderMap;
 use maplit::btreemap;
 use mz_adapter::TimestampExplanation;
@@ -138,6 +138,7 @@ pub struct TestHarness {
     deploy_generation: u64,
     system_parameter_defaults: BTreeMap<String, String>,
     internal_console_redirect_url: Option<String>,
+    cors_allowed_origins: Vec<HeaderValue>,
     metrics_registry: Option<MetricsRegistry>,
     code_version: semver::Version,
     force_builtin_schema_migration: Option<String>,
@@ -247,6 +248,7 @@ impl Default for TestHarness {
                 ),
             ]),
             internal_console_redirect_url: None,
+            cors_allowed_origins: Vec::new(),
             metrics_registry: None,
             orchestrator_tracing_cli_args: TracingCliArgs {
                 startup_log_filter: CloneableEnvFilter::from_str("error").expect("must parse"),
@@ -658,6 +660,12 @@ impl TestHarness {
         self
     }
 
+    pub fn with_cors_allowed_origin(mut self, origin: &'static str) -> Self {
+        self.cors_allowed_origins
+            .push(HeaderValue::from_static(origin));
+        self
+    }
+
     pub fn with_system_parameter_default(mut self, param: String, value: String) -> Self {
         self.system_parameter_defaults.insert(param, value);
         self
@@ -927,8 +935,8 @@ impl Listeners {
                 metrics_registry: metrics_registry.clone(),
                 now: config.now,
                 environment_id: config.environment_id,
-                cors_allowed_origin: AllowOrigin::list([]),
-                cors_allowed_origin_list: Vec::new(),
+                cors_allowed_origin: AllowOrigin::list(config.cors_allowed_origins.clone()),
+                cors_allowed_origin_list: config.cors_allowed_origins.clone(),
                 cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
                 bootstrap_default_cluster_replication_factor: config

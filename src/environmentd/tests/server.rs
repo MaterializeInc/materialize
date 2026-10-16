@@ -5471,6 +5471,41 @@ fn test_mcp_agent_disabled() {
     run_mcp_datadriven("tests/testdata/mcp/agent_disabled", harness);
 }
 
+/// A browser on an allowed origin may send the MCP transport headers.
+#[mz_ore::test]
+fn test_mcp_cors_allows_transport_headers() {
+    let origin = "https://browser-client.example";
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, true)
+        .with_cors_allowed_origin(origin)
+        .start_blocking();
+    let headers = ["mcp-protocol-version", "mcp-method", "mcp-name"];
+    for route in ["agent", "developer"] {
+        let response = Client::new()
+            .request(
+                reqwest::Method::OPTIONS,
+                format!("http://{}/api/mcp/{route}", server.http_local_addr()),
+            )
+            .header(ORIGIN, origin)
+            .header("access-control-request-method", "POST")
+            .header("access-control-request-headers", headers.join(","))
+            .send()
+            .unwrap();
+        let allowed = response
+            .headers()
+            .get("access-control-allow-headers")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        for header in headers {
+            assert!(
+                allowed.contains(header),
+                "{route} preflight does not allow {header}: {allowed}"
+            );
+        }
+    }
+}
+
 /// Tests the MCP agent endpoint on protocol 2026-07-28.
 #[mz_ore::test]
 fn test_mcp_agent_protocol_2026_07_28() {
