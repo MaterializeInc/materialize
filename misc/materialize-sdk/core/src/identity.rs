@@ -18,6 +18,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::decode::Envelope;
+use crate::error::UsageError;
 use crate::statement::ObjectRef;
 
 /// One output column of an object, as `mz_columns` describes it.
@@ -52,6 +53,49 @@ pub struct Fingerprint {
     pub envelope: Envelope,
     /// The object's output columns, in order.
     pub columns: Vec<Column>,
+}
+
+/// A subscription's columns in the order a change's cells arrive.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PayloadColumns {
+    /// The key columns in `KEY` order, the cells of a key. Empty in the diff
+    /// envelope.
+    pub key: Vec<Column>,
+    /// The other columns in relation order, the cells of an upsert's value.
+    /// In the diff envelope, every column, the cells of a row.
+    pub value: Vec<Column>,
+}
+
+impl Fingerprint {
+    /// The columns of the cells the subscription produces (see
+    /// [`crate::decode`] for the layout). Fails if a key column is missing or
+    /// repeated.
+    pub fn payload_columns(&self) -> Result<PayloadColumns, UsageError> {
+        let Envelope::Upsert { key } = &self.envelope else {
+            return Ok(PayloadColumns {
+                key: Vec::new(),
+                value: self.columns.clone(),
+            });
+        };
+        let mut value = self.columns.clone();
+        let mut key_columns = Vec::with_capacity(key.len());
+        for name in key {
+            let position = value
+                .iter()
+                .position(|column| &column.name == name)
+                .ok_or_else(|| {
+                    UsageError::new(format!(
+                        "the key column {name:?} is not a column of {:?}, or is repeated",
+                        self.object.name
+                    ))
+                })?;
+            key_columns.push(value.remove(position));
+        }
+        Ok(PayloadColumns {
+            key: key_columns,
+            value,
+        })
+    }
 }
 
 /// How the object a name resolves to now differs from a stored fingerprint.
@@ -145,6 +189,38 @@ mod tests {
         assert_eq!(compare(&stored, Some(&swapped)), IdentityChange::Swapped);
         swapped.object.id = "u9".into();
         assert_eq!(compare(&stored, Some(&swapped)), IdentityChange::Swapped);
+    }
+
+    #[test]
+    fn payload_columns_put_the_key_first_in_key_order() {
+        let mut stored = fingerprint();
+        stored.columns.insert(
+            1,
+            Column {
+                name: "region".into(),
+                type_oid: 25,
+                type_mod: -1,
+                nullable: false,
+            },
+        );
+        let names = |columns: &[Column]| columns.iter().map(|c| c.name.clone()).collect::<Vec<_>>();
+
+        stored.envelope = Envelope::Upsert {
+            key: vec!["total".into(), "id".into()],
+        };
+        let payload = stored.payload_columns().unwrap();
+        assert_eq!(names(&payload.key), ["total", "id"]);
+        assert_eq!(names(&payload.value), ["region"]);
+
+        stored.envelope = Envelope::Diff;
+        let payload = stored.payload_columns().unwrap();
+        assert!(payload.key.is_empty());
+        assert_eq!(names(&payload.value), ["id", "region", "total"]);
+
+        for key in [vec!["missing".to_string()], vec!["id".into(), "id".into()]] {
+            stored.envelope = Envelope::Upsert { key };
+            assert!(stored.payload_columns().is_err(), "{:?}", stored.envelope);
+        }
     }
 
     #[test]

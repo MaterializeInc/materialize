@@ -17,23 +17,32 @@
 //! subscription to it.
 
 use std::future::Future;
+use std::sync::Arc;
 
 use materialize_sdk_core::checkpoint::MAX_BYTES;
-use materialize_sdk_core::{CheckpointWrite, SinkType, Update};
+use materialize_sdk_core::{CheckpointWrite, PayloadColumns, SinkType, Update};
 
 /// The changes the SDK hands a sink in one [`Sink::write`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SinkBatch {
     updates: Vec<Update>,
+    columns: Arc<PayloadColumns>,
     generation: u64,
     snapshot: bool,
 }
 
 impl SinkBatch {
-    /// A batch of `updates`, for testing a sink without Materialize.
-    pub fn new(updates: Vec<Update>, generation: u64, snapshot: bool) -> SinkBatch {
+    /// A batch of `updates` with cells of `columns`, for testing a sink
+    /// without Materialize.
+    pub fn new(
+        updates: Vec<Update>,
+        columns: impl Into<Arc<PayloadColumns>>,
+        generation: u64,
+        snapshot: bool,
+    ) -> SinkBatch {
         SinkBatch {
             updates,
+            columns: columns.into(),
             generation,
             snapshot,
         }
@@ -42,6 +51,12 @@ impl SinkBatch {
     /// The changes, in timestamp order.
     pub fn updates(&self) -> &[Update] {
         &self.updates
+    }
+
+    /// The columns of the changes' cells, the same in every batch under one
+    /// checkpoint, because the SDK stops at a schema change.
+    pub fn columns(&self) -> &PayloadColumns {
+        &self.columns
     }
 
     /// The generation the changes belong to.

@@ -70,9 +70,10 @@ pub use error::Error;
 pub use live::{LiveOptions, LiveSubscription};
 pub use materialize_sdk_core::catalog::ObjectName;
 pub use materialize_sdk_core::{
-    self as core, Batch, Change, CheckpointError, CheckpointWrite, Classification, CommitConflict,
-    Envelope, ErrorKind, Event, Frontier, IdentityChange, ObjectRef, ProtocolError, Row, SinkType,
-    Subscribe, Target, TimestampTooLarge, Update, UsageError, WriteKind,
+    self as core, Batch, Change, CheckpointError, CheckpointWrite, Classification, Column,
+    CommitConflict, Envelope, ErrorKind, Event, Frontier, IdentityChange, ObjectRef,
+    PayloadColumns, ProtocolError, Row, SinkType, Subscribe, Target, TimestampTooLarge, Update,
+    UsageError, WriteKind,
 };
 pub use sink::{Rejected, Sink, SinkBatch, SinkError, WriteResult};
 pub use store::{CheckpointStore, MaterializeStore, checkpoint_table_sql};

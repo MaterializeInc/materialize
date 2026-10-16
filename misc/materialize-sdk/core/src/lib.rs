@@ -59,7 +59,7 @@ pub use classify::{
 pub use decode::{Change, Datum, Decoder, Envelope, Message, Row, Update};
 pub use error::{ProtocolError, TimestampTooLarge, UsageError};
 pub use frontier::Frontier;
-pub use identity::{Column, Fingerprint, IdentityChange, compare};
+pub use identity::{Column, Fingerprint, IdentityChange, PayloadColumns, compare};
 pub use sink::{CheckpointWrite, SinkType, WriteError, WriteKind};
 pub use statement::{ObjectRef, Subscribe, Target};
 pub use subscription::{Fetch, PushError, Subscription};
