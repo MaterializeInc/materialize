@@ -14,7 +14,7 @@ what latency to expect and what to change when a query is slow.
 
 | Query type | Reads from |
 |------------|------------|
-| [Indexed reads](#indexed-reads) | An existing index, in memory |
+| [Indexed reads](#indexed-reads) | An existing index |
 | [Ad-hoc computation](#ad-hoc-computation) | A temporary dataflow built for the query |
 
 Queries that reduce to a constant, such as `SELECT 1`, are answered without
@@ -27,17 +27,18 @@ Every `SELECT` goes through the same stages:
 1. **Plan and optimize.** Materialize parses the query, resolves the objects it
    references, and picks how to run it.
 1. **Select a timestamp.** Materialize chooses the timestamp at which to read,
-   based on your [isolation level](/serve-results/isolation-level/). If an input
-   has not yet caught up to that timestamp, for example because it is
+   based on your [isolation level](/serve-results/isolation-level/) and the
+   objects in the schemas the query references. If an input has not yet caught
+   up to that timestamp, for example because it is
    [hydrating](/fundamentals/concepts/hydration/) or lagging, the query cannot
    return until it does. Use [`EXPLAIN TIMESTAMP`](/sql/explain-timestamp/) to
    compare the chosen timestamp with each input's frontier. See [freshness
    troubleshooting](/transform-data/freshness-troubleshooting/).
-1. **Execute.** Materialize sends the query to the cluster. The cluster returns
-   the result once every input is readable at the chosen timestamp. If the
-   cluster needs to wait for the chosen timestamp, the query keeps holding
-   cluster resources. For example, joining a large input with a lagging one can
-   use a lot of memory until the lagging input catches up.
+1. **Execute.** Materialize sends the query to the cluster's replicas, which
+   start executing it, potentially waiting for the selected timestamp to be
+   available. A query can consume replica resources from submission until its
+   completion. For example, joining a large input with a lagging one can use a
+   lot of memory until the lagging input catches up.
 1. **Return results.** Materialize sends the rows to your client.
 
 For indexed reads, computing the result is quick, so the total latency usually
@@ -136,9 +137,9 @@ Used Indexes:
 Target cluster: quickstart
 ```
 
-A `SELECT` with only a `LIMIT`, and no filter or `ORDER BY`, on a materialized view or source with
-no index in the cluster may read a few rows directly from storage instead of
-building a dataflow. `EXPLAIN` shows this as `→ReadStorage`. This is useful
+A `SELECT` with only a `LIMIT`, and no filter or `ORDER BY`, on a materialized
+view or source with no index in the cluster may read a few rows directly from
+storage instead of building a dataflow. `EXPLAIN` shows this as `→ReadStorage`. This is useful
 for peeking at data, but because `LIMIT` without `ORDER BY` returns arbitrary
 rows, don't rely on it in application queries.
 
