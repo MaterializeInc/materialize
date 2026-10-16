@@ -50,7 +50,7 @@ usage_permission AS (
     WHERE privilege_type = 'USAGE' AND name = current_database()
 )
 
-SELECT missing_create, missing_usage, quote_ident(current_role), current_database()
+SELECT missing_create, missing_usage, quote_ident(current_role), quote_ident(current_database())
 FROM create_permission, usage_permission;
 {% endset %}
 
@@ -62,7 +62,7 @@ FROM create_permission, usage_permission;
             database_check.rows[0][2] ~ """ needs CREATE and USAGE privileges on database """ ~
             database_check.rows[0][3] ~ """.
 
-            Hint: `GRANT USAGE, CREATE ON DATABASE """ ~ database_check.rows[0][2] ~ """ TO """ ~ database_check.rows[0][3] ~ """;`
+            Hint: `GRANT USAGE, CREATE ON DATABASE """ ~ database_check.rows[0][3] ~ """ TO """ ~ database_check.rows[0][2] ~ """;`
         """) }}
     {% endif %}
 {% endif %}
@@ -126,7 +126,7 @@ FROM missing_ownership
     {% if cluster_ownership|length > 0 %}
         {{ exceptions.raise_compiler_error("""
             Missing necessary permissions to execute a deployment. The current role """
-            ~ cluster_ownership.rows[0][1] ~ """ needs to be an owner of cluster """ ~ cluster_ownership.rows[0][0] ~ """.
+            ~ cluster_ownership.rows[0][1] ~ """ needs to be an owner of cluster """ ~ cluster_ownership.rows[0][0] ~ """, or a member of the role that owns it.
 
             Hint: `ALTER CLUSTER """ ~ cluster_ownership.rows[0][0] ~ """ OWNER TO """ ~ cluster_ownership.rows[0][1] ~ """;`
         """)}}
@@ -179,7 +179,7 @@ FROM missing_ownership
         {{ exceptions.raise_compiler_error("""
             Missing necessary permissions to execute a deployment. The current role """
             ~ schema_ownership.rows[0][1] ~ """ needs to be an owner of schema """ ~
-            schema_ownership.rows[0][0] ~ """.
+            schema_ownership.rows[0][0] ~ """, or a member of the role that owns it.
 
             Hint: `ALTER SCHEMA """ ~ schema_ownership.rows[0][0] ~ """ OWNER TO """ ~ schema_ownership.rows[0][1] ~ """;`
         """)}}
