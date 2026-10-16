@@ -24,15 +24,6 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-10-15* <br>
 *Released to Materialize Self-Managed: 2026-10-16* <br>
 
-### Metric Sinks {#v26.46-metric-sinks}
-`CREATE METRIC SINK`, `DROP METRIC SINK`, and `SHOW METRIC SINKS` are now available without setting a feature flag. A metric sink exports a relation that supplies `metric_name`, `metric_type`, `labels`, `value`, and `help` columns as Prometheus metrics under a name you choose, and every cluster now also renders two built-in curated sinks covering arrangement sizes and dataflow errors. Cluster-level health and your own SQL-defined measurements reach your existing Prometheus monitoring without a separate exporter.
-
-### Kafka sink message attribution {#v26.46-kafka-sink-id-header}
-
-{{< private-preview />}}
-
-Kafka sinks can now attach a `materialize-sink-id` header carrying the sink's ID to every message they produce, so a consumer of a topic that several sinks write to can tell which sink produced each message. For more information, see [`CREATE SINK`: Headers](/sql/create-sink/kafka/#headers).
-
 ### Exclude upstream constraints from MySQL source tables {#v26.46-mysql-exclude-constraints}
 
 {{< public-preview />}}
