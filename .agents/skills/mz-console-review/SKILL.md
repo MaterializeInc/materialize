@@ -195,7 +195,9 @@ flag in practice: comments with fluff, details that make no sense out of context
 ("avoids alphanumeric sorting issues"), and comments that no longer match the
 code. They ask *for* comments on undocumented catalog behavior, on unconventional
 uses (react-query used only to get loading/error state for an initializer), on
-non-obvious algorithms, and on props whose meaning is subtle.
+non-obvious algorithms, and on props whose meaning is subtle. It is not necessary to describe
+the evolution of the code by referring to code that has been removed ("use quicksort because
+bubble sort is inefficient"). 
 
 ### 4.8 Loading, error, and empty states
 
