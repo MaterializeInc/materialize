@@ -100,13 +100,26 @@ impl Coordinator {
                 .as_ref()
                 .expect("replanning has original input"),
         );
-        self.start_execute_catalog_read(
-            ctx,
+        // A retained continuation can discover stale preparation at the start
+        // of its reacquired DDL turn. Use that turn for fresh planning. Paths
+        // invalidated after doing work must release admission before replanning,
+        // so they cannot repeatedly plan within one turn.
+        let continuation = if self
+            .active_conns
+            .get(ctx.session().conn_id())
+            .is_some_and(|conn| conn.deferred_lock.is_some())
+        {
+            ExecuteCatalogContinuation::AdmittedStatement {
+                stmt: Arc::clone(&input.0),
+                params: input.1.clone(),
+            }
+        } else {
             ExecuteCatalogContinuation::Statement {
                 stmt: Arc::clone(&input.0),
                 params: input.1.clone(),
-            },
-        );
+            }
+        };
+        self.start_execute_catalog_read(ctx, continuation);
     }
 
     /// A client for coordinator-owned work that must not wait on the coordinator

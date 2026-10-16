@@ -31,7 +31,7 @@ impl Staged for CatalogCommitStage {
         // Feature, privilege and name-resolution decisions belong to the original
         // structural snapshot. Metadata retries retain the logical operation.
         if self.planning_revision != coord.catalog().transient_revision() {
-            coord.release_ddl_lock(ctx.session().conn_id());
+            // No attempt has run in this reacquired turn. Replan within it.
             return Err(AdapterError::CatalogSnapshotChanged);
         }
         let result = coord

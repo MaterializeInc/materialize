@@ -1191,7 +1191,7 @@ impl Coordinator {
         mut stage: crate::coord::CreateMaterializedViewCommit,
     ) -> Result<StageResult<Box<CreateMaterializedViewStage>>, AdapterError> {
         if self.catalog().transient_revision() != stage.planning_revision {
-            self.release_ddl_lock(ctx.session().conn_id());
+            // No attempt has run in this reacquired turn. Replan within it.
             return Err(AdapterError::CatalogSnapshotChanged);
         }
         let transact_result = self
