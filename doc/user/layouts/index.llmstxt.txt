@@ -56,8 +56,8 @@
   position. The identifier test covers the header-only entries declared in
   config.toml, which have no page at all.
 
-  A header whose children are root-level pages, such as faqs and license, maps to
-  the empty section, whose pages the root index lists itself.
+  A header whose children are root-level pages, such as license, maps to the
+  empty section, whose pages the root index lists itself.
 */ -}}
 {{- $keys := slice -}}
 {{- $groups := slice -}}
