@@ -30,13 +30,8 @@
   The output must be byte-stable: no dates, no build metadata, and no ranging
   over maps. Every collection below is explicitly ordered.
 */ -}}
-{{- $basePath := (urls.Parse site.BaseURL).Path -}}
-{{- /*
-  Only the main docs build produces the markdown-docs tree these links resolve
-  against; self-managed-docs/* branches build HTML alone. Emit nothing there
-  rather than publish an index of dead links.
-*/ -}}
-{{- if not (in $basePath "self-managed") -}}
+{{- /* Emit nothing rather than an index of dead links. */ -}}
+{{- if partial "site-has-markdown.html" . -}}
 {{- $eligible := slice -}}
 {{- range site.Pages -}}
   {{- $keep := true -}}

@@ -12,10 +12,10 @@
   The pointer is the llms.txt directive the Agent-Friendly Documentation Spec
   recommends. The skill bundle has no llms.txt, so it gets no pointer.
 
-  In the website build, each link in an inline link, a reference definition
-  or an HTML href or src attribute is rewritten by markdown-link-target. The
-  bin/gen-claude-skill bundle has base path "/", and its links stay as written,
-  because there they name directories under the bundle root.
+  When the Markdown is published on the website (see markdown-on-website.html),
+  each link in an inline link, a reference definition or an HTML href or src
+  attribute is rewritten by markdown-link-target. In the skill bundle, links
+  stay as written, because there they name directories under the bundle root.
 
   Arguments (dict):
     page  (required) the Page whose body to render
@@ -28,8 +28,7 @@
   are syntax for the HTML pass. Drop them from the Markdown, in both builds.
 */ -}}
 {{- $content := replaceRE `(?m)^(#{1,6} .*?)[ \t]*\{[ \t]*[#.][^}\n]*\}[ \t]*$` "$1" .page.RenderShortcodes -}}
-{{- $basePath := strings.TrimSuffix "/" (urls.Parse site.BaseURL).Path -}}
-{{- if $basePath -}}
+{{- if partial "markdown-on-website.html" . -}}
   {{- /*
     The leading blank line separates the pointer from the description that
     single.skill.md writes just before the body without a newline; without it

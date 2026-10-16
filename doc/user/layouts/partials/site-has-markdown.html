@@ -1,0 +1,10 @@
+{{- /*
+  Returns whether the website publishes a Markdown tree at
+  <baseURL>/markdown-docs/ for this build. self-managed-docs/* branches build
+  the HTML alone, under a base path that contains "self-managed" (see
+  ci/deploy_website/website.sh).
+
+  Usage:
+    {{ if partial "site-has-markdown.html" . }}...{{ end }}
+*/ -}}
+{{- return not (in (urls.Parse site.BaseURL).Path "self-managed") -}}
