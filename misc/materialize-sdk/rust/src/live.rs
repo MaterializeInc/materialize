@@ -16,11 +16,6 @@
 //! Live subscriptions: changes streamed to the caller as they happen, with no
 //! checkpoint and no resume.
 
-// The repository's clippy rules ask for `mz_ore` and `mz_postgres_util`
-// wrappers around `tokio::spawn` and the `tokio-postgres` client, which a
-// standalone SDK cannot depend on.
-#![allow(clippy::disallowed_methods)]
-
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -156,7 +151,7 @@ pub struct LiveSubscription {
 /// Aborts the task when dropped, so that dropping a [`LiveSubscription`], or
 /// the future of [`LiveSubscription::connect`], ends the session.
 #[derive(Debug)]
-struct AbortOnDrop(JoinHandle<()>);
+pub(crate) struct AbortOnDrop(pub(crate) JoinHandle<()>);
 
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
@@ -381,18 +376,7 @@ fn server_error(sub: &Subscription, error: &tokio_postgres::Error) -> Error {
             db.detail().map(str::to_string),
             db.hint().map(str::to_string),
         ),
-        None => {
-            // The driver's message omits its cause, such as "connection
-            // refused", which is only in the source chain.
-            let mut message = error.to_string();
-            let mut source = std::error::Error::source(error);
-            while let Some(cause) = source {
-                message.push_str(": ");
-                message.push_str(&cause.to_string());
-                source = cause.source();
-            }
-            (None, message, None, None)
-        }
+        None => (None, message_with_sources(error), None, None),
     };
     let classification = sub.classify(sqlstate.as_deref(), &message);
     Error::Server {
@@ -402,4 +386,17 @@ fn server_error(sub: &Subscription, error: &tokio_postgres::Error) -> Error {
         hint,
         classification,
     }
+}
+
+/// The driver's message with its causes, such as "connection refused", which
+/// its own message omits.
+pub(crate) fn message_with_sources(error: &tokio_postgres::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
 }
