@@ -98,7 +98,9 @@ use differential_dataflow::trace::implementations::{BatchContainer, Layout};
 use differential_dataflow::{Hashable, VecCollection};
 use futures::StreamExt;
 use iceberg::ErrorKind;
-use iceberg::arrow::{arrow_schema_to_schema, schema_to_arrow_schema};
+use iceberg::arrow::{
+    arrow_schema_to_schema, arrow_schema_to_schema_auto_assign_ids, schema_to_arrow_schema,
+};
 use iceberg::spec::{
     DataFile, FormatVersion, NestedField, PrimitiveType, Snapshot, StructType, Type,
     read_data_files_from_avro, write_data_files_to_avro,
@@ -1142,7 +1144,7 @@ fn relation_desc_to_iceberg_schema(
 
     let arrow_schema_with_ids = add_field_ids_to_arrow_schema(arrow_schema);
 
-    let iceberg_schema = arrow_schema_to_schema(&arrow_schema_with_ids)
+    let iceberg_schema = arrow_schema_to_schema_auto_assign_ids(&arrow_schema_with_ids)
         .context("Failed to convert Arrow schema to Iceberg schema")?;
 
     Ok((arrow_schema_with_ids, Arc::new(iceberg_schema)))
@@ -3231,9 +3233,10 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
                     // merging metadata. Both must include these columns before any operator starts.
                     let extended_arrow = build_schema_with_append_columns(&arrow_schema_with_ids);
                     let extended_iceberg = Arc::new(
-                        arrow_schema_to_schema(&extended_arrow)
+                        arrow_schema_to_schema_auto_assign_ids(&extended_arrow)
                             .context("Failed to build Iceberg schema with append columns")?,
                     );
+
                     (extended_arrow, extended_iceberg)
                 } else {
                     (arrow_schema_with_ids, iceberg_schema)
