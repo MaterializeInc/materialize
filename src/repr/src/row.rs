@@ -454,11 +454,13 @@ mod columnation {
         unsafe fn copy(&mut self, item: &Row) -> Row {
             if item.data.spilled() {
                 let bytes = self.region.copy_slice(&item.data[..]);
+                // NOTE: The capacity is the copied length, as bytes past it belong to the next
+                // row in the region.
                 Row {
                     data: compact_bytes::CompactBytes::from_raw_parts(
                         bytes.as_mut_ptr(),
                         item.data.len(),
-                        item.data.capacity(),
+                        item.data.len(),
                     ),
                 }
             } else {
