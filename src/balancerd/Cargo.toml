@@ -64,6 +64,7 @@ tempfile.workspace = true
 [features]
 default = ["mz-alloc-default"]
 jemalloc = ["mz-alloc/jemalloc"]
+mimalloc = ["mz-alloc/mimalloc"]
 
 [package.metadata.unused-deps]
 ignore = ["mz-alloc-default"]
