@@ -398,11 +398,16 @@ would push the backlog into `environmentd` until the server retires the
 subscribe (R8).
 
 Durable consumption will use the same fetch loop, so a slow target write fills
-the client buffer, not `environmentd`. When the client buffer fills, or the
-server retires the subscribe with `FellBehind`, the SDK will resume from the
-last commit with exponential backoff and report a metric. Each cycle restarts a
-dataflow, so a target that stays slower than the stream needs a larger buffer or
-a longer `commit_interval`.
+the client buffer, not `environmentd`. Once a number of events wait, each new
+batch is appended to the last batch waiting, up to a size per batch, so a
+target that takes minutes for one write, such as one that embeds text, gets
+fewer, larger batches instead of a full buffer. Snapshot chunks are never
+appended, and neither is anything to the batch that completes a snapshot. The
+buffer is bounded by bytes. When it is full, or the server retires the subscribe
+with `FellBehind`, the SDK will resume from the last commit with exponential
+backoff and report a metric. Each cycle restarts a dataflow, so a target that
+stays slower than the stream needs a larger buffer or a longer
+`commit_interval`.
 
 The initial snapshot is one timestamp and can exceed client memory. It will
 arrive as chunks, followed by the batch that completes it and carries its
@@ -632,11 +637,13 @@ below a configured threshold.
 A connected subscribe holds history only up to what it has emitted, not up to
 what the sink has committed (see "Retention window"). The margin therefore has
 to cover the commit lag (the client buffer, `commit_interval`, and the target's
-write time) as well as the retry budget and an operator's response to a stall. A
-resume fails once `F - 1` falls below the object's `since`. With the default
-one-second window that happens after about a second of commit lag or downtime,
-so the SDK will refuse to start durable consumption when the object's retention
-is below the commit lag.
+write time) as well as the retry budget and an operator's response to a stall.
+Appending makes the buffer's part of the lag grow with the target's write time
+instead of being bounded by a number of events. A resume fails once `F - 1`
+falls below the object's `since`. With the default one-second window that
+happens after about a second of commit lag or downtime, so the SDK will refuse
+to start durable consumption when the object's retention is below the commit
+lag.
 
 Under durable subscriptions the margin becomes the time since the last
 acknowledgement against the subscription's `ACKNOWLEDGE WITHIN` deadline. A
