@@ -33,10 +33,20 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 Kafka sinks can now attach a `materialize-sink-id` header carrying the sink's ID to every message they produce, so a consumer of a topic that several sinks write to can tell which sink produced each message. For more information, see [`CREATE SINK`: Headers](/sql/create-sink/kafka/#headers).
 
+### Exclude upstream constraints from MySQL source tables {#v26.46-mysql-exclude-constraints}
+
+{{< public-preview />}}
+
+`CREATE TABLE ... FROM SOURCE` now accepts `EXCLUDE CONSTRAINTS` and `EXCLUDE ALL CONSTRAINTS` for MySQL sources, as it already did for PostgreSQL sources. This lets you drop a `PRIMARY KEY`, `UNIQUE`, or `NOT NULL` constraint upstream without stalling ingestion:
+
+- `EXCLUDE CONSTRAINTS` excludes the `PRIMARY KEY` and `UNIQUE` constraints you name.
+- `EXCLUDE ALL CONSTRAINTS` excludes every constraint, including `NOT NULL`, so the table has no keys and every column is nullable.
+
+For more information, see [Handle upstream constraint drop](/ingest-data/mysql/source-versioning/#handle-upstream-constraint-drop).
+
 ### Improvements {#v26.46-improvements}
 - **Replication-factor changes during a cluster reconfiguration**: `ALTER CLUSTER ... SET (REPLICATION FACTOR ...)` is now accepted while a graceful reconfiguration is in flight, preserving the dimensions and the deadline you did not name, so you can scale a stuck reconfiguration down to zero or cancel it by restoring the original configuration instead of waiting it out.
 - **Zero-downtime deployment readiness follows replica hydration**: A zero-downtime deployment now asks each replica how long it has been hydrated instead of tracking cluster status itself, so a read-only `environmentd` restart that picks up DDL no longer resets the stability period, drop-only DDL restarts the read-only generation so it can release obsolete replicas and read holds, and a replica that stays online but never hydrates holds the cut-over until `with_0dt_deployment_max_wait` passes or the deployment is promoted with skip-catchup.
-- **Constraint exclusion for MySQL source tables**: `CREATE TABLE ... FROM SOURCE` now accepts `EXCLUDE CONSTRAINTS` and `EXCLUDE ALL CONSTRAINTS` against MySQL sources as it already did for Postgres, dropping the named primary key and unique constraints — and, with `EXCLUDE ALL CONSTRAINTS`, the nullability constraints too — so that an upstream constraint change does not stall the table.
 - **Read-then-write statements no longer take a table write lock**: `DELETE`, `UPDATE`, and read-then-write `INSERT` now sequence through optimistic concurrency control by default, detecting intervening writes through timestamp conflicts rather than holding a per-table write lock for the span between the read and the write.
 - **Lower memory when ingesting wide schemas**: Sources with wide or deeply nested schemas now need less memory to write their data, because each column's encoding buffer starts empty and grows on demand instead of preallocating 1,024 slots.
 - **Kafka broker addresses are checked against private IP ranges**: In Materialize Cloud, a Kafka connection that reaches its brokers directly, rather than through PrivateLink or an SSH tunnel, now fails with "Broker address resolved to a private IP" unless every address the broker resolves to is a global address — at bootstrap, from cluster metadata, and on every re-resolution — while self-managed deployments are unaffected.
