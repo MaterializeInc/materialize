@@ -54,13 +54,23 @@
         clippy::arithmetic_side_effects,
     )
 )]
+// The repository's clippy rules ask for `mz_ore` and `mz_postgres_util`
+// wrappers around `tokio::spawn` and the `tokio-postgres` client, which a
+// standalone SDK cannot depend on.
+#![allow(clippy::disallowed_methods)]
 
 mod error;
 mod live;
+mod sink;
+mod store;
 
 pub use error::Error;
 pub use live::{LiveOptions, LiveSubscription};
+pub use materialize_sdk_core::catalog::ObjectName;
 pub use materialize_sdk_core::{
-    self as core, Batch, Change, Classification, ErrorKind, Event, Frontier, ObjectRef,
-    ProtocolError, Row, Subscribe, Target, TimestampTooLarge, Update, UsageError,
+    self as core, Batch, Change, CheckpointWrite, Classification, ErrorKind, Event, Frontier,
+    ObjectRef, ProtocolError, Row, SinkType, Subscribe, Target, TimestampTooLarge, Update,
+    UsageError, WriteKind,
 };
+pub use sink::{Rejected, Sink, SinkBatch, SinkError, WriteResult};
+pub use store::{CheckpointStore, MaterializeStore, checkpoint_table_sql};
