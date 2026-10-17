@@ -284,11 +284,15 @@ fn hydration_matches_plain_spilled() {
 
 /// Steps whose times never precede the last seal, ending in a drain.
 fn arb_steps() -> impl Strategy<Value = Vec<Step<u64>>> {
-    let op = prop_oneof![
-        3 => proptest::collection::vec((0..6u64, 0..400u64, -2..=2i64), 0..20)
-            .prop_map(|updates| (Some(updates), 0)),
-        2 => (0..60u64).prop_map(|advance| (None, advance)),
-    ];
+    let op = proptest::strategy::Union::new_weighted(vec![
+        (
+            3,
+            proptest::collection::vec((0..6u64, 0..400u64, -2..=2i64), 0..20)
+                .prop_map(|updates| (Some(updates), 0))
+                .boxed(),
+        ),
+        (2, (0..60u64).prop_map(|advance| (None, advance)).boxed()),
+    ]);
     proptest::collection::vec(op, 0..40).prop_map(|ops| {
         let mut upper = 0;
         let mut steps = Vec::new();
@@ -314,7 +318,10 @@ fn arb_steps() -> impl Strategy<Value = Vec<Step<u64>>> {
 proptest! {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
-    fn matches_plain(steps in arb_steps(), theta in prop_oneof![Just(0u64), Just(1), Just(7), Just(50)]) {
+    fn matches_plain(
+        steps in arb_steps(),
+        theta in proptest::sample::select(vec![0u64, 1, 7, 50]),
+    ) {
         check_arm::<ColumnArm<u64>, _>(&steps, theta);
         check_arm::<ChunkArm<u64>, _>(&steps, theta);
         check_arm::<ColumnationArm<u64>, _>(&steps, theta);
@@ -385,12 +392,20 @@ fn product_edge_cases_match_plain() {
 /// Uppers that advance from the previous upper, mixing elements with and without a minimal
 /// inner coordinate, with updates at or after some element of the last upper.
 fn arb_product_steps() -> impl Strategy<Value = Vec<Step<Time2>>> {
-    let op = prop_oneof![
-        3 => proptest::collection::vec((0..6u64, 0..3usize, 0..40u64, 0..4u64, -2..=2i64), 0..20)
-            .prop_map(|updates| (Some(updates), Vec::new())),
-        2 => proptest::collection::vec((0..3usize, 0..20u64, 0..3u64), 1..4)
-            .prop_map(|advances| (None, advances)),
-    ];
+    let op = proptest::strategy::Union::new_weighted(vec![
+        (
+            3,
+            proptest::collection::vec((0..6u64, 0..3usize, 0..40u64, 0..4u64, -2..=2i64), 0..20)
+                .prop_map(|updates| (Some(updates), Vec::new()))
+                .boxed(),
+        ),
+        (
+            2,
+            proptest::collection::vec((0..3usize, 0..20u64, 0..3u64), 1..4)
+                .prop_map(|advances| (None, advances))
+                .boxed(),
+        ),
+    ]);
     proptest::collection::vec(op, 0..40).prop_map(|ops| {
         let mut upper = vec![t2(0, 0)];
         let mut steps = Vec::new();
@@ -424,7 +439,10 @@ fn arb_product_steps() -> impl Strategy<Value = Vec<Step<Time2>>> {
 proptest! {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
-    fn product_matches_plain(steps in arb_product_steps(), theta in prop_oneof![Just(0u64), Just(1), Just(7)]) {
+    fn product_matches_plain(
+        steps in arb_product_steps(),
+        theta in proptest::sample::select(vec![0u64, 1, 7]),
+    ) {
         check_all2(&steps, theta);
     }
 }
