@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -4126,6 +4127,178 @@ async fn test_cancel_linearize_reads() {
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
+async fn test_cancel_linearize_commit_discards_set_local() {
+    let server = test_util::TestHarness::default().start().await;
+    server
+        .enable_feature_flags(&["enable_refresh_every_mvs", "allow_real_time_recency"])
+        .await;
+    let client = server.connect().await.unwrap();
+    let client_cancel = client.cancel_token();
+
+    // This test will break in the year 30,000 after Jan 1st. When that happens, increase the year
+    // to fix the test.
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW const_mv WITH (REFRESH AT '30000-01-01 23:59') AS SELECT 2;",
+        )
+        .await
+        .unwrap();
+    client
+        .batch_execute("SET transaction_isolation = 'serializable';")
+        .await
+        .unwrap();
+
+    let (commit_sent_tx, commit_sent_rx) = oneshot::channel();
+    let (tx, rx) = oneshot::channel();
+
+    let commit_task = task::spawn(|| "commit task", async move {
+        client
+            .batch_execute(
+                "BEGIN;
+                 SET LOCAL transaction_isolation = 'strict serializable';
+                 SET LOCAL real_time_recency = true;",
+            )
+            .await
+            .unwrap();
+        // The since of const_mv is in the year 30,000, so the read's timestamp is too, and COMMIT
+        // waits for the timestamp oracle to catch up.
+        client
+            .query_one("SELECT * FROM const_mv;", &[])
+            .await
+            .unwrap();
+        commit_sent_tx.send(()).unwrap();
+        let err = client.batch_execute("COMMIT;").await.unwrap_err();
+        assert_eq!(err.unwrap_db_error().code(), &SqlState::QUERY_CANCELED);
+        tx.send(()).unwrap();
+        client
+    });
+
+    commit_sent_rx.await.unwrap();
+    let (_, res) = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry_async_with_state(
+            (client_cancel, rx),
+            |_, (client_cancel, mut rx)| async move {
+                client_cancel.cancel_query(postgres::NoTls).await.unwrap();
+                let res = rx.try_recv();
+                ((client_cancel, rx), res)
+            },
+        )
+        .await;
+    res.unwrap();
+    let client = commit_task.await;
+
+    // NOTE: This must use the simple query protocol. An extended-protocol query first sends Parse
+    // and Sync, and that Sync ends an empty transaction, which would discard leaked values before
+    // the SHOW runs.
+    let shown: Vec<String> = client
+        .simple_query("SHOW transaction_isolation; SHOW real_time_recency;")
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|m| match m {
+            postgres::SimpleQueryMessage::Row(row) => Some(row.get(0).unwrap().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        ["serializable", "off"],
+        "SET LOCAL values outlived their cancelled transaction"
+    );
+}
+
+/// A COMMIT whose write is queued for group commit and then cancelled must not leave its
+/// `SET LOCAL` values on the session.
+///
+/// Group commits run one at a time, so a group commit parked at the
+/// `group_commit_before_apply_write` failpoint holds the COMMIT in `pending_writes`, where the
+/// cancel finds it. The failpoint is process-global, so the test relies on running in its own
+/// process, as nextest runs it.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_cancel_group_commit_discards_set_local() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let client_cancel = client.cancel_token();
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client
+        .batch_execute("SET transaction_isolation = 'serializable'")
+        .unwrap();
+    client
+        .batch_execute(
+            "BEGIN;
+             SET LOCAL transaction_isolation = 'strict serializable';
+             INSERT INTO t VALUES (1);",
+        )
+        .unwrap();
+
+    // Park the first group commit to reach the failpoint, whether it is the INSERT below or a
+    // table keepalive. Later ones pass through, so nothing waits on a rendezvous nobody is at.
+    let parked = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    let first = Arc::new(AtomicBool::new(true));
+    fail::cfg_callback("group_commit_before_apply_write", {
+        let parked = Arc::clone(&parked);
+        let resume = Arc::clone(&resume);
+        move || {
+            if first.swap(false, Ordering::SeqCst) {
+                // This runs on a worker of the server's runtime, which the COMMIT and the cancel
+                // below need. `block_in_place` hands this worker's queue to another thread.
+                tokio::task::block_in_place(|| {
+                    parked.wait();
+                    resume.wait();
+                });
+            }
+        }
+    })
+    .unwrap();
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+    let writer_thread = thread::spawn(move || writer.batch_execute("INSERT INTO t VALUES (2)"));
+    parked.wait();
+
+    let (commit_tx, commit_rx) = std::sync::mpsc::channel();
+    let commit_thread = thread::spawn(move || {
+        commit_tx.send(client.batch_execute("COMMIT")).unwrap();
+        client
+    });
+    // A cancel that lands before the COMMIT is queued has no effect, so retry until it returns.
+    let commit_res = Retry::default()
+        .max_duration(Duration::from_secs(30))
+        .retry(|_| {
+            client_cancel.cancel_query(postgres::NoTls).unwrap();
+            commit_rx.try_recv()
+        })
+        .expect("COMMIT returned");
+    fail::remove("group_commit_before_apply_write");
+    resume.wait();
+    writer_thread.join().unwrap().unwrap();
+    let mut client = commit_thread.join().unwrap();
+
+    let err = commit_res.expect_err("COMMIT was cancelled");
+    assert_eq!(err.unwrap_db_error().code(), &SqlState::QUERY_CANCELED);
+    // NOTE: This must use the simple query protocol, see
+    // `test_cancel_linearize_commit_discards_set_local`.
+    let shown: Vec<String> = client
+        .simple_query("SHOW transaction_isolation")
+        .unwrap()
+        .into_iter()
+        .filter_map(|m| match m {
+            postgres::SimpleQueryMessage::Row(row) => Some(row.get(0).unwrap().to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        ["serializable"],
+        "SET LOCAL values outlived their cancelled transaction"
+    );
+}
+
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
 async fn test_cancel_linearize_read_then_writes() {
     let server = test_util::TestHarness::default().start().await;
     server
@@ -4342,6 +4515,98 @@ async fn test_serialized_ddl_cancel() {
     // The mz_sleep calls above cause this test to not exit until the optimization tasks have fully
     // run, because spawn_blocking (used by optimization) are waited upon during Drop. Thus, don't
     // pass very high durations to mz_sleep so that we aren't waiting for long.
+}
+
+// Test that cancelling the commit of an implicit transaction while it waits for the DDL lock
+// discards the transaction's variable changes.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_serialized_ddl_cancel_implicit_commit_discards_set_local() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start()
+        .await;
+    server
+        .enable_feature_flags(&["unsafe_enable_unsafe_functions"])
+        .await;
+
+    let client1 = server.connect().await.unwrap();
+    let client2 = server.connect().await.unwrap();
+    let cancel1 = client1.cancel_token();
+    let cancel2 = client2.cancel_token();
+
+    // NOTE: This must use the simple query protocol. An extended-protocol query first sends Parse
+    // and Sync, and that Sync ends an empty transaction, which would discard leaked values before
+    // the SHOW runs.
+    async fn show_vars(client: &tokio_postgres::Client) -> Vec<String> {
+        client
+            .simple_query("SHOW transaction_isolation; SHOW application_name;")
+            .await
+            .unwrap()
+            .into_iter()
+            .filter_map(|m| match m {
+                postgres::SimpleQueryMessage::Row(row) => Some(row.get(0).unwrap().to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    client2
+        .batch_execute("CREATE TABLE t (a int)")
+        .await
+        .unwrap();
+    let before = show_vars(&client2).await;
+
+    // client1 holds the DDL lock while the view's optimization sleeps.
+    let handle1 = task::spawn(|| "test", async move {
+        client1
+            .batch_execute("CREATE VIEW v AS SELECT mz_unsafe.mz_sleep(5)")
+            .await
+    });
+    let handle2 = task::spawn(|| "test", async move {
+        // Encourage client1 to take the DDL lock first.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        // A multi-statement query runs in an implicit transaction. The rename joins the
+        // transaction's DDL ops without taking the DDL lock, so only the closing commit waits for
+        // it.
+        let err = client2
+            .batch_execute(
+                "SET LOCAL transaction_isolation = 'serializable';
+                 SET application_name = 'canceled';
+                 ALTER TABLE t RENAME TO t2;",
+            )
+            .await
+            .unwrap_err();
+        (client2, err)
+    });
+    // A cancel that lands before the commit is queued has nothing to cancel, so retry until one
+    // lands while it waits.
+    let ((_, handle2), res) = Retry::default()
+        .clamp_backoff(Duration::from_millis(250))
+        .max_duration(Duration::from_secs(30))
+        .retry_async_with_state((cancel2, handle2), |_, (cancel2, handle2)| async move {
+            cancel2.cancel_query(tokio_postgres::NoTls).await.unwrap();
+            let res = if handle2.is_finished() {
+                Ok(())
+            } else {
+                Err("pending commit not yet canceled".to_string())
+            };
+            ((cancel2, handle2), res)
+        })
+        .await;
+    res.unwrap();
+    let (client2, err) = handle2.await;
+    assert_eq!(err.unwrap_db_error().code(), &SqlState::QUERY_CANCELED);
+
+    assert_eq!(
+        show_vars(&client2).await,
+        before,
+        "variable changes outlived their canceled transaction"
+    );
+
+    cancel1.cancel_query(tokio_postgres::NoTls).await.unwrap();
+    let _ = handle1.await;
 }
 
 // Regression test for SQL-232: `GRANT ALL ON TABLE <view>` must not emit the
