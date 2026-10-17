@@ -75,8 +75,7 @@ use std::convert::Infallible;
 use std::pin::pin;
 use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::LazyLock;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use differential_dataflow::AsCollection;
@@ -1350,8 +1349,11 @@ async fn run_schema_validator(
         // Each round replaces the previous one instead of appending to it. The
         // replication loop takes the errors only when the stream yields a
         // keepalive, so appending grows without bound while the stream is
-        // silent. A round reports the full current state, so replacing an
-        // unread round loses nothing that is still wrong upstream.
+        // silent. Replacing can drop an unread error, for example when the
+        // next round fails on the connection before it reaches the schema
+        // checks. That error comes back: the connection error restarts the
+        // source, and the restarted validator reports any condition that
+        // still holds upstream.
         *errors.lock().expect("lock poisoned") = round;
         // Sleep after failed rounds too. A dead connection fails each query
         // immediately, and without the sleep this loop spins on it.
@@ -1447,7 +1449,26 @@ mod tests {
                 ))]
             },
         );
-        let _ = tokio::time::timeout(Duration::from_secs(60), validator).await;
-        assert_eq!(rounds.get(), 5);
+        let _ = tokio::time::timeout(Duration::from_secs(59), validator).await;
+        assert_eq!(rounds.get(), 4);
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn schema_validator_stops_when_errors_dropped() {
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let mut validator = pin!(run_schema_validator(
+            Arc::downgrade(&errors),
+            || Duration::from_secs(15),
+            async || Vec::new(),
+        ));
+        let running = tokio::time::timeout(Duration::from_secs(1), validator.as_mut()).await;
+        assert!(
+            running.is_err(),
+            "validator runs while the errors are alive"
+        );
+        drop(errors);
+        tokio::time::timeout(Duration::from_secs(16), validator)
+            .await
+            .expect("validator stops within one interval after the errors are dropped");
     }
 }
