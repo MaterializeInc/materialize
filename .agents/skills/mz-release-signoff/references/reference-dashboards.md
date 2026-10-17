@@ -4,7 +4,7 @@ Two dashboards that the release bot files under `Reference`: `release-health`, U
 
 ## Scoping differs from every other dashboard
 
-`release-health` keys on `$organization`, an organization id rather than a namespace, and constructs namespaces from it as `environment-$organization-0` or `environment-${organization}-.`. It also takes `$mz_cluster`, the EKS cluster, and `$version`. Many of its panels are deliberately fleet-wide with no environment filter at all, because they measure regional availability.
+`release-health` keys on `$organization`, an organization id rather than a namespace, and constructs namespaces from it as `environment-$organization-0` or `environment-${organization}-.`. It also takes `$mz_cluster`, the EKS cluster, and `$version`. Set both `var-stack` and the matching regional `var-datasource` in links. The five controller-backed Deploy progress panels use a hidden datasource selected by `stack`, while the other health panels use the regional `datasource`. Many panels are deliberately fleet-wide with no environment filter at all, because they measure regional availability.
 
 `networking` keys on `$namespace`, `$pod`, and `$tenant`. Most of its panels are node-level or cluster-level rather than environment-level.
 
@@ -15,6 +15,23 @@ Nearly every `release-health` panel excludes end-to-end test organizations with 
 ### Rollout progress
 
 These come from the cloud control plane, not from Materialize, and carry no namespace label.
+
+`running_deploys`, `running_environment_rollouts`, and `running_node_replacements`
+were emitted on each region's datasource before the controller migration. Since
+2026-09-10 around 15:30 UTC for staging and 2026-10-16 around 21:13 UTC for
+production, one controller in us-east-1 emits them for all regions. On the
+shared source, filter `region=~"(aws-)?<requested-region>"`. Older regional
+samples may lack the `region` label, so the old regional source needs
+`region=~"(aws-)?<requested-region>|"`. Query both sources and combine samples
+by label set and timestamp for a range crossing migration. The exact cutover
+minute is approximate, and an earlier staging attempt was reverted, so do not
+use the dates as exclusive query boundaries.
+
+The live Release Health panels 68, 69, 71, 72, and 73 read only the shared
+source over the whole selected range. They do not retrieve old regional
+history or filter to the region selected by `var-datasource`. A pre-migration
+regional panel can be empty or show another region's deploy. Validate
+historical per-region rollout progress with the two-source queries above.
 
 | Metric | Type | Notes |
 |---|---|---|
