@@ -170,3 +170,26 @@ jaro_winkler(.[0]; .[1]) * 1000 | round
 $$)
 ----
 961
+
+# A program that references a column is not a literal and must not panic
+# during constant folding.
+statement ok
+CREATE TABLE jq_programs (j jsonb, p text)
+
+statement ok
+INSERT INTO jq_programs VALUES ('{"a": 1}', '.a')
+
+query error jq requires a string literal as its second argument
+SELECT jq(j, p) FROM jq_programs
+
+query error jq requires a string literal as its second argument
+SELECT jq(j, p || '') FROM jq_programs
+
+query error jq requires a string literal as its second argument
+SELECT jq(j, CASE WHEN p IS NULL THEN '.' ELSE p END) FROM jq_programs
+
+query error jq requires a string literal as its second argument
+SELECT jq(j, upper(p) || lower(p)) FROM jq_programs
+
+query error regexp_extract requires a string literal as its first argument
+SELECT * FROM jq_programs, regexp_extract(p || '', 'x')
