@@ -1,7 +1,7 @@
 {{- /*
   Returns a page's body for the Markdown output: its .RenderShortcodes output,
-  without Hugo heading attributes and with links made absolute, after a
-  pointer to llms.txt.
+  without Hugo heading attributes and with links made absolute outside fenced
+  code blocks, after a pointer to llms.txt.
 
   Source links are mostly written relative to the docs root, such as
   "/sql/create-cluster/#syntax", or to the page, such as "../create-role". The
@@ -24,11 +24,77 @@
     {{ partial "markdown-body.html" (dict "page" .) }}
 */ -}}
 {{- /*
-  Hugo heading attributes, such as "## Object Introspection (SHOW) { #show }",
-  are syntax for the HTML pass. Drop them from the Markdown, in both builds.
+  Fenced code blocks pass through as written. A fence closes at a line of
+  only its own character, at least as long as the opening run, or at the end of
+  the page, as in CommonMark. ci/test/check-docs-markdown.py reports fences that
+  do not close where their author meant.
+
+  $starts holds the first line of each segment. Segments alternate between
+  prose and code, starting with prose, so an even index is prose.
 */ -}}
-{{- $content := replaceRE `(?m)^(#{1,6} .*?)[ \t]*\{[ \t]*[#.][^}\n]*\}[ \t]*$` "$1" .page.RenderShortcodes -}}
+{{- $lines := split .page.RenderShortcodes "\n" -}}
+{{- $starts := slice 0 -}}
+{{- $fence := "" -}}
+{{- range $i, $line := $lines -}}
+  {{- if $fence -}}
+    {{- with findRESubmatch "^[ \t>]*(`+|~+)[ \t]*$" $line 1 -}}
+      {{- if strings.HasPrefix (index . 0 1) $fence -}}
+        {{- $fence = "" -}}
+        {{- $starts = $starts | append (add $i 1) -}}
+      {{- end -}}
+    {{- end -}}
+  {{- else -}}
+    {{- with findRESubmatch "^[ \t]*(?:(?:>[ \t]?|(?:[-*+]|[0-9]{1,9}[.)])[ \t]+)*)(?:(`{3,})[^`]*|(~{3,}).*)$" $line 1 -}}
+      {{- $fence = add (index . 0 1) (index . 0 2) -}}
+      {{- $starts = $starts | append $i -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- $starts = $starts | append (len $lines) -}}
 {{- $basePath := strings.TrimSuffix "/" (urls.Parse site.BaseURL).Path -}}
+{{- /*
+  Three link forms, each as (prefix, target, end): inline links, reference
+  definitions, and href or src attributes in HTML that shortcodes emit. A
+  reference definition's target must start with "/" or "." and end the line or
+  precede a title, so that prose such as "[Note]: Materialize ..." is not
+  mistaken for one.
+*/ -}}
+{{- $forms := slice
+  (dict "find" `(\]\()([^)\s]+)([)\s])` "end" `[)\s]`)
+  (dict "find" `(?m)(^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*)([./]\S*)([ \t]*$|[ \t]+["'(])` "end" `(?:[ \t]*$|[ \t]+["'(])`)
+  (dict "find" `((?:href|src)=")([^"]+)(")` "end" `"`)
+-}}
+{{- $content := "" -}}
+{{- range $k, $start := first (sub (len $starts) 1) $starts -}}
+  {{- $segment := first (sub (index $starts (add $k 1)) $start) (after $start $lines) -}}
+  {{- if not $segment -}}
+    {{- continue -}}
+  {{- end -}}
+  {{- $text := printf "%s\n" (delimit $segment "\n") -}}
+  {{- if modBool $k 2 -}}
+    {{- /*
+      Hugo heading attributes, such as "## Object Introspection (SHOW) { #show }",
+      are syntax for the HTML pass. Drop them from the Markdown, in both builds.
+    */ -}}
+    {{- $text = replaceRE `(?m)^(#{1,6} .*?)[ \t]*\{[ \t]*[#.][^}\n]*\}[ \t]*$` "$1" $text -}}
+    {{- if $basePath -}}
+      {{- range $forms -}}
+        {{- $end := .end -}}
+        {{- range findRESubmatch .find $text -}}
+          {{- $prefix := index . 1 -}}
+          {{- $target := index . 2 -}}
+          {{- $url := partial "markdown-link-target.html" (dict "page" $.page "target" $target) -}}
+          {{- if $url -}}
+            {{- $quoted := replaceRE `([\\.+*?()|\[\]{}^$])` `\$1` (printf "%s%s" $prefix $target) -}}
+            {{- $text = replaceRE (printf `(?m)%s(%s)` $quoted $end) (printf "%s%s$1" $prefix $url) $text -}}
+          {{- end -}}
+        {{- end -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+  {{- $content = printf "%s%s" $content $text -}}
+{{- end -}}
+{{- $content = strings.TrimSuffix "\n" $content -}}
 {{- if $basePath -}}
   {{- /*
     The leading blank line separates the pointer from the description that
@@ -36,29 +102,5 @@
     the pointer joins the description's line and is not a blockquote.
   */ -}}
   {{- $content = printf "\n\n> For the complete documentation index, see [llms.txt](%s).\n\n%s" (partial "llms-txt-url.html" (dict "absolute" true)) $content -}}
-  {{- /*
-    Three link forms, each as (prefix, target, end): inline links, reference
-    definitions, and href or src attributes in HTML that shortcodes emit. A
-    reference definition's target must start with "/" or "." and end the line
-    or precede a title, so that prose such as "[Note]: Materialize ..." is not
-    mistaken for one.
-  */ -}}
-  {{- $forms := slice
-    (dict "find" `(\]\()([^)\s]+)([)\s])` "end" `[)\s]`)
-    (dict "find" `(?m)(^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*)([./]\S*)([ \t]*$|[ \t]+["'(])` "end" `(?:[ \t]*$|[ \t]+["'(])`)
-    (dict "find" `((?:href|src)=")([^"]+)(")` "end" `"`)
-  -}}
-  {{- range $forms -}}
-    {{- $end := .end -}}
-    {{- range findRESubmatch .find $content -}}
-      {{- $prefix := index . 1 -}}
-      {{- $target := index . 2 -}}
-      {{- $url := partial "markdown-link-target.html" (dict "page" $.page "target" $target) -}}
-      {{- if $url -}}
-        {{- $quoted := replaceRE `([\\.+*?()|\[\]{}^$])` `\$1` (printf "%s%s" $prefix $target) -}}
-        {{- $content = replaceRE (printf `(?m)%s(%s)` $quoted $end) (printf "%s%s$1" $prefix $url) $content -}}
-      {{- end -}}
-    {{- end -}}
-  {{- end -}}
 {{- end -}}
 {{- return $content -}}

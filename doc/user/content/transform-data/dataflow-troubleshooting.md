@@ -130,7 +130,7 @@ depending on the values set for the `cluster` and `cluster_replica`
 
 <!--
 [//]: # "TODO(joacoc) We should share ways for the user to diagnose and troubleshoot if and how fast a source is consuming."
-``` -->
+-->
 
 ## Where is Materialize spending compute time?
 
