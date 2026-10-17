@@ -326,11 +326,13 @@ where
         }
     }
 
-    /// Move the inner batcher's updates with key at least `far` into the chain, by sealing it
-    /// at `{lower_of(far)}` into a fresh batcher, then at the empty frontier into the chain.
-    fn rebuild(&mut self, far: &T::Key) {
+    /// Seal the inner batcher at `upper`, and move its remaining updates with key at least
+    /// `far` into the chain. The others move into a fresh inner batcher, by sealing at
+    /// `{lower_of(far)}` and then at the empty frontier.
+    fn rebuild(&mut self, upper: &Antichain<T>, far: &T::Key) -> Vec<B::Output> {
         let fresh = B::new(self.logger.clone(), self.operator_id);
         let mut old = std::mem::replace(&mut self.inner, fresh);
+        let (readied, _) = old.seal(upper.clone());
         let (near, _) = old.seal(Antichain::from_elem(T::lower_of(far)));
         for chunk in near {
             self.stats.first_seal_touched += chunk.update_count();
@@ -344,6 +346,7 @@ where
             chunk.partition_into(|_| true, &mut self.far, &mut self.near);
             self.park_far();
         }
+        readied
     }
 }
 
@@ -380,27 +383,45 @@ where
             .as_ref()
             .and_then(|edge| <T::Key as Timestamp>::Summary::from(self.theta).results_in(edge));
 
+        let mut rebuilt = None;
         if !self.sealed {
             self.sealed = true;
             if let Some(far) = &far_bound {
-                self.rebuild(far);
+                rebuilt = Some(self.rebuild(&upper, far));
             }
         }
 
         // Updates that might be ready at `upper` must be in the inner batcher, which decides
         // readiness exactly. Updates left in the chain have a key of at least `edge`, so
         // `lower_of(edge)`, an element of `upper`, is at or before each of them.
-        let peel_at = Antichain::from_iter(edge);
-        for bucket in self.chain.peel(peel_at.borrow()) {
-            for mut column in bucket.done() {
-                self.push_inner_column(&mut column);
+        // Peeling and restoring an empty chain only splits empty buckets.
+        let parked = self
+            .chain
+            .buckets()
+            .any(|bucket| !bucket.lower().is_empty());
+        if parked {
+            let peel_at = Antichain::from_iter(edge);
+            for bucket in self.chain.peel(peel_at.borrow()) {
+                for mut column in bucket.done() {
+                    self.push_inner_column(&mut column);
+                }
             }
         }
         while let Some(chunk) = self.chunker.finish() {
             self.inner.push_into(std::mem::take(chunk));
         }
 
-        let (readied, _) = self.inner.seal(upper.clone());
+        let (mut readied, _) = self.inner.seal(upper.clone());
+        if let Some(rebuilt) = rebuilt {
+            // The fresh inner batcher and the chain only hold updates the rebuild found not
+            // ready, so the rebuild's chain is the whole output. The seal above still runs to
+            // establish the fresh batcher's frontier.
+            assert!(
+                readied.iter().all(|chunk| chunk.update_count() == 0),
+                "temporal batcher readied updates after its rebuild"
+            );
+            readied = rebuilt;
+        }
         let description = Description::new(
             self.lower.clone(),
             upper.clone(),
@@ -409,8 +430,10 @@ where
         self.lower = upper;
         self.far_bound = far_bound;
 
-        let mut fuel = RESTORE_FUEL;
-        self.chain.restore(&mut fuel);
+        if parked {
+            let mut fuel = RESTORE_FUEL;
+            self.chain.restore(&mut fuel);
+        }
 
         (readied, description)
     }
