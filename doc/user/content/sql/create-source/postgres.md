@@ -1,6 +1,6 @@
 ---
 title: "CREATE SOURCE: PostgreSQL (Legacy Syntax)"
-description: "Connecting Materialize to a PostgreSQL database for Change Data Capture (CDC)."
+description: "Creates a source from PostgreSQL 11+ using the legacy syntax, which ingests upstream tables as subsources."
 pagerank: 40
 menu:
   main:

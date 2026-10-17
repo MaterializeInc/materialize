@@ -1,6 +1,6 @@
 ---
 title: "date_part function"
-description: "Returns a specified time component from a time-based value"
+description: "Returns a specified time component from a time-based value as a float, for PostgreSQL compatibility"
 menu:
   main:
     parent: 'sql-functions'
