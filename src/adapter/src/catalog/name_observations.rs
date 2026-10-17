@@ -252,6 +252,38 @@ mod tests {
             let positive = positive.snapshot();
             let negative = negative.snapshot();
 
+            let path_reads = CatalogReadRecorder::default();
+            let effective_path_reads = CatalogReadRecorder::default();
+            let schema_reads = CatalogReadRecorder::default();
+            let _ = catalog
+                .for_session(&session)
+                .with_read_recorder(path_reads.clone())
+                .search_path();
+            let _ = catalog
+                .for_session(&session)
+                .with_read_recorder(effective_path_reads.clone())
+                .effective_search_path(true);
+            let _ = catalog
+                .for_session(&session)
+                .with_read_recorder(schema_reads.clone())
+                .get_schemas();
+            let absent_schemas: Vec<_> = [false, true]
+                .into_iter()
+                .map(|qualified| {
+                    let reads = CatalogReadRecorder::default();
+                    let catalog = catalog
+                        .for_session(&session)
+                        .with_read_recorder(reads.clone());
+                    let result = if qualified {
+                        catalog.resolve_schema_in_database(&database_id, "earlier")
+                    } else {
+                        catalog.resolve_schema(None, "earlier")
+                    };
+                    assert!(result.is_err());
+                    reads.snapshot()
+                })
+                .collect();
+
             let timestamp = catalog.current_upper().await;
             catalog
                 .transact(None, timestamp, None, vec![schema_op("earlier")])
@@ -259,6 +291,16 @@ mod tests {
                 .expect("create earlier schema");
             assert!(positive.check(catalog.state()).is_ok());
             assert!(negative.check(catalog.state()).is_ok());
+            for reads in absent_schemas.into_iter().chain([
+                path_reads.snapshot(),
+                effective_path_reads.snapshot(),
+                schema_reads.snapshot(),
+            ]) {
+                assert!(matches!(
+                    reads.check(catalog.state()),
+                    Err(AdapterError::DDLTransactionRace)
+                ));
+            }
 
             create_item(&mut catalog, "earlier", "target").await;
             assert!(matches!(
