@@ -237,6 +237,7 @@ impl Default for TestHarness {
             // If we need those in the future, we might need to change both.
             system_parameter_defaults: BTreeMap::from([
                 ("log_filter".to_string(), "error".to_string()),
+                ("enable_mcp_agent_events".to_string(), "true".to_string()),
                 (
                     ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE.name().to_string(),
                     "true".to_string(),

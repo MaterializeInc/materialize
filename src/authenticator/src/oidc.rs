@@ -257,6 +257,8 @@ impl OidcClaims {
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct ValidatedClaims {
     pub user: String,
+    /// Expiration of the verified token, in Unix seconds.
+    pub exp: i64,
     /// Groups extracted from the JWT group claim. None if claim absent.
     pub groups: Option<Vec<String>>,
     // Prevent construction outside of `GenericOidcAuthenticator::validate_token`.
@@ -540,6 +542,7 @@ impl GenericOidcAuthenticatorInner {
 
         Ok(ValidatedClaims {
             user: user.to_string(),
+            exp: token_data.claims.exp,
             groups,
             _private: (),
         })
@@ -644,11 +647,13 @@ mod tests {
         use mz_ore::secure::Zeroize;
         let mut claims = ValidatedClaims {
             user: "alice@example.com".to_string(),
+            exp: 123,
             groups: Some(vec!["eng".to_string()]),
             _private: (),
         };
         claims.zeroize();
         assert!(claims.user.is_empty());
+        assert_eq!(claims.exp, 0);
     }
 
     #[mz_ore::test]

@@ -98,6 +98,7 @@ rlimit.workspace = true
 rustls.workspace = true
 semver = { workspace = true, optional = true }
 sentry-tracing = { workspace = true, optional = true }
+schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 shell-words.workspace = true
@@ -117,6 +118,7 @@ tracing-opentelemetry.workspace = true
 tracing-subscriber = { workspace = true, optional = true }
 tungstenite.workspace = true
 url.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true
@@ -146,7 +148,6 @@ serde_urlencoded.workspace = true
 similar-asserts.workspace = true
 timely.workspace = true
 tokio-postgres = { workspace = true, features = ["with-chrono-0_4", "with-serde_json-1"] }
-uuid.workspace = true
 
 [build-dependencies]
 anyhow.workspace = true
