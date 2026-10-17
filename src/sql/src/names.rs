@@ -40,7 +40,7 @@ use crate::ast::{
     RawDataType, RawItemName, Statement, UnresolvedItemName, UnresolvedObjectName,
 };
 use crate::catalog::{
-    CatalogError, CatalogItem, CatalogItemType, CatalogTypeDetails, SessionCatalog,
+    CatalogError, CatalogItemRef, CatalogItemType, CatalogTypeDetails, SessionCatalog,
 };
 use crate::normalize;
 use crate::plan::PlanError;
@@ -1491,7 +1491,7 @@ impl<'a> NameResolver<'a> {
             }
         };
 
-        let mut r: Result<&dyn CatalogItem, CatalogError> =
+        let mut r: Result<CatalogItemRef<'_>, CatalogError> =
             Err(CatalogError::UnknownItem(raw_name.to_string()));
 
         if r.is_err() && config.types {
