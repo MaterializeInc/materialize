@@ -1661,7 +1661,53 @@ pub struct TowerSessionData {
 
 #[cfg(test)]
 mod tests {
-    use super::{AllowedRoles, check_role_allowed};
+    use axum::extract::State;
+    use axum::response::IntoResponse;
+    use mz_orchestratord::controller::materialize::generation::PromoteResponse;
+
+    use super::{AllowedRoles, check_role_allowed, handle_leader_promote};
+    use crate::deployment::state::{DeploymentState, DeploymentStateHandle};
+
+    async fn promote(handle: &DeploymentStateHandle) -> PromoteResponse {
+        let response = handle_leader_promote(State(handle.clone()))
+            .await
+            .into_response();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body is in memory");
+        PromoteResponse::classify(status, std::str::from_utf8(&body).expect("body is JSON"))
+    }
+
+    /// orchestratord retries a promotion it classifies as `NotYet`, and a
+    /// promoted environmentd passes back through `Initializing` when it
+    /// reboots as the leader. Every state must classify accordingly.
+    #[mz_ore::test(tokio::test)]
+    async fn leader_promote_responses_match_orchestratord_contract() {
+        let (state, handle) = DeploymentState::new();
+        let not_yet = |r: PromoteResponse| matches!(r, PromoteResponse::NotYet(_));
+
+        assert!(not_yet(promote(&handle).await), "Initializing");
+        let _skip_catchup = state.set_catching_up();
+        assert!(not_yet(promote(&handle).await), "CatchingUp");
+        let _promoted = state.set_ready_to_promote();
+        assert_eq!(
+            promote(&handle).await,
+            PromoteResponse::Accepted,
+            "ReadyToPromote"
+        );
+        assert_eq!(
+            promote(&handle).await,
+            PromoteResponse::Accepted,
+            "Promoting"
+        );
+        state.set_is_leader();
+        assert_eq!(
+            promote(&handle).await,
+            PromoteResponse::Accepted,
+            "IsLeader"
+        );
+    }
 
     #[mz_ore::test]
     fn test_check_role_allowed() {
