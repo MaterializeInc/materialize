@@ -10,7 +10,8 @@
 import { screen } from "@testing-library/react";
 import React from "react";
 
-import { UI_PREVIEWS } from "~/config/uiPreviews";
+import { flexibleDeploymentFlags } from "~/config/flexibleDeploymentFlags";
+import { UI_PREVIEWS, UiPreviewKey } from "~/config/uiPreviews";
 import { useUiPreview } from "~/hooks/useUiPreview";
 import { renderComponent } from "~/test/utils";
 
@@ -18,18 +19,24 @@ const clusterListPreview = UI_PREVIEWS.clusterListUsageMetrics;
 
 const flags: Record<string, boolean> = {};
 
-vi.mock("~/hooks/useFlags", () => ({
-  useFlags: () => flags,
-}));
-
 const appConfig = { mode: "cloud" as "cloud" | "self-managed" };
+
+// Mirrors `useFlags`: LaunchDarkly in cloud, the stubbed flags elsewhere.
+vi.mock("~/hooks/useFlags", () => ({
+  useFlags: () =>
+    appConfig.mode === "cloud" ? flags : flexibleDeploymentFlags,
+}));
 
 vi.mock("~/config/useAppConfig", () => ({
   useAppConfig: () => appConfig,
 }));
 
-const Probe = () => {
-  const { isAvailable, isEnabled } = useUiPreview("clusterListUsageMetrics");
+const Probe = ({
+  previewKey = "clusterListUsageMetrics",
+}: {
+  previewKey?: UiPreviewKey;
+}) => {
+  const { isAvailable, isEnabled } = useUiPreview(previewKey);
   return (
     <>
       <div>available: {String(isAvailable)}</div>
@@ -54,9 +61,15 @@ describe("useUiPreview", () => {
 
   it("ships the flagged UI outright in self-managed mode, offering no choice", async () => {
     appConfig.mode = "self-managed";
-    flags[clusterListPreview.ldFlag] = true;
     await renderComponent(<Probe />);
     expect(screen.getByText("available: false")).toBeInTheDocument();
     expect(screen.getByText("enabled: true")).toBeInTheDocument();
+  });
+
+  it("keeps the cluster details redesign off in self-managed mode", async () => {
+    appConfig.mode = "self-managed";
+    await renderComponent(<Probe previewKey="clusterDetailsRedesign" />);
+    expect(screen.getByText("available: false")).toBeInTheDocument();
+    expect(screen.getByText("enabled: false")).toBeInTheDocument();
   });
 });
