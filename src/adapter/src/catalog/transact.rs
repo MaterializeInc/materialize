@@ -102,6 +102,8 @@ pub struct InjectedAuditEvent {
 
 #[derive(Debug, Clone)]
 pub enum Op {
+    /// Validates preparation-time observations against the preceding operation prefix.
+    ValidateReads(crate::catalog::CatalogReadSet),
     AlterRetainHistory {
         id: CatalogItemId,
         value: Option<Value>,
@@ -1077,6 +1079,7 @@ impl Catalog {
         storage_collections_to_register: &mut BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), AdapterError> {
         match op {
+            Op::ValidateReads(reads) => reads.check(state)?,
             Op::CheckClusterState {
                 cluster_id,
                 expected,
