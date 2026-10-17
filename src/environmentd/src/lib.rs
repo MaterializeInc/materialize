@@ -417,6 +417,7 @@ impl Listeners {
         let metrics_registry = config.metrics_registry.clone();
         let metrics = http::Metrics::register_into(&metrics_registry, "mz_http");
         let mcp_metrics = http::mcp_metrics::McpMetrics::register_into(&metrics_registry);
+        let mcp_subscriptions = http::SubscriptionRegistry::default();
         let oauth_metadata_metrics =
             http::oauth_metadata::OauthMetadataMetrics::register_into(&metrics_registry);
         let mut http_listener_handles = BTreeMap::new();
@@ -446,6 +447,7 @@ impl Listeners {
                 metrics: metrics.clone(),
                 metrics_registry: metrics_registry.clone(),
                 mcp_metrics: mcp_metrics.clone(),
+                mcp_subscriptions: mcp_subscriptions.clone(),
                 oauth_metadata_metrics: oauth_metadata_metrics.clone(),
                 internal_route_config: Arc::clone(&internal_route_config),
                 routes_enabled: listener.config.routes,

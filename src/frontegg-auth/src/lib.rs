@@ -16,7 +16,7 @@ mod metrics;
 use std::path::PathBuf;
 
 pub use auth::{
-    Authenticator, AuthenticatorConfig, ClaimMetadata, ClaimTokenType, Claims,
+    AuthSessionHandle, Authenticator, AuthenticatorConfig, ClaimMetadata, ClaimTokenType, Claims,
     DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
 };
 pub use client::Client;

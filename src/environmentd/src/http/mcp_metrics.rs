@@ -18,7 +18,7 @@
 use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::stats::histogram_seconds_buckets;
-use prometheus::{HistogramTimer, HistogramVec, IntCounterVec};
+use prometheus::{HistogramTimer, HistogramVec, IntCounter, IntCounterVec, IntGauge};
 
 /// Closed set of outcomes recorded in the MCP `status` label. Keeping these
 /// as an enum (rather than free-form strings at the call sites) pins the
@@ -59,12 +59,50 @@ impl McpCallStatus {
 /// so the struct can be cloned freely and stored as an axum `Extension`.
 #[derive(Debug, Clone)]
 pub struct McpMetrics {
+    pub active_subscriptions: IntGauge,
+    pub subscription_events: IntCounter,
+    pub subscription_ends: IntCounterVec,
     /// Total MCP requests by endpoint type, JSON-RPC method, and status.
     pub requests: IntCounterVec,
     /// Total MCP `tools/call` invocations by endpoint type, tool name, and status.
     pub tool_calls: IntCounterVec,
     /// Duration of MCP `tools/call` invocations by endpoint type and tool name.
     pub tool_call_duration: HistogramVec,
+}
+
+/// Records one request outcome on drop. A request dropped before its outcome is set records as
+/// cancelled.
+pub struct RequestGuard<'a> {
+    metrics: &'a McpMetrics,
+    endpoint_label: &'static str,
+    method_label: String,
+    status: McpCallStatus,
+}
+
+impl<'a> RequestGuard<'a> {
+    pub fn new(
+        metrics: &'a McpMetrics,
+        endpoint_label: &'static str,
+        method_label: String,
+    ) -> Self {
+        Self {
+            metrics,
+            endpoint_label,
+            method_label,
+            status: McpCallStatus::Cancelled,
+        }
+    }
+
+    pub fn set_status(&mut self, status: McpCallStatus) {
+        self.status = status;
+    }
+}
+
+impl Drop for RequestGuard<'_> {
+    fn drop(&mut self) {
+        self.metrics
+            .record_request(self.endpoint_label, &self.method_label, self.status);
+    }
 }
 
 /// RAII guard for a single `tools/call` invocation. On drop, increments
@@ -120,6 +158,19 @@ impl Drop for ToolCallGuard<'_> {
 impl McpMetrics {
     pub fn register_into(registry: &MetricsRegistry) -> Self {
         Self {
+            active_subscriptions: registry.register(metric!(
+                name: "mz_mcp_active_subscriptions",
+                help: "Number of active MCP subscriptions.",
+            )),
+            subscription_events: registry.register(metric!(
+                name: "mz_mcp_subscription_events_total",
+                help: "Number of MCP subscription events queued for delivery.",
+            )),
+            subscription_ends: registry.register(metric!(
+                name: "mz_mcp_subscription_ends_total",
+                help: "Number of MCP subscriptions ended, by reason.",
+                var_labels: ["reason"],
+            )),
             requests: registry.register(metric!(
                 name: "mz_mcp_requests_total",
                 help: "Total number of MCP requests received.",
@@ -151,8 +202,24 @@ impl McpMetrics {
 
 #[cfg(test)]
 mod tests {
-    use super::{McpCallStatus, McpMetrics};
+    use super::{McpCallStatus, McpMetrics, RequestGuard};
     use mz_ore::metrics::MetricsRegistry;
+
+    #[mz_ore::test]
+    fn test_request_guard_records_cancellation_by_default() {
+        let metrics = McpMetrics::register_into(&MetricsRegistry::new());
+        let count = |status: &str| {
+            metrics
+                .requests
+                .with_label_values(&["agent", "tools/list", status])
+                .get()
+        };
+        let mut guard = RequestGuard::new(&metrics, "agent", "tools/list".into());
+        guard.set_status(McpCallStatus::Ok);
+        drop(guard);
+        drop(RequestGuard::new(&metrics, "agent", "tools/list".into()));
+        assert_eq!((count("ok"), count("cancelled")), (1, 1));
+    }
 
     /// The status label strings are a wire/dashboard contract; pin them so a
     /// rename is a deliberate, visible change.

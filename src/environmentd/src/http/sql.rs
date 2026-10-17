@@ -541,10 +541,10 @@ pub enum SqlRequest {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ExtendedRequest {
     /// A query string containing zero or one queries.
-    query: String,
+    pub(in crate::http) query: String,
     /// Optional parameters for the query.
     #[serde(default)]
-    params: Vec<Option<String>>,
+    pub(in crate::http) params: Vec<Option<String>>,
 }
 
 /// The response to a `SqlRequest`.
