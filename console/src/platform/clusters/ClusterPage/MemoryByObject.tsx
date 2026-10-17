@@ -20,22 +20,32 @@ import {
 import React from "react";
 import { Link as RouterLink } from "react-router-dom";
 
+import Alert from "~/components/Alert";
 import { TooltipColorSwatch } from "~/components/graphComponents";
+import { LoadingContainer } from "~/components/LoadingContainer";
 import TextLink from "~/components/TextLink";
 import { generateRainbowPalette } from "~/components/ThresholdLineGraph/thresholdLineGraphHelpers";
 import { useFlags } from "~/hooks/useFlags";
 import { LargestReplicaBoundary } from "~/platform/clusters/LargestMaintainedQueries";
-import { useLargestMaintainedQueries } from "~/platform/clusters/queries";
+import {
+  UNIFIED_OBJECT_SIZES_MIN_VERSION,
+  useLargestMaintainedQueries,
+} from "~/platform/clusters/queries";
 import {
   absoluteMaintainedObjectPath,
   useBuildWorkflowGraphPath,
 } from "~/platform/routeHelpers";
-import { useRegionSlug } from "~/store/environments";
+import { useEnvironmentGate, useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { formatMemoryUsage } from "~/utils/format";
 
-import { segmentWidths, TOP_OBJECT_COUNT } from "./memoryByObjectModel";
+import {
+  LargestObject,
+  segmentWidths,
+  TOP_OBJECT_COUNT,
+} from "./memoryByObjectModel";
 import { PERCENT_TICKS } from "./ResourceUsage/resourceUsageStyles";
+import { useLiveLargestObjects } from "./useLiveLargestObjects";
 
 export interface MemoryByObjectProps {
   clusterId: string;
@@ -46,32 +56,37 @@ export interface MemoryByObjectProps {
 export const MemoryByObject = ({
   clusterId,
   clusterName,
-}: MemoryByObjectProps) => (
-  <LargestReplicaBoundary clusterId={clusterId}>
-    {(replica) => (
-      <MemoryByObjectCard
-        clusterId={clusterId}
-        clusterName={clusterName}
-        replicaName={replica.name}
-        replicaHeapLimit={replica.heapLimit}
-      />
-    )}
-  </LargestReplicaBoundary>
-);
+}: MemoryByObjectProps) => {
+  const hasLiveSizes =
+    useEnvironmentGate(UNIFIED_OBJECT_SIZES_MIN_VERSION) === true;
+  return (
+    <LargestReplicaBoundary clusterId={clusterId}>
+      {(replica) =>
+        hasLiveSizes ? (
+          <LiveMemoryByObject
+            replicaId={replica.id}
+            replicaName={replica.name}
+            replicaHeapLimit={replica.heapLimit}
+          />
+        ) : (
+          <PolledMemoryByObject
+            clusterId={clusterId}
+            clusterName={clusterName}
+            replicaName={replica.name}
+            replicaHeapLimit={replica.heapLimit}
+          />
+        )
+      }
+    </LargestReplicaBoundary>
+  );
+};
 
-const MemoryByObjectCard = ({
+const PolledMemoryByObject = ({
   clusterId,
   clusterName,
   replicaName,
   replicaHeapLimit,
 }: MemoryByObjectProps & { replicaName: string; replicaHeapLimit: number }) => {
-  const { colors } = useTheme<MaterializeTheme>();
-  // The maintained objects page only has routes while its flag is on.
-  const hasMaintainedObjectsPage = Boolean(
-    useFlags()["maintained-objects-ui-50"],
-  );
-  const regionSlug = useRegionSlug();
-  const workflowGraphPath = useBuildWorkflowGraphPath();
   const { data: objects } = useLargestMaintainedQueries({
     clusterId,
     clusterName,
@@ -79,8 +94,60 @@ const MemoryByObjectCard = ({
     replicaName,
     replicaHeapLimit,
   });
+  return (
+    <MemoryByObjectCard
+      objects={objects ?? []}
+      replicaName={replicaName}
+      hasHeapLimit={replicaHeapLimit > 0}
+    />
+  );
+};
 
-  if (!objects || objects.length === 0) return null;
+const LiveMemoryByObject = ({
+  replicaId,
+  replicaName,
+  replicaHeapLimit,
+}: {
+  replicaId: string;
+  replicaName: string;
+  replicaHeapLimit: number;
+}) => {
+  const { objects, snapshotComplete, isError } = useLiveLargestObjects({
+    replicaId,
+    heapLimit: replicaHeapLimit,
+  });
+  if (isError) {
+    return <Alert variant="error" message="Object memory is unavailable." />;
+  }
+  if (!snapshotComplete) return <LoadingContainer />;
+  return (
+    <MemoryByObjectCard
+      objects={objects}
+      replicaName={replicaName}
+      hasHeapLimit={replicaHeapLimit > 0}
+    />
+  );
+};
+
+const MemoryByObjectCard = ({
+  objects,
+  replicaName,
+  hasHeapLimit,
+}: {
+  objects: LargestObject[];
+  replicaName: string;
+  /** Without a heap limit there are no shares, so the card lists sizes alone. */
+  hasHeapLimit: boolean;
+}) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  // The maintained objects page only has routes while its flag is on.
+  const hasMaintainedObjectsPage = Boolean(
+    useFlags()["maintained-objects-ui-50"],
+  );
+  const regionSlug = useRegionSlug();
+  const workflowGraphPath = useBuildWorkflowGraphPath();
+
+  if (objects.length === 0) return null;
 
   // Colored by rank like the Freshness page's lines, so the largest objects
   // are furthest apart in hue.
@@ -89,21 +156,21 @@ const MemoryByObjectCard = ({
     objects.map((object) => object.memoryPercentage),
   );
   const segments = objects.map((object, index) => {
-    const { id, name, databaseName, schemaName } = object;
+    const { id, name, databaseName, schemaName, type } = object;
     return {
       key: id ?? object.dataflowId ?? String(index),
       label: name ?? object.dataflowName ?? "-",
-      usage: formatMemoryUsage(object),
+      usage: formatMemoryUsage(hasHeapLimit ? object : { size: object.size }),
       color: palette[index],
       widthPercent: widths[index],
       path:
-        object.isOrphanedDataflow || !id || !name || !schemaName
+        object.isOrphanedDataflow || !id || !name || !schemaName || !type
           ? undefined
           : hasMaintainedObjectsPage
             ? absoluteMaintainedObjectPath(regionSlug, id)
             : workflowGraphPath({
                 databaseObject: { id, name, databaseName, schemaName },
-                type: object.type,
+                type,
               }),
     };
   });
@@ -124,56 +191,60 @@ const MemoryByObjectCard = ({
               : `Top ${TOP_OBJECT_COUNT} Objects by Memory`}
           </Text>
           <Text textStyle="text-small" color={colors.foreground.secondary}>
-            % of heap limit on {replicaName}
+            {hasHeapLimit
+              ? `% of heap limit on ${replicaName}`
+              : `Size on ${replicaName}`}
           </Text>
         </HStack>
-        <Box>
-          <Flex
-            role="img"
-            aria-label="Memory by object"
-            height="6"
-            borderRadius="sm"
-            overflow="hidden"
-            background={colors.background.secondary}
-          >
-            {segments.map(
-              (segment) =>
-                segment.widthPercent > 0 && (
-                  <Tooltip
-                    key={segment.key}
-                    label={`${segment.label} · ${segment.usage}`}
-                  >
-                    <Box
-                      width={`${segment.widthPercent}%`}
-                      background={segment.color}
-                      borderRightWidth="1px"
-                      borderColor={colors.background.primary}
-                    />
-                  </Tooltip>
-                ),
-            )}
-          </Flex>
-          <Box position="relative" height="4" mt={1}>
-            {PERCENT_TICKS.map((tick) => (
-              <Text
-                key={tick}
-                position="absolute"
-                left={`${tick}%`}
-                transform={
-                  tick === 0
-                    ? undefined
-                    : tick === 100
-                      ? "translateX(-100%)"
-                      : "translateX(-50%)"
-                }
-                textStyle="text-small"
-                color={colors.foreground.secondary}
-              >
-                {tick}%
-              </Text>
-            ))}
+        {hasHeapLimit && (
+          <Box>
+            <Flex
+              role="img"
+              aria-label="Memory by object"
+              height="6"
+              borderRadius="sm"
+              overflow="hidden"
+              background={colors.background.secondary}
+            >
+              {segments.map(
+                (segment) =>
+                  segment.widthPercent > 0 && (
+                    <Tooltip
+                      key={segment.key}
+                      label={`${segment.label} · ${segment.usage}`}
+                    >
+                      <Box
+                        width={`${segment.widthPercent}%`}
+                        background={segment.color}
+                        borderRightWidth="1px"
+                        borderColor={colors.background.primary}
+                      />
+                    </Tooltip>
+                  ),
+              )}
+            </Flex>
+            <Box position="relative" height="4" mt={1}>
+              {PERCENT_TICKS.map((tick) => (
+                <Text
+                  key={tick}
+                  position="absolute"
+                  left={`${tick}%`}
+                  transform={
+                    tick === 0
+                      ? undefined
+                      : tick === 100
+                        ? "translateX(-100%)"
+                        : "translateX(-50%)"
+                  }
+                  textStyle="text-small"
+                  color={colors.foreground.secondary}
+                >
+                  {tick}%
+                </Text>
+              ))}
+            </Box>
           </Box>
-        </Box>
+        )}
         <Flex
           as="ul"
           aria-label="Objects"

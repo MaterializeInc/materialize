@@ -19,11 +19,12 @@ import {
   OVERVIEW_MAX_MINUTES,
   REPLICA_MEMORY_BREAKDOWN_MIN_VERSION,
   useObjectCreationTimes,
+  usePolledReplicaUtilizationHistory,
   useReplicaHeapLimits,
   useReplicaHydrationEpisodes,
   useReplicaStatusHistory,
-  useReplicaUtilizationHistory,
   useUnhydratedObjectCounts,
+  useUtilizationTier,
 } from "~/platform/clusters/queries";
 import { useClusterObjectsLive } from "~/store/allObjectsCollection";
 import { useEnvironmentGate } from "~/store/environments";
@@ -40,6 +41,7 @@ import {
   transformDdlEvents,
   transformReplicaTimeline,
 } from "./resourceUsageModel";
+import { useLiveClusterUtilization } from "./useLiveClusterUtilization";
 
 const DDL_OBJECT_TYPES = ["index", "materialized-view"];
 const EMPTY_SERIES: ReplicaData[] = [];
@@ -90,8 +92,18 @@ export function useResourceUsageData({
   timePeriodMinutes: number;
 }) {
   const { colors } = useTheme<MaterializeTheme>();
-  // The status timeline reads offline stretches from status history.
-  const history = useReplicaUtilizationHistory(
+  const bucketSizeMs = Math.max(timePeriodMinutes * 1000, MIN_BUCKET_SIZE_MS);
+  const tier = useUtilizationTier(timePeriodMinutes);
+  const hasMemoryBreakdown =
+    useEnvironmentGate(REPLICA_MEMORY_BREAKDOWN_MIN_VERSION) === true;
+  const live = useLiveClusterUtilization({
+    clusterId: cluster.id,
+    timePeriodMinutes,
+    bucketSizeMs,
+    tier: tier === "poll" ? undefined : tier,
+    includeMemoryBreakdown: hasMemoryBreakdown,
+  });
+  const polled = usePolledReplicaUtilizationHistory(
     {
       bucketSizeMs: Math.max(timePeriodMinutes * 1000, MIN_BUCKET_SIZE_MS),
       timePeriodMinutes,
@@ -99,8 +111,17 @@ export function useResourceUsageData({
       replicaId: undefined,
       includeMemoryBreakdown: true,
     },
-    { includeOfflineEvents: false },
+    { enabled: tier === "poll" },
   );
+  const history =
+    tier === "poll"
+      ? {
+          data: polled.data,
+          isLoading: polled.isLoading,
+          isError: polled.isError,
+          isRefreshing: false,
+        }
+      : live;
   const graphData = history.data?.graphData;
 
   // Replicas that share a name, such as a scheduled cluster's refreshes, share
@@ -187,8 +208,7 @@ export function useResourceUsageData({
   // allocation instead, and no RAM limit share. Only the views' rows on 26.44
   // and later carry that share, so other windows keep the heap labels.
   const rowsCarryHeapLimit =
-    useEnvironmentGate(REPLICA_MEMORY_BREAKDOWN_MIN_VERSION) === true &&
-    timePeriodMinutes <= OVERVIEW_MAX_MINUTES;
+    hasMemoryBreakdown && timePeriodMinutes <= OVERVIEW_MAX_MINUTES;
   const hasHeapLimit =
     !rowsCarryHeapLimit ||
     chartData.some(({ data }) =>

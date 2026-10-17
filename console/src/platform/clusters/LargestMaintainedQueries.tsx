@@ -119,6 +119,7 @@ const LargestMaintainedQueriesError = ({
 };
 
 export interface LargestReplica {
+  id: string;
   name: string;
   heapLimit: number;
 }
@@ -173,6 +174,7 @@ const LargestReplicaLoader = ({
       )}
     >
       {children({
+        id: largestReplica.id,
         name: largestReplica.name,
         heapLimit: Number(largestReplica.heapLimit),
       })}
