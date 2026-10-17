@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/mysql/schemas.rs
-revision: 47a81d6e64
+revision: 0c7c2a15c1
 ---
 
 # mz-storage::source::mysql::schemas

@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/metrics.rs
-revision: b462f89663
+revision: 57daf7ac77
 ---
 
 # mz-ore::metrics
@@ -18,6 +18,7 @@ Key types and traits:
 * `DeleteOnDropWrapper<M>` — wraps a `MetricVec` so that only delete-on-drop child metrics can be created from it, preventing label leaks; re-exported type aliases (`CounterVec`, `GaugeVec`, `IntCounterVec`, etc.) shadow the raw Prometheus types.
 * `ComputedGenericGauge` / `ComputedGauge` / `ComputedIntGauge` / `ComputedUIntGauge` — gauges whose value is recomputed from a closure on every scrape.
 * `MetricsFutureExt` — extension trait adding `wall_time()` and `exec_time()` combinators to any `Future`; the resulting `WallTimeFuture` / `ExecTimeFuture` record elapsed or CPU time to a Histogram or Counter.
+* `aggregation` submodule — public submodule for metric aggregation utilities.
 * `delete_on_drop` submodule — underlying RAII machinery for `DeleteOnDropMetric` and related types.
 * `remove_children_with_label` — removes every child of a metric vec whose label with the given name has the given value. Prometheus removes children only by their full label tuple, so this function snapshots the vec via `collect()` to learn the tuples (cloning each child once), then calls `remove_label_values` for each matching child. Intended for occasional cleanup such as dropping all series for a specific object, not for hot paths. A concurrent removal between the snapshot and the remove call is silently ignored.
 
