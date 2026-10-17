@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import pytest
-from dbt.tests.util import run_dbt
+from dbt.tests.util import run_dbt, run_dbt_and_capture
 
 # Source materialization in dedicated schema (for non-strict tests)
 load_gen_source = """
@@ -174,6 +174,12 @@ view_model = """
 SELECT 1 AS id
 """
 
+view_model_on_quickstart = """
+{{ config(materialized='view', cluster='quickstart') }}
+
+SELECT 1 AS id
+"""
+
 materialized_view_model = """
 {{ config(materialized='materialized_view') }}
 
@@ -282,6 +288,12 @@ class TestStrictModeViewBlocked:
         """With strict_mode, mixing view and source_table in same schema fails at compile time."""
         run_dbt(["run"], expect_pass=False)
 
+    def test_view_alone_warns_about_source_table_in_schema(self, project):
+        # The source_table's own check does not run when only the view is
+        # selected, so this pins the view side.
+        _, output = run_dbt_and_capture(["run", "--select", "test_view"])
+        assert "contains source_table objects" in output
+
 
 class TestStrictModeSourceTablesCanCoexist:
     """Test that multiple source_tables can coexist in the same schema (strict_mode enabled)."""
@@ -346,12 +358,18 @@ class TestStrictModeViewBlockedBySink:
         return {
             "sink_source_mv.sql": sink_source_mv,
             "test_sink.sql": sink_model,
-            "test_view.sql": view_model,
+            "test_view.sql": view_model_on_quickstart,
         }
 
     def test_view_blocked_in_schema_with_sink(self, project):
         """With strict_mode, mixing view and sink in same schema fails at compile time."""
         run_dbt(["run"], expect_pass=False)
+
+    def test_view_alone_warns_about_sink_in_schema(self, project):
+        # The sink's own check does not run when only the view is selected, so
+        # this pins the view side.
+        _, output = run_dbt_and_capture(["run", "--select", "test_view"])
+        assert "contains sink objects" in output
 
 
 class TestStrictModeSinksCanCoexist:
@@ -422,6 +440,12 @@ class TestStrictModeViewBlockedBySource:
     def test_view_blocked_in_schema_with_source(self, project):
         """With strict_mode, mixing view and source in same schema fails at compile time."""
         run_dbt(["run"], expect_pass=False)
+
+    def test_view_alone_warns_about_source_in_schema(self, project):
+        # The source's own check does not run when only the view is selected,
+        # so this pins the view side.
+        _, output = run_dbt_and_capture(["run", "--select", "test_view"])
+        assert "contains source objects" in output
 
 
 class TestStrictModeSourcesCanCoexist:
