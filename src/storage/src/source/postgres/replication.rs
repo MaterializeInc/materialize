@@ -75,9 +75,7 @@ use std::convert::Infallible;
 use std::pin::pin;
 use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::Arc;
-use std::sync::LazyLock;
-use std::time::Instant;
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use differential_dataflow::AsCollection;
@@ -109,7 +107,8 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
+use tokio::time::Instant;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 use tracing::{error, trace};
@@ -468,7 +467,7 @@ pub(crate) fn render<'scope>(
             let client = connection_config
                 .connect("schema validation", ssh_tunnel_manager)
                 .await?;
-            let mut schema_errors = spawn_schema_validator(
+            let schema_errors = spawn_schema_validator(
                 client,
                 &config,
                 connection.publication.clone(),
@@ -539,7 +538,9 @@ pub(crate) fn render<'scope>(
                         );
 
                         // Take the opportunity to report any schema validation errors.
-                        while let Ok(error) = schema_errors.try_recv() {
+                        let errors =
+                            std::mem::take(&mut *schema_errors.lock().expect("lock poisoned"));
+                        for error in errors {
                             use SchemaValidationError::*;
                             match error {
                                 Postgres(PostgresError::PublicationMissing(publication)) => {
@@ -1306,76 +1307,168 @@ fn spawn_schema_validator(
     publication: String,
     table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     is_physical_replica: bool,
-) -> mpsc::UnboundedReceiver<SchemaValidationError> {
-    let (tx, rx) = mpsc::unbounded_channel();
+) -> Arc<Mutex<Vec<SchemaValidationError>>> {
+    let errors = Arc::new(Mutex::new(Vec::new()));
     let source_id = config.id;
     let config_set = Arc::clone(config.config.config_set());
 
-    mz_ore::task::spawn(|| format!("schema-validator:{}", source_id), async move {
-        while !tx.is_closed() {
-            trace!(%source_id, "validating schemas");
+    mz_ore::task::spawn(
+        || format!("schema-validator:{}", source_id),
+        run_schema_validator(
+            Arc::downgrade(&errors),
+            move || PG_SCHEMA_VALIDATION_INTERVAL.get(&config_set),
+            async move || {
+                validate_schemas(
+                    source_id,
+                    &client,
+                    &publication,
+                    &table_info,
+                    is_physical_replica,
+                )
+                .await
+            },
+        ),
+    );
 
-            let validation_start = Instant::now();
+    errors
+}
 
-            // Detect a physical replica being promoted to a primary (or vice
-            // versa) while the stream is live. The startup check in raw_stream
-            // only catches this across a restart, so we re-check periodically
-            // here to surface a definite error proactively.
-            match mz_postgres_util::get_is_in_recovery(&*client).await {
-                Ok(actual) if actual != is_physical_replica => {
-                    let _ = tx.send(SchemaValidationError::PhysicalReplicaChanged {
-                        expected: is_physical_replica,
-                        actual,
-                    });
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    let _ = tx.send(SchemaValidationError::Postgres(error));
-                    continue;
-                }
-            }
+/// Runs `validate` once per `interval` and stores the errors of the latest
+/// round in `errors`, until the owner of `errors` drops it.
+async fn run_schema_validator(
+    errors: Weak<Mutex<Vec<SchemaValidationError>>>,
+    interval: impl Fn() -> Duration,
+    mut validate: impl AsyncFnMut() -> Vec<SchemaValidationError>,
+) {
+    while errors.strong_count() > 0 {
+        let validation_start = Instant::now();
+        let round = validate().await;
+        let Some(errors) = errors.upgrade() else {
+            break;
+        };
+        // Each round replaces the previous one instead of appending to it. The
+        // replication loop takes the errors only when the stream yields a
+        // keepalive, so appending grows without bound while the stream is
+        // silent. Replacing can drop an unread error, for example when the
+        // next round fails on the connection before it reaches the schema
+        // checks. That error comes back: the connection error restarts the
+        // source, and the restarted validator reports any condition that
+        // still holds upstream.
+        *errors.lock().expect("lock poisoned") = round;
+        // Sleep after failed rounds too. A dead connection fails each query
+        // immediately, and without the sleep this loop spins on it.
+        let wait = interval().saturating_sub(validation_start.elapsed());
+        tokio::time::sleep(wait).await;
+    }
+}
 
-            let upstream_info = match mz_postgres_util::publication_info(
-                &*client,
-                &publication,
-                Some(&table_info.keys().copied().collect::<Vec<_>>()),
-            )
-            .await
-            {
-                Ok(info) => info,
-                Err(error) => {
-                    let _ = tx.send(SchemaValidationError::Postgres(error));
-                    continue;
-                }
-            };
+/// Validates the upstream against the source's expectations once.
+async fn validate_schemas(
+    source_id: GlobalId,
+    client: &Client,
+    publication: &str,
+    table_info: &BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
+    is_physical_replica: bool,
+) -> Vec<SchemaValidationError> {
+    trace!(%source_id, "validating schemas");
+    let mut errors = Vec::new();
 
-            for (&oid, outputs) in table_info.iter() {
-                for (&output_index, info) in outputs {
-                    if let Err(error) = verify_schema(oid, info, &upstream_info) {
-                        trace!(
-                            %source_id,
-                            "schema of output index {output_index} for oid {oid} invalid",
-                        );
-                        let _ = tx.send(SchemaValidationError::Schema {
-                            oid,
-                            output_index,
-                            error,
-                        });
-                    } else {
-                        trace!(
-                            %source_id,
-                            "schema of output index {output_index} for oid {oid} valid",
-                        );
-                    }
-                }
-            }
-
-            let interval = PG_SCHEMA_VALIDATION_INTERVAL.get(&config_set);
-            let elapsed = validation_start.elapsed();
-            let wait = interval.saturating_sub(elapsed);
-            tokio::time::sleep(wait).await;
+    // Detect a physical replica being promoted to a primary (or vice
+    // versa) while the stream is live. The startup check in raw_stream
+    // only catches this across a restart, so we re-check periodically
+    // here to surface a definite error proactively.
+    match mz_postgres_util::get_is_in_recovery(&**client).await {
+        Ok(actual) if actual != is_physical_replica => {
+            errors.push(SchemaValidationError::PhysicalReplicaChanged {
+                expected: is_physical_replica,
+                actual,
+            });
         }
-    });
+        Ok(_) => {}
+        Err(error) => {
+            errors.push(SchemaValidationError::Postgres(error));
+            return errors;
+        }
+    }
 
-    rx
+    let upstream_info = match mz_postgres_util::publication_info(
+        &**client,
+        publication,
+        Some(&table_info.keys().copied().collect::<Vec<_>>()),
+    )
+    .await
+    {
+        Ok(info) => info,
+        Err(error) => {
+            errors.push(SchemaValidationError::Postgres(error));
+            return errors;
+        }
+    };
+
+    for (&oid, outputs) in table_info.iter() {
+        for (&output_index, info) in outputs {
+            if let Err(error) = verify_schema(oid, info, &upstream_info) {
+                trace!(
+                    %source_id,
+                    "schema of output index {output_index} for oid {oid} invalid",
+                );
+                errors.push(SchemaValidationError::Schema {
+                    oid,
+                    output_index,
+                    error,
+                });
+            } else {
+                trace!(
+                    %source_id,
+                    "schema of output index {output_index} for oid {oid} valid",
+                );
+            }
+        }
+    }
+    errors
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn schema_validator_waits_between_failed_rounds() {
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let rounds = Cell::new(0);
+        let validator = run_schema_validator(
+            Arc::downgrade(&errors),
+            || Duration::from_secs(15),
+            async || {
+                rounds.set(rounds.get() + 1);
+                assert!(rounds.get() <= 10, "validator retries without waiting");
+                vec![SchemaValidationError::Postgres(PostgresError::Generic(
+                    anyhow::anyhow!("connection closed"),
+                ))]
+            },
+        );
+        let _ = tokio::time::timeout(Duration::from_secs(59), validator).await;
+        assert_eq!(rounds.get(), 4);
+    }
+
+    #[mz_ore::test(tokio::test(start_paused = true))]
+    async fn schema_validator_stops_when_errors_dropped() {
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let mut validator = pin!(run_schema_validator(
+            Arc::downgrade(&errors),
+            || Duration::from_secs(15),
+            async || Vec::new(),
+        ));
+        let running = tokio::time::timeout(Duration::from_secs(1), validator.as_mut()).await;
+        assert!(
+            running.is_err(),
+            "validator runs while the errors are alive"
+        );
+        drop(errors);
+        tokio::time::timeout(Duration::from_secs(16), validator)
+            .await
+            .expect("validator stops within one interval after the errors are dropped");
+    }
 }
