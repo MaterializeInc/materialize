@@ -500,7 +500,9 @@ impl CatalogState {
             unresolvable_ids: BTreeSet::new(),
             conn_id: session.conn_id().clone(),
             cluster: session.vars().cluster().into(),
+            database_name: Cow::Borrowed(session.vars().database()),
             database,
+            raw_search_path: Cow::Borrowed(session.vars().search_path()),
             search_path,
             role_id: session.current_role_id().clone(),
             prepared_statements: Some(session.prepared_statements()),
@@ -520,6 +522,7 @@ impl CatalogState {
             unresolvable_ids: BTreeSet::new(),
             conn_id: SYSTEM_CONN_ID.clone(),
             cluster,
+            database_name: Cow::Borrowed(DEFAULT_DATABASE_NAME),
             database: self
                 .resolve_database(DEFAULT_DATABASE_NAME)
                 .ok()
@@ -527,6 +530,7 @@ impl CatalogState {
             // Leaving the system's search path empty allows us to catch issues
             // where catalog object names have not been normalized correctly.
             search_path: Vec::new(),
+            raw_search_path: Cow::Borrowed(&[]),
             role_id,
             prepared_statements: None,
             portals: None,
@@ -2245,17 +2249,26 @@ impl CatalogState {
             .get(session.database())
             .map(|id| id.clone());
 
+        self.resolve_search_path_for(
+            database.as_ref(),
+            session.search_path().iter().map(|schema| schema.as_str()),
+            session.conn_id(),
+        )
+    }
+
+    pub(super) fn resolve_search_path_for<'a>(
+        &self,
+        database: Option<&DatabaseId>,
+        search_path: impl Iterator<Item = &'a str>,
+        conn_id: &ConnectionId,
+    ) -> Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
         // NOTE: This drops schemas that don't resolve, and consumers rely on
         // every returned entry existing (e.g. `allocate_full_name` and the
         // `current_schemas` evaluation look schemas up infallibly). In
         // particular, `mz_temp` is dropped until the session's temporary
         // namespace is registered at its first temporary-item creation.
-        session
-            .search_path()
-            .iter()
-            .map(|schema| {
-                self.resolve_schema(database.as_ref(), None, schema.as_str(), session.conn_id())
-            })
+        search_path
+            .map(|schema| self.resolve_schema(database, None, schema, conn_id))
             .filter_map(|schema| schema.ok())
             .map(|schema| (schema.name().database.clone(), schema.id().clone()))
             .collect()

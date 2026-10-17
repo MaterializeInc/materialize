@@ -44,8 +44,8 @@ use mz_catalog::durable::{
 use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database,
-    NetworkPolicy, Role, RoleAuth, Schema,
+    CatalogCollectionEntry, CatalogEntry, Cluster, ClusterReplica, Database, NetworkPolicy, Role,
+    RoleAuth, Schema,
 };
 use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute_types::dataflows::DataflowDescription;
@@ -113,6 +113,7 @@ mod migrate;
 
 mod apply;
 pub(crate) mod cluster_state;
+mod name_observations;
 mod observations;
 mod observed_item;
 mod open;
@@ -283,7 +284,9 @@ pub struct ConnCatalog<'a> {
     unresolvable_ids: BTreeSet<CatalogItemId>,
     conn_id: ConnectionId,
     cluster: String,
+    database_name: Cow<'a, str>,
     database: Option<DatabaseId>,
+    raw_search_path: Cow<'a, [mz_sql_parser::ast::Ident]>,
     search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
     role_id: RoleId,
     prepared_statements: Option<&'a BTreeMap<String, PreparedStatement>>,
@@ -2144,55 +2147,18 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn resolve_item(&self, name: &PartialItemName) -> Result<CatalogItemRef<'_>, SqlCatalogError> {
-        let r = self.state.resolve_entry(
-            self.database.as_ref(),
-            &self.effective_search_path(true),
-            name,
-            &self.conn_id,
-        )?;
-        if self.unresolvable_ids.contains(&r.id()) {
-            Err(SqlCatalogError::UnknownItem(name.to_string()))
-        } else {
-            Ok(self.item_view(r))
-        }
+        self.resolve_observed_item(name, name_observations::ItemNamespace::Item)
     }
 
     fn resolve_function(
         &self,
         name: &PartialItemName,
     ) -> Result<CatalogItemRef<'_>, SqlCatalogError> {
-        let r = self.state.resolve_function(
-            self.database.as_ref(),
-            &self.effective_search_path(false),
-            name,
-            &self.conn_id,
-        )?;
-
-        if self.unresolvable_ids.contains(&r.id()) {
-            Err(SqlCatalogError::UnknownFunction {
-                name: name.to_string(),
-                alternative: None,
-            })
-        } else {
-            Ok(self.item_view(r))
-        }
+        self.resolve_observed_item(name, name_observations::ItemNamespace::Function)
     }
 
     fn resolve_type(&self, name: &PartialItemName) -> Result<CatalogItemRef<'_>, SqlCatalogError> {
-        let r = self.state.resolve_type(
-            self.database.as_ref(),
-            &self.effective_search_path(false),
-            name,
-            &self.conn_id,
-        )?;
-
-        if self.unresolvable_ids.contains(&r.id()) {
-            Err(SqlCatalogError::UnknownType {
-                name: name.to_string(),
-            })
-        } else {
-            Ok(self.item_view(r))
-        }
+        self.resolve_observed_item(name, name_observations::ItemNamespace::Type)
     }
 
     fn get_system_type(&self, name: &str) -> CatalogItemRef<'_> {
@@ -2200,29 +2166,18 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn try_get_item(&self, id: &CatalogItemId) -> Option<CatalogItemRef<'_>> {
-        Some(self.item_view(self.state.try_get_entry(id)?))
+        let id = *id;
+        self.observe("item by ID", move |state| {
+            state.try_get_entry(&id).map(|entry| entry.id())
+        })
+        .map(|id| self.item_view(self.state.get_entry(&id)))
     }
 
     fn try_get_item_by_global_id(
         &self,
         id: &GlobalId,
     ) -> Option<Box<dyn mz_sql::catalog::CatalogCollectionItem>> {
-        let entry = self.state.try_get_entry_by_global_id(id)?;
-        let entry = match &entry.item {
-            CatalogItem::Table(table) => {
-                let (version, _gid) = table
-                    .collections
-                    .iter()
-                    .find(|(_version, gid)| *gid == id)
-                    .expect("catalog out of sync, mismatched GlobalId");
-                self.item_view(entry)
-                    .at_version(RelationVersionSelector::Specific(*version))
-            }
-            _ => self
-                .item_view(entry)
-                .at_version(RelationVersionSelector::Latest),
-        };
-        Some(entry)
+        self.observed_collection(id)
     }
 
     fn get_item(&self, id: &CatalogItemId) -> CatalogItemRef<'_> {
@@ -2233,22 +2188,8 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         id: &GlobalId,
     ) -> Box<dyn mz_sql::catalog::CatalogCollectionItem> {
-        let entry = self.state.get_entry_by_global_id(id);
-        let entry = match &entry.item {
-            CatalogItem::Table(table) => {
-                let (version, _gid) = table
-                    .collections
-                    .iter()
-                    .find(|(_version, gid)| *gid == id)
-                    .expect("catalog out of sync, mismatched GlobalId");
-                self.item_view(&entry)
-                    .at_version(RelationVersionSelector::Specific(*version))
-            }
-            _ => self
-                .item_view(&entry)
-                .at_version(RelationVersionSelector::Latest),
-        };
-        entry
+        self.observed_collection(id)
+            .expect("catalog out of sync, missing global ID")
     }
 
     fn get_items(&self) -> Vec<CatalogItemRef<'_>> {
@@ -2260,15 +2201,53 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_item_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>> {
-        self.state
-            .get_item_by_name(name, &self.conn_id)
-            .map(|item| self.item_view(item))
+        if self.read_recorder.is_none() {
+            return self
+                .state
+                .get_item_by_name(name, &self.conn_id)
+                .map(|entry| self.item_view(entry));
+        }
+        let name = name.clone();
+        let conn_id = self.conn_id.clone();
+        self.observe("item by qualified name", move |state| {
+            state.try_get_schema(
+                &name.qualifiers.database_spec,
+                &name.qualifiers.schema_spec,
+                &conn_id,
+            )?;
+            Some(
+                state
+                    .get_item_by_name(&name, &conn_id)
+                    .map(|entry| entry.id()),
+            )
+        })
+        .expect("qualified lookup schema exists")
+        .map(|id| self.item_view(self.state.get_entry(&id)))
     }
 
     fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>> {
-        self.state
-            .get_type_by_name(name, &self.conn_id)
-            .map(|item| self.item_view(item))
+        if self.read_recorder.is_none() {
+            return self
+                .state
+                .get_type_by_name(name, &self.conn_id)
+                .map(|entry| self.item_view(entry));
+        }
+        let name = name.clone();
+        let conn_id = self.conn_id.clone();
+        self.observe("type by qualified name", move |state| {
+            state.try_get_schema(
+                &name.qualifiers.database_spec,
+                &name.qualifiers.schema_spec,
+                &conn_id,
+            )?;
+            Some(
+                state
+                    .get_type_by_name(&name, &conn_id)
+                    .map(|entry| entry.id()),
+            )
+        })
+        .expect("qualified lookup schema exists")
+        .map(|id| self.item_view(self.state.get_entry(&id)))
     }
 
     fn get_cluster(&self, id: ClusterId) -> &dyn mz_sql::catalog::CatalogCluster<'_> {
