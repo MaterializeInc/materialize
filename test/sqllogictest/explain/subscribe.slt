@@ -228,3 +228,61 @@ EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t
 
 statement ok
 COMMIT
+
+# An EXPLAIN between reads of a transaction adds no SUBSCRIBE to it, which would
+# fail the reads around it.
+statement ok
+BEGIN
+
+statement ok
+SELECT * FROM t
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t
+
+statement ok
+SELECT * FROM t
+
+statement ok
+COMMIT
+
+# EXPLAIN needs no replicas.
+statement ok
+CREATE CLUSTER no_replicas (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0)
+
+statement ok
+SET cluster = no_replicas
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t
+----
+Source materialize.public.t
+
+Target cluster: no_replicas
+
+EOF
+
+statement ok
+RESET cluster
+
+statement ok
+DROP CLUSTER no_replicas
+
+# EXPLAIN BROKEN explains the stages before an optimizer panic in the LIR stage.
+statement ok
+SET failpoints = 'finalize_dataflow=panic(forced optimizer panic)'
+
+statement error unexpected panic during query optimization
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR BROKEN SUBSCRIBE t
+----
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+SET failpoints = 'finalize_dataflow=off'
