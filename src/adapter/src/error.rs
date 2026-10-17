@@ -890,8 +890,7 @@ impl AdapterError {
                     .into(),
             ),
             AdapterError::DDLTransactionRace => Some(
-                "Currently, DDL transactions fail when any other DDL happens concurrently, \
-                 even on unrelated schemas/clusters.".into()
+                "Retry the statement, or retry the entire transaction if it was explicit.".into()
             ),
             AdapterError::ConcurrentDependencyMutation { .. } => Some(
                 "Another session modified one of this statement's dependencies before \
@@ -1495,9 +1494,9 @@ impl fmt::Display for AdapterError {
             AdapterError::DDLOnlyTransaction => f.write_str(
                 "transactions which modify objects are restricted to just modifying objects",
             ),
-            AdapterError::DDLTransactionRace => f.write_str(
-                "another session modified the catalog while this DDL transaction was open",
-            ),
+            AdapterError::DDLTransactionRace => {
+                f.write_str("catalog changed concurrently with this statement or transaction")
+            }
             AdapterError::ClusterStateChanged { cluster_id } => {
                 write!(f, "cluster {cluster_id} was concurrently modified")
             }

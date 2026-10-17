@@ -1420,20 +1420,19 @@ impl Coordinator {
                     | Statement::AlterObjectSwap(_)
                     | Statement::CreateTableFromSource(_)
                     | Statement::CreateSource(_) => {
-                        let state = self.catalog().for_session(ctx.session()).state().clone();
-                        let revision = self.catalog().transient_revision();
-
-                        // Initialize our transaction with a set of empty ops, or return an error
-                        // if we can't run a DDL transaction
-                        let txn_status = ctx.session_mut().transaction_mut();
-                        if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
-                            ops: vec![],
-                            state,
-                            revision,
-                            side_effects: vec![],
-                            snapshot: None,
-                        }) {
-                            return ctx.retire(Err(err));
+                        if let Some(transaction) = ctx.session().transaction().ddl_transaction() {
+                            if let Err(err) = transaction.check_configuration(self.catalog()) {
+                                return ctx.retire(Err(err));
+                            }
+                        } else {
+                            let transaction = self.catalog().start_ddl_transaction().await;
+                            let txn_status = ctx.session_mut().transaction_mut();
+                            if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
+                                transaction,
+                                side_effects: vec![],
+                            }) {
+                                return ctx.retire(Err(err));
+                            }
                         }
                     }
 

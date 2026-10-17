@@ -324,6 +324,7 @@ impl CatalogState {
                 self.apply_system_configuration_update(system_configuration, diff, retractions);
             }
             StateUpdateKind::ClusterSystemConfiguration(cfg) => {
+                self.configuration_generation += 1;
                 Self::apply_scoped_system_configuration_update(
                     &mut self.scoped_system_parameters.cluster,
                     cfg.cluster_id,
@@ -333,6 +334,7 @@ impl CatalogState {
                 );
             }
             StateUpdateKind::ReplicaSystemConfiguration(cfg) => {
+                self.configuration_generation += 1;
                 Self::apply_scoped_system_configuration_update(
                     &mut self.scoped_system_parameters.replica,
                     cfg.replica_id,
@@ -2161,7 +2163,7 @@ impl CatalogState {
     /// Return a `bool` value indicating whether the configuration was modified
     /// by the call.
     fn insert_system_configuration(&mut self, name: &str, value: VarInput) -> Result<bool, Error> {
-        Ok(Arc::make_mut(&mut self.system_configuration).set(name, value)?)
+        Ok(self.system_config_mut().set(name, value)?)
     }
 
     /// Reset system configuration `name`.
@@ -2169,7 +2171,7 @@ impl CatalogState {
     /// Return a `bool` value indicating whether the configuration was modified
     /// by the call.
     fn remove_system_configuration(&mut self, name: &str) -> Result<bool, Error> {
-        Ok(Arc::make_mut(&mut self.system_configuration).reset(name)?)
+        Ok(self.system_config_mut().reset(name)?)
     }
 }
 

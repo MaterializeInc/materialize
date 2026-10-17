@@ -4087,16 +4087,12 @@ mod tests {
         );
     }
 
-    /// Verifies that `transact_incremental_dry_run` processes only new ops
-    /// against the accumulated state, not all ops from scratch. Two paths are
-    /// compared:
-    ///   - Incremental: two separate calls, each with one op
-    ///   - All-at-once: one call with both ops
-    /// Both must produce equivalent catalog state.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
-    async fn test_transact_incremental_dry_run_processes_only_new_ops() {
-        Catalog::with_debug(|catalog| async move {
+    async fn test_ddl_transaction_stages_without_publishing() {
+        use mz_sql::catalog::SessionCatalog;
+
+        Catalog::with_debug(|mut catalog| async move {
             // Resolve default database and schema.
             let database = catalog
                 .resolve_database(DEFAULT_DATABASE_NAME)
@@ -4151,19 +4147,20 @@ mod tests {
 
             let base_state = catalog.state().clone();
 
-            // --- Path A: Incremental (two separate dry-run calls) ---
-
-            // First call: only op_t1, no previous snapshot.
-            let (state_after_t1, snapshot_after_t1) = catalog
-                .transact_incremental_dry_run(
-                    &base_state,
-                    vec![op_t1.clone()],
-                    None,
-                    None,
-                    oracle_write_ts,
-                )
+            let transaction = catalog.start_ddl_transaction().await;
+            assert!(
+                transaction
+                    .state()
+                    .for_system_session()
+                    .with_read_recorder(transaction.read_recorder())
+                    .try_get_item(&id_t1)
+                    .is_none()
+            );
+            let transaction = catalog
+                .stage_ddl_transaction(transaction, vec![op_t1.clone()], None, oracle_write_ts)
                 .await
                 .expect("first dry run");
+            let state_after_t1 = transaction.state();
 
             // After first dry run: t1 exists, t2 does not.
             assert!(
@@ -4183,17 +4180,23 @@ mod tests {
                 "t2 should NOT exist after first dry run"
             );
 
-            // Second call: only op_t2, using state/snapshot from first call.
-            let (state_incremental, _) = catalog
-                .transact_incremental_dry_run(
-                    &state_after_t1,
-                    vec![op_t2.clone()],
-                    None,
-                    Some(snapshot_after_t1),
-                    oracle_write_ts,
-                )
+            {
+                let view = transaction
+                    .state()
+                    .for_system_session()
+                    .with_read_recorder(transaction.read_recorder());
+                assert_eq!(view.get_item(&id_t1).name().item, "t1");
+                assert!(view.try_get_item(&id_t2).is_none());
+            }
+
+            let mut transaction = catalog
+                .stage_ddl_transaction(transaction, vec![op_t2.clone()], None, oracle_write_ts)
                 .await
                 .expect("second dry run");
+            let state_incremental = transaction.state();
+            assert_eq!(transaction.ops().count(), 2);
+            assert!(catalog.state().try_get_entry(&id_t1).is_none());
+            assert!(catalog.state().try_get_entry(&id_t2).is_none());
 
             // After second dry run: both t1 and t2 exist.
             assert!(
@@ -4204,8 +4207,6 @@ mod tests {
                 state_incremental.try_get_entry(&id_t2).is_some(),
                 "t2 should exist in incremental result"
             );
-
-            // --- Path B: All-at-once (single dry-run call with both ops) ---
 
             let (state_all_at_once, _) = catalog
                 .transact_incremental_dry_run(
@@ -4227,8 +4228,6 @@ mod tests {
                 "t2 should exist in all-at-once result"
             );
 
-            // --- Compare: both paths produce equivalent items ---
-
             let inc_t1 = state_incremental.try_get_entry(&id_t1).expect("inc t1");
             let all_t1 = state_all_at_once.try_get_entry(&id_t1).expect("all t1");
             assert_eq!(inc_t1.name(), all_t1.name());
@@ -4238,6 +4237,24 @@ mod tests {
             let all_t2 = state_all_at_once.try_get_entry(&id_t2).expect("all t2");
             assert_eq!(inc_t2.name(), all_t2.name());
             assert_eq!(inc_t2.owner_id, all_t2.owner_id);
+
+            assert_eq!(
+                transaction
+                    .state()
+                    .for_system_session()
+                    .with_read_recorder(transaction.read_recorder())
+                    .get_item(&id_t2)
+                    .name()
+                    .item,
+                "t2"
+            );
+            let timestamp = catalog.current_upper().await;
+            catalog
+                .transact(None, timestamp, None, transaction.take_ops())
+                .await
+                .expect("validate and replay ordered preparation reads");
+            assert!(catalog.state().try_get_entry(&id_t1).is_some());
+            assert!(catalog.state().try_get_entry(&id_t2).is_some());
 
             catalog.expire().await;
         })
@@ -4507,6 +4524,154 @@ mod tests {
             name: MAX_CONNECTIONS.name.to_string(),
             value: OwnedVarInput::Flat(value.to_string()),
         }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // Catalog bootstrap uses unsupported foreign functions.
+    async fn ddl_observations_reject_configuration_changes_restored_before_commit() {
+        Catalog::with_debug(|mut catalog| async move {
+            let original = catalog.system_config().max_connections();
+            let mut transaction = catalog.start_ddl_transaction().await;
+            let changed = if original == 17 { 18 } else { 17 };
+            for value in [changed, original] {
+                let timestamp = catalog.current_upper().await;
+                catalog
+                    .transact(None, timestamp, None, vec![set_max_connections_op(value)])
+                    .await
+                    .expect("change configuration");
+            }
+            assert_eq!(catalog.system_config().max_connections(), original);
+            let timestamp = catalog.current_upper().await;
+            let result = catalog
+                .transact(None, timestamp, None, transaction.take_ops())
+                .await;
+            assert!(matches!(
+                result,
+                Err(crate::AdapterError::DDLTransactionRace)
+            ));
+            catalog.expire().await;
+        })
+        .await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // Catalog bootstrap uses unsupported foreign functions.
+    async fn scoped_configuration_on_new_cluster_fences_open_rename() {
+        use std::collections::{BTreeMap, BTreeSet};
+
+        use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant};
+
+        use crate::config::{ScopedParameters, ScopedParametersScope};
+
+        Catalog::with_debug(|mut catalog| async move {
+            let database_spec = ResolvedDatabaseSpecifier::Id(
+                catalog
+                    .resolve_database(DEFAULT_DATABASE_NAME)
+                    .expect("default database")
+                    .id(),
+            );
+            let schema_spec = catalog
+                .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+                .expect("default schema")
+                .id
+                .clone();
+            let transaction = catalog.start_ddl_transaction().await;
+            let timestamp = catalog.current_upper().await;
+            let mut transaction = catalog
+                .stage_ddl_transaction(
+                    transaction,
+                    vec![Op::RenameSchema {
+                        database_spec,
+                        schema_spec,
+                        new_name: "ddl_scoped_renamed".to_string(),
+                        check_reserved_names: true,
+                    }],
+                    None,
+                    timestamp,
+                )
+                .await
+                .expect("stage rename");
+
+            let timestamp = catalog.current_upper().await;
+            let cluster = catalog
+                .allocate_user_cluster_id(timestamp)
+                .await
+                .expect("allocate unrelated cluster");
+            let timestamp = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    timestamp,
+                    None,
+                    vec![Op::CreateCluster {
+                        id: cluster,
+                        name: "ddl_scoped_unrelated".to_string(),
+                        introspection_sources: Vec::new(),
+                        owner_id: MZ_SYSTEM_ROLE_ID,
+                        config: ClusterConfig {
+                            variant: ClusterVariant::Unmanaged,
+                            workload_class: None,
+                        },
+                    }],
+                )
+                .await
+                .expect("create unrelated cluster");
+            transaction
+                .check_configuration(&catalog)
+                .expect("cluster creation without overrides preserves the configuration fence");
+
+            let global_limit = catalog.system_config().max_result_size();
+            let timestamp = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    timestamp,
+                    None,
+                    vec![Op::UpdateScopedSystemParameters {
+                        scoped: ScopedParameters {
+                            cluster: BTreeMap::from([(
+                                cluster,
+                                BTreeMap::from([(
+                                    "max_result_size".to_string(),
+                                    "1MB".to_string(),
+                                )]),
+                            )]),
+                            replica: BTreeMap::new(),
+                        },
+                        prune_scope: ScopedParametersScope {
+                            clusters: BTreeSet::from([cluster]),
+                            replicas: BTreeSet::new(),
+                        },
+                    }],
+                )
+                .await
+                .expect("install scoped overrides on the new cluster");
+            assert_eq!(catalog.system_config().max_result_size(), global_limit);
+            let timestamp = catalog.current_upper().await;
+            let result = catalog
+                .transact(None, timestamp, None, transaction.take_ops())
+                .await;
+            assert!(matches!(
+                result,
+                Err(crate::AdapterError::DDLTransactionRace)
+            ));
+            assert!(
+                catalog
+                    .resolve_schema_in_database(&database_spec, DEFAULT_SCHEMA, &SYSTEM_CONN_ID)
+                    .is_ok()
+            );
+            assert!(
+                catalog
+                    .resolve_schema_in_database(
+                        &database_spec,
+                        "ddl_scoped_renamed",
+                        &SYSTEM_CONN_ID
+                    )
+                    .is_err()
+            );
+            catalog.expire().await;
+        })
+        .await;
     }
 
     // The commit-boundary firing now lives in

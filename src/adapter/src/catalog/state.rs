@@ -140,6 +140,10 @@ pub struct CatalogState {
 
     #[serde(skip)]
     pub(super) system_configuration: Arc<SystemVars>,
+    // Configuration clones share live dyncfg values. Any configuration mutation
+    // invalidates prepared DDL, including changes that restore an earlier value.
+    #[serde(skip)]
+    pub(super) configuration_generation: u64,
     /// In-memory mirror of the durable scoped (per-cluster and per-replica)
     /// system-parameter cache, maintained by `apply.rs` from the durable
     /// collections. Resolution reads from here: the optimizer's per-cluster
@@ -471,6 +475,7 @@ impl CatalogState {
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
             availability_zones: Default::default(),
             system_configuration: Arc::new(SystemVars::default()),
+            configuration_generation: 0,
             scoped_system_parameters: Default::default(),
             egress_addresses: Default::default(),
             aws_principal_context: Default::default(),
@@ -487,10 +492,21 @@ impl CatalogState {
     }
 
     pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
+        let read_recorder = session
+            .transaction()
+            .ddl_transaction()
+            .map(|transaction| transaction.read_recorder());
         let state = match session.transaction().catalog_state() {
             Some(txn_catalog_state) => Cow::Borrowed(txn_catalog_state),
             None => Cow::Borrowed(self),
         };
+        if let Some(recorder) = &read_recorder {
+            for id in [*session.current_role_id(), *session.session_role_id()] {
+                recorder.record("session role exists", true, move |state| {
+                    state.roles_by_id.contains_key(&id)
+                });
+            }
+        }
         let search_path = state.resolve_search_path(session);
         let database = state
             .database_by_name
@@ -498,7 +514,7 @@ impl CatalogState {
             .map(|id| id.clone());
         ConnCatalog {
             state,
-            read_recorder: None,
+            read_recorder,
             unresolvable_ids: BTreeSet::new(),
             conn_id: session.conn_id().clone(),
             cluster: session.vars().cluster().into(),
@@ -2567,6 +2583,7 @@ impl CatalogState {
 
     /// Return a mutable reference to the current system configuration.
     pub fn system_config_mut(&mut self) -> &mut SystemVars {
+        self.configuration_generation += 1;
         Arc::make_mut(&mut self.system_configuration)
     }
 

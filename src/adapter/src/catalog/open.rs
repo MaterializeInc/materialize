@@ -165,6 +165,7 @@ impl Catalog {
             role_auth_by_id: imbl::OrdMap::new(),
             network_policies_by_name: imbl::OrdMap::new(),
             system_configuration: Arc::new(system_configuration),
+            configuration_generation: 0,
             scoped_system_parameters: Default::default(),
             default_privileges: Arc::new(DefaultPrivileges::default()),
             system_privileges: Arc::new(PrivilegeMap::default()),
@@ -774,7 +775,7 @@ impl CatalogState {
         name: &str,
         value: VarInput,
     ) -> Result<(), Error> {
-        Ok(Arc::make_mut(&mut self.system_configuration).set_default(name, value)?)
+        Ok(self.system_config_mut().set_default(name, value)?)
     }
 }
 
