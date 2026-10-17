@@ -16,6 +16,7 @@ backtrace.workspace = true
 flate2.workspace = true
 jemalloc_pprof = { workspace = true, optional = true }
 pprof_util.workspace = true
+mz-alloc-track = { path = "../alloc-track", optional = true }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 pprof.workspace = true
 prost.workspace = true
@@ -32,3 +33,5 @@ prost-build.workspace = true
 default = []
 # Whether to enable profiling features that depend on jemalloc.
 jemalloc = ["tikv-jemalloc-ctl", "jemalloc_pprof"]
+# Whether to enable profiles from the allocation tracker.
+alloc-track = ["dep:mz-alloc-track"]
