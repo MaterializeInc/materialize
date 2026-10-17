@@ -48,6 +48,7 @@ mod frontend_read_then_write;
 mod frontend_transaction;
 mod notice;
 mod optimize;
+mod peek_registry;
 mod util;
 
 pub mod catalog;
