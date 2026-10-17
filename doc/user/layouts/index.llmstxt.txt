@@ -12,7 +12,8 @@
   Renders /llms.txt, an index of the docs for LLM and agent consumers, and one
   <section>/llms.txt per top-level docs section. Format per https://llmstxt.org/:
   an H1, a `>` summary blockquote and a short orienting note. The root index
-  then lists the section indexes; each section index lists its pages as
+  then lists the section indexes and the pages outside any section, and each
+  section index lists its pages. Pages are listed as
   "- [Title](url): description" entries.
 
   The pages are split across section indexes because one index of every page
@@ -30,13 +31,8 @@
   The output must be byte-stable: no dates, no build metadata, and no ranging
   over maps. Every collection below is explicitly ordered.
 */ -}}
-{{- $basePath := (urls.Parse site.BaseURL).Path -}}
-{{- /*
-  Only the main docs build produces the markdown-docs tree these links resolve
-  against; self-managed-docs/* branches build HTML alone. Emit nothing there
-  rather than publish an index of dead links.
-*/ -}}
-{{- if not (in $basePath "self-managed") -}}
+{{- /* Emit nothing rather than an index of dead links. */ -}}
+{{- if partial "site-has-markdown.html" . -}}
 {{- $eligible := slice -}}
 {{- range site.Pages -}}
   {{- $keep := true -}}
@@ -60,8 +56,8 @@
   position. The identifier test covers the header-only entries declared in
   config.toml, which have no page at all.
 
-  A header whose children are root-level pages maps to the empty section, which
-  is how faqs/license reach the index.
+  A header whose children are root-level pages, such as license, maps to the
+  empty section, whose pages the root index lists itself.
 */ -}}
 {{- $keys := slice -}}
 {{- $groups := slice -}}
@@ -116,31 +112,45 @@
 {{- end -}}
 {{- $note := "Every link below points at the Markdown source of a documentation page. For\nthe HTML page instead, drop `markdown-docs/` from the URL and drop the\ntrailing `index.md`." -}}
 {{- $sections := slice -}}
+{{- $root := dict -}}
 {{- range $groups -}}
   {{- $items := sort (where $eligible "Section" .key) "RelPermalink" -}}
   {{- if $items -}}
-    {{- $dir := .key | default (urlize .title) -}}
-    {{- $lines := slice (printf "# %s: %s\n\n> Pages in the %s section of the %s.\n\n%s\n" site.Title .title .title site.Title $note) -}}
+    {{- $entries := slice -}}
     {{- range $items -}}
       {{- $line := printf "- [%s](%s)" .Title (partial "markdown-url.html" (dict "page" . "absolute" true)) -}}
       {{- with .Description -}}{{- $d := trim (replaceRE `\s+` " " .) " " -}}{{- if $d -}}{{- $line = printf "%s: %s" $line $d -}}{{- end -}}{{- end -}}
-      {{- $lines = $lines | append $line -}}
+      {{- $entries = $entries | append $line -}}
     {{- end -}}
-    {{- $index := resources.FromString (printf "%s/llms.txt" $dir) (printf "%s\n" (delimit $lines "\n")) -}}
-    {{- with $index.Publish -}}{{- end -}}
-    {{- $sections = $sections | append (dict "title" .title "url" (partial "llms-txt-url.html" (dict "section" $dir "absolute" true)) "count" (len $items)) -}}
+    {{- if .key -}}
+      {{- $header := printf "# %s: %s\n\n> Pages in the %s section of the %s.\n\n%s\n" site.Title .title .title site.Title $note -}}
+      {{- $index := resources.FromString (printf "%s/llms.txt" .key) (printf "%s\n%s\n" $header (delimit $entries "\n")) -}}
+      {{- with $index.Publish -}}{{- end -}}
+      {{- $sections = $sections | append (dict "title" .title "url" (partial "llms-txt-url.html" (dict "section" .key "absolute" true)) "count" (len $items)) -}}
+    {{- else -}}
+      {{- $root = dict "title" .title "entries" $entries -}}
+    {{- end -}}
   {{- end -}}
 {{- end -}}
 # {{ site.Title }}
 
 > {{ $intro }}
 
-Each link below points at the index of one documentation section. A section
-index lists every page in the section, with a link to its Markdown source and a
-one-line description.
+Each link under Sections points at the index of one documentation section. A
+section index lists every page in the section, with a link to its Markdown
+source and a one-line description.
+{{- with $root }} The pages outside any section are listed
+after the sections, in the same form.
+{{- end }}
 
 ## Sections
 
 {{ range $sections }}- [{{ .title }}]({{ .url }}): {{ .count }} {{ cond (eq .count 1) "page" "pages" }}
 {{ end }}
+{{- with $root }}
+## {{ .title }}
+
+{{ range .entries }}{{ . }}
+{{ end }}
+{{- end }}
 {{- end -}}
