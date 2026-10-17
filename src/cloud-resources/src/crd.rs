@@ -68,6 +68,20 @@ pub struct MaterializeCertSpec {
     pub private_key_size: Option<i64>,
 }
 
+/// Appearance overrides for an instance's console.
+///
+/// Consoles are otherwise identical, so an operator running several
+/// Materialize instances cannot tell from a browser tab which instance a
+/// console is pointed at.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsoleAppearance {
+    /// A short name for this instance, such as `dev` or `prod`. The console
+    /// appends it to its browser tab title.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
 pub trait ManagedResource: Resource<DynamicType = ()> + Sized {
     fn default_labels(&self) -> BTreeMap<String, String> {
         BTreeMap::new()
