@@ -630,6 +630,24 @@ impl CatalogState {
         out
     }
 
+    pub(super) fn dependency_root_exists(&self, id: &ObjectId, conn_id: &ConnectionId) -> bool {
+        match id {
+            ObjectId::Cluster(id) => self.clusters_by_id.contains_key(id),
+            ObjectId::ClusterReplica((cluster, replica)) => self
+                .clusters_by_id
+                .get(cluster)
+                .and_then(|cluster| cluster.replica(*replica))
+                .is_some(),
+            ObjectId::Database(id) => self.database_by_id.contains_key(id),
+            ObjectId::Schema((database, schema)) => {
+                self.try_get_schema(database, schema, conn_id).is_some()
+            }
+            ObjectId::Role(id) => self.roles_by_id.contains_key(id),
+            ObjectId::NetworkPolicy(id) => self.network_policies_by_id.contains_key(id),
+            ObjectId::Item(id) => self.try_get_entry(id).is_some(),
+        }
+    }
+
     /// Returns all the IDs of all objects that depend on `ids`, including `ids` themselves.
     ///
     /// The order is guaranteed to be in reverse dependency order, i.e. the leafs will appear
@@ -2812,6 +2830,35 @@ impl CatalogState {
         audit_events.push(event.clone());
         tx.insert_audit_log_event(event);
         Ok(())
+    }
+
+    pub(super) fn try_get_privileges(
+        &self,
+        id: &SystemObjectId,
+        conn_id: &ConnectionId,
+    ) -> Option<&PrivilegeMap> {
+        match id {
+            SystemObjectId::System => Some(&self.system_privileges),
+            SystemObjectId::Object(ObjectId::Cluster(id)) => self
+                .clusters_by_id
+                .get(id)
+                .map(|cluster| &cluster.privileges),
+            SystemObjectId::Object(ObjectId::Database(id)) => self
+                .database_by_id
+                .get(id)
+                .map(|database| &database.privileges),
+            SystemObjectId::Object(ObjectId::Schema((database, schema))) => self
+                .try_get_schema(database, schema, conn_id)
+                .map(|schema| &schema.privileges),
+            SystemObjectId::Object(ObjectId::Item(id)) => {
+                self.try_get_entry(id).map(|entry| entry.privileges())
+            }
+            SystemObjectId::Object(ObjectId::NetworkPolicy(id)) => self
+                .network_policies_by_id
+                .get(id)
+                .map(|policy| &policy.privileges),
+            SystemObjectId::Object(ObjectId::ClusterReplica(_) | ObjectId::Role(_)) => None,
+        }
     }
 
     pub(super) fn get_owner_id(&self, id: &ObjectId, conn_id: &ConnectionId) -> Option<RoleId> {
