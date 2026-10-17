@@ -99,6 +99,36 @@ impl SqlServerTableDesc {
         }
     }
 
+    /// Returns whether rows of a table with the `current` upstream columns
+    /// still decode as this description.
+    ///
+    /// Every replicated column must still exist with the same type. A column
+    /// recorded as nullable also accepts a NOT NULL upstream column, since
+    /// every value it produces fits, but a column recorded as NOT NULL does
+    /// not accept a nullable one.
+    pub fn is_compatible_with(&self, current: &[SqlServerColumnRaw]) -> bool {
+        self.columns
+            .iter()
+            .filter_map(|recorded| recorded.column_type.as_ref().map(|ty| (recorded, ty)))
+            .all(|(recorded, recorded_type)| {
+                let Some(raw) = current.iter().find(|raw| raw.name == recorded.name) else {
+                    return false;
+                };
+                let mut column = SqlServerColumnDesc::new(raw);
+                // TEXT COLUMNS replace the Materialize type with a string, so
+                // compare at that level. The decode type is unaffected and
+                // still exposes an upstream type change.
+                if recorded_type.scalar_type == SqlScalarType::String {
+                    column.represent_as_text();
+                }
+                column.decode_type == recorded.decode_type
+                    && column.column_type.is_some_and(|ty| {
+                        ty.scalar_type == recorded_type.scalar_type
+                            && (recorded_type.nullable || !ty.nullable)
+                    })
+            })
+    }
+
     /// Update this [`SqlServerTableDesc`] to represent the specified columns
     /// as text in Materialize.
     pub fn apply_text_columns(&mut self, text_columns: &BTreeSet<&str>) {
@@ -1245,13 +1275,6 @@ impl SqlServerRowDecoder {
         }
         Ok(())
     }
-
-    pub fn included_column_names(&self) -> Vec<Arc<str>> {
-        self.decoders
-            .iter()
-            .map(|decoder| Arc::clone(&decoder.0))
-            .collect()
-    }
 }
 
 // Returns true if the Row's update_mask indicates the column was updated, false otherwise.
@@ -1379,6 +1402,63 @@ mod tests {
             panic!("unexpected decode type {desc:?}");
         };
         assert_contains!(context, "columns with unlimited size do not support CDC");
+    }
+
+    #[mz_ore::test]
+    fn test_table_desc_is_compatible_with() {
+        let a = || {
+            SqlServerColumnRaw::new("a", "varchar")
+                .max_length(16)
+                .nullable(true)
+        };
+        let b = || SqlServerColumnRaw::new("b", "int");
+        let c = || SqlServerColumnRaw::new("c", "int").nullable(true);
+        let raw = SqlServerTableRaw {
+            schema_name: "my_schema".into(),
+            name: "my_table".into(),
+            capture_instance: Arc::new(SqlServerCaptureInstanceRaw {
+                name: "my_table_CT".into(),
+                create_date: NaiveDateTime::parse_from_str(
+                    "2024-01-01 00:00:00",
+                    "%Y-%m-%d %H:%M:%S",
+                )
+                .unwrap()
+                .into(),
+            }),
+            columns: [a(), b(), c()].into(),
+        };
+        let mut desc = SqlServerTableDesc::new(raw, vec![]).unwrap();
+        desc.apply_text_columns(&BTreeSet::from(["c"]));
+
+        assert!(desc.is_compatible_with(&[a(), b(), c()]));
+        assert!(
+            desc.is_compatible_with(&[a().nullable(false), b(), c()]),
+            "gaining NOT NULL is compatible"
+        );
+        assert!(
+            desc.is_compatible_with(&[a(), b(), c(), SqlServerColumnRaw::new("d", "int")]),
+            "an added column is compatible"
+        );
+        assert!(
+            !desc.is_compatible_with(&[a(), b().nullable(true), c()]),
+            "losing NOT NULL is incompatible"
+        );
+        assert!(
+            !desc.is_compatible_with(&[a().max_length(32), b(), c()]),
+            "widening a column is incompatible"
+        );
+        assert!(
+            !desc.is_compatible_with(&[
+                a(),
+                b(),
+                SqlServerColumnRaw::new("c", "bigint").nullable(true)
+            ]),
+            "changing the type of a text column is incompatible"
+        );
+        assert!(
+            !desc.is_compatible_with(&[a(), b()]),
+            "dropping a column is incompatible"
+        );
     }
 
     #[mz_ore::test]
