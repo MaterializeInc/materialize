@@ -26,7 +26,6 @@ use crate::config::Settings;
 use crate::project::SchemaQualifier;
 use crate::project::analysis::changeset::ChangeSet;
 use crate::project::analysis::deployment_snapshot;
-use crate::project::ast::Statement;
 use crate::project::ir::compiled::FullyQualifiedName;
 use crate::project::ir::object_id::ObjectId;
 use crate::project::resolve::normalize::NormalizingVisitor;
@@ -123,39 +122,31 @@ pub async fn run(
     let new_snapshot = deployment_snapshot::build_snapshot_from_planned(&planned_project)?;
     let production_snapshot = deployment_snapshot::load_from_database(&client, None).await?;
 
-    // Empty production → full overlay (first-run semantics matching stage).
-    let change_set = if production_snapshot.objects.is_empty() {
+    // An empty production snapshot makes every object read as added, so the
+    // fixed point produces a full overlay without a separate first-run path.
+    let change_set = ChangeSet::compute(
+        &client,
+        &planned_project,
+        &production_snapshot,
+        &new_snapshot,
+        &BTreeSet::new(),
+    )
+    .await?;
+    if production_snapshot.objects.is_empty() {
         verbose!("Full deployment: no production deployment found");
-        None
-    } else {
-        Some(ChangeSet::from_deployment_snapshot_comparison(
-            &production_snapshot,
-            &new_snapshot,
-            &planned_project,
-            &BTreeSet::new(),
-        ))
-    };
+    }
+    verbose!("{}", change_set);
 
-    let all_objects = match change_set.as_ref() {
-        Some(cs) if cs.is_empty() => Vec::new(),
-        Some(cs) => {
-            verbose!("{}", cs);
-            planned_project.get_sorted_objects_filtered(&cs.objects_to_deploy)?
-        }
-        None => planned_project.get_sorted_objects()?,
-    };
+    // The deployable set is exactly the views and materialized views: the
+    // fixed point already routed sinks and apply-managed objects elsewhere,
+    // and an overlay supports neither.
+    let mut overlayable: BTreeSet<ObjectId> = change_set.stage_objects.clone();
+    overlayable.extend(change_set.stage_replacement_mvs.iter().cloned());
 
-    let mut skipped = 0usize;
-    let overlay_objects: Vec<ObjectRef<'_>> = all_objects
-        .into_iter()
-        .filter(|(_, typed_obj)| match &typed_obj.stmt {
-            Statement::CreateView(_) | Statement::CreateMaterializedView(_) => true,
-            _ => {
-                skipped += 1;
-                false
-            }
-        })
-        .collect();
+    let overlay_objects: Vec<ObjectRef<'_>> =
+        planned_project.get_sorted_objects_filtered(&overlayable)?;
+
+    let skipped = change_set.apply_managed_count + change_set.stage_sinks.len();
     if skipped > 0 {
         verbose!(
             "skipped {} object(s) of unsupported type (tables/sources/sinks)",
