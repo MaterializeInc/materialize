@@ -164,3 +164,144 @@ EXECUTE record_param_left('(1,2,3)');
 
 query error operator does not exist: record\(f1: integer,f2: integer\) = text
 EXECUTE record_param_right('(1,2,3)');
+
+mode cockroach
+
+statement ok
+CREATE TABLE prepared_values (id int, value int);
+
+statement ok
+INSERT INTO prepared_values VALUES (1, 11), (2, 22), (3, 33);
+
+statement ok
+CREATE INDEX prepared_values_id ON prepared_values (id);
+
+statement ok
+PREPARE prepared_conditional AS
+SELECT CASE WHEN $2 THEN value ELSE 1 / $3 END
+FROM prepared_values WHERE id = $1;
+
+query I
+EXECUTE prepared_conditional(1, true, 0);
+----
+11
+
+query I
+EXECUTE prepared_conditional(2, false, 2);
+----
+0
+
+query error division by zero
+EXECUTE prepared_conditional(1, false, 0);
+
+query I
+EXECUTE prepared_conditional(3, true, 0);
+----
+33
+
+statement ok
+PREPARE prepared_finishing AS
+SELECT value FROM prepared_values WHERE id >= $1 ORDER BY value LIMIT $2 OFFSET $3;
+
+query I
+EXECUTE prepared_finishing(1, 1, 1);
+----
+22
+
+query error unable to cast given parameter \$2: expected bigint, got text
+EXECUTE prepared_finishing(2, NULL, 0);
+
+query I
+EXECUTE prepared_finishing(2, NULL::bigint, 0);
+----
+22
+33
+
+query I
+EXECUTE prepared_finishing(1, 0, 0);
+----
+
+query I
+EXECUTE prepared_finishing(NULL::int, 1, 0);
+----
+
+query error LIMIT must not be negative
+EXECUTE prepared_finishing(1, -1, 0);
+
+query I
+EXECUTE prepared_finishing(1, 1, 2);
+----
+33
+
+# The same prepared bodies retain their semantics on the custom-plan path.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_prepared_query_templates TO false;
+----
+COMPLETE 0
+
+query I
+EXECUTE prepared_conditional(2, true, 0);
+----
+22
+
+query error division by zero
+EXECUTE prepared_conditional(1, false, 0);
+
+query I
+EXECUTE prepared_finishing(1, 1, 1);
+----
+22
+
+query error LIMIT must not be negative
+EXECUTE prepared_finishing(1, -1, 0);
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_prepared_query_templates;
+----
+COMPLETE 0
+
+# A new temporary relation changes unqualified resolution, even if the
+# prepared result descriptor and the original relation are unchanged.
+statement ok
+PREPARE prepared_shadow AS SELECT value FROM prepared_values WHERE id = $1;
+
+query I
+EXECUTE prepared_shadow(1);
+----
+11
+
+statement ok
+CREATE TEMP TABLE prepared_values (id int, value int);
+
+statement ok
+INSERT INTO prepared_values VALUES (1, 101), (2, 202);
+
+query I
+EXECUTE prepared_shadow(1);
+----
+101
+
+query I
+EXECUTE prepared_shadow(2);
+----
+202
+
+statement ok
+DROP TABLE prepared_values;
+
+query I
+EXECUTE prepared_shadow(2);
+----
+22
+
+statement ok
+DEALLOCATE prepared_shadow;
+
+statement ok
+DEALLOCATE prepared_conditional;
+
+statement ok
+DEALLOCATE prepared_finishing;
+
+statement ok
+DROP TABLE prepared_values;
