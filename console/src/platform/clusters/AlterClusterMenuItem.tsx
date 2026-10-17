@@ -13,10 +13,16 @@ import React from "react";
 import { Cluster } from "~/api/materialize/cluster/clusterList";
 
 import { AlterClusterModal } from "./AlterClusterModal";
-import { useAvailableClusterSizes, useMaxReplicasPerCluster } from "./queries";
+import {
+  useAvailableClusterSizesWithoutSuspense,
+  useMaxReplicasPerCluster,
+} from "./queries";
 
 const AlterClusterMenuItem = ({ cluster }: { cluster: Cluster }) => {
-  const { data: clusterSizes } = useAvailableClusterSizes();
+  // NOTE: this mounts while its overflow menu is closed, in cluster list rows
+  // and the cluster detail header. Suspending would swap the page it renders
+  // in for that page's Suspense fallback.
+  const { data: clusterSizes } = useAvailableClusterSizesWithoutSuspense();
   const { data: maxReplicas } = useMaxReplicasPerCluster();
 
   const { isOpen, onOpen, onClose } = useDisclosure();
@@ -24,6 +30,9 @@ const AlterClusterMenuItem = ({ cluster }: { cluster: Cluster }) => {
   return (
     <>
       <MenuItem
+        // The modal needs the sizes. A click before they load would otherwise
+        // open it later, unprompted.
+        isDisabled={!clusterSizes}
         onClick={(e) => {
           e.stopPropagation();
           onOpen();

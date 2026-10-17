@@ -9,6 +9,7 @@
 
 import {
   keepPreviousData,
+  QueryFunctionContext,
   useMutation,
   useQuery,
   useQueryClient,
@@ -552,16 +553,23 @@ export function useLargestMaintainedQueries(
   });
 }
 
+const availableClusterSizesQuery = () => ({
+  queryKey: clusterQueryKeys.availableClusterSizes(),
+  queryFn: ({ queryKey, signal }: QueryFunctionContext) => {
+    return fetchAvailableClusterSizes({
+      queryKey,
+      requestOptions: { signal },
+    });
+  },
+});
+
 export function useAvailableClusterSizes() {
-  return useSuspenseQuery({
-    queryKey: clusterQueryKeys.availableClusterSizes(),
-    queryFn: ({ queryKey, signal }) => {
-      return fetchAvailableClusterSizes({
-        queryKey,
-        requestOptions: { signal },
-      });
-    },
-  });
+  return useSuspenseQuery(availableClusterSizesQuery());
+}
+
+/** `useAvailableClusterSizes`, with `data` undefined while loading instead of suspending. */
+export function useAvailableClusterSizesWithoutSuspense() {
+  return useQuery(availableClusterSizesQuery());
 }
 
 export function useMaxReplicasPerCluster() {
