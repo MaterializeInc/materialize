@@ -44,6 +44,7 @@ mod models;
 mod provisioning;
 mod type_info;
 mod validation;
+mod version_skew;
 
 /// Name of the dedicated cluster mz-deploy creates during `setup` and
 /// pins every connection to via libpq options.
