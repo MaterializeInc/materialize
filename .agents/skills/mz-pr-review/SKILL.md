@@ -108,6 +108,23 @@ Release notes are auto-generated per release from PR descriptions (the [`/mz-rel
 authors don't write them. So for a user-visible change, check that the PR *description* states the
 user-observable effect in user-facing terms — not only implementation detail — so the classifier includes it.
 
+### CI coverage of the change
+For a PR number, check what CI has actually exercised before leaning on it:
+- Has CI run on the current head SHA? A PR untouched for weeks carries checks from its last push,
+  while `main` has moved on beneath it. Say how far behind `main` the branch is and whether the
+  files it touches changed there since.
+- Did the run execute the changed code path? A code path that only runs under a condition, such
+  as a retry after a flagged regression, can sit behind a green check without ever running. When
+  it did not run, say which CI run would force it, rather than asking for a plain re-run.
+
+## Posting comments on GitHub
+Only when the user asks for comments to be posted or a pending review to be edited:
+- A `suggestion` block can only replace lines inside the PR's diff hunks. Check the line against
+  `gh pr diff` before posting. GraphQL's `addPullRequestReviewThread` on a line outside every hunk
+  returns `"thread": null` with no error, so a missing thread is a failed post, not a slow one.
+  When the fix needs such a line (a new import, say), state it in the nearby comment's prose.
+- Read back the pending review after editing it and confirm every comment and suggestion is there.
+
 ## One semantic change rule
 
 The PR should do one thing. If it spans multiple CODEOWNERS areas (e.g. sql-parser + sql planner), consider suggesting a split.
