@@ -61,8 +61,6 @@ use tracing::{Instrument, Level, Span, event, warn};
 use crate::ExecuteContext;
 use crate::catalog::{Catalog, CatalogState};
 use crate::command::{Command, ExecuteResponse, Response};
-use crate::coord::appends::DeferredPlan;
-use crate::coord::validity::PlanValidity;
 use crate::coord::{
     Coordinator, DeferredPlanStatement, ExplainPlanContext, Message, PlanStatement, TargetCluster,
     catalog_serving,
@@ -116,31 +114,6 @@ impl Coordinator {
                 ctx.retire(Err(AdapterError::ReadOnly));
                 return;
             }
-
-            // Check if we're still waiting for any of the builtin table appends from when we
-            // started the Session to complete.
-            if let Some((dependencies, wait_future)) =
-                super::appends::waiting_on_startup_appends(self.catalog(), ctx.session_mut(), &plan)
-            {
-                let conn_id = ctx.session().conn_id();
-                tracing::debug!(%conn_id, "deferring plan for startup appends");
-
-                let role_metadata = ctx.session().role_metadata().clone();
-                let validity =
-                    PlanValidity::new(&self.catalog, dependencies, None, None, role_metadata);
-                let deferred_plan = DeferredPlan {
-                    ctx,
-                    plan,
-                    validity,
-                    resolved_ids,
-                    sql_impl_resolved_ids,
-                };
-                self.defer_plan(wait_future, deferred_plan);
-
-                // Return early because our op is deferred on waiting for the builtin writes to
-                // complete.
-                return;
-            };
 
             // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.
             let target_cluster = match ctx.session().transaction().cluster() {
@@ -413,15 +386,12 @@ impl Coordinator {
                     let result = self.sequence_explain_schema(plan);
                     ctx.retire(result);
                 }
-                Plan::ExplainTimestamp(plan) => {
-                    self.sequence_explain_timestamp(ctx, plan, target_cluster)
-                        .await;
-                }
                 // `try_frontend_peek` and `try_frontend_read_then_write` take over every statement
                 // that plans to one of these.
                 // TODO(SQL-760): Drop the manual soft panic once internal errors soft-panic
                 // centrally.
                 plan @ (Plan::CopyTo(_)
+                | Plan::ExplainTimestamp(_)
                 | Plan::Insert(_)
                 | Plan::ReadThenWrite(_)
                 | Plan::Select(_)
