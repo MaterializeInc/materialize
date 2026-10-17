@@ -139,9 +139,9 @@
 //!   chain 2.b: [(a, 2, +1), (c, 2, -1)]
 //!
 //! For many distinct stale times — e.g. a since jump across many buffered timestamps when a sink
-//! restarts with an old as-of — the number of sub-chains grows with the number of distinct times,
-//! so we instead materialize the affected updates, advance their times, and sort and consolidate
-//! them in one O(U log U) pass.
+//! restarts with an old as-of, or when the first batch of a hydrating sink lands — the number of
+//! sub-chains grows with the number of distinct times, so we instead materialize the affected
+//! updates, advance their times, and sort and consolidate them in bounded runs that we then merge.
 
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BinaryHeap, VecDeque};
@@ -519,9 +519,9 @@ impl<D: Data> CorrectionV2<D> {
         // Count the distinct stale times, up to a small cap. For few distinct stale times -- the
         // steady state -- split cursors into runs that remain sorted under advancement and merge
         // those. For many distinct stale times -- e.g. a since jump across many buffered
-        // timestamps when a sink restarts with an old as-of -- the number of runs and the cost of
-        // cloning cursor state per run grow with the number of distinct times, so materialize,
-        // advance, and consolidate in one O(U log U) pass instead.
+        // timestamps when a sink restarts with an old as-of, or when a hydrating sink's first batch
+        // lands -- the number of runs and the cost of cloning cursor state per run grow with the
+        // number of distinct times, so materialize, advance, and sort in bounded runs instead.
         const MAX_STALE_RUNS: usize = 32;
         let mut stale_times = 0;
         for chain in &lowers {
@@ -547,14 +547,7 @@ impl<D: Data> CorrectionV2<D> {
             }
             merge_cursors(runs, 0)
         } else {
-            let mut updates: Vec<_> = lowers.iter().flat_map(|c| c.iter()).collect();
-            for (_, time, _) in &mut updates {
-                *time = std::cmp::max(*time, since_ts);
-            }
-            consolidate(&mut updates);
-            let mut builder = ChainBuilder::default();
-            builder.extend(updates);
-            let chain = builder.finish();
+            let chain = sort_advanced(lowers, since_ts, STALE_SORT_RUN);
 
             // Advancement can move updates to or beyond the upper; such updates stay pending.
             match upper.as_option() {
@@ -645,6 +638,43 @@ impl<D: Data> CorrectionV2<D> {
         self.prev_size = new_size;
         self.prev_update_count = new_length;
     }
+}
+
+/// The number of updates [`sort_advanced`] sorts on the heap at a time.
+///
+/// Each worker holds at most one run as owned updates, so this bounds the heap a since jump costs
+/// per worker. A row of a wide table takes a few hundred bytes owned, so a run stays in the
+/// hundreds of MiB.
+const STALE_SORT_RUN: usize = 1 << 20;
+
+/// Advance the times of the updates in `chains` to at least `since_ts` and return them as one
+/// sorted and consolidated chain.
+///
+/// Sorts runs of at most `run_len` updates on the heap and mints each as a chain before merging
+/// them, so the heap holds one run of owned updates rather than all of them. Each input chain is
+/// dropped once read.
+fn sort_advanced<D: Data>(chains: Vec<Chain<D>>, since_ts: Timestamp, run_len: usize) -> Chain<D> {
+    let mut runs = Vec::new();
+    let mut run = Vec::with_capacity(run_len.min(STALE_SORT_RUN));
+    let mut finish_run = |run: &mut Vec<(D, Timestamp, Diff)>| {
+        consolidate(run);
+        let mut builder = ChainBuilder::default();
+        builder.extend(run.drain(..));
+        runs.push(builder.finish());
+    };
+    for chain in chains {
+        for (data, time, diff) in chain.iter() {
+            run.push((data, std::cmp::max(time, since_ts), diff));
+            if run.len() >= run_len {
+                finish_run(&mut run);
+            }
+        }
+    }
+    if !run.is_empty() {
+        finish_run(&mut run);
+    }
+    let cursors = runs.into_iter().filter_map(Chain::into_cursor).collect();
+    merge_cursors(cursors, 0)
 }
 
 /// Merge the given cursors into one chain, writing new chunks at `depth`.
@@ -2315,6 +2345,46 @@ mod tests {
         out1.sort();
         out2.sort();
         assert_eq!(out1, out2);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow under Miri, and the sort and merge it checks have no unsafe code
+    fn sort_advanced_consolidates_across_runs() {
+        // Each time carries an insertion and, at a later time, its retraction, so with runs of
+        // a few updates the pair lands in different runs and only the merge can cancel it.
+        let since_ts = Timestamp::from(100);
+        let mut updates = Vec::new();
+        for i in 0..50_i64 {
+            let t = u64::try_from(i).expect("fits");
+            updates.push((i, Timestamp::from(t), Diff::ONE));
+            updates.push((i, Timestamp::from(t + 50), -Diff::ONE));
+            updates.push((i, Timestamp::from(t), Diff::ONE));
+        }
+        // Times beyond the since keep their own time.
+        updates.push((7, Timestamp::from(200), Diff::ONE));
+        let chains: Vec<_> = updates
+            .chunks(9)
+            .map(|part| {
+                let mut part = part.to_vec();
+                consolidate(&mut part);
+                let mut builder = ChainBuilder::default();
+                builder.extend(part);
+                builder.finish()
+            })
+            .collect();
+
+        let merged = sort_advanced(chains, since_ts, 4);
+
+        let mut expected: Vec<_> = updates
+            .into_iter()
+            .map(|(d, t, r)| (d, std::cmp::max(t, since_ts), r))
+            .collect();
+        consolidate(&mut expected);
+        assert_eq!(merged.iter().collect::<Vec<_>>(), expected);
+        assert_eq!(
+            merged.update_count, 51,
+            "50 surviving insertions and the late update"
+        );
     }
 
     /// A since jump across many distinct buffered timestamps must collapse them onto the since.
