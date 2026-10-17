@@ -18,7 +18,7 @@ use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::columnar_exchange_data;
 use mz_timely_util::temporal::bucket::TimeMajorBucket;
-use mz_timely_util::temporal::{BucketChain, BucketRange, BucketTimestamp};
+use mz_timely_util::temporal::{BucketChain, BucketRange, BucketTime};
 use timely::Accountable;
 use timely::ExchangeData;
 use timely::container::{CapacityContainerBuilder, PushInto};
@@ -46,7 +46,7 @@ pub trait TemporalBucketing<'scope, T: Timestamp>: Sized {
 /// Implementation for streams in scopes where timestamps define a total order.
 impl<'scope, T, D> TemporalBucketing<'scope, T> for Stream<'scope, T, Column<(D, T, mz_repr::Diff)>>
 where
-    T: Timestamp + Default + ExchangeData + MzData + BucketTimestamp + TotalOrder + Lattice,
+    T: Timestamp + Default + ExchangeData + MzData + BucketTime<Key = T> + TotalOrder + Lattice,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     D: ExchangeData + MzData + Ord + Clone + std::fmt::Debug + Hashable,
     for<'a> columnar::Ref<'a, D>: Copy + Ord + Hash,
@@ -198,7 +198,7 @@ where
 /// such caller, and this implementation goes away once its consumer reads columns.
 impl<'scope, T, D> TemporalBucketing<'scope, T> for StreamVec<'scope, T, (D, T, mz_repr::Diff)>
 where
-    T: Timestamp + Default + ExchangeData + MzData + BucketTimestamp + TotalOrder + Lattice,
+    T: Timestamp + Default + ExchangeData + MzData + BucketTime<Key = T> + TotalOrder + Lattice,
     D: ExchangeData + MzData + Ord + Clone + std::fmt::Debug + Hashable,
     for<'a> <(D, T, mz_repr::Diff) as Columnar>::Container: Push<&'a (D, T, mz_repr::Diff)>,
 {

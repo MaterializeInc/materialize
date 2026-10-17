@@ -21,6 +21,7 @@ use mz_ore::cast::CastFrom;
 use timely::progress::Timestamp;
 use timely::progress::frontier::AntichainRef;
 
+pub mod batcher;
 pub mod bucket;
 
 /// Timestamp extension for timestamps that can advance by `2^exponent`.
@@ -37,6 +38,29 @@ pub trait BucketTimestamp: Timestamp {
 impl BucketTimestamp for u64 {
     fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
         self.checked_add(1_u64.checked_shl(bits)?)
+    }
+}
+
+/// A timestamp whose updates a [`BucketChain`] can hold, keyed by a totally ordered coordinate.
+///
+/// `lower_of(k) <= t` holds exactly when `k <= key(t)`, so sealing a batcher at
+/// `{lower_of(k)}` releases exactly the updates whose key is less than `k`.
+pub trait BucketTime: Timestamp {
+    /// The coordinate buckets are keyed by.
+    type Key: BucketTimestamp;
+    /// The bucket key of this time.
+    fn key(&self) -> Self::Key;
+    /// The least time whose key is `key`.
+    fn lower_of(key: &Self::Key) -> Self;
+}
+
+impl BucketTime for u64 {
+    type Key = u64;
+    fn key(&self) -> u64 {
+        *self
+    }
+    fn lower_of(key: &u64) -> u64 {
+        *key
     }
 }
 

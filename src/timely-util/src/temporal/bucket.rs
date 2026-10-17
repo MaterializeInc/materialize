@@ -9,7 +9,7 @@
 
 //! Spillable, time-major bucket storage for a [`BucketChain`](super::BucketChain).
 
-use columnar::{Columnar, Container as _, Len, Push};
+use columnar::{Columnar, Container as _, Index, Len, Push};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Batcher;
@@ -18,7 +18,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::columnar::Column;
 use crate::columnar::chunk::{AccountedChunkBatcher, ChunkChunker, ComputeSpill};
-use crate::temporal::{Bucket, BucketTimestamp};
+use crate::temporal::{Bucket, BucketTime};
 
 /// A wrapper around [`AccountedChunkBatcher`] that implements the bucketing API.
 ///
@@ -51,6 +51,9 @@ where
     operator_id: usize,
     chunker: ChunkChunker<(T, D), T, R, ComputeSpill>,
     inner: AccountedChunkBatcher<(T, D), T, R, ComputeSpill>,
+    /// A lower bound on the times of the held updates, empty only if no update is held.
+    /// Consolidation can leave it below the actual times.
+    lower: Antichain<T>,
 }
 
 impl<D, T, R> TimeMajorBucket<D, T, R>
@@ -72,7 +75,13 @@ where
             operator_id,
             chunker: ChunkChunker::default(),
             inner: AccountedChunkBatcher::new(logger, operator_id),
+            lower: Antichain::new(),
         }
+    }
+
+    /// A lower bound on the times of the held updates, empty only if no update is held.
+    pub fn lower(&self) -> &Antichain<T> {
+        &self.lower
     }
 
     /// Consolidate `buffer` through the chunker and feed any complete chunks to
@@ -86,6 +95,13 @@ where
         // pool and the batcher's size accounting.
         let mut staging = <((T, D), T, R) as Columnar>::Container::default();
         let (data, time, diff) = buffer.borrow();
+        let mut scratch = T::minimum();
+        for index in 0..time.len() {
+            scratch.copy_from(time.get(index));
+            if !self.lower.less_equal(&scratch) {
+                self.lower.insert(scratch.clone());
+            }
+        }
         staging.0.0.extend_from_self(time, 0..time.len());
         staging.0.1.extend_from_self(data, 0..data.len());
         staging.1.extend_from_self(time, 0..time.len());
@@ -126,7 +142,7 @@ impl<D, T, R> Bucket for TimeMajorBucket<D, T, R>
 where
     D: Columnar,
     for<'a> columnar::Ref<'a, D>: Copy + Ord,
-    T: Columnar + Ord + Clone + Default + Lattice + BucketTimestamp,
+    T: Columnar + Ord + Clone + Default + Lattice + BucketTime,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     R: Columnar + Semigroup + Default + for<'a> Semigroup<columnar::Ref<'a, R>>,
     for<'a> columnar::Ref<'a, R>: Ord,
@@ -134,11 +150,13 @@ where
     for<'a> <T as Columnar>::Container: Push<columnar::Ref<'a, T>>,
     for<'a> <R as Columnar>::Container: Push<&'a R>,
 {
-    type Timestamp = T;
+    type Timestamp = T::Key;
 
     fn split(mut self, timestamp: &Self::Timestamp, fuel: &mut i64) -> (Self, Self) {
         self.flush();
-        let upper = Antichain::from_elem(timestamp.clone());
+        // Releases exactly the updates whose key is less than `timestamp`, per the
+        // `BucketTime::lower_of` contract.
+        let upper = Antichain::from_elem(T::lower_of(timestamp));
         let mut lower = Self::new(self.logger.clone(), self.operator_id);
         // Sealing at `timestamp` ships exactly the updates strictly less than it,
         // as sorted, consolidated chunks; feed them to the lower batcher whole,
@@ -148,7 +166,12 @@ where
         for chunk in chain {
             *fuel = fuel.saturating_sub(timely::Accountable::record_count(&chunk));
             lower.inner.push_into(chunk);
+            if lower.lower.is_empty() {
+                lower.lower = self.lower.clone();
+            }
         }
+        // The seal leaves the batcher's frontier at the exact lower bound of what it holds.
+        self.lower = self.inner.frontier().to_owned();
         (lower, self)
     }
 }
@@ -157,7 +180,6 @@ where
 mod tests {
     use std::collections::BTreeMap;
 
-    use columnar::Index;
     use mz_ore::pool::Pool;
 
     use super::*;
