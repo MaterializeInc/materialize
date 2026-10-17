@@ -94,13 +94,23 @@ where
 
 /// Drives the plain batcher `B` and the wrapper over `B` through `steps`, and checks that
 /// each seal emits the same updates and description, and that the wrapper's frontier lies
-/// between the sealed frontier and the held updates. Returns the wrapper's stats.
-pub(super) fn check<B, Chu, T>(steps: &[Step<T>], summary: u64) -> TemporalBatcherStats
+/// between the sealed frontier and the held updates. The wrapper knows `as_of`, which all
+/// updates must be at or after. Returns the wrapper's stats.
+pub(super) fn check<B, Chu, T>(
+    steps: &[Step<T>],
+    summary: u64,
+    as_of: Option<u64>,
+) -> TemporalBatcherStats
 where
     B: Batcher<Time = T>,
     B::Output: TimedUpdates<u64, T, i64>,
     Chu: ContainerBuilder<Container = B::Output> + for<'a> PushInto<&'a mut Column<(u64, T, i64)>>,
-    T: BucketTime + Columnar + Ord + Default + Debug + differential_dataflow::lattice::Lattice,
+    T: BucketTime<Key = u64>
+        + Columnar
+        + Ord
+        + Default
+        + Debug
+        + differential_dataflow::lattice::Lattice,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     <T::Key as Timestamp>::Summary: From<u64>,
     for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
@@ -109,7 +119,7 @@ where
 {
     let mut plain = B::new(None, 0);
     let mut plain_chunker = Chu::default();
-    let mut wrapped = TemporalBatcher::<B, Chu, u64, T, i64>::with_summary(None, 0, summary);
+    let mut wrapped = TemporalBatcher::<B, Chu, u64, T, i64>::with_config(None, 0, summary, as_of);
     let mut wrapped_chunker = Chu::default();
     let mut held: BTreeMap<(u64, T), i64> = BTreeMap::new();
 
@@ -227,19 +237,25 @@ fn edge_cases() -> Vec<Step<u64>> {
 #[cfg_attr(miri, ignore)]
 fn edge_cases_match_plain() {
     for summary in [0, 1, 5, 100] {
-        check_arm::<ColumnArm<u64>, _>(&edge_cases(), summary);
-        check_arm::<ChunkArm<u64>, _>(&edge_cases(), summary);
-        check_arm::<ColumnationArm<u64>, _>(&edge_cases(), summary);
+        for as_of in [None, Some(0), Some(5)] {
+            check_arm::<ColumnArm<u64>, _>(&edge_cases(), summary, as_of);
+            check_arm::<ChunkArm<u64>, _>(&edge_cases(), summary, as_of);
+            check_arm::<ColumnationArm<u64>, _>(&edge_cases(), summary, as_of);
+        }
     }
 }
 
-fn check_arm<A: Arm<T>, T>(steps: &[Step<T>], summary: u64) -> TemporalBatcherStats {
-    A::check(steps, summary)
+fn check_arm<A: Arm<T>, T>(
+    steps: &[Step<T>],
+    summary: u64,
+    as_of: Option<u64>,
+) -> TemporalBatcherStats {
+    A::check(steps, summary, as_of)
 }
 
 /// A batcher and chunker pair, as one type parameter.
 trait Arm<T> {
-    fn check(steps: &[Step<T>], summary: u64) -> TemporalBatcherStats;
+    fn check(steps: &[Step<T>], summary: u64, as_of: Option<u64>) -> TemporalBatcherStats;
 }
 
 impl<B, Chu, T> Arm<T> for (B, Chu)
@@ -247,15 +263,20 @@ where
     B: Batcher<Time = T>,
     B::Output: TimedUpdates<u64, T, i64>,
     Chu: ContainerBuilder<Container = B::Output> + for<'a> PushInto<&'a mut Column<(u64, T, i64)>>,
-    T: BucketTime + Columnar + Ord + Default + Debug + differential_dataflow::lattice::Lattice,
+    T: BucketTime<Key = u64>
+        + Columnar
+        + Ord
+        + Default
+        + Debug
+        + differential_dataflow::lattice::Lattice,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     <T::Key as Timestamp>::Summary: From<u64>,
     for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
     for<'a> <(u64, T, i64) as Columnar>::Container:
         columnar::Push<columnar::Ref<'a, (u64, T, i64)>> + columnar::Push<&'a (u64, T, i64)>,
 {
-    fn check(steps: &[Step<T>], summary: u64) -> TemporalBatcherStats {
-        check::<B, Chu, T>(steps, summary)
+    fn check(steps: &[Step<T>], summary: u64, as_of: Option<u64>) -> TemporalBatcherStats {
+        check::<B, Chu, T>(steps, summary, as_of)
     }
 }
 
@@ -263,14 +284,13 @@ where
 #[cfg_attr(miri, ignore)]
 fn hydration_matches_plain() {
     let steps = hydration(1_000, 20_000, 100_000, 1_000, 20);
-    for summary in [0, 1_000, 10_000] {
-        let stats = check_arm::<ColumnArm<u64>, _>(&steps, summary);
-        assert!(
-            stats.rebuild_parked > 0,
-            "summary = {summary}: nothing parked"
-        );
-        check_arm::<ChunkArm<u64>, _>(&steps, summary);
-        check_arm::<ColumnationArm<u64>, _>(&steps, summary);
+    for summary in [1, 1_000, 10_000] {
+        let stats = check_arm::<ColumnArm<u64>, _>(&steps, summary, Some(0));
+        assert!(stats.parked > 0, "summary = {summary}: nothing parked");
+        check_arm::<ChunkArm<u64>, _>(&steps, summary, Some(0));
+        check_arm::<ColumnationArm<u64>, _>(&steps, summary, Some(0));
+        // Without the `as_of`, nothing parks before the first seal.
+        check_arm::<ColumnArm<u64>, _>(&steps, summary, None);
     }
 }
 
@@ -280,7 +300,7 @@ fn hydration_matches_plain_spilled() {
     let pool = Pool::new().expect("pool creation");
     set_spill_override(Some(pool.clone()));
     let steps = hydration(1_000, 200_000, 100_000, 1_000, 20);
-    check_arm::<ChunkArm<u64>, _>(&steps, 1_000);
+    check_arm::<ChunkArm<u64>, _>(&steps, 1_000, Some(0));
     set_spill_override(None);
     assert!(pool.stats().inserts > 0, "nothing spilled");
 }
@@ -324,10 +344,11 @@ proptest! {
     fn matches_plain(
         steps in arb_steps(),
         summary in proptest::sample::select(vec![0u64, 1, 7, 50]),
+        as_of in proptest::option::of(Just(0u64)),
     ) {
-        check_arm::<ColumnArm<u64>, _>(&steps, summary);
-        check_arm::<ChunkArm<u64>, _>(&steps, summary);
-        check_arm::<ColumnationArm<u64>, _>(&steps, summary);
+        check_arm::<ColumnArm<u64>, _>(&steps, summary, as_of);
+        check_arm::<ChunkArm<u64>, _>(&steps, summary, as_of);
+        check_arm::<ColumnationArm<u64>, _>(&steps, summary, as_of);
     }
 }
 
@@ -343,10 +364,10 @@ fn seal2(elements: &[(u64, u64)]) -> Step<Time2> {
     ))
 }
 
-fn check_all2(steps: &[Step<Time2>], summary: u64) -> TemporalBatcherStats {
-    let stats = check_arm::<ColumnArm<Time2>, _>(steps, summary);
-    check_arm::<ChunkArm<Time2>, _>(steps, summary);
-    check_arm::<ColumnationArm<Time2>, _>(steps, summary);
+fn check_all2(steps: &[Step<Time2>], summary: u64, as_of: Option<u64>) -> TemporalBatcherStats {
+    let stats = check_arm::<ColumnArm<Time2>, _>(steps, summary, as_of);
+    check_arm::<ChunkArm<Time2>, _>(steps, summary, as_of);
+    check_arm::<ColumnationArm<Time2>, _>(steps, summary, as_of);
     stats
 }
 
@@ -388,15 +409,17 @@ fn product_edge_cases_match_plain() {
         seal_all(),
     ];
     for summary in [0, 1, 5, 100] {
-        check_all2(&steps, summary);
+        for as_of in [None, Some(0)] {
+            check_all2(&steps, summary, as_of);
+        }
     }
 }
 
-/// A first upper without an inner-minimum element parks nothing, and the tail it does not
-/// release stays in the inner batcher. Advancing uppers cannot regain such an element.
+/// An upper without an inner-minimum element drains the chain, and the inner batcher holds
+/// the tail it does not release.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
-fn product_upper_without_inner_minimum_parks_nothing() {
+fn product_upper_without_inner_minimum_drains() {
     let tail: Vec<_> = (0..1_000u64)
         .map(|i| (i % 7, t2(100 + i, 3 + i % 3), 1))
         .collect();
@@ -408,30 +431,42 @@ fn product_upper_without_inner_minimum_parks_nothing() {
         seal_all(),
     ];
     for summary in [0, 10] {
-        let stats = check_all2(&steps, summary);
-        assert_eq!(stats.rebuild_touched, 0, "summary = {summary}: {stats:?}");
+        let stats = check_all2(&steps, summary, Some(0));
+        assert_eq!(stats.parked, 1_000, "summary = {summary}: {stats:?}");
+        assert_eq!(check_all2(&steps, summary, None).parked, 0);
     }
 }
 
-/// A first upper with an inner-minimum element rebuilds and parks the tail.
+/// A snapshot at the `as_of` and a tail, with uppers that step from the minimum through times
+/// before the `as_of` to times after it. Only the tail parks, at push time.
+fn stepping_uppers<T: Timestamp>(lower: impl Fn(u64) -> T) -> Vec<Step<T>> {
+    let mut updates: Vec<_> = (0..500u64).map(|i| (i, lower(1_000), 1)).collect();
+    updates.extend((0..2_000u64).map(|i| (i % 13, lower(5_000 + i * 7), 1)));
+    vec![
+        Step::Push(updates),
+        Step::Seal(Antichain::from_elem(lower(0))),
+        Step::Seal(Antichain::from_elem(lower(500))),
+        Step::Push(vec![(1, lower(1_000), -1), (2, lower(9_000), 1)]),
+        Step::Seal(Antichain::from_elem(lower(999))),
+        Step::Seal(Antichain::from_elem(lower(1_001))),
+        Step::Seal(Antichain::from_elem(lower(8_000))),
+        seal_all(),
+    ]
+}
+
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
-fn product_first_upper_with_inner_minimum_parks_tail() {
-    let tail: Vec<_> = (0..1_000u64)
-        .map(|i| (i % 7, t2(100 + i, i % 3), 1))
-        .collect();
-    let steps = vec![
-        Step::Push(tail),
-        seal2(&[(5, 3), (10, 0)]),
-        seal2(&[(500, 0)]),
-        seal_all(),
-    ];
-    for summary in [0, 10] {
-        let stats = check_all2(&steps, summary);
-        assert_eq!(
-            stats.rebuild_parked, 1_000,
-            "summary = {summary}: {stats:?}"
-        );
+fn stepping_uppers_park_only_the_tail() {
+    for summary in [10, 1_000] {
+        let steps = stepping_uppers(|t| t);
+        let stats = check_arm::<ColumnArm<u64>, _>(&steps, summary, Some(1_000));
+        assert_eq!(stats.parked, 2_001, "summary = {summary}: {stats:?}");
+        check_arm::<ChunkArm<u64>, _>(&steps, summary, Some(1_000));
+        check_arm::<ColumnationArm<u64>, _>(&steps, summary, Some(1_000));
+
+        let steps = stepping_uppers(|t| t2(t, 0));
+        let stats = check_all2(&steps, summary, Some(1_000));
+        assert_eq!(stats.parked, 2_001, "summary = {summary}: {stats:?}");
     }
 }
 
@@ -488,7 +523,8 @@ proptest! {
     fn product_matches_plain(
         steps in arb_product_steps(),
         summary in proptest::sample::select(vec![0u64, 1, 7]),
+        as_of in proptest::option::of(Just(0u64)),
     ) {
-        check_all2(&steps, summary);
+        check_all2(&steps, summary, as_of);
     }
 }

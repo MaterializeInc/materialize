@@ -146,6 +146,7 @@ use mz_timely_util::operator::StreamExt;
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
 use mz_timely_util::temporal::BucketTime;
+use mz_timely_util::temporal::batcher::set_render_as_of;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
@@ -244,6 +245,14 @@ pub fn build_compute_dataflow(
     let input_name = format!("InputRegion: {}", dataflow.debug_name);
     let build_name = format!("BuildRegion: {}", dataflow.debug_name);
 
+    // Batchers park future updates relative to the dataflow's `as_of`, see `TemporalBatcher`.
+    let _as_of_guard = set_render_as_of(
+        dataflow
+            .as_of
+            .as_ref()
+            .and_then(|as_of| as_of.as_option().copied())
+            .map(u64::from),
+    );
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         let scope = scope.with_label();
 

@@ -15,10 +15,11 @@
 //! plus the summary, in a chain of time-major buckets instead, and moves them into the inner batcher once
 //! a seal's frontier catches up with their bucket.
 //!
-//! The batcher does not know the dataflow's `as_of`, so the snapshot and its future tail all
-//! arrive before the first seal. The first seal with a far bound rebuilds the inner batcher,
-//! moving its future tail into the chain.
+//! The snapshot and its future tail arrive before the first seal. A wrapper that knows the
+//! dataflow's `as_of` parks the tail on arrival, see [`set_render_as_of`]. Without it nothing
+//! parks before the first seal.
 
+use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use columnar::{Columnar, Index, Len};
@@ -45,6 +46,30 @@ static SUMMARY: AtomicU64 = AtomicU64::new(2_000);
 /// Set the summary that subsequently constructed [`TemporalBatcher`]s use.
 pub fn set_temporal_batcher_summary(summary: u64) {
     SUMMARY.store(summary, Ordering::Relaxed);
+}
+
+thread_local! {
+    /// The `as_of` key that [`TemporalBatcher::new`] reads, see [`set_render_as_of`].
+    static RENDER_AS_OF: Cell<Option<u64>> = const { Cell::new(None) };
+}
+
+/// Set `as_of` as the key of the dataflow `as_of` that [`TemporalBatcher`]s constructed on
+/// this thread read, until the returned guard drops and restores the previous value.
+///
+/// A batcher's updates must all be at or after the `as_of` it reads. Differential constructs
+/// batchers while the dataflow is built, so the dataflow builder holds the guard while building.
+#[must_use]
+pub fn set_render_as_of(as_of: Option<u64>) -> RenderAsOfGuard {
+    RenderAsOfGuard(RENDER_AS_OF.with(|cell| cell.replace(as_of)))
+}
+
+/// Restores the previous render `as_of` on drop, see [`set_render_as_of`].
+pub struct RenderAsOfGuard(Option<u64>);
+
+impl Drop for RenderAsOfGuard {
+    fn drop(&mut self) {
+        RENDER_AS_OF.with(|cell| cell.set(self.0));
+    }
 }
 
 /// A batcher output chunk whose updates the [`TemporalBatcher`] can read by time.
@@ -182,10 +207,8 @@ where
 /// Counters for measuring the wrapper.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TemporalBatcherStats {
-    /// Updates the rebuild moved out of the old inner batcher.
-    pub rebuild_touched: usize,
-    /// Updates the rebuild parked in the chain.
-    pub rebuild_parked: usize,
+    /// Updates pushed into the chain.
+    pub parked: usize,
 }
 
 /// A [`Batcher`] that parks updates at least the summary in advance of the last sealed frontier in a
@@ -210,13 +233,12 @@ where
     chunker: Chu,
     chain: BucketChain<TimeMajorBucket<D, T, R>>,
     summary: u64,
+    /// The key of the dataflow `as_of`, if known.
+    as_of: Option<T::Key>,
     /// The key at or after which pushed updates park in the chain. `None` parks nothing.
     far_bound: Option<T::Key>,
-    rebuilt: bool,
     lower: Antichain<T>,
     frontier: Antichain<T>,
-    logger: Option<Logger>,
-    operator_id: usize,
     near: Column<(D, T, R)>,
     far: Column<(D, T, R)>,
     buffer: Column<(D, T, R)>,
@@ -245,19 +267,38 @@ where
     for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<columnar::Ref<'a, (D, T, R)>>,
 {
     /// Construct a wrapper that parks updates at least `summary` key units in advance of the
-    /// last sealed frontier.
-    pub fn with_summary(logger: Option<Logger>, operator_id: usize, summary: u64) -> Self {
+    /// last sealed frontier, or of `as_of` before the first seal.
+    ///
+    /// All pushed updates must be at or after `as_of`.
+    pub fn with_config(
+        logger: Option<Logger>,
+        operator_id: usize,
+        summary: u64,
+        as_of: Option<T::Key>,
+    ) -> Self {
+        let mut chain = BucketChain::new(TimeMajorBucket::new(logger.clone(), operator_id));
+        if let Some(as_of) = &as_of {
+            // Shape the empty chain around `as_of`, so the tail lands in buckets of its own
+            // size instead of one bucket spanning the domain that every seal splits.
+            let _ = chain.peel(Antichain::from_elem(as_of.clone()).borrow());
+            let mut fuel = 0;
+            while fuel <= 0 {
+                fuel = RESTORE_FUEL;
+                chain.restore(&mut fuel);
+            }
+        }
+        let far_bound = as_of
+            .as_ref()
+            .and_then(|as_of| <T::Key as Timestamp>::Summary::from(summary).results_in(as_of));
         Self {
-            inner: B::new(logger.clone(), operator_id),
+            inner: B::new(logger, operator_id),
             chunker: Chu::default(),
-            chain: BucketChain::new(TimeMajorBucket::new(logger.clone(), operator_id)),
+            chain,
             summary,
-            far_bound: None,
-            rebuilt: false,
+            as_of,
+            far_bound,
             lower: Antichain::from_elem(T::minimum()),
             frontier: Antichain::new(),
-            logger,
-            operator_id,
             near: Default::default(),
             far: Default::default(),
             buffer: Default::default(),
@@ -320,29 +361,6 @@ where
             self.inner.push_into(std::mem::take(chunk));
         }
     }
-
-    /// Seal the inner batcher at `upper`, and move its remaining updates with key at least
-    /// `far` into the chain. The others move into a fresh inner batcher, by sealing at
-    /// `{lower_of(far)}` and then at the empty frontier.
-    fn rebuild(&mut self, upper: &Antichain<T>, far: &T::Key) -> Vec<B::Output> {
-        let fresh = B::new(self.logger.clone(), self.operator_id);
-        let mut old = std::mem::replace(&mut self.inner, fresh);
-        let (readied, _) = old.seal(upper.clone());
-        let (near, _) = old.seal(Antichain::from_elem(T::lower_of(far)));
-        for chunk in near {
-            self.stats.rebuild_touched += chunk.update_count();
-            self.inner.push_into(chunk);
-        }
-        let (rest, _) = old.seal(Antichain::new());
-        for chunk in rest {
-            let count = chunk.update_count();
-            self.stats.rebuild_touched += count;
-            self.stats.rebuild_parked += count;
-            chunk.partition_into(|_| true, &mut self.far, &mut self.near);
-            self.park_far();
-        }
-        readied
-    }
 }
 
 impl<B, Chu, D, T, R> Batcher for TemporalBatcher<B, Chu, D, T, R>
@@ -364,12 +382,14 @@ where
     for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
     for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
     for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<columnar::Ref<'a, (D, T, R)>>,
+    T::Key: From<u64>,
 {
     type Output = B::Output;
     type Time = T;
 
     fn new(logger: Option<Logger>, operator_id: usize) -> Self {
-        Self::with_summary(logger, operator_id, SUMMARY.load(Ordering::Relaxed))
+        let as_of = RENDER_AS_OF.with(Cell::get).map(T::Key::from);
+        Self::with_config(logger, operator_id, SUMMARY.load(Ordering::Relaxed), as_of)
     }
 
     fn seal(&mut self, upper: Antichain<T>) -> (Vec<Self::Output>, Description<T>) {
@@ -380,24 +400,20 @@ where
         // Updates that might be ready are therefore always in the inner batcher, which decides
         // readiness exactly. The argument assumes nothing about how frontiers of an iterative
         // scope evolve. Without such an element nothing parks and the chain drains, so the
-        // wrapper behaves like the inner batcher.
+        // wrapper behaves like the inner batcher. The same argument covers updates parked
+        // before the first seal relative to `as_of`, because the first seal peels at its edge,
+        // or entirely without one.
+        //
+        // Joining the edge with `as_of` keeps the far bound past the snapshot while uppers are
+        // still before `as_of`, as the bucketing operator does with its input frontier.
         let edge = Self::inner_minimum_key(upper.borrow());
-        let far_bound = edge
-            .as_ref()
-            .and_then(|edge| <T::Key as Timestamp>::Summary::from(self.summary).results_in(edge));
-
-        // Until a seal yields a far bound, nothing parks and the inner batcher holds every
-        // update, including a hydration tail, so the rebuild waits for the first seal that has
-        // one. NOTE: with advancing uppers, a seal without an inner-minimum element is never
-        // followed by one with, because `lower_of(k)` is at or after an earlier element only if
-        // that element is inner-minimum too. Waiting only costs a check.
-        let mut rebuilt = None;
-        if !self.rebuilt
-            && let Some(far) = &far_bound
-        {
-            self.rebuilt = true;
-            rebuilt = Some(self.rebuild(&upper, far));
-        }
+        let far_bound = edge.as_ref().and_then(|edge| {
+            let base = match &self.as_of {
+                Some(as_of) if as_of > edge => as_of,
+                _ => edge,
+            };
+            <T::Key as Timestamp>::Summary::from(self.summary).results_in(base)
+        });
 
         // Peeling and restoring an empty chain only splits empty buckets.
         let parked = self
@@ -416,17 +432,7 @@ where
             self.inner.push_into(std::mem::take(chunk));
         }
 
-        let (mut readied, _) = self.inner.seal(upper.clone());
-        if let Some(rebuilt) = rebuilt {
-            // The fresh inner batcher and the chain only hold updates the rebuild found not
-            // ready, so the rebuild's chain is the whole output. The seal above still runs to
-            // establish the fresh batcher's frontier.
-            assert!(
-                readied.iter().all(|chunk| chunk.update_count() == 0),
-                "temporal batcher readied updates after its rebuild"
-            );
-            readied = rebuilt;
-        }
+        let (readied, _) = self.inner.seal(upper.clone());
         let description = Description::new(
             self.lower.clone(),
             upper.clone(),
@@ -500,6 +506,7 @@ where
             &mut self.near,
         );
         drop(chunk);
+        self.stats.parked += self.far.borrow().len();
         self.park_far();
         let mut near = std::mem::take(&mut self.near);
         if !near.is_empty() {

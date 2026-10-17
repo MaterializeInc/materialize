@@ -145,7 +145,7 @@ fn bench_ticks(
             |b, &summary| {
                 b.iter_batched(
                     || {
-                        let mut batcher = Wrapped::with_summary(None, 0, summary);
+                        let mut batcher = Wrapped::with_config(None, 0, summary, Some(0));
                         let mut chunker = Chunker::default();
                         step(&mut batcher, &mut chunker, &tail, 1);
                         batcher
@@ -172,15 +172,14 @@ fn bench_first_seal(c: &mut Criterion) {
         )
     });
     for &summary in SUMMARIES {
-        let mut batcher = Wrapped::with_summary(None, 0, summary);
+        let mut batcher = Wrapped::with_config(None, 0, summary, Some(0));
         step(&mut batcher, &mut Chunker::default(), &input, 1);
         let stats = batcher.stats();
         let retained = TAIL;
         eprintln!(
-            "first_seal summary={summary}: touched {} parked {} retained F {retained} touched/F {:.2}",
-            stats.rebuild_touched,
-            stats.rebuild_parked,
-            f64::from(u32::try_from(stats.rebuild_touched).expect("fits"))
+            "first_seal summary={summary}: parked {} retained F {retained} parked/F {:.2}",
+            stats.parked,
+            f64::from(u32::try_from(stats.parked).expect("fits"))
                 / f64::from(u32::try_from(retained).expect("fits")),
         );
         group.bench_with_input(
@@ -188,7 +187,7 @@ fn bench_first_seal(c: &mut Criterion) {
             &summary,
             |b, &summary| {
                 b.iter_batched(
-                    || Wrapped::with_summary(None, 0, summary),
+                    || Wrapped::with_config(None, 0, summary, Some(0)),
                     |mut batcher| step(&mut batcher, &mut Chunker::default(), &input, 1),
                     BatchSize::LargeInput,
                 )
