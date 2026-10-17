@@ -493,6 +493,56 @@ impl ImpliedValue for OptionalDuration {
     }
 }
 
+/// Width of one bucket when a window function is split by a coarsening of its
+/// primary `ORDER BY` key.
+///
+/// A temporal key takes a duration and an integer key a count of the key's own
+/// units, because the two share no unit: `'1 day'` means nothing to a version
+/// counter, and `4096` means nothing in particular to a timestamp.
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize
+)]
+pub enum WindowBucketWidth {
+    /// A count of the `ORDER BY` key's own units, for an integer key.
+    Units(u64),
+    /// A duration, for a `timestamp` or `timestamptz` key.
+    Duration(Duration),
+}
+
+impl TryFromValue<Value> for WindowBucketWidth {
+    fn try_from_value(v: Value) -> Result<Self, PlanError> {
+        match v {
+            v @ Value::Number(_) => Ok(WindowBucketWidth::Units(u64::try_from_value(v)?)),
+            v => Ok(WindowBucketWidth::Duration(Duration::try_from_value(v)?)),
+        }
+    }
+
+    fn try_into_value(self, catalog: &dyn SessionCatalog) -> Option<Value> {
+        match self {
+            WindowBucketWidth::Units(n) => n.try_into_value(catalog),
+            WindowBucketWidth::Duration(d) => d.try_into_value(catalog),
+        }
+    }
+
+    fn name() -> String {
+        "integer or interval".to_string()
+    }
+}
+
+impl ImpliedValue for WindowBucketWidth {
+    fn implied_value() -> Result<Self, PlanError> {
+        sql_bail!("must provide a bucket width")
+    }
+}
+
 impl TryFromValue<Value> for String {
     fn try_from_value(v: Value) -> Result<Self, PlanError> {
         match v {
