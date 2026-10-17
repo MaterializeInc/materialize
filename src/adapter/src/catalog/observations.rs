@@ -8,7 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+use mz_sql::catalog::{CatalogItem, CatalogItemRef};
 
 use crate::AdapterError;
 use crate::catalog::CatalogState;
@@ -17,6 +19,43 @@ use crate::catalog::CatalogState;
 #[derive(Clone, Debug, Default)]
 pub struct CatalogReadSet {
     observations: Vec<Observation>,
+}
+
+/// A shared recorder for one statement's catalog observations.
+#[derive(Clone, Debug, Default)]
+pub struct CatalogReadRecorder {
+    reads: Arc<Mutex<CatalogReadSet>>,
+}
+
+impl CatalogReadRecorder {
+    /// Captures the observations recorded so far without changing the recorder.
+    /// Call after all preparation work using clones of this recorder has finished
+    /// to capture a complete statement.
+    pub fn snapshot(&self) -> CatalogReadSet {
+        self.reads
+            .lock()
+            .expect("catalog read recorder poisoned")
+            .clone()
+    }
+
+    /// Returns an item view that records the properties its callers access.
+    pub fn item<'a>(&self, item: &'a dyn CatalogItem) -> CatalogItemRef<'a> {
+        super::observed_item::item(self.clone(), item)
+    }
+
+    pub(super) fn record<T>(
+        &self,
+        label: &'static str,
+        expected: T,
+        read: impl Fn(&CatalogState) -> T + Send + Sync + 'static,
+    ) where
+        T: PartialEq + Send + Sync + 'static,
+    {
+        self.reads
+            .lock()
+            .expect("catalog read recorder poisoned")
+            .record(label, expected, read);
+    }
 }
 
 #[derive(Clone)]
@@ -48,12 +87,22 @@ impl CatalogReadSet {
         T: Clone + PartialEq + Send + Sync + 'static,
     {
         let answer = read(state);
-        let expected = answer.clone();
+        self.record(label, answer.clone(), read);
+        answer
+    }
+
+    pub(super) fn record<T>(
+        &mut self,
+        label: &'static str,
+        expected: T,
+        read: impl Fn(&CatalogState) -> T + Send + Sync + 'static,
+    ) where
+        T: PartialEq + Send + Sync + 'static,
+    {
         self.observations.push(Observation {
             label,
             matches: Arc::new(move |state| read(state) == expected),
         });
-        answer
     }
 
     /// Checks observations against the state at their position in a catalog transaction.

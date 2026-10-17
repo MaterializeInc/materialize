@@ -496,6 +496,7 @@ impl CatalogState {
             .map(|id| id.clone());
         ConnCatalog {
             state,
+            read_recorder: None,
             unresolvable_ids: BTreeSet::new(),
             conn_id: session.conn_id().clone(),
             cluster: session.vars().cluster().into(),
@@ -515,6 +516,7 @@ impl CatalogState {
 
         ConnCatalog {
             state: Cow::Borrowed(self),
+            read_recorder: None,
             unresolvable_ids: BTreeSet::new(),
             conn_id: SYSTEM_CONN_ID.clone(),
             cluster,
