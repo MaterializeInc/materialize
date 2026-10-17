@@ -859,6 +859,8 @@ pub struct DropOwnedPlan {
 #[derive(Debug)]
 pub struct ShowVariablePlan {
     pub name: String,
+    /// The name as written in the statement. See `plan_variable_name`.
+    pub written_name: String,
 }
 
 #[derive(Debug)]
@@ -870,6 +872,8 @@ pub struct InspectShardPlan {
 #[derive(Debug)]
 pub struct SetVariablePlan {
     pub name: String,
+    /// The name as written in the statement. See `plan_variable_name`.
+    pub written_name: String,
     pub value: VariableValue,
     pub local: bool,
 }
@@ -883,6 +887,8 @@ pub enum VariableValue {
 #[derive(Debug)]
 pub struct ResetVariablePlan {
     pub name: String,
+    /// The name as written in the statement. See `plan_variable_name`.
+    pub written_name: String,
 }
 
 #[derive(Debug)]
@@ -1395,12 +1401,16 @@ pub struct AlterSecretPlan {
 #[derive(Debug)]
 pub struct AlterSystemSetPlan {
     pub name: String,
+    /// The name as written in the statement. See `plan_variable_name`.
+    pub written_name: String,
     pub value: VariableValue,
 }
 
 #[derive(Debug)]
 pub struct AlterSystemResetPlan {
     pub name: String,
+    /// The name as written in the statement. See `plan_variable_name`.
+    pub written_name: String,
 }
 
 #[derive(Debug)]

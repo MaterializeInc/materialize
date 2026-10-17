@@ -359,6 +359,13 @@ ALTER ROLE agent RESET restrict_to_user_objects;
 db error: ERROR: permission denied to set restrict_to_user_objects
 DETAIL: You must be a superuser to set restrict_to_user_objects
 
+# A quoted, non-lowercase spelling hits the same superuser check
+simple conn=agent,user=agent
+ALTER ROLE agent SET "RESTRICT_TO_USER_OBJECTS" = false;
+----
+db error: ERROR: permission denied to set restrict_to_user_objects
+DETAIL: You must be a superuser to set restrict_to_user_objects
+
 # Verify that even a role with CREATEROLE system privilege cannot set restrict_to_user_objects.
 # This tests that the RBAC superuser check (rbac.rs) and allow_role_default (vars.rs)
 # stay in sync — CREATEROLE alone is not enough, superuser is required.
