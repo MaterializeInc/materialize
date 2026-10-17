@@ -75,8 +75,8 @@ use std::convert::Infallible;
 use std::pin::pin;
 use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use differential_dataflow::AsCollection;
@@ -108,7 +108,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 use tokio::time::Instant;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
@@ -468,7 +468,7 @@ pub(crate) fn render<'scope>(
             let client = connection_config
                 .connect("schema validation", ssh_tunnel_manager)
                 .await?;
-            let mut schema_errors = spawn_schema_validator(
+            let schema_errors = spawn_schema_validator(
                 client,
                 &config,
                 connection.publication.clone(),
@@ -539,7 +539,9 @@ pub(crate) fn render<'scope>(
                         );
 
                         // Take the opportunity to report any schema validation errors.
-                        while let Ok(error) = schema_errors.try_recv() {
+                        let errors =
+                            std::mem::take(&mut *schema_errors.lock().expect("lock poisoned"));
+                        for error in errors {
                             use SchemaValidationError::*;
                             match error {
                                 Postgres(PostgresError::PublicationMissing(publication)) => {
@@ -1306,20 +1308,15 @@ fn spawn_schema_validator(
     publication: String,
     table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     is_physical_replica: bool,
-) -> mpsc::Receiver<SchemaValidationError> {
-    // One round reports at most one connection-level error and one error per output.
-    let capacity = 1 + table_info
-        .values()
-        .map(|outputs| outputs.len())
-        .sum::<usize>();
-    let (tx, rx) = mpsc::channel(capacity);
+) -> Arc<Mutex<Vec<SchemaValidationError>>> {
+    let errors = Arc::new(Mutex::new(Vec::new()));
     let source_id = config.id;
     let config_set = Arc::clone(config.config.config_set());
 
     mz_ore::task::spawn(
         || format!("schema-validator:{}", source_id),
         run_schema_validator(
-            tx,
+            Arc::downgrade(&errors),
             move || PG_SCHEMA_VALIDATION_INTERVAL.get(&config_set),
             async move || {
                 validate_schemas(
@@ -1334,26 +1331,28 @@ fn spawn_schema_validator(
         ),
     );
 
-    rx
+    errors
 }
 
-/// Runs `validate` once per `interval` and forwards its errors to `tx`, until
-/// the receiver is dropped.
+/// Runs `validate` once per `interval` and stores the errors of the latest
+/// round in `errors`, until the owner of `errors` drops it.
 async fn run_schema_validator(
-    tx: mpsc::Sender<SchemaValidationError>,
+    errors: Weak<Mutex<Vec<SchemaValidationError>>>,
     interval: impl Fn() -> Duration,
     mut validate: impl AsyncFnMut() -> Vec<SchemaValidationError>,
 ) {
-    while !tx.is_closed() {
+    while errors.strong_count() > 0 {
         let validation_start = Instant::now();
-        for error in validate().await {
-            // The receiver drains the channel only when the replication stream
-            // yields a keepalive, so a silent stream leaves it full. Dropping the
-            // error then is safe: the receiver restarts the source on the first
-            // connection error, ignores repeated schema errors for an output,
-            // and the next round reports any remaining error again.
-            let _ = tx.try_send(error);
-        }
+        let round = validate().await;
+        let Some(errors) = errors.upgrade() else {
+            break;
+        };
+        // Each round replaces the previous one instead of appending to it. The
+        // replication loop takes the errors only when the stream yields a
+        // keepalive, so appending grows without bound while the stream is
+        // silent. A round reports the full current state, so replacing an
+        // unread round loses nothing that is still wrong upstream.
+        *errors.lock().expect("lock poisoned") = round;
         // Sleep after failed rounds too. A dead connection fails each query
         // immediately, and without the sleep this loop spins on it.
         let wait = interval().saturating_sub(validation_start.elapsed());
@@ -1435,10 +1434,10 @@ mod tests {
 
     #[mz_ore::test(tokio::test(start_paused = true))]
     async fn schema_validator_waits_between_failed_rounds() {
-        let (tx, _rx) = mpsc::channel(1);
+        let errors = Arc::new(Mutex::new(Vec::new()));
         let rounds = Cell::new(0);
         let validator = run_schema_validator(
-            tx,
+            Arc::downgrade(&errors),
             || Duration::from_secs(15),
             async || {
                 rounds.set(rounds.get() + 1);
