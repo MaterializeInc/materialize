@@ -10,7 +10,10 @@
 import { greatest, max, sort } from "d3";
 import { millisecondsInHour, millisecondsInMinute } from "date-fns/constants";
 
-import { DataPoint } from "~/platform/clusters/ClusterOverview/types";
+import {
+  DataPoint,
+  ReplicaData,
+} from "~/platform/clusters/ClusterOverview/types";
 
 export type ReplicaState = "running" | "hydrating" | "offline";
 
@@ -224,6 +227,36 @@ export function transformDdlEvents(
   return sort(events, (event) => event.occurredAtMs);
 }
 
+/**
+ * Why a window has no readings. A down replica and missing metrics collection
+ * both report empty readings, so replica status tells them apart:
+ * `unmeasured` when a replica was up, `offlineOom` or `offline` when every
+ * replica was down (by the last offline reason), and `unknown` without status.
+ */
+export type MissingUsageCause =
+  "unmeasured" | "offlineOom" | "offline" | "unknown";
+
+export function missingUsageCause({
+  timelines,
+  transitions,
+  isStatusError,
+}: {
+  timelines: ReplicaTimeline[];
+  transitions: StatusTransition[];
+  isStatusError: boolean;
+}): MissingUsageCause {
+  const states = timelines.flatMap(({ segments }) =>
+    segments.map(({ state }) => state),
+  );
+  if (isStatusError || states.length === 0) return "unknown";
+  if (states.some((state) => state !== "offline")) return "unmeasured";
+  const lastOffline = greatest(
+    transitions.filter(({ status }) => status !== "online"),
+    (transition) => transition.occurredAt.getTime(),
+  );
+  return lastOffline?.reason === OOM_REASON ? "offlineOom" : "offline";
+}
+
 export const stateAt = (timeline: ReplicaTimeline, timeMs: number) =>
   timeline.segments.find(
     (segment) => segment.startMs <= timeMs && timeMs < segment.endMs,
@@ -277,6 +310,94 @@ export function mergeBuckets(data: DataPoint[], groupMs: number) {
   });
 }
 
+/**
+ * Each replica's group, keyed by the id that stands for its cluster and name:
+ * the current replica of that name, else the one that reported last. A
+ * scheduled cluster gets a new replica id under the same name on every
+ * refresh. A cluster holds one live replica per name (`replica_id_by_name_` in
+ * the catalog), so a name's replicas in one cluster ran one after another
+ * unless one was renamed. A past blue-green deployment is another cluster, and
+ * its replicas run alongside the current ones while those hydrate, so they
+ * keep their own groups.
+ */
+export function groupReplicasByName(
+  replicas: Array<{
+    id: string;
+    name: string;
+    clusterId: string;
+    isCurrent: boolean;
+  }>,
+  lastReportedMs: Map<string, number>,
+) {
+  const groupKey = ({ clusterId, name }: (typeof replicas)[number]) =>
+    `${clusterId}\0${name}`;
+  const membersByKey = new Map<string, typeof replicas>();
+  for (const replica of replicas) {
+    membersByKey.set(groupKey(replica), [
+      ...(membersByKey.get(groupKey(replica)) ?? []),
+      replica,
+    ]);
+  }
+  const groupIdByKey = new Map(
+    [...membersByKey].map(([key, members]) => [
+      key,
+      (
+        members.find((replica) => replica.isCurrent) ??
+        greatest(members, (replica) => lastReportedMs.get(replica.id) ?? 0) ??
+        members[0]
+      ).id,
+    ]),
+  );
+  return new Map(
+    replicas.map((replica) => [
+      replica.id,
+      groupIdByKey.get(groupKey(replica)) ?? replica.id,
+    ]),
+  );
+}
+
+/**
+ * One status timeline for replicas that ran one after another. Where they
+ * overlap, the later segment wins.
+ */
+export function mergeTimelines(timelines: ReplicaTimeline[]): ReplicaTimeline {
+  if (timelines.length === 1) return timelines[0];
+  const segments = sort(
+    timelines.flatMap((timeline) => timeline.segments),
+    (segment) => segment.startMs,
+  ).map((segment, index, sorted) => ({
+    ...segment,
+    endMs: Math.min(segment.endMs, sorted[index + 1]?.startMs ?? Infinity),
+  }));
+  return {
+    segments: mergeAdjacent(
+      segments.filter((segment) => segment.endMs > segment.startMs),
+    ),
+    oomAtMs: sort(timelines.flatMap((timeline) => timeline.oomAtMs)),
+  };
+}
+
+/**
+ * The series with a memory bar in each bucket, in series order, so bars at one
+ * time share only that time's slot.
+ */
+export function seriesWithBarAt(series: ReplicaData[]) {
+  const idsByBucketStart = new Map<number, string[]>();
+  for (const { id, data } of series) {
+    for (const point of data) {
+      if (!memoryBar(point)) continue;
+      const ids = idsByBucketStart.get(point.bucketStart);
+      if (ids) ids.push(id);
+      else idsByBucketStart.set(point.bucketStart, [id]);
+    }
+  }
+  return idsByBucketStart;
+}
+
+/** The most memory bars at one time, at least 1. */
+export const mostBarsAtOnce = (series: ReplicaData[]) =>
+  max([...seriesWithBarAt(series).values()], (ids) => ids.length) ?? 1;
+
 const BUCKET_WIDTHS_MS = [
   ...[1, 2, 3, 5, 6, 10, 15, 20, 30].map(
     (minutes) => minutes * millisecondsInMinute,
@@ -287,9 +408,9 @@ const BUCKET_WIDTHS_MS = [
 ];
 
 /**
- * The bucket width that gives each replica's bar at least `minSlotPx`: the
- * source width when that already does, else the narrowest round width that
- * is a multiple of it.
+ * The bucket width that gives each bar at least `minSlotPx` when
+ * `replicaCount` bars share a time: the source width when that already does,
+ * else the narrowest round width that is a multiple of it.
  */
 export function mergedBucketMs({
   sourceBucketMs,
