@@ -56,12 +56,11 @@ use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
 use crate::render::{ArrangementFlavor, Pairer, RenderTimestamp};
 use crate::typedefs::{
-    ErrBatcher, ErrBuilder, KeyBatcher, RowAgent, RowErrBuilder, RowErrSpine, RowRowAgent,
-    RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
+    BucketedKeyBatcher, BucketedKeyValBatcher, ErrBatcher, ErrBuilder, RowAgent, RowErrBuilder,
+    RowErrSpine, RowRowAgent, RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
 };
 use mz_row_spine::{
-    DatumContainer, DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher,
-    RowValBuilder,
+    DatumContainer, DatumSeq, RowBatcher, RowBuilder, RowRowBuilder, RowValBuilder,
 };
 
 /// Key container of trace `Tr`'s batch cursor.
@@ -165,11 +164,17 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             // `Reduce` builds its own arrangement via `KeyValPlan`, bypassing
             // `ensure_collections`, so the strategy is plumbed through `PlanNode::Reduce`
             // rather than inferred at the arrangement site. No-op for `Direct`.
+            //
+            // The input batchers of the other plans park future updates themselves. The
+            // accumulable arrangement carries `(Vec<Accum>, Diff)` diffs, which the bucket
+            // storage cannot consolidate, because it needs the diff to add a columnar ref.
+            // TODO: Park the accumulable plan's future updates in its batcher too.
             let key_val_collection = key_val_input.as_collection();
             let key_val_collection = if matches!(
                 temporal_bucketing_strategy,
                 ArrangementStrategy::TemporalBucketing
-            ) {
+            ) && matches!(reduce_plan, ReducePlan::Accumulable(_))
+            {
                 let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
                     .get(&self.config_set)
                     .try_into()
@@ -303,7 +308,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let arranged = collection
             .mz_arrange::<
                 ColumnationChunker<_>,
-                RowRowBatcher<_, _>,
+                BucketedKeyValBatcher<Row, Row, _>,
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
             >(
@@ -413,7 +418,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let arranged = differential_dataflow::collection::concatenate(input.scope(), to_collect)
             .mz_arrange::<
                 ColumnationChunker<_>,
-                RowValBatcher<_, _, _>,
+                BucketedKeyValBatcher<Row, _, _>,
                 RowValBuilder<_, _, _>,
                 RowValSpine<_, _, _>,
             >(
@@ -579,7 +584,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let arranged = partial
             .mz_arrange::<
                 ColumnationChunker<_>,
-                RowRowBatcher<_, _>,
+                BucketedKeyValBatcher<Row, Row, _>,
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
             >(&format!(
@@ -808,7 +813,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let input: KeyCollection<_, _, _> = input.into();
         let arranged = input.mz_arrange::<
             ColumnationChunker<_>,
-            RowBatcher<_, _>,
+            BucketedKeyBatcher<Row, _>,
             RowBuilder<_, _>,
             RowSpine<_, _>,
         >(
@@ -943,7 +948,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 let arranged = partial
                     .mz_arrange::<
                         ColumnationChunker<_>,
-                        RowRowBatcher<_, _>,
+                        BucketedKeyValBatcher<Row, Row, _>,
                         RowRowBuilder<_, _>,
                         RowRowSpine<_, _>,
                     >(
@@ -1154,7 +1159,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let arranged_input = input
             .mz_arrange::<
                 ColumnationChunker<_>,
-                RowRowBatcher<_, _>,
+                BucketedKeyValBatcher<Row, Row, _>,
                 RowRowBuilder<_, _>,
                 RowRowSpine<_, _>,
             >(
@@ -1250,7 +1255,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
                 (key, values)
             })
-            .consolidate_named_if::<KeyBatcher<_, _, _>>(
+            .consolidate_named_if::<BucketedKeyBatcher<_, _>>(
                 must_consolidate,
                 "Consolidated ReduceMonotonic input",
             );
@@ -1444,7 +1449,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 })
                 .mz_arrange::<
                     ColumnationChunker<_>,
-                    RowBatcher<_, _>,
+                    BucketedKeyBatcher<Row, _>,
                     RowBuilder<_, _>,
                     RowSpine<_, _>,
                 >(

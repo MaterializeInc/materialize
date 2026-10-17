@@ -19,6 +19,7 @@ use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::Diff;
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationStack};
+use mz_timely_util::temporal::batcher::TemporalBatcher;
 
 use mz_row_spine::RowValBuilder;
 
@@ -154,3 +155,17 @@ where
 
 pub trait MzArrangeData: columnation::Columnation {}
 impl<T> MzArrangeData for T where T: columnation::Columnation {}
+
+/// A batcher over `ColumnationStack` chains of `(D, T, Diff)` updates that parks future updates
+/// in a bucket chain, see [`TemporalBatcher`].
+pub type BucketedBatcher<B, D, T> = TemporalBatcher<
+    B,
+    mz_timely_util::columnar::batcher::Chunker<ColumnationStack<(D, T, Diff)>>,
+    D,
+    T,
+    Diff,
+>;
+/// [`KeyValBatcher`] parking future updates.
+pub type BucketedKeyValBatcher<K, V, T> = BucketedBatcher<KeyValBatcher<K, V, T, Diff>, (K, V), T>;
+/// [`KeyBatcher`] parking future updates.
+pub type BucketedKeyBatcher<K, T> = BucketedKeyValBatcher<K, (), T>;

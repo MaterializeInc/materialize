@@ -38,7 +38,6 @@ use mz_timely_util::columnar::chunk::{
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Col2ValColBatcher, columnar_exchange};
 use mz_timely_util::columnation::ColumnationChunker;
-use mz_timely_util::temporal::BucketTime;
 use mz_timely_util::temporal::batcher::TemporalBatcher;
 use timely::ContainerBuilder;
 use timely::container::NoopBuilder;
@@ -1078,7 +1077,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .take()
                     .expect("Collection constructed above");
                 // The ok arrangement's batcher parks future updates itself, see
-                // `MaybeBucketByTime::arrange_row_row`.
+                // `arrange_row_row_bucketed`.
                 let batcher = ArrangementBatcher::from_config(config_set);
                 let (oks, errs_keyed, passthrough) =
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone(), batcher);
@@ -1187,7 +1186,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             (ok_stream, err_stream, passthrough_stream.as_collection())
         };
 
-        let oks = T::arrange_row_row(ok_stream, name, batcher);
+        let oks = arrange_row_row_bucketed(ok_stream, name, batcher);
         (oks, err_stream.as_collection(), passthrough)
     }
 }
@@ -1200,9 +1199,7 @@ pub(crate) fn arrange_row_row_bucketed<'scope, T>(
     batcher: ArrangementBatcher,
 ) -> Arranged<'scope, RowRowAgent<T, Diff>>
 where
-    T: RenderTimestamp + BucketTime + Ord,
-    <T::Key as Timestamp>::Summary: From<u64>,
-    for<'a> <T as Columnar>::Container: columnar::Push<columnar::Ref<'a, T>>,
+    T: RenderTimestamp,
 {
     let exchange =
         ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
