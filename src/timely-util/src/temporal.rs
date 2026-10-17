@@ -21,6 +21,8 @@ use mz_ore::cast::CastFrom;
 use timely::progress::Timestamp;
 use timely::progress::frontier::AntichainRef;
 
+pub mod bucket;
+
 /// Timestamp extension for timestamps that can advance by `2^exponent`.
 ///
 /// Most likely, this is only relevant for totally ordered timestamps.
@@ -30,6 +32,12 @@ pub trait BucketTimestamp: Timestamp {
     /// Advance this timestamp by `2^exponent`. Returns `None` if the
     /// timestamp would overflow.
     fn advance_by_power_of_two(&self, exponent: u32) -> Option<Self>;
+}
+
+impl BucketTimestamp for u64 {
+    fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
+        self.checked_add(1_u64.checked_shl(bits)?)
+    }
 }
 
 /// A type that can be split into two parts based on a timestamp.
@@ -240,12 +248,6 @@ mod tests {
     impl BucketTimestamp for u8 {
         fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
             self.checked_add(1_u8.checked_shl(bits)?)
-        }
-    }
-
-    impl BucketTimestamp for u64 {
-        fn advance_by_power_of_two(&self, bits: u32) -> Option<Self> {
-            self.checked_add(1_u64.checked_shl(bits)?)
         }
     }
 
