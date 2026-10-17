@@ -38,11 +38,13 @@ use mz_timely_util::shared_trace::SharedReader;
 
 pub(crate) use self::publish::{Published, adopt_trace};
 
-use crate::typedefs::RowRowSpine;
+use crate::typedefs::{ErrSpine, RowRowSpine};
 
 /// A `Send` reader handle for a published `oks` arrangement.
 pub(crate) type SharedOksHandle =
     SharedReader<<RowRowSpine<Timestamp, Diff> as TraceReader>::Batch>;
+/// A `Send` reader handle for a published `errs` arrangement.
+pub(crate) type SharedErrsHandle = SharedReader<<ErrSpine<Timestamp, Diff> as TraceReader>::Batch>;
 
 // `pub(crate)` for sibling test modules. The peek and render tests in `crate::render` and
 // `crate::sharing` read a published arrangement through `SharedReaderExt::snapshot_at` and inspect
