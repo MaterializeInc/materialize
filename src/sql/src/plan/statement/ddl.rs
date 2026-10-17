@@ -128,8 +128,8 @@ use prost::Message;
 
 use crate::ast::display::AstDisplay;
 use crate::catalog::{
-    CatalogCluster, CatalogDatabase, CatalogError, CatalogItem, CatalogItemRef, CatalogItemType,
-    CatalogRecordField, CatalogType, CatalogTypeDetails, ObjectType, SystemObjectType,
+    CatalogError, CatalogItem, CatalogItemRef, CatalogItemType, CatalogRecordField, CatalogType,
+    CatalogTypeDetails, ObjectType, SystemObjectType,
 };
 use crate::iceberg::IcebergSinkConfigOptionExtracted;
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
@@ -2298,7 +2298,7 @@ fn get_encoding(
 fn source_sink_cluster_config<'a, 'ctx>(
     scx: &'a StatementContext<'ctx>,
     in_cluster: &mut Option<ResolvedClusterName>,
-) -> Result<&'a dyn CatalogCluster<'ctx>, PlanError> {
+) -> Result<crate::catalog::CatalogClusterRef<'a>, PlanError> {
     let cluster = match in_cluster {
         None => {
             let cluster = scx.catalog.resolve_cluster(None)?;
@@ -2861,13 +2861,9 @@ pub fn plan_create_materialized_view(
             scx.require_feature_flag(&ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS)?;
 
             let cluster = scx.catalog.get_cluster(cluster_id);
-            let replica_id = cluster
-                .replica_ids()
-                .get(replica_name.as_str())
-                .copied()
-                .ok_or_else(|| {
-                    CatalogError::UnknownClusterReplica(replica_name.as_str().to_string())
-                })?;
+            let replica_id = cluster.replica_id(replica_name.as_str()).ok_or_else(|| {
+                CatalogError::UnknownClusterReplica(replica_name.as_str().to_string())
+            })?;
             Some(replica_id)
         }
         None => None,
@@ -6500,7 +6496,7 @@ pub fn plan_drop_owned(
             .filter_map(|object_id| scx.catalog.get_owner_id(object_id))
             .collect::<BTreeSet<_>>()
             .into_iter()
-            .map(|role_id| scx.catalog.get_role(&role_id).name().quoted());
+            .map(|role_id| scx.catalog.get_role(&role_id).name().quoted().to_string());
         sql_bail!(
             "cannot drop objects owned by role {} because they are required by the database system",
             owners.join(", "),
@@ -8491,7 +8487,7 @@ pub(crate) fn resolve_cluster<'a>(
     scx: &'a StatementContext,
     name: &'a Ident,
     if_exists: bool,
-) -> Result<Option<&'a dyn CatalogCluster<'a>>, PlanError> {
+) -> Result<Option<crate::catalog::CatalogClusterRef<'a>>, PlanError> {
     match scx.resolve_cluster(Some(name)) {
         Ok(cluster) => Ok(Some(cluster)),
         Err(_) if if_exists => Ok(None),
@@ -8503,10 +8499,10 @@ pub(crate) fn resolve_cluster_replica<'a>(
     scx: &'a StatementContext,
     name: &QualifiedReplica,
     if_exists: bool,
-) -> Result<Option<(&'a dyn CatalogCluster<'a>, ReplicaId)>, PlanError> {
+) -> Result<Option<(crate::catalog::CatalogClusterRef<'a>, ReplicaId)>, PlanError> {
     match scx.resolve_cluster(Some(&name.cluster)) {
-        Ok(cluster) => match cluster.replica_ids().get(name.replica.as_str()) {
-            Some(replica_id) => Ok(Some((cluster, *replica_id))),
+        Ok(cluster) => match cluster.replica_id(name.replica.as_str()) {
+            Some(replica_id) => Ok(Some((cluster, replica_id))),
             None if if_exists => Ok(None),
             None => Err(sql_err!(
                 "CLUSTER {} has no CLUSTER REPLICA named {}",
@@ -8523,7 +8519,7 @@ pub(crate) fn resolve_database<'a>(
     scx: &'a StatementContext,
     name: &'a UnresolvedDatabaseName,
     if_exists: bool,
-) -> Result<Option<&'a dyn CatalogDatabase>, PlanError> {
+) -> Result<Option<crate::catalog::CatalogDatabaseRef<'a>>, PlanError> {
     match scx.resolve_database(name) {
         Ok(database) => Ok(Some(database)),
         Err(_) if if_exists => Ok(None),

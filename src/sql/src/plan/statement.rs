@@ -27,8 +27,8 @@ use mz_storage_types::connections::Connection;
 
 use crate::ast::{Ident, Statement, UnresolvedItemName};
 use crate::catalog::{
-    CatalogCluster, CatalogCollectionItem, CatalogDatabase, CatalogItemRef, CatalogItemType,
-    CatalogSchema, ObjectType, SessionCatalog, SystemObjectType,
+    CatalogCollectionItem, CatalogItemRef, CatalogItemType, ObjectType, SessionCatalog,
+    SystemObjectType,
 };
 use crate::names::{
     self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
@@ -742,19 +742,19 @@ impl<'a> StatementContext<'a> {
         }
     }
 
-    pub fn get_cluster(&self, id: &ClusterId) -> &dyn CatalogCluster<'_> {
+    pub fn get_cluster(&self, id: &ClusterId) -> crate::catalog::CatalogClusterRef<'_> {
         self.catalog.get_cluster(*id)
     }
 
     pub fn resolve_database(
         &self,
         name: &UnresolvedDatabaseName,
-    ) -> Result<&dyn CatalogDatabase, PlanError> {
+    ) -> Result<crate::catalog::CatalogDatabaseRef<'_>, PlanError> {
         let name = normalize::ident_ref(&name.0);
         Ok(self.catalog.resolve_database(name)?)
     }
 
-    pub fn get_database(&self, id: &DatabaseId) -> &dyn CatalogDatabase {
+    pub fn get_database(&self, id: &DatabaseId) -> crate::catalog::CatalogDatabaseRef<'_> {
         self.catalog.get_database(id)
     }
 
@@ -762,7 +762,7 @@ impl<'a> StatementContext<'a> {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema: &Ident,
-    ) -> Result<&dyn CatalogSchema, PlanError> {
+    ) -> Result<crate::catalog::CatalogSchemaRef<'_>, PlanError> {
         let schema = normalize::ident_ref(schema);
         Ok(self
             .catalog
@@ -772,7 +772,7 @@ impl<'a> StatementContext<'a> {
     pub fn resolve_schema(
         &self,
         name: UnresolvedSchemaName,
-    ) -> Result<&dyn CatalogSchema, PlanError> {
+    ) -> Result<crate::catalog::CatalogSchemaRef<'_>, PlanError> {
         let name = normalize::unresolved_schema_name(name)?;
         Ok(self
             .catalog
@@ -783,7 +783,7 @@ impl<'a> StatementContext<'a> {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
-    ) -> &dyn CatalogSchema {
+    ) -> crate::catalog::CatalogSchemaRef<'_> {
         self.catalog.get_schema(database_spec, schema_spec)
     }
 
@@ -846,7 +846,7 @@ impl<'a> StatementContext<'a> {
     pub fn resolve_cluster(
         &self,
         name: Option<&Ident>,
-    ) -> Result<&dyn CatalogCluster<'_>, PlanError> {
+    ) -> Result<crate::catalog::CatalogClusterRef<'_>, PlanError> {
         let name = name.map(|name| name.as_str());
         Ok(self.catalog.resolve_cluster(name)?)
     }

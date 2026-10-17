@@ -431,13 +431,13 @@ impl<'a> FuncRewriter<'a> {
             over,
         } = func
         {
-            let pg_catalog_id = self
+            let pg_catalog_id = *self
                 .scx
                 .catalog
                 .resolve_schema(None, PG_CATALOG_SCHEMA)
                 .expect("pg_catalog schema exists")
                 .id();
-            let mz_catalog_id = self
+            let mz_catalog_id = *self
                 .scx
                 .catalog
                 .resolve_schema(None, MZ_CATALOG_SCHEMA)
@@ -449,7 +449,7 @@ impl<'a> FuncRewriter<'a> {
                     full_name,
                     ..
                 } => {
-                    if ![*pg_catalog_id, *mz_catalog_id].contains(&qualifiers.schema_spec) {
+                    if ![pg_catalog_id, mz_catalog_id].contains(&qualifiers.schema_spec) {
                         return None;
                     }
                     full_name.item.clone()

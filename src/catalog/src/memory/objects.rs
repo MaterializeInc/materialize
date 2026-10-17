@@ -41,10 +41,10 @@ use mz_sql::ast::{
     UnresolvedItemName, Value, WithOptionValue,
 };
 use mz_sql::catalog::{
-    CatalogClusterReplica, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogType,
-    CatalogTypeDetails, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference,
-    RoleAttributes, RoleMembership, RoleVars, SystemObjectType,
+    CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
+    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogType, CatalogTypeDetails,
+    DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, RoleAttributes, RoleMembership,
+    RoleVars, SystemObjectType,
 };
 use mz_sql::names::{
     Aug, CommentObjectId, DatabaseId, DependencyIds, FullItemName, QualifiedItemName,
@@ -394,6 +394,11 @@ impl Cluster {
         self.replica_id_by_name_.get(name).copied()
     }
 
+    /// Returns replica IDs ordered by name.
+    pub fn replica_ids(&self) -> &BTreeMap<String, ReplicaId> {
+        &self.replica_id_by_name_
+    }
+
     /// Returns the availability zones of this cluster, if they exist.
     pub fn availability_zones(&self) -> Option<&[String]> {
         match &self.config.variant {
@@ -409,7 +414,7 @@ impl Cluster {
     /// CREATE CLUSTER` cannot just print a stored statement. It rebuilds one,
     /// and this is the first half of that: config to plan. `unplan_create_cluster`
     /// then turns the plan back into a statement.
-    pub fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError> {
+    pub fn try_to_plan(&self) -> Result<CreateClusterPlan, mz_sql::catalog::ClusterPlanError> {
         let name = self.name.clone();
         let variant = match &self.config.variant {
             ClusterVariant::Managed(ClusterVariantManaged {
@@ -454,11 +459,8 @@ impl Cluster {
                 })
             }
             ClusterVariant::Unmanaged => {
-                // Unmanaged clusters are deprecated, so hopefully we can remove
-                // them before we have to implement this.
-                return Err(PlanError::Unsupported {
-                    feature: "SHOW CREATE for unmanaged clusters".to_string(),
-                    discussion_no: None,
+                return Err(mz_sql::catalog::ClusterPlanError {
+                    feature: "SHOW CREATE for unmanaged clusters".to_owned(),
                 });
             }
         };
@@ -3930,12 +3932,12 @@ impl mz_sql::catalog::CatalogDatabase for Database {
         &self.schemas_by_name
     }
 
-    // `as` is ok to use to cast to a trait object.
-    #[allow(clippy::as_conversions)]
-    fn schemas(&self) -> Vec<&dyn CatalogSchema> {
+    fn schemas(&self) -> Vec<mz_sql::catalog::CatalogSchemaRef<'_>> {
         self.schemas_by_id
             .values()
-            .map(|schema| schema as &dyn CatalogSchema)
+            .map(|schema| -> mz_sql::catalog::CatalogSchemaRef<'_> {
+                mz_sql::catalog::CatalogRef::Borrowed(schema)
+            })
             .collect()
     }
 
@@ -4040,20 +4042,20 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
         &self.bound_objects
     }
 
-    fn replica_ids(&self) -> &BTreeMap<String, ReplicaId> {
-        &self.replica_id_by_name_
+    fn replica_id(&self, name: &str) -> Option<ReplicaId> {
+        self.replica_id(name)
     }
 
-    // `as` is ok to use to cast to a trait object.
-    #[allow(clippy::as_conversions)]
-    fn replicas(&self) -> Vec<&dyn CatalogClusterReplica<'_>> {
+    fn replicas(&self) -> Vec<mz_sql::catalog::CatalogClusterReplicaRef<'_>> {
         self.replicas()
-            .map(|replica| replica as &dyn CatalogClusterReplica)
+            .map(|replica| -> mz_sql::catalog::CatalogClusterReplicaRef<'_> {
+                mz_sql::catalog::CatalogRef::Borrowed(replica)
+            })
             .collect()
     }
 
-    fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica<'_> {
-        self.replica(id).expect("catalog out of sync")
+    fn replica(&self, id: ReplicaId) -> mz_sql::catalog::CatalogClusterReplicaRef<'_> {
+        mz_sql::catalog::CatalogRef::Borrowed(self.replica(id).expect("catalog out of sync"))
     }
 
     fn owner_id(&self) -> RoleId {
@@ -4100,7 +4102,7 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
             ClusterVariant::Unmanaged => None,
         }
     }
-    fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError> {
+    fn try_to_plan(&self) -> Result<CreateClusterPlan, mz_sql::catalog::ClusterPlanError> {
         self.try_to_plan()
     }
 }
