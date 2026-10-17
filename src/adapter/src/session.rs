@@ -720,6 +720,7 @@ impl Session {
                 state: PortalState::NotStarted,
                 logging,
                 lifecycle_timestamps: None,
+                batch_lookahead: None,
             },
         );
         Ok(())
@@ -756,6 +757,7 @@ impl Session {
             logging: &mut p.logging,
             state: &mut p.state,
             lifecycle_timestamps: &mut p.lifecycle_timestamps,
+            batch_lookahead: &mut p.batch_lookahead,
         })
     }
 
@@ -786,6 +788,7 @@ impl Session {
                         state: PortalState::NotStarted,
                         logging,
                         lifecycle_timestamps: None,
+                        batch_lookahead: None,
                     });
                     return Ok(name);
                 }
@@ -963,6 +966,23 @@ pub struct Portal {
     pub state: PortalState,
     /// Statement lifecycle timestamps coming from `mz-pgwire`.
     pub lifecycle_timestamps: Option<LifecycleTimestamps>,
+    /// What `mz-pgwire` saw follow this portal's `Execute` in its batch, if it
+    /// read ahead before executing it.
+    pub batch_lookahead: Option<BatchLookahead>,
+}
+
+/// What follows a statement in its batch, the statements a client sends before
+/// one `Sync`, as `mz-pgwire` saw it by reading ahead before executing the
+/// statement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchLookahead {
+    /// A `Sync` comes next, before any other statement.
+    LastBeforeSync,
+    /// Another statement comes before the `Sync`.
+    MoreStatements,
+    /// A `Flush` came, and no `Sync` had arrived behind it. The client may be
+    /// waiting for the statement's result, so what follows is unknown.
+    FlushWithoutSync,
 }
 
 /// A mutable reference to a portal, capturing its state and associated metadata. Importantly, it
@@ -986,6 +1006,8 @@ pub struct PortalRefMut<'a> {
     pub state: &'a mut PortalState,
     /// Statement lifecycle timestamps coming from `mz-pgwire`.
     pub lifecycle_timestamps: &'a mut Option<LifecycleTimestamps>,
+    /// What `mz-pgwire` saw follow this portal's `Execute` in its batch.
+    pub batch_lookahead: &'a mut Option<BatchLookahead>,
 }
 
 /// Points to a revision of catalog state and session state. When the current revisions are not the

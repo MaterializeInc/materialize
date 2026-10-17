@@ -1283,14 +1283,28 @@ fn test_many_bind_params() {
 }
 
 /// How the frontend OCC read-then-write path behaves inside an extended-protocol
-/// pipeline: a write that reads nothing stages its rows and rolls back with the
-/// pipeline, one that reads persisted state is either refused or commits as its
-/// own transaction.
+/// batch: a write that reads nothing stages its rows and rolls back with the
+/// batch, one that reads persisted state runs only as the last statement before
+/// Sync.
 #[mz_ore::test]
 fn test_pgtest_mz_frontend_occ_pipelined_dml() {
     pg_test_harness(
         Path::new("../../test/pgtest-mz/frontend-occ-pipelined-dml.pt"),
         true,
         test_util::TestHarness::default,
+    );
+}
+
+#[mz_ore::test]
+fn test_pgtest_mz_pipelined_dml_flag_off() {
+    pg_test_harness(
+        Path::new("../../test/pgtest-mz/pipelined-dml-flag-off.pt"),
+        true,
+        || {
+            test_util::TestHarness::default().with_system_parameter_default(
+                "enable_extended_protocol_implicit_transaction".into(),
+                "false".into(),
+            )
+        },
     );
 }

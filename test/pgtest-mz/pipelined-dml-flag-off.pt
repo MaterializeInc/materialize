@@ -1,0 +1,58 @@
+# With the feature flag `enable_extended_protocol_implicit_transaction` off,
+# every statement of a batch commits on its own, and a read-dependent write that
+# is not the last statement before Sync runs anyway.
+
+send
+Query {"query": "CREATE TABLE t (a int)"}
+Query {"query": "INSERT INTO t VALUES (1), (2), (3)"}
+----
+
+until
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"INSERT 0 3"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "DELETE FROM t WHERE a = 1"}
+Bind
+Execute
+Parse {"query": "INSERT INTO t VALUES (4)"}
+Bind
+Execute
+Parse {"query": "SELECT 1/0"}
+Bind
+Execute
+Sync
+----
+
+until err_field_typs=SC
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"DELETE 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22012"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "SELECT a FROM t ORDER BY a"}
+----
+
+until
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"a"}]}
+DataRow {"fields":["2"]}
+DataRow {"fields":["3"]}
+DataRow {"fields":["4"]}
+CommandComplete {"tag":"SELECT 3"}
+ReadyForQuery {"status":"I"}

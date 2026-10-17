@@ -537,95 +537,103 @@ pub fn run_test(tf: &mut datadriven::TestFile, addr: String, user: String, timeo
         }
         match tc.directive.as_str() {
             "send" => {
-                for line in lines {
-                    if pgt.verbose {
-                        println!("SEND {}", line);
-                    }
-                    let mut line = line.splitn(2, ' ');
-                    let typ = line.next().unwrap_or("");
-                    let args = line.next().unwrap_or("{}");
-                    pgt.send(conn.clone(), options.clone(), |buf| match typ {
-                        "Query" => {
-                            let v: Query = serde_json::from_str(args).unwrap();
-                            frontend::query(&v.query, buf).unwrap();
+                // The whole block goes out in one write, the way drivers buffer
+                // the messages they send together. A server that reads ahead
+                // then sees them as having arrived together.
+                let lines: Vec<_> = lines.collect();
+                let verbose = pgt.verbose;
+                pgt.send(conn, options, |buf| {
+                    for line in &lines {
+                        if verbose {
+                            println!("SEND {}", line);
                         }
-                        "Parse" => {
-                            let v: Parse = serde_json::from_str(args).unwrap();
-                            frontend::parse(
-                                &v.name.unwrap_or_else(|| "".into()),
-                                &v.query,
-                                vec![],
-                                buf,
-                            )
-                            .unwrap();
-                        }
-                        "Sync" => frontend::sync(buf),
-                        "Bind" => {
-                            let v: Bind = serde_json::from_str(args).unwrap();
-                            // Parameter values as raw bytes. `binary_values`
-                            // supplies them verbatim, which (together with
-                            // `param_formats`) is what lets a test exercise the
-                            // binary parameter format; otherwise `values` are
-                            // sent as UTF-8 text, matching historical behavior.
-                            let values: Vec<Vec<u8>> = match v.binary_values {
-                                Some(binary_values) => binary_values,
-                                None => v
-                                    .values
-                                    .unwrap_or_default()
-                                    .into_iter()
-                                    .map(String::into_bytes)
-                                    .collect(),
-                            };
-                            if frontend::bind(
-                                &v.portal.unwrap_or_else(|| "".into()),
-                                &v.statement.unwrap_or_else(|| "".into()),
-                                v.param_formats.unwrap_or_default(), // formats
-                                values,                              // values
-                                |bytes: Vec<u8>, buf| {
-                                    buf.put_slice(&bytes);
-                                    Ok(IsNull::No)
-                                }, // serializer
-                                v.result_formats.unwrap_or_default(),
-                                buf,
-                            )
-                            .is_err()
-                            {
-                                panic!("bind error");
+                        let mut line = line.splitn(2, ' ');
+                        let typ = line.next().unwrap_or("");
+                        let args = line.next().unwrap_or("{}");
+                        match typ {
+                            "Query" => {
+                                let v: Query = serde_json::from_str(args).unwrap();
+                                frontend::query(&v.query, buf).unwrap();
                             }
+                            "Parse" => {
+                                let v: Parse = serde_json::from_str(args).unwrap();
+                                frontend::parse(
+                                    &v.name.unwrap_or_else(|| "".into()),
+                                    &v.query,
+                                    vec![],
+                                    buf,
+                                )
+                                .unwrap();
+                            }
+                            "Sync" => frontend::sync(buf),
+                            "Flush" => frontend::flush(buf),
+                            "Bind" => {
+                                let v: Bind = serde_json::from_str(args).unwrap();
+                                // Parameter values as raw bytes. `binary_values`
+                                // supplies them verbatim, which (together with
+                                // `param_formats`) is what lets a test exercise the
+                                // binary parameter format; otherwise `values` are
+                                // sent as UTF-8 text, matching historical behavior.
+                                let values: Vec<Vec<u8>> = match v.binary_values {
+                                    Some(binary_values) => binary_values,
+                                    None => v
+                                        .values
+                                        .unwrap_or_default()
+                                        .into_iter()
+                                        .map(String::into_bytes)
+                                        .collect(),
+                                };
+                                if frontend::bind(
+                                    &v.portal.unwrap_or_else(|| "".into()),
+                                    &v.statement.unwrap_or_else(|| "".into()),
+                                    v.param_formats.unwrap_or_default(), // formats
+                                    values,                              // values
+                                    |bytes: Vec<u8>, buf| {
+                                        buf.put_slice(&bytes);
+                                        Ok(IsNull::No)
+                                    }, // serializer
+                                    v.result_formats.unwrap_or_default(),
+                                    buf,
+                                )
+                                .is_err()
+                                {
+                                    panic!("bind error");
+                                }
+                            }
+                            "Describe" => {
+                                let v: Describe = serde_json::from_str(args).unwrap();
+                                frontend::describe(
+                                    v.variant.unwrap_or_else(|| "S".into()).as_bytes()[0],
+                                    &v.name.unwrap_or_else(|| "".into()),
+                                    buf,
+                                )
+                                .unwrap();
+                            }
+                            "Execute" => {
+                                let v: Execute = serde_json::from_str(args).unwrap();
+                                frontend::execute(
+                                    &v.portal.unwrap_or_else(|| "".into()),
+                                    v.max_rows.unwrap_or(0),
+                                    buf,
+                                )
+                                .unwrap();
+                            }
+                            "CopyData" => {
+                                let v: String = serde_json::from_str(args).unwrap();
+                                frontend::CopyData::new(v.as_bytes()).unwrap().write(buf);
+                            }
+                            "CopyDone" => {
+                                frontend::copy_done(buf);
+                            }
+                            "CopyFail" => {
+                                let v: String = serde_json::from_str(args).unwrap();
+                                frontend::copy_fail(&v, buf).unwrap();
+                            }
+                            _ => panic!("unknown message type {}", typ),
                         }
-                        "Describe" => {
-                            let v: Describe = serde_json::from_str(args).unwrap();
-                            frontend::describe(
-                                v.variant.unwrap_or_else(|| "S".into()).as_bytes()[0],
-                                &v.name.unwrap_or_else(|| "".into()),
-                                buf,
-                            )
-                            .unwrap();
-                        }
-                        "Execute" => {
-                            let v: Execute = serde_json::from_str(args).unwrap();
-                            frontend::execute(
-                                &v.portal.unwrap_or_else(|| "".into()),
-                                v.max_rows.unwrap_or(0),
-                                buf,
-                            )
-                            .unwrap();
-                        }
-                        "CopyData" => {
-                            let v: String = serde_json::from_str(args).unwrap();
-                            frontend::CopyData::new(v.as_bytes()).unwrap().write(buf);
-                        }
-                        "CopyDone" => {
-                            frontend::copy_done(buf);
-                        }
-                        "CopyFail" => {
-                            let v: String = serde_json::from_str(args).unwrap();
-                            frontend::copy_fail(&v, buf).unwrap();
-                        }
-                        _ => panic!("unknown message type {}", typ),
-                    })
-                    .unwrap();
-                }
+                    }
+                })
+                .unwrap();
                 "".to_string()
             }
             "until" => {

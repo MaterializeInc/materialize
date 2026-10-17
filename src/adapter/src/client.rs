@@ -46,7 +46,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
 use mz_sql::session::vars::{CLUSTER, OwnedVarInput, SystemVars, Var};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{InsertStatement, StatementKind};
+use mz_sql_parser::ast::{ExecuteStatement, InsertStatement, StatementKind};
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
@@ -64,16 +64,16 @@ use crate::coord::read_then_write::DependencyPolicy;
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::frontend_read_then_write::{
-    FrontendWriteAttemptState, FrontendWriteCancellation, contains_mz_now,
+    FrontendWriteAttemptState, FrontendWriteCancellation, build_success_response, contains_mz_now,
     validate_selection_dependencies,
 };
 use crate::metrics::Metrics;
-use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
+use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
 use crate::peek_client::{CoordinatorClient, ExecutionLogging, TakeOver};
 use crate::session::{
-    EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
-    TransactionStatus,
+    BatchLookahead, EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision,
+    TransactionId, TransactionStatus,
 };
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
@@ -891,7 +891,7 @@ impl SessionClient {
         portal_name: String,
         logging: &mut ExecutionLogging,
     ) -> Result<String, AdapterError> {
-        let (stmt, params, outer_logging, outer_lifecycle_timestamps) = {
+        let (stmt, params, outer_logging, outer_lifecycle_timestamps, outer_batch_lookahead) = {
             let session = self.session.as_ref().expect("SessionClient invariant");
             let portal = match session.get_portal_unverified(&portal_name) {
                 Some(p) => p,
@@ -906,6 +906,7 @@ impl SessionClient {
                     portal.parameters.clone(),
                     Arc::clone(&portal.logging),
                     portal.lifecycle_timestamps.clone(),
+                    portal.batch_lookahead,
                 ),
                 None => return Ok(portal_name),
             }
@@ -945,7 +946,14 @@ impl SessionClient {
             TakeOver::UnrolledExecute,
         );
 
-        self.install_inner_portal_for_execute(&catalog, &stmt, &params)
+        let inner_portal = self.install_inner_portal_for_execute(&catalog, &stmt, &params)?;
+        // pgwire read ahead for the EXECUTE, and the decision applies to the
+        // statement it runs.
+        let session = self.session.as_mut().expect("SessionClient invariant");
+        if let Some(portal) = session.get_portal_unverified_mut(&inner_portal) {
+            *portal.batch_lookahead = outer_batch_lookahead;
+        }
+        Ok(inner_portal)
     }
 
     /// Helper for [`Self::unroll_sql_execute`]: plans the outer
@@ -1586,13 +1594,13 @@ impl SessionClient {
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let catalog = self.catalog_snapshot("try_frontend_read_then_write").await;
 
-        let stmt = {
+        let (stmt, batch_lookahead) = {
             let session = self.session.as_ref().expect("SessionClient invariant");
             let portal = match session.get_portal_unverified(portal_name) {
                 Some(portal) => portal,
                 None => return Ok(None), // Portal doesn't exist, fall back
             };
-            portal.stmt.clone()
+            (portal.stmt.clone(), portal.batch_lookahead)
         };
 
         let stmt = match stmt {
@@ -1645,12 +1653,12 @@ impl SessionClient {
 
         // Mirror the coordinator's transaction-state gate in `handle_execute`:
         // in a multi-statement transaction (an implicit batch or an explicit
-        // block), the only DML allowed is an AST-constant INSERT without
-        // RETURNING, which joins the transaction's write ops and commits at
-        // transaction end. All other DML is prohibited because writes on this
-        // path commit immediately and cannot be rolled back at transaction
-        // end. `Failed` transactions pass through, pgwire only admits
-        // COMMIT/ROLLBACK in that state.
+        // block), the only DML allowed is an AST-constant INSERT, which joins
+        // the transaction's write ops and commits at transaction end. All
+        // other DML is prohibited because writes on this path commit
+        // immediately and cannot be rolled back at transaction end. `Failed`
+        // transactions pass through, pgwire only admits COMMIT/ROLLBACK in that
+        // state.
         //
         // An AST-constant source can still plan to a read, so the check on the
         // planned selection further down narrows this.
@@ -1670,15 +1678,24 @@ impl SessionClient {
                 TransactionStatus::Started(_)
                 | TransactionStatus::InTransactionImplicit(_)
                 | TransactionStatus::InTransaction(_) => {
-                    let constant_insert = matches!(
-                        &*stmt,
-                        Statement::Insert(InsertStatement {
-                            source, returning, ..
-                        }) if returning.is_empty() && ConstantVisitor::insert_source(source)
-                    );
-                    if !constant_insert {
+                    if is_read_dependent_write(&stmt) {
                         return Err(prohibited_in_transaction(&stmt));
                     }
+                }
+            }
+        }
+
+        // A read-dependent write commits as it executes, so in a batch it can
+        // run only as the last statement before `Sync`. pgwire read ahead to
+        // find out, see `BatchLookahead`.
+        if is_read_dependent_write(&stmt) {
+            match batch_lookahead {
+                None | Some(BatchLookahead::LastBeforeSync) => {}
+                Some(BatchLookahead::MoreStatements) => {
+                    return Err(not_last_before_sync(&stmt, false));
+                }
+                Some(BatchLookahead::FlushWithoutSync) => {
+                    return Err(not_last_before_sync(&stmt, true));
                 }
             }
         }
@@ -1793,10 +1810,11 @@ impl SessionClient {
         // Handle ReadThenWrite plans or Insert plans.
         let rtw_plan = match plan {
             Plan::ReadThenWrite(rtw_plan) => rtw_plan,
-            Plan::Insert(insert_plan) => {
-                // A constant INSERT without RETURNING is a blind write, handled
-                // here through the coordinator's `insert_constant` helper, which
-                // buffers the rows as session write ops.
+            Plan::Insert(mut insert_plan) => {
+                // A constant INSERT is a blind write, handled here through the
+                // coordinator's `insert_constant` helper, which buffers the rows
+                // as session write ops. Its RETURNING clause is evaluated over
+                // those rows here, so no cluster is involved.
                 //
                 // Deciding that needs HIR lowered to MIR, because a VALUES list
                 // is planned as a `Wrap` call at the HIR level.
@@ -1857,16 +1875,50 @@ impl SessionClient {
                     };
 
                     let inner_mir = optimized_mir.into_inner();
-                    if inner_mir.as_const().is_some() && insert_plan.returning.is_empty() {
+                    // `mz_now()` in RETURNING is left to the RTW validator, which
+                    // reports it with the established error.
+                    let returning_mz_now =
+                        insert_plan.returning.iter().any(|e| e.contains_temporal());
+                    if inner_mir.as_const().is_some() && !returning_mz_now {
                         let session = self.session.as_mut().expect("SessionClient invariant");
+                        let returned_rows = match inner_mir.as_const() {
+                            Some((Ok(rows), _)) if !insert_plan.returning.is_empty() => {
+                                Some(rows.clone())
+                            }
+                            _ => None,
+                        };
                         let result = Coordinator::insert_constant(
                             &catalog,
                             session,
                             insert_plan.id,
                             inner_mir,
-                        );
-
-                        return Ok(Some(result?));
+                        )?;
+                        let Some(rows) = returned_rows else {
+                            return Ok(Some(result));
+                        };
+                        // RETURNING is evaluated after `insert_constant` checked the
+                        // rows' constraints, so a NOT NULL violation is reported
+                        // first, as in PostgreSQL. An error here fails the
+                        // statement, and the rows it staged go with its transaction:
+                        // an error rolls back an implicit transaction and fails an
+                        // explicit one.
+                        let mut returning = std::mem::take(&mut insert_plan.returning);
+                        let prep = ExprPrepOneShot {
+                            logical_time: EvalTime::NotAvailable,
+                            session,
+                            catalog_state: catalog.state(),
+                        };
+                        for expr in &mut returning {
+                            prep.prep_scalar_expr(expr)?;
+                        }
+                        return Ok(Some(build_success_response(
+                            &MutationKind::Insert,
+                            &returning,
+                            &rows,
+                            catalog.system_config().max_result_size(),
+                            session.vars().max_query_result_size(),
+                            session.metrics().row_set_finishing_seconds(),
+                        )?));
                     }
                 }
 
@@ -1971,17 +2023,58 @@ fn is_read_then_write_statement(stmt: &Statement<Raw>) -> bool {
     )
 }
 
-/// Builds the error for DML that cannot run in a transaction block, mirroring
-/// the coordinator's redaction in `handle_execute`: statements that can carry
-/// sensitive literals are redacted because the error message is persisted in
-/// `mz_statement_execution_history`.
+/// Whether a statement is a write whose rows depend on a read: `UPDATE`,
+/// `DELETE`, or an `INSERT` whose source is not constant in the AST.
+///
+/// Such a write commits when it executes, so it cannot share a transaction with
+/// other statements. Everything that keeps it alone must use this predicate, so
+/// that they agree on which statements it covers.
+pub(crate) fn is_read_dependent_write(stmt: &Statement<Raw>) -> bool {
+    match stmt {
+        Statement::Update(_) | Statement::Delete(_) => true,
+        Statement::Insert(InsertStatement { source, .. }) => {
+            !ConstantVisitor::insert_source(source)
+        }
+        _ => false,
+    }
+}
+
+/// Whether `stmt` runs a read-dependent write, itself or through SQL `EXECUTE`
+/// of a prepared statement in `session`. See [`is_read_dependent_write`].
+pub fn runs_read_dependent_write(session: &Session, stmt: &Statement<Raw>) -> bool {
+    match stmt {
+        Statement::Execute(ExecuteStatement { name, .. }) => session
+            .get_prepared_statement_unverified(name.as_str())
+            .and_then(|ps| ps.stmt())
+            .is_some_and(is_read_dependent_write),
+        stmt => is_read_dependent_write(stmt),
+    }
+}
+
+/// Builds the error for a read-dependent write that is not the last statement
+/// before `Sync`. See [`is_read_dependent_write`].
+fn not_last_before_sync(stmt: &Statement<Raw>, before_flush: bool) -> AdapterError {
+    AdapterError::NotLastBeforeSync {
+        op: statement_for_error(stmt),
+        before_flush,
+    }
+}
+
+/// Builds the error for DML that cannot run in a transaction block.
 fn prohibited_in_transaction(stmt: &Statement<Raw>) -> AdapterError {
-    let op = if StatementKind::from(stmt).is_sensitive() {
+    AdapterError::OperationProhibitsTransaction(statement_for_error(stmt))
+}
+
+/// Renders a statement for an error message, mirroring the coordinator's
+/// redaction in `handle_execute`: statements that can carry sensitive literals
+/// are redacted because the error message is persisted in
+/// `mz_statement_execution_history`.
+fn statement_for_error(stmt: &Statement<Raw>) -> String {
+    if StatementKind::from(stmt).is_sensitive() {
         stmt.to_ast_string_redacted()
     } else {
         stmt.to_string()
-    };
-    AdapterError::OperationProhibitsTransaction(op)
+    }
 }
 
 impl Drop for SessionClient {

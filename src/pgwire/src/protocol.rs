@@ -20,10 +20,10 @@ use byteorder::{ByteOrder, NetworkEndian};
 use csv_core::ReadRecordResult;
 use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::Itertools;
-use mz_adapter::client::{RecordFirstRowStream, redact_sql_for_logging};
+use mz_adapter::client::{RecordFirstRowStream, redact_sql_for_logging, runs_read_dependent_write};
 use mz_adapter::session::{
-    EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState, Session,
-    SessionConfig, TransactionStatus,
+    BatchLookahead, EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut,
+    PortalState, Session, SessionConfig, TransactionStatus,
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
@@ -70,7 +70,7 @@ use tracing::{Instrument, debug, debug_span, info, warn};
 use uuid::Uuid;
 
 use crate::codec::{
-    FramedConn, decode_password, decode_sasl_initial_response, decode_sasl_response,
+    FramedConn, Peeked, decode_password, decode_sasl_initial_response, decode_sasl_response,
 };
 use crate::message::{
     self, BackendMessage, SASLServerFinalMessage, SASLServerFinalMessageKinds,
@@ -989,6 +989,13 @@ where
                 portal_name,
                 max_rows,
             }) => {
+                // Reading ahead may wait for the client, which is not time the
+                // statement spends.
+                let received = if self.read_ahead_in_batch(&portal_name).await? {
+                    SYSTEM_TIME()
+                } else {
+                    received
+                };
                 let max_rows = match usize::try_from(max_rows) {
                     Ok(0) | Err(_) => ExecuteCount::All, // If `max_rows < 0`, no limit.
                     Ok(n) => ExecuteCount::Count(n),
@@ -1081,6 +1088,84 @@ where
             .observe(recv_scheduling_delay_ms);
 
         Ok(next_state)
+    }
+
+    /// When the portal runs a read-dependent write that would open an implicit
+    /// transaction, reads ahead in the batch and records on the portal what
+    /// follows the write's `Execute`, for the adapter to decide whether the
+    /// write may run (see `BatchLookahead`). Returns whether it read ahead.
+    ///
+    /// Waiting for the next message cannot deadlock a conforming client: after
+    /// an `Execute` it must send `Sync`, `Flush`, or more commands before it may
+    /// wait for results. After a `Flush` it may wait, so from there on only
+    /// messages that have already arrived count.
+    async fn read_ahead_in_batch(&mut self, portal_name: &str) -> Result<bool, io::Error> {
+        // Messages that execute nothing and that a client may send between a
+        // statement and `Sync` are skipped, up to this many. Holding more would
+        // let a client make us buffer without bound, so past that the write
+        // counts as followed by more statements.
+        const MAX_SKIPPED: usize = 64;
+
+        let session = self.adapter_client.session();
+        let runs_write = match session.get_portal_unverified(portal_name) {
+            Some(portal) if matches!(portal.state, PortalState::NotStarted) => portal
+                .stmt
+                .as_deref()
+                .is_some_and(|stmt| runs_read_dependent_write(session, stmt)),
+            _ => false,
+        };
+        // Elsewhere the transaction's admission rules decide. A read that
+        // started the transaction commits before this statement runs.
+        let txn = session.transaction();
+        let opens_implicit_txn = match txn {
+            TransactionStatus::Default => true,
+            TransactionStatus::Started(_) => self.txn_needs_commit || !txn.contains_ops(),
+            TransactionStatus::InTransactionImplicit(_)
+            | TransactionStatus::InTransaction(_)
+            | TransactionStatus::Failed(_) => false,
+        };
+        if !runs_write
+            || !opens_implicit_txn
+            || !self
+                .adapter_client
+                .extended_protocol_implicit_transaction_enabled()
+                .await
+        {
+            return Ok(false);
+        }
+
+        let mut after_flush = false;
+        let mut lookahead = BatchLookahead::MoreStatements;
+        for n in 0..=MAX_SKIPPED {
+            match self.conn.peek(n, !after_flush).await? {
+                Peeked::Message(FrontendMessage::Sync) => {
+                    lookahead = BatchLookahead::LastBeforeSync;
+                    break;
+                }
+                Peeked::Message(FrontendMessage::Flush) => after_flush = true,
+                Peeked::Message(
+                    FrontendMessage::Parse { .. }
+                    | FrontendMessage::Bind { .. }
+                    | FrontendMessage::DescribeStatement { .. }
+                    | FrontendMessage::DescribePortal { .. }
+                    | FrontendMessage::CloseStatement { .. }
+                    | FrontendMessage::ClosePortal { .. },
+                ) => {}
+                Peeked::NotArrived => {
+                    lookahead = BatchLookahead::FlushWithoutSync;
+                    break;
+                }
+                Peeked::Message(_) | Peeked::Eof => break,
+            }
+        }
+        if let Some(portal) = self
+            .adapter_client
+            .session()
+            .get_portal_unverified_mut(portal_name)
+        {
+            *portal.batch_lookahead = Some(lookahead);
+        }
+        Ok(true)
     }
 
     async fn advance_drain(&mut self) -> Result<State, io::Error> {
