@@ -283,6 +283,9 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_blob_hedged_get_enabled", "true", ["true", "false"]
         ),
+        # 'on' because CI's S3 endpoint is not GCS, so 'gcs' would never use
+        # the pool.
+        VariableSystemParameter("persist_blob_http_pool", "on", ["off", "gcs", "on"]),
         # 10ms (vs the 2s production default) makes hedges actually fire in
         # every CI run; 0s makes every blob get hedge under randomized seeds.
         VariableSystemParameter(
