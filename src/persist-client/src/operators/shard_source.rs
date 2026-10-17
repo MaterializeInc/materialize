@@ -128,6 +128,24 @@ impl ErrorHandler {
             }
         }
     }
+
+    /// Signal that the requested `as_of` is not beyond the shard's since. This function never
+    /// returns. Unlike [`Self::report_and_stop`], it does not halt the process.
+    pub async fn report_since_violation_and_stop(&self, error: anyhow::Error) -> ! {
+        match self {
+            ErrorHandler::Halt(name) => {
+                // A since violation comes either from a dataflow the controller has dropped
+                // already, which takes this operator down with it, or from a controller that let
+                // the since pass the `as_of` of a live dataflow. Halting helps in neither case,
+                // because a restarted process is handed the same `as_of` for a live dataflow. The
+                // caller still holds its capability at the `as_of`, so downstream operators never
+                // observe progress past times they have not seen data for.
+                tracing::error!("cannot serve as_of in {name}: {error:#}");
+                std::future::pending().await
+            }
+            ErrorHandler::Signal(_) => self.report_and_stop(error).await,
+        }
+    }
 }
 
 /// Creates a new source that reads from a persist shard, distributing the work
@@ -439,7 +457,7 @@ where
                 SnapshotMode::Include => match read.snapshot(as_of.clone()).await {
                     Ok(parts) => parts,
                     Err(e) => error_handler
-                        .report_and_stop(anyhow!(
+                        .report_since_violation_and_stop(anyhow!(
                             "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
                         ))
                         .await,
@@ -468,7 +486,7 @@ where
             Ok(handle) => listen.insert(handle),
             Err(e) => {
                 error_handler
-                    .report_and_stop(anyhow!(
+                    .report_since_violation_and_stop(anyhow!(
                         "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
                     ))
                     .await
@@ -1383,6 +1401,71 @@ mod tests {
 
         assert!(errored);
         assert_eq!(frontier, Antichain::from_elem(1));
+    }
+
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // too slow
+    async fn test_shard_source_since_violation_does_not_halt() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let shard_id = ShardId::new();
+
+        let mut write = persist_client
+            .open_writer::<String, String, u64, u64>(
+                shard_id,
+                Arc::new(StringSchema),
+                Arc::new(StringSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("invalid usage");
+        let data = [(("k1".to_owned(), "v1".to_owned()), 0u64, 1u64)];
+        write.expect_compare_and_append(&data[..], 0, 5).await;
+        initialize_shard(&persist_client, shard_id, Antichain::from_elem(3)).await;
+
+        let frontier = timely::execute::execute_directly(move |worker| {
+            let (probe, _token) = worker.dataflow::<u64, _, _>(|outer| {
+                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                    let transformer = move |_, descs, _| (descs, vec![]);
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                        outer,
+                        scope,
+                        "test_source",
+                        move || std::future::ready(persist_client.clone()),
+                        shard_id,
+                        Some(Antichain::from_elem(1)),
+                        SnapshotMode::Include,
+                        Antichain::new(),
+                        Some(transformer),
+                        Arc::new(StringSchema),
+                        Arc::new(StringSchema),
+                        FilterResult::keep_all,
+                        false.then_some(|| unreachable!()),
+                        async {},
+                        ErrorHandler::Halt("test_source"),
+                    );
+                    (stream.leave(outer), tokens)
+                });
+
+                let probe = ProbeHandle::new();
+                let _stream = stream.probe_with(&probe);
+                (probe, token)
+            });
+
+            // Give the source time to open its reader and hit the since violation. Halting would
+            // exit the test process.
+            let deadline = Instant::now() + std::time::Duration::from_secs(2);
+            while Instant::now() < deadline {
+                worker.step_or_park(Some(std::time::Duration::from_millis(1)));
+            }
+
+            probe.with_frontier(|f| f.to_owned())
+        });
+
+        assert_eq!(
+            frontier,
+            Antichain::from_elem(1),
+            "source must stay frozen at the as_of"
+        );
     }
 
     /// Regression test for the `shard_source_fetch` freeze path: a blob that
