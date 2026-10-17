@@ -1189,11 +1189,13 @@ fn test_statement_logging_read_then_write_outcomes() {
             false,
             Some(1_i64),
         ),
+        // Constant, so its RETURNING is evaluated in environmentd: an empty
+        // result set, as in PostgreSQL.
         (
             "INSERT INTO statement_logging_rtw_t SELECT 101 WHERE false RETURNING x",
             false,
             false,
-            None,
+            Some(0),
         ),
         (
             "DELETE FROM statement_logging_rtw_t WHERE x > 1000",
@@ -1271,8 +1273,8 @@ ORDER BY mseh.began_at DESC",
         assert_eq!(row.get::<_, Option<i64>>(4), rows_returned, "{sql}");
         let result_size: Option<i64> = row.get(5);
         assert_eq!(result_size.is_some(), rows_returned.is_some(), "{sql}");
-        if let Some(result_size) = result_size {
-            assert!(result_size > 0, "{sql}");
+        if let (Some(result_size), Some(rows_returned)) = (result_size, rows_returned) {
+            assert_eq!(result_size > 0, rows_returned > 0, "{sql}");
         }
         assert_eq!(
             row.get::<_, Option<String>>(6).as_deref(),

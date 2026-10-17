@@ -64,11 +64,11 @@ use crate::coord::read_then_write::DependencyPolicy;
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::frontend_read_then_write::{
-    FrontendWriteAttemptState, FrontendWriteCancellation, contains_mz_now,
+    FrontendWriteAttemptState, FrontendWriteCancellation, build_success_response, contains_mz_now,
     validate_selection_dependencies,
 };
 use crate::metrics::Metrics;
-use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
+use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
 use crate::peek_client::{CoordinatorClient, ExecutionLogging, TakeOver};
 use crate::session::{
@@ -1645,12 +1645,12 @@ impl SessionClient {
 
         // Mirror the coordinator's transaction-state gate in `handle_execute`:
         // in a multi-statement transaction (an implicit batch or an explicit
-        // block), the only DML allowed is an AST-constant INSERT without
-        // RETURNING, which joins the transaction's write ops and commits at
-        // transaction end. All other DML is prohibited because writes on this
-        // path commit immediately and cannot be rolled back at transaction
-        // end. `Failed` transactions pass through, pgwire only admits
-        // COMMIT/ROLLBACK in that state.
+        // block), the only DML allowed is an AST-constant INSERT, which joins
+        // the transaction's write ops and commits at transaction end. All
+        // other DML is prohibited because writes on this path commit
+        // immediately and cannot be rolled back at transaction end. `Failed`
+        // transactions pass through, pgwire only admits COMMIT/ROLLBACK in that
+        // state.
         //
         // An AST-constant source can still plan to a read, so the check on the
         // planned selection further down narrows this.
@@ -1672,9 +1672,8 @@ impl SessionClient {
                 | TransactionStatus::InTransaction(_) => {
                     let constant_insert = matches!(
                         &*stmt,
-                        Statement::Insert(InsertStatement {
-                            source, returning, ..
-                        }) if returning.is_empty() && ConstantVisitor::insert_source(source)
+                        Statement::Insert(InsertStatement { source, .. })
+                            if ConstantVisitor::insert_source(source)
                     );
                     if !constant_insert {
                         return Err(prohibited_in_transaction(&stmt));
@@ -1793,10 +1792,11 @@ impl SessionClient {
         // Handle ReadThenWrite plans or Insert plans.
         let rtw_plan = match plan {
             Plan::ReadThenWrite(rtw_plan) => rtw_plan,
-            Plan::Insert(insert_plan) => {
-                // A constant INSERT without RETURNING is a blind write, handled
-                // here through the coordinator's `insert_constant` helper, which
-                // buffers the rows as session write ops.
+            Plan::Insert(mut insert_plan) => {
+                // A constant INSERT is a blind write, handled here through the
+                // coordinator's `insert_constant` helper, which buffers the rows
+                // as session write ops. Its RETURNING clause is evaluated over
+                // those rows here, so no cluster is involved.
                 //
                 // Deciding that needs HIR lowered to MIR, because a VALUES list
                 // is planned as a `Wrap` call at the HIR level.
@@ -1857,16 +1857,50 @@ impl SessionClient {
                     };
 
                     let inner_mir = optimized_mir.into_inner();
-                    if inner_mir.as_const().is_some() && insert_plan.returning.is_empty() {
+                    // `mz_now()` in RETURNING is left to the RTW validator, which
+                    // reports it with the established error.
+                    let returning_mz_now =
+                        insert_plan.returning.iter().any(|e| e.contains_temporal());
+                    if inner_mir.as_const().is_some() && !returning_mz_now {
                         let session = self.session.as_mut().expect("SessionClient invariant");
+                        let returned_rows = match inner_mir.as_const() {
+                            Some((Ok(rows), _)) if !insert_plan.returning.is_empty() => {
+                                Some(rows.clone())
+                            }
+                            _ => None,
+                        };
                         let result = Coordinator::insert_constant(
                             &catalog,
                             session,
                             insert_plan.id,
                             inner_mir,
-                        );
-
-                        return Ok(Some(result?));
+                        )?;
+                        let Some(rows) = returned_rows else {
+                            return Ok(Some(result));
+                        };
+                        // RETURNING is evaluated after `insert_constant` checked the
+                        // rows' constraints, so a NOT NULL violation is reported
+                        // first, as in PostgreSQL. An error here fails the
+                        // statement, and the rows it staged go with its transaction:
+                        // an error rolls back an implicit transaction and fails an
+                        // explicit one.
+                        let mut returning = std::mem::take(&mut insert_plan.returning);
+                        let prep = ExprPrepOneShot {
+                            logical_time: EvalTime::NotAvailable,
+                            session,
+                            catalog_state: catalog.state(),
+                        };
+                        for expr in &mut returning {
+                            prep.prep_scalar_expr(expr)?;
+                        }
+                        return Ok(Some(build_success_response(
+                            &MutationKind::Insert,
+                            &returning,
+                            &rows,
+                            catalog.system_config().max_result_size(),
+                            session.vars().max_query_result_size(),
+                            session.metrics().row_set_finishing_seconds(),
+                        )?));
                     }
                 }
 

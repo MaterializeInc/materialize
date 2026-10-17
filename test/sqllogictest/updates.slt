@@ -135,14 +135,20 @@ SELECT * FROM t1
 statement error column "t1\.x" does not exist
 UPDATE t1 AS m SET x = 5 WHERE t1.x < 10
 
-# Regression for database-issues#7334
+# Regression for database-issues#7334. An INSERT of constant values with
+# RETURNING may join a transaction (SQL-771).
 simple
 BEGIN;
 SELECT 1;
 INSERT INTO t VALUES (1) RETURNING 0;
 COMMIT;
 ----
-db error: ERROR: INSERT INTO t VALUES ('<REDACTED>') RETURNING '<REDACTED>' cannot be run inside a transaction block
+COMPLETE 0
+1
+COMPLETE 1
+0
+COMPLETE 1
+COMPLETE 0
 
 # Regression for non-constant VALUES
 # VALUES cannot contain a query that references a table.
