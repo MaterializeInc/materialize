@@ -162,7 +162,7 @@ use timely::worker::Worker as TimelyWorker;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::extensions::arrange::{ArrangementBatcher, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
@@ -174,7 +174,7 @@ use crate::render::columnar::{
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
-use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, MzTimestamp};
+use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, MzTimestamp, RowRowAgent};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 
@@ -1744,6 +1744,16 @@ pub trait MaybeBucketByTime: Timestamp + ColumnarData {
         for<'a> ::columnar::Ref<'a, Diff>: Ord,
         for<'a> <(D, Self, Diff) as ColumnarData>::Container:
             ColumnarPush<&'a (D, Self, Diff)> + ColumnarPush<::columnar::Ref<'a, (D, Self, Diff)>>;
+
+    /// Arranges the ok stream of an `ArrangeBy`, parking future updates in the batcher where
+    /// the timestamp supports it.
+    fn arrange_row_row<'scope>(
+        stream: Stream<'scope, Self, Column<((Row, Row), Self, Diff)>>,
+        name: &str,
+        batcher: ArrangementBatcher,
+    ) -> Arranged<'scope, RowRowAgent<Self, Diff>>
+    where
+        Self: RenderTimestamp;
 }
 
 impl RenderTimestamp for mz_repr::Timestamp {
@@ -1768,6 +1778,17 @@ impl RenderTimestamp for mz_repr::Timestamp {
 }
 
 impl MaybeBucketByTime for mz_repr::Timestamp {
+    fn arrange_row_row<'scope>(
+        stream: Stream<'scope, Self, Column<((Row, Row), Self, Diff)>>,
+        name: &str,
+        batcher: ArrangementBatcher,
+    ) -> Arranged<'scope, RowRowAgent<Self, Diff>>
+    where
+        Self: RenderTimestamp,
+    {
+        crate::render::context::arrange_row_row_bucketed(stream, name, batcher)
+    }
+
     fn maybe_apply_temporal_bucketing<'scope, D>(
         stream: Stream<'scope, Self, Column<(D, Self, Diff)>>,
         as_of: Antichain<mz_repr::Timestamp>,
@@ -1837,6 +1858,17 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
 }
 
 impl MaybeBucketByTime for Product<mz_repr::Timestamp, PointStamp<u64>> {
+    fn arrange_row_row<'scope>(
+        stream: Stream<'scope, Self, Column<((Row, Row), Self, Diff)>>,
+        name: &str,
+        batcher: ArrangementBatcher,
+    ) -> Arranged<'scope, RowRowAgent<Self, Diff>>
+    where
+        Self: RenderTimestamp,
+    {
+        crate::render::context::arrange_row_row_plain(stream, name, batcher)
+    }
+
     fn maybe_apply_temporal_bucketing<'scope, D>(
         stream: Stream<'scope, Self, Column<(D, Self, Diff)>>,
         _as_of: Antichain<mz_repr::Timestamp>,

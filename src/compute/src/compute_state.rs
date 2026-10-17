@@ -392,6 +392,11 @@ impl ComputeState {
 
         self.linear_join_spec = LinearJoinSpec::from_config(config);
 
+        let theta = TEMPORAL_BUCKETING_SUMMARY.get(config).as_millis();
+        mz_timely_util::temporal::batcher::set_temporal_batcher_theta(
+            u64::try_from(theta).unwrap_or(u64::MAX),
+        );
+
         if ENABLE_LGALLOC.get(config) {
             if let Some(path) = &self.context.scratch_directory {
                 let clear_bytes = LGALLOC_SLOW_CLEAR_BYTES.get(config);
