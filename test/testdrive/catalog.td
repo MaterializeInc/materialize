@@ -513,10 +513,8 @@ name                           comment
 mz_array_types                 ""
 mz_base_types                  ""
 mz_cluster_replica_sizes       ""
-mz_columns                     ""
 mz_egress_ips                  ""
 mz_functions                   ""
-mz_index_columns               ""
 mz_list_types                  ""
 mz_map_types                   ""
 mz_operators                   ""
@@ -541,10 +539,12 @@ mz_audit_events       mz_catalog_server   ""
 mz_aws_privatelink_connections mz_catalog_server ""
 mz_clusters           mz_catalog_server   ""
 mz_cluster_replicas   mz_catalog_server   ""
+mz_columns            mz_catalog_server   ""
 mz_connections        mz_catalog_server   ""
 mz_databases          mz_catalog_server   ""
 mz_default_privileges mz_catalog_server   ""
 mz_iceberg_sinks      mz_catalog_server   ""
+mz_index_columns      mz_catalog_server   ""
 mz_indexes            mz_catalog_server   ""
 mz_kafka_connections  mz_catalog_server   ""
 mz_kafka_sinks        mz_catalog_server   ""
@@ -619,6 +619,8 @@ mz_webhook_sources                       ""
 name                                     comment
 ------------------------------------------------
 mz_activity_log_thinned                  ""
+mz_builtin_columns                       ""
+mz_builtin_index_columns                 ""
 mz_builtin_indexes                       ""
 mz_builtin_log_indexes                   ""
 mz_builtin_materialized_views            ""
@@ -840,7 +842,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-25
+23
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
