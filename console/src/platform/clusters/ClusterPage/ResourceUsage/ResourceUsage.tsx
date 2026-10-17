@@ -49,6 +49,8 @@ import { capitalizeSentence } from "~/util";
 import { formatPercentage } from "~/utils/format";
 import { buildXYGraphLayoutProps } from "~/utils/graph";
 
+import { WorkerCpuDrawer } from "../WorkerCpu/WorkerCpuDrawer";
+import { WorkerReplica } from "../WorkerCpu/workerCpuModel";
 import { ProcessesDrawer, ProcessReplica } from "./ProcessesDrawer";
 import {
   CpuChart,
@@ -595,6 +597,30 @@ export const ResourceUsage = ({ cluster }: ResourceUsageProps) => {
     [cluster.replicas, allocationsBySize, colorMap, colors.lineGraph],
   );
 
+  const [isWorkersOpen, setIsWorkersOpen] = React.useState(false);
+  // Skew needs more than one worker, so single-worker sizes get no button.
+  // Memoized because the drawer's object table is memoized on it.
+  const workerReplicas = React.useMemo(
+    () =>
+      cluster.replicas.flatMap(({ id, name, size }): WorkerReplica[] => {
+        const allocation = size ? allocationsBySize?.get(size) : undefined;
+        if (!size || !allocation) return [];
+        return allocation.processes * allocation.workers > 1
+          ? [
+              {
+                id,
+                name,
+                size,
+                processes: allocation.processes,
+                workersPerProcess: allocation.workers,
+                cpuNanoCoresPerProcess: allocation.cpuNanoCores,
+              },
+            ]
+          : [];
+      }),
+    [cluster.replicas, allocationsBySize],
+  );
+
   let body: React.ReactNode;
   if (history.isError) {
     body = <ErrorBox message={CLUSTERS_FETCH_ERROR_MESSAGE} />;
@@ -635,14 +661,27 @@ export const ResourceUsage = ({ cluster }: ResourceUsageProps) => {
             isStatusError={isStatusError}
             isHydrationError={isHydrationError}
             cpuHeaderAction={
-              processReplicas.length > 0 && (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={() => setIsProcessesOpen(true)}
-                >
-                  Processes
-                </Button>
+              (processReplicas.length > 0 || workerReplicas.length > 0) && (
+                <HStack spacing={2}>
+                  {processReplicas.length > 0 && (
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() => setIsProcessesOpen(true)}
+                    >
+                      Processes
+                    </Button>
+                  )}
+                  {workerReplicas.length > 0 && (
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() => setIsWorkersOpen(true)}
+                    >
+                      Workers
+                    </Button>
+                  )}
+                </HStack>
               )
             }
           />
@@ -718,6 +757,14 @@ export const ResourceUsage = ({ cluster }: ResourceUsageProps) => {
         onClose={() => setIsProcessesOpen(false)}
         replicas={processReplicas}
         timePeriodMinutes={timePeriodMinutes}
+      />
+      <WorkerCpuDrawer
+        isOpen={isWorkersOpen}
+        onClose={() => setIsWorkersOpen(false)}
+        clusterId={cluster.id}
+        clusterName={cluster.name}
+        replicas={workerReplicas}
+        unhydratedObjectCounts={unhydratedObjectCounts}
       />
     </Card>
   );

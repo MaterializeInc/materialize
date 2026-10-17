@@ -32,6 +32,8 @@ export interface ProcessMetricsSample {
 /** A size's process count and each process's CPU, memory and disk allocation. */
 export interface SizeAllocation {
   processes: number;
+  /** Timely workers per process. */
+  workers: number;
   cpuNanoCores: number;
   memoryBytes: number;
   diskBytes: number;
@@ -96,6 +98,7 @@ export function buildReplicaSizeAllocationsQuery({
     .select([
       "size",
       sql<number>`processes::float8`.as("processes"),
+      sql<number>`workers::float8`.as("workers"),
       sql<number>`cpu_nano_cores::float8`.as("cpuNanoCores"),
       sql<number>`memory_bytes::float8`.as("memoryBytes"),
       sql<number>`disk_bytes::float8`.as("diskBytes"),

@@ -20,6 +20,7 @@ import {
 const MINUTE = 60_000;
 const ALLOCATION = {
   processes: 3,
+  workers: 1,
   cpuNanoCores: 1e9,
   memoryBytes: 1000,
   diskBytes: 0,
