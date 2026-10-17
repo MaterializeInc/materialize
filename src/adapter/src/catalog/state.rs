@@ -303,10 +303,12 @@ impl TemporaryNamespaces {
             .and_then(|namespace| namespace.schema.as_mut())
     }
 
-    pub(super) fn schemas(&self) -> impl Iterator<Item = &Schema> {
-        self.by_conn
-            .values()
-            .filter_map(|namespace| namespace.schema.as_ref())
+    pub(super) fn schemas_with_connections(
+        &self,
+    ) -> impl Iterator<Item = (&ConnectionId, &Schema)> {
+        self.by_conn.iter().filter_map(|(conn_id, namespace)| {
+            namespace.schema.as_ref().map(|schema| (conn_id, schema))
+        })
     }
 
     pub(super) fn conn_for_uuid(&self, uuid: &Uuid) -> Option<&ConnectionId> {
