@@ -16,8 +16,8 @@
 //! a seal's frontier catches up with their bucket.
 //!
 //! The batcher does not know the dataflow's `as_of`, so the snapshot and its future tail all
-//! arrive before the first seal. The first seal rebuilds the inner batcher, moving its future
-//! tail into the chain.
+//! arrive before the first seal. The first seal with a far bound rebuilds the inner batcher,
+//! moving its future tail into the chain.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -182,10 +182,10 @@ where
 /// Counters for measuring the wrapper.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TemporalBatcherStats {
-    /// Updates the first-seal rebuild moved out of the old inner batcher.
-    pub first_seal_touched: usize,
-    /// Updates the first-seal rebuild parked in the chain.
-    pub first_seal_parked: usize,
+    /// Updates the rebuild moved out of the old inner batcher.
+    pub rebuild_touched: usize,
+    /// Updates the rebuild parked in the chain.
+    pub rebuild_parked: usize,
 }
 
 /// A [`Batcher`] that parks updates at least θ in advance of the last sealed frontier in a
@@ -212,7 +212,7 @@ where
     theta: u64,
     /// The key at or after which pushed updates park in the chain. `None` parks nothing.
     far_bound: Option<T::Key>,
-    sealed: bool,
+    rebuilt: bool,
     lower: Antichain<T>,
     frontier: Antichain<T>,
     logger: Option<Logger>,
@@ -253,7 +253,7 @@ where
             chain: BucketChain::new(TimeMajorBucket::new(logger.clone(), operator_id)),
             theta,
             far_bound: None,
-            sealed: false,
+            rebuilt: false,
             lower: Antichain::from_elem(T::minimum()),
             frontier: Antichain::new(),
             logger,
@@ -330,14 +330,14 @@ where
         let (readied, _) = old.seal(upper.clone());
         let (near, _) = old.seal(Antichain::from_elem(T::lower_of(far)));
         for chunk in near {
-            self.stats.first_seal_touched += chunk.update_count();
+            self.stats.rebuild_touched += chunk.update_count();
             self.inner.push_into(chunk);
         }
         let (rest, _) = old.seal(Antichain::new());
         for chunk in rest {
             let count = chunk.update_count();
-            self.stats.first_seal_touched += count;
-            self.stats.first_seal_parked += count;
+            self.stats.rebuild_touched += count;
+            self.stats.rebuild_parked += count;
             chunk.partition_into(|_| true, &mut self.far, &mut self.near);
             self.park_far();
         }
@@ -386,12 +386,17 @@ where
             .as_ref()
             .and_then(|edge| <T::Key as Timestamp>::Summary::from(self.theta).results_in(edge));
 
+        // Until a seal yields a far bound, nothing parks and the inner batcher holds every
+        // update, including a hydration tail, so the rebuild waits for the first seal that has
+        // one. NOTE: with advancing uppers, a seal without an inner-minimum element is never
+        // followed by one with, because `lower_of(k)` is at or after an earlier element only if
+        // that element is inner-minimum too. Waiting only costs a check.
         let mut rebuilt = None;
-        if !self.sealed {
-            self.sealed = true;
-            if let Some(far) = &far_bound {
-                rebuilt = Some(self.rebuild(&upper, far));
-            }
+        if !self.rebuilt
+            && let Some(far) = &far_bound
+        {
+            self.rebuilt = true;
+            rebuilt = Some(self.rebuild(&upper, far));
         }
 
         // Peeling and restoring an empty chain only splits empty buckets.

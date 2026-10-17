@@ -174,9 +174,9 @@ fn bench_first_seal(c: &mut Criterion) {
         let retained = TAIL;
         eprintln!(
             "first_seal θ={theta}: touched {} parked {} retained F {retained} touched/F {:.2}",
-            stats.first_seal_touched,
-            stats.first_seal_parked,
-            f64::from(u32::try_from(stats.first_seal_touched).expect("fits"))
+            stats.rebuild_touched,
+            stats.rebuild_parked,
+            f64::from(u32::try_from(stats.rebuild_touched).expect("fits"))
                 / f64::from(u32::try_from(retained).expect("fits")),
         );
         group.bench_with_input(BenchmarkId::new("wrapped", theta), &theta, |b, &theta| {

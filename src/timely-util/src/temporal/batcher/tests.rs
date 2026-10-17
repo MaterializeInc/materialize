@@ -265,7 +265,7 @@ fn hydration_matches_plain() {
     let steps = hydration(1_000, 20_000, 100_000, 1_000, 20);
     for theta in [0, 1_000, 10_000] {
         let stats = check_arm::<ColumnArm<u64>, _>(&steps, theta);
-        assert!(stats.first_seal_parked > 0, "θ = {theta}: nothing parked");
+        assert!(stats.rebuild_parked > 0, "θ = {theta}: nothing parked");
         check_arm::<ChunkArm<u64>, _>(&steps, theta);
         check_arm::<ColumnationArm<u64>, _>(&steps, theta);
     }
@@ -386,6 +386,46 @@ fn product_edge_cases_match_plain() {
     ];
     for theta in [0, 1, 5, 100] {
         check_all2(&steps, theta);
+    }
+}
+
+/// A first upper without an inner-minimum element parks nothing, and the tail it does not
+/// release stays in the inner batcher. Advancing uppers cannot regain such an element.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn product_upper_without_inner_minimum_parks_nothing() {
+    let tail: Vec<_> = (0..1_000u64)
+        .map(|i| (i % 7, t2(100 + i, 3 + i % 3), 1))
+        .collect();
+    let steps = vec![
+        Step::Push(tail),
+        seal2(&[(5, 3)]),
+        seal2(&[(6, 3), (8, 4)]),
+        seal2(&[(500, 4)]),
+        seal_all(),
+    ];
+    for theta in [0, 10] {
+        let stats = check_all2(&steps, theta);
+        assert_eq!(stats.rebuild_touched, 0, "θ = {theta}: {stats:?}");
+    }
+}
+
+/// A first upper with an inner-minimum element rebuilds and parks the tail.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)]
+fn product_first_upper_with_inner_minimum_parks_tail() {
+    let tail: Vec<_> = (0..1_000u64)
+        .map(|i| (i % 7, t2(100 + i, i % 3), 1))
+        .collect();
+    let steps = vec![
+        Step::Push(tail),
+        seal2(&[(5, 3), (10, 0)]),
+        seal2(&[(500, 0)]),
+        seal_all(),
+    ];
+    for theta in [0, 10] {
+        let stats = check_all2(&steps, theta);
+        assert_eq!(stats.rebuild_parked, 1_000, "θ = {theta}: {stats:?}");
     }
 }
 
