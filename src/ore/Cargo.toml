@@ -37,6 +37,7 @@ ipnet.workspace = true
 itertools.workspace = true
 lgalloc = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }
+mz-alloc-track = { path = "../alloc-track", optional = true }
 mz-ore-proc = { path = "../ore-proc", default-features = false }
 num.workspace = true
 num-traits = { workspace = true, optional = true }
@@ -94,6 +95,7 @@ libc = { workspace = true }
 
 [dev-dependencies]
 anyhow.workspace = true
+backtrace.workspace = true
 criterion.workspace = true
 lz4_flex.workspace = true
 mz-alloc-default = { path = "../alloc-default" }
@@ -156,10 +158,16 @@ proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
 pager = ["dep:bytemuck", "libc", "rand", "dep:tracing"]
 pool = ["dep:bytemuck", "libc", "dep:tracing"]
+# Whether the buffer pool reports its allocations to the allocation tracker.
+alloc-track = ["dep:mz-alloc-track"]
 
 [[test]]
 name = "future"
 required-features = ["async", "panic"]
+
+[[test]]
+name = "alloc_track"
+required-features = ["alloc-track", "pool"]
 
 [[test]]
 name = "panic"

@@ -277,7 +277,11 @@ impl SwapExtent {
 
             let (ptr, alloc_size, backing) = match arena.alloc(comp_len) {
                 Some((class, slot)) => (
-                    arena.regions[class].slot_ptr(slot),
+                    {
+                        let ptr = arena.regions[class].slot_ptr(slot);
+                        super::track_alloc(ptr, comp_len, true);
+                        ptr
+                    },
                     arena.classes[class],
                     Backing::Arena {
                         arena: Arc::clone(arena),
@@ -464,6 +468,7 @@ impl Drop for SwapExtent {
     fn drop(&mut self) {
         match &self.backing {
             Backing::Arena { arena, class, slot } => {
+                super::track_free(self.ptr);
                 // Discarding the pages also drops any copy on the swap
                 // device (`MADV_DONTNEED` frees an anonymous range's swap
                 // entries), so the slot returns to the free list with no
