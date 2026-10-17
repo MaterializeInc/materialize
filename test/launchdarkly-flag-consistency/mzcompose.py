@@ -158,6 +158,7 @@ SESSION_VARIABLES = {
     "idle_in_transaction_session_timeout",
     "timezone",
     "transaction_isolation",
+    "max_query_heap_size",
     "max_query_result_size",
     # Pseudo-variables added by SessionVars::iter.
     "mz_version",

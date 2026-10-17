@@ -958,7 +958,8 @@ impl PeekClient {
         let kind = plan.kind.clone();
         let returning = plan.returning.clone();
 
-        let (df_desc, df_meta) = global_lir_plan.unapply();
+        let (mut df_desc, df_meta) = global_lir_plan.unapply();
+        df_desc.heap_size_limit = session.vars().max_query_heap_size();
 
         crate::coord::sequencer::emit_optimizer_notices(
             &**catalog,
@@ -2031,6 +2032,10 @@ fn process_message(
             // means a write is coming, nothing at all means there is none.
             let ready_to_write = saw_progress && !state.is_empty();
             ProcessResult::Continue { ready_to_write }
+        }
+        // The limit names a session variable the user can raise, so it keeps its SQLSTATE.
+        PeekResponseUnary::Error(e @ AdapterError::QueryHeapSizeLimitExceeded { .. }) => {
+            ProcessResult::Error(e)
         }
         PeekResponseUnary::Error(e) => {
             ProcessResult::Error(AdapterError::Unstructured(anyhow::anyhow!(e)))
