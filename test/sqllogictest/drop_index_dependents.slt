@@ -1,0 +1,216 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# An index cannot be dropped while a materialized view or index reads from it.
+# The optimizer plans a materialized view or index over an indexed relation to
+# read from the index, which makes the new object a compute-level dependent of
+# the index even though the index does not appear in its definition.
+#
+# test/testdrive/drop-index-dependents.td checks that none of these drops
+# leaves an orphaned dataflow behind.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (a int, b int);
+
+statement ok
+INSERT INTO t VALUES (1, 10), (2, 20);
+
+statement ok
+CREATE INDEX t_idx ON t (a);
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t WHERE a > 0;
+
+query II rowsort
+SELECT * FROM mv
+----
+1  10
+2  20
+
+statement error db error: ERROR: cannot drop index "t_idx": still depended upon by materialized view "mv"
+DROP INDEX t_idx;
+
+statement error db error: ERROR: cannot drop index "t_idx": still depended upon by materialized view "mv"
+DROP INDEX t_idx RESTRICT;
+
+simple
+DROP INDEX t_idx;
+----
+db error: ERROR: cannot drop index "t_idx": still depended upon by materialized view "mv"
+DETAIL: The dependent objects are live dataflows that read from index "t_idx", so the index cannot be dropped while they exist.
+HINT: Drop the dependent objects first, then drop the index and recreate the dependents. To replace them in production without downtime, use a blue/green deployment.
+
+# CASCADE does not extend to readers of the index. It behaves like RESTRICT.
+statement error db error: ERROR: cannot drop index "t_idx": still depended upon by materialized view "mv"
+DROP INDEX t_idx CASCADE;
+
+# Nothing was dropped.
+query T rowsort
+SELECT name FROM mz_objects WHERE name IN ('t', 't_idx', 'mv')
+----
+mv
+t
+t_idx
+
+# Dropping the dependent by hand frees the index.
+statement ok
+DROP MATERIALIZED VIEW mv;
+
+statement ok
+DROP INDEX t_idx;
+
+# A newer index on the same relation reads from the older one, so indexes are
+# dropped newest first.
+statement ok
+CREATE INDEX t_idx ON t (a);
+
+statement ok
+CREATE INDEX t_idx2 ON t (b);
+
+statement error db error: ERROR: cannot drop index "t_idx": still depended upon by index "t_idx2"
+DROP INDEX t_idx;
+
+statement ok
+DROP INDEX t_idx2;
+
+statement ok
+DROP INDEX t_idx CASCADE;
+
+# A reader that the same statement drops does not block the drop.
+statement ok
+CREATE INDEX t_idx ON t (a);
+
+statement ok
+CREATE INDEX t_idx2 ON t (b);
+
+statement ok
+DROP INDEX t_idx, t_idx2;
+
+# An index on a view blocks the drop of the index its dataflow reads from.
+statement ok
+CREATE INDEX t_idx ON t (a);
+
+statement ok
+CREATE VIEW v AS SELECT a, b FROM t WHERE b > 0;
+
+statement ok
+CREATE INDEX v_idx ON v (b);
+
+statement error db error: ERROR: cannot drop index "t_idx": still depended upon by index "v_idx"
+DROP INDEX t_idx;
+
+statement ok
+DROP INDEX v_idx;
+
+statement ok
+DROP INDEX t_idx;
+
+# Readers of an index also depend on its relation in the catalog, so CASCADE
+# drops of the relation, its schema, or its cluster take the readers along.
+statement ok
+CREATE SCHEMA s;
+
+statement ok
+CREATE TABLE s.t (a int);
+
+statement ok
+CREATE INDEX t_idx ON s.t (a);
+
+statement ok
+CREATE MATERIALIZED VIEW s.mv AS SELECT a FROM s.t WHERE a > 0;
+
+statement ok
+DROP SCHEMA s CASCADE;
+
+statement ok
+CREATE TABLE t2 (a int);
+
+statement ok
+CREATE INDEX t2_idx ON t2 (a);
+
+statement ok
+CREATE MATERIALIZED VIEW mv2 AS SELECT a FROM t2 WHERE a > 0;
+
+statement ok
+DROP TABLE t2 CASCADE;
+
+query T rowsort
+SELECT name FROM mz_objects WHERE name IN ('t2', 't2_idx', 'mv2')
+----
+
+# enable_unsafe_drop_index lets the plain drop through, leaving the dependent
+# running on the orphaned index.
+statement ok
+CREATE INDEX t_idx ON t (a);
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t WHERE a > 0;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unsafe_drop_index = true
+----
+COMPLETE 0
+
+statement ok
+DROP INDEX t_idx;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_unsafe_drop_index
+----
+COMPLETE 0
+
+query T rowsort
+SELECT name FROM mz_objects WHERE name IN ('t_idx', 'mv')
+----
+mv
+
+query II rowsort
+SELECT * FROM mv
+----
+1  10
+2  20
+
+statement ok
+DROP MATERIALIZED VIEW mv;
+
+# Under the flag, CASCADE still drops only the index, not its readers.
+statement ok
+CREATE INDEX t_idx ON t (a);
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t WHERE a > 0;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_unsafe_drop_index = true
+----
+COMPLETE 0
+
+statement ok
+DROP INDEX t_idx CASCADE;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_unsafe_drop_index
+----
+COMPLETE 0
+
+query T rowsort
+SELECT name FROM mz_objects WHERE name IN ('t_idx', 'mv')
+----
+mv
+
+query II rowsort
+SELECT * FROM mv
+----
+1  10
+2  20
+
+statement ok
+DROP MATERIALIZED VIEW mv;

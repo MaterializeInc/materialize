@@ -1196,12 +1196,15 @@ def workflow_arrangement_sizes_stale_snapshot_after_restart(c: Composition) -> N
         wait_for_full_sample(remaining)
 
         for round_num in range(5):
-            dropped, remaining = remaining[:2], remaining[2:]
+            # Newer indexes on stale_v read from older ones' arrangements, and
+            # `DROP INDEX` refuses an index that others read from, so drop from
+            # the newest end.
+            dropped, remaining = remaining[-2:], remaining[:-2]
 
             # Kill right after the drops: their retractions cannot reach the
             # storage collections before the process dies, so the retained
             # shard contents keep rows for the now-nonexistent indexes.
-            c.sql(";".join(f"DROP INDEX {name}" for name in dropped))
+            c.sql(f"DROP INDEX {', '.join(dropped)}")
             c.kill("materialized")
             c.up("materialized")
 

@@ -18,15 +18,33 @@ Syntax element | Description
 ---------------|------------
 **IF EXISTS** | Optional. If specified, do not return an error if the specified index does not exist.
 `<index_name>` | Index to drop.
-**CASCADE** | Optional. If specified, remove the index and its dependent objects.
-**RESTRICT** | Optional. Remove the index. _(Default.)_
+**CASCADE** | Optional. Equivalent to `RESTRICT`. `DROP INDEX` never drops the objects that depend on the index. See [Dependent objects](#dependent-objects).
+**RESTRICT** | Optional. Do not remove the index if other objects depend on it. _(Default.)_
 
-{{< note >}}
+## Dependent objects
 
-Since indexes do not have dependent objects, `DROP INDEX`, `DROP INDEX
-RESTRICT`, and `DROP INDEX CASCADE` are equivalent.
+When Materialize creates a materialized view or another index, its optimizer
+may plan the new object to read from an existing index rather than from the
+underlying relation. The object then depends on that index, even though the
+index does not appear in the object's definition.
 
-{{< /note >}}
+`DROP INDEX` fails if any materialized view or index reads from the index, and
+the error names the dependent objects. This holds with `CASCADE` too: because
+the dependency is invisible in the dependents' definitions, `DROP INDEX` never
+drops them. To drop the index, first drop the dependent
+objects yourself, then drop the index and recreate the dependents. In
+production, use a [blue/green deployment](/developer-tools/dbt/blue-green-deployments/)
+to replace them without downtime.
+
+A newer index on a relation can read from an older index on the same relation,
+so drop indexes on the same relation newest first.
+
+In-progress `SELECT` and `SUBSCRIBE` statements that read from the index do not
+block the drop. The index continues to be maintained until they finish, and the
+`DROP INDEX` statement returns a notice saying so.
+
+You can inspect which objects read from an index with
+[`mz_internal.mz_compute_dependencies`](/sql/system-catalog/mz_internal/#mz_compute_dependencies).
 
 ## Privileges
 
@@ -53,6 +71,28 @@ DROP INDEX q01_geo_idx;
 ```
 
 If the index `q01_geo_idx` does not exist, the above operation returns an error.
+
+### Remove an index that other objects read from
+
+If a materialized view was planned to read from the index, `DROP INDEX` returns
+an error:
+
+```mzsql
+DROP INDEX q01_geo_idx;
+```
+```nofmt
+ERROR:  cannot drop index "q01_geo_idx": still depended upon by materialized view "q01_geo_summary"
+DETAIL:  The dependent objects are live dataflows that read from index "q01_geo_idx", so the index cannot be dropped while they exist.
+HINT:  Drop the dependent objects first, then drop the index and recreate the dependents. To replace them in production without downtime, use a blue/green deployment.
+```
+
+Drop the materialized view first, then the index, and recreate the view:
+
+```mzsql
+DROP MATERIALIZED VIEW q01_geo_summary;
+DROP INDEX q01_geo_idx;
+CREATE MATERIALIZED VIEW q01_geo_summary AS ...;
+```
 
 ### Remove an index without erroring if the index does not exist
 
