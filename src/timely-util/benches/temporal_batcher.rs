@@ -12,9 +12,9 @@
 //! milliseconds.
 //!
 //! * `now`: every update is at the current tick, nothing in the future.
-//! * `near`: updates spread over the next second, swept over θ.
+//! * `near`: updates spread over the next second, swept over the summary.
 //! * `tail`: a retained future tail spread over an hour, with each tick
-//!   adding updates an hour out and at the current tick, swept over θ.
+//!   adding updates an hour out and at the current tick, swept over the summary.
 //!   Measures steady-state ticks after the first seal.
 //! * `first_seal`: the push and first seal of a snapshot plus future tail.
 
@@ -40,7 +40,7 @@ const HOUR: u64 = 3_600_000;
 const TICKS: u64 = 100;
 const PER_TICK: u64 = 2_000;
 const TAIL: u64 = 400_000;
-const THETAS: &[u64] = &[0, 1_000, 2_000, 10_000, 60_000];
+const SUMMARIES: &[u64] = &[0, 1_000, 2_000, 10_000, 60_000];
 
 fn hash(i: u64) -> u64 {
     i.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 16
@@ -107,7 +107,7 @@ fn bench_ticks(
     name: &str,
     hydrate: bool,
     offset: impl Fn(u64) -> u64 + Copy,
-    thetas: &[u64],
+    summaries: &[u64],
 ) {
     let ticks: Vec<_> = (1..=TICKS)
         .map(|tick| {
@@ -138,19 +138,23 @@ fn bench_ticks(
             BatchSize::LargeInput,
         )
     });
-    for &theta in thetas {
-        group.bench_with_input(BenchmarkId::new("wrapped", theta), &theta, |b, &theta| {
-            b.iter_batched(
-                || {
-                    let mut batcher = Wrapped::with_theta(None, 0, theta);
-                    let mut chunker = Chunker::default();
-                    step(&mut batcher, &mut chunker, &tail, 1);
-                    batcher
-                },
-                |mut batcher| run_ticks(&mut batcher, &ticks),
-                BatchSize::LargeInput,
-            )
-        });
+    for &summary in summaries {
+        group.bench_with_input(
+            BenchmarkId::new("wrapped", summary),
+            &summary,
+            |b, &summary| {
+                b.iter_batched(
+                    || {
+                        let mut batcher = Wrapped::with_summary(None, 0, summary);
+                        let mut chunker = Chunker::default();
+                        step(&mut batcher, &mut chunker, &tail, 1);
+                        batcher
+                    },
+                    |mut batcher| run_ticks(&mut batcher, &ticks),
+                    BatchSize::LargeInput,
+                )
+            },
+        );
     }
     group.finish();
 }
@@ -167,33 +171,37 @@ fn bench_first_seal(c: &mut Criterion) {
             BatchSize::LargeInput,
         )
     });
-    for &theta in THETAS {
-        let mut batcher = Wrapped::with_theta(None, 0, theta);
+    for &summary in SUMMARIES {
+        let mut batcher = Wrapped::with_summary(None, 0, summary);
         step(&mut batcher, &mut Chunker::default(), &input, 1);
         let stats = batcher.stats();
         let retained = TAIL;
         eprintln!(
-            "first_seal θ={theta}: touched {} parked {} retained F {retained} touched/F {:.2}",
+            "first_seal summary={summary}: touched {} parked {} retained F {retained} touched/F {:.2}",
             stats.rebuild_touched,
             stats.rebuild_parked,
             f64::from(u32::try_from(stats.rebuild_touched).expect("fits"))
                 / f64::from(u32::try_from(retained).expect("fits")),
         );
-        group.bench_with_input(BenchmarkId::new("wrapped", theta), &theta, |b, &theta| {
-            b.iter_batched(
-                || Wrapped::with_theta(None, 0, theta),
-                |mut batcher| step(&mut batcher, &mut Chunker::default(), &input, 1),
-                BatchSize::LargeInput,
-            )
-        });
+        group.bench_with_input(
+            BenchmarkId::new("wrapped", summary),
+            &summary,
+            |b, &summary| {
+                b.iter_batched(
+                    || Wrapped::with_summary(None, 0, summary),
+                    |mut batcher| step(&mut batcher, &mut Chunker::default(), &input, 1),
+                    BatchSize::LargeInput,
+                )
+            },
+        );
     }
     group.finish();
 }
 
 fn benches(c: &mut Criterion) {
     bench_ticks(c, "now", false, |_| 0, &[2_000]);
-    bench_ticks(c, "near", false, |h| h % TICK, THETAS);
-    bench_ticks(c, "tail", true, |_| HOUR, THETAS);
+    bench_ticks(c, "near", false, |h| h % TICK, SUMMARIES);
+    bench_ticks(c, "tail", true, |_| HOUR, SUMMARIES);
     bench_first_seal(c);
 }
 

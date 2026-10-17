@@ -95,7 +95,7 @@ where
 /// Drives the plain batcher `B` and the wrapper over `B` through `steps`, and checks that
 /// each seal emits the same updates and description, and that the wrapper's frontier lies
 /// between the sealed frontier and the held updates. Returns the wrapper's stats.
-pub(super) fn check<B, Chu, T>(steps: &[Step<T>], theta: u64) -> TemporalBatcherStats
+pub(super) fn check<B, Chu, T>(steps: &[Step<T>], summary: u64) -> TemporalBatcherStats
 where
     B: Batcher<Time = T>,
     B::Output: TimedUpdates<u64, T, i64>,
@@ -109,7 +109,7 @@ where
 {
     let mut plain = B::new(None, 0);
     let mut plain_chunker = Chu::default();
-    let mut wrapped = TemporalBatcher::<B, Chu, u64, T, i64>::with_theta(None, 0, theta);
+    let mut wrapped = TemporalBatcher::<B, Chu, u64, T, i64>::with_summary(None, 0, summary);
     let mut wrapped_chunker = Chu::default();
     let mut held: BTreeMap<(u64, T), i64> = BTreeMap::new();
 
@@ -207,7 +207,7 @@ fn edge_cases() -> Vec<Step<u64>> {
     vec![
         Step::Push(vec![(1, 5, 1), (2, 1_000, 1), (3, 1_000, 1)]),
         seal(10),
-        // Far bound is 15 at θ = 5. A record at exactly 15 parks, one at 14 does not.
+        // Far bound is 15 at summary = 5. A record at exactly 15 parks, one at 14 does not.
         Step::Push(vec![(4, 15, 1), (5, 14, 1), (6, 15, 2)]),
         // Retract a far insert, so the bucket holding time 1_000 cancels to empty.
         Step::Push(vec![(2, 1_000, -1), (3, 1_000, -1)]),
@@ -226,20 +226,20 @@ fn edge_cases() -> Vec<Step<u64>> {
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)]
 fn edge_cases_match_plain() {
-    for theta in [0, 1, 5, 100] {
-        check_arm::<ColumnArm<u64>, _>(&edge_cases(), theta);
-        check_arm::<ChunkArm<u64>, _>(&edge_cases(), theta);
-        check_arm::<ColumnationArm<u64>, _>(&edge_cases(), theta);
+    for summary in [0, 1, 5, 100] {
+        check_arm::<ColumnArm<u64>, _>(&edge_cases(), summary);
+        check_arm::<ChunkArm<u64>, _>(&edge_cases(), summary);
+        check_arm::<ColumnationArm<u64>, _>(&edge_cases(), summary);
     }
 }
 
-fn check_arm<A: Arm<T>, T>(steps: &[Step<T>], theta: u64) -> TemporalBatcherStats {
-    A::check(steps, theta)
+fn check_arm<A: Arm<T>, T>(steps: &[Step<T>], summary: u64) -> TemporalBatcherStats {
+    A::check(steps, summary)
 }
 
 /// A batcher and chunker pair, as one type parameter.
 trait Arm<T> {
-    fn check(steps: &[Step<T>], theta: u64) -> TemporalBatcherStats;
+    fn check(steps: &[Step<T>], summary: u64) -> TemporalBatcherStats;
 }
 
 impl<B, Chu, T> Arm<T> for (B, Chu)
@@ -254,8 +254,8 @@ where
     for<'a> <(u64, T, i64) as Columnar>::Container:
         columnar::Push<columnar::Ref<'a, (u64, T, i64)>> + columnar::Push<&'a (u64, T, i64)>,
 {
-    fn check(steps: &[Step<T>], theta: u64) -> TemporalBatcherStats {
-        check::<B, Chu, T>(steps, theta)
+    fn check(steps: &[Step<T>], summary: u64) -> TemporalBatcherStats {
+        check::<B, Chu, T>(steps, summary)
     }
 }
 
@@ -263,11 +263,14 @@ where
 #[cfg_attr(miri, ignore)]
 fn hydration_matches_plain() {
     let steps = hydration(1_000, 20_000, 100_000, 1_000, 20);
-    for theta in [0, 1_000, 10_000] {
-        let stats = check_arm::<ColumnArm<u64>, _>(&steps, theta);
-        assert!(stats.rebuild_parked > 0, "θ = {theta}: nothing parked");
-        check_arm::<ChunkArm<u64>, _>(&steps, theta);
-        check_arm::<ColumnationArm<u64>, _>(&steps, theta);
+    for summary in [0, 1_000, 10_000] {
+        let stats = check_arm::<ColumnArm<u64>, _>(&steps, summary);
+        assert!(
+            stats.rebuild_parked > 0,
+            "summary = {summary}: nothing parked"
+        );
+        check_arm::<ChunkArm<u64>, _>(&steps, summary);
+        check_arm::<ColumnationArm<u64>, _>(&steps, summary);
     }
 }
 
@@ -320,11 +323,11 @@ proptest! {
     #[cfg_attr(miri, ignore)]
     fn matches_plain(
         steps in arb_steps(),
-        theta in proptest::sample::select(vec![0u64, 1, 7, 50]),
+        summary in proptest::sample::select(vec![0u64, 1, 7, 50]),
     ) {
-        check_arm::<ColumnArm<u64>, _>(&steps, theta);
-        check_arm::<ChunkArm<u64>, _>(&steps, theta);
-        check_arm::<ColumnationArm<u64>, _>(&steps, theta);
+        check_arm::<ColumnArm<u64>, _>(&steps, summary);
+        check_arm::<ChunkArm<u64>, _>(&steps, summary);
+        check_arm::<ColumnationArm<u64>, _>(&steps, summary);
     }
 }
 
@@ -340,10 +343,10 @@ fn seal2(elements: &[(u64, u64)]) -> Step<Time2> {
     ))
 }
 
-fn check_all2(steps: &[Step<Time2>], theta: u64) -> TemporalBatcherStats {
-    let stats = check_arm::<ColumnArm<Time2>, _>(steps, theta);
-    check_arm::<ChunkArm<Time2>, _>(steps, theta);
-    check_arm::<ColumnationArm<Time2>, _>(steps, theta);
+fn check_all2(steps: &[Step<Time2>], summary: u64) -> TemporalBatcherStats {
+    let stats = check_arm::<ColumnArm<Time2>, _>(steps, summary);
+    check_arm::<ChunkArm<Time2>, _>(steps, summary);
+    check_arm::<ColumnationArm<Time2>, _>(steps, summary);
     stats
 }
 
@@ -360,7 +363,7 @@ fn product_edge_cases_match_plain() {
             (3, t2(40, 0), 1),
             (4, t2(9, 7), 1),
         ]),
-        // Edge is 8, so with small θ the updates at outer 20 and 40 park.
+        // Edge is 8, so with a small summary the updates at outer 20 and 40 park.
         seal2(&[(5, 3), (8, 0)]),
         Step::Push(vec![(5, t2(30, 0), 1), (6, t2(8, 0), 1), (7, t2(6, 4), 1)]),
         // `(15, 0) <= (20, 1)`, so the parked update is not ready, although
@@ -384,8 +387,8 @@ fn product_edge_cases_match_plain() {
         seal2(&[(43, 1)]),
         seal_all(),
     ];
-    for theta in [0, 1, 5, 100] {
-        check_all2(&steps, theta);
+    for summary in [0, 1, 5, 100] {
+        check_all2(&steps, summary);
     }
 }
 
@@ -404,9 +407,9 @@ fn product_upper_without_inner_minimum_parks_nothing() {
         seal2(&[(500, 4)]),
         seal_all(),
     ];
-    for theta in [0, 10] {
-        let stats = check_all2(&steps, theta);
-        assert_eq!(stats.rebuild_touched, 0, "θ = {theta}: {stats:?}");
+    for summary in [0, 10] {
+        let stats = check_all2(&steps, summary);
+        assert_eq!(stats.rebuild_touched, 0, "summary = {summary}: {stats:?}");
     }
 }
 
@@ -423,9 +426,12 @@ fn product_first_upper_with_inner_minimum_parks_tail() {
         seal2(&[(500, 0)]),
         seal_all(),
     ];
-    for theta in [0, 10] {
-        let stats = check_all2(&steps, theta);
-        assert_eq!(stats.rebuild_parked, 1_000, "θ = {theta}: {stats:?}");
+    for summary in [0, 10] {
+        let stats = check_all2(&steps, summary);
+        assert_eq!(
+            stats.rebuild_parked, 1_000,
+            "summary = {summary}: {stats:?}"
+        );
     }
 }
 
@@ -481,8 +487,8 @@ proptest! {
     #[cfg_attr(miri, ignore)]
     fn product_matches_plain(
         steps in arb_product_steps(),
-        theta in proptest::sample::select(vec![0u64, 1, 7]),
+        summary in proptest::sample::select(vec![0u64, 1, 7]),
     ) {
-        check_all2(&steps, theta);
+        check_all2(&steps, summary);
     }
 }

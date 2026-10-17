@@ -12,7 +12,7 @@
 //! The inner batcher re-merges and re-extracts every update it holds on each seal, so updates
 //! far in advance of the sealed frontier cost work on every seal until they become ready. The
 //! wrapper keeps updates whose key is at least `far_bound`, the last seal's inner-minimum key
-//! plus θ, in a chain of time-major buckets instead, and moves them into the inner batcher once
+//! plus the summary, in a chain of time-major buckets instead, and moves them into the inner batcher once
 //! a seal's frontier catches up with their bucket.
 //!
 //! The batcher does not know the dataflow's `as_of`, so the snapshot and its future tail all
@@ -39,12 +39,12 @@ use crate::temporal::{BucketChain, BucketTime};
 /// cannot reschedule its operator.
 const RESTORE_FUEL: i64 = 1_000_000;
 
-/// θ, in key units, that [`TemporalBatcher::new`] reads.
-static THETA: AtomicU64 = AtomicU64::new(2_000);
+/// The summary, in key units, that [`TemporalBatcher::new`] reads.
+static SUMMARY: AtomicU64 = AtomicU64::new(2_000);
 
-/// Set the θ that subsequently constructed [`TemporalBatcher`]s use.
-pub fn set_temporal_batcher_theta(theta: u64) {
-    THETA.store(theta, Ordering::Relaxed);
+/// Set the summary that subsequently constructed [`TemporalBatcher`]s use.
+pub fn set_temporal_batcher_summary(summary: u64) {
+    SUMMARY.store(summary, Ordering::Relaxed);
 }
 
 /// A batcher output chunk whose updates the [`TemporalBatcher`] can read by time.
@@ -188,7 +188,7 @@ pub struct TemporalBatcherStats {
     pub rebuild_parked: usize,
 }
 
-/// A [`Batcher`] that parks updates at least θ in advance of the last sealed frontier in a
+/// A [`Batcher`] that parks updates at least the summary in advance of the last sealed frontier in a
 /// [`BucketChain`], and otherwise defers to the inner batcher `B`.
 ///
 /// `Chu` re-chunks columns for `B`: the near part of a split chunk and the updates peeled
@@ -209,7 +209,7 @@ where
     inner: B,
     chunker: Chu,
     chain: BucketChain<TimeMajorBucket<D, T, R>>,
-    theta: u64,
+    summary: u64,
     /// The key at or after which pushed updates park in the chain. `None` parks nothing.
     far_bound: Option<T::Key>,
     rebuilt: bool,
@@ -244,14 +244,14 @@ where
     for<'a> <R as Columnar>::Container: columnar::Push<&'a R>,
     for<'a> <(D, T, R) as Columnar>::Container: columnar::Push<columnar::Ref<'a, (D, T, R)>>,
 {
-    /// Construct a wrapper that parks updates at least `theta` key units in advance of the
+    /// Construct a wrapper that parks updates at least `summary` key units in advance of the
     /// last sealed frontier.
-    pub fn with_theta(logger: Option<Logger>, operator_id: usize, theta: u64) -> Self {
+    pub fn with_summary(logger: Option<Logger>, operator_id: usize, summary: u64) -> Self {
         Self {
             inner: B::new(logger.clone(), operator_id),
             chunker: Chu::default(),
             chain: BucketChain::new(TimeMajorBucket::new(logger.clone(), operator_id)),
-            theta,
+            summary,
             far_bound: None,
             rebuilt: false,
             lower: Antichain::from_elem(T::minimum()),
@@ -369,12 +369,12 @@ where
     type Time = T;
 
     fn new(logger: Option<Logger>, operator_id: usize) -> Self {
-        Self::with_theta(logger, operator_id, THETA.load(Ordering::Relaxed))
+        Self::with_summary(logger, operator_id, SUMMARY.load(Ordering::Relaxed))
     }
 
     fn seal(&mut self, upper: Antichain<T>) -> (Vec<Self::Output>, Description<T>) {
         // Parking is sound relative to `edge`, the least key whose `lower_of` is in `upper`.
-        // An update parks only with a key of at least `edge + θ`, and at every later seal at
+        // An update parks only with a key of at least `edge + summary`, and at every later seal at
         // `F'` it is either peeled or still has a key of at least `edge(F')`. Then
         // `lower_of(edge(F')) <= t` with `lower_of(edge(F'))` in `F'`, so `t` is not ready.
         // Updates that might be ready are therefore always in the inner batcher, which decides
@@ -384,7 +384,7 @@ where
         let edge = Self::inner_minimum_key(upper.borrow());
         let far_bound = edge
             .as_ref()
-            .and_then(|edge| <T::Key as Timestamp>::Summary::from(self.theta).results_in(edge));
+            .and_then(|edge| <T::Key as Timestamp>::Summary::from(self.summary).results_in(edge));
 
         // Until a seal yields a far bound, nothing parks and the inner batcher holds every
         // update, including a hydration tail, so the rebuild waits for the first seal that has
