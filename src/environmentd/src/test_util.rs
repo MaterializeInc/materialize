@@ -236,6 +236,10 @@ impl Default for TestHarness {
             // This and startup_log_filter below are both (?) needed to suppress clusterd messages.
             // If we need those in the future, we might need to change both.
             system_parameter_defaults: BTreeMap::from([
+                (
+                    "enable_frontend_transaction_completion".to_string(),
+                    "true".to_string(),
+                ),
                 ("log_filter".to_string(), "error".to_string()),
                 (
                     ENABLE_CLUSTER_RECONFIGURATION_LAG_GATE.name().to_string(),
