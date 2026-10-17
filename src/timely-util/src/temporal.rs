@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 
 use mz_ore::cast::CastFrom;
+use timely::order::Product;
 use timely::progress::Timestamp;
 use timely::progress::frontier::AntichainRef;
 
@@ -61,6 +62,18 @@ impl BucketTime for u64 {
     }
     fn lower_of(key: &u64) -> u64 {
         *key
+    }
+}
+
+/// Buckets by the outer coordinate. `lower_of` pairs the key with the minimal inner time,
+/// which is at or before every inner time, so the [`BucketTime`] contract holds.
+impl<O: BucketTimestamp, I: Timestamp> BucketTime for Product<O, I> {
+    type Key = O;
+    fn key(&self) -> O {
+        self.outer.clone()
+    }
+    fn lower_of(key: &O) -> Self {
+        Product::new(key.clone(), I::minimum())
     }
 }
 

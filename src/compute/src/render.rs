@@ -1745,8 +1745,10 @@ pub trait MaybeBucketByTime: Timestamp + ColumnarData {
         for<'a> <(D, Self, Diff) as ColumnarData>::Container:
             ColumnarPush<&'a (D, Self, Diff)> + ColumnarPush<::columnar::Ref<'a, (D, Self, Diff)>>;
 
-    /// Arranges the ok stream of an `ArrangeBy`, parking future updates in the batcher where
-    /// the timestamp supports it.
+    /// Arranges the ok stream of an `ArrangeBy` with a batcher that parks future updates.
+    ///
+    /// A trait method so the bounds the wrapper needs of the timestamp stay out of the
+    /// render signatures.
     fn arrange_row_row<'scope>(
         stream: Stream<'scope, Self, Column<((Row, Row), Self, Diff)>>,
         name: &str,
@@ -1866,7 +1868,7 @@ impl MaybeBucketByTime for Product<mz_repr::Timestamp, PointStamp<u64>> {
     where
         Self: RenderTimestamp,
     {
-        crate::render::context::arrange_row_row_plain(stream, name, batcher)
+        crate::render::context::arrange_row_row_bucketed(stream, name, batcher)
     }
 
     fn maybe_apply_temporal_bucketing<'scope, D>(

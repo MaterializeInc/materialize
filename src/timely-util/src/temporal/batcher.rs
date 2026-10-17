@@ -271,12 +271,7 @@ where
         self.stats
     }
 
-    /// The far bound for a seal at `upper`.
-    ///
-    /// Parking is sound only below a frontier element whose inner coordinates are minimal,
-    /// `lower_of(e)` with `e` the least such key: a parked update `t` has `e <= key(t)`, so
-    /// `lower_of(e) <= t` and `t` is not ready at `upper`. Without such an element nothing
-    /// parks, and the wrapper behaves like the inner batcher.
+    /// The least key `e` with `lower_of(e)` in `upper`, if any.
     fn inner_minimum_key(upper: AntichainRef<T>) -> Option<T::Key> {
         upper
             .iter()
@@ -378,6 +373,14 @@ where
     }
 
     fn seal(&mut self, upper: Antichain<T>) -> (Vec<Self::Output>, Description<T>) {
+        // Parking is sound relative to `edge`, the least key whose `lower_of` is in `upper`.
+        // An update parks only with a key of at least `edge + θ`, and at every later seal at
+        // `F'` it is either peeled or still has a key of at least `edge(F')`. Then
+        // `lower_of(edge(F')) <= t` with `lower_of(edge(F'))` in `F'`, so `t` is not ready.
+        // Updates that might be ready are therefore always in the inner batcher, which decides
+        // readiness exactly. The argument assumes nothing about how frontiers of an iterative
+        // scope evolve. Without such an element nothing parks and the chain drains, so the
+        // wrapper behaves like the inner batcher.
         let edge = Self::inner_minimum_key(upper.borrow());
         let far_bound = edge
             .as_ref()
@@ -391,9 +394,6 @@ where
             }
         }
 
-        // Updates that might be ready at `upper` must be in the inner batcher, which decides
-        // readiness exactly. Updates left in the chain have a key of at least `edge`, so
-        // `lower_of(edge)`, an element of `upper`, is at or before each of them.
         // Peeling and restoring an empty chain only splits empty buckets.
         let parked = self
             .chain

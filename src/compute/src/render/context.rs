@@ -1192,39 +1192,6 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     }
 }
 
-/// Arranges the ok stream of an `ArrangeBy` with the plain batcher of `batcher`.
-pub(crate) fn arrange_row_row_plain<'scope, T: RenderTimestamp>(
-    stream: Stream<'scope, T, Column<((Row, Row), T, Diff)>>,
-    name: &str,
-    batcher: ArrangementBatcher,
-) -> Arranged<'scope, RowRowAgent<T, Diff>> {
-    let exchange =
-        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<Row, Row, T, Diff>);
-    match batcher {
-        ArrangementBatcher::Chunked => stream.mz_arrange_core::<
-            _,
-            ChunkChunker<(Row, Row), T, Diff, ComputeSpill>,
-            AccountedChunkBatcher<(Row, Row), T, Diff, ComputeSpill>,
-            UnchunkBuilder<RowRowColPagedBuilder<T, Diff>, (Row, Row), T, Diff, ComputeSpill>,
-            RowRowSpine<_, _>,
-        >(exchange, name),
-        ArrangementBatcher::Columnar => stream.mz_arrange_core::<
-            _,
-            batcher::ColumnChunker<_>,
-            Col2ValColBatcher<_, _, _, _>,
-            RowRowColPagedBuilder<_, _>,
-            RowRowSpine<_, _>,
-        >(exchange, name),
-        ArrangementBatcher::Columnation => stream.mz_arrange_core::<
-            _,
-            batcher::Chunker<_>,
-            Col2ValBatcher<_, _, _, _>,
-            RowRowBuilder<_, _>,
-            RowRowSpine<_, _>,
-        >(exchange, name),
-    }
-}
-
 /// Arranges the ok stream of an `ArrangeBy` with the batcher of `batcher` wrapped in a
 /// [`TemporalBatcher`], which parks future updates in a bucket chain.
 pub(crate) fn arrange_row_row_bucketed<'scope, T>(
