@@ -4104,13 +4104,17 @@ impl HirScalarExpr {
     /// Returns None if self is not constant and therefore can't be simplified to a literal, or if
     /// an evaluation error occurs during simplification, or if self contains
     /// - a subquery
-    /// - a column reference to an outer level
+    /// - a column reference
     /// - a parameter
     /// - a window function call
     fn simplify_to_literal(self) -> Option<Row> {
         let mut expr = self
             .lower_uncorrelated(crate::plan::lowering::Config::default())
             .ok()?;
+        // `reduce` is called without column types, so it panics on a column reference.
+        if expr.contains_column() {
+            return None;
+        }
         // Using MIR evaluation with repr types is fine here: the
         // result is an untyped Row, so any intermediate type
         // canonicalization is discarded.
@@ -4139,6 +4143,12 @@ impl HirScalarExpr {
             .map_err(|err| {
                 PlanError::ConstantExpressionSimplificationFailed(err.to_string_with_causes())
             })?;
+        // `reduce` is called without column types, so it panics on a column reference.
+        if expr.contains_column() {
+            return Err(PlanError::ConstantExpressionSimplificationFailed(
+                "Not a constant".to_string(),
+            ));
+        }
         // Using MIR evaluation with repr types is fine here: the
         // result is an untyped Row, so any intermediate type
         // canonicalization is discarded.
