@@ -485,15 +485,15 @@ impl CatalogState {
     }
 
     pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
-        let search_path = self.resolve_search_path(session);
-        let database = self
-            .database_by_name
-            .get(session.vars().database())
-            .map(|id| id.clone());
         let state = match session.transaction().catalog_state() {
             Some(txn_catalog_state) => Cow::Borrowed(txn_catalog_state),
             None => Cow::Borrowed(self),
         };
+        let search_path = state.resolve_search_path(session);
+        let database = state
+            .database_by_name
+            .get(session.vars().database())
+            .map(|id| id.clone());
         ConnCatalog {
             state,
             unresolvable_ids: BTreeSet::new(),
