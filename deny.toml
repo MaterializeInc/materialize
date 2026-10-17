@@ -163,10 +163,12 @@ skip = [
     { name = "block-buffer", version = "0.10.4" },
     { name = "const-oid", version = "0.9.6" },
     { name = "crypto-common", version = "0.1.6" },
+    { name = "der", version = "0.7.10" },
     { name = "digest", version = "0.10.7" },
     { name = "hmac", version = "0.12.1" },
     { name = "sha1", version = "0.10.6" },
     { name = "sha2", version = "0.10.9" },
+    { name = "spki", version = "0.7.3" },
     # reqsign-azure-storage 3.2 moved to pem 4, while jsonwebtoken, and so most
     # of the workspace, is still on pem 3. The ADLS credential loader needs the
     # `expires_at` field that 3.2 added to `Credential::SasToken`, so the older
