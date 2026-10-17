@@ -93,6 +93,7 @@ import {
   attachOfflineEvents,
   BinnedSubscribeRow,
   bucketRowsToBucketsByReplicaId,
+  clipBinnedRowsToWindow,
   parseBinnedSubscribeRow,
   rebucketUtilizationSamples,
   toReplicaUtilizationGraphData,
@@ -478,6 +479,8 @@ export function useLargestClusterReplica(params: LargestClusterReplicaParams) {
 
 const STRIP_DATAFLOW_PREFIX = /^Dataflow: /;
 
+export const UNIFIED_OBJECT_SIZES_MIN_VERSION = "26.35.0-dev";
+
 export type UseLargestMaintainedQueriesParams = {
   clusterId: string;
   clusterName: string;
@@ -490,7 +493,8 @@ export function useLargestMaintainedQueries(
 ) {
   // mz_object_arrangement_sizes reports sizes reliably from v26.35, where
   // they no longer go stale across replica restarts.
-  const unifiedSizes = useEnvironmentGate("26.35.0-dev") ?? false;
+  const unifiedSizes =
+    useEnvironmentGate(UNIFIED_OBJECT_SIZES_MIN_VERSION) ?? false;
   const queryClient = useQueryClient();
   // queryClient is a stable singleton, not query input.
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
@@ -736,6 +740,11 @@ export function useMaterializationLag(params: MaterializationLagParams) {
 const SUBSCRIBE_UNBINNED_MAX_MINUTES = 180; // 3h: live un-binned base, client-binned
 const SUBSCRIBE_BINNED_MAX_MINUTES = 1440; // 24h: live 5-min binned view
 export const OVERVIEW_MAX_MINUTES = 20160; // 14d: polled overview view; beyond, ad-hoc
+/** How far back each live tier's subscribe reaches. */
+export const LIVE_TIER_RETENTION_MINUTES = {
+  unbinned3h: SUBSCRIBE_UNBINNED_MAX_MINUTES,
+  binned24h: SUBSCRIBE_BINNED_MAX_MINUTES,
+};
 
 // A blue-green cutover changes a cluster's lineage. Refetching on this interval
 // bounds how long that takes to reach an open chart.
@@ -854,7 +863,6 @@ export function useUtilizationTier(timePeriodMinutes: number) {
 function useReplicaUtilizationHistorySubscribe(
   params: ReplicaUtilizationHistoryFilters,
   enabled: boolean,
-  includeOfflineEvents: boolean,
 ) {
   const { replicaId, timePeriodMinutes, bucketSizeMs, includeMemoryBreakdown } =
     params;
@@ -891,7 +899,7 @@ function useReplicaUtilizationHistorySubscribe(
   const offlineEvents = useReplicaOfflineEvents(
     data,
     timePeriodMinutes,
-    enabled && includeOfflineEvents,
+    enabled,
   );
 
   const result = useMemo(() => {
@@ -959,15 +967,10 @@ function useReplicaUtilizationHistoryBinnedSubscribe(
     const endDate = new Date();
     const startDate = subMinutes(endDate, timePeriodMinutes);
 
-    // Clip to the window like the SQL does. Held rows from a previous wider
-    // window would otherwise stretch the chart domain past the selected range.
-    const rows = data.filter(
-      (row) =>
-        row.bucketStart.getTime() >= startDate.getTime() &&
-        (!replicaId || row.replicaId === replicaId),
+    const rows = clipBinnedRowsToWindow(
+      replicaId ? data.filter((row) => row.replicaId === replicaId) : data,
+      startDate,
     );
-    // ENVELOPE UPSERT yields an unordered keyed set; the chart needs time order.
-    rows.sort((a, b) => a.bucketStart.getTime() - b.bucketStart.getTime());
 
     return toReplicaUtilizationGraphData(
       bucketRowsToBucketsByReplicaId(rows),
@@ -984,45 +987,31 @@ function useReplicaUtilizationHistoryBinnedSubscribe(
   };
 }
 
-export function useReplicaUtilizationHistory(
-  params: ReplicaUtilizationHistoryFilters,
-  queryOptions?: {
-    enabled?: boolean;
-    // `false` skips the <=3h windows' offline-events poll, for callers that
-    // read replica status from elsewhere. Their buckets carry no events then.
-    includeOfflineEvents?: boolean;
-  },
-) {
-  const enabled = queryOptions?.enabled ?? true;
-  const tier = useUtilizationTier(params.timePeriodMinutes);
+function useUtilizationFilters(params: ReplicaUtilizationHistoryFilters) {
   const hasMemoryBreakdown =
     useEnvironmentGate(REPLICA_MEMORY_BREAKDOWN_MIN_VERSION) === true;
-  const filters = {
+  return {
     ...params,
     // `false` would change the query key for callers that don't pass this.
     includeMemoryBreakdown:
       (params.includeMemoryBreakdown && hasMemoryBreakdown) || undefined,
   };
+}
 
-  const useUnbinnedSubscribe = tier === "unbinned3h";
-  const useBinnedSubscribe = tier === "binned24h";
-
-  const unbinnedResult = useReplicaUtilizationHistorySubscribe(
-    filters,
-    enabled && useUnbinnedSubscribe,
-    queryOptions?.includeOfflineEvents ?? true,
-  );
-  const binnedResult = useReplicaUtilizationHistoryBinnedSubscribe(
-    filters,
-    enabled && useBinnedSubscribe,
-  );
-
-  const queryResult = useQuery({
+/**
+ * Polled utilization, for windows no subscribe serves. Unlike
+ * `useReplicaUtilizationHistory` it mounts no subscribe hooks, so it opens no
+ * WebSocket (see the NOTE on `useReplicaUtilizationHistorySubscribe`).
+ */
+export function usePolledReplicaUtilizationHistory(
+  params: ReplicaUtilizationHistoryFilters,
+  { enabled }: { enabled: boolean },
+) {
+  const filters = useUtilizationFilters(params);
+  return useQuery({
     queryKey: clusterQueryKeys.replicaUtilizationHistory(filters),
     refetchInterval: 20_000,
-    // Poll whatever a subscribe isn't serving: >24h on new mz, and every window
-    // on old mz (where the subscribes are gated off).
-    enabled: enabled && !useUnbinnedSubscribe && !useBinnedSubscribe,
+    enabled,
     queryFn: async ({ queryKey, signal }) => {
       const [, queryKeyParams] = queryKey;
 
@@ -1045,6 +1034,35 @@ export function useReplicaUtilizationHistory(
 
       return toReplicaUtilizationGraphData(data, startDate, endDate);
     },
+  });
+}
+
+export function useReplicaUtilizationHistory(
+  params: ReplicaUtilizationHistoryFilters,
+  queryOptions?: {
+    enabled?: boolean;
+  },
+) {
+  const enabled = queryOptions?.enabled ?? true;
+  const tier = useUtilizationTier(params.timePeriodMinutes);
+  const filters = useUtilizationFilters(params);
+
+  const useUnbinnedSubscribe = tier === "unbinned3h";
+  const useBinnedSubscribe = tier === "binned24h";
+
+  const unbinnedResult = useReplicaUtilizationHistorySubscribe(
+    filters,
+    enabled && useUnbinnedSubscribe,
+  );
+  const binnedResult = useReplicaUtilizationHistoryBinnedSubscribe(
+    filters,
+    enabled && useBinnedSubscribe,
+  );
+
+  const queryResult = usePolledReplicaUtilizationHistory(params, {
+    // Poll whatever a subscribe isn't serving: >24h on new mz, and every window
+    // on old mz (where the subscribes are gated off).
+    enabled: enabled && !useUnbinnedSubscribe && !useBinnedSubscribe,
   });
 
   const active = useUnbinnedSubscribe

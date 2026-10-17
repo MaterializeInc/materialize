@@ -185,6 +185,14 @@ export function createCollectionSubscribeSession<
       unsubscribeScope?.();
       keepAlive.unsubscribe();
       session.destroy();
+      // No subscribe backs the held rows any more, so they read as refreshing
+      // until a later session's snapshot lands, as behind a new subscribe's
+      // empty pre-snapshot.
+      target.applySnapshot({
+        data: [],
+        snapshotComplete: false,
+        error: undefined,
+      });
     },
   };
 }

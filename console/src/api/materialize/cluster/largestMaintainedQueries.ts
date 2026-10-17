@@ -15,6 +15,7 @@ import {
   executeSqlV2,
   queryBuilder,
 } from "~/api/materialize";
+import { buildSubscribeQuery } from "~/api/materialize/buildSubscribeQuery";
 
 export type LargestMaintainedQueriesParams = {
   replicaHeapLimit: number;
@@ -159,6 +160,29 @@ export function buildLargestMaintainedObjectSizesQuery({
       .orderBy("size", sql`desc NULLS LAST`)
       .orderBy("s.object_id")
       .limit(() => sql.raw(limit.toString()))
+  );
+}
+
+/** One object's arrangement size on a replica, in bytes. */
+export interface ReplicaObjectSize {
+  objectId: string;
+  size: number | null;
+}
+
+/**
+ * Live arrangement sizes of every object on a replica. Filtering on the
+ * literal replica id makes this a lookup on `mz_object_arrangement_sizes_ind`.
+ */
+export function buildReplicaObjectSizesSubscribe(replicaId: string) {
+  return buildSubscribeQuery<ReplicaObjectSize>(
+    queryBuilder
+      .selectFrom("mz_object_arrangement_sizes")
+      .select([
+        "object_id as objectId",
+        sql<number | null>`size::float8`.as("size"),
+      ])
+      .where("replica_id", "=", replicaId),
+    { upsertKey: "objectId" },
   );
 }
 
