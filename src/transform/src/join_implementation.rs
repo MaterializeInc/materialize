@@ -615,7 +615,7 @@ mod delta_queries {
                 cardinalities,
                 filters,
                 input_mapper,
-                optimizer_features.enable_join_prioritize_arranged,
+                optimizer_features,
             )?;
 
             // Count new arrangements.
@@ -713,7 +713,7 @@ mod differential {
                 cardinalities,
                 filters,
                 input_mapper,
-                optimizer_features.enable_join_prioritize_arranged,
+                optimizer_features,
             )?;
 
             // Count new arrangements.
@@ -1014,7 +1014,7 @@ fn optimize_orders(
     cardinalities: &[Option<usize>],     // cardinalities of input relations
     filters: &[FilterCharacteristics],   // filter characteristics per input
     input_mapper: &JoinInputMapper,      // join helper
-    enable_join_prioritize_arranged: bool,
+    features: &OptimizerFeatures,
 ) -> Result<Vec<Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>>, TransformError> {
     let mut orderer = Orderer::new(
         equivalences,
@@ -1023,7 +1023,7 @@ fn optimize_orders(
         cardinalities,
         filters,
         input_mapper,
-        enable_join_prioritize_arranged,
+        features,
     );
     (0..available.len())
         .map(move |i| orderer.optimize_order_for(i))
@@ -1040,6 +1040,19 @@ struct Orderer<'a> {
     input_mapper: &'a JoinInputMapper,
     reverse_equivalences: Vec<Vec<(usize, usize)>>,
     unique_arrangement: Vec<Vec<bool>>,
+    /// Per input, the expressions (local to it) that an equivalence class pins
+    /// to a literal. Such an expression is bound whatever the order, so an
+    /// arrangement whose key the column equalities only partly cover can still
+    /// be viable. Kept apart from `bound`, which doubles as the key of an
+    /// arrangement the join would build: merging them would widen that key and
+    /// trade an existing arrangement for a new one.
+    ///
+    /// A key made viable by literals alone would probe with constants and leave
+    /// the real equalities as residual filters. That does not arise from SQL:
+    /// `LiteralConstraints` turns a fully literal key into an `IndexedFilter`
+    /// before the join is planned, and states a literal equivalence only next
+    /// to column equalities that bind the rest of the key.
+    literal_bound: Vec<Vec<MirScalarExpr>>,
 
     order: Vec<(JoinInputCharacteristics, Vec<MirScalarExpr>, usize)>,
     placed: Vec<bool>,
@@ -1060,7 +1073,7 @@ impl<'a> Orderer<'a> {
         cardinalities: &'a [Option<usize>],
         filters: &'a [FilterCharacteristics],
         input_mapper: &'a JoinInputMapper,
-        enable_join_prioritize_arranged: bool,
+        features: &OptimizerFeatures,
     ) -> Self {
         let inputs = arrangements.len();
         // A map from inputs to the equivalence classes in which they are referenced.
@@ -1083,6 +1096,21 @@ impl<'a> Orderer<'a> {
             }
         }
 
+        // See the doc on `literal_bound` for why this is kept apart from `bound`.
+        let mut literal_bound: Vec<Vec<MirScalarExpr>> = vec![Vec::new(); inputs];
+        if features.enable_partial_literal_index_lookups {
+            for equivalence in equivalences.iter() {
+                if !equivalence.iter().any(|e| e.is_literal()) {
+                    continue;
+                }
+                for expr in equivalence {
+                    if let Some(rel) = input_mapper.single_input(expr) {
+                        literal_bound[rel].push(input_mapper.map_expr_to_local(expr.clone()));
+                    }
+                }
+            }
+        }
+
         let order = Vec::with_capacity(inputs);
         let placed = vec![false; inputs];
         let bound = vec![Vec::new(); inputs];
@@ -1099,13 +1127,14 @@ impl<'a> Orderer<'a> {
             input_mapper,
             reverse_equivalences,
             unique_arrangement,
+            literal_bound,
             order,
             placed,
             bound,
             equivalences_active,
             arrangement_active,
             priority_queue,
-            enable_join_prioritize_arranged,
+            enable_join_prioritize_arranged: features.enable_join_prioritize_arranged,
         }
     }
 
@@ -1308,7 +1337,10 @@ impl<'a> Orderer<'a> {
 
                                         // Determine if the arrangement is viable,
                                         // which happens when all its key components are bound.
-                                        if key.iter().all(|k| self.bound[rel].contains(k)) {
+                                        if key.iter().all(|k| {
+                                            self.bound[rel].contains(k)
+                                                || self.literal_bound[rel].contains(k)
+                                        }) {
                                             self.arrangement_active[rel].push(pos);
                                             // TODO: This could be pre-computed, as it is independent of the order.
                                             let is_unique = self.unique_arrangement[rel][pos];

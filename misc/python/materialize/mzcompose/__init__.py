@@ -118,6 +118,7 @@ def get_minimal_system_parameters(
         "enable_mcp_protocol_2026_07_28": "true",
         "enable_metric_sink": "true",
         "enable_multi_worker_storage_persist_sink": "true",
+        "enable_partial_literal_index_lookups": "true",
         "enable_rbac_checks": "true",
         "enable_reduce_mfp_fusion": "true",
         "enable_refresh_every_mvs": "true",
