@@ -655,26 +655,56 @@ const STALE_SORT_RUN: usize = 1 << 20;
 /// dropped once read.
 fn sort_advanced<D: Data>(chains: Vec<Chain<D>>, since_ts: Timestamp, run_len: usize) -> Chain<D> {
     let mut runs = Vec::new();
-    let mut run = Vec::with_capacity(run_len.min(STALE_SORT_RUN));
-    let mut finish_run = |run: &mut Vec<(D, Timestamp, Diff)>| {
-        consolidate(run);
-        let mut builder = ChainBuilder::default();
-        builder.extend(run.drain(..));
-        runs.push(builder.finish());
-    };
+    let mut run = Vec::with_capacity(run_len);
     for chain in chains {
         for (data, time, diff) in chain.iter() {
             run.push((data, std::cmp::max(time, since_ts), diff));
             if run.len() >= run_len {
-                finish_run(&mut run);
+                consolidate(&mut run);
+                // A run that consolidation left at most half full keeps accumulating, so updates
+                // that cancel within the heap cost no chunks, and each consolidation either halves
+                // the run or mints it.
+                if run.len() * 2 > run_len {
+                    push_run(&mut runs, mint_run(&mut run));
+                }
             }
         }
     }
-    if !run.is_empty() {
-        finish_run(&mut run);
-    }
+    consolidate(&mut run);
+    push_run(&mut runs, mint_run(&mut run));
+
     let cursors = runs.into_iter().filter_map(Chain::into_cursor).collect();
     merge_cursors(cursors, 0)
+}
+
+/// Mint the sorted and consolidated `run` as a chain, emptying it.
+fn mint_run<D: Data>(run: &mut Vec<(D, Timestamp, Diff)>) -> Chain<D> {
+    let mut builder = ChainBuilder::default();
+    builder.extend(run.drain(..));
+    builder.finish()
+}
+
+/// Push `run` onto the stack of `runs`, merging it into its predecessors while it holds at least
+/// half as many updates as they do.
+///
+/// The stack then holds runs of geometrically decreasing size, a number logarithmic in the
+/// updates, so the final merge stays narrow. Updates that cancel do so at the first merge that
+/// brings them together rather than in the final one.
+fn push_run<D: Data>(runs: &mut Vec<Chain<D>>, mut run: Chain<D>) {
+    while let Some(prev) = runs.last() {
+        if run.update_count * 2 < prev.update_count {
+            break;
+        }
+        let prev = runs.pop().expect("checked above");
+        let cursors = [prev, run]
+            .into_iter()
+            .filter_map(Chain::into_cursor)
+            .collect();
+        run = merge_cursors(cursors, 0);
+    }
+    if !run.is_empty() {
+        runs.push(run);
+    }
 }
 
 /// Merge the given cursors into one chain, writing new chunks at `depth`.
@@ -2362,18 +2392,7 @@ mod tests {
         }
         // Times beyond the since keep their own time.
         updates.push((7, Timestamp::from(200), Diff::ONE));
-        let chains: Vec<_> = updates
-            .chunks(9)
-            .map(|part| {
-                let mut part = part.to_vec();
-                consolidate(&mut part);
-                let mut builder = ChainBuilder::default();
-                builder.extend(part);
-                builder.finish()
-            })
-            .collect();
-
-        let merged = sort_advanced(chains, since_ts, 4);
+        let merged = sort_advanced(chains_of(&updates, 9), since_ts, 4);
 
         let mut expected: Vec<_> = updates
             .into_iter()
@@ -2385,6 +2404,65 @@ mod tests {
             merged.update_count, 51,
             "50 surviving insertions and the late update"
         );
+    }
+
+    /// Builds one chain per `per_chain` updates, each sorted and consolidated on its own.
+    fn chains_of(updates: &[(i64, Timestamp, Diff)], per_chain: usize) -> Vec<Chain<i64>> {
+        updates
+            .chunks(per_chain)
+            .map(|part| {
+                let mut part = part.to_vec();
+                consolidate(&mut part);
+                mint_run(&mut part)
+            })
+            .collect()
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow under Miri, and the sort and merge it checks have no unsafe code
+    fn sort_advanced_matches_one_sort() {
+        // Insertions spread over many times, a share of them retracted at a later time, so runs
+        // both survive consolidation and cancel across runs at several merge levels.
+        let since_ts = Timestamp::from(500);
+        let mut updates = Vec::new();
+        for i in 0..2_000_i64 {
+            let t = u64::try_from(i % 997).expect("fits");
+            updates.push((i % 300, Timestamp::from(t), Diff::ONE));
+            if i % 3 == 0 {
+                updates.push((i % 300, Timestamp::from(t + 3), -Diff::ONE));
+            }
+        }
+        let mut expected: Vec<_> = updates
+            .iter()
+            .map(|(d, t, r)| (*d, std::cmp::max(*t, since_ts), *r))
+            .collect();
+        consolidate(&mut expected);
+
+        for run_len in [1, 2, 7, 64, 100_000] {
+            let merged = sort_advanced(chains_of(&updates, 37), since_ts, run_len);
+            assert_eq!(
+                merged.iter().collect::<Vec<_>>(),
+                expected,
+                "run_len {run_len}"
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // slow under Miri, and the sort and merge it checks have no unsafe code
+    fn sort_advanced_cancels_to_nothing() {
+        let since_ts = Timestamp::from(10);
+        let updates: Vec<_> = (0..100_i64)
+            .flat_map(|i| {
+                let t = Timestamp::from(u64::try_from(i % 10).expect("fits"));
+                [
+                    (i, t, Diff::ONE),
+                    (i, t.max(Timestamp::from(5)), -Diff::ONE),
+                ]
+            })
+            .collect();
+        let merged = sort_advanced(chains_of(&updates, 13), since_ts, 8);
+        assert!(merged.is_empty(), "every insertion meets its retraction");
     }
 
     /// A since jump across many distinct buffered timestamps must collapse them onto the since.
