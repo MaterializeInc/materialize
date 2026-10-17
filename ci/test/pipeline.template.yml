@@ -303,6 +303,19 @@ steps:
     agents:
       queue: hetzner-aarch64-8cpu-16gb
 
+  - id: staged-catalog
+    topics: [cockroach, iceberg, kafka, mysql, postgres, sql-server]
+    label: Staged catalog observations
+    depends_on: build-aarch64
+    timeout_in_minutes: 10
+    inputs: [test/parallel-workload, misc/python/materialize/parallel_workload]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: parallel-workload
+          run: staged-catalog
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+
   - id: catalog-transactions
     topics: [cockroach, iceberg, kafka, mysql, postgres, sql-server]
     label: Catalog transaction isolation
@@ -432,7 +445,7 @@ steps:
         label: SSH connection
         depends_on: build-x86_64
         timeout_in_minutes: 40
-        inputs: [test/ssh-connection]
+        inputs: [test/ssh-connection, misc/python/materialize/parallel_workload/staged_catalog.py]
         parallelism: 3
         plugins:
           - ./ci/plugins/mzcompose:

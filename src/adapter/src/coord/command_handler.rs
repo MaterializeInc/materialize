@@ -1573,8 +1573,16 @@ impl Coordinator {
             }
         }
 
-        let catalog = self.catalog();
-        let catalog = catalog.for_session(ctx.session());
+        let observes_alter_connection = match &*stmt {
+            Statement::AlterConnection(AlterConnectionStatement { actions, .. }) => actions
+                .iter()
+                .any(|action| !matches!(action, AlterConnectionAction::RotateKeys)),
+            _ => false,
+        };
+        if Self::must_spawn_purification(&*stmt) || observes_alter_connection {
+            ctx.begin_catalog_preparation(self.catalog());
+        }
+        let catalog = ctx.catalog(self.catalog());
         let original_stmt = Arc::clone(&stmt);
         // `resolved_ids` should be derivable from `stmt`. If `stmt` is transformed to remove/add
         // IDs, then `resolved_ids` should be updated to also remove/add those IDs.
@@ -1592,13 +1600,13 @@ impl Coordinator {
             // Various statements must be purified off the main coordinator thread of control.
             stmt if Self::must_spawn_purification(&stmt) => {
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
-                let conn_id = ctx.session().conn_id().clone();
+                let conn_id = ctx.session().conn_id().unhandled();
                 let catalog = self.owned_catalog();
                 let now = self.now();
                 let otel_ctx = OpenTelemetryContext::obtain();
                 let current_storage_configuration = self.controller.storage.config().clone();
                 task::spawn(|| format!("purify:{conn_id}"), async move {
-                    let conn_catalog = catalog.for_session(ctx.session());
+                    let conn_catalog = ctx.catalog(&catalog);
 
                     let statement_source = mz_sql::pure::statement_source(&conn_catalog, &stmt);
 
@@ -1636,8 +1644,18 @@ impl Coordinator {
                         cluster_id,
                         None,
                         ctx.session().role_metadata().clone(),
-                    );
+                    )
+                    .with_catalog_reads(ctx.catalog_read_recorder());
                     // It is not an error for purification to complete after `internal_cmd_rx` is dropped.
+                    // Race tests wait for this event before mutating the prepared dependencies.
+                    tracing::debug!(
+                        target: "mz_adapter::catalog_preparation",
+                        %conn_id,
+                        kind = "purification",
+                        "catalog preparation complete"
+                    );
+                    crate::coord::catalog_preparation_test_pause("catalog_purification_ready")
+                        .await;
                     let result = internal_cmd_tx.send(Message::PurifiedStatementReady(
                         PurifiedStatementReady {
                             ctx,
@@ -1756,7 +1774,7 @@ impl Coordinator {
             _ => (stmt, resolved_ids),
         };
 
-        match self.plan_statement(ctx.session(), stmt, &params, &resolved_ids) {
+        match self.plan_statement(&ctx, stmt, &params, &resolved_ids) {
             Ok((plan, sql_impl_ids)) => {
                 self.sequence_plan(ctx, plan, resolved_ids, sql_impl_ids)
                     .await

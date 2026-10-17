@@ -396,17 +396,17 @@ impl Coordinator {
     /// The caller needs to provide a `CatalogItemId` and `GlobalId` for the sub-source.
     pub(crate) fn plan_subsource(
         &self,
-        session: &Session,
+        ctx: &ExecuteContext,
         params: &mz_sql::plan::Params,
         subsource_stmt: CreateSubsourceStatement<mz_sql::names::Aug>,
         item_id: CatalogItemId,
         global_id: GlobalId,
     ) -> Result<CreateSourcePlanBundle, AdapterError> {
-        let catalog = self.catalog().for_session(session);
+        let catalog = ctx.catalog(self.catalog());
         let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &subsource_stmt);
 
         let (plan, _sql_impl_ids) = self.plan_statement(
-            session,
+            ctx,
             Statement::CreateSubsource(subsource_stmt),
             params,
             &resolved_ids,
@@ -427,7 +427,7 @@ impl Coordinator {
     /// Prepares an `ALTER SOURCE...ADD SUBSOURCE`.
     pub(crate) async fn plan_purified_alter_source_add_subsource(
         &mut self,
-        session: &Session,
+        ctx: &ExecuteContext,
         params: Params,
         source_name: ResolvedItemName,
         options: Vec<AlterSourceAddSubsourceOption<Aug>>,
@@ -456,7 +456,7 @@ impl Coordinator {
             .allocate_user_ids(u64::cast_from(subsource_stmts.len()))
             .await?;
         for (subsource_stmt, (item_id, global_id)) in subsource_stmts.into_iter().zip_eq(ids) {
-            let s = self.plan_subsource(session, &params, subsource_stmt, item_id, global_id)?;
+            let s = self.plan_subsource(ctx, &params, subsource_stmt, item_id, global_id)?;
             subsource_plans.push(s);
         }
 
@@ -527,10 +527,9 @@ impl Coordinator {
             assert_none!(progress_stmt.of_source);
             let (item_id, global_id) = self.allocate_user_id().await?;
             let progress_plan =
-                self.plan_subsource(ctx.session(), &params, progress_stmt, item_id, global_id)?;
-            let progress_full_name = self
-                .catalog()
-                .for_session(ctx.session())
+                self.plan_subsource(ctx, &params, progress_stmt, item_id, global_id)?;
+            let progress_full_name = ctx
+                .catalog(self.catalog())
                 .resolve_full_name(&progress_plan.plan.name);
             let progress_subsource = ResolvedItemName::Item {
                 id: progress_plan.item_id,
@@ -545,7 +544,7 @@ impl Coordinator {
             source_stmt.progress_subsource = Some(DeferredItemName::Named(progress_subsource));
         }
 
-        let catalog = self.catalog().for_session(ctx.session());
+        let catalog = ctx.catalog(self.catalog());
         let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &source_stmt);
 
         let propagated_with_options: Vec<_> = source_stmt
@@ -562,7 +561,7 @@ impl Coordinator {
 
         // 2. Then plan the main source.
         let source_plan = match self.plan_statement(
-            ctx.session(),
+            ctx,
             Statement::CreateSource(source_stmt),
             &params,
             &resolved_ids,
@@ -573,9 +572,8 @@ impl Coordinator {
 
         let (item_id, global_id) = self.allocate_user_id().await?;
 
-        let source_full_name = self
-            .catalog()
-            .for_session(ctx.session())
+        let source_full_name = ctx
+            .catalog(self.catalog())
             .resolve_full_name(&source_plan.name);
         let of_source = ResolvedItemName::Item {
             id: item_id,
@@ -586,7 +584,7 @@ impl Coordinator {
         };
 
         // Generate subsource statements
-        let session_catalog = self.catalog().for_session(ctx.session());
+        let session_catalog = ctx.catalog(self.catalog());
         let conn_catalog = session_catalog.for_system_session();
         let pcx = plan::PlanContext::zero();
         let scx = StatementContext::new(Some(&pcx), &conn_catalog);
@@ -612,7 +610,7 @@ impl Coordinator {
             .allocate_user_ids(u64::cast_from(subsource_stmts.len()))
             .await?;
         for (stmt, (item_id, global_id)) in subsource_stmts.into_iter().zip_eq(ids) {
-            let plan = self.plan_subsource(ctx.session(), &params, stmt, item_id, global_id)?;
+            let plan = self.plan_subsource(ctx, &params, stmt, item_id, global_id)?;
             create_source_plans.push(plan);
         }
 
@@ -1148,7 +1146,7 @@ impl Coordinator {
                     kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
                 }),
             ) if if_not_exists => {
-                let catalog = self.catalog().for_session(ctx.session());
+                let catalog = ctx.catalog(self.catalog());
                 let exists = catalog.item_or_type_exists(&name);
                 if !exists {
                     return Err(err);
@@ -1168,7 +1166,7 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_create_sink(
         &mut self,
-        ctx: ExecuteContext,
+        mut ctx: ExecuteContext,
         plan: plan::CreateSinkPlan,
         resolved_ids: ResolvedIds,
     ) {
@@ -1203,7 +1201,9 @@ impl Coordinator {
             owner_id: *ctx.session().current_role_id(),
         }];
 
-        let result = self.catalog_transact(Some(ctx.session()), ops).await;
+        let result = self
+            .catalog_transact_with_context(None, Some(&mut ctx), ops)
+            .await;
 
         match result {
             Ok(()) => {}
@@ -1336,11 +1336,9 @@ impl Coordinator {
         let mut objects = Vec::new();
         for obj_id in &drop_ids {
             if !referenced_ids_hashset.contains(obj_id) {
-                let object_info = ErrorMessageObjectDescription::from_id(
-                    obj_id,
-                    &self.catalog().for_session(ctx.session()),
-                )
-                .to_string();
+                let object_info =
+                    ErrorMessageObjectDescription::from_id(obj_id, &ctx.catalog(self.catalog()))
+                        .to_string();
                 objects.push(object_info);
             }
         }
@@ -3072,13 +3070,16 @@ impl Coordinator {
         drop_options: BTreeSet<ConnectionOptionName>,
         validate: bool,
     ) {
-        let cur_entry = self.catalog().get_entry(&id);
-        let cur_conn = cur_entry.connection().expect("known to be connection");
-        let connection_gid = cur_conn.global_id();
+        let catalog = ctx.catalog(self.catalog());
+        let cur_entry = catalog.get_item(&id);
+        let create_sql = cur_entry.create_sql().to_owned();
+        let connection_gid = cur_entry.global_ids().next().expect("connection global ID");
+        drop(cur_entry);
+        drop(catalog);
 
         let inner = || -> Result<Connection, AdapterError> {
             // Parse statement.
-            let create_conn_stmt = match mz_sql::parse::parse(&cur_conn.create_sql)
+            let create_conn_stmt = match mz_sql::parse::parse(&create_sql)
                 .expect("invalid create sql persisted to catalog")
                 .into_element()
                 .ast
@@ -3087,7 +3088,8 @@ impl Coordinator {
                 _ => unreachable!("proved type is source"),
             };
 
-            let catalog = self.catalog().for_system_session();
+            let session_catalog = ctx.catalog(self.catalog());
+            let catalog = session_catalog.for_system_session();
 
             // Resolve items in statement
             let (mut create_conn_stmt, resolved_ids) =
@@ -3108,7 +3110,8 @@ impl Coordinator {
 
             // Open a new catalog, which we will use to re-plan our
             // statement with the desired config.
-            let mut catalog = self.catalog().for_system_session();
+            let session_catalog = ctx.catalog(self.catalog());
+            let mut catalog = session_catalog.for_system_session();
             catalog.mark_id_unresolvable_for_replanning(id);
 
             // Re-define our source in terms of the amended statement
@@ -3137,7 +3140,8 @@ impl Coordinator {
                 _ => unreachable!("proved type is source"),
             };
 
-            let catalog = self.catalog().for_system_session();
+            let session_catalog = ctx.catalog(self.catalog());
+            let catalog = session_catalog.for_system_session();
 
             // Resolve items in statement
             let (_, new_deps) = mz_sql::names::resolve(&catalog, create_conn_stmt)
@@ -3145,7 +3149,7 @@ impl Coordinator {
 
             Ok(Connection {
                 create_sql: plan.connection.create_sql,
-                global_id: cur_conn.global_id,
+                global_id: connection_gid,
                 details: plan.connection.details,
                 resolved_ids: new_deps,
             })
@@ -3162,7 +3166,7 @@ impl Coordinator {
         // that `check_plan` could not authorize. Check them before secret guards
         // or validation can resolve a secret.
         let usage_check = {
-            let catalog = self.catalog().for_session(ctx.session());
+            let catalog = ctx.catalog(self.catalog());
             rbac::check_usage(
                 &catalog,
                 ctx.session(),
@@ -3193,20 +3197,22 @@ impl Coordinator {
             let connection = conn
                 .details
                 .to_connection()
-                .into_inline_connection(self.catalog().state());
+                .into_inline_connection(&ctx.catalog(self.catalog()));
 
             let internal_cmd_tx = self.internal_cmd_tx.clone();
             let catalog = self.owned_catalog();
-            let conn_id = ctx.session().conn_id().clone();
+            let conn_id = ctx.session().conn_id().unhandled();
             let otel_ctx = OpenTelemetryContext::obtain();
             let role_metadata = ctx.session().role_metadata().clone();
+            let catalog_reads = ctx.catalog_read_recorder();
             let current_storage_parameters = self.controller.storage.config().clone();
 
             task::spawn(
                 || format!("validate_alter_connection:{conn_id}"),
                 async move {
                     let resolved_ids = conn.resolved_ids.clone();
-                    let dependency_ids: BTreeSet<_> = resolved_ids.items().copied().collect();
+                    let mut dependency_ids: BTreeSet<_> = resolved_ids.items().copied().collect();
+                    dependency_ids.insert(id);
                     let result = match std::panic::AssertUnwindSafe(
                         connection.validate(id, &current_storage_parameters),
                     )
@@ -3224,6 +3230,15 @@ impl Coordinator {
                     };
 
                     // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
+                    // Race tests wait for this event before mutating the prepared dependencies.
+                    tracing::debug!(
+                        target: "mz_adapter::catalog_preparation",
+                        %conn_id,
+                        kind = "alter_connection",
+                        "catalog preparation complete"
+                    );
+                    crate::coord::catalog_preparation_test_pause("catalog_alter_connection_ready")
+                        .await;
                     let result = internal_cmd_tx.send(Message::AlterConnectionValidationReady(
                         AlterConnectionValidationReady {
                             ctx,
@@ -3236,7 +3251,8 @@ impl Coordinator {
                                 None,
                                 None,
                                 role_metadata,
-                            ),
+                            )
+                            .with_catalog_reads(catalog_reads),
                             otel_ctx,
                             resolved_ids,
                         },
@@ -3248,7 +3264,7 @@ impl Coordinator {
             );
         } else {
             let result = self
-                .sequence_alter_connection_stage_finish(ctx.session_mut(), id, conn)
+                .sequence_alter_connection_stage_finish(&mut ctx, id, conn)
                 .await;
             ctx.retire(result);
         }
@@ -3257,7 +3273,7 @@ impl Coordinator {
     #[instrument]
     pub(crate) async fn sequence_alter_connection_stage_finish(
         &mut self,
-        session: &Session,
+        ctx: &mut ExecuteContext,
         id: CatalogItemId,
         connection: Connection,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -3278,7 +3294,8 @@ impl Coordinator {
             to_item: CatalogItem::Connection(connection.clone()),
         }];
 
-        self.catalog_transact(Some(session), ops).await?;
+        self.catalog_transact_with_context(None, Some(ctx), ops)
+            .await?;
 
         // NOTE: The rest of the alter connection logic (updating VPC endpoints
         // and propagating connection changes to dependent sources, sinks, and
@@ -3292,13 +3309,14 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_alter_source(
         &mut self,
-        session: &Session,
+        ctx: &mut ExecuteContext,
         plan::AlterSourcePlan {
             item_id,
             ingestion_id,
             action,
         }: plan::AlterSourcePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        let session = ctx.session();
         let cur_entry = self.catalog().get_entry(&item_id);
         let cur_source = cur_entry.source().expect("known to be source");
 
@@ -3607,11 +3625,13 @@ impl Coordinator {
                     "IF NOT EXISTS not supported for ALTER SOURCE...ADD SUBSOURCES"
                 );
 
-                self.catalog_transact(Some(session), ops).await?;
+                self.catalog_transact_with_context(None, Some(ctx), ops)
+                    .await?;
             }
             plan::AlterSourceAction::RefreshReferences { references } => {
-                self.catalog_transact(
-                    Some(session),
+                self.catalog_transact_with_context(
+                    None,
+                    Some(ctx),
                     vec![catalog::Op::UpdateSourceReferences {
                         source_id: item_id,
                         references: references.into(),

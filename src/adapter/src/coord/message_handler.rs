@@ -825,16 +825,8 @@ impl Coordinator {
     ) {
         otel_ctx.attach_as_parent();
 
-        // Ensure that all dependencies still exist after purification, as a
-        // `DROP CONNECTION` or other `DROP` may have sneaked in. If any have gone missing, we
-        // repurify the original statement. This will either produce a nice
-        // "unknown connector" error, or pick up a new connector that has
-        // replaced the dropped connector.
-        //
-        // n.b. an `ALTER CONNECTION` occurring during purification is OK
-        // because we always look up/populate a connection's state after
-        // committing to the catalog, so are guaranteed to see the connection's
-        // most recent version.
+        // Repurify when catalog observations changed. External metadata captured
+        // using an old connection cannot be combined with its new definition.
         // A DDL transaction can depend on its own uncommitted objects. Its
         // catalog observations are validated in replay order at commit, not
         // against the committed catalog used by this retry check.
@@ -873,7 +865,7 @@ impl Coordinator {
                 subsources,
             } => self
                 .plan_purified_alter_source_add_subsource(
-                    ctx.session(),
+                    &ctx,
                     params,
                     source_name,
                     options,
@@ -913,9 +905,9 @@ impl Coordinator {
 
                 // Determine all dependencies, not just those in the statement
                 // itself.
-                let catalog = self.catalog().for_session(ctx.session());
+                let catalog = ctx.catalog(self.catalog());
                 let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &stmt);
-                self.plan_statement(ctx.session(), stmt, &params, &resolved_ids)
+                self.plan_statement(&ctx, stmt, &params, &resolved_ids)
                     .map(|(plan, sql_impl_ids)| (plan, resolved_ids, sql_impl_ids))
             }
         };
@@ -944,11 +936,6 @@ impl Coordinator {
     ) {
         otel_ctx.attach_as_parent();
 
-        // Ensure that all dependencies still exist after validation, as a
-        // `DROP SECRET` may have sneaked in.
-        //
-        // WARNING: If we support `ALTER SECRET`, we'll need to also check
-        // for connectors that were altered while we were purifying.
         if let Err(e) = plan_validity.check(self.catalog()) {
             if self.secrets_controller.delete(connection_id).await.is_ok() {
                 self.caching_secrets_reader.invalidate(connection_id);
@@ -993,11 +980,7 @@ impl Coordinator {
     ) {
         otel_ctx.attach_as_parent();
 
-        // Ensure that all dependencies still exist after validation, as a
-        // `DROP SECRET` may have sneaked in.
-        //
-        // WARNING: If we support `ALTER SECRET`, we'll need to also check
-        // for connectors that were altered while we were purifying.
+        // Key rotation can change the target while validation runs off-thread.
         if let Err(e) = plan_validity.check(self.catalog()) {
             return ctx.retire(Err(e));
         }
@@ -1010,7 +993,7 @@ impl Coordinator {
         };
 
         let result = self
-            .sequence_alter_connection_stage_finish(ctx.session_mut(), connection_id, conn)
+            .sequence_alter_connection_stage_finish(&mut ctx, connection_id, conn)
             .await;
         ctx.retire(result);
     }
