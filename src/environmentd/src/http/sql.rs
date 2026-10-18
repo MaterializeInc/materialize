@@ -520,29 +520,27 @@ async fn forward_notices(
     Ok(())
 }
 
-/// A request to execute SQL over HTTP.
+/// A request to execute SQL over HTTP or WebSocket. Execution stops at the first statement
+/// that fails.
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(untagged)]
 pub enum SqlRequest {
-    /// A simple query request.
-    Simple {
-        /// A query string containing zero or more queries delimited by
-        /// semicolons.
-        query: Sql,
-    },
-    /// An extended query request.
-    Extended {
-        /// Queries to execute using the extended protocol.
-        queries: Vec<ExtendedRequest>,
-    },
+    /// One SQL string without parameters, as in PostgreSQL's simple query protocol. Its
+    /// statements, separated by semicolons, share one implicit transaction, unless `BEGIN` and
+    /// `COMMIT` among them group statements into an explicit transaction.
+    Simple { query: Sql },
+    /// A list of statements, each with its own parameters. Each statement runs in its own
+    /// implicit transaction, as if it were followed by a `Sync` in PostgreSQL's extended query
+    /// protocol, unless `BEGIN` and `COMMIT` entries group statements into an explicit transaction.
+    Extended { queries: Vec<ExtendedRequest> },
 }
 
-/// An request to execute a SQL query using the extended protocol.
+/// One statement of an [`SqlRequest::Extended`].
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ExtendedRequest {
-    /// A query string containing zero or one queries.
+    /// A SQL string containing exactly one statement.
     query: String,
-    /// Optional parameters for the query.
+    /// The values of the statement's parameters, as text. `None` is SQL `NULL`.
     #[serde(default)]
     params: Vec<Option<String>>,
 }
