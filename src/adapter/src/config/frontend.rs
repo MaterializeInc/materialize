@@ -131,7 +131,13 @@ impl SystemParameterFrontend {
     /// This will create and initialize an [ld::Client] instance. The
     /// [ld::Client::wait_for_initialization] call will be attempted in a loop with an
     /// exponential backoff with power `2s` and max duration `60s`.
-    pub async fn from(sync_config: &SystemParameterSyncConfig) -> Result<Self, anyhow::Error> {
+    ///
+    /// If `send_events` is false, the LaunchDarkly client sends no analytics
+    /// events (flag evaluation summaries and evaluation contexts).
+    pub async fn from(
+        sync_config: &SystemParameterSyncConfig,
+        send_events: bool,
+    ) -> Result<Self, anyhow::Error> {
         match &sync_config.backend_config {
             super::SystemParameterSyncClientConfig::File { path } => Ok(Self {
                 client: SystemParameterFrontendClient::File { path: path.clone() },
@@ -147,8 +153,14 @@ impl SystemParameterFrontend {
                 now_fn,
             } => Ok(Self {
                 client: SystemParameterFrontendClient::LaunchDarkly {
-                    client: ld_client(sdk_key, base_uri.as_deref(), &sync_config.metrics, now_fn)
-                        .await?,
+                    client: ld_client(
+                        sdk_key,
+                        base_uri.as_deref(),
+                        &sync_config.metrics,
+                        now_fn,
+                        send_events,
+                    )
+                    .await?,
                     // The environment-wide context carries no cluster/replica
                     // scope. Scoped evaluation passes a `cluster` or `replica`
                     // context per pass via [`ld_ctx`].
@@ -510,6 +522,7 @@ fn ld_config(
     base_uri: Option<&str>,
     metrics: &Metrics,
     now_fn: &NowFn,
+    send_events: bool,
 ) -> ld::Config {
     // How long a body read on the streaming connection may stay idle before
     // the transport surfaces a timeout error to the data source. This is the
@@ -542,26 +555,27 @@ fn ld_config(
     let transport = mz_dyncfg_launchdarkly::https_transport(Duration::from_secs(10), read_timeout)
         .expect("failed to create HTTPS transport");
 
-    let cse_transport = MetricsTransport {
-        inner: transport.clone(),
-        last_success_gauge: metrics.last_cse_time_seconds.clone(),
-        now_fn: now_fn.clone(),
-    };
     let data_source_transport = MetricsTransport {
-        inner: transport,
+        inner: transport.clone(),
         last_success_gauge: metrics.last_sse_time_seconds.clone(),
         now_fn: now_fn.clone(),
     };
 
-    let mut event_processor = ld::EventProcessorBuilder::new();
-    event_processor.transport(cse_transport);
-
     let mut data_source = ld::StreamingDataSourceBuilder::new();
     data_source.transport(data_source_transport);
 
-    let mut config = ld::ConfigBuilder::new(api_key)
-        .event_processor(&event_processor)
-        .data_source(&data_source);
+    let mut config = ld::ConfigBuilder::new(api_key).data_source(&data_source);
+    config = if send_events {
+        let mut event_processor = ld::EventProcessorBuilder::new();
+        event_processor.transport(MetricsTransport {
+            inner: transport,
+            last_success_gauge: metrics.last_cse_time_seconds.clone(),
+            now_fn: now_fn.clone(),
+        });
+        config.event_processor(&event_processor)
+    } else {
+        config.event_processor(&ld::NullEventProcessorBuilder::new())
+    };
     if let Some(base_uri) = base_uri {
         let mut endpoints = ld::ServiceEndpointsBuilder::new();
         endpoints.relay_proxy(base_uri);
@@ -575,8 +589,9 @@ async fn ld_client(
     base_uri: Option<&str>,
     metrics: &Metrics,
     now_fn: &NowFn,
+    send_events: bool,
 ) -> Result<ld::Client, anyhow::Error> {
-    let ld_client = ld::Client::build(ld_config(api_key, base_uri, metrics, now_fn))?;
+    let ld_client = ld::Client::build(ld_config(api_key, base_uri, metrics, now_fn, send_events))?;
     tracing::info!("waiting for SystemParameterFrontend to initialize");
     ld_client.start_with_default_executor();
 

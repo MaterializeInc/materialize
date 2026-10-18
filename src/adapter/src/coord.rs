@@ -5427,7 +5427,13 @@ pub async fn load_remote_system_parameters(
         //    6. Reboot environmentd.
         let mut params = SynchronizedParameters::new(SystemVars::default());
         let frontend_sync = async {
-            let frontend = SystemParameterFrontend::from(&system_parameter_sync_config).await?;
+            // This frontend serves one pull and is then dropped. Its LaunchDarkly
+            // client sends no analytics events: the sync loop's client reports the
+            // same evaluations, and dropping a client that has an event processor
+            // without closing it makes the SDK log `inbox_rx is disconnected` as an
+            // error.
+            let frontend =
+                SystemParameterFrontend::from(&system_parameter_sync_config, false).await?;
             frontend.pull(&mut params);
             let ops = params
                 .modified()
