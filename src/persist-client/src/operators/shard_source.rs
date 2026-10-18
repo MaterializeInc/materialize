@@ -39,7 +39,7 @@ use mz_timely_util::builder_async::{
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Capability, CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
+use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
 use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::AntichainRef;
@@ -704,7 +704,7 @@ where
         // come back with the result. The missing-blob diagnostics round-trip
         // happens inside the future, so the error surfaces only after the fetch
         // has truly failed.
-        let fetch_one = |caps: [Capability<TInner>; 2], part: ExchangeableBatchPart<T>| {
+        let fetch_one = |caps: [CapabilitySet<TInner>; 2], part: ExchangeableBatchPart<T>| {
             let mut fetcher = fetcher.clone();
             async move {
                 let reader_id = part.reader_id().clone();
@@ -748,7 +748,7 @@ where
         // worker via the completed-fetches feedback. Carrying capabilities
         // rather than a separate time-keyed map makes correctness independent of
         // the order results come back in.
-        let mut pending: VecDeque<([Capability<TInner>; 2], ExchangeableBatchPart<T>)> =
+        let mut pending: VecDeque<([CapabilitySet<TInner>; 2], ExchangeableBatchPart<T>)> =
             VecDeque::new();
         let mut in_flight = FuturesUnordered::new();
         let mut input_done = false;
@@ -1086,8 +1086,8 @@ mod tests {
                 // frontier downgrades are held back.
                 let mut max_msg_time: Option<u64> = None;
                 while let Ok(event) = receiver.try_recv() {
-                    if let CaptureEvent::Messages(time, _) = event {
-                        max_msg_time = max_msg_time.max(Some(time));
+                    if let CaptureEvent::Messages(stamp, _) = event {
+                        max_msg_time = max_msg_time.max(stamp.iter().copied().max());
                     }
                 }
                 max_msg_time
@@ -1590,9 +1590,9 @@ mod tests {
             let mut blob_count = 0;
             let mut max_time: Option<u64> = None;
             while let Ok(event) = capture.try_recv() {
-                if let CaptureEvent::Messages(time, msgs) = event {
+                if let CaptureEvent::Messages(stamp, msgs) = event {
                     blob_count += msgs.len();
-                    max_time = max_time.max(Some(time));
+                    max_time = max_time.max(stamp.iter().copied().max());
                 }
             }
             (blob_count, max_time)

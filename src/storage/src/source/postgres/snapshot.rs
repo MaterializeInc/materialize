@@ -809,7 +809,7 @@ pub(crate) fn render<'scope>(
                 &format!("PgCastSnapshotRows({output_index})"),
                 |_, _| {
                     move |input, output| {
-                        input.for_each_time(|time, data| {
+                        input.for_each_stamp(|time, data| {
                             let mut session = output.session(&time);
                             for (event, time, diff) in data.flat_map(|data| data.drain(..)) {
                                 let info = info

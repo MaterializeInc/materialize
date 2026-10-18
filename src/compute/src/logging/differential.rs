@@ -18,12 +18,13 @@ use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::logging::{
     BatchEvent, BatcherEvent, DifferentialEvent, DropEvent, MergeEvent, TraceShare,
 };
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
+use mz_row_spine::RowRowBuilder;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
-use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::InputCapability;
@@ -38,8 +39,8 @@ use crate::logging::{
     DifferentialLog, EventQueue, LogCollection, LogVariant, SharedLoggingState,
     consolidate_and_pack,
 };
-use crate::typedefs::{KeyBatcher, RowRowSpine};
-use mz_row_spine::RowRowBuilder;
+use crate::typedefs::ConsolidateBatcher;
+use crate::typedefs::RowRowSpine;
 
 /// The return type of [`construct`].
 pub(super) struct Return {
@@ -108,7 +109,7 @@ pub(super) fn construct(
                 let mut batcher_capacity = batcher_capacity_out.activate();
                 let mut batcher_allocations = batcher_allocations_out.activate();
 
-                input.for_each_time(|cap, data| {
+                input.for_each_stamp(|cap, data| {
                     let mut output_buffers = DemuxOutput {
                         batches: batches.session_with_builder(&cap),
                         records: records.session_with_builder(&cap),
@@ -144,22 +145,19 @@ pub(super) fn construct(
             Timestamp,
             mz_timely_util::columnar::Column<((mz_repr::Row, mz_repr::Row), Timestamp, Diff)>,
         > {
-            consolidate_and_pack::<
-                ColumnationChunker<_>,
-                KeyBatcher<_, _, _>,
-                ColumnBuilder<_>,
-                _,
-                _,
-                _,
-            >(input, log, move |data, packer, session| {
-                for ((op, ()), time, diff) in data.iter() {
-                    let data = packer.pack_slice(&[
-                        Datum::UInt64(u64::cast_from(*op)),
-                        Datum::UInt64(u64::cast_from(worker_id)),
-                    ]);
-                    session.give((data, *time, *diff))
-                }
-            })
+            consolidate_and_pack::<ConsolidateBatcher<_, _, _>, ColumnBuilder<_>, _, _, _, _>(
+                input,
+                log,
+                move |data, packer, session| {
+                    for ((op, ()), time, diff) in data.iter() {
+                        let data = packer.pack_slice(&[
+                            Datum::UInt64(u64::cast_from(*op)),
+                            Datum::UInt64(u64::cast_from(worker_id)),
+                        ]);
+                        session.give((data, *time, *diff))
+                    }
+                },
+            )
         }
         let worker_id = scope.index();
 
@@ -195,11 +193,9 @@ pub(super) fn construct(
                 let trace = collection
                     .mz_arrange_core::<
                         _,
-                        batcher::Chunker<_>,
-                        Col2ValBatcher<_, _, _, _>,
-                        RowRowBuilder<_, _>,
+                        Col2ValBatcher<_, _, _, _, batcher::Chunker<_>, RowRowBuilder<_, _>>,
                         RowRowSpine<_, _>,
-                    >(exchange, &format!("Arrange {variant:?}"))
+                    >(exchange, &format!("Arrange {variant:?}"), MergeBatcher::new)
                     .trace;
                 let collection = LogCollection {
                     trace,

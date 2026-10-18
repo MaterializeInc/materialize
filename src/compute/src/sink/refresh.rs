@@ -55,7 +55,7 @@ where
                 let Some(capability) = capability.as_mut() else {
                     soft_panic_or_log!(
                         "should have a capability if we received data. input_cap: {:?}, frontier: {:?}",
-                        input_cap.time(),
+                        input_cap.stamp(),
                         frontiers[0].frontier()
                     );
                     return;
