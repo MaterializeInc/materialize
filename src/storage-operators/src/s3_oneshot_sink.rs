@@ -23,7 +23,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_repr::{CatalogItemId, Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::connections::aws::AwsConnection;
+use mz_storage_types::connections::aws::{AwsConnection, AwsConnectionExt};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::s3_oneshot_sink::S3KeyManager;
 use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};

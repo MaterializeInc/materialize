@@ -54,6 +54,7 @@ use mz_sql_parser::ast::{
 use mz_sql_server_util::desc::SqlServerTableDesc;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::Connection;
+use mz_storage_types::connections::aws::AwsConnectionExt;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::errors::ContextCreationError;
 use mz_storage_types::sources::load_generator::LoadGeneratorOutput;

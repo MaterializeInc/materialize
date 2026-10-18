@@ -21,4 +21,4 @@ pub mod sinks;
 pub mod sources;
 
 /// Identifier of a compute instance.
-pub type ComputeInstanceId = mz_storage_types::instances::StorageInstanceId;
+pub type ComputeInstanceId = mz_cluster_client::instances::StorageInstanceId;

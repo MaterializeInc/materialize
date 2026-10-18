@@ -1,0 +1,45 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+use mz_repr::CatalogItemId;
+#[cfg(any(test, feature = "proptest"))]
+use proptest_derive::Arbitrary;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub enum StringOrSecret {
+    String(String),
+    Secret(CatalogItemId),
+}
+
+impl StringOrSecret {
+    /// Asserts that this string or secret is a string and returns its contents.
+    pub fn unwrap_string(&self) -> &str {
+        match self {
+            StringOrSecret::String(s) => s,
+            StringOrSecret::Secret(_) => panic!("StringOrSecret::unwrap_string called on a secret"),
+        }
+    }
+
+    /// Asserts that this string or secret is a secret and returns its global
+    /// ID.
+    pub fn unwrap_secret(&self) -> CatalogItemId {
+        match self {
+            StringOrSecret::String(_) => panic!("StringOrSecret::unwrap_secret called on a string"),
+            StringOrSecret::Secret(id) => *id,
+        }
+    }
+}
+
+impl<V: std::fmt::Display> From<V> for StringOrSecret {
+    fn from(v: V) -> StringOrSecret {
+        StringOrSecret::String(format!("{}", v))
+    }
+}
