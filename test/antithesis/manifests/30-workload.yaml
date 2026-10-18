@@ -1,0 +1,212 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# The workload pod. Its entrypoint creates the Materialize CR, waits for the
+# environment to serve SQL, emits `setup_complete`, and then idles while
+# Antithesis runs the test commands under /opt/antithesis/test/v1/.
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: workload
+  namespace: materialize
+---
+# Drives rollouts and observes what orchestratord and environmentd create.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload
+  namespace: materialize-environment
+rules:
+- apiGroups: [materialize.cloud]
+  resources: [materializes, materializes/status]
+  verbs: [get, list, watch, create, patch, update]
+- apiGroups: [apps]
+  resources: [statefulsets]
+  verbs: [get, list, watch]
+- apiGroups: [""]
+  resources: [pods]
+  verbs: [get, list, watch, delete]
+- apiGroups: [""]
+  resources: [services, events, secrets]
+  verbs: [get, list, watch]
+- apiGroups: [""]
+  resources: [configmaps]
+  verbs: [get, list, watch, patch, update]
+- apiGroups: [events.k8s.io]
+  resources: [events]
+  verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload
+  namespace: materialize-environment
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: workload
+subjects:
+- kind: ServiceAccount
+  name: workload
+  namespace: materialize
+---
+# Reads the orchestratord leader Lease and pods in the operator namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: workload-operator
+  namespace: materialize
+rules:
+- apiGroups: [coordination.k8s.io]
+  resources: [leases]
+  verbs: [get, list, watch]
+- apiGroups: [""]
+  resources: [pods]
+  verbs: [get, list, watch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workload-operator
+  namespace: materialize
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: workload-operator
+subjects:
+- kind: ServiceAccount
+  name: workload
+  namespace: materialize
+---
+# Waiting for the Materialize CRD to be established needs cluster scope.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: materialize-workload-crds
+rules:
+- apiGroups: [apiextensions.k8s.io]
+  resources: [customresourcedefinitions]
+  verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: materialize-workload-crds
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: materialize-workload-crds
+subjects:
+- kind: ServiceAccount
+  name: workload
+  namespace: materialize
+---
+# The resource kill check reads every pod, node conditions, and the eviction
+# and OOM events, which the kubelet records in whatever namespace the
+# involved object lives in (`default` for the node).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: materialize-workload-resource-kills
+rules:
+- apiGroups: [""]
+  resources: [pods, nodes, events]
+  verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: materialize-workload-resource-kills
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: materialize-workload-resource-kills
+subjects:
+- kind: ServiceAccount
+  name: workload
+  namespace: materialize
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workload
+  namespace: materialize
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: workload
+  template:
+    metadata:
+      labels:
+        app: workload
+    spec:
+      serviceAccountName: workload
+      # Antithesis only pre-pulls images that appear in the manifests. The
+      # environmentd and clusterd images are referenced only through the
+      # Materialize CR, so these no-op init containers pull them. The initial
+      # images are the target ones unless the environment starts on an older
+      # release to upgrade from.
+      initContainers:
+      - name: pull-environmentd
+        image: ${ENVIRONMENTD_IMAGE}
+        imagePullPolicy: IfNotPresent
+        command: [/busybox/true]
+      - name: pull-clusterd
+        image: ${CLUSTERD_IMAGE}
+        imagePullPolicy: IfNotPresent
+        command: [/busybox/true]
+      - name: pull-initial-environmentd
+        image: ${INITIAL_ENVIRONMENTD_IMAGE}
+        imagePullPolicy: IfNotPresent
+        command: [/busybox/true]
+      - name: pull-initial-clusterd
+        image: ${INITIAL_CLUSTERD_IMAGE}
+        imagePullPolicy: IfNotPresent
+        command: [/busybox/true]
+      containers:
+      - name: workload
+        image: ${WORKLOAD_IMAGE}
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: MZ_ANTITHESIS_NAMESPACE
+          value: materialize-environment
+        - name: MZ_ANTITHESIS_OPERATOR_NAMESPACE
+          value: materialize
+        - name: MZ_ANTITHESIS_ENVIRONMENT
+          value: ${ENVIRONMENT_NAME}
+        - name: MZ_ANTITHESIS_KAFKA_BROKER
+          value: redpanda.materialize.svc.cluster.local:9092
+        - name: MZ_ANTITHESIS_SCHEMA_REGISTRY_URL
+          value: http://redpanda.materialize.svc.cluster.local:8081
+        - name: MZ_ANTITHESIS_UPSTREAM_POSTGRES_URL
+          value: postgres://postgres:postgres@postgres-upstream.materialize.svc.cluster.local:5432/upstream
+        - name: MZ_ANTITHESIS_METADATA_POSTGRES_URL
+          value: postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db
+        - name: MZ_ANTITHESIS_STATE_DIR
+          value: /var/lib/antithesis-workload
+        - name: MZ_ANTITHESIS_ENVIRONMENTD_IMAGE
+          value: ${ENVIRONMENTD_IMAGE}
+        - name: MZ_ANTITHESIS_INITIAL_ENVIRONMENTD_IMAGE
+          value: ${INITIAL_ENVIRONMENTD_IMAGE}
+        resources:
+          requests:
+            cpu: 20m
+            memory: 256Mi
+        readinessProbe:
+          exec:
+            command: [test, -f, /var/lib/antithesis-workload/setup-complete]
+          periodSeconds: 5
+        volumeMounts:
+        - name: state
+          mountPath: /var/lib/antithesis-workload
+      volumes:
+      - name: state
+        emptyDir: {}
