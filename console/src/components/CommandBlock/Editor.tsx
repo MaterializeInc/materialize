@@ -9,6 +9,7 @@
 
 import { Code, CodeProps, useTheme } from "@chakra-ui/react";
 import {
+  EditorView,
   lineNumbers as codeMirrorLineNumbers,
   placeholder as codeMirrorPlaceholder,
 } from "@codemirror/view";
@@ -138,13 +139,16 @@ const Editor = forwardRef<FocusableElement, EditorProps>(
   ) => {
     const currentView = useView();
     const containerRef = useContainerRef();
-    useViewEffect((view) => {
-      return addUpdateListener(view, (update) => {
-        if (onChange && update.docChanged) {
-          onChange(update.state.doc.toString());
-        }
-      });
-    });
+    const addChangeListener = useCallback(
+      (view: EditorView) =>
+        addUpdateListener(view, (update) => {
+          if (onChange && update.docChanged) {
+            onChange(update.state.doc.toString());
+          }
+        }),
+      [onChange],
+    );
+    useViewEffect(addChangeListener);
     useInitializePromptOnMount();
     useAdditionalExtensions({ lineNumbers, placeholder, onCommand, onKeyDown });
 

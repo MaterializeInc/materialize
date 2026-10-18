@@ -7,22 +7,24 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { createCodeMirrorWithContext } from "@codemirror-toolkit/react";
+import {
+  createContext,
+  useView as useCodeMirrorView,
+  useViewEffect as useCodeMirrorViewEffect,
+  ViewEffectSetup,
+} from "@codemirror-toolkit/react";
 
-const {
-  Provider,
-  useGetView,
-  useView,
-  useViewDispatch,
-  useViewEffect,
-  useContainerRef,
-} = createCodeMirrorWithContext<HTMLDivElement>("CodeMirrorContext");
+const { Provider, useCodeMirror } = createContext();
 
-export {
-  Provider as _Provider,
-  useContainerRef,
-  useGetView,
-  useView,
-  useViewDispatch,
-  useViewEffect,
-};
+export const useGetView = () => useCodeMirror().getView;
+
+export const useView = () => useCodeMirrorView(useCodeMirror());
+
+/** `setup` must be referentially stable, or the effect re-runs on every render. */
+export const useViewEffect = (setup: ViewEffectSetup) =>
+  useCodeMirrorViewEffect(useCodeMirror(), setup);
+
+/** Returns a callback ref that mounts the editor into the referenced element. */
+export const useContainerRef = () => useCodeMirror().setContainer;
+
+export { Provider as _Provider };

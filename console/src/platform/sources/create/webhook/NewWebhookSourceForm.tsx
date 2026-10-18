@@ -45,10 +45,7 @@ import useSchemas from "~/api/materialize/useSchemas";
 import { HTTP_HEADER_FIELD_NAME_REGEX } from "~/api/materialize/validation";
 import Alert from "~/components/Alert";
 import CommandBlock, { CodeMirrorProvider } from "~/components/CommandBlock";
-import {
-  useGetView,
-  useViewDispatch,
-} from "~/components/CommandBlock/provider";
+import { useGetView } from "~/components/CommandBlock/provider";
 import ErrorBox from "~/components/ErrorBox";
 import {
   FORM_CONTENT_WIDTH,
@@ -177,7 +174,6 @@ const CustomCheckControl = forwardRef<HTMLDivElement, CustomCheckControlProps>(
   ({ secret, onBlur, onChange, value, boxProps, error }, ref) => {
     const { colors, radii } = useTheme<MaterializeTheme>();
     const getView = useGetView();
-    const viewDispatch = useViewDispatch();
 
     useEffect(() => {
       // react-hook-form won't advertise errors with this field until the
@@ -187,18 +183,14 @@ const CustomCheckControl = forwardRef<HTMLDivElement, CustomCheckControlProps>(
       onBlur();
     });
 
-    const handleChange = (newVal: string) => {
-      onChange(newVal);
-    };
-
     useEffect(() => {
       const view = getView();
       if (!view) return;
       if (view.state.doc.toString() === value) return;
-      viewDispatch({
+      view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: value },
       });
-    }, [getView, viewDispatch, value]);
+    }, [getView, value]);
 
     const previousSecret = useRef<SecretOption | null>(null);
     const hasCheckStatement = value.trim().length !== 0;
@@ -248,7 +240,7 @@ const CustomCheckControl = forwardRef<HTMLDivElement, CustomCheckControlProps>(
             borderRadius={radii.lg}
           >
             <CommandBlock
-              onChange={handleChange}
+              onChange={onChange}
               ref={ref}
               containerProps={{
                 width: "100%",
