@@ -1888,8 +1888,13 @@ async fn execute_stmt<S: ResultSender>(
             let max_result_size = max_result_size(client).await;
 
             let rows = futures::stream::once(futures::future::ready(PeekResponseUnary::Rows(rows)));
-            let rows_stream =
-                RecordFirstRowStream::new(Box::new(rows), execute_started, client, None, None);
+            let rows_stream = RecordFirstRowStream::new(
+                Box::new(rows),
+                execute_started,
+                client,
+                None,
+                Some(StatementExecutionStrategy::Constant),
+            );
 
             StatementResult::Rows {
                 desc: desc.relation_desc.expect("RelationDesc must exist"),
