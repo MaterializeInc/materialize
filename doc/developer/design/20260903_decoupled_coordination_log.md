@@ -179,14 +179,15 @@ instead finds the frontier-observation index dominating the same worker:
 `mz_cluster_replica_frontiers_ind`'s arrangement consumes 29.4s over a roughly
 45s capture interval. A CPU profile identifies repeated batch sealing/extraction,
 with strongly skewed inputs. The bounded candidate routes six non-retained
-current-view fence lookups through the existing shared catalog index. Installed
-plans confirm all six import the shared index, while the three retained indexes
-keep their raw imports. Maintained raw readers fall from eleven to five.
-Catalog EXPLAIN and index-accounting regressions, catalog testdrive and the SQL
-workflow's SIGKILL/restart sanity check pass. The generated EXPLAIN inventory
-remains 330 queries. Two full-workload attempts fail in the Python driver's
-parked file-descriptor error during validation, not a passing workload result.
-Original-budget CI and compatible handover still need verification.
+current-view fence lookups through the existing shared catalog index. Sharing
+does not establish a memory or SQL-latency improvement. Keep this candidate
+provisional rather than treating fewer raw readers as the contention repair.
+Original-budget stalls include repeated stale candidates and long catalog
+certification while holding admission. Separate oracle-handle acquisition,
+oracle reads, snapshot round trips and task scheduling before choosing a repair.
+The requested CI queue also accepts larger hosts. Keep exact-instance diagnostic
+placement separate from production changes and out of the landing history.
+Keep the Python driver's file-descriptor issue parked.
 Retained lookups, the two peek-only views and generic batcher machinery are
 unchanged. Input-skew amplification remains an observed risk, not a resolved
 property. Keep this post-workload diagnosis distinct from CI's long DDL awaits.

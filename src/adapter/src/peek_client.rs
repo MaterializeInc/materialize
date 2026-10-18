@@ -207,12 +207,19 @@ impl PeekClient {
         timeline: Timeline,
     ) -> Result<&mut Arc<dyn TimestampOracle<Timestamp> + Send + Sync>, AdapterError> {
         if !self.oracles.contains_key(&timeline) {
+            let started = std::time::Instant::now();
+            tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                phase = "oracle_handle", ?timeline, "frontend dependency await started");
             let oracle = self
                 .call_coordinator(|tx| Command::GetOracle {
                     timeline: timeline.clone(),
                     tx,
                 })
-                .await??;
+                .await;
+            tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                phase = "oracle_handle", ?timeline, elapsed = ?started.elapsed(),
+                "frontend dependency await returned");
+            let oracle = oracle??;
             self.oracles.insert(timeline.clone(), oracle);
         }
         Ok(self.oracles.get_mut(&timeline).expect("ensured above"))
@@ -230,7 +237,13 @@ impl PeekClient {
         let oracle = self.ensure_oracle(timeline).await?;
         let mut nudged = false;
         loop {
+            let started = std::time::Instant::now();
+            tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                phase = "oracle_read", %lower, "frontend dependency await started");
             let timestamp = oracle.read_ts().await;
+            tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                phase = "oracle_read", %lower, %timestamp, elapsed = ?started.elapsed(),
+                "frontend dependency await returned");
             if timestamp >= lower {
                 return Ok(timestamp);
             }
@@ -242,6 +255,9 @@ impl PeekClient {
             }
             let wait = std::time::Duration::from_millis(u64::from(lower.saturating_sub(timestamp)))
                 .min(std::time::Duration::from_secs(1));
+            tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                phase = "oracle_progress_wait", %lower, %timestamp, ?wait,
+                "frontend oracle progress wait");
             tokio::time::sleep(wait).await;
         }
     }
@@ -253,7 +269,13 @@ impl PeekClient {
         &mut self,
         context: &str,
     ) -> Result<(Arc<Catalog>, Option<Timestamp>), AdapterError> {
+        let started = std::time::Instant::now();
+        tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+            phase = "initial_snapshot", context, "frontend dependency await started");
         let mut catalog = self.catalog_snapshot(context).await;
+        tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+            phase = "initial_snapshot", context, elapsed = ?started.elapsed(),
+            "frontend dependency await returned");
         if catalog.observed_position().is_none() {
             return Ok((catalog, None));
         }
@@ -261,13 +283,25 @@ impl PeekClient {
             .oracle_read_ts_at_least(Timeline::EpochMilliseconds, Timestamp::MIN)
             .await?;
         loop {
-            catalog = self.catalog_snapshot_at(catalog, timestamp).await?;
+            let started = std::time::Instant::now();
+            tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                phase = "certified_snapshot", context, %timestamp,
+                "frontend dependency await started");
+            let result = self.catalog_snapshot_at(catalog, timestamp).await;
+            tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                phase = "certified_snapshot", context, %timestamp,
+                elapsed = ?started.elapsed(), failed = result.is_err(),
+                "frontend dependency await returned");
+            catalog = result?;
             let required = catalog
                 .planning_position()
                 .expect("committed catalog")
                 .upper
                 .step_back()
                 .expect("catalog prefix is nonempty");
+            tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                context, %required, %timestamp, retry = required > timestamp,
+                "catalog certification freshness decision");
             if required <= timestamp {
                 return Ok((catalog, Some(timestamp)));
             }

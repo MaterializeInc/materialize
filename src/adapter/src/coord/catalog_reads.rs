@@ -20,6 +20,7 @@ use mz_sql::session::vars::IsolationLevel;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_types::sources::Timeline;
 use tokio::sync::watch;
+use tracing::Instrument;
 
 use crate::AdapterError;
 use crate::catalog::Catalog;
@@ -179,11 +180,27 @@ impl Coordinator {
             | ExecuteCatalogContinuation::AdmittedStatement { stmt, .. } => Some(Arc::clone(stmt)),
         };
         super::trace_create_mv_phase(ctx.session(), timing_stmt.as_deref(), "catalog_read_start");
-        let handle = task::spawn(|| "execute_catalog_read", async move {
-            // Keep the seed alive: PeekClient's cache holds only a weak reference.
-            let _catalog = catalog;
-            client.fresh_catalog_snapshot("coordinator_execute").await
-        });
+        let span = tracing::debug_span!(
+            target: "mz_adapter::frontend_read_then_write",
+            "execute_catalog_read",
+            session_id = %ctx.session().uuid(),
+            conn_id = %ctx.session().conn_id(),
+            transaction_id = ?ctx.session().transaction().inner().map(|txn| txn.id),
+        );
+        let handle = task::spawn(
+            || "execute_catalog_read",
+            async move {
+                tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                    "catalog certification task entered");
+                // Keep the seed alive: PeekClient's cache holds only a weak reference.
+                let _catalog = catalog;
+                let result = client.fresh_catalog_snapshot("coordinator_execute").await;
+                tracing::debug!(target: "mz_adapter::frontend_read_then_write",
+                    failed = result.is_err(), "catalog certification task returned");
+                result
+            }
+            .instrument(span),
+        );
         self.handle_spawn(
             ctx,
             handle.abort_on_drop(),
