@@ -1,0 +1,30 @@
+{
+ "packages": [
+  {"id": "app", "name": "app", "workspace": true, "proc_macro": false, "deps": ["server"], "build_deps": []},
+  {"id": "big", "name": "big", "workspace": false, "proc_macro": false, "deps": ["huge"], "build_deps": []},
+  {"id": "client", "name": "client", "workspace": true, "proc_macro": false, "deps": ["macros", "types", "util"], "build_deps": ["util"]},
+  {"id": "huge", "name": "huge", "workspace": false, "proc_macro": false, "deps": [], "build_deps": []},
+  {"id": "logging", "name": "logging", "workspace": true, "proc_macro": false, "deps": ["small"], "build_deps": []},
+  {"id": "macros", "name": "macros", "workspace": true, "proc_macro": true, "deps": [], "build_deps": []},
+  {"id": "server", "name": "server", "workspace": true, "proc_macro": false, "deps": ["client", "types"], "build_deps": []},
+  {"id": "small", "name": "small", "workspace": false, "proc_macro": false, "deps": [], "build_deps": []},
+  {"id": "tool", "name": "tool", "workspace": true, "proc_macro": false, "deps": ["types"], "build_deps": []},
+  {"id": "tool2", "name": "tool2", "workspace": true, "proc_macro": false, "deps": ["types"], "build_deps": []},
+  {"id": "types", "name": "types", "workspace": true, "proc_macro": false, "deps": ["big", "small", "util"], "build_deps": []},
+  {"id": "util", "name": "util", "workspace": true, "proc_macro": false, "deps": ["logging", "small"], "build_deps": []}
+ ],
+ "modules": [
+  {"path": "app/main.rs", "package": "app", "role": "bin", "loc": 40, "refs": {"server/lib.rs": 2, "types/lib.rs": 1}, "external": {}, "named": [], "pinned": [], "symbols": {"server/lib.rs": ["serve()."], "types/lib.rs": ["Row#"]}, "referrers": {"server/lib.rs": ["main()."], "types/lib.rs": ["main()."]}},
+  {"path": "client/lib.rs", "package": "client", "role": "lib", "loc": 120, "refs": {"types/lib.rs": 3}, "external": {}, "named": ["macros", "types"], "pinned": [], "symbols": {"types/lib.rs": ["Row#", "Schema#"]}, "referrers": {"types/lib.rs": ["Client#", "Client#fetch()."]}},
+  {"path": "logging/lib.rs", "package": "logging", "role": "lib", "loc": 80, "refs": {}, "external": {"small": 1}, "named": [], "pinned": [], "symbols": {}, "referrers": {}},
+  {"path": "macros/lib.rs", "package": "macros", "role": "lib", "loc": 60, "refs": {}, "external": {}, "named": [], "pinned": [], "symbols": {}, "referrers": {}},
+  {"path": "server/lib.rs", "package": "server", "role": "lib", "loc": 200, "refs": {"client/lib.rs": 2, "types/heavy.rs": 1}, "external": {}, "named": [], "pinned": [], "symbols": {"client/lib.rs": ["Client#"], "types/heavy.rs": ["Encoder#"]}, "referrers": {"client/lib.rs": ["serve()."], "types/heavy.rs": ["serve()."]}},
+  {"path": "server/main.rs", "package": "server", "role": "bin", "loc": 30, "refs": {"server/lib.rs": 1}, "external": {}, "named": [], "pinned": [], "symbols": {}, "referrers": {}},
+  {"path": "tool/lib.rs", "package": "tool", "role": "lib", "loc": 50, "refs": {"types/lib.rs": 1}, "external": {}, "named": [], "pinned": [], "symbols": {"types/lib.rs": ["Schema#"]}, "referrers": {"types/lib.rs": ["check()."]}},
+  {"path": "tool2/lib.rs", "package": "tool2", "role": "lib", "loc": 50, "refs": {"types/lib.rs": 1}, "external": {}, "named": [], "pinned": [], "symbols": {"types/lib.rs": ["Row#"]}, "referrers": {"types/lib.rs": ["lint()."]}},
+  {"path": "types/heavy.rs", "package": "types", "role": "lib", "loc": 150, "refs": {"types/lib.rs": 4, "util/lib.rs": 1}, "external": {"big": 2}, "named": [], "pinned": [], "symbols": {"util/lib.rs": ["retry()."]}, "referrers": {"util/lib.rs": ["Encoder#encode()."]}},
+  {"path": "types/impls.rs", "package": "types", "role": "lib", "loc": 20, "refs": {"types/lib.rs": 1}, "external": {}, "named": [], "pinned": ["types/heavy.rs"], "symbols": {}, "referrers": {}},
+  {"path": "types/lib.rs", "package": "types", "role": "lib", "loc": 100, "refs": {}, "external": {"small": 1}, "named": [], "pinned": [], "symbols": {}, "referrers": {}},
+  {"path": "util/lib.rs", "package": "util", "role": "lib", "loc": 30, "refs": {"logging/lib.rs": 1}, "external": {}, "named": [], "pinned": [], "symbols": {"logging/lib.rs": ["log()."]}, "referrers": {"logging/lib.rs": ["retry()."]}}
+ ]
+}
