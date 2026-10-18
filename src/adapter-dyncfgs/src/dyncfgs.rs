@@ -312,7 +312,7 @@ pub const ENABLE_PUBLIC_METRICS_ENDPOINT: Config<bool> = Config::new(
 pub const MCP_MAX_RESPONSE_SIZE: Config<usize> = Config::new(
     "mcp_max_response_size",
     1_000_000,
-    "Maximum size in bytes of MCP tool response content. Responses exceeding this limit are rejected with an error telling the agent to narrow its query.",
+    "Maximum size in bytes of MCP tool response content or a serialized MCP event notification. Larger results are rejected.",
     ParameterScope::Environment,
 );
 
@@ -322,6 +322,41 @@ pub const MCP_REQUEST_TIMEOUT: Config<Duration> = Config::new(
     "mcp_request_timeout",
     Duration::from_secs(60),
     "Maximum time an MCP request may run before it is aborted with a timeout error.",
+    ParameterScope::Environment,
+);
+
+pub const ENABLE_MCP_AGENT_EVENTS: Config<bool> = Config::new(
+    "enable_mcp_agent_events",
+    false,
+    "Whether the agent MCP endpoint offers the MCP Events extension over SSE.",
+    ParameterScope::Environment,
+);
+
+pub const MCP_EVENTS_MAX_PER_ROLE: Config<usize> = Config::new(
+    "mcp_events_max_per_role",
+    16,
+    "Maximum concurrent MCP event streams per Materialize role on this server.",
+    ParameterScope::Environment,
+);
+
+pub const MCP_EVENTS_MAX_CONCURRENT: Config<usize> = Config::new(
+    "mcp_events_max_concurrent",
+    128,
+    "Maximum concurrent MCP event streams across all listeners on this server.",
+    ParameterScope::Environment,
+);
+
+pub const MCP_EVENTS_MAX_LIFETIME: Config<Duration> = Config::new(
+    "mcp_events_max_lifetime",
+    Duration::from_secs(24 * 60 * 60),
+    "Maximum MCP event stream lifetime. Clients default to one hour and may request up to this limit.",
+    ParameterScope::Environment,
+);
+
+pub const MCP_EVENTS_HEARTBEAT_INTERVAL: Config<Duration> = Config::new(
+    "mcp_events_heartbeat_interval",
+    Duration::from_secs(30),
+    "MCP event stream heartbeat interval, capped at 30 seconds.",
     ParameterScope::Environment,
 );
 
@@ -597,6 +632,11 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_PUBLIC_METRICS_ENDPOINT)
         .add(&MCP_MAX_RESPONSE_SIZE)
         .add(&MCP_REQUEST_TIMEOUT)
+        .add(&ENABLE_MCP_AGENT_EVENTS)
+        .add(&MCP_EVENTS_MAX_PER_ROLE)
+        .add(&MCP_EVENTS_MAX_CONCURRENT)
+        .add(&MCP_EVENTS_MAX_LIFETIME)
+        .add(&MCP_EVENTS_HEARTBEAT_INTERVAL)
         .add(&WEBHOOK_MAX_REQUEST_SIZE_BYTES)
         .add(&WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES)
         .add(&SUBSCRIBE_MAX_BUFFERED_BYTES)
