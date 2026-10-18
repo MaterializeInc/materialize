@@ -21,8 +21,8 @@ Use the dedicated x86_64 scratch worker for focused builds, tests and
 interactive debugging. The parallel-check workflow requires SQL Server, which
 does not run natively on ARM. Keep the 16-vCPU, 64-GiB, 500-GiB configuration,
 one worker, and renew its expiry as needed for this work without asking again.
-Current worker: `i-014808eeb9469702a`. Last recorded expiry:
-2026-10-16 20:41:55 UTC. Verify and extend it before further work.
+Current worker: `i-01023ce0e1db179f9`. Last recorded expiry:
+2026-10-20 05:30:24 UTC. Verify and extend it before further work.
 Scratch evidence is copied off-worker under
 `~/.local/share/aj/m2-evidence/scratch/`.
 Launch with `bin/scratch create decoupled-coordination
@@ -132,29 +132,68 @@ Keep general bootstrap admission atomic across the selected index plan, bound an
 creator protection, including fixed recovery timestamps and same-build plan reuse.
 Replicas execute committed selections, without forced adoption.
 
-The remaining resource-bounded workload failure is aggregate memory exhaustion.
-Attribute growth across the replica population, not only the largest process.
-The concrete transient allocation boundary is subscribe row packing and compute
-response serialization during large UPDATEs. A single-UPDATE comparison supports
-reducing the packing buffer from 448 MiB to 224 MiB through exact preallocation
-and incremental input release, with serialization still allocating 224 MiB.
-Concurrent buffer occupancy obscures this difference in the two-table capture.
-The combined repair still OOMs in the original 8-CPU/16-GiB workload before any
-validation starts. SQL completions and finite compaction-bound advancement occur,
-but neither establishes whole-workload progress or physical-since advancement.
-Pause allocator/cache/pool tuning and preserve its evidence. The recent allocation
-comparisons already contain decoupling and do not establish a regression against
-upstream. The matched pinned-upstream d9a2c5dc40 and branch comparison both OOM,
-using the same 104 checks, seed, concurrency, effective backends and 8-CPU/16-GiB
-budget, with original settings. This does not establish a branch-only memory
-regression. Saved CI evidence shows about 15 GiB of swap, with observed use,
-where scratch prohibits swap. Scratch also derives pool budgets from its 64-GiB
-host despite the 16-GiB parent cap. Its eight selected CPU IDs cover four physical
-cores with SMT, whereas the failing CI host reports eight physical cores.
-Treat its OOM as a separate stress observation, not a CI reproduction. Attribute
-introduced state, allocation churn or overlap only from a valid comparison.
-The largest existing allocation is not necessarily the regression. No further
-tuning campaign or production allocator-policy change.
+Keep allocator/cache/pool tuning paused. The focused subscribe-packing repair
+reduces its single-UPDATE buffer from 448 MiB to 224 MiB, with serialization still
+allocating 224 MiB. It does not establish whole-workload progress.
+
+The pinned-upstream d9a2c5dc40 and branch comparison both OOM under scratch's
+8-CPU/16-GiB cap. That reproduction differs from CI: scratch has no swap, derives
+pool budgets from its 64-GiB host, and its selected CPU IDs cover four physical
+cores with SMT. CI reports eight physical cores and about 15 GiB of swap, with
+observed use. Treat those OOMs as separate stress observations, not a CI reproduction
+or evidence of a branch-only memory regression.
+
+With an aggregate eight-CPU quota and host memory headroom, d83f2451 completes
+the original shard in 515s versus pinned upstream's 233s. Both execute the same
+104 checks in the same launch order, with matching common images and explicit
+settings apart from the native-protection parameter. Recorded SQL completion
+medians are 1.920s and 0.331s respectively. Native's completed catalog awaits stay
+below one second despite substantial throttling. Finite committed compaction
+bounds advance. These outcomes do not reproduce or resolve CI's long waits.
+Upstream resource capture has gaps, so its sampled memory maximum is not a
+matched peak comparison. Evidence is under `scratch/catalog-state-attribution/`
+and `scratch/original-shard-cpu8/` in the off-worker evidence directory.
+
+At matched post-workflow age, forty process heaps estimate 24.2 GiB on native
+versus 4.3 GiB upstream. Most of the difference is allocated by blob reads and
+encoding. Process-0 replicas, which follow the catalog, show the large RSS
+difference. Process-1 replicas do not. Followers share the existing process-local
+Persist cache rather than creating another cache. An ownership capture records
+9.7 GiB cached across 32 follower processes versus 7 MiB across seven process-1
+peers, with nearly balanced blob-read completion counters. That run hits the
+parked driver file-descriptor error and is not acceptance.
+The bounded follower-client A/B remains experimental, not production policy.
+The cached control passes in 507s. The uncached candidate fails in 1164s with five
+sink-history/statistics SELECT timeouts. Whole-workflow sampled memory peaks are
+32.20/28.73 GiB, final surviving-process cache occupancy 9.36/1.08 GiB, and MinIO
+S3 egress 9.69/34.02 GB. The candidate runs longer and completes less work, so
+traffic totals are not a matched-work comparison. Both use eight CPUs with memory
+headroom, not CI's 16-GiB environment. Neither records new OOM events or sampled
+full-memory pressure. Captured catalog catch-up remains subsecond in both arms.
+These results do not establish a contention fix or the timeout's causal owner.
+Preserve the experiment under `scratch/catalog-cache-ab/`, without more cache
+tuning. In the preserved failure, `mz_sinks`' durable output and its imported
+shared catalog index advance far behind the raw catalog. Native introspection
+locates lag at the raw-catalog import into that index. A paired scheduling capture
+instead finds the frontier-observation index dominating the same worker:
+`mz_cluster_replica_frontiers_ind`'s arrangement consumes 29.4s over a roughly
+45s capture interval. A CPU profile identifies repeated batch sealing/extraction,
+with strongly skewed inputs. The bounded candidate routes six non-retained
+current-view fence lookups through the existing shared catalog index. Installed
+plans confirm all six import the shared index, while the three retained indexes
+keep their raw imports. Maintained raw readers fall from eleven to five.
+Catalog EXPLAIN and index-accounting regressions, catalog testdrive and the SQL
+workflow's SIGKILL/restart sanity check pass. The generated EXPLAIN inventory
+remains 330 queries. Two full-workload attempts fail in the Python driver's
+parked file-descriptor error during validation, not a passing workload result.
+Original-budget CI and compatible handover still need verification.
+Retained lookups, the two peek-only views and generic batcher machinery are
+unchanged. Input-skew amplification remains an observed risk, not a resolved
+property. Keep this post-workload diagnosis distinct from CI's long DDL awaits.
+
+Attribute introduced state, allocation churn or overlapping work across the replica
+population. The largest existing allocation is not necessarily the regression.
+No further tuning campaign or production allocator-policy change.
 Preserve consolidation, row ordering, batch frontiers and the wire contract.
 Do not turn this into a transport protocol or memory-policy redesign.
 Compare actual CI agent resources, not requested queue labels.

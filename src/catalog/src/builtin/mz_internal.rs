@@ -51,9 +51,10 @@ pub static MZ_CATALOG_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSou
     ontology: None,
 });
 
-// Catalog MVs share decoding through this indexed view. Retained metrics read
-// the raw source directly so their reconstruction windows do not retain
-// unrelated catalog history in this arrangement.
+// Catalog MVs and non-retained current-view indexes share catalog reads through
+// this indexed view. Literal kind predicates expose lookups on its index.
+// Retained metrics read the raw source directly so their reconstruction windows
+// do not retain unrelated catalog history in this arrangement.
 pub static MZ_CATALOG_SHARED: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_catalog_shared",
     schema: MZ_INTERNAL_SCHEMA,
@@ -1298,14 +1299,16 @@ SELECT
 FROM mz_internal.mz_cluster_replica_status_history
 JOIN mz_cluster_replicas r ON r.id = replica_id
 WHERE deployment_generation IS NOT DISTINCT FROM (
-        SELECT max(CASE WHEN data->>'kind' = 'FenceToken'
-                        THEN (data->>'deploy_generation')::uint8 END)
-        FROM mz_internal.mz_catalog_raw
+        SELECT max((data->>'deploy_generation')::uint8)
+        FROM mz_internal.mz_catalog_shared
         WHERE data->>'kind' = 'FenceToken'
-           OR (data->>'kind' = 'Config'
-               AND data->'key'->>'key' = 'catalog_read_protection_enabled'
-               AND data->'value'->'value' <> '0'::jsonb)
-        HAVING bool_or(data->>'kind' = 'Config')
+          AND EXISTS (
+              SELECT 1
+              FROM mz_internal.mz_catalog_shared
+              WHERE data->>'kind' = 'Config'
+                AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND data->'value'->'value' <> '0'::jsonb
+          )
     )
 ORDER BY replica_id, process_id, occurred_at DESC",
     access: vec![PUBLIC_SELECT],
@@ -2233,14 +2236,16 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| {
             s.details
         FROM mz_internal.mz_source_status_history s
         WHERE ((s.replica_id IS NULL AND s.deployment_generation IS NULL) OR s.deployment_generation IS NOT DISTINCT FROM (
-        SELECT max(CASE WHEN data->>'kind' = 'FenceToken'
-                        THEN (data->>'deploy_generation')::uint8 END)
-        FROM mz_internal.mz_catalog_raw
+        SELECT max((data->>'deploy_generation')::uint8)
+        FROM mz_internal.mz_catalog_shared
         WHERE data->>'kind' = 'FenceToken'
-           OR (data->>'kind' = 'Config'
-               AND data->'key'->>'key' = 'catalog_read_protection_enabled'
-               AND data->'value'->'value' <> '0'::jsonb)
-        HAVING bool_or(data->>'kind' = 'Config')
+          AND EXISTS (
+              SELECT 1
+              FROM mz_internal.mz_catalog_shared
+              WHERE data->>'kind' = 'Config'
+                AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND data->'value'->'value' <> '0'::jsonb
+          )
     ))
     ),
     -- For getting the latest events, we first determine the latest per-replica
@@ -2531,14 +2536,16 @@ uniform_status_history AS
         s.details
     FROM mz_internal.mz_sink_status_history s
     WHERE ((s.replica_id IS NULL AND s.deployment_generation IS NULL) OR s.deployment_generation IS NOT DISTINCT FROM (
-        SELECT max(CASE WHEN data->>'kind' = 'FenceToken'
-                        THEN (data->>'deploy_generation')::uint8 END)
-        FROM mz_internal.mz_catalog_raw
+        SELECT max((data->>'deploy_generation')::uint8)
+        FROM mz_internal.mz_catalog_shared
         WHERE data->>'kind' = 'FenceToken'
-           OR (data->>'kind' = 'Config'
-               AND data->'key'->>'key' = 'catalog_read_protection_enabled'
-               AND data->'value'->'value' <> '0'::jsonb)
-        HAVING bool_or(data->>'kind' = 'Config')
+          AND EXISTS (
+              SELECT 1
+              FROM mz_internal.mz_catalog_shared
+              WHERE data->>'kind' = 'Config'
+                AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND data->'value'->'value' <> '0'::jsonb
+          )
     ))
 ),
 -- For getting the latest events, we first determine the latest per-replica
@@ -2911,14 +2918,16 @@ SELECT
 FROM mz_internal.mz_cluster_replica_metrics_history
 JOIN mz_cluster_replicas r ON r.id = replica_id
 WHERE deployment_generation IS NOT DISTINCT FROM (
-        SELECT max(CASE WHEN data->>'kind' = 'FenceToken'
-                        THEN (data->>'deploy_generation')::uint8 END)
-        FROM mz_internal.mz_catalog_raw
+        SELECT max((data->>'deploy_generation')::uint8)
+        FROM mz_internal.mz_catalog_shared
         WHERE data->>'kind' = 'FenceToken'
-           OR (data->>'kind' = 'Config'
-               AND data->'key'->>'key' = 'catalog_read_protection_enabled'
-               AND data->'value'->'value' <> '0'::jsonb)
-        HAVING bool_or(data->>'kind' = 'Config')
+          AND EXISTS (
+              SELECT 1
+              FROM mz_internal.mz_catalog_shared
+              WHERE data->>'kind' = 'Config'
+                AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND data->'value'->'value' <> '0'::jsonb
+          )
     )
 ORDER BY replica_id, process_id, occurred_at DESC",
     access: vec![PUBLIC_SELECT],
@@ -9464,14 +9473,16 @@ WHERE length(id) > 0
   AND deployment_generation IS NOT DISTINCT FROM CASE
       WHEN replica_id IS NULL THEN NULL
       ELSE (
-        SELECT max(CASE WHEN data->>'kind' = 'FenceToken'
-                        THEN (data->>'deploy_generation')::uint8 END)
-        FROM mz_internal.mz_catalog_raw
+        SELECT max((data->>'deploy_generation')::uint8)
+        FROM mz_internal.mz_catalog_shared
         WHERE data->>'kind' = 'FenceToken'
-           OR (data->>'kind' = 'Config'
-               AND data->'key'->>'key' = 'catalog_read_protection_enabled'
-               AND data->'value'->'value' <> '0'::jsonb)
-        HAVING bool_or(data->>'kind' = 'Config')
+          AND EXISTS (
+              SELECT 1
+              FROM mz_internal.mz_catalog_shared
+              WHERE data->>'kind' = 'Config'
+                AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND data->'value'->'value' <> '0'::jsonb
+          )
       )
   END",
         access: vec![PUBLIC_SELECT],

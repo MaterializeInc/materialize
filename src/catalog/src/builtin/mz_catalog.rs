@@ -3082,14 +3082,16 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|
 SELECT object_id, replica_id, write_frontier
 FROM mz_internal.mz_cluster_replica_frontiers_raw
 WHERE deployment_generation IS NOT DISTINCT FROM (
-        SELECT max(CASE WHEN data->>'kind' = 'FenceToken'
-                        THEN (data->>'deploy_generation')::uint8 END)
-        FROM mz_internal.mz_catalog_raw
+        SELECT max((data->>'deploy_generation')::uint8)
+        FROM mz_internal.mz_catalog_shared
         WHERE data->>'kind' = 'FenceToken'
-           OR (data->>'kind' = 'Config'
-               AND data->'key'->>'key' = 'catalog_read_protection_enabled'
-               AND data->'value'->'value' <> '0'::jsonb)
-        HAVING bool_or(data->>'kind' = 'Config')
+          AND EXISTS (
+              SELECT 1
+              FROM mz_internal.mz_catalog_shared
+              WHERE data->>'kind' = 'Config'
+                AND data->'key'->>'key' = 'catalog_read_protection_enabled'
+                AND data->'value'->'value' <> '0'::jsonb
+          )
     )",
     access: vec![PUBLIC_SELECT],
     ontology: None,
