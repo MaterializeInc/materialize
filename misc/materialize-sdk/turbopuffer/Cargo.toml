@@ -19,5 +19,8 @@ sha2.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+openssl.workspace = true
+openssl-probe.workspace = true
+postgres-openssl.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 tokio-postgres.workspace = true

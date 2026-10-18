@@ -70,3 +70,21 @@ use TLS when the server offers it, as Materialize Cloud does, and verify its
 certificate against the system's certificate authorities. A server with a
 self-signed certificate needs its CA in `SSL_CERT_FILE`, or `sslmode=disable`
 in its URL.
+
+`turbopuffer/examples/search.rs` keeps a Materialize table, source, or
+materialized view searchable in turbopuffer, by meaning with native embedding
+and by words with full-text search, and searches it. From
+`misc/materialize-sdk`:
+
+```
+export MATERIALIZE_URL="host=localhost port=6875 user=materialize"
+export TURBOPUFFER_API_KEY=...
+export SOURCE=materialize.public.articles KEY=id EMBED=body FULL_TEXT=body NAME=articles
+cargo run --example search -- sink
+cargo run --example search -- search "a cat on a windowsill"
+```
+
+Changes to the source show up in searches within seconds, deletes included.
+Stop the sink and start it again, and it resumes from its checkpoint without
+embedding everything again. The namespaces are named after `NAME`, and the
+example's docs list its other settings.
