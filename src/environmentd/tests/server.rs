@@ -1704,6 +1704,134 @@ fn test_implicit_commit_failure() {
     }
 }
 
+/// A write's or `COMMIT`'s execution time includes the commit its result waits for, and excludes
+/// a commit that follows its result.
+///
+/// While the failpoint is armed, every group commit sleeps for `HOLD`, so a time that includes a
+/// commit is at least `HOLD`. The first group commit also waits until a `staged` notice has
+/// arrived, which shows that the notice did not wait for the commit. That first group commit can
+/// be a keepalive of the table uppers rather than the statement's own, but one `GroupCommitter`
+/// applies group commits in order, so the statement's commit waits behind it either way.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_execution_time_commit() {
+    const HOLD: Duration = Duration::from_secs(1);
+    const FAILPOINT: &str = "group_commit_before_apply_write";
+
+    /// Arms the failpoint. The returned sender releases the first group commit, as does dropping
+    /// it.
+    fn arm() -> std::sync::mpsc::Sender<()> {
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let release_rx = Mutex::new(release_rx);
+        let first = AtomicBool::new(true);
+        fail::cfg_callback(FAILPOINT, move || {
+            // Parks a runtime worker until the test releases it, which needs the server to keep
+            // serving the request. `block_in_place` frees the worker first, see
+            // `with_failing_insert_commit`.
+            tokio::task::block_in_place(|| {
+                if first.swap(false, Ordering::SeqCst) {
+                    let _ = release_rx.lock().expect("lock poisoned").recv();
+                }
+                thread::sleep(HOLD);
+            })
+        })
+        .unwrap();
+        release_tx
+    }
+    let micros = |detail: &serde_json::Value| detail["duration_us"].as_u64().unwrap();
+    let hold_micros = u64::try_from(HOLD.as_micros()).unwrap();
+
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE dt (a int)").unwrap();
+
+    let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
+    test_util::auth_with_ws(
+        &mut ws,
+        BTreeMap::from([("emit_execution_time_notice".into(), "on".into())]),
+    )
+    .unwrap();
+    // A `staged` notice that waits for the commit would never arrive, so fail instead of hanging.
+    if let tungstenite::stream::MaybeTlsStream::Plain(stream) = ws.get_ref() {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(120)))
+            .unwrap();
+    }
+    // Sends `request` and returns the details of its execution time notices.
+    let mut run_ws = |request: serde_json::Value| -> Vec<serde_json::Value> {
+        let release = arm();
+        ws.send(Message::Text(request.to_string().into())).unwrap();
+        let mut details = Vec::new();
+        loop {
+            let Message::Text(text) = ws
+                .read()
+                .expect("a staged notice must not wait for the commit")
+            else {
+                continue;
+            };
+            let msg: serde_json::Value = serde_json::from_str(&text).unwrap();
+            match msg["type"].as_str().unwrap() {
+                "Notice" if msg["payload"]["code"] == "MZ012" => {
+                    let detail: serde_json::Value =
+                        serde_json::from_str(msg["payload"]["detail"].as_str().unwrap()).unwrap();
+                    if detail["kind"] == "staged" {
+                        let _ = release.send(());
+                    }
+                    details.push(detail);
+                }
+                "ReadyForQuery" => break,
+                _ => {}
+            }
+        }
+        fail::remove(FAILPOINT);
+        details
+    };
+
+    // In an implicit transaction, only the statement that ends it waits for the commit.
+    let details = run_ws(serde_json::json!({
+        "query": "INSERT INTO dt VALUES (1); INSERT INTO dt VALUES (2)"
+    }));
+    let kinds: Vec<_> = details.iter().map(|d| d["kind"].clone()).collect();
+    assert_eq!(kinds, ["staged", "committed"], "{details:?}");
+    assert!(micros(&details[1]) >= hold_micros, "{details:?}");
+
+    // In an explicit transaction, `COMMIT` carries the commit.
+    let details = run_ws(serde_json::json!({
+        "queries": [
+            {"query": "BEGIN"},
+            {"query": "INSERT INTO dt VALUES (3)"},
+            {"query": "COMMIT"}
+        ]
+    }));
+    let kinds: Vec<_> = details.iter().map(|d| d["kind"].clone()).collect();
+    assert_eq!(kinds, ["completed", "staged", "completed"], "{details:?}");
+    assert!(micros(&details[2]) >= hold_micros, "{details:?}");
+
+    // pgwire's simple query protocol commits before the statement's `CommandComplete` too.
+    let (notice_tx, notice_rx) = std::sync::mpsc::channel();
+    let mut pg = server
+        .pg_config()
+        .options("--emit_execution_time_notice=on --welcome_message=off")
+        .notice_callback(move |notice| {
+            let _ = notice_tx.send(notice);
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+    // No `staged` notice to wait for, so release the first group commit at once.
+    drop(arm());
+    pg.batch_execute("INSERT INTO dt VALUES (4)").unwrap();
+    fail::remove(FAILPOINT);
+    let details: Vec<serde_json::Value> = notice_rx
+        .try_iter()
+        .filter(|notice| notice.code().code() == "MZ012")
+        .map(|notice| serde_json::from_str(notice.detail().unwrap()).unwrap())
+        .collect();
+    let kinds: Vec<_> = details.iter().map(|d| d["kind"].clone()).collect();
+    assert_eq!(kinds, ["committed"], "{details:?}");
+    assert!(micros(&details[0]) >= hold_micros, "{details:?}");
+}
+
 /// Regression test for SQL-428: the JSON `/api/sql` endpoint enforces
 /// `max_result_size` on `Row::byte_len`, the same quantity the WebSocket
 /// transport and pgwire use. A result that exceeds the cap fails cleanly with a
