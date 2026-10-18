@@ -128,6 +128,7 @@ mod catalog;
 mod cluster;
 mod console;
 mod mcp;
+pub use mcp::SubscriptionRegistry;
 pub mod mcp_metrics;
 mod memory;
 mod metrics;
@@ -183,6 +184,7 @@ pub struct HttpConfig {
     pub metrics: Metrics,
     pub metrics_registry: MetricsRegistry,
     pub mcp_metrics: mcp_metrics::McpMetrics,
+    pub mcp_subscriptions: SubscriptionRegistry,
     pub oauth_metadata_metrics: oauth_metadata::OauthMetadataMetrics,
     pub internal_route_config: Arc<InternalRouteConfig>,
     pub routes_enabled: HttpRoutesEnabled,
@@ -243,6 +245,7 @@ impl HttpServer {
             metrics,
             metrics_registry,
             mcp_metrics,
+            mcp_subscriptions,
             oauth_metadata_metrics,
             internal_route_config,
             routes_enabled,
@@ -626,6 +629,7 @@ impl HttpServer {
                 .layer(Extension(HelmChartVersion(helm_chart_version.clone())))
                 .layer(Extension(mcp_allowed_origins))
                 .layer(Extension(mcp_metrics))
+                .layer(Extension(mcp_subscriptions))
                 .layer(
                     CorsLayer::new()
                         .allow_methods(Method::POST)
@@ -798,6 +802,7 @@ async fn x_materialize_user_header_auth(mut req: Request, next: Next) -> impl In
             authenticated: Authenticated,
             authenticator_kind: mz_auth::AuthenticatorKind::None,
             groups: None,
+            lifetime: AuthLifetime::Unbounded,
         });
     }
     Ok(next.run(req).await)
@@ -852,11 +857,40 @@ pub struct AuthedUser {
     authenticator_kind: mz_auth::AuthenticatorKind,
     /// Groups from JWT claims for OIDC group-to-role sync.
     groups: Option<Vec<String>>,
+    lifetime: AuthLifetime,
+}
+
+#[derive(Clone, Debug)]
+enum AuthLifetime {
+    Unbounded,
+    Deadline(tokio::time::Instant),
+    Refreshable(mz_frontegg_auth::AuthSessionHandle),
+}
+
+impl AuthLifetime {
+    fn token(exp: i64) -> Self {
+        let now = tokio::time::Instant::now();
+        let epoch_elapsed = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default();
+        let remaining =
+            Duration::from_secs(u64::try_from(exp).unwrap_or(0)).saturating_sub(epoch_elapsed);
+        Self::Deadline(now.checked_add(remaining).unwrap_or(now))
+    }
+
+    async fn expired(self) {
+        match self {
+            Self::Unbounded => std::future::pending().await,
+            Self::Deadline(deadline) => tokio::time::sleep_until(deadline).await,
+            Self::Refreshable(mut session) => session.expired().await,
+        }
+    }
 }
 
 pub struct AuthedClient {
     pub client: SessionClient,
     pub connection_guard: Option<ConnectionHandle>,
+    lifetime: AuthLifetime,
 }
 
 impl AuthedClient {
@@ -874,6 +908,7 @@ impl AuthedClient {
         F: FnOnce(&mut AdapterSession),
     {
         let conn_id = adapter_client.new_conn_id()?;
+        let lifetime = user.lifetime;
         let mut session = adapter_client.new_session(
             AdapterSessionConfig {
                 conn_id,
@@ -908,6 +943,7 @@ impl AuthedClient {
         Ok(AuthedClient {
             client: adapter_client,
             connection_guard,
+            lifetime,
         })
     }
 }
@@ -1493,6 +1529,7 @@ pub(crate) async fn ensure_session_unexpired(
         authenticated: session_data.authenticated,
         authenticator_kind: session_data.authenticator_kind,
         groups: None,
+        lifetime: AuthLifetime::Deadline(tokio::time::Instant::now() + SESSION_DURATION),
     })
 }
 
@@ -1502,6 +1539,7 @@ async fn auth(
     challenges: &WwwAuthenticateChallenges,
     group_claim: Option<&str>,
 ) -> Result<AuthedUser, AuthError> {
+    let mut lifetime = AuthLifetime::Unbounded;
     let (name, external_metadata_rx, authenticated, groups) = match authenticator {
         Authenticator::Frontegg(frontegg) => match creds {
             Some(Credentials::Password { username, password }) => {
@@ -1511,11 +1549,13 @@ async fn auth(
                 let name = auth_session.user().into();
                 let groups = auth_session.groups();
                 let external_metadata_rx = Some(auth_session.external_metadata_rx());
+                lifetime = AuthLifetime::Refreshable(auth_session);
                 (name, external_metadata_rx, authenticated, groups)
             }
             Some(Credentials::Token { token }) => {
                 let (claims, authenticated) =
                     frontegg.validate_access_token(&token, None, group_claim)?;
+                lifetime = AuthLifetime::token(claims.exp);
                 let (_, external_metadata_rx) = watch::channel(ExternalUserMetadata {
                     user_id: claims.user_id,
                     admin: claims.is_admin,
@@ -1562,6 +1602,7 @@ async fn auth(
                     .await
                     .map_err(|e| AuthError::OidcFailed(e.to_string()))?;
                 let name = std::mem::take(&mut claims.user);
+                lifetime = AuthLifetime::token(claims.exp);
                 let groups = claims.groups.take();
                 (name, None, authenticated, groups)
             }
@@ -1589,6 +1630,7 @@ async fn auth(
         authenticated,
         authenticator_kind: authenticator.kind(),
         groups,
+        lifetime,
     })
 }
 
@@ -1662,6 +1704,24 @@ pub struct TowerSessionData {
 #[cfg(test)]
 mod tests {
     use super::{AllowedRoles, check_role_allowed};
+
+    #[mz_ore::test(tokio::test)]
+    async fn expired_token_bounds_stream_authority() {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            super::AuthLifetime::token(0).expired(),
+        )
+        .await
+        .expect("expired token must terminate immediately");
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(1),
+                super::AuthLifetime::Unbounded.expired()
+            )
+            .await
+            .is_err()
+        );
+    }
 
     #[mz_ore::test]
     fn test_check_role_allowed() {
