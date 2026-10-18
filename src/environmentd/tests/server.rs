@@ -5577,7 +5577,7 @@ fn test_mcp_developer_request_timeout() {
     assert_eq!(body["error"]["code"].as_i64(), Some(-32603), "{body}");
     assert_eq!(
         body["error"]["data"]["error_type"].as_str(),
-        Some("ExecutionError"),
+        Some("Timeout"),
         "{body}"
     );
 }

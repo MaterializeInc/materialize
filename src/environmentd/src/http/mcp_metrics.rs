@@ -67,6 +67,41 @@ pub struct McpMetrics {
     pub tool_call_duration: HistogramVec,
 }
 
+/// Records one request outcome on drop. A request dropped before its outcome is set records as
+/// cancelled.
+pub struct RequestGuard<'a> {
+    metrics: &'a McpMetrics,
+    endpoint_label: &'static str,
+    method_label: String,
+    status: McpCallStatus,
+}
+
+impl<'a> RequestGuard<'a> {
+    pub fn new(
+        metrics: &'a McpMetrics,
+        endpoint_label: &'static str,
+        method_label: String,
+    ) -> Self {
+        Self {
+            metrics,
+            endpoint_label,
+            method_label,
+            status: McpCallStatus::Cancelled,
+        }
+    }
+
+    pub fn set_status(&mut self, status: McpCallStatus) {
+        self.status = status;
+    }
+}
+
+impl Drop for RequestGuard<'_> {
+    fn drop(&mut self) {
+        self.metrics
+            .record_request(self.endpoint_label, &self.method_label, self.status);
+    }
+}
+
 /// RAII guard for a single `tools/call` invocation. On drop, increments
 /// `tool_calls_total` with the current status and observes
 /// `tool_call_duration_seconds` via the embedded [`HistogramTimer`]'s own
@@ -151,8 +186,24 @@ impl McpMetrics {
 
 #[cfg(test)]
 mod tests {
-    use super::{McpCallStatus, McpMetrics};
+    use super::{McpCallStatus, McpMetrics, RequestGuard};
     use mz_ore::metrics::MetricsRegistry;
+
+    #[mz_ore::test]
+    fn test_request_guard_records_cancellation_by_default() {
+        let metrics = McpMetrics::register_into(&MetricsRegistry::new());
+        let count = |status: &str| {
+            metrics
+                .requests
+                .with_label_values(&["agent", "tools/list", status])
+                .get()
+        };
+        let mut guard = RequestGuard::new(&metrics, "agent", "tools/list".into());
+        guard.set_status(McpCallStatus::Ok);
+        drop(guard);
+        drop(RequestGuard::new(&metrics, "agent", "tools/list".into()));
+        assert_eq!((count("ok"), count("cancelled")), (1, 1));
+    }
 
     /// The status label strings are a wire/dashboard contract; pin them so a
     /// rename is a deliberate, visible change.
