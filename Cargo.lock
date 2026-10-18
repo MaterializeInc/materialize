@@ -7267,6 +7267,7 @@ dependencies = [
  "mz-orchestrator-tracing",
  "mz-orchestratord",
  "mz-ore",
+ "mz-persist",
  "mz-persist-client",
  "mz-pgrepr",
  "mz-pgtest",
@@ -7969,6 +7970,8 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-credential-types",
+ "aws-lc-rs",
+ "aws-sdk-kms",
  "aws-sdk-s3",
  "aws-types",
  "azure_core",
@@ -8010,6 +8013,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
