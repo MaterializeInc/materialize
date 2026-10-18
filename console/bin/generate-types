@@ -23,9 +23,9 @@ sleep 30
 # The schemas below must correspond with the search path set in executeSql
 yarn kysely-codegen \
   --no-domains \
-  --schema mz_catalog \
-  --schema mz_catalog_unstable \
-  --schema mz_internal \
-  --schema mz_introspection \
+  --default-schema mz_catalog \
+  --default-schema mz_catalog_unstable \
+  --default-schema mz_internal \
+  --default-schema mz_introspection \
   --out-file types/materialize.d.ts \
   --url postgres://localhost:6875/materialize
