@@ -720,6 +720,9 @@ name = "materialize-sdk-turbopuffer"
 version = "0.0.0"
 dependencies = [
  "materialize-sdk",
+ "openssl",
+ "openssl-probe",
+ "postgres-openssl",
  "reqwest",
  "serde",
  "serde_json",
