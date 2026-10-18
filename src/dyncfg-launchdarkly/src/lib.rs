@@ -55,11 +55,6 @@ where
         // documentation), or a healthy idle stream would trip the timeout and
         // reconnect spuriously. The same constant lives in the adapter's
         // `SystemParameterFrontend`.
-        //
-        // NOTE: `HyperTransport` auto-detects the `HTTP_PROXY`/`HTTPS_PROXY`/
-        // `NO_PROXY` env vars and routes through a configured proxy. No
-        // exposure today (balancerd's cloud pods set no proxy vars), but worth
-        // knowing if proxy vars ever appear on a pod.
         let transport = https_transport(Duration::from_secs(10), Duration::from_secs(300))
             .expect("failed to create HTTPS transport");
 
@@ -124,9 +119,7 @@ where
 /// provider. Like `build_https`, the connector also accepts plain `http` URIs, which a relay
 /// proxy or test mock may use.
 ///
-/// NOTE: `HyperTransport` still honors `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`, but only for
-/// proxies reached over plain HTTP. TLS to the proxy itself requires a transport crate feature
-/// that would pull `ring` back in.
+/// The transport ignores `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` and always connects directly.
 pub fn https_transport(
     connect_timeout: Duration,
     read_timeout: Duration,
@@ -137,7 +130,11 @@ pub fn https_transport(
         .enable_http1()
         .enable_http2()
         .build();
+    // NOTE: without the transport crate's TLS features, its proxy layer sends HTTPS requests
+    // through a CONNECT tunnel in plaintext (SDK key included), because the injected connector
+    // only ever sees the proxy URI. Those features pull in `ring`, so proxies are disabled.
     launchdarkly_sdk_transport::HyperTransport::builder()
+        .disable_proxy()
         .connect_timeout(connect_timeout)
         .read_timeout(read_timeout)
         .build_with_connector(connector)
