@@ -395,7 +395,7 @@ async fn main() {
     }
 
     let license_key = if let Some(license_key_text) = args.license_key {
-        mz_license_keys::validate(license_key_text.trim())
+        mz_license_keys::validate(license_key_text.trim(), &[])
             .unwrap_or_else(|e| die!("testdrive: failed to validate license key: {}", e))
     } else {
         // Use `disabled()` to match environmentd's behavior when no license
