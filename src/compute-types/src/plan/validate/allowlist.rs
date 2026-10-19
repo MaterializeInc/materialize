@@ -46,8 +46,9 @@ pub enum TypingRule {
 }
 
 impl TypingRule {
-    /// Checks argument types against the rule, where `None` stands for an argument whose
-    /// type is not known and that satisfies any rule.
+    /// Checks argument types against the rule. `None` satisfies any rule, and stands for an
+    /// argument no row reaches, on which the function is never evaluated. The validator
+    /// rejects an argument of unknown type before calling this.
     ///
     /// Returns a description of the violation, if any.
     pub fn check(&self, args: &[Option<&ReprColumnType>]) -> Result<(), String> {

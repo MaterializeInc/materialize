@@ -27,7 +27,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use mz_expr::{Id, LocalId, OptimizableExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::vec::PartialOrdVecExt;
-use mz_repr::{GlobalId, ReprRelationType, ReprScalarType};
+use mz_repr::{GlobalId, ReprColumnType, ReprRelationType, ReprScalarType};
 use timely::PartialOrder;
 
 use crate::dataflows::LirDataflowDescription;
@@ -641,7 +641,8 @@ impl Validator {
             let typ: Vec<ColType> = ReprRelationType::from(&import.desc.typ)
                 .column_types
                 .into_iter()
-                .map(ColType::of)
+                .enumerate()
+                .map(|(c, t)| self.import_type(&format!("source import {id} column {c}"), t))
                 .collect();
             // The source's operators run inside the source, so `Get`s see their output.
             let (arity, typ) = match &import.desc.arguments.operators {
@@ -686,15 +687,17 @@ impl Validator {
                     self.snapshotless.entry(on_id).or_default().insert(key);
                 }
             }
-            types.entry(on_id).or_insert_with(|| {
-                import
+            if !types.contains_key(&on_id) {
+                let typ = import
                     .typ
                     .column_types
                     .iter()
                     .cloned()
-                    .map(ColType::of)
-                    .collect()
-            });
+                    .enumerate()
+                    .map(|(c, t)| self.import_type(&format!("index import {id} column {c}"), t))
+                    .collect();
+                types.insert(on_id, typ);
+            }
             match arities.get(&on_id) {
                 Some(existing) if *existing != arity => self.dataflow_error(
                     Rule::Arity,
@@ -716,6 +719,17 @@ impl Validator {
             info.set_monotonicity(monotonicity);
             self.globals.insert(id, Output::Rows(info));
         }
+    }
+
+    /// The column type `typ` of the import `what`, reported as a dataflow error if the typer
+    /// cannot track it.
+    fn import_type(&mut self, what: &str, typ: ReprColumnType) -> ColType {
+        let mut issues = Vec::new();
+        let t = self.typer.of(&mut issues, what, typ);
+        for (rule, message) in issues {
+            self.dataflow_error(rule, message);
+        }
+        t
     }
 
     /// The output types of a source's operators, given the types of the source.

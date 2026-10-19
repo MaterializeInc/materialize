@@ -19,6 +19,7 @@ use mz_repr::{
 };
 use timely::progress::Antichain;
 
+use super::types::TYPE_SIZE_LIMIT;
 use super::*;
 use crate::dataflows::{BuildDesc, IndexDesc, IndexImport, SourceImport};
 use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
@@ -1496,6 +1497,141 @@ fn accepts_allowlisted_functions_when_enforced() {
     );
 }
 
+/// A record of `TYPE_SIZE_LIMIT` `int8` fields, one node more than the validator tracks.
+fn oversized_record() -> SqlScalarType {
+    SqlScalarType::Record {
+        fields: (0..TYPE_SIZE_LIMIT)
+            .map(|i| {
+                (
+                    ColumnName::from(format!("f{i}")),
+                    SqlScalarType::Int64.nullable(false),
+                )
+            })
+            .collect(),
+        custom_id: None,
+    }
+}
+
+/// A literal of a record of `fields` `int8` fields, holding a list of as many `int8`s.
+fn record_literal(fields: usize) -> LirScalarExpr {
+    let SqlScalarType::Record { fields: all, .. } = oversized_record() else {
+        unreachable!("oversized_record is a record")
+    };
+    let typ = SqlScalarType::Record {
+        fields: all.into_iter().take(fields).collect(),
+        custom_id: None,
+    };
+    let mut row = Row::default();
+    row.packer()
+        .push_list((0..fields).map(|i| Datum::Int64(i64::try_from(i).expect("fits"))));
+    LirScalarExpr::Literal(
+        Ok(StableRow(row)),
+        ReprScalarType::from(&typ).nullable(false),
+    )
+}
+
+#[mz_ore::test]
+fn type_size_counts_record_fields() {
+    let LirScalarExpr::Literal(_, within) = record_literal(TYPE_SIZE_LIMIT - 1) else {
+        unreachable!("record_literal is a literal")
+    };
+    let LirScalarExpr::Literal(_, beyond) = record_literal(TYPE_SIZE_LIMIT) else {
+        unreachable!("record_literal is a literal")
+    };
+    assert_eq!(super::types::type_size(&within), Some(TYPE_SIZE_LIMIT));
+    assert_eq!(super::types::type_size(&beyond), None);
+}
+
+#[mz_ore::test]
+fn rejects_predicate_of_unknown_type_when_enforced() {
+    // The literal is the predicate itself, so no function application rejects it first.
+    let plan = mfp(
+        raw_t1(),
+        2,
+        vec![],
+        vec![(2, record_literal(TYPE_SIZE_LIMIT))],
+        vec![0, 1],
+    );
+    let df = dataflow(&[(T1, 2)], vec![(OUT, plan)]);
+    let errs = errors_with(&df, &enforced());
+    assert_error(
+        &errs,
+        Rule::Type,
+        "literal has a type of more than 256 nodes",
+    );
+    assert_error(
+        &errs,
+        Rule::Type,
+        "predicate at position 2 has an unknown type, not Bool",
+    );
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid when not enforced");
+}
+
+#[mz_ore::test]
+fn rejects_oversized_literal_type_when_enforced() {
+    // `And` evaluates `unreachable!` on a datum that is not a `bool`, and its typing rule
+    // cannot check an argument whose type the validator does not track.
+    let and = LirScalarExpr::CallVariadic {
+        func: mz_expr::VariadicFunc::And(mz_expr::func::variadic::And),
+        exprs: vec![record_literal(TYPE_SIZE_LIMIT)],
+    };
+    let plan = mfp(raw_t1(), 2, vec![], vec![(2, and)], vec![0, 1]);
+    let df = dataflow(&[(T1, 2)], vec![(OUT, plan)]);
+    let errs = errors_with(&df, &enforced());
+    assert_error(
+        &errs,
+        Rule::Type,
+        "literal has a type of more than 256 nodes",
+    );
+    assert_error(&errs, Rule::Type, "argument 0 of unknown type");
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid when not enforced");
+}
+
+#[mz_ore::test]
+fn rejects_oversized_source_column_type_when_enforced() {
+    let eq = col(0).call_binary(col(0), mz_expr::func::Eq);
+    let plan = mfp(raw_t1(), 1, vec![eq], vec![], vec![1]);
+    let mut df = dataflow(&[(T1, 1)], vec![(OUT, plan)]);
+    df.source_imports.get_mut(&T1).expect("imported").desc.typ =
+        SqlRelationType::new(vec![oversized_record().nullable(false)]);
+    let errs = errors_with(&df, &enforced());
+    assert_error(
+        &errs,
+        Rule::Type,
+        "source import t1 column 0 has a type of more than 256 nodes",
+    );
+    assert_error(&errs, Rule::Type, "argument 0 of unknown type");
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid when not enforced");
+}
+
+#[mz_ore::test]
+fn rejects_oversized_index_column_type_when_enforced() {
+    let eq = col(0).call_binary(col(0), mz_expr::func::Eq);
+    let plan = plan(LirRelationNode::Mfp {
+        input: Box::new(get_global(T1, arranged(&[0], 1))),
+        mfp: MfpPlan::from_parts(
+            SafeMfpPlan::from_mfp(raw_mfp(1, vec![eq], vec![], vec![1])),
+            vec![],
+            vec![],
+        ),
+        input_key_val: Some((vec![col(0)], None)),
+    });
+    let mut df = dataflow(&[], vec![(OUT, plan)]);
+    import_index(&mut df, T2, T1, &[0], 1);
+    df.index_imports.get_mut(&T2).expect("imported").typ =
+        ReprRelationType::from(&SqlRelationType::new(vec![
+            oversized_record().nullable(false),
+        ]));
+    let errs = errors_with(&df, &enforced());
+    assert_error(
+        &errs,
+        Rule::Type,
+        "index import t2 column 0 has a type of more than 256 nodes",
+    );
+    assert_error(&errs, Rule::Type, "argument 0 of unknown type");
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid when not enforced");
+}
+
 #[mz_ore::test]
 fn infers_output_types() {
     let sum = col(0).call_binary(col(1), mz_expr::func::AddInt64);
@@ -1777,8 +1913,9 @@ fn resolves_many_locals_quickly() {
         values,
     });
     let df = dataflow(&[], vec![(OUT, plan)]);
-    // The plan may pass or fail. It must be validated quickly.
-    let _ = validate_dataflow(&df, &ValidateConfig::default());
+    // The object is empty and has no export, so it has no type.
+    let types = validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+    assert!(types.is_empty(), "{types:?}");
 }
 
 #[mz_ore::test]

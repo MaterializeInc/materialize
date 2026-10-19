@@ -20,9 +20,11 @@
 //!
 //! A column type is a [`ColType`]. Checks skip columns whose type is not [`ColType::Known`].
 //! [`ColType::Bottom`] marks columns no row reaches, where skipping checks loses nothing.
-//! [`ColType::Unknown`] marks columns that rows may reach. It arises only without the
-//! allowlist, or after an error has been reported, so that a plan that passes with the
-//! allowlist enforced has a known type for every column a row reaches.
+//! [`ColType::Unknown`] marks columns that rows may reach. With the allowlist enforced, every
+//! site that produces an unknown type reports an error, including a type larger than
+//! [`TYPE_SIZE_LIMIT`], and a function application or check that meets an unknown type
+//! reports one too, so a plan that passes with the allowlist enforced has a known type for
+//! every column a row reaches. Without the allowlist, unknown types pass every check.
 //!
 //! Input columns come as `Option<&[ColType]>`, where `None` stands for an input no row
 //! reaches, whose columns are all [`ColType::Bottom`]. That avoids allocating vectors of
@@ -78,7 +80,15 @@ pub(super) fn type_size(typ: &ReprColumnType) -> Option<usize> {
             | ReprScalarType::List { element_type: t }
             | ReprScalarType::Map { value_type: t }
             | ReprScalarType::Range { element_type: t } => todo.push(t),
-            ReprScalarType::Record { fields } => todo.extend(fields.iter().map(|f| &f.scalar_type)),
+            ReprScalarType::Record { fields } => {
+                // Every pending node is counted eventually, so a record whose fields alone
+                // exceed the limit is rejected before they are queued.
+                let pending = size.saturating_add(todo.len()).saturating_add(fields.len());
+                if pending > TYPE_SIZE_LIMIT {
+                    return None;
+                }
+                todo.extend(fields.iter().map(|f| &f.scalar_type));
+            }
             _ => {}
         }
     }
@@ -219,15 +229,32 @@ pub(super) struct Typer {
 }
 
 impl Typer {
-    /// Reports `t` unless it is known to have type `expected`.
-    fn expect(issues: &mut Issues, what: &str, t: &ColType, expected: ReprScalarType) {
-        if let ColType::Known(t) = t {
-            if t.scalar_type != expected {
-                issues.push((
-                    Rule::Type,
-                    format!("{what} has type {:?}, not {expected:?}", t.scalar_type),
-                ));
-            }
+    /// `typ` as a known column type, or unknown if it exceeds [`TYPE_SIZE_LIMIT`], which is
+    /// reported if the allowlist is enforced, since no check runs on an unknown type.
+    pub(super) fn of(self, issues: &mut Issues, what: &str, typ: ReprColumnType) -> ColType {
+        let t = ColType::of(typ);
+        if self.enforce && t == ColType::Unknown {
+            issues.push((
+                Rule::Type,
+                format!("{what} has a type of more than {TYPE_SIZE_LIMIT} nodes"),
+            ));
+        }
+        t
+    }
+
+    /// Reports `t` unless it is known to have type `expected`, or no row reaches it. An
+    /// unknown type is reported only if the allowlist is enforced.
+    fn expect(self, issues: &mut Issues, what: &str, t: &ColType, expected: ReprScalarType) {
+        match t {
+            ColType::Known(t) if t.scalar_type != expected => issues.push((
+                Rule::Type,
+                format!("{what} has type {:?}, not {expected:?}", t.scalar_type),
+            )),
+            ColType::Unknown if self.enforce => issues.push((
+                Rule::Type,
+                format!("{what} has an unknown type, not {expected:?}"),
+            )),
+            ColType::Known(_) | ColType::Unknown | ColType::Bottom => {}
         }
     }
 
@@ -246,7 +273,7 @@ impl Typer {
         f: impl FnOnce() -> ReprColumnType,
     ) -> ColType {
         match mz_ore::panic::catch_unwind(AssertUnwindSafe(f)) {
-            Ok(t) => ColType::of(t),
+            Ok(t) => self.of(issues, &format!("{what}: output of function {name}"), t),
             Err(_) => {
                 if self.enforce {
                     issues.push((
@@ -261,7 +288,9 @@ impl Typer {
 
     /// Checks `args` against the typing rule of a function, if the allowlist is enforced.
     ///
-    /// Returns whether the application is admitted.
+    /// Returns whether the application is admitted. With the allowlist enforced, an argument
+    /// of unknown type is never admitted, since the rule cannot check it. An argument no row
+    /// reaches is admitted, since the function is never evaluated on it.
     fn admit(
         self,
         issues: &mut Issues,
@@ -280,6 +309,13 @@ impl Typer {
             ));
             return false;
         };
+        if let Some(i) = args.iter().position(|a| *a == ColType::Unknown) {
+            issues.push((
+                Rule::Type,
+                format!("{what}: function {name} has argument {i} of unknown type"),
+            ));
+            return false;
+        }
         let args: Vec<_> = args.iter().map(ColType::known).collect();
         match rule.check(&args) {
             Ok(()) => true,
@@ -295,13 +331,15 @@ impl Typer {
 
     /// The type of a literal, checking that its value is an instance of its declared type.
     fn literal(
+        self,
         issues: &mut Issues,
         what: &str,
         value: &Result<StableRow, EvalError>,
         typ: &ReprColumnType,
     ) -> ColType {
+        let what = format!("{what} literal");
         let Ok(row) = value else {
-            return ColType::of(typ.clone());
+            return self.of(issues, &what, typ.clone());
         };
         // Evaluation unpacks the first datum and panics if there is none.
         let mut datums = row.iter();
@@ -309,20 +347,20 @@ impl Typer {
             issues.push((
                 Rule::Shape,
                 format!(
-                    "{what} literal holds {} datums, but a literal holds exactly one",
+                    "{what} holds {} datums, but a literal holds exactly one",
                     row.iter().count()
                 ),
             ));
             return ColType::Unknown;
         };
         if datum.is_instance_of(typ) {
-            ColType::of(typ.clone())
+            self.of(issues, &what, typ.clone())
         } else {
             let nullability = if datum.is_null() { " non-null" } else { "" };
             issues.push((
                 Rule::Type,
                 format!(
-                    "{what} literal is not an instance of its declared{nullability} type {:?}",
+                    "{what} is not an instance of its declared{nullability} type {:?}",
                     typ.scalar_type
                 ),
             ));
@@ -350,7 +388,7 @@ impl Typer {
             match step {
                 Step::Visit(LirScalarExpr::Column(c, _)) => done.push(cols(*c)),
                 Step::Visit(LirScalarExpr::Literal(value, typ)) => {
-                    done.push(Self::literal(issues, what, value, typ))
+                    done.push(self.literal(issues, what, value, typ))
                 }
                 Step::Visit(e) => {
                     todo.push(Step::Apply(e));
@@ -378,7 +416,7 @@ impl Typer {
             let [cond, then, els] = args.as_slice() else {
                 return ColType::Unknown;
             };
-            Self::expect(
+            self.expect(
                 issues,
                 &format!("{what} If condition"),
                 cond,
@@ -452,7 +490,7 @@ impl Typer {
             for (position, predicate) in &mfp.predicates {
                 let what = format!("{what} predicate at position {position}");
                 let t = self.scalar(issues, &what, predicate, &cols);
-                Self::expect(issues, &what, &t, ReprScalarType::Bool);
+                self.expect(issues, &what, &t, ReprScalarType::Bool);
             }
         }
         computed
@@ -487,7 +525,7 @@ impl Typer {
         for bound in lower.iter().chain(upper) {
             let what = format!("{what} temporal bound");
             let t = self.scalar(issues, &what, bound, &cols);
-            Self::expect(issues, &what, &t, ReprScalarType::MzTimestamp);
+            self.expect(issues, &what, &t, ReprScalarType::MzTimestamp);
         }
         mfp.projection.iter().map(|c| cols(*c)).collect()
     }
@@ -579,7 +617,11 @@ impl Typer {
             .into_iter()
             .enumerate()
             .map(|(c, (column, nullable))| match column {
-                ConstantColumn::Known(t) => ColType::of(t.nullable(nullable)),
+                ConstantColumn::Known(t) => self.of(
+                    issues,
+                    &format!("constant column {c}"),
+                    t.nullable(nullable),
+                ),
                 ConstantColumn::Null => {
                     if self.enforce {
                         issues.push((
@@ -692,9 +734,18 @@ impl Typer {
         let arity = func.checked_output_arity();
         let output = mz_ore::panic::catch_unwind(AssertUnwindSafe(|| func.output_type()));
         let mut types: Vec<ColType> = match output {
-            Ok(typ) if Some(typ.arity()) == arity => {
-                typ.column_types.into_iter().map(ColType::of).collect()
-            }
+            Ok(typ) if Some(typ.arity()) == arity => typ
+                .column_types
+                .into_iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    self.of(
+                        issues,
+                        &format!("{what}: output column {i} of function {name}"),
+                        t,
+                    )
+                })
+                .collect(),
             _ => {
                 if self.enforce {
                     issues.push((
@@ -762,6 +813,14 @@ impl Typer {
     ) -> Vec<ColType> {
         for (k, class) in closure.ready_equivalences.iter().enumerate() {
             let types = self.exprs(issues, &format!("{what} equivalence"), class, Some(row));
+            if self.enforce {
+                if let Some(i) = types.iter().position(|t| *t == ColType::Unknown) {
+                    issues.push((
+                        Rule::Type,
+                        format!("{what} equivalence class {k} expression {i} has an unknown type"),
+                    ));
+                }
+            }
             let mut known = types.iter().filter_map(ColType::known);
             if let Some(first) = known.next() {
                 if let Some(other) = known.find(|t| t.scalar_type != first.scalar_type) {
@@ -979,7 +1038,7 @@ impl Typer {
         if let Some(limit) = limit {
             // Rendering unwraps the limit as an `int8`.
             let t = self.scalar(issues, "TopK limit", limit, &|c| col(input, c));
-            Self::expect(issues, "TopK limit", &t, ReprScalarType::Int64);
+            self.expect(issues, "TopK limit", &t, ReprScalarType::Int64);
         }
         input.map(<[ColType]>::to_vec)
     }
