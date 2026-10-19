@@ -21,7 +21,7 @@ use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_catalog::memory::objects::{CatalogItem, Sink};
+use mz_catalog::memory::objects::Sink;
 use mz_cluster_client::ReplicaId;
 use mz_controller_types::ClusterId;
 use mz_ore::instrument;
