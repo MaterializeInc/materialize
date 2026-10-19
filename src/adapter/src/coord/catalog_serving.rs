@@ -186,26 +186,15 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
 
     // Make sure we only depend on the system catalog, and nothing we depend on is a
     // per-replica object, that requires being run a specific replica.
-    let valid_dependencies = depends_on.all(|id| {
-        let entry = catalog.state().get_entry(&id);
-        let schema = entry.name().qualifiers.schema_spec;
-
-        let system_only = catalog.state().is_system_schema_specifier(schema);
-        let non_replica = catalog.state().introspection_dependencies(id).is_empty();
-
-        system_only && non_replica
-    });
+    let valid_dependencies = depends_on.all(|id| catalog.is_system_item_without_introspection(id));
 
     if (has_dependencies && valid_dependencies)
         || (!has_dependencies && !could_run_expensive_function)
     {
-        let intros_cluster = catalog
-            .state()
-            .resolve_builtin_cluster(&MZ_CATALOG_SERVER_CLUSTER);
         tracing::debug!("Running on '{}' cluster", MZ_CATALOG_SERVER_CLUSTER.name);
 
         // If we're running on a different cluster than the active one, notify the user.
-        if intros_cluster.name != session.vars().cluster() {
+        if MZ_CATALOG_SERVER_CLUSTER.name != session.vars().cluster() {
             session.add_notice(AdapterNotice::AutoRunOnCatalogServerCluster);
         }
         TargetCluster::CatalogServer

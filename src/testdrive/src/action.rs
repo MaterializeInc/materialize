@@ -22,8 +22,7 @@ use aws_credential_types::provider::ProvideCredentials;
 use aws_types::SdkConfig;
 use futures::future::FutureExt;
 use itertools::Itertools;
-use mz_adapter::catalog::{Catalog, ConnCatalog, DebugAwsContext};
-use mz_adapter::session::Session;
+use mz_adapter::catalog::{Catalog, DebugAwsContext};
 use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
@@ -456,7 +455,7 @@ impl State {
         f: F,
     ) -> Result<Option<T>, anyhow::Error>
     where
-        F: FnOnce(ConnCatalog) -> T,
+        F: FnOnce(&Catalog) -> T,
     {
         async fn persist_client(
             persist_consensus_url: SensitiveUrl,
@@ -497,7 +496,7 @@ impl State {
                 Some(aws_context),
             )
             .await?;
-            let res = f(catalog.for_session(&Session::dummy()));
+            let res = f(&catalog);
             catalog.expire().await;
             Ok(Some(res))
         } else {

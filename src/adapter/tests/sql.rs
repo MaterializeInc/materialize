@@ -118,7 +118,7 @@ async fn datadriven() {
                         }
                         "resolve" => {
                             let sess = Session::dummy();
-                            let catalog = catalog.for_session(&sess);
+                            let catalog = catalog.for_session_without_preparation(&sess);
 
                             let parsed = mz_sql::parse::parse(&test_case.input).unwrap();
                             let pcx = &PlanContext::zero();

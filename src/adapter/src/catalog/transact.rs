@@ -4250,7 +4250,12 @@ mod tests {
             );
             let timestamp = catalog.current_upper().await;
             catalog
-                .transact(None, timestamp, None, transaction.take_ops())
+                .transact(
+                    None,
+                    timestamp,
+                    None,
+                    transaction.take_prepared_batch().into_ops(),
+                )
                 .await
                 .expect("validate and replay ordered preparation reads");
             assert!(catalog.state().try_get_entry(&id_t1).is_some());
@@ -4543,7 +4548,12 @@ mod tests {
             assert_eq!(catalog.system_config().max_connections(), original);
             let timestamp = catalog.current_upper().await;
             let result = catalog
-                .transact(None, timestamp, None, transaction.take_ops())
+                .transact(
+                    None,
+                    timestamp,
+                    None,
+                    transaction.take_prepared_batch().into_ops(),
+                )
                 .await;
             assert!(matches!(
                 result,
@@ -4649,7 +4659,12 @@ mod tests {
             assert_eq!(catalog.system_config().max_result_size(), global_limit);
             let timestamp = catalog.current_upper().await;
             let result = catalog
-                .transact(None, timestamp, None, transaction.take_ops())
+                .transact(
+                    None,
+                    timestamp,
+                    None,
+                    transaction.take_prepared_batch().into_ops(),
+                )
                 .await;
             assert!(matches!(
                 result,

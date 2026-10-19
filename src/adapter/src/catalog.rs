@@ -98,6 +98,9 @@ pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::ddl_transaction::DdlTransaction;
 pub use crate::catalog::observations::{CatalogReadRecorder, CatalogReadSet};
 pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
+pub(crate) use crate::catalog::preparation::{
+    CatalogPreparation, PreparedCatalogBatch, UntrackedCatalogWrite,
+};
 pub use crate::catalog::state::CatalogState;
 pub use crate::catalog::transact::{
     DropObjectInfo, InjectedAuditEvent, Op, ReplicaCreateDropReason, TransactionResult,
@@ -114,6 +117,7 @@ mod builtin_table_updates;
 pub(crate) mod consistency;
 mod migrate;
 
+mod access;
 mod apply;
 #[cfg(test)]
 mod boundary_tests;
@@ -124,6 +128,7 @@ mod observations;
 mod observed_item;
 mod observed_objects;
 mod open;
+mod preparation;
 mod state;
 mod timeline;
 mod transact;
@@ -277,8 +282,7 @@ impl Catalog {
 
 #[derive(Debug)]
 pub struct ConnCatalog<'a> {
-    state: Cow<'a, CatalogState>,
-    read_recorder: Option<CatalogReadRecorder>,
+    state: access::CatalogAccess<'a>,
     /// Because we don't have any way of removing items from the catalog
     /// temporarily, we allow the ConnCatalog to pretend that a set of items
     /// don't exist during resolution.
@@ -292,9 +296,7 @@ pub struct ConnCatalog<'a> {
     conn_id: ConnectionId,
     cluster: String,
     database_name: Cow<'a, str>,
-    database: Option<DatabaseId>,
     raw_search_path: Cow<'a, [mz_sql_parser::ast::Ident]>,
-    search_path: Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)>,
     role_id: RoleId,
     prepared_statements: Option<&'a BTreeMap<String, PreparedStatement>>,
     portals: Option<&'a BTreeMap<String, Portal>>,
@@ -332,29 +334,15 @@ impl ConnCatalog<'_> {
         &self.conn_id
     }
 
-    pub fn state(&self) -> &CatalogState {
-        &*self.state
-    }
-
     /// Returns a system-role view of this catalog snapshot.
     pub fn for_system_session(&self) -> ConnCatalog<'_> {
-        let mut catalog = self.state.for_system_session();
-        catalog.read_recorder = self.read_recorder.clone();
-        catalog
+        self.state.for_system_session()
     }
 
     /// Attaches a statement's read recorder to this catalog view.
     pub fn with_read_recorder(mut self, recorder: CatalogReadRecorder) -> Self {
-        debug_assert!(self.read_recorder.is_none());
-        self.read_recorder = Some(recorder);
+        self.state.attach_recorder(recorder);
         self
-    }
-
-    fn item_view<'a>(&self, item: &'a dyn SqlCatalogItem) -> CatalogItemRef<'a> {
-        match &self.read_recorder {
-            Some(recorder) => recorder.item(item),
-            None => CatalogRef::Borrowed(item),
-        }
     }
 
     /// Prevent planning from resolving item with the provided ID. Instead,
@@ -383,24 +371,27 @@ impl ConnCatalog<'_> {
         &self,
         include_temp_schema: bool,
     ) -> Vec<(ResolvedDatabaseSpecifier, SchemaSpecifier)> {
-        let path = self
-            .state
-            .effective_search_path(&self.search_path, include_temp_schema);
-        if let Some(recorder) = &self.read_recorder {
-            let database_name = self.database_name.clone().into_owned();
-            let raw_path = self.raw_search_path.clone().into_owned();
-            let conn_id = self.conn_id.clone();
-            recorder.record("effective search path", path.clone(), move |state| {
-                let database = state.database_by_name.get(&database_name);
-                let path = state.resolve_search_path_for(
-                    database,
-                    raw_path.iter().map(|name| name.as_str()),
-                    &conn_id,
-                );
-                state.effective_search_path(&path, include_temp_schema)
-            });
-        }
-        path
+        self.state.read_namespace(
+            |state, _, search_path| state.effective_search_path(search_path, include_temp_schema),
+            |path| {
+                let database_name = self.database_name.clone().into_owned();
+                let raw_path = self.raw_search_path.clone().into_owned();
+                let conn_id = self.conn_id.clone();
+                (
+                    "effective search path",
+                    path.clone(),
+                    move |state: &CatalogState| {
+                        let database = state.database_by_name.get(&database_name);
+                        let path = state.resolve_search_path_for(
+                            database,
+                            raw_path.iter().map(|name| name.as_str()),
+                            &conn_id,
+                        );
+                        state.effective_search_path(&path, include_temp_schema)
+                    },
+                )
+            },
+        )
     }
 }
 
@@ -807,7 +798,21 @@ impl Catalog {
         Ok(catalog)
     }
 
-    pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
+    pub(crate) fn for_preparation<'a>(
+        &'a self,
+        session: &'a Session,
+        preparation: &CatalogPreparation,
+    ) -> ConnCatalog<'a> {
+        let view = self.state.for_session(session);
+        match preparation.recorder() {
+            Some(reads) => view.with_read_recorder(reads),
+            None => view,
+        }
+    }
+
+    /// A session view outside statement preparation. Explicit DDL prefix reads
+    /// still belong to the transaction, but no preparation-attempt reads attach.
+    pub fn for_session_without_preparation<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
         self.state.for_session(session)
     }
 
@@ -1872,17 +1877,26 @@ impl From<UpdatePrivilegeVariant> for EventType {
 
 impl ExprHumanizer for ConnCatalog<'_> {
     fn humanize_id(&self, id: GlobalId) -> Option<String> {
-        let entry = self.state.try_get_entry_by_global_id(&id)?;
+        let entry = self
+            .state
+            .exempt(access::Exemption::Diagnostics)
+            .try_get_entry_by_global_id(&id)?;
         Some(self.resolve_full_name(entry.name()).to_string())
     }
 
     fn humanize_id_unqualified(&self, id: GlobalId) -> Option<String> {
-        let entry = self.state.try_get_entry_by_global_id(&id)?;
+        let entry = self
+            .state
+            .exempt(access::Exemption::Diagnostics)
+            .try_get_entry_by_global_id(&id)?;
         Some(entry.name().item.clone())
     }
 
     fn humanize_id_parts(&self, id: GlobalId) -> Option<Vec<String>> {
-        let entry = self.state.try_get_entry_by_global_id(&id)?;
+        let entry = self
+            .state
+            .exempt(access::Exemption::Diagnostics)
+            .try_get_entry_by_global_id(&id)?;
         Some(self.resolve_full_name(entry.name()).into_parts())
     }
 
@@ -1945,7 +1959,11 @@ impl ExprHumanizer for ConnCatalog<'_> {
             UInt64 => "uint8".into(),
             ty => {
                 let pgrepr_type = mz_pgrepr::Type::from(ty);
-                let pg_catalog_schema = SchemaSpecifier::Id(self.state.get_pg_catalog_schema_id());
+                let pg_catalog_schema = SchemaSpecifier::Id(
+                    self.state
+                        .exempt(access::Exemption::Diagnostics)
+                        .get_pg_catalog_schema_id(),
+                );
 
                 let res = if self
                     .effective_search_path(true)
@@ -1971,11 +1989,17 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 
     fn column_names_for_id(&self, id: GlobalId) -> Option<Vec<String>> {
-        let entry = self.state.try_get_entry_by_global_id(&id)?;
+        let entry = self
+            .state
+            .exempt(access::Exemption::Diagnostics)
+            .try_get_entry_by_global_id(&id)?;
 
         match entry.index() {
             Some(index) => {
-                let on_desc = self.state.try_get_desc_by_global_id(&index.on)?;
+                let on_desc = self
+                    .state
+                    .exempt(access::Exemption::Diagnostics)
+                    .try_get_desc_by_global_id(&index.on)?;
                 let mut on_names = on_desc
                     .iter_names()
                     .map(|col_name| col_name.to_string())
@@ -1999,7 +2023,10 @@ impl ExprHumanizer for ConnCatalog<'_> {
                 Some(ix_names) // Return the updated ix_names vector.
             }
             None => {
-                let desc = self.state.try_get_desc_by_global_id(&id)?;
+                let desc = self
+                    .state
+                    .exempt(access::Exemption::Diagnostics)
+                    .try_get_desc_by_global_id(&id)?;
                 let column_names = desc
                     .iter_names()
                     .map(|col_name| col_name.to_string())
@@ -2011,12 +2038,18 @@ impl ExprHumanizer for ConnCatalog<'_> {
     }
 
     fn humanize_column(&self, id: GlobalId, column: usize) -> Option<String> {
-        let desc = self.state.try_get_desc_by_global_id(&id)?;
+        let desc = self
+            .state
+            .exempt(access::Exemption::Diagnostics)
+            .try_get_desc_by_global_id(&id)?;
         Some(desc.get_name(column).to_string())
     }
 
     fn id_exists(&self, id: GlobalId) -> bool {
-        self.state.entry_by_global_id.contains_key(&id)
+        self.state
+            .exempt(access::Exemption::Diagnostics)
+            .entry_by_global_id
+            .contains_key(&id)
     }
 }
 
@@ -2043,30 +2076,36 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     fn active_database_name(&self) -> Option<&str> {
         let id = *self.active_database()?;
-        let database = &self.state.database_by_id[&id];
-        if let Some(recorder) = &self.read_recorder {
-            recorder.record(
-                "active database name",
-                Some(database.name.clone()),
-                move |state| {
-                    state
-                        .database_by_id
-                        .get(&id)
-                        .map(|database| database.name.clone())
-                },
-            );
-        }
-        Some(database.name.as_str())
+        let name = self.state.read(
+            |state| state.database_by_id[&id].name.as_str(),
+            |name| {
+                (
+                    "active database name",
+                    Some((*name).to_owned()),
+                    move |state: &CatalogState| {
+                        state
+                            .database_by_id
+                            .get(&id)
+                            .map(|database| database.name.clone())
+                    },
+                )
+            },
+        );
+        Some(name)
     }
 
     fn active_database(&self) -> Option<&DatabaseId> {
-        if let Some(recorder) = &self.read_recorder {
-            let name = self.database_name.clone().into_owned();
-            recorder.record("active database", self.database, move |state| {
-                state.database_by_name.get(&name).copied()
-            });
-        }
-        self.database.as_ref()
+        self.state.read_namespace(
+            |_, database, _| database,
+            |answer| {
+                let name = self.database_name.clone().into_owned();
+                (
+                    "active database",
+                    answer.copied(),
+                    move |state: &CatalogState| state.database_by_name.get(&name).copied(),
+                )
+            },
+        )
     }
 
     fn active_cluster(&self) -> &str {
@@ -2074,30 +2113,35 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn search_path(&self) -> &[(ResolvedDatabaseSpecifier, SchemaSpecifier)] {
-        if let Some(recorder) = &self.read_recorder {
-            let database_name = self.database_name.clone().into_owned();
-            let raw_path = self.raw_search_path.clone().into_owned();
-            let conn_id = self.conn_id.clone();
-            recorder.record("search path", self.search_path.clone(), move |state| {
-                state.resolve_search_path_for(
-                    state.database_by_name.get(&database_name),
-                    raw_path.iter().map(|name| name.as_str()),
-                    &conn_id,
+        self.state.read_namespace(
+            |_, _, path| path,
+            |answer| {
+                let database_name = self.database_name.clone().into_owned();
+                let raw_path = self.raw_search_path.clone().into_owned();
+                let conn_id = self.conn_id.clone();
+                (
+                    "search path",
+                    answer.to_vec(),
+                    move |state: &CatalogState| {
+                        state.resolve_search_path_for(
+                            state.database_by_name.get(&database_name),
+                            raw_path.iter().map(|name| name.as_str()),
+                            &conn_id,
+                        )
+                    },
                 )
-            });
-        }
-        &self.search_path
+            },
+        )
     }
 
     fn resolve_database(
         &self,
         database_name: &str,
     ) -> Result<mz_sql::catalog::CatalogDatabaseRef<'_>, SqlCatalogError> {
-        if self.read_recorder.is_none() {
-            return self
-                .state
-                .resolve_database(database_name)
-                .map(|database| self.database_view(database));
+        if let Some(state) = self.state.untracked() {
+            return state.resolve_database(database_name).map(|database| {
+                CatalogRef::<dyn mz_sql::catalog::CatalogDatabase>::Borrowed(database)
+            });
         }
         let name = database_name.to_owned();
         let id = self.observe("database name", move |state| {
@@ -2107,12 +2151,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_database(&self, id: &DatabaseId) -> mz_sql::catalog::CatalogDatabaseRef<'_> {
-        self.database_view(
-            self.state
-                .database_by_id
-                .get(id)
-                .expect("database doesn't exist"),
-        )
+        self.state.database(id)
     }
 
     fn get_databases(&self) -> Vec<mz_sql::catalog::CatalogDatabaseRef<'_>> {
@@ -2129,16 +2168,15 @@ impl SessionCatalog for ConnCatalog<'_> {
         database_name: Option<&str>,
         schema_name: &str,
     ) -> Result<mz_sql::catalog::CatalogSchemaRef<'_>, SqlCatalogError> {
-        if self.read_recorder.is_none() {
-            return self
-                .state
+        if let Some(state) = self.state.untracked() {
+            return state
                 .resolve_schema(
-                    self.database.as_ref(),
+                    self.active_database(),
                     database_name,
                     schema_name,
                     &self.conn_id,
                 )
-                .map(|schema| self.schema_view(schema, &self.conn_id));
+                .map(|schema| CatalogRef::<dyn mz_sql::catalog::CatalogSchema>::Borrowed(schema));
         }
         let current_database = self.database_name.clone().into_owned();
         let database_name = database_name.map(str::to_owned);
@@ -2162,11 +2200,10 @@ impl SessionCatalog for ConnCatalog<'_> {
         database_spec: &ResolvedDatabaseSpecifier,
         schema_name: &str,
     ) -> Result<mz_sql::catalog::CatalogSchemaRef<'_>, SqlCatalogError> {
-        if self.read_recorder.is_none() {
-            return self
-                .state
+        if let Some(state) = self.state.untracked() {
+            return state
                 .resolve_schema_in_database(database_spec, schema_name, &self.conn_id)
-                .map(|schema| self.schema_view(schema, &self.conn_id));
+                .map(|schema| CatalogRef::<dyn mz_sql::catalog::CatalogSchema>::Borrowed(schema));
         }
         let database = *database_spec;
         let name = schema_name.to_owned();
@@ -2184,11 +2221,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
     ) -> mz_sql::catalog::CatalogSchemaRef<'_> {
-        self.schema_view(
-            self.state
-                .get_schema(database_spec, schema_spec, &self.conn_id),
-            &self.conn_id,
-        )
+        self.state.schema(database_spec, schema_spec, &self.conn_id)
     }
 
     fn get_schemas(&self) -> Vec<mz_sql::catalog::CatalogSchemaRef<'_>> {
@@ -2213,36 +2246,36 @@ impl SessionCatalog for ConnCatalog<'_> {
                 .collect::<Vec<_>>()
         })
         .into_iter()
-        .map(|(database, schema, conn_id)| {
-            self.schema_view(
-                self.state.get_schema(&database, &schema, &conn_id),
-                &conn_id,
-            )
-        })
+        .map(|(database, schema, conn_id)| self.state.schema(&database, &schema, &conn_id))
         .collect()
     }
 
     fn get_mz_internal_schema_id(&self) -> SchemaId {
-        self.state().get_mz_internal_schema_id()
+        self.state
+            .exempt(access::Exemption::BuiltinIdentity)
+            .get_mz_internal_schema_id()
     }
 
     fn get_mz_unsafe_schema_id(&self) -> SchemaId {
-        self.state().get_mz_unsafe_schema_id()
+        self.state
+            .exempt(access::Exemption::BuiltinIdentity)
+            .get_mz_unsafe_schema_id()
     }
 
     fn is_system_schema_specifier(&self, schema: SchemaSpecifier) -> bool {
-        self.state.is_system_schema_specifier(schema)
+        self.state
+            .exempt(access::Exemption::BuiltinIdentity)
+            .is_system_schema_specifier(schema)
     }
 
     fn resolve_role(
         &self,
         role_name: &str,
     ) -> Result<mz_sql::catalog::CatalogRoleRef<'_>, SqlCatalogError> {
-        if self.read_recorder.is_none() {
-            return self
-                .state
+        if let Some(state) = self.state.untracked() {
+            return state
                 .try_get_role_by_name(role_name)
-                .map(|role| self.role_view(role))
+                .map(|role| CatalogRef::<dyn mz_sql::catalog::CatalogRole>::Borrowed(role))
                 .ok_or_else(|| SqlCatalogError::UnknownRole(role_name.into()));
         }
         let name = role_name.to_owned();
@@ -2258,11 +2291,12 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         policy_name: &str,
     ) -> Result<mz_sql::catalog::CatalogNetworkPolicyRef<'_>, SqlCatalogError> {
-        if self.read_recorder.is_none() {
-            return self
-                .state
+        if let Some(state) = self.state.untracked() {
+            return state
                 .try_get_network_policy_by_name(policy_name)
-                .map(|policy| self.network_policy_view(policy))
+                .map(|policy| {
+                    CatalogRef::<dyn mz_sql::catalog::CatalogNetworkPolicy>::Borrowed(policy)
+                })
                 .ok_or_else(|| SqlCatalogError::UnknownNetworkPolicy(policy_name.into()));
         }
         let name = policy_name.to_owned();
@@ -2285,7 +2319,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_role(&self, id: &RoleId) -> mz_sql::catalog::CatalogRoleRef<'_> {
-        self.role_view(self.state.get_role(id))
+        self.state.role(id)
     }
 
     fn get_roles(&self) -> Vec<mz_sql::catalog::CatalogRoleRef<'_>> {
@@ -2316,7 +2350,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         id: &NetworkPolicyId,
     ) -> mz_sql::catalog::CatalogNetworkPolicyRef<'_> {
-        self.network_policy_view(self.state.get_network_policy(id))
+        self.state.network_policy(id)
     }
 
     fn get_network_policies(&self) -> Vec<mz_sql::catalog::CatalogNetworkPolicyRef<'_>> {
@@ -2336,11 +2370,12 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         cluster_name: Option<&str>,
     ) -> Result<mz_sql::catalog::CatalogClusterRef<'_>, SqlCatalogError> {
-        if self.read_recorder.is_none() {
-            return self
-                .state
+        if let Some(state) = self.state.untracked() {
+            return state
                 .resolve_cluster(cluster_name.unwrap_or_else(|| self.active_cluster()))
-                .map(|cluster| self.cluster_view(cluster));
+                .map(|cluster| {
+                    CatalogRef::<dyn mz_sql::catalog::CatalogCluster>::Borrowed(cluster)
+                });
         }
         let name = cluster_name
             .unwrap_or_else(|| self.active_cluster())
@@ -2355,11 +2390,12 @@ impl SessionCatalog for ConnCatalog<'_> {
         &self,
         cluster_replica_name: &QualifiedReplica,
     ) -> Result<mz_sql::catalog::CatalogClusterReplicaRef<'_>, SqlCatalogError> {
-        if self.read_recorder.is_none() {
-            return self
-                .state
+        if let Some(state) = self.state.untracked() {
+            return state
                 .resolve_cluster_replica(cluster_replica_name)
-                .map(|replica| self.replica_view(replica));
+                .map(|replica| {
+                    CatalogRef::<dyn mz_sql::catalog::CatalogClusterReplica>::Borrowed(replica)
+                });
         }
         let name = cluster_replica_name.clone();
         let (cluster, replica) = self.observe("cluster replica name", move |state| {
@@ -2386,7 +2422,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_system_type(&self, name: &str) -> CatalogItemRef<'_> {
-        self.item_view(self.state.get_system_type(name))
+        self.state.system_type(name)
     }
 
     fn try_get_item(&self, id: &CatalogItemId) -> Option<CatalogItemRef<'_>> {
@@ -2394,7 +2430,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         self.observe("item by ID", move |state| {
             state.try_get_entry(&id).map(|entry| entry.id())
         })
-        .map(|id| self.item_view(self.state.get_entry(&id)))
+        .map(|id| self.state.item(&id))
     }
 
     fn try_get_item_by_global_id(
@@ -2405,7 +2441,7 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_item(&self, id: &CatalogItemId) -> CatalogItemRef<'_> {
-        self.item_view(self.state.get_entry(id))
+        self.state.item(id)
     }
 
     fn get_item_by_global_id(
@@ -2426,11 +2462,10 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_item_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>> {
-        if self.read_recorder.is_none() {
-            return self
-                .state
+        if let Some(state) = self.state.untracked() {
+            return state
                 .get_item_by_name(name, &self.conn_id)
-                .map(|entry| self.item_view(entry));
+                .map(|entry| CatalogRef::<dyn mz_sql::catalog::CatalogItem>::Borrowed(entry));
         }
         let name = name.clone();
         let conn_id = self.conn_id.clone();
@@ -2447,15 +2482,14 @@ impl SessionCatalog for ConnCatalog<'_> {
             )
         })
         .expect("qualified lookup schema exists")
-        .map(|id| self.item_view(self.state.get_entry(&id)))
+        .map(|id| self.state.item(&id))
     }
 
     fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>> {
-        if self.read_recorder.is_none() {
-            return self
-                .state
+        if let Some(state) = self.state.untracked() {
+            return state
                 .get_type_by_name(name, &self.conn_id)
-                .map(|entry| self.item_view(entry));
+                .map(|entry| CatalogRef::<dyn mz_sql::catalog::CatalogItem>::Borrowed(entry));
         }
         let name = name.clone();
         let conn_id = self.conn_id.clone();
@@ -2472,11 +2506,11 @@ impl SessionCatalog for ConnCatalog<'_> {
             )
         })
         .expect("qualified lookup schema exists")
-        .map(|id| self.item_view(self.state.get_entry(&id)))
+        .map(|id| self.state.item(&id))
     }
 
     fn get_cluster(&self, id: ClusterId) -> mz_sql::catalog::CatalogClusterRef<'_> {
-        self.cluster_view(&self.state.clusters_by_id[&id])
+        self.state.cluster(id)
     }
 
     fn get_clusters(&self) -> Vec<mz_sql::catalog::CatalogClusterRef<'_>> {
@@ -2493,8 +2527,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         cluster_id: ClusterId,
         replica_id: ReplicaId,
     ) -> mz_sql::catalog::CatalogClusterReplicaRef<'_> {
-        let cluster = &self.state.clusters_by_id[&cluster_id];
-        self.replica_view(cluster.replica(replica_id).expect("catalog out of sync"))
+        self.state.replica(cluster_id, replica_id)
     }
 
     fn get_cluster_replicas(&self) -> Vec<mz_sql::catalog::CatalogClusterReplicaRef<'_>> {
@@ -2519,15 +2552,17 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn get_default_privileges(
         &self,
     ) -> Vec<(&DefaultPrivilegeObject, Vec<&DefaultPrivilegeAclItem>)> {
-        if let Some(recorder) = &self.read_recorder {
-            recorder.record(
-                "default privileges",
-                Arc::clone(&self.state.default_privileges),
-                |state| Arc::clone(&state.default_privileges),
-            );
-        }
         self.state
-            .default_privileges
+            .read(
+                |state| &state.default_privileges,
+                |privileges| {
+                    (
+                        "default privileges",
+                        Arc::clone(privileges),
+                        |state: &CatalogState| Arc::clone(&state.default_privileges),
+                    )
+                },
+            )
             .iter()
             .map(|(object, acl_items)| (object, acl_items.collect()))
             .collect()
@@ -2591,23 +2626,33 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn config(&self) -> &mz_sql::catalog::CatalogConfig {
-        self.state.config()
+        self.state.exempt(access::Exemption::Configuration).config()
     }
 
     fn now(&self) -> EpochMillis {
-        (self.state.config().now)()
+        (self
+            .state
+            .exempt(access::Exemption::Configuration)
+            .config()
+            .now)()
     }
 
     fn aws_privatelink_availability_zones(&self) -> Option<BTreeSet<String>> {
-        self.state.aws_privatelink_availability_zones.clone()
+        self.state
+            .exempt(access::Exemption::Configuration)
+            .aws_privatelink_availability_zones
+            .clone()
     }
 
     fn system_vars(&self) -> &SystemVars {
-        &self.state.system_configuration
+        &self
+            .state
+            .exempt(access::Exemption::Configuration)
+            .system_configuration
     }
 
     fn system_vars_mut(&mut self) -> &mut SystemVars {
-        Arc::make_mut(&mut self.state.to_mut().system_configuration)
+        self.state.configuration_mut()
     }
 
     fn get_owner_id(&self, id: &ObjectId) -> Option<RoleId> {
@@ -2627,43 +2672,54 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_privileges(&self, id: &SystemObjectId) -> Option<&PrivilegeMap> {
-        let privileges = self.state.try_get_privileges(id, &self.conn_id);
-        if let Some(recorder) = &self.read_recorder {
-            let id = id.clone();
-            let conn_id = self.conn_id.clone();
-            recorder.record("object privileges", privileges.cloned(), move |state| {
-                state.try_get_privileges(&id, &conn_id).cloned()
-            });
-        }
-        privileges
+        self.state.read(
+            |state| state.try_get_privileges(id, &self.conn_id),
+            |privileges| {
+                let id = id.clone();
+                let conn_id = self.conn_id.clone();
+                (
+                    "object privileges",
+                    privileges.cloned(),
+                    move |state: &CatalogState| state.try_get_privileges(&id, &conn_id).cloned(),
+                )
+            },
+        )
     }
 
     fn object_dependents(&self, ids: &Vec<ObjectId>) -> Vec<ObjectId> {
-        let mut seen = BTreeSet::new();
-        let answer = self.state.object_dependents(ids, &self.conn_id, &mut seen);
-        if let Some(recorder) = &self.read_recorder {
-            let ids = ids.clone();
-            let conn_id = self.conn_id.clone();
-            recorder.record("object dependents", Some(answer.clone()), move |state| {
-                ids.iter()
-                    .all(|id| state.dependency_root_exists(id, &conn_id))
-                    .then(|| state.object_dependents(&ids, &conn_id, &mut BTreeSet::new()))
-            });
-        }
-        answer
+        self.state.read(
+            |state| state.object_dependents(ids, &self.conn_id, &mut BTreeSet::new()),
+            |answer| {
+                let ids = ids.clone();
+                let conn_id = self.conn_id.clone();
+                (
+                    "object dependents",
+                    Some((*answer).clone()),
+                    move |state: &CatalogState| {
+                        ids.iter()
+                            .all(|id| state.dependency_root_exists(id, &conn_id))
+                            .then(|| state.object_dependents(&ids, &conn_id, &mut BTreeSet::new()))
+                    },
+                )
+            },
+        )
     }
 
     fn item_dependents(&self, id: CatalogItemId) -> Vec<ObjectId> {
-        let mut seen = BTreeSet::new();
-        let answer = self.state.item_dependents(id, &mut seen);
-        if let Some(recorder) = &self.read_recorder {
-            recorder.record("item dependents", Some(answer.clone()), move |state| {
-                state
-                    .try_get_entry(&id)
-                    .map(|_| state.item_dependents(id, &mut BTreeSet::new()))
-            });
-        }
-        answer
+        self.state.read(
+            |state| state.item_dependents(id, &mut BTreeSet::new()),
+            |answer| {
+                (
+                    "item dependents",
+                    Some((*answer).clone()),
+                    move |state: &CatalogState| {
+                        state
+                            .try_get_entry(&id)
+                            .map(|_| state.item_dependents(id, &mut BTreeSet::new()))
+                    },
+                )
+            },
+        )
     }
 
     fn all_object_privileges(&self, object_type: mz_sql::catalog::SystemObjectType) -> AclMode {
@@ -2673,7 +2729,12 @@ impl SessionCatalog for ConnCatalog<'_> {
     fn get_object_type(&self, object_id: &ObjectId) -> mz_sql::catalog::ObjectType {
         match object_id {
             ObjectId::Item(id) => self.get_item(id).item_type().into(),
-            _ => self.state.get_object_type(object_id),
+            ObjectId::Cluster(_) => mz_sql::catalog::ObjectType::Cluster,
+            ObjectId::ClusterReplica(_) => mz_sql::catalog::ObjectType::ClusterReplica,
+            ObjectId::Database(_) => mz_sql::catalog::ObjectType::Database,
+            ObjectId::Schema(_) => mz_sql::catalog::ObjectType::Schema,
+            ObjectId::Role(_) => mz_sql::catalog::ObjectType::Role,
+            ObjectId::NetworkPolicy(_) => mz_sql::catalog::ObjectType::NetworkPolicy,
         }
     }
 
@@ -2705,7 +2766,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         let database_id = match &qualified_name.qualifiers.database_spec {
             ResolvedDatabaseSpecifier::Ambient => None,
             ResolvedDatabaseSpecifier::Id(id)
-                if self.database.is_some() && self.database == Some(*id) =>
+                if self.state.database_for_diagnostics() == Some(*id) =>
             {
                 None
             }
@@ -2770,24 +2831,33 @@ impl SessionCatalog for ConnCatalog<'_> {
     }
 
     fn get_item_comments(&self, id: &CatalogItemId) -> Option<&BTreeMap<Option<usize>, String>> {
-        let comment_id = self.state.get_comment_id(ObjectId::Item(*id));
-        let comments = self.state.comments.get_object_comments(comment_id);
-        if let Some(recorder) = &self.read_recorder {
-            let id = *id;
-            recorder.record("item comments", Some(comments.cloned()), move |state| {
-                state.try_get_entry(&id).map(|entry| {
-                    state
-                        .comments
-                        .get_object_comments(entry.comment_object_id())
-                        .cloned()
-                })
-            });
-        }
-        comments
+        self.state.read(
+            |state| {
+                state
+                    .comments
+                    .get_object_comments(state.get_comment_id(ObjectId::Item(*id)))
+            },
+            |comments| {
+                let id = *id;
+                (
+                    "item comments",
+                    Some(comments.cloned()),
+                    move |state: &CatalogState| {
+                        state.try_get_entry(&id).map(|entry| {
+                            state
+                                .comments
+                                .get_object_comments(entry.comment_object_id())
+                                .cloned()
+                        })
+                    },
+                )
+            },
+        )
     }
 
     fn is_cluster_size_cc(&self, size: &str) -> bool {
         self.state
+            .exempt(access::Exemption::Configuration)
             .cluster_replica_sizes
             .0
             .get(size)
@@ -2907,7 +2977,7 @@ mod tests {
                 );
                 assert_eq!(
                     catalog
-                        .for_session(&Session::dummy())
+                        .for_session_without_preparation(&Session::dummy())
                         .minimal_qualification(&tc.input),
                     tc.normal_output
                 );
@@ -2984,21 +3054,21 @@ mod tests {
 
             // Behavior with the default search_schema (public)
             let session = Session::dummy();
-            let conn_catalog = catalog.for_session(&session);
+            let conn_catalog = catalog.for_session_without_preparation(&session);
             assert_ne!(
                 conn_catalog.effective_search_path(false),
-                conn_catalog.search_path
+                conn_catalog.search_path()
             );
             assert_ne!(
                 conn_catalog.effective_search_path(true),
-                conn_catalog.search_path
+                conn_catalog.search_path()
             );
             assert_eq!(
                 conn_catalog.effective_search_path(false),
                 vec![
                     mz_catalog_schema.clone(),
                     pg_catalog_schema.clone(),
-                    conn_catalog.search_path[0].clone()
+                    conn_catalog.search_path()[0].clone()
                 ]
             );
             assert_eq!(
@@ -3007,7 +3077,7 @@ mod tests {
                     mz_temp_schema.clone(),
                     mz_catalog_schema.clone(),
                     pg_catalog_schema.clone(),
-                    conn_catalog.search_path[0].clone()
+                    conn_catalog.search_path()[0].clone()
                 ]
             );
 
@@ -3022,14 +3092,14 @@ mod tests {
                     false,
                 )
                 .expect("failed to set search_path");
-            let conn_catalog = catalog.for_session(&session);
+            let conn_catalog = catalog.for_session_without_preparation(&session);
             assert_ne!(
                 conn_catalog.effective_search_path(false),
-                conn_catalog.search_path
+                conn_catalog.search_path()
             );
             assert_ne!(
                 conn_catalog.effective_search_path(true),
-                conn_catalog.search_path
+                conn_catalog.search_path()
             );
             assert_eq!(
                 conn_catalog.effective_search_path(false),
@@ -3054,14 +3124,14 @@ mod tests {
                     false,
                 )
                 .expect("failed to set search_path");
-            let conn_catalog = catalog.for_session(&session);
+            let conn_catalog = catalog.for_session_without_preparation(&session);
             assert_ne!(
                 conn_catalog.effective_search_path(false),
-                conn_catalog.search_path
+                conn_catalog.search_path()
             );
             assert_ne!(
                 conn_catalog.effective_search_path(true),
-                conn_catalog.search_path
+                conn_catalog.search_path()
             );
             assert_eq!(
                 conn_catalog.effective_search_path(false),
@@ -3086,14 +3156,14 @@ mod tests {
                     false,
                 )
                 .expect("failed to set search_path");
-            let conn_catalog = catalog.for_session(&session);
+            let conn_catalog = catalog.for_session_without_preparation(&session);
             assert_ne!(
                 conn_catalog.effective_search_path(false),
-                conn_catalog.search_path
+                conn_catalog.search_path()
             );
             assert_ne!(
                 conn_catalog.effective_search_path(true),
-                conn_catalog.search_path
+                conn_catalog.search_path()
             );
             // Because we lazily initialize the `mz_temp` schema,
             // an explicit `mz_temp` search path before the first
@@ -3873,7 +3943,7 @@ mod tests {
             let catalog = Arc::new(catalog);
             let conn_catalog = catalog.for_system_session();
 
-            let resolve_type_oid = |item: &str| conn_catalog.state().get_system_type(item).oid();
+            let resolve_type_oid = |item: &str| conn_catalog.get_system_type(item).oid();
             let mut handles = Vec::new();
 
             // Extracted during planning; always panics when executed.

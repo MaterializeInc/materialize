@@ -240,7 +240,7 @@ impl Coordinator {
                     format,
                     &config,
                     &features,
-                    &self.catalog().for_session(ctx.session()),
+                    &ctx.catalog(self.catalog()),
                     cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
@@ -260,7 +260,7 @@ impl Coordinator {
                     format,
                     &config,
                     &features,
-                    &self.catalog().for_session(ctx.session()),
+                    &ctx.catalog(self.catalog()),
                     cardinality_stats,
                     Some(target_cluster.name.as_str()),
                     dataflow_metainfo,
@@ -502,7 +502,7 @@ impl Coordinator {
             .await;
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
+            .catalog_transact_with_side_effects(ctx, ops, move |coord, _ctx| {
                 Box::pin(async move {
                     // Save plan structures.
                     coord
@@ -579,7 +579,7 @@ impl Coordinator {
             ..
         }: CreateIndexExplain,
     ) -> Result<StageResult<Box<CreateIndexStage>>, AdapterError> {
-        let session_catalog = self.catalog().for_session(session);
+        let session_catalog = self.catalog().for_session_without_preparation(session);
         let expr_humanizer = {
             let on_entry = self.catalog.get_entry_by_global_id(&index.on);
             let full_name = self.catalog.resolve_full_name(&name, on_entry.conn_id());

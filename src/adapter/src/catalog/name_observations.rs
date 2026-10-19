@@ -9,7 +9,7 @@
 
 use std::collections::BTreeSet;
 
-use mz_repr::{CatalogItemId, GlobalId, RelationVersionSelector};
+use mz_repr::{CatalogItemId, GlobalId};
 use mz_sql::catalog::{CatalogError, CatalogItemRef};
 use mz_sql::names::{DatabaseId, PartialItemName, ResolvedDatabaseSpecifier, SchemaSpecifier};
 
@@ -55,6 +55,16 @@ impl ItemNamespace {
 }
 
 impl ConnCatalog<'_> {
+    pub(crate) fn is_system_item_without_introspection(&self, id: CatalogItemId) -> bool {
+        self.observe("system item without introspection", move |state| {
+            state.try_get_entry(&id).map(|entry| {
+                state.is_system_schema_specifier(entry.name.qualifiers.schema_spec)
+                    && state.introspection_dependencies(id).is_empty()
+            })
+        })
+        .expect("catalog item exists")
+    }
+
     pub(super) fn observed_collection(
         &self,
         id: &GlobalId,
@@ -65,22 +75,7 @@ impl ConnCatalog<'_> {
                 .try_get_entry_by_global_id(&global_id)
                 .map(|entry| entry.id())
         })?;
-        let entry = self.state.get_entry(&item_id);
-        let entry = match &entry.item {
-            mz_catalog::memory::objects::CatalogItem::Table(table) => {
-                let (version, _gid) = table
-                    .collections
-                    .iter()
-                    .find(|(_version, gid)| *gid == id)
-                    .expect("catalog out of sync, mismatched GlobalId");
-                self.item_view(entry)
-                    .at_version(RelationVersionSelector::Specific(*version))
-            }
-            _ => self
-                .item_view(entry)
-                .at_version(RelationVersionSelector::Latest),
-        };
-        Some(entry)
+        Some(self.state.collection(item_id, id))
     }
 
     pub(super) fn observe<T>(
@@ -91,11 +86,7 @@ impl ConnCatalog<'_> {
     where
         T: Clone + PartialEq + Send + Sync + 'static,
     {
-        let answer = read(&self.state);
-        if let Some(recorder) = &self.read_recorder {
-            recorder.record(label, answer.clone(), read);
-        }
-        answer
+        self.state.observe(label, read)
     }
 
     pub(super) fn resolve_observed_item(
@@ -103,40 +94,48 @@ impl ConnCatalog<'_> {
         name: &PartialItemName,
         namespace: ItemNamespace,
     ) -> Result<CatalogItemRef<'_>, CatalogError> {
-        let answer = namespace.resolve(
-            &self.state,
-            self.database.as_ref(),
-            &self.search_path,
-            name,
-            &self.conn_id,
-            &self.unresolvable_ids,
-        );
-        if let Some(recorder) = &self.read_recorder {
-            let name = name.clone();
-            let database_name = self.database_name.clone().into_owned();
-            let raw_search_path = self.raw_search_path.clone().into_owned();
-            let conn_id = self.conn_id.clone();
-            let unresolvable_ids = self.unresolvable_ids.clone();
-            recorder.record("item resolution", answer.clone(), move |state| {
-                let database = state.database_by_name.get(&database_name);
-                // Re-resolve the raw path so newly created schemas can shadow a
-                // binding. A changed path alone is not a changed binding.
-                let search_path = state.resolve_search_path_for(
-                    database,
-                    raw_search_path.iter().map(|name| name.as_str()),
-                    &conn_id,
-                );
+        let answer = self.state.read_namespace(
+            |state, database, search_path| {
                 namespace.resolve(
                     state,
                     database,
-                    &search_path,
-                    &name,
-                    &conn_id,
-                    &unresolvable_ids,
+                    search_path,
+                    name,
+                    &self.conn_id,
+                    &self.unresolvable_ids,
                 )
-            });
-        }
-        answer.map(|id| self.item_view(self.state.get_entry(&id)))
+            },
+            |answer| {
+                let name = name.clone();
+                let database_name = self.database_name.clone().into_owned();
+                let raw_search_path = self.raw_search_path.clone().into_owned();
+                let conn_id = self.conn_id.clone();
+                let unresolvable_ids = self.unresolvable_ids.clone();
+                (
+                    "item resolution",
+                    answer.clone(),
+                    move |state: &CatalogState| {
+                        let database = state.database_by_name.get(&database_name);
+                        // Re-resolve the raw path so newly created schemas can shadow a
+                        // binding. A changed path alone is not a changed binding.
+                        let search_path = state.resolve_search_path_for(
+                            database,
+                            raw_search_path.iter().map(|name| name.as_str()),
+                            &conn_id,
+                        );
+                        namespace.resolve(
+                            state,
+                            database,
+                            &search_path,
+                            &name,
+                            &conn_id,
+                            &unresolvable_ids,
+                        )
+                    },
+                )
+            },
+        );
+        answer.map(|id| self.state.item(&id))
     }
 }
 
@@ -237,15 +236,19 @@ mod tests {
             };
             assert!(
                 catalog
-                    .for_session(&session)
-                    .with_read_recorder(positive.clone())
+                    .for_preparation(
+                        &session,
+                        &crate::catalog::CatalogPreparation::Observed(positive.clone())
+                    )
                     .resolve_item(&name("target"))
                     .is_ok()
             );
             assert!(
                 catalog
-                    .for_session(&session)
-                    .with_read_recorder(negative.clone())
+                    .for_preparation(
+                        &session,
+                        &crate::catalog::CatalogPreparation::Observed(negative.clone())
+                    )
                     .resolve_item(&name("missing"))
                     .is_err()
             );
@@ -256,24 +259,31 @@ mod tests {
             let effective_path_reads = CatalogReadRecorder::default();
             let schema_reads = CatalogReadRecorder::default();
             let _ = catalog
-                .for_session(&session)
-                .with_read_recorder(path_reads.clone())
+                .for_preparation(
+                    &session,
+                    &crate::catalog::CatalogPreparation::Observed(path_reads.clone()),
+                )
                 .search_path();
             let _ = catalog
-                .for_session(&session)
-                .with_read_recorder(effective_path_reads.clone())
+                .for_preparation(
+                    &session,
+                    &crate::catalog::CatalogPreparation::Observed(effective_path_reads.clone()),
+                )
                 .effective_search_path(true);
             let _ = catalog
-                .for_session(&session)
-                .with_read_recorder(schema_reads.clone())
+                .for_preparation(
+                    &session,
+                    &crate::catalog::CatalogPreparation::Observed(schema_reads.clone()),
+                )
                 .get_schemas();
             let absent_schemas: Vec<_> = [false, true]
                 .into_iter()
                 .map(|qualified| {
                     let reads = CatalogReadRecorder::default();
-                    let catalog = catalog
-                        .for_session(&session)
-                        .with_read_recorder(reads.clone());
+                    let catalog = catalog.for_preparation(
+                        &session,
+                        &crate::catalog::CatalogPreparation::Observed(reads.clone()),
+                    );
                     let result = if qualified {
                         catalog.resolve_schema_in_database(&database_id, "earlier")
                     } else {
@@ -380,6 +390,38 @@ mod tests {
                 recorder.snapshot().check(catalog.state()),
                 Err(AdapterError::DDLTransactionRace)
             ));
+            catalog.expire().await;
+        })
+        .await;
+    }
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // Catalog bootstrap uses unsupported foreign functions.
+    async fn routing_reads_ignore_names_but_detect_eligibility_changes() {
+        Catalog::with_debug(|catalog| async move {
+            let mut state = catalog.state().clone();
+            let id = state.get_system_type("text").id();
+            let reads = CatalogReadRecorder::default();
+            assert!(
+                state
+                    .for_system_session()
+                    .with_read_recorder(reads.clone())
+                    .is_system_item_without_introspection(id)
+            );
+            state
+                .entry_by_id
+                .get_mut(&id)
+                .expect("builtin type exists")
+                .name
+                .item = "renamed_type".to_owned();
+            assert!(reads.snapshot().check(&state).is_ok());
+            state
+                .entry_by_id
+                .get_mut(&id)
+                .expect("builtin type exists")
+                .name
+                .qualifiers
+                .schema_spec = SchemaSpecifier::Temporary;
+            assert!(reads.snapshot().check(&state).is_err());
             catalog.expire().await;
         })
         .await;

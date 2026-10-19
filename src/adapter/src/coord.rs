@@ -1539,7 +1539,7 @@ pub struct ExecuteContextInner {
     extra: ExecuteContextGuard,
     #[derivative(Debug = "ignore")]
     response_barriers: Vec<BuiltinTableAppendNotify>,
-    catalog_reads: Option<CatalogReadRecorder>,
+    catalog_preparation: crate::catalog::CatalogPreparation,
 }
 
 /// Waits while a test configures the named failpoint with a `return` action.
@@ -1555,33 +1555,30 @@ async fn catalog_preparation_test_pause(name: &'static str) {
 }
 
 impl ExecuteContext {
-    fn begin_catalog_preparation(&mut self, catalog: &Catalog) {
-        // A retry must not retain observations from abandoned preparation.
-        self.catalog_reads = self
-            .session()
-            .transaction()
-            .ddl_transaction()
-            .is_none()
-            .then(|| catalog.new_read_recorder());
+    fn begin_catalog_preparation(&mut self, catalog: &Catalog, observed: bool) {
+        use crate::catalog::{CatalogPreparation, UntrackedCatalogWrite};
+        self.catalog_preparation = if self.session().transaction().ddl_transaction().is_some() {
+            CatalogPreparation::Transaction
+        } else if observed {
+            CatalogPreparation::Observed(catalog.new_read_recorder())
+        } else {
+            CatalogPreparation::Untracked(UntrackedCatalogWrite::ExistingStatementSynchronization)
+        };
     }
 
     fn catalog<'a>(&'a self, catalog: &'a Catalog) -> ConnCatalog<'a> {
-        let view = catalog.for_session(self.session());
-        match &self.catalog_reads {
-            Some(reads) => view.with_read_recorder(reads.clone()),
-            None => view,
-        }
+        catalog.for_preparation(self.session(), &self.catalog_preparation)
     }
 
     fn catalog_read_recorder(&self) -> Option<CatalogReadRecorder> {
-        self.catalog_reads.clone()
+        self.catalog_preparation.recorder()
     }
 
-    // Validate before the statement's own writes can change its observed values.
-    fn add_catalog_preconditions(&self, ops: &mut Vec<crate::catalog::Op>) {
-        if let Some(reads) = &self.catalog_reads {
-            ops.insert(0, crate::catalog::Op::ValidateReads(reads.snapshot()));
-        }
+    fn prepare_catalog_writes(
+        &mut self,
+        ops: Vec<crate::catalog::Op>,
+    ) -> Result<crate::catalog::PreparedCatalogBatch, AdapterError> {
+        self.catalog_preparation.finish(ops)
     }
 
     pub fn session(&self) -> &Session {
@@ -1624,7 +1621,7 @@ impl ExecuteContext {
                     extra,
                     response_barriers,
                     internal_cmd_tx,
-                    catalog_reads: None,
+                    catalog_preparation: Default::default(),
                 }
                 .into(),
             ),
@@ -1644,6 +1641,8 @@ impl ExecuteContext {
     /// The returned parts lose the `Drop` backstop that answers the client on shutdown, so they
     /// must not be held across an await point. A bare `ClientTransmitter` panics when dropped
     /// unsent.
+    /// Reassembly starts unclassified preparation. Re-enter statement execution
+    /// instead of using these parts to resume a prepared catalog write.
     pub fn into_parts(
         mut self,
     ) -> (
@@ -1659,7 +1658,7 @@ impl ExecuteContext {
             session,
             extra,
             response_barriers,
-            catalog_reads: _,
+            catalog_preparation: _,
         } = *self.inner.take().expect("only consumed by value");
         (tx, internal_cmd_tx, session, extra, response_barriers)
     }
@@ -2151,12 +2150,13 @@ impl Coordinator {
         // a concurrently-created object's override is not wiped. Best-effort: a
         // failure here is logged and retried on the next sync tick.
         if let Err(e) = self
-            .catalog_transact(
+            .catalog_transact_untracked(
                 None,
                 vec![crate::catalog::Op::UpdateScopedSystemParameters {
                     scoped,
                     prune_scope,
                 }],
+                crate::catalog::UntrackedCatalogWrite::Internal,
             )
             .await
         {
@@ -5698,6 +5698,70 @@ mod execute_context_tests {
             "expected an internal error, got {:?}",
             response.result
         );
+    }
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // Catalog bootstrap uses unsupported foreign functions.
+    async fn prepared_writes_validate_all_reads_before_mutating_catalog() {
+        use crate::catalog::{Catalog, Op};
+        use mz_sql::catalog::SessionCatalog;
+
+        Catalog::with_debug(|mut catalog| async move {
+            let (client_tx, client_rx) = oneshot::channel();
+            let (internal_tx, _internal_rx) = mpsc::unbounded_channel();
+            let mut ctx = ExecuteContext::from_parts(
+                ClientTransmitter::new(client_tx, internal_tx.clone()),
+                internal_tx,
+                Session::dummy(),
+                ExecuteContextGuard::default(),
+            );
+            assert!(ctx.prepare_catalog_writes(Vec::new()).is_err());
+            ctx.begin_catalog_preparation(&catalog, true);
+            assert!(
+                ctx.catalog(&catalog)
+                    .resolve_database("prepared_destination")
+                    .is_err()
+            );
+            assert!(
+                ctx.catalog(&catalog)
+                    .for_system_session()
+                    .resolve_database("late_dependency")
+                    .is_err()
+            );
+            let create = |name: &str| Op::CreateDatabase {
+                name: name.to_owned(),
+                owner_id: mz_sql::session::user::MZ_SYSTEM_ROLE_ID,
+            };
+            let batch = ctx
+                .prepare_catalog_writes(vec![create("prepared_destination")])
+                .expect("prepare observed writes");
+            let timestamp = catalog.current_upper().await;
+            catalog
+                .transact(None, timestamp, None, vec![create("late_dependency")])
+                .await
+                .expect("concurrent dependency change");
+            let timestamp = catalog.current_upper().await;
+            assert!(matches!(
+                catalog
+                    .transact(None, timestamp, None, batch.into_ops())
+                    .await,
+                Err(AdapterError::DDLTransactionRace)
+            ));
+            assert!(catalog.resolve_database("prepared_destination").is_err());
+
+            ctx.begin_catalog_preparation(&catalog, true);
+            let batch = ctx
+                .prepare_catalog_writes(vec![create("prepared_destination")])
+                .expect("prepare fresh attempt");
+            let timestamp = catalog.current_upper().await;
+            catalog
+                .transact(None, timestamp, None, batch.into_ops())
+                .await
+                .expect("fresh attempt does not retain abandoned reads");
+            ctx.retire(Ok(ExecuteResponse::CreatedDatabase));
+            assert!(client_rx.await.expect("execution responds").result.is_ok());
+            catalog.expire().await;
+        })
+        .await;
     }
 }
 

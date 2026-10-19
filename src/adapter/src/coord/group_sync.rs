@@ -220,7 +220,8 @@ impl Coordinator {
         let mut ops = diff.revokes;
         ops.extend(diff.grants);
 
-        self.catalog_transact(None, ops).await?;
+        self.catalog_transact_untracked(None, ops, crate::catalog::UntrackedCatalogWrite::Internal)
+            .await?;
 
         Ok(())
     }

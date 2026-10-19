@@ -361,7 +361,7 @@ impl Client {
         // it allows updates to be batched.
         session.set_builtin_table_updates(write_notify);
 
-        let catalog = catalog.for_session(session);
+        let catalog = catalog.for_session_without_preparation(session);
 
         let cluster_active = session.vars().cluster().to_string();
         if session.vars().welcome_message() {
@@ -962,7 +962,7 @@ impl SessionClient {
 
         let execute_plan = {
             let session = self.session.as_mut().expect("SessionClient invariant");
-            let conn_catalog = catalog.for_session(session);
+            let conn_catalog = catalog.for_session_without_preparation(session);
             let (resolved_stmt, resolved_ids) =
                 mz_sql::names::resolve(&conn_catalog, (**stmt).clone())?;
             let pcx = session.pcx();
@@ -1685,7 +1685,7 @@ impl SessionClient {
 
         let (plan, target_cluster, resolved_ids, sql_impl_ids) = {
             let session = self.session.as_mut().expect("SessionClient invariant");
-            let conn_catalog = catalog.for_session(session);
+            let conn_catalog = catalog.for_session_without_preparation(session);
             let (stmt, resolved_ids) = mz_sql::names::resolve(&conn_catalog, (*stmt).clone())?;
             let pcx = session.pcx();
             let (plan, sql_impl_ids) =
@@ -1737,7 +1737,7 @@ impl SessionClient {
 
         {
             let session = self.session.as_ref().expect("SessionClient invariant");
-            let conn_catalog = catalog.for_session(session);
+            let conn_catalog = catalog.for_session_without_preparation(session);
             if let Some(cluster_name) = &target_cluster_name {
                 crate::coord::catalog_serving::check_cluster_restrictions(
                     cluster_name,

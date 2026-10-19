@@ -271,7 +271,14 @@ impl Coordinator {
                     }
 
                     let result = self
-                        .catalog_transact_with_context(Some(&conn_id), None, ops)
+                        .catalog_commit_with_context(
+                            Some(&conn_id),
+                            None,
+                            crate::catalog::PreparedCatalogBatch::untracked(
+                                ops,
+                                crate::catalog::UntrackedCatalogWrite::Internal,
+                            ),
+                        )
                         .await;
                     let _ = tx.send(result);
                 }
@@ -301,7 +308,14 @@ impl Coordinator {
                 } => {
                     let ops = vec![catalog::Op::InjectAuditEvents { events }];
                     let result = self
-                        .catalog_transact_with_context(Some(&conn_id), None, ops)
+                        .catalog_commit_with_context(
+                            Some(&conn_id),
+                            None,
+                            crate::catalog::PreparedCatalogBatch::untracked(
+                                ops,
+                                crate::catalog::UntrackedCatalogWrite::Internal,
+                            ),
+                        )
                         .await;
                     let _ = tx.send(result);
                 }
@@ -1579,9 +1593,10 @@ impl Coordinator {
                 .any(|action| !matches!(action, AlterConnectionAction::RotateKeys)),
             _ => false,
         };
-        if Self::must_spawn_purification(&*stmt) || observes_alter_connection {
-            ctx.begin_catalog_preparation(self.catalog());
-        }
+        ctx.begin_catalog_preparation(
+            self.catalog(),
+            Self::must_spawn_purification(&*stmt) || observes_alter_connection,
+        );
         let catalog = ctx.catalog(self.catalog());
         let original_stmt = Arc::clone(&stmt);
         // `resolved_ids` should be derivable from `stmt`. If `stmt` is transformed to remove/add
@@ -1704,7 +1719,7 @@ impl Coordinator {
                     Err(e) => return ctx.retire(Err(e)),
                 };
 
-                let catalog = self.catalog().for_session(ctx.session());
+                let catalog = ctx.catalog(self.catalog());
 
                 purify_create_materialized_view_options(
                     catalog,
@@ -1751,7 +1766,7 @@ impl Coordinator {
                     Err(e) => return ctx.retire(Err(e)),
                 };
 
-                let catalog = self.catalog().for_session(ctx.session());
+                let catalog = ctx.catalog(self.catalog());
 
                 purify_create_materialized_view_options(
                     catalog,
@@ -1911,7 +1926,7 @@ impl Coordinator {
             .iter()
             .any(|wo| matches!(wo.value, Some(WithOptionValue::Refresh(..))))
         {
-            let catalog = self.catalog().for_session(session);
+            let catalog = self.catalog().for_session_without_preparation(session);
             let cluster = mz_sql::plan::resolve_cluster_for_materialized_view(&catalog, cmvs)?;
             let ids = self
                 .index_oracle(cluster)
