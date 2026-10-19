@@ -264,6 +264,10 @@ async fn test_dry_run_fork_preserves_parent_commit() {
         let mut fork = parent.fork_dry_run().expect("fork parent");
         assert_eq!(fork.current_snapshot(), before, "fork sees pending writes");
         let fork = fork.transaction_mut();
+        assert!(
+            fork.get_and_commit_op_updates().is_empty(),
+            "fork must not copy the parent's operation updates"
+        );
         fork.set_setting("fork_isolation".into(), Some("fork".into()))
             .expect("write fork setting");
         let fork_audit_id = fork.allocate_audit_log_id().expect("allocate fork audit");
@@ -284,6 +288,15 @@ async fn test_dry_run_fork_preserves_parent_commit() {
             .expect("allocate parent audit"),
         fork_audit_id,
         "discarded fork does not consume IDs"
+    );
+    let updates = parent.get_and_commit_op_updates();
+    assert!(
+        updates.iter().any(|update| matches!(
+            &update.kind,
+            mz_catalog::memory::objects::StateUpdateKind::AuditLog(log)
+                if log.event == prefix_event
+        )),
+        "parent retains its pending audit update"
     );
     let commit_ts = parent.upper();
     let expected = parent.current_snapshot();
