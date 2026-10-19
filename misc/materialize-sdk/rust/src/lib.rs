@@ -75,5 +75,5 @@ pub use materialize_sdk_core::{
     PayloadColumns, ProtocolError, Row, SinkType, Subscribe, Target, TimestampTooLarge, Update,
     UsageError, WriteKind,
 };
-pub use sink::{Rejected, Sink, SinkBatch, SinkError, WriteResult};
+pub use sink::{Rejected, Sink, SinkBatch, SinkError, WriteRequest, WriteResult};
 pub use store::{CheckpointStore, MaterializeStore, checkpoint_table_sql};

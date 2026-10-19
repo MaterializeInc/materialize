@@ -30,17 +30,10 @@ use crate::sink::{SinkError, WriteResult};
 /// Where the SDK keeps the checkpoint of a sink whose
 /// [`crate::Sink::load`] returns [`SinkError::NotSupported`].
 ///
-/// Every write is a compare-and-set on the whole checkpoint text, with the
-/// results of [`crate::Sink::commit`].
+/// Every write is a compare-and-set on the whole checkpoint text, or, for the
+/// first checkpoint, an insert where none exists, with the results of a
+/// checkpoint [`crate::WriteRequest`].
 pub trait CheckpointStore: Send {
-    /// Creates the sink's first checkpoint, only if it has none. Returns not
-    /// applied if one exists.
-    fn create(
-        &mut self,
-        sink_id: &str,
-        checkpoint: &str,
-    ) -> impl Future<Output = WriteResult> + Send;
-
     /// The latest applied checkpoint, or `None` if the sink was never set up.
     fn load(
         &mut self,
@@ -54,8 +47,9 @@ pub trait CheckpointStore: Send {
     }
 
     /// Replaces the expected checkpoint with the new one, only if the stored
-    /// one is still the expected one.
-    fn compare_and_set(
+    /// one is still the expected one, or, for the first checkpoint, only if
+    /// there is none.
+    fn write(
         &mut self,
         sink_id: &str,
         write: &CheckpointWrite,
@@ -160,15 +154,8 @@ where
         self.busy = false;
         Ok(result)
     }
-}
 
-impl<T> CheckpointStore for MaterializeStore<T>
-where
-    T: MakeTlsConnect<Socket> + Clone + Send + Sync + 'static,
-    T::Stream: Send + 'static,
-    T::TlsConnect: Send,
-    <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
-{
+    /// Inserts the first checkpoint, only if the sink has none.
     async fn create(&mut self, sink_id: &str, checkpoint: &str) -> WriteResult {
         let sql = format!(
             "INSERT INTO {table} SELECT $1::text, $2::text \
@@ -183,7 +170,15 @@ where
             Err(error) => WriteResult::Failed(error),
         }
     }
+}
 
+impl<T> CheckpointStore for MaterializeStore<T>
+where
+    T: MakeTlsConnect<Socket> + Clone + Send + Sync + 'static,
+    T::Stream: Send + 'static,
+    T::TlsConnect: Send,
+    <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+{
     async fn load(&mut self, sink_id: &str) -> Result<Option<String>, SinkError> {
         let sql = format!("SELECT checkpoint FROM {} WHERE sink_id = $1", self.table);
         let rows = self
@@ -209,17 +204,20 @@ where
         }
     }
 
-    async fn compare_and_set(&mut self, sink_id: &str, write: &CheckpointWrite) -> WriteResult {
+    async fn write(&mut self, sink_id: &str, write: &CheckpointWrite) -> WriteResult {
+        let Some(expected) = &write.expected else {
+            return self.create(sink_id, &write.new).await;
+        };
         // NOTE: Materialize counts an `UPDATE` that leaves the row unchanged
         // as zero rows, even when its condition holds. So a write that only
         // checks the condition reads instead.
-        let ran = if write.expected == write.new {
+        let ran = if *expected == write.new {
             let sql = format!(
                 "SELECT 1 FROM {} WHERE sink_id = $1 AND checkpoint = $2",
                 self.table
             );
             self.on_session(async |client| {
-                let rows = client.query(&sql, &[&sink_id, &write.expected]).await?;
+                let rows = client.query(&sql, &[&sink_id, expected]).await?;
                 Ok(u64::try_from(rows.len()).unwrap_or(u64::MAX))
             })
             .await
@@ -230,7 +228,7 @@ where
             );
             self.on_session(async |client| {
                 client
-                    .execute(&sql, &[&sink_id, &write.expected, &write.new])
+                    .execute(&sql, &[&sink_id, expected, &write.new])
                     .await
             })
             .await

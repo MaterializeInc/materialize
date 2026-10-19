@@ -2,6 +2,13 @@
   "function": "checkpoint_write",
   "cases": [
     {
+      "name": "the first checkpoint expects none, at epoch 1 and generation 1 without a frontier",
+      "input": {
+        "operation": {"create": {"subscriptions": {}}}
+      },
+      "expect": {"write": {"kind": "create", "expected": null, "new": "{\"epoch\":\"1\",\"format\":1,\"frontier\":null,\"generation\":\"1\",\"snapshot_as_of\":null,\"subscriptions\":{}}"}}
+    },
+    {
       "name": "a take-over carries the frontier it read",
       "input": {
         "current": {"format": 1, "epoch": "2", "generation": "1", "frontier": "10", "snapshot_as_of": null, "subscriptions": {}},
