@@ -1,0 +1,204 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+use mz_expr::{MapFilterProject, MfpPlan};
+use mz_repr::{Datum, ReprScalarType, Row};
+
+use super::*;
+use crate::plan::scalar::LirScalarExpr;
+use crate::plan::{AvailableCollections, GetPlan, LirId};
+
+fn lir_id(n: u64) -> LirId {
+    serde_json::from_value(serde_json::json!(n)).expect("LirId is a u64")
+}
+
+fn node(n: u64, node: LirRelationNode) -> LirRelationExpr {
+    LirRelationExpr {
+        lir_id: lir_id(n),
+        node,
+    }
+}
+
+fn get(n: u64, id: GlobalId) -> LirRelationExpr {
+    node(
+        n,
+        LirRelationNode::Get {
+            id: Id::Global(id),
+            keys: AvailableCollections::new_raw(),
+            plan: GetPlan::PassArrangements,
+        },
+    )
+}
+
+fn sample_envelope() -> LirPlanEnvelope {
+    let constant = node(
+        1,
+        LirRelationNode::Constant {
+            rows: Ok(vec![(
+                StableRow(Row::pack_slice(&[Datum::Int64(7), Datum::Null])),
+                mz_repr::Timestamp::from(0u64),
+                mz_repr::Diff::from(1i64),
+            )]),
+        },
+    );
+    let mfp = MapFilterProject::<LirScalarExpr>::new(1).map([LirScalarExpr::literal_ok(
+        Datum::String("x"),
+        ReprScalarType::String,
+    )]);
+    let mfp = node(
+        3,
+        LirRelationNode::Mfp {
+            input: Box::new(get(2, GlobalId::Transient(1))),
+            mfp: MfpPlan::create_from(mfp).expect("no temporal filters"),
+            input_key_val: None,
+        },
+    );
+    LirPlanEnvelope {
+        lir_version: LIR_VERSION,
+        imports: vec![
+            EnvelopeImport {
+                id: GlobalId::Transient(1),
+                source: ImportSource::Name("materialize.public.t".into()),
+                persist: true,
+                indexes: vec![],
+            },
+            EnvelopeImport {
+                id: GlobalId::Transient(2),
+                source: ImportSource::Item {
+                    item_id: CatalogItemId::User(5),
+                    version: serde_json::from_value(serde_json::json!(0)).expect("u64"),
+                },
+                persist: false,
+                indexes: vec![ImportSource::Name("materialize.public.t_idx".into())],
+            },
+        ],
+        objects: vec![
+            EnvelopeObject {
+                id: GlobalId::Transient(3),
+                plan: constant,
+            },
+            EnvelopeObject {
+                id: GlobalId::Transient(4),
+                plan: mfp,
+            },
+        ],
+        output: GlobalId::Transient(4),
+    }
+}
+
+#[mz_ore::test]
+fn envelope_roundtrip() {
+    let envelope = sample_envelope();
+    let json = envelope_to_json(&envelope);
+    assert!(json.contains("\"$row\""), "{json}");
+    assert_eq!(parse_envelope(&json), Ok(envelope));
+}
+
+#[mz_ore::test]
+fn envelope_rejects_version() {
+    let mut envelope = sample_envelope();
+    envelope.lir_version = 2;
+    let json = envelope_to_json(&envelope);
+    assert_eq!(
+        parse_envelope(&json),
+        Err(EnvelopeError::Version {
+            found: 2,
+            expected: 1
+        })
+    );
+}
+
+#[mz_ore::test]
+fn envelope_malformed_row() {
+    let json = envelope_to_json(&sample_envelope()).replace("\"Int64\"", "\"Bogus\"");
+    assert!(matches!(parse_envelope(&json), Err(EnvelopeError::Row(_))));
+}
+
+#[mz_ore::test]
+fn envelope_unknown_function_names_it() {
+    let call = r#"{"lir_id": 1, "node": {"Mfp": {
+        "input": {"lir_id": 2, "node": {"Constant": {"rows": {"Ok": []}}}},
+        "mfp": {"mfp": {"mfp": {"expressions": [
+            {"CallUnary": {"func": "NoSuchFunc",
+                           "expr": {"Column": [0, null]}}}
+        ], "predicates": [], "projection": [0], "input_arity": 1}},
+        "lower_bounds": [], "upper_bounds": []},
+        "input_key_val": null}}}"#;
+    let json = format!(
+        r#"{{"lir_version": 1, "imports": [], "output": {{"Transient": 1}},
+            "objects": [{{"id": {{"Transient": 1}}, "plan": {call}}}]}}"#
+    );
+    let Err(EnvelopeError::Json(msg)) = parse_envelope(&json) else {
+        panic!("expected a Json error");
+    };
+    assert!(msg.contains("NoSuchFunc"), "{msg}");
+}
+
+#[mz_ore::test]
+fn envelope_deep_nesting_does_not_overflow() {
+    const DEPTH: usize = 5000;
+    let mut plan = String::from(r#"{"lir_id": 1, "node": {"Constant": {"rows": {"Ok": []}}}}"#);
+    for _ in 0..DEPTH {
+        plan = format!(r#"{{"lir_id": 1, "node": {{"Negate": {{"input": {plan}}}}}}}"#);
+    }
+    let json = format!(
+        r#"{{"lir_version": 1, "imports": [], "output": {{"Transient": 1}},
+            "objects": [{{"id": {{"Transient": 1}}, "plan": {plan}}}]}}"#
+    );
+    // Either outcome is fine, the property is that this returns.
+    let _ = parse_envelope(&json);
+}
+
+#[mz_ore::test]
+fn substitute_global_ids_rewrites_gets() {
+    let (a, b, c) = (
+        GlobalId::Transient(1),
+        GlobalId::Transient(2),
+        GlobalId::Transient(3),
+    );
+    let mut plan = node(
+        3,
+        LirRelationNode::Union {
+            inputs: vec![
+                get(1, a),
+                node(
+                    2,
+                    LirRelationNode::Negate {
+                        input: Box::new(get(4, b)),
+                    },
+                ),
+            ],
+            consolidate_output: false,
+            temporal_bucketing_strategies: vec![],
+        },
+    );
+    let map = BTreeMap::from([(a, c)]);
+    substitute_global_ids(&mut plan, &map);
+
+    let mut expected = node(
+        3,
+        LirRelationNode::Union {
+            inputs: vec![
+                get(1, c),
+                node(
+                    2,
+                    LirRelationNode::Negate {
+                        input: Box::new(get(4, b)),
+                    },
+                ),
+            ],
+            consolidate_output: false,
+            temporal_bucketing_strategies: vec![],
+        },
+    );
+    assert_eq!(plan, expected);
+    // A second application with the identity-free map is a no-op.
+    substitute_global_ids(&mut expected, &BTreeMap::new());
+    assert_eq!(plan, expected);
+}

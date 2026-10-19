@@ -2265,6 +2265,32 @@
   "ElementListConcat": "UNITSTRUCT",
   "Encode": "UNITSTRUCT",
   "EncodedBytesCharLength": "UNITSTRUCT",
+  "EnvelopeImport": {
+    "STRUCT": {
+      "id": {
+        "TYPENAME": "GlobalId"
+      },
+      "indexes": {
+        "SEQ": {
+          "TYPENAME": "ImportSource"
+        }
+      },
+      "persist": "BOOL",
+      "source": {
+        "TYPENAME": "ImportSource"
+      }
+    }
+  },
+  "EnvelopeObject": {
+    "STRUCT": {
+      "id": {
+        "TYPENAME": "GlobalId"
+      },
+      "plan": {
+        "TYPENAME": "LirRelationExpr"
+      }
+    }
+  },
   "Eq": "UNITSTRUCT",
   "ErrorIfNull": "UNITSTRUCT",
   "Exp": "UNITSTRUCT",
@@ -2374,6 +2400,23 @@
         "NEWTYPE": {
           "TYPENAME": "LocalId"
         }
+      }
+    }
+  },
+  "ImportSource": {
+    "ENUM": {
+      "Item": {
+        "STRUCT": {
+          "item_id": {
+            "TYPENAME": "CatalogItemId"
+          },
+          "version": {
+            "TYPENAME": "RelationVersion"
+          }
+        }
+      },
+      "Name": {
+        "NEWTYPE": "STR"
       }
     }
   },
@@ -2534,6 +2577,24 @@
   },
   "LirId": {
     "NEWTYPESTRUCT": "U64"
+  },
+  "LirPlanEnvelope": {
+    "STRUCT": {
+      "imports": {
+        "SEQ": {
+          "TYPENAME": "EnvelopeImport"
+        }
+      },
+      "lir_version": "U64",
+      "objects": {
+        "SEQ": {
+          "TYPENAME": "EnvelopeObject"
+        }
+      },
+      "output": {
+        "TYPENAME": "GlobalId"
+      }
+    }
   },
   "LirRelationExpr": {
     "STRUCT": {
@@ -3187,6 +3248,9 @@
     "NEWTYPESTRUCT": {
       "TYPENAME": "Regex"
     }
+  },
+  "RelationVersion": {
+    "NEWTYPESTRUCT": "U64"
   },
   "RepeatString": "UNITSTRUCT",
   "Replace": "UNITSTRUCT",

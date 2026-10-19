@@ -6999,6 +6999,7 @@ dependencies = [
  "serde-reflection",
  "serde_json",
  "sha2 0.11.1",
+ "stacker",
  "timely",
  "tracing",
 ]
