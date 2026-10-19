@@ -8,6 +8,8 @@ design is in `doc/developer/design/20260706_materialize_sdk.md`.
 - `conformance/`: language-neutral test vectors that every package runs.
 - `rust/`: the Rust package, over `tokio-postgres`.
 - `python/`: the Python package, the core built with PyO3 under psycopg.
+- `node/`: the Node package, the core built for WebAssembly under
+  node-postgres.
 
 This directory is its own Cargo workspace, outside the Materialize workspace.
 
@@ -58,6 +60,19 @@ python -m pytest tests
 
 `_core.pyi` describes the compiled module by hand. stubtest fails when it no
 longer matches. The live tests run when `MATERIALIZE_URL` is set.
+
+The Node package builds with wasm-pack and needs Node 22 or later:
+
+```
+cd misc/materialize-sdk/node
+npm ci
+npm run build
+npm test
+```
+
+wasm-bindgen generates the binding's TypeScript declarations, and the build
+type-checks the package against them. The live tests run when
+`MATERIALIZE_URL` is set.
 
 ## Try it
 

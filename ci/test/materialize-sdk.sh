@@ -35,3 +35,12 @@ python3 -m venv "$venv"
     mypy --strict materialize_sdk
     python -m pytest --quiet tests
 )
+
+# The Node package: its WebAssembly binding, type-checked against the
+# declarations wasm-bindgen generates, and the conformance vectors through it.
+(
+    cd node
+    npm ci --quiet
+    npm run build
+    npm test
+)
