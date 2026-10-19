@@ -21,7 +21,7 @@ bytes.workspace = true
 bytesize.workspace = true
 futures.workspace = true
 http-body-util.workspace = true
-mz-ore = { path = "../ore", features = ["async", "network"], default-features = false }
+mz-ore = { path = "../ore", features = ["async", "metrics", "network"], default-features = false }
 pin-project.workspace = true
 thiserror.workspace = true
 

@@ -152,6 +152,8 @@ async fn open(
     header_waits: Arc<HeaderWaits>,
 ) -> Result<S3Blob, anyhow::Error> {
     let knobs = PersistConfig::new_default_configs(&crate::BUILD_INFO, SYSTEM_TIME.clone());
+    let metrics = S3BlobMetrics::new(registry);
+    let pool_metrics = metrics.http_pool();
     let config = S3BlobConfig::new(
         store.bucket.clone(),
         store.prefix.clone(),
@@ -163,12 +165,12 @@ async fn open(
             store.secret_access_key.unsecure().to_owned(),
         )),
         Box::new(knobs),
-        S3BlobMetrics::new(registry),
+        metrics,
     )
     .await?;
     let http_client = match client {
         ClientKind::Sdk => SharedHttpClient::new(mz_aws_util::http_client()),
-        ClientKind::Pooled => SharedHttpClient::new(mz_aws_util::pooled_http_client()),
+        ClientKind::Pooled => SharedHttpClient::new(mz_aws_util::pooled_http_client(pool_metrics)),
     };
     let config = config.with_http_client(TimedHttpClient {
         inner: http_client,

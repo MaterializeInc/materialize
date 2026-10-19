@@ -219,7 +219,10 @@ impl S3BlobConfig {
             let knobs = Arc::clone(&knobs);
             move || knobs.http_pool().use_pool(is_google)
         };
-        loader = loader.http_client(mz_aws_util::switched_http_client(use_pool));
+        loader = loader.http_client(mz_aws_util::switched_http_client(
+            use_pool,
+            metrics.http_pool(),
+        ));
 
         if let Some(endpoint) = endpoint {
             loader = loader.endpoint_url(endpoint)

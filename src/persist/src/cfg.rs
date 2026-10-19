@@ -66,6 +66,8 @@ pub async fn open_hedge_sibling(
     knobs: Box<dyn BlobKnobs>,
     metrics: S3BlobMetrics,
 ) -> HedgeSibling {
+    // The HTTP pool metrics describe only the primary's requests.
+    let metrics = metrics.without_http_pool_metrics();
     let config = match BlobConfig::try_from(url, knobs, metrics).await {
         Ok(config) => config,
         Err(err) => {

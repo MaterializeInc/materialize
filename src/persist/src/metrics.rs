@@ -11,8 +11,10 @@
 
 use std::time::Instant;
 
+use mz_aws_util::HttpPoolMetrics;
+use mz_ore::cast::CastFrom;
 use mz_ore::metric;
-use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry};
+use mz_ore::metrics::{ComputedUIntGauge, Counter, IntCounter, MetricsRegistry};
 use mz_ore::stats::histogram_seconds_buckets;
 use prometheus::{Gauge, Histogram, IntCounterVec, IntGauge};
 
@@ -94,6 +96,7 @@ pub struct S3BlobMetrics {
     pub(crate) delete_object: IntCounter,
     pub(crate) list_objects: IntCounter,
     pub(crate) error_counts: IntCounterVec,
+    http_pool: HttpPoolMetrics,
 }
 
 impl S3BlobMetrics {
@@ -136,6 +139,70 @@ impl S3BlobMetrics {
             delete_object: operations.with_label_values(&["delete_object"]),
             list_objects: operations.with_label_values(&["list_objects"]),
             error_counts: errors,
+            http_pool: Self::http_pool_metrics(registry),
+        }
+    }
+
+    fn http_pool_metrics(registry: &MetricsRegistry) -> HttpPoolMetrics {
+        let http_pool = HttpPoolMetrics::new(registry.register(metric!(
+            name: "mz_persist_s3_http_pool_requests",
+            help: "number of requests (including retries) sent through the pool of HTTP clients",
+        )));
+        let register = |opts, get: fn(&HttpPoolMetrics) -> usize| {
+            let http_pool = http_pool.clone();
+            // The registry keeps the computed gauge, so its handle can be dropped.
+            let _: ComputedUIntGauge =
+                registry.register_computed_gauge(opts, move || u64::cast_from(get(&http_pool)));
+        };
+        register(
+            metric!(
+                name: "mz_persist_s3_http_pool_clients",
+                help: "number of HTTP clients in the pool, whether or not requests use the pool",
+            ),
+            HttpPoolMetrics::clients,
+        );
+        register(
+            metric!(
+                name: "mz_persist_s3_http_pool_clients_in_use",
+                help: "number of HTTP clients in the pool with at least one request in flight",
+            ),
+            HttpPoolMetrics::clients_in_use,
+        );
+        register(
+            metric!(
+                name: "mz_persist_s3_http_pool_in_flight",
+                help: "number of requests in flight through the pool of HTTP clients",
+            ),
+            HttpPoolMetrics::in_flight,
+        );
+        register(
+            metric!(
+                name: "mz_persist_s3_http_pool_client_in_flight_min",
+                help: "fewest requests in flight on one HTTP client in the pool",
+            ),
+            |http_pool| http_pool.client_in_flight_range().0,
+        );
+        register(
+            metric!(
+                name: "mz_persist_s3_http_pool_client_in_flight_max",
+                help: "most requests in flight on one HTTP client in the pool",
+            ),
+            |http_pool| http_pool.client_in_flight_range().1,
+        );
+        http_pool
+    }
+
+    /// The metrics for the pool of HTTP clients.
+    pub fn http_pool(&self) -> HttpPoolMetrics {
+        self.http_pool.clone()
+    }
+
+    /// A clone whose pool of HTTP clients doesn't count toward the
+    /// `mz_persist_s3_http_pool_*` metrics.
+    pub fn without_http_pool_metrics(&self) -> Self {
+        S3BlobMetrics {
+            http_pool: HttpPoolMetrics::unreported(),
+            ..self.clone()
         }
     }
 }
