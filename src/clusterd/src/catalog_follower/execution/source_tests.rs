@@ -131,7 +131,7 @@ async fn catalog_counter_ingests_after_writer_and_query_drop() {
         .created_client_incarnations[0];
     transact(
         &mut writer,
-        vec![Op::PublishClientReadRequirements {
+        vec![Op::GrantClientReadRequirements {
             incarnation: reader,
             requirements: BTreeMap::from([(source, Timestamp::MIN)]),
         }],

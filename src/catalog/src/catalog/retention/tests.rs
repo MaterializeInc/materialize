@@ -81,13 +81,13 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
     for reject_candidate in [true, false] {
         peer.sync_to_current_updates().await.expect("refresh peer");
         let mut tx = peer.transaction().await.expect("open peer publication");
-        let requirements = if reject_candidate {
-            BTreeMap::from([(id, frontier)])
+        if reject_candidate {
+            tx.grant_client_read_requirements(peer_incarnation, BTreeMap::from([(id, frontier)]))
+                .expect("publish peer grant");
         } else {
-            BTreeMap::new()
-        };
-        tx.publish_client_read_requirements(peer_incarnation, requirements)
-            .expect("publish peer grants");
+            tx.update_client_read_requirements(peer_incarnation, BTreeMap::from([(id, None)]))
+                .expect("release peer grant");
+        }
         let _ = tx.get_and_commit_op_updates();
         let ts = tx.upper();
         tx.commit(ts).await.expect("commit peer publication");
@@ -112,7 +112,7 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
                 expected: None,
             }
         } else {
-            Op::PublishClientReadRequirements {
+            Op::GrantClientReadRequirements {
                 incarnation: writer,
                 requirements: BTreeMap::from([(id, frontier)]),
             }
@@ -158,13 +158,16 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
             .await
             .expect("open conflicting publication");
         grant = grant.step_forward();
-        let requirements = if structural {
-            BTreeMap::new()
+        if structural {
+            tx.update_client_read_requirements(publisher, BTreeMap::from([(id, None)]))
+                .expect("release conflicting grant");
         } else {
-            BTreeMap::from([(id, grant)])
-        };
-        tx.publish_client_read_requirements(publisher, requirements)
-            .expect("stage conflicting grant");
+            // A publisher can introduce its first grant or advance an existing one.
+            tx.grant_client_read_requirements(publisher, BTreeMap::from([(id, grant)]))
+                .expect("establish conflicting grant");
+            tx.update_client_read_requirements(publisher, BTreeMap::from([(id, Some(grant))]))
+                .expect("advance conflicting grant");
+        }
         if structural {
             tx.upsert_system_config("max_tables", "777".into())
                 .expect("stage structural change");
@@ -353,7 +356,7 @@ async fn automatic_mv_birth_recomputed_across_frontier_catch_up() {
             }
         );
         assert_eq!(
-            result.creator_read_requirements,
+            result.granted_client_read_requirements,
             BTreeMap::from([(catch_up.incarnation, BTreeMap::from([(mv_id, floor)]))])
         );
         assert_eq!(
@@ -372,9 +375,9 @@ async fn automatic_mv_birth_recomputed_across_frontier_catch_up() {
 
         // Retire the first MV and its grant so they cannot pin the next import.
         f.transact(vec![
-            Op::PublishClientReadRequirements {
+            Op::UpdateClientReadRequirements {
                 incarnation: catch_up.incarnation,
-                requirements: BTreeMap::new(),
+                requirements: BTreeMap::from([(mv_id, None)]),
             },
             Op::DropObjects(vec![DropObjectInfo::Item(item_id)]),
         ])
@@ -1026,7 +1029,7 @@ async fn replacing_client_preserves_index_object_retention() {
         .await
         .expect("create client")
         .created_client_incarnations[0];
-    f.transact(vec![Op::PublishClientReadRequirements {
+    f.transact(vec![Op::GrantClientReadRequirements {
         incarnation,
         requirements: BTreeMap::from([(input, Timestamp::new(80_000))]),
     }])
@@ -1055,9 +1058,9 @@ async fn replacing_client_preserves_index_object_retention() {
             .client_incarnations()
             .contains_key(&incarnation)
     );
-    f.transact(vec![Op::PublishClientReadRequirements {
+    f.transact(vec![Op::UpdateClientReadRequirements {
         incarnation: successor,
-        requirements: BTreeMap::new(),
+        requirements: BTreeMap::from([(input, None)]),
     }])
     .await;
     assert!(f.catalog.state().client_read_requirements().is_empty());

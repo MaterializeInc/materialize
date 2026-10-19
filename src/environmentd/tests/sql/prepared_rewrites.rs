@@ -317,11 +317,8 @@ async fn run_inner(conflict: Conflict) {
                 let successor = txn
                     .replace_client_incarnation(Some(replica), Some(incarnation))
                     .unwrap();
-                txn.publish_client_read_requirements(
-                    successor,
-                    BTreeMap::from([(input, required)]),
-                )
-                .unwrap();
+                txn.grant_client_read_requirements(successor, BTreeMap::from([(input, required)]))
+                    .unwrap();
                 Some((replica, successor))
             }
             Conflict::Structural => {

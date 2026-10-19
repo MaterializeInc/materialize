@@ -46,7 +46,7 @@ fn insert_replica(tx: &mut Transaction<'_>, cluster: ClusterId, replica: Replica
 
 fn protect(tx: &mut Transaction<'_>, replica: Option<ReplicaId>) -> u64 {
     let client = tx.replace_client_incarnation(replica, None).unwrap();
-    tx.publish_client_read_requirements(client, BTreeMap::from([(COLLECTION, 20.into())]))
+    tx.grant_client_read_requirements(client, BTreeMap::from([(COLLECTION, 20.into())]))
         .unwrap();
     client
 }
@@ -160,7 +160,7 @@ async fn realization_replacement_and_removal_preserve_other_owners() {
                 .is_err()
         );
         assert!(
-            tx.publish_client_read_requirements(predecessor, BTreeMap::new())
+            tx.update_client_read_requirements(predecessor, BTreeMap::from([(COLLECTION, None)]))
                 .is_err()
         );
         drop(tx);
@@ -258,10 +258,17 @@ async fn realization_replacement_and_removal_preserve_other_owners() {
 
         let mut tx = state.transaction().await.unwrap();
         for client in retired {
-            for requirements in [BTreeMap::new(), BTreeMap::from([(COLLECTION, 20.into())])] {
+            for result in [
+                tx.grant_client_read_requirements(
+                    client,
+                    BTreeMap::from([(COLLECTION, 20.into())]),
+                )
+                .map(|_| ()),
+                tx.update_client_read_requirements(client, BTreeMap::from([(COLLECTION, None)])),
+            ] {
                 assert!(
                     matches!(
-                        tx.publish_client_read_requirements(client, requirements),
+                        result,
                         Err(CatalogError::Durable(
                             DurableCatalogError::InvalidReadProtection(_)
                         ))
@@ -312,7 +319,7 @@ async fn replacement_retains_index_history_without_granting_earlier_reads() {
     let predecessor = tx
         .replace_client_incarnation(None, None)
         .expect("create initial execution");
-    tx.publish_client_read_requirements(predecessor, BTreeMap::from([(COLLECTION, 20.into())]))
+    tx.grant_client_read_requirements(predecessor, BTreeMap::from([(COLLECTION, 20.into())]))
         .expect("publish initial index grant");
     commit(tx).await;
     let mut tx = state.transaction().await.expect("begin permission advance");
@@ -341,7 +348,7 @@ async fn replacement_retains_index_history_without_granting_earlier_reads() {
             .expect("replace intermediate execution");
         let mut requirements = BTreeMap::from([(COLLECTION, 20.into())]);
         requirements.insert(target, 14.into());
-        tx.publish_client_read_requirements(successor, requirements)
+        tx.grant_client_read_requirements(successor, requirements)
             .expect("stage invalid acquisition for commit validation");
         tx.finalize_index_compaction_bounds();
         let _ = tx.get_and_commit_op_updates();
@@ -387,7 +394,7 @@ async fn replacement_retains_index_history_without_granting_earlier_reads() {
     let successor = tx
         .replace_client_incarnation(None, Some(predecessor))
         .expect("replace retired index reader");
-    tx.publish_client_read_requirements(successor, BTreeMap::from([(COLLECTION, 19.into())]))
+    tx.grant_client_read_requirements(successor, BTreeMap::from([(COLLECTION, 19.into())]))
         .expect("stage earlier retired index grant");
     tx.finalize_index_compaction_bounds();
     let _ = tx.get_and_commit_op_updates();

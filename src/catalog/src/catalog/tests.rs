@@ -437,7 +437,7 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
         let incarnation = tx
             .create_client_incarnation(None)
             .expect("can create client incarnation");
-        tx.publish_client_read_requirements(
+        tx.grant_client_read_requirements(
             incarnation,
             ids.into_iter().map(|id| (id, Timestamp::MIN)).collect(),
         )
@@ -544,9 +544,9 @@ async fn durable_temporary_membership_preserves_storage_lifetime() {
     check(&catalog).await;
 
     // Dry runs leave durable client protection in place for the drop checks.
-    let release = Op::PublishClientReadRequirements {
+    let release = Op::UpdateClientReadRequirements {
         incarnation,
-        requirements: BTreeMap::new(),
+        requirements: ids.into_iter().map(|id| (id, None)).collect(),
     };
     let ts = catalog.current_upper().await;
     let (released, _) = catalog

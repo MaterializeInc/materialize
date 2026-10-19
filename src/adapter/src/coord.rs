@@ -4432,8 +4432,8 @@ impl Coordinator {
             selections.push(publication.op());
             Some(publication)
         } else {
-            let requirements = client.protection.prepare_publication(BTreeMap::new());
-            selections.push(crate::catalog::Op::PublishClientReadRequirements {
+            let requirements = client.protection.prepare_grant_publication(BTreeMap::new());
+            selections.push(crate::catalog::Op::GrantClientReadRequirements {
                 incarnation: client.protection.incarnation(),
                 requirements,
             });
@@ -4446,7 +4446,13 @@ impl Coordinator {
         if let Some(publication) = publication {
             holds.extend(publication.finish(result.as_ref().ok()));
         } else {
-            client.protection.finish_publication(result.is_ok());
+            match &result {
+                Ok(result) => client.protection.finish_grant_publication(
+                    result.granted_client_read_requirements[&client.protection.incarnation()]
+                        .clone(),
+                ),
+                Err(_) => client.protection.finish_publication(false),
+            }
         }
         if !self
             .catalog()
@@ -4854,12 +4860,12 @@ impl Coordinator {
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
     ) -> Result<(), AdapterError> {
         let Some(client) = client else { return Ok(()) };
-        let Some(requirements) = client.protection.prepare_publication_if_needed() else {
+        let Some(requirements) = client.protection.prepare_updates_if_needed() else {
             return Ok(());
         };
         let result = self
             .bootstrap_catalog_transact(
-                vec![crate::catalog::Op::PublishClientReadRequirements {
+                vec![crate::catalog::Op::UpdateClientReadRequirements {
                     incarnation: client.protection.incarnation(),
                     requirements,
                 }],

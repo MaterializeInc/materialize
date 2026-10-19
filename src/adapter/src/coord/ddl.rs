@@ -57,10 +57,16 @@ use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContext, catalog};
 use mz_catalog::memory::implications::ParsedStateUpdate;
 
+/// Client identities and exact grants acknowledged by a completed catalog write.
+pub(crate) struct ClientProtectionResult {
+    pub(crate) incarnations: Vec<u64>,
+    pub(crate) grants: BTreeMap<u64, BTreeMap<GlobalId, mz_repr::Timestamp>>,
+}
+
 type CommittedCatalogTransaction = (
     BuiltinTableAppendNotify,
     Vec<ParsedStateUpdate>,
-    Vec<u64>,
+    ClientProtectionResult,
     crate::ReadHolds,
 );
 
@@ -300,13 +306,13 @@ impl Coordinator {
             .map(|_| ())
     }
 
-    /// Commits and applies catalog effects, returning client identities allocated by the batch.
+    /// Commits and applies catalog effects, returning allocated client identities and exact grants.
     pub(crate) async fn catalog_transact_with_results(
         &mut self,
         conn_id: Option<&ConnectionId>,
         ctx: Option<&mut ExecuteContext>,
         ops: Vec<catalog::Op>,
-    ) -> Result<Vec<u64>, AdapterError> {
+    ) -> Result<ClientProtectionResult, AdapterError> {
         let start = Instant::now();
 
         let conn_id = conn_id.or_else(|| ctx.as_ref().map(|ctx| ctx.session().conn_id()));
@@ -322,11 +328,12 @@ impl Coordinator {
     pub(super) async fn catalog_transact_once(
         &mut self,
         ops: Vec<catalog::Op>,
-    ) -> Result<Vec<u64>, AdapterError> {
+    ) -> Result<ClientProtectionResult, AdapterError> {
         assert!(ops.iter().all(|op| matches!(
             op,
             Op::CreateClientIncarnation { .. }
-                | Op::PublishClientReadRequirements { .. }
+                | Op::UpdateClientReadRequirements { .. }
+                | Op::GrantClientReadRequirements { .. }
                 | Op::SetReadProtection { .. }
         )));
         let start = Instant::now();
@@ -455,7 +462,7 @@ impl Coordinator {
         ctx: Option<&mut ExecuteContext>,
         committed: CommittedCatalogTransaction,
         start: Instant,
-    ) -> Result<Vec<u64>, AdapterError> {
+    ) -> Result<ClientProtectionResult, AdapterError> {
         let (table_updates, catalog_updates, created_clients, admission_holds) = committed;
 
         let table_updates_wait = self
@@ -771,7 +778,7 @@ impl Coordinator {
         (
             BuiltinTableAppendNotify,
             Vec<ParsedStateUpdate>,
-            Vec<u64>,
+            ClientProtectionResult,
             crate::ReadHolds,
         ),
         AdapterError,
@@ -782,7 +789,8 @@ impl Coordinator {
             matches!(
                 op,
                 catalog::Op::CreateClientIncarnation { .. }
-                    | catalog::Op::PublishClientReadRequirements { .. }
+                    | Op::UpdateClientReadRequirements { .. }
+                    | Op::GrantClientReadRequirements { .. }
             )
         });
         loop {
@@ -1481,7 +1489,9 @@ impl Coordinator {
             && ops.iter().all(|op| {
                 matches!(
                     op,
-                    Op::CreateClientIncarnation { .. } | Op::PublishClientReadRequirements { .. }
+                    Op::CreateClientIncarnation { .. }
+                        | Op::UpdateClientReadRequirements { .. }
+                        | Op::GrantClientReadRequirements { .. }
                 )
             });
         let mut prepared = Box::pin(self.begin_catalog_transaction(conn_id, ops)).await?;
@@ -1798,7 +1808,7 @@ impl Coordinator {
             catalog_updates,
             audit_events,
             created_client_incarnations,
-            creator_read_requirements: _,
+            granted_client_read_requirements,
         } = result;
 
         if let Some(conn) = conn
@@ -1874,7 +1884,10 @@ impl Coordinator {
         Ok((
             builtin_update_notify,
             catalog_updates,
-            created_client_incarnations,
+            ClientProtectionResult {
+                incarnations: created_client_incarnations,
+                grants: granted_client_read_requirements,
+            },
             admission_holds,
         ))
     }
@@ -2497,7 +2510,8 @@ impl Coordinator {
                 | Op::SetReadProtection { .. }
                 | Op::SetWrittenPlan { .. }
                 | Op::CreateClientIncarnation { .. }
-                | Op::PublishClientReadRequirements { .. }
+                | Op::UpdateClientReadRequirements { .. }
+                | Op::GrantClientReadRequirements { .. }
                 | Op::PublishCreatorReadRequirements { .. }
                 | Op::Comment { .. }
                 | Op::CheckClusterState { .. }

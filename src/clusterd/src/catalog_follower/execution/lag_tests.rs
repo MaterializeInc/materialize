@@ -175,8 +175,10 @@ async fn lagging_index_admits_new_historical_reader() {
     let reader = create_reader(&mut observer).await;
     publish(
         &mut observer,
-        reader,
-        BTreeMap::from([(index, Timestamp::new(45_000))]),
+        Op::GrantClientReadRequirements {
+            incarnation: reader,
+            requirements: BTreeMap::from([(index, Timestamp::new(45_000))]),
+        },
     )
     .await
     .unwrap();
@@ -195,9 +197,15 @@ async fn lagging_index_admits_new_historical_reader() {
     // input. The outstanding 45 grant still protects old rows across catch-up.
     assert_rows(&mut *query, catalog_position, index, &desc, 95_000, &[1, 2]).await;
     assert_rows(&mut *query, catalog_position, index, &desc, 45_000, &[1]).await;
-    publish(&mut observer, reader, BTreeMap::new())
-        .await
-        .unwrap();
+    publish(
+        &mut observer,
+        Op::UpdateClientReadRequirements {
+            incarnation: reader,
+            requirements: BTreeMap::from([(index, None), (source, None)]),
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(
         wait_window(&mut observer, source, index, 100_000).await,
         replica,
@@ -205,8 +213,10 @@ async fn lagging_index_admits_new_historical_reader() {
     assert_only_replica_grants(&observer, replica, source, index);
     let rejected = publish(
         &mut observer,
-        reader,
-        BTreeMap::from([(index, Timestamp::new(45_000))]),
+        Op::GrantClientReadRequirements {
+            incarnation: reader,
+            requirements: BTreeMap::from([(index, Timestamp::new(45_000))]),
+        },
     )
     .await;
     assert!(

@@ -128,7 +128,7 @@ async fn exercise_liveness() {
             None,
             ts,
             None,
-            vec![Op::PublishClientReadRequirements {
+            vec![Op::GrantClientReadRequirements {
                 incarnation: predecessor,
                 requirements: BTreeMap::from([(fixture.source, Timestamp::new(17_000))]),
             }],
@@ -456,7 +456,7 @@ async fn exercise_liveness() {
             None,
             ts,
             None,
-            vec![Op::PublishClientReadRequirements {
+            vec![Op::GrantClientReadRequirements {
                 incarnation: peer,
                 requirements: BTreeMap::from([(fixture.source, Timestamp::new(20_000))]),
             }],
@@ -537,9 +537,9 @@ async fn exercise_liveness() {
             None,
             ts,
             None,
-            vec![Op::PublishClientReadRequirements {
+            vec![Op::UpdateClientReadRequirements {
                 incarnation: peer,
-                requirements: BTreeMap::new(),
+                requirements: BTreeMap::from([(fixture.source, None)]),
             }],
         )
         .await
@@ -567,7 +567,7 @@ async fn exercise_liveness() {
             None,
             ts,
             None,
-            vec![Op::PublishClientReadRequirements {
+            vec![Op::GrantClientReadRequirements {
                 incarnation: peer,
                 requirements: BTreeMap::from([(fixture.source, *old_bound.as_option().unwrap())]),
             }],

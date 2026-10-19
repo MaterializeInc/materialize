@@ -99,7 +99,7 @@ async fn replica_replacement_survives_catalog_reopen() {
                 None,
                 ts,
                 None,
-                vec![Op::PublishClientReadRequirements {
+                vec![Op::UpdateClientReadRequirements {
                     incarnation: first,
                     requirements: BTreeMap::new(),
                 }]

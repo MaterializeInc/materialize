@@ -111,7 +111,7 @@ are excluded from immediate reconstruction.
 Ordinary DDL derives the creator grant inside the real admission candidate, at
 the maximum of the admitted bound and the client's oracle minimum. The pending
 local barrier retains committed grants until the definitive outcome. Successful
-completion adopts the exact committed map and issues the new timeline tokens
+completion adopts the exact committed grants and issues the new timeline tokens
 before another publication can release them. Explicit reconstruction windows
 remain fixed rather than becoming another automatic birth.
 
@@ -129,6 +129,12 @@ publication. New or stronger protection still needs its own committed grant, and
 pending publication barriers remain binding. Idle clients do not renew unchanged
 aggregates. Publication cadence, staggering and conflict backoff govern advancement,
 not protection lifetime.
+
+Token counts and retained logical-input routes stay local. Maintenance publishes
+changed per-collection frontiers, leaving unmentioned grants intact. Pending
+advancement or release restricts acquisition immediately, but committed protection
+remains until a definitive successful write. New dependency routes require fresh
+grant admission, including builtin reconstruction under a retained index identity.
 
 Ordinary CREATE MATERIALIZED VIEW admits its automatic birth in the content
 transaction, joining logical-input and selected-import permission. The definition,

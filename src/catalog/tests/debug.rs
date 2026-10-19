@@ -409,9 +409,7 @@ async fn test_debug_live_mutations(registered: bool, protected: bool) {
             .unwrap();
     }
     if registered {
-        let id = txn.create_client_incarnation(None).unwrap();
-        txn.publish_client_read_requirements(id, Default::default())
-            .unwrap();
+        txn.create_client_incarnation(None).unwrap();
     }
     // The open timestamp is not the publication timestamp. Publish at wall-clock
     // time so the advisory check observes genuinely recent durable activity.
@@ -585,9 +583,7 @@ async fn test_persist_debug_registered_execution_requires_force() {
         .unwrap();
     state.sync_to_current_updates().await.unwrap();
     let mut txn = state.transaction().await.unwrap();
-    let id = txn.create_client_incarnation(None).unwrap();
-    txn.publish_client_read_requirements(id, Default::default())
-        .unwrap();
+    txn.create_client_incarnation(None).unwrap();
     let ts = txn.upper();
     let _ = txn.get_and_commit_op_updates();
     txn.commit(ts).await.unwrap();

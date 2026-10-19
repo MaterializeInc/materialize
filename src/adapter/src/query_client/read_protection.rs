@@ -96,13 +96,6 @@ impl ClientReadProtection {
         Ok(Some(holds))
     }
 
-    pub(crate) fn prepare_publication(
-        &self,
-        extra: BTreeMap<GlobalId, Timestamp>,
-    ) -> BTreeMap<GlobalId, Timestamp> {
-        self.inner.prepare_publication(extra)
-    }
-
     pub(crate) fn prepare_grant_publication(
         &self,
         extra: BTreeMap<GlobalId, Timestamp>,
@@ -110,8 +103,10 @@ impl ClientReadProtection {
         self.inner.prepare_grant_publication(extra)
     }
 
-    pub(crate) fn prepare_publication_if_needed(&self) -> Option<BTreeMap<GlobalId, Timestamp>> {
-        self.inner.prepare_publication_if_needed()
+    pub(crate) fn prepare_updates_if_needed(
+        &self,
+    ) -> Option<BTreeMap<GlobalId, Option<Timestamp>>> {
+        self.inner.prepare_updates_if_needed()
     }
 
     pub(crate) fn finish_publication(&self, committed: bool) {
@@ -151,6 +146,13 @@ mod tests {
         }
     }
 
+    fn updates(values: &[(u64, Option<u64>)]) -> BTreeMap<GlobalId, Option<Timestamp>> {
+        values
+            .iter()
+            .map(|(id, time)| (GlobalId::User(*id), time.map(Timestamp::from)))
+            .collect()
+    }
+
     fn dependencies() -> BTreeMap<GlobalId, BTreeSet<GlobalId>> {
         [(GlobalId::User(2), [GlobalId::User(1)].into())].into()
     }
@@ -167,23 +169,23 @@ mod tests {
     }
 
     fn publish(client: &ClientReadProtection, extra: BTreeMap<GlobalId, Timestamp>) {
-        client.prepare_publication(extra);
-        client.finish_publication(true);
+        let grants = client.prepare_grant_publication(extra);
+        client.finish_grant_publication(grants);
     }
 
     #[mz_ore::test]
     fn recovery_grants_cover_bootstrap_until_successor_windows_are_acquired() {
         let inherited = requirements(&[(1, 10), (2, 10), (3, 5)]);
         let (client, recovery) = ClientReadProtection::from_committed(2, inherited.clone());
-        assert_eq!(client.prepare_publication_if_needed(), None);
+        assert_eq!(client.prepare_updates_if_needed(), None);
         let mut window = acquire(&client, 10);
         window.downgrade(Timestamp::from(30));
-        assert_eq!(client.prepare_publication(BTreeMap::new()), inherited);
-        client.finish_publication(true);
+        assert_eq!(client.active_frontiers(), inherited);
+        assert_eq!(client.prepare_updates_if_needed(), None);
         drop(recovery);
         assert_eq!(
-            client.prepare_publication_if_needed(),
-            Some(requirements(&[(1, 30), (2, 30)]))
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, Some(30)), (2, Some(30)), (3, None)]))
         );
         client.finish_publication(true);
         drop(window);
@@ -196,7 +198,7 @@ mod tests {
         publish(&client, requirements(&[(3, 5)]));
         assert_eq!(
             client.prepare_grant_publication(BTreeMap::new()),
-            requirements(&[(3, 5)])
+            BTreeMap::new()
         );
         assert!(
             client
@@ -213,8 +215,8 @@ mod tests {
         // Adoption owns only the requested tokens. An unrelated retained grant
         // remains eligible for release by the next aggregate publication.
         assert_eq!(
-            client.prepare_publication(BTreeMap::new()),
-            requirements(&[(1, 20), (2, 20)])
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(3, None)]))
         );
         client.finish_publication(true);
         drop(holds);
@@ -248,13 +250,13 @@ mod tests {
         window.downgrade(Timestamp::from(20));
         window.downgrade(Timestamp::from(30));
         // Local changes alone are not dirtiness: a live reader still needs 10.
-        assert_eq!(client.prepare_publication_if_needed(), None);
+        assert_eq!(client.prepare_updates_if_needed(), None);
         assert!(!client.publication_pending());
         drop(old_query);
         let advanced = requirements(&[(1, 30), (2, 30)]);
         assert_eq!(
-            client.prepare_publication_if_needed(),
-            Some(advanced.clone())
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, Some(30)), (2, Some(30))]))
         );
         assert!(client.publication_pending());
         assert!(
@@ -287,31 +289,30 @@ mod tests {
         drop(concurrent);
         assert_eq!(client.granted_frontier(GlobalId::User(1)), Some(10.into()));
         assert_eq!(
-            client.prepare_publication_if_needed(),
-            Some(advanced.clone()),
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, Some(30)), (2, Some(30))])),
             "failed publication must remain eligible for retry"
         );
         // Changes during the commit remain eligible for the next cadence.
         window.downgrade(Timestamp::from(40));
         client.finish_publication(true);
         assert_eq!(client.granted_frontier(GlobalId::User(1)), Some(30.into()));
-        let current = requirements(&[(1, 40), (2, 40)]);
         assert_eq!(
-            client.prepare_publication_if_needed(),
-            Some(current.clone())
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, Some(40)), (2, Some(40))]))
         );
         client.finish_publication(true);
-        assert_eq!(client.prepare_publication_if_needed(), None);
+        assert_eq!(client.prepare_updates_if_needed(), None);
         drop(window);
         assert_eq!(
-            client.prepare_publication_if_needed(),
-            Some(BTreeMap::new())
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, None), (2, None)]))
         );
         for id in bundle().iter() {
             assert_eq!(client.reusable_frontier(id, None), None);
         }
         client.finish_publication(true);
-        assert_eq!(client.prepare_publication_if_needed(), None);
+        assert_eq!(client.prepare_updates_if_needed(), None);
     }
 
     #[mz_ore::test]
@@ -321,7 +322,7 @@ mod tests {
         let mut window = acquire(&client, 10);
         window.downgrade(Timestamp::from(30));
         let extra = requirements(&[(1, 5), (4, 40)]);
-        let pending = requirements(&[(1, 5), (2, 10), (3, 10), (4, 40)]);
+        let pending = requirements(&[(1, 5), (4, 40)]);
         let new_bundle = CollectionIdBundle {
             storage_ids: [GlobalId::User(4)].into(),
             compute_ids: BTreeMap::new(),
@@ -339,7 +340,11 @@ mod tests {
                     .is_none()
             );
             assert_eq!(client.granted_frontier(GlobalId::User(1)), Some(10.into()));
-            client.finish_publication(committed);
+            if committed {
+                client.finish_grant_publication(pending.clone());
+            } else {
+                client.finish_publication(false);
+            }
         }
         let new_hold = client
             .try_acquire(&new_bundle, &new_request, &BTreeMap::new())
@@ -349,8 +354,8 @@ mod tests {
         assert_eq!(client.granted_frontier(GlobalId::User(2)), Some(10.into()));
         assert_eq!(client.granted_frontier(GlobalId::User(3)), Some(10.into()));
         assert_eq!(
-            client.prepare_publication_if_needed(),
-            Some(requirements(&[(1, 30), (2, 30), (4, 40)])),
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, Some(30)), (2, Some(30)), (3, None)])),
             "creator publication must not acknowledge unrelated advancement or release"
         );
         client.finish_publication(true);
@@ -360,11 +365,11 @@ mod tests {
     #[mz_ore::test]
     fn historical_grant_expansion_requires_commit() {
         let client = ClientReadProtection::new(1);
-        client.prepare_publication(requirements(&[(1, 100), (2, 100)]));
+        let grants = client.prepare_grant_publication(requirements(&[(1, 100), (2, 100)]));
         for id in bundle().iter() {
             assert_eq!(client.reusable_frontier(id, None), None);
         }
-        client.finish_publication(true);
+        client.finish_grant_publication(grants);
         let ordinary = acquire(&client, 120);
         for id in bundle().iter() {
             for target in [None, Some(Timestamp::from(100)), Some(Timestamp::from(120))] {
@@ -386,7 +391,7 @@ mod tests {
                 .expect("client remains open")
         };
         assert!(try_historical().is_none());
-        client.prepare_publication(historical.clone());
+        client.prepare_grant_publication(historical.clone());
         assert!(try_historical().is_none());
         for id in bundle().iter() {
             assert_eq!(client.reusable_frontier(id, None), Some(100.into()));
@@ -402,8 +407,8 @@ mod tests {
             held.least_valid_read(),
             Antichain::from_elem(Timestamp::from(50))
         );
-        assert_eq!(client.prepare_publication(BTreeMap::new()), historical);
-        client.finish_publication(true);
+        assert_eq!(client.active_frontiers(), historical);
+        assert_eq!(client.prepare_updates_if_needed(), None);
         drop((ordinary, held));
     }
 
@@ -429,11 +434,7 @@ mod tests {
         // subsequent accounting, including once the client is closed.
         drop(deps);
         client.mark_closed();
-        assert_eq!(
-            client.prepare_publication(BTreeMap::new()),
-            requirements(&[(1, 10), (2, 10), (3, 10)])
-        );
-        client.finish_publication(true);
+        assert_eq!(client.prepare_updates_if_needed(), None);
         let clone = subset.clone();
         subset.downgrade(Timestamp::from(20));
         for (id, hold) in clone.compute_holds {
@@ -443,19 +444,18 @@ mod tests {
                 .expect("index retained")
                 .merge_assign(hold);
         }
-        assert_eq!(
-            client.prepare_publication(BTreeMap::new()),
-            requirements(&[(1, 10), (2, 10), (3, 10)])
-        );
-        client.finish_publication(true);
+        assert_eq!(client.prepare_updates_if_needed(), None);
         subset.downgrade(Timestamp::from(30));
         assert_eq!(
-            client.prepare_publication(BTreeMap::new()),
-            requirements(&[(1, 30), (2, 30), (3, 30)])
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, Some(30)), (2, Some(30)), (3, Some(30))]))
         );
         client.finish_publication(true);
         drop(subset);
-        assert!(client.prepare_publication(BTreeMap::new()).is_empty());
+        assert_eq!(
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, None), (2, None), (3, None)]))
+        );
         client.finish_publication(true);
     }
 
@@ -471,25 +471,24 @@ mod tests {
             )
             .expect("open")
             .expect("covered");
-        assert_eq!(
-            client.prepare_publication(BTreeMap::new()),
-            requirements(&[(1, 5), (2, 10)])
-        );
-        client.finish_publication(true);
+        assert_eq!(client.prepare_updates_if_needed(), None);
         holds.remove_storage_collection(GlobalId::User(1));
         assert_eq!(
-            client.prepare_publication(BTreeMap::new()),
-            requirements(&[(1, 10), (2, 10)])
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, Some(10))]))
         );
         client.finish_publication(true);
         drop(holds);
-        assert!(client.prepare_publication(BTreeMap::new()).is_empty());
+        assert_eq!(
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, None), (2, None)]))
+        );
         client.finish_publication(true);
     }
 
     #[mz_ore::test]
     fn leaf_coverage_and_publication_barrier() {
-        let client = ClientReadProtection::new(1);
+        let (client, _recovery) = ClientReadProtection::from_committed(1, requirements(&[(2, 10)]));
         let mut index_bundle = bundle();
         index_bundle.storage_ids.clear();
         let request = requirements(&[(2, 10)]);
@@ -498,21 +497,42 @@ mod tests {
                 .try_acquire(&index_bundle, &request, &dependencies())
                 .expect("open")
         };
-        publish(&client, request.clone());
         assert!(try_index().is_none());
-        client.prepare_publication(requirements(&[(1, 10), (2, 10)]));
+        let grants = client.prepare_grant_publication(requirements(&[(1, 10)]));
         assert!(try_index().is_none());
-        client.finish_publication(true);
+        client.finish_grant_publication(grants);
         drop(try_index().expect("leaf grant committed"));
-        // The index grant itself stays unchanged. Both leaf advancement and
-        // removal must bar acquisition at the old index timestamp.
-        for pending in [requirements(&[(1, 20), (2, 10)]), request.clone()] {
-            client.prepare_publication(pending);
+        let storage_bundle = CollectionIdBundle {
+            storage_ids: [GlobalId::User(1)].into(),
+            compute_ids: BTreeMap::new(),
+        };
+        let acquire_leaf = || {
+            client
+                .try_acquire(&storage_bundle, &requirements(&[(1, 20)]), &BTreeMap::new())
+                .expect("open")
+                .expect("leaf covered")
+        };
+        let mut leaf = Some(acquire_leaf());
+        // The flat recovery hold keeps only the index grant unchanged, so each
+        // rejection below must come from the independently changing leaf.
+        for frontier in [Some(20), None] {
+            if frontier.is_none() {
+                drop(leaf.take());
+            }
+            assert_eq!(
+                client.prepare_updates_if_needed(),
+                Some(updates(&[(1, frontier)]))
+            );
             assert!(try_index().is_none());
             client.finish_publication(false);
-            drop(try_index().expect("failed publication preserves grant"));
+            drop(try_index().expect("failed publication preserves the leaf grant"));
         }
-        publish(&client, requirements(&[(1, 20), (2, 10)]));
+        let _leaf = acquire_leaf();
+        assert_eq!(
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, Some(20))]))
+        );
+        client.finish_publication(true);
         assert!(try_index().is_none());
     }
 
@@ -551,7 +571,10 @@ mod tests {
                 .expect("open")
                 .is_none()
         );
-        assert!(client.prepare_publication(BTreeMap::new()).is_empty());
+        assert_eq!(
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, None), (2, None), (3, None)]))
+        );
         client.finish_publication(false);
         let changed_dependencies = [(GlobalId::User(2), [GlobalId::User(3)].into())].into();
         assert!(
@@ -561,7 +584,10 @@ mod tests {
                 .is_none()
         );
 
-        assert!(client.prepare_publication(BTreeMap::new()).is_empty());
+        assert_eq!(
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, None), (2, None), (3, None)]))
+        );
         client.finish_publication(true);
         publish(&client, requirements(&[(1, 10), (2, 10), (3, 10)]));
         let _holds = client
@@ -585,7 +611,7 @@ mod tests {
                 .expect("open")
                 .is_none()
         );
-        client.prepare_publication(request.clone());
+        client.prepare_grant_publication(request.clone());
         assert!(
             client
                 .try_acquire(&bundle(), &request, &dependencies())
@@ -601,7 +627,10 @@ mod tests {
                 .is_none()
         );
         // A failed acquisition must not pin even the covered storage leaf.
-        assert!(client.prepare_publication(BTreeMap::new()).is_empty());
+        assert_eq!(
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, None)]))
+        );
         client.finish_publication(false);
         publish(&client, request.clone());
         assert!(
@@ -639,28 +668,31 @@ mod tests {
         let mut clone = holds.clone();
         holds.downgrade(Timestamp::from(20));
         assert_eq!(
-            client.prepare_publication(requirements(&[(1, 5)])),
-            requirements(&[(1, 5), (2, 10)])
+            client.prepare_grant_publication(requirements(&[(1, 5)])),
+            requirements(&[(1, 5)])
         );
-        client.finish_publication(true);
+        client.finish_grant_publication(requirements(&[(1, 5)]));
         clone
             .storage_holds
             .get_mut(&GlobalId::User(1))
             .expect("leaf")
             .release();
         assert_eq!(
-            client.prepare_publication(BTreeMap::new()),
-            requirements(&[(1, 10), (2, 10)])
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, Some(10))]))
         );
         client.finish_publication(true);
         drop(clone);
         assert_eq!(
-            client.prepare_publication(BTreeMap::new()),
-            requirements(&[(1, 20), (2, 20)])
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, Some(20)), (2, Some(20))]))
         );
         client.finish_publication(true);
         drop(holds);
-        assert!(client.prepare_publication(BTreeMap::new()).is_empty());
+        assert_eq!(
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, None), (2, None)]))
+        );
         client.finish_publication(true);
     }
 
@@ -669,18 +701,19 @@ mod tests {
         let client = Arc::new(ClientReadProtection::new(1));
         publish(&client, requirements(&[(1, 10), (2, 10)]));
         let request = requirements(&[(1, 10), (2, 10)]);
-        assert!(!client.publication_pending());
-        // Exercise both lock orderings: an acquisition before prepare is in its
-        // snapshot, while one on another thread after prepare sees the barrier.
         let holds = acquire(&client, 10);
-        assert_eq!(client.prepare_publication(BTreeMap::new()), request);
-        assert!(client.publication_pending());
         let clone = holds.clone();
         drop(holds);
-        client.finish_publication(true);
+        // Acquisition before preparation retains the old grants without a write.
+        assert_eq!(client.prepare_updates_if_needed(), None);
         drop(clone);
-        assert!(!client.publication_pending());
-        client.prepare_publication(requirements(&[(1, 20), (2, 20)]));
+        let window = acquire(&client, 20);
+        let advancement = updates(&[(1, Some(20)), (2, Some(20))]);
+        assert_eq!(
+            client.prepare_updates_if_needed(),
+            Some(advancement.clone())
+        );
+        assert!(client.publication_pending());
         let other = Arc::clone(&client);
         std::thread::spawn(move || {
             assert!(
@@ -696,40 +729,38 @@ mod tests {
         client.finish_publication(false);
         assert!(!client.publication_pending());
         drop(acquire(&client, 10));
-        publish(&client, requirements(&[(1, 20), (2, 20)]));
-        assert!(
-            client
-                .try_acquire(
-                    &bundle(),
-                    &requirements(&[(1, 10), (2, 10)]),
-                    &dependencies()
-                )
-                .expect("open")
-                .is_none()
-        );
-        drop(acquire(&client, 20));
-        client.prepare_publication(BTreeMap::new());
-        assert!(
-            client
-                .try_acquire(
-                    &bundle(),
-                    &requirements(&[(1, 20), (2, 20)]),
-                    &dependencies()
-                )
-                .expect("open")
-                .is_none()
-        );
+        assert_eq!(client.prepare_updates_if_needed(), Some(advancement));
         client.finish_publication(true);
         assert!(
             client
                 .try_acquire(
                     &bundle(),
-                    &requirements(&[(1, 20), (2, 20)]),
-                    &dependencies()
+                    &requirements(&[(1, 10), (2, 10)]),
+                    &dependencies(),
                 )
                 .expect("open")
                 .is_none()
         );
+        drop(window);
+        assert_eq!(
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, None), (2, None)]))
+        );
+        for committed in [false, true] {
+            if committed {
+                client.finish_publication(true);
+            }
+            assert!(
+                client
+                    .try_acquire(
+                        &bundle(),
+                        &requirements(&[(1, 20), (2, 20)]),
+                        &dependencies(),
+                    )
+                    .expect("open")
+                    .is_none()
+            );
+        }
     }
 
     #[mz_ore::test]
@@ -753,11 +784,14 @@ mod tests {
         drop(holds);
         clone.downgrade(Timestamp::from(20));
         assert_eq!(
-            client.prepare_publication(BTreeMap::new()),
-            requirements(&[(1, 20), (2, 20)])
+            client.prepare_updates_if_needed(),
+            Some(updates(&[(1, Some(20)), (2, Some(20))]))
         );
         client.finish_publication(true);
-        assert!(other.prepare_publication(BTreeMap::new()).is_empty());
+        assert_eq!(
+            other.prepare_updates_if_needed(),
+            Some(updates(&[(1, None), (2, None)]))
+        );
         other.finish_publication(false);
         drop(acquire(&other, 10));
         drop(client);

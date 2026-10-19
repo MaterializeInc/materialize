@@ -357,8 +357,15 @@ pub enum Op {
         replica_id: Option<ReplicaId>,
         expected: Option<u64>,
     },
-    /// Replaces an execution's aggregate requirements atomically.
-    PublishClientReadRequirements {
+    /// Advances or releases changed grants, leaving unmentioned grants intact.
+    /// The execution routes token changes through its retained logical inputs.
+    UpdateClientReadRequirements {
+        incarnation: u64,
+        requirements: BTreeMap<GlobalId, Option<mz_repr::Timestamp>>,
+    },
+    /// Adds or strengthens requested grants without changing unrelated protection.
+    /// Acknowledges the exact grants, including current logical inputs.
+    GrantClientReadRequirements {
         incarnation: u64,
         requirements: BTreeMap<GlobalId, mz_repr::Timestamp>,
     },
@@ -432,7 +439,8 @@ impl Op {
             | Self::DropClusterReplicaRealization { .. }
             | Self::CheckClusterDeclarations { .. }
             | Self::CreateClientIncarnation { .. }
-            | Self::PublishClientReadRequirements { .. }
+            | Self::UpdateClientReadRequirements { .. }
+            | Self::GrantClientReadRequirements { .. }
             | Self::PublishCreatorReadRequirements { .. }
             | Self::SetReadProtection { .. }
             | Self::SetWrittenPlan { .. } => true,
@@ -586,8 +594,8 @@ pub struct TransactionResult {
     pub catalog_updates: Vec<ParsedStateUpdate>,
     pub audit_events: Vec<VersionedEvent>,
     pub created_client_incarnations: Vec<u64>,
-    /// Exact creator grants published by this commit, grouped by incarnation.
-    pub creator_read_requirements: BTreeMap<u64, BTreeMap<GlobalId, mz_repr::Timestamp>>,
+    /// Exact requested grants published by this commit, grouped by incarnation.
+    pub granted_client_read_requirements: BTreeMap<u64, BTreeMap<GlobalId, mz_repr::Timestamp>>,
 }
 
 /// Catch-up authorized by a caller that owns this protection execution.
@@ -617,7 +625,7 @@ struct TransactInnerResult {
     planning_update_kinds:
         Option<BTreeMap<(&'static str, crate::memory::objects::StateDiff), usize>>,
     created_client_incarnations: Vec<u64>,
-    creator_read_requirements: BTreeMap<u64, BTreeMap<GlobalId, mz_repr::Timestamp>>,
+    granted_client_read_requirements: BTreeMap<u64, BTreeMap<GlobalId, mz_repr::Timestamp>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -946,7 +954,8 @@ impl Catalog {
         }
         for op in &ops {
             match op {
-                Op::PublishClientReadRequirements { incarnation, .. }
+                Op::UpdateClientReadRequirements { incarnation, .. }
+                | Op::GrantClientReadRequirements { incarnation, .. }
                 | Op::PublishCreatorReadRequirements { incarnation, .. } => {
                     owned_incarnations.insert(*incarnation);
                 }
@@ -1153,7 +1162,7 @@ impl Catalog {
                 planning_changed,
                 planning_update_kinds,
                 created_client_incarnations,
-                creator_read_requirements,
+                granted_client_read_requirements,
             } = new_state;
             debug!(
                 target: "mz_catalog::planning_revision",
@@ -1197,7 +1206,7 @@ impl Catalog {
                 catalog_updates,
                 audit_events,
                 created_client_incarnations,
-                creator_read_requirements,
+                granted_client_read_requirements,
             });
         }
     }
@@ -1389,8 +1398,8 @@ impl Catalog {
         let mut updated_requirements = BTreeSet::new();
         let mut created_client_incarnations = Vec::new();
         let mut selected_plans = BTreeMap::new();
-        let mut creator_publications = Vec::new();
-        let mut creator_read_requirements =
+        let mut grant_publications = Vec::new();
+        let mut granted_client_read_requirements =
             BTreeMap::<u64, BTreeMap<GlobalId, mz_repr::Timestamp>>::new();
 
         for op in ops {
@@ -1400,7 +1409,15 @@ impl Catalog {
                 minimums,
             } = op
             {
-                creator_publications.push((incarnation, requirements, minimums));
+                grant_publications.push((incarnation, requirements, minimums, true));
+                continue;
+            }
+            if let Op::GrantClientReadRequirements {
+                incarnation,
+                requirements,
+            } = op
+            {
+                grant_publications.push((incarnation, requirements, BTreeMap::new(), false));
                 continue;
             }
             if let Op::SetWrittenPlan {
@@ -1621,7 +1638,7 @@ impl Catalog {
             mode,
         )?;
         let admission_elapsed = validation_started.elapsed();
-        for (incarnation, mut requirements, minimums) in creator_publications {
+        for (incarnation, mut requirements, minimums, creator) in grant_publications {
             let merge_started = Instant::now();
             let mut grants = BTreeMap::new();
             for (id, minimum) in minimums {
@@ -1636,49 +1653,35 @@ impl Catalog {
                     grants.insert(id, (*bound).max(minimum));
                 }
             }
-            // Creator publication cannot flush unrelated advancement or release.
-            // System(0) is the minimum GlobalId, so this visits only this client.
-            let committed = state
-                .client_read_requirements()
-                .range((incarnation, GlobalId::System(0))..)
-                .take_while(|((client, _), _)| *client == incarnation)
-                .map(|((_, id), frontier)| (*id, *frontier));
-            let staged = preliminary_state
-                .client_read_requirements()
-                .range((incarnation, GlobalId::System(0))..)
-                .take_while(|((client, _), _)| *client == incarnation)
-                .map(|((_, id), frontier)| (*id, *frontier));
-            let earlier_creators = creator_read_requirements
-                .get(&incarnation)
-                .into_iter()
-                .flat_map(|requirements| requirements.iter())
-                .map(|(id, frontier)| (*id, *frontier));
-            for (id, frontier) in committed
-                .chain(staged)
-                .chain(earlier_creators)
-                .chain(grants)
-            {
+            for (id, frontier) in grants {
                 requirements
                     .entry(id)
                     .and_modify(|held| *held = (*held).min(frontier))
                     .or_insert(frontier);
             }
             let requested_count = requirements.len();
+            // Expand from the effective target grant, not a weaker request.
+            // Reconstruction can introduce different logical leaves, which must
+            // inherit an existing target's stronger protection.
+            let requirements = tx.grant_client_read_requirements(incarnation, requirements)?;
             let merge_elapsed = merge_started.elapsed();
             let expansion_started = Instant::now();
             let requirements =
                 preliminary_state.expand_client_read_requirements(incarnation, requirements)?;
             let expansion_elapsed = expansion_started.elapsed();
             let publication_started = Instant::now();
-            tx.publish_client_read_requirements(incarnation, requirements.clone())?;
+            let requirements = tx.grant_client_read_requirements(incarnation, requirements)?;
             debug!(target: "mz_adapter::frontend_read_then_write",
-                incarnation, requested_count, expanded_count = requirements.len(), creator = true,
+                incarnation, requested_count, expanded_count = requirements.len(), creator,
                 ?merge_elapsed, ?expansion_elapsed,
                 publication_elapsed = ?publication_started.elapsed(),
                 "catalog client protection staged");
-            creator_read_requirements.insert(incarnation, requirements);
+            granted_client_read_requirements
+                .entry(incarnation)
+                .or_default()
+                .extend(requirements);
         }
-        if admitted_mvs || !creator_read_requirements.is_empty() {
+        if admitted_mvs || !granted_client_read_requirements.is_empty() {
             // Apply derived grants with birth definitions and requirements so
             // final validation sees one projection of the admission updates.
             let mut admission_updates = tx.get_and_commit_op_updates();
@@ -1792,7 +1795,7 @@ impl Catalog {
             planning_changed,
             planning_update_kinds,
             created_client_incarnations,
-            creator_read_requirements,
+            granted_client_read_requirements,
         })
     }
 
@@ -1818,7 +1821,7 @@ impl Catalog {
         created_client_incarnations: &mut Vec<u64>,
     ) -> Result<(), CatalogError> {
         match op {
-            Op::PublishCreatorReadRequirements { .. } => {
+            Op::PublishCreatorReadRequirements { .. } | Op::GrantClientReadRequirements { .. } => {
                 unreachable!("creator publication must follow birth admission")
             }
             Op::SetWrittenPlan {
@@ -1853,21 +1856,11 @@ impl Catalog {
                 created_client_incarnations
                     .push(tx.replace_client_incarnation(replica_id, expected)?);
             }
-            Op::PublishClientReadRequirements {
+            Op::UpdateClientReadRequirements {
                 incarnation,
                 requirements,
             } => {
-                let started = Instant::now();
-                let requested_count = requirements.len();
-                let requirements =
-                    state.expand_client_read_requirements(incarnation, requirements)?;
-                let expansion_elapsed = started.elapsed();
-                let expanded_count = requirements.len();
-                let started = Instant::now();
-                tx.publish_client_read_requirements(incarnation, requirements)?;
-                debug!(target: "mz_adapter::frontend_read_then_write",
-                    incarnation, requested_count, expanded_count, ?expansion_elapsed,
-                    staging_elapsed = ?started.elapsed(), "catalog client protection staged");
+                tx.update_client_read_requirements(incarnation, requirements)?;
             }
             Op::CheckClusterState {
                 cluster_id,
@@ -5420,7 +5413,7 @@ mod tests {
                 None,
                 ts,
                 None,
-                vec![Op::PublishClientReadRequirements {
+                vec![Op::GrantClientReadRequirements {
                     incarnation,
                     requirements: BTreeMap::from([(global_id, birth)]),
                 }],
@@ -5435,7 +5428,7 @@ mod tests {
                 None,
                 ts,
                 None,
-                vec![Op::PublishClientReadRequirements {
+                vec![Op::GrantClientReadRequirements {
                     incarnation,
                     requirements: BTreeMap::from([(global_id, birth)]),
                 }],
@@ -5489,9 +5482,9 @@ mod tests {
                 None,
                 ts,
                 None,
-                vec![Op::PublishClientReadRequirements {
+                vec![Op::UpdateClientReadRequirements {
                     incarnation,
-                    requirements: BTreeMap::new(),
+                    requirements: BTreeMap::from([(global_id, None)]),
                 }],
             )
             .await
@@ -5855,7 +5848,7 @@ mod tests {
                 None,
                 ts,
                 None,
-                vec![Op::PublishClientReadRequirements {
+                vec![Op::GrantClientReadRequirements {
                     incarnation,
                     requirements: old.clone(),
                 }],
@@ -5961,7 +5954,7 @@ mod tests {
         let expected = BTreeMap::from([(input, input_birth), (index, minimum), (mv, input_birth)]);
         // The fresh client's index grant expands through the view to its leaf.
         assert_eq!(
-            result.creator_read_requirements,
+            result.granted_client_read_requirements,
             BTreeMap::from([
                 (incarnation, expected.clone()),
                 (
@@ -6012,9 +6005,13 @@ mod tests {
                 None,
                 ts,
                 None,
-                vec![Op::PublishClientReadRequirements {
+                vec![Op::UpdateClientReadRequirements {
                     incarnation,
-                    requirements: BTreeMap::from([(index, minimum)]),
+                    requirements: BTreeMap::from([
+                        (index, Some(minimum)),
+                        (input, Some(minimum)),
+                        (mv, None),
+                    ]),
                 }],
             )
             .await
@@ -6041,8 +6038,13 @@ mod tests {
             .await
             .expect("retain existing admission requirements");
         assert_eq!(
-            skipped.creator_read_requirements[&incarnation],
-            BTreeMap::from([(input, minimum), (index, minimum)])
+            skipped.granted_client_read_requirements[&incarnation],
+            BTreeMap::from([(input, minimum)])
+        );
+        assert_eq!(
+            catalog.state().client_read_requirements()[&(incarnation, index)],
+            minimum,
+            "an unmentioned grant remains protected",
         );
         assert_eq!(
             catalog.state().collection_compaction_bounds()[&index],

@@ -209,6 +209,32 @@ MV admission from its prepared definition and dependencies without reconstructin
 unchanged SQL or edges on frontier-only retries. Preserve shared committed-diff
 effects. Use a small scaling check and boundary regressions before original-budget
 verification. Reassess arbitration only if contention remains after these slices.
+Sparse advancement/release and additive acquisition/creator publication are wired
+through adapter, bootstrap and replica owners, retaining pending barriers,
+definitive outcomes and exact acknowledgement. Independent review found no
+blockers.
+Builtin reconstruction can change logical leaves under a retained index ID:
+expand from its effective stronger grant, not the weaker requested timestamp.
+The whole-map local and catalog replacement APIs are removed. Fixtures use
+explicit grants, advances and named releases, without replacement compatibility
+helpers. Final API-removal revision `422147d96a` passes four-crate Clippy, 16 durable
+boundary tests, eight shared retention/retry tests, two lifecycle tests, six debug
+tests, all 22 native follower tests and 33 query-client tests. Evidence is preserved
+off-worker in `scratch/incremental-protection-removal{,-fixtures}.tar.gz`.
+The native replica test reproduces a SIGSEGV in unoptimized startup with a 4-MiB
+test stack. GDB places its stack pointer below the mapped stack, before publication
+assertions. The pre-slice `a8cf29e4` reproduces the startup failure with identical
+settings. Both revisions pass with an 8-MiB diagnostic test-stack override
+(28.58s and 28.33s respectively). This is not a repository default or optimized
+CI verification. The 22-test native suite uses the same diagnostic override.
+No production stack setting or deadline has changed.
+The local scaling check grows unrelated holdings from 100 to 100,000: median
+grant preparation is 823–915ns and advancement preparation 780–972ns, with one
+changed key throughout. This measures local preparation, not durable commit or SQL
+progress. The diagnostic is archived and removed. See
+`scratch/incremental-protection-scaling-report.md` and the matching evidence
+archives under the off-worker evidence directory. Original-budget workload
+verification remains open.
 Committed bounds advance elsewhere, without proving physical reclamation or
 fleet-wide progress. Snapshot waits and append conflicts remain open. A legacy CREATE
 CLUSTER retry turn occupies the coordinator for 8.87s. Keep the refresh-to-commit

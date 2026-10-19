@@ -158,8 +158,10 @@ async fn written_index_survives_writer_and_query_disconnect() {
     // Acquire the historical grant before native reconstruction installs the index.
     publish(
         &mut observer,
-        reader,
-        BTreeMap::from([(index, Timestamp::new(15_000))]),
+        Op::GrantClientReadRequirements {
+            incarnation: reader,
+            requirements: BTreeMap::from([(index, Timestamp::new(15_000))]),
+        },
     )
     .await
     .unwrap();
@@ -183,9 +185,15 @@ async fn written_index_survives_writer_and_query_disconnect() {
         Some(ComputeResponse::QueryReady)
     ));
     assert_rows(&mut *query, catalog_position, index, &desc, 15_000, &[1]).await;
-    publish(&mut observer, reader, BTreeMap::new())
-        .await
-        .unwrap();
+    publish(
+        &mut observer,
+        Op::UpdateClientReadRequirements {
+            incarnation: reader,
+            requirements: BTreeMap::from([(index, None), (source, None)]),
+        },
+    )
+    .await
+    .unwrap();
     drop(query);
     drop(writer);
     drop(store);
@@ -251,8 +259,10 @@ async fn written_index_survives_writer_and_query_disconnect() {
     }
     let rejected = publish(
         &mut observer,
-        reader,
-        BTreeMap::from([(index, Timestamp::new(15_000))]),
+        Op::GrantClientReadRequirements {
+            incarnation: reader,
+            requirements: BTreeMap::from([(index, Timestamp::new(15_000))]),
+        },
     )
     .await;
     assert!(
@@ -268,8 +278,10 @@ async fn written_index_survives_writer_and_query_disconnect() {
     );
     publish(
         &mut observer,
-        reader,
-        BTreeMap::from([(index, Timestamp::new(35_000))]),
+        Op::GrantClientReadRequirements {
+            incarnation: reader,
+            requirements: BTreeMap::from([(index, Timestamp::new(35_000))]),
+        },
     )
     .await
     .unwrap();
@@ -671,26 +683,13 @@ async fn wait_window(
     .expect("replica must publish its live window and logical input grant")
 }
 
-pub(super) async fn publish(
-    catalog: &mut Catalog,
-    incarnation: u64,
-    requirements: BTreeMap<GlobalId, Timestamp>,
-) -> Result<(), CatalogError> {
+pub(super) async fn publish(catalog: &mut Catalog, op: Op) -> Result<(), CatalogError> {
     timeout(Duration::from_secs(10), async {
         loop {
             catalog.sync_to_current_updates().await.unwrap();
             let ts = catalog.current_upper().await;
             match catalog
-                .transact(
-                    None,
-                    None,
-                    ts,
-                    None,
-                    vec![Op::PublishClientReadRequirements {
-                        incarnation,
-                        requirements: requirements.clone(),
-                    }],
-                )
+                .transact(None, None, ts, None, vec![op.clone()])
                 .await
             {
                 Err(CatalogError::Catalog(error))

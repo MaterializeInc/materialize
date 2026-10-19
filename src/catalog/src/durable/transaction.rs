@@ -3217,28 +3217,79 @@ impl<'a> Transaction<'a> {
         Ok(successor)
     }
 
-    /// Replaces this execution's complete protection.
-    /// Protection is usable only after durable commit. The adapter must include independent
-    /// storage-leaf requirements covering the logical inputs of index targets.
-    /// A closed incarnation cannot publish, even an empty requirement map.
-    pub fn publish_client_read_requirements(
+    /// Adds or strengthens the requested grants without advancing or releasing
+    /// any existing protection. Returns the exact staged frontier for each
+    /// requested collection, including stronger grants already present.
+    ///
+    /// The caller must validate and durably commit before adopting these grants.
+    pub fn grant_client_read_requirements(
         &mut self,
         incarnation: u64,
-        requirements: BTreeMap<GlobalId, mz_repr::Timestamp>,
+        mut requirements: BTreeMap<GlobalId, mz_repr::Timestamp>,
+    ) -> Result<BTreeMap<GlobalId, mz_repr::Timestamp>, CatalogError> {
+        self.ensure_client_incarnation(incarnation)?;
+        let mut updates = BTreeMap::new();
+        for (id, frontier) in &mut requirements {
+            let key = ClientReadRequirementKey {
+                incarnation,
+                id: *id,
+            };
+            if let Some(previous) = self.client_read_requirements.get(&key) {
+                *frontier = (*frontier).min(previous.frontier);
+                if *frontier == previous.frontier {
+                    continue;
+                }
+            }
+            updates.insert(
+                key,
+                Some(ClientReadRequirementValue {
+                    frontier: *frontier,
+                }),
+            );
+        }
+        self.client_read_requirements
+            .set_many(updates, self.op_id)?;
+        Ok(requirements)
+    }
+
+    /// Advances only the supplied per-collection frontiers. `None` releases a grant.
+    /// Unmentioned grants remain unchanged. Individual hold counts belong to the
+    /// execution, not the durable catalog.
+    ///
+    /// Input requirements must already account for logical dependencies. The
+    /// caller must validate and durably commit before using changed protection.
+    pub fn update_client_read_requirements(
+        &mut self,
+        incarnation: u64,
+        requirements: BTreeMap<GlobalId, Option<mz_repr::Timestamp>>,
     ) -> Result<(), CatalogError> {
         self.ensure_client_incarnation(incarnation)?;
-        let mut updates: BTreeMap<_, _> = self
-            .client_requirement_keys(incarnation)
+        for (id, frontier) in &requirements {
+            if let Some(frontier) = frontier {
+                let key = ClientReadRequirementKey {
+                    incarnation,
+                    id: *id,
+                };
+                if !self
+                    .client_read_requirements
+                    .get(&key)
+                    .is_some_and(|previous| previous.frontier <= *frontier)
+                {
+                    return Err(DurableCatalogError::InvalidReadProtection(format!(
+                        "client {incarnation} cannot advance missing or later grant for {id} to {frontier}"
+                    ))
+                    .into());
+                }
+            }
+        }
+        let updates = requirements
             .into_iter()
-            .map(|key| (key, None))
+            .filter_map(|(id, frontier)| {
+                let key = ClientReadRequirementKey { incarnation, id };
+                let value = frontier.map(|frontier| ClientReadRequirementValue { frontier });
+                (self.client_read_requirements.get(&key) != value.as_ref()).then_some((key, value))
+            })
             .collect();
-        updates.extend(requirements.into_iter().map(|(id, frontier)| {
-            (
-                ClientReadRequirementKey { incarnation, id },
-                Some(ClientReadRequirementValue { frontier }),
-            )
-        }));
-        updates.retain(|key, value| self.client_read_requirements.get(key) != value.as_ref());
         self.client_read_requirements
             .set_many(updates, self.op_id)?;
         Ok(())

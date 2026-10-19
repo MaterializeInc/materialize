@@ -26,6 +26,7 @@ use mz_storage_client::storage_collections::CollectionFrontiers;
 use timely::progress::Antichain;
 
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState, Op, TransactionResult};
+use crate::coord::ddl::ClientProtectionResult;
 use crate::coord::{Coordinator, Message};
 use crate::query_client::{PreparedRead, QueryClient};
 use crate::{AdapterError, CollectionIdBundle, ReadHolds, TimelineContext};
@@ -129,7 +130,7 @@ impl AdmissionTimelinePublication {
                 minimums: self.requested.clone(),
             };
         }
-        Op::PublishClientReadRequirements {
+        Op::GrantClientReadRequirements {
             incarnation: self.client.protection.incarnation(),
             requirements: self.requirements.clone(),
         }
@@ -140,17 +141,17 @@ impl AdmissionTimelinePublication {
             self.client.protection.finish_publication(false);
             return ReadHolds::new();
         };
+        let grants = result
+            .granted_client_read_requirements
+            .get(&self.client.protection.incarnation())
+            .expect("admission grant publication resolved");
+        self.client
+            .protection
+            .finish_grant_publication(grants.clone());
         if self.resolve_birth {
-            self.requested = result
-                .creator_read_requirements
-                .get(&self.client.protection.incarnation())
-                .expect("creator publication resolved")
-                .clone();
-            self.client
-                .protection
-                .finish_grant_publication(self.requested.clone());
-            // Completed collections have no finite window to acquire. Entries
-            // outside the bundle are retained grants, not new local tokens.
+            self.requested = grants.clone();
+            // Completed collections have no finite window. Logical-input grants
+            // outside the bundle do not create separate local tokens.
             self.bundle
                 .storage_ids
                 .retain(|id| self.requested.contains_key(id));
@@ -158,8 +159,6 @@ impl AdmissionTimelinePublication {
                 ids.retain(|id| self.requested.contains_key(id));
                 !ids.is_empty()
             });
-        } else {
-            self.client.protection.finish_publication(true);
         }
         // Adopt every grant synchronously. Another publication aggregates active
         // tokens and could otherwise release an acknowledged but unused grant.
@@ -446,7 +445,9 @@ impl Coordinator {
     /// Client metadata is live even when SQL uses a prewarming savepoint. This
     /// writer validates its own projection but does not enact maintained objects.
     async fn transact_client_protection(&mut self, op: Op) -> Result<Vec<u64>, AdapterError> {
-        self.transact_client_protection_inner(op, false).await
+        self.transact_client_protection_inner(op, false)
+            .await
+            .map(|result| result.incarnations)
     }
 
     pub(super) async fn sync_client_protection_catalog(&mut self) -> Result<(), AdapterError> {
@@ -507,10 +508,12 @@ impl Coordinator {
         &mut self,
         op: Op,
         once: bool,
-    ) -> Result<Vec<u64>, AdapterError> {
+    ) -> Result<ClientProtectionResult, AdapterError> {
         assert!(matches!(
             &op,
-            Op::CreateClientIncarnation { .. } | Op::PublishClientReadRequirements { .. }
+            Op::CreateClientIncarnation { .. }
+                | Op::UpdateClientReadRequirements { .. }
+                | Op::GrantClientReadRequirements { .. }
         ));
         if self.client_protection_catalog.is_none() {
             if once {
@@ -537,7 +540,12 @@ impl Coordinator {
                 )
                 .await
             {
-                Ok(result) => return Ok(result.created_client_incarnations),
+                Ok(result) => {
+                    return Ok(ClientProtectionResult {
+                        incarnations: result.created_client_incarnations,
+                        grants: result.granted_client_read_requirements,
+                    });
+                }
                 Err(error)
                     if matches!(&error, AdapterError::Catalog(error) if matches!(
                         &error.kind,
@@ -938,22 +946,33 @@ impl Coordinator {
             .state()
             .expand_client_read_requirements(incarnation, prepared.frontiers.clone())?;
         let requirements = client.protection.prepare_grant_publication(extra);
-        let op = Op::PublishClientReadRequirements {
+        let op = Op::GrantClientReadRequirements {
             incarnation,
             requirements,
         };
-        let result = match publication {
+        let mut result = match publication {
             ReadProtectionPublication::Runtime => {
                 self.transact_client_protection_inner(op, once).await
             }
             ReadProtectionPublication::Bootstrap(updates) => self
                 .bootstrap_catalog_transact(vec![op], updates)
                 .await
-                .map(|result| result.created_client_incarnations),
+                .map(|result| ClientProtectionResult {
+                    incarnations: result.created_client_incarnations,
+                    grants: result.granted_client_read_requirements,
+                }),
         };
         // Indeterminate outcomes terminate before this point. Only a definitive
         // result can release the pending barrier or authorize the local grant.
-        client.protection.finish_publication(result.is_ok());
+        match &mut result {
+            Ok(result) => client.protection.finish_grant_publication(
+                result
+                    .grants
+                    .remove(&incarnation)
+                    .expect("acquisition grants acknowledged"),
+            ),
+            Err(_) => client.protection.finish_publication(false),
+        }
         if !publication
             .catalog(self)
             .state()
@@ -981,13 +1000,13 @@ impl Coordinator {
         let Some(client) = self.query_client.clone() else {
             return Ok(());
         };
-        let Some(requirements) = client.protection.prepare_publication_if_needed() else {
+        let Some(requirements) = client.protection.prepare_updates_if_needed() else {
             return Ok(());
         };
         let incarnation = client.protection.incarnation();
         let result = self
             .transact_client_protection_inner(
-                Op::PublishClientReadRequirements {
+                Op::UpdateClientReadRequirements {
                     incarnation,
                     requirements,
                 },

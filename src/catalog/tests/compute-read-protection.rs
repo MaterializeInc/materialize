@@ -246,7 +246,7 @@ async fn cancelled_prewarming_cannot_restore_its_protection() {
     tx.set_collection_compaction_bound(input, Some(10.into()))
         .unwrap();
     let serving_client = tx.create_client_incarnation(None).unwrap();
-    tx.publish_client_read_requirements(serving_client, BTreeMap::from([(input, 30.into())]))
+    tx.grant_client_read_requirements(serving_client, BTreeMap::from([(input, 30.into())]))
         .unwrap();
     commit(tx).await;
     let serving_snapshot = active.snapshot().await.unwrap();
@@ -262,7 +262,7 @@ async fn cancelled_prewarming_cannot_restore_its_protection() {
     pending.sync_to_current_updates().await.unwrap();
     let mut tx = pending.transaction().await.unwrap();
     let pending_client = tx.create_client_incarnation(None).unwrap();
-    tx.publish_client_read_requirements(pending_client, BTreeMap::from([(input, 10.into())]))
+    tx.grant_client_read_requirements(pending_client, BTreeMap::from([(input, 10.into())]))
         .unwrap();
     commit(tx).await;
     let promotion = pending_builder.clone().unwrap_build().await;
@@ -347,7 +347,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
     tx.set_collection_compaction_bound(index, Some(20.into()))
         .unwrap();
     let active_client = tx.create_client_incarnation(None).unwrap();
-    tx.publish_client_read_requirements(active_client, BTreeMap::from([(input, 30.into())]))
+    tx.grant_client_read_requirements(active_client, BTreeMap::from([(input, 30.into())]))
         .unwrap();
     let active_replica = tx
         .get_cluster_replicas()
@@ -424,7 +424,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
     assert_eq!(active.get_deployment_generation().await.unwrap(), 7);
     let mut tx = pending.transaction().await.unwrap();
     let warm_client = tx.create_client_incarnation(None).unwrap();
-    tx.publish_client_read_requirements(warm_client, BTreeMap::from([(input, 10.into())]))
+    tx.grant_client_read_requirements(warm_client, BTreeMap::from([(input, 10.into())]))
         .unwrap();
     tx.set_written_plan_with_owner(
         index,
@@ -620,7 +620,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
     // Rejected shared writes cannot partially publish even permitted metadata.
     let before = pending.snapshot().await.unwrap();
     let mut tx = pending.transaction().await.unwrap();
-    tx.publish_client_read_requirements(warm_client, BTreeMap::new())
+    tx.update_client_read_requirements(warm_client, BTreeMap::from([(input, None)]))
         .unwrap();
     tx.set_config("prewarming_forbidden".into(), Some(1))
         .unwrap();
@@ -666,13 +666,13 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
     );
     assert_eq!(reopened.written_plans, before_restart.written_plans);
     let mut tx = pending.transaction().await.unwrap();
-    tx.publish_client_read_requirements(warm_client, BTreeMap::from([(input, 10.into())]))
+    tx.grant_client_read_requirements(warm_client, BTreeMap::from([(input, 10.into())]))
         .unwrap();
     commit(tx).await;
     // Joining and restarting the pending writer did not fence the active writer.
     active.sync_to_current_updates().await.unwrap();
     let mut tx = active.transaction().await.unwrap();
-    tx.publish_client_read_requirements(active_client, BTreeMap::from([(input, 30.into())]))
+    tx.grant_client_read_requirements(active_client, BTreeMap::from([(input, 30.into())]))
         .unwrap();
     commit(tx).await;
     pending.sync_to_current_updates().await.unwrap();
@@ -707,7 +707,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
     pending.sync_to_current_updates().await.unwrap();
     let mut prepared = pending.transaction().await.unwrap();
     prepared
-        .publish_client_read_requirements(warm_client, BTreeMap::from([(input, 20.into())]))
+        .update_client_read_requirements(warm_client, BTreeMap::from([(input, Some(20.into()))]))
         .unwrap();
 
     // Only the externally authorized ordinary open advances the durable fence.
@@ -756,7 +756,7 @@ async fn prewarming_metadata_authority_survives_restart_and_promotion() {
         .unwrap();
     reject(tx, "readable at 10").await;
     let mut tx = pending.transaction().await.unwrap();
-    tx.publish_client_read_requirements(warm_client, BTreeMap::from([(input, 10.into())]))
+    tx.grant_client_read_requirements(warm_client, BTreeMap::from([(input, 10.into())]))
         .unwrap();
     tx.set_config("promoted_writer".into(), Some(1)).unwrap();
     commit(tx).await;
@@ -808,7 +808,7 @@ async fn deployment_cannot_publish_another_deployments_protection() {
     txn.set_collection_compaction_bound(id, Some(10.into()))
         .unwrap();
     let old = txn.create_client_incarnation(None).unwrap();
-    txn.publish_client_read_requirements(old, BTreeMap::from([(id, 20.into())]))
+    txn.grant_client_read_requirements(old, BTreeMap::from([(id, 20.into())]))
         .unwrap();
     commit(txn).await;
     let before = state.snapshot().await.unwrap();
@@ -835,13 +835,13 @@ async fn deployment_cannot_publish_another_deployments_protection() {
     );
     let mut txn = state.transaction().await.unwrap();
     assert!(matches!(
-        txn.publish_client_read_requirements(old, BTreeMap::new()),
+        txn.update_client_read_requirements(old, BTreeMap::from([(id, None)])),
         Err(CatalogError::Durable(
             DurableCatalogError::InvalidReadProtection(_)
         ))
     ));
     let own = txn.create_client_incarnation(None).unwrap();
-    txn.publish_client_read_requirements(own, BTreeMap::from([(id, 30.into())]))
+    txn.grant_client_read_requirements(own, BTreeMap::from([(id, 30.into())]))
         .unwrap();
     commit(txn).await;
     let snapshot = state.snapshot().await.unwrap();
@@ -885,9 +885,9 @@ async fn client_publication_reopen_and_replica_retirement() {
     let a = txn.create_client_incarnation(Some(replica)).unwrap();
     let b = txn.create_client_incarnation(None).unwrap();
     assert_ne!(a, b);
-    txn.publish_client_read_requirements(a, BTreeMap::from([(id, 20.into())]))
+    txn.grant_client_read_requirements(a, BTreeMap::from([(id, 20.into())]))
         .unwrap();
-    txn.publish_client_read_requirements(b, BTreeMap::from([(id, 30.into())]))
+    txn.grant_client_read_requirements(b, BTreeMap::from([(id, 30.into())]))
         .unwrap();
     commit(txn).await;
     let before = state.snapshot().await.unwrap();
@@ -913,7 +913,7 @@ async fn client_publication_reopen_and_replica_retirement() {
     reject(txn, "readable at 20").await;
     let mut txn = state.transaction().await.unwrap();
     // An unchanged publication preserves protection without catalog traffic.
-    txn.publish_client_read_requirements(a, BTreeMap::from([(id, 20.into())]))
+    txn.grant_client_read_requirements(a, BTreeMap::from([(id, 20.into())]))
         .unwrap();
     assert!(txn.get_and_commit_op_updates().is_empty());
     let ts = txn.upper();
@@ -928,7 +928,7 @@ async fn client_publication_reopen_and_replica_retirement() {
     let mut txn = state.transaction().await.unwrap();
     txn.remove_cluster_replica(replica).unwrap();
     assert!(
-        txn.publish_client_read_requirements(a, BTreeMap::new())
+        txn.update_client_read_requirements(a, BTreeMap::from([(id, None)]))
             .is_err()
     );
     txn.set_collection_compaction_bound(id, Some(30.into()))
@@ -948,12 +948,137 @@ async fn client_publication_reopen_and_replica_retirement() {
     let _ = state.sync_to_current_updates().await.unwrap();
     let mut txn = state.transaction().await.unwrap();
     assert!(
-        txn.publish_client_read_requirements(a, BTreeMap::from([(id, 30.into())]))
+        txn.grant_client_read_requirements(a, BTreeMap::from([(id, 30.into())]))
             .is_err()
     );
     let c = txn.replace_client_incarnation(None, Some(b)).unwrap();
     assert!(c > a && c > b);
     commit(txn).await;
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn client_grants_and_updates_leave_unmentioned_protection_unchanged() {
+    let builder = TestCatalogStateBuilder::new(PersistClient::new_for_tests().await)
+        .with_default_deploy_generation();
+    let mut state = builder
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = state.sync_to_current_updates().await.unwrap();
+    let [target, unrelated, added] = [1000, 1001, 1002].map(GlobalId::User);
+    let mut txn = state.transaction().await.unwrap();
+    txn.insert_collection_metadata(
+        [target, unrelated, added]
+            .into_iter()
+            .map(|id| (id, ShardId::new()))
+            .collect(),
+    )
+    .unwrap();
+    for id in [target, unrelated, added] {
+        txn.set_collection_compaction_bound(id, Some(10.into()))
+            .unwrap();
+    }
+    let client = txn.create_client_incarnation(None).unwrap();
+    let replica = txn
+        .get_cluster_replicas()
+        .next()
+        .expect("bootstrap replica")
+        .replica_id;
+    let peer = txn.create_client_incarnation(Some(replica)).unwrap();
+    txn.grant_client_read_requirements(
+        client,
+        BTreeMap::from([(target, 30.into()), (unrelated, 20.into())]),
+    )
+    .unwrap();
+    txn.grant_client_read_requirements(peer, BTreeMap::from([(target, 17.into())]))
+        .unwrap();
+    commit(txn).await;
+
+    let mut txn = state.transaction().await.unwrap();
+    for (id, frontier) in [(added, 20), (unrelated, 15)] {
+        let error = txn
+            .update_client_read_requirements(
+                client,
+                BTreeMap::from([(target, Some(40.into())), (id, Some(frontier.into()))]),
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cannot advance missing or later grant")
+        );
+        assert!(txn.get_and_commit_op_updates().is_empty());
+    }
+    assert_eq!(
+        txn.grant_client_read_requirements(client, BTreeMap::from([(target, 40.into())]))
+            .unwrap(),
+        BTreeMap::from([(target, 30.into())]),
+    );
+    assert!(txn.get_and_commit_op_updates().is_empty());
+    assert_eq!(
+        txn.grant_client_read_requirements(
+            client,
+            BTreeMap::from([(target, 12.into()), (added, 15.into())]),
+        )
+        .unwrap(),
+        BTreeMap::from([(target, 12.into()), (added, 15.into())]),
+    );
+    // A second request in the same transaction acknowledges the staged grant.
+    assert_eq!(
+        txn.grant_client_read_requirements(client, BTreeMap::from([(target, 25.into())]))
+            .unwrap(),
+        BTreeMap::from([(target, 12.into())]),
+    );
+    commit(txn).await;
+    let snapshot = state.snapshot().await.unwrap();
+    let frontiers: BTreeMap<_, _> = snapshot
+        .client_read_requirements
+        .into_iter()
+        .map(|(key, value)| {
+            let grant = objects::ClientReadRequirement::from_key_value(key, value);
+            ((grant.incarnation, grant.id), grant.frontier)
+        })
+        .collect();
+    assert_eq!(
+        frontiers,
+        BTreeMap::from([
+            ((client, target), 12.into()),
+            ((client, unrelated), 20.into()),
+            ((client, added), 15.into()),
+            ((peer, target), 17.into()),
+        ]),
+    );
+
+    let mut txn = state.transaction().await.unwrap();
+    txn.update_client_read_requirements(
+        client,
+        BTreeMap::from([(target, Some(25.into())), (added, None)]),
+    )
+    .unwrap();
+    commit(txn).await;
+    let snapshot = state.snapshot().await.unwrap();
+    let mut expected = frontiers;
+    expected.insert((client, target), 25.into());
+    expected.remove(&(client, added));
+    assert_eq!(
+        snapshot
+            .client_read_requirements
+            .into_iter()
+            .map(|(key, value)| {
+                let grant = objects::ClientReadRequirement::from_key_value(key, value);
+                ((grant.incarnation, grant.id), grant.frontier)
+            })
+            .collect::<BTreeMap<_, _>>(),
+        expected,
+    );
+    let mut txn = state.transaction().await.unwrap();
+    txn.set_collection_compaction_bound(target, Some(18.into()))
+        .unwrap();
+    reject(txn, "readable at 17").await;
     Box::new(state).expire().await;
 }
 
@@ -986,7 +1111,7 @@ async fn client_admission_and_protected_metadata_retirement() {
 
     for target in [id, GlobalId::User(9999)] {
         let mut txn = state.transaction().await.unwrap();
-        txn.publish_client_read_requirements(client, BTreeMap::from([(target, 9.into())]))
+        txn.grant_client_read_requirements(client, BTreeMap::from([(target, 9.into())]))
             .unwrap();
         reject(
             txn,
@@ -999,7 +1124,7 @@ async fn client_admission_and_protected_metadata_retirement() {
         .await;
     }
     let mut txn = state.transaction().await.unwrap();
-    txn.publish_client_read_requirements(client, BTreeMap::from([(id, 10.into())]))
+    txn.grant_client_read_requirements(client, BTreeMap::from([(id, 10.into())]))
         .unwrap();
     let replica = txn
         .get_cluster_replicas()
@@ -1007,7 +1132,7 @@ async fn client_admission_and_protected_metadata_retirement() {
         .expect("bootstrap replica")
         .replica_id;
     let other = txn.create_client_incarnation(Some(replica)).unwrap();
-    txn.publish_client_read_requirements(other, BTreeMap::from([(id, 20.into())]))
+    txn.grant_client_read_requirements(other, BTreeMap::from([(id, 20.into())]))
         .unwrap();
     commit(txn).await;
     let mut txn = state.transaction().await.unwrap();
@@ -1023,7 +1148,7 @@ async fn client_admission_and_protected_metadata_retirement() {
     assert_eq!(bounds(snapshot)[&id], Some(10.into()));
     let mut txn = state.transaction().await.unwrap();
     assert_eq!(txn.get_collection_metadata()[&id], shard);
-    txn.publish_client_read_requirements(client, BTreeMap::new())
+    txn.update_client_read_requirements(client, BTreeMap::from([(id, None)]))
         .unwrap();
     assert!(
         txn.delete_collection_metadata(BTreeSet::from([id]))
@@ -1059,7 +1184,7 @@ async fn client_index_permission_and_retirement() {
     Owner::Ordinary.insert(&mut txn, 1000);
     let id = Owner::Ordinary.id(1000);
     let client = txn.create_client_incarnation(None).unwrap();
-    txn.publish_client_read_requirements(client, BTreeMap::from([(id, 20.into())]))
+    txn.grant_client_read_requirements(client, BTreeMap::from([(id, 20.into())]))
         .unwrap();
     commit(txn).await;
     let mut txn = state.transaction().await.unwrap();
@@ -1071,7 +1196,7 @@ async fn client_index_permission_and_retirement() {
         .unwrap();
     commit(txn).await;
     let mut txn = state.transaction().await.unwrap();
-    txn.publish_client_read_requirements(client, BTreeMap::from([(id, 14.into())]))
+    txn.grant_client_read_requirements(client, BTreeMap::from([(id, 14.into())]))
         .unwrap();
     reject(txn, "readable at 14").await;
     let mut txn = state.transaction().await.unwrap();
@@ -1079,7 +1204,7 @@ async fn client_index_permission_and_retirement() {
     commit(txn).await;
     assert!(!bounds(state.snapshot().await.unwrap()).contains_key(&id));
     let mut txn = state.transaction().await.unwrap();
-    txn.publish_client_read_requirements(client, BTreeMap::from([(id, 21.into())]))
+    txn.update_client_read_requirements(client, BTreeMap::from([(id, Some(21.into()))]))
         .unwrap();
     commit(txn).await;
     let mut txn = state.transaction().await.unwrap();
@@ -1089,11 +1214,11 @@ async fn client_index_permission_and_retirement() {
         .expect("bootstrap replica")
         .replica_id;
     let other = txn.create_client_incarnation(Some(replica)).unwrap();
-    txn.publish_client_read_requirements(other, BTreeMap::from([(id, 21.into())]))
+    txn.grant_client_read_requirements(other, BTreeMap::from([(id, 21.into())]))
         .unwrap();
     reject(txn, "no live storage or index identity").await;
     let mut txn = state.transaction().await.unwrap();
-    txn.publish_client_read_requirements(client, BTreeMap::new())
+    txn.update_client_read_requirements(client, BTreeMap::from([(id, None)]))
         .unwrap();
     commit(txn).await;
     Box::new(state).expire().await;

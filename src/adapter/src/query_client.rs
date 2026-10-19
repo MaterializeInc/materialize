@@ -1356,22 +1356,24 @@ mod tests {
             .state()
             .expand_client_read_requirements(incarnation, prepared.frontiers.clone())
             .expect("logical input requirements expand");
-        let requirements = client.protection.prepare_publication(requirements);
+        let requirements = client.protection.prepare_grant_publication(requirements);
         let ts = catalog.current_upper().await;
-        catalog
+        let result = catalog
             .transact(
                 None,
                 None,
                 ts,
                 None,
-                vec![Op::PublishClientReadRequirements {
+                vec![Op::GrantClientReadRequirements {
                     incarnation,
                     requirements,
                 }],
             )
             .await
             .expect("protection publication commits");
-        client.protection.finish_publication(true);
+        client.protection.finish_grant_publication(
+            result.granted_client_read_requirements[&incarnation].clone(),
+        );
         let holds = client
             .protection
             .try_acquire(&bundle, &prepared.frontiers, &prepared.index_inputs)
@@ -1665,7 +1667,7 @@ mod tests {
                 .expect("can observe candidate before competing publication");
             let requirements = client
                 .protection
-                .prepare_publication(prepared.frontiers.clone());
+                .prepare_grant_publication(prepared.frontiers.clone());
 
             // Deterministically interleave a real permission commit between
             // observation and grant publication. No grant protects the candidate.
@@ -1691,7 +1693,7 @@ mod tests {
                 .await
                 .expect("peer publishes permission");
             reader.downgrade_since(&frontier(60)).await;
-            let op = Op::PublishClientReadRequirements {
+            let op = Op::GrantClientReadRequirements {
                 incarnation,
                 requirements,
             };
@@ -1747,22 +1749,24 @@ mod tests {
             );
             let requirements = client
                 .protection
-                .prepare_publication(fresh.frontiers.clone());
+                .prepare_grant_publication(fresh.frontiers.clone());
             let ts = catalog.current_upper().await;
-            catalog
+            let result = catalog
                 .transact(
                     None,
                     None,
                     ts,
                     None,
-                    vec![Op::PublishClientReadRequirements {
+                    vec![Op::GrantClientReadRequirements {
                         incarnation,
                         requirements,
                     }],
                 )
                 .await
                 .expect("fresh acquisition commits");
-            client.protection.finish_publication(true);
+            client.protection.finish_grant_publication(
+                result.granted_client_read_requirements[&incarnation].clone(),
+            );
             let holds = client
                 .protection
                 .try_acquire(&bundle, &fresh.frontiers, &fresh.index_inputs)
@@ -1821,16 +1825,18 @@ mod tests {
                 .is_none(),
             "observing the oracle window is not a grant"
         );
-        let requirements = client.protection.prepare_publication(initial.frontiers);
+        let requirements = client
+            .protection
+            .prepare_grant_publication(initial.frontiers);
         let ts = catalog.current_upper().await;
-        catalog
+        let result = catalog
             .transact(
                 None,
                 None,
                 ts,
                 None,
                 vec![
-                    Op::PublishClientReadRequirements {
+                    Op::GrantClientReadRequirements {
                         incarnation,
                         requirements,
                     },
@@ -1845,7 +1851,9 @@ mod tests {
             )
             .await
             .expect("can grant oracle window and advance initial permission");
-        client.protection.finish_publication(true);
+        client.protection.finish_grant_publication(
+            result.granted_client_read_requirements[&incarnation].clone(),
+        );
         assert_eq!(
             client.protection.granted_frontier(id),
             Some(Timestamp::from(100))
@@ -1951,7 +1959,7 @@ mod tests {
         assert_eq!(prepared.upper, frontier(90));
         let requirements = client
             .protection
-            .prepare_publication(prepared.frontiers.clone());
+            .prepare_grant_publication(prepared.frontiers.clone());
         assert!(
             client
                 .protection
@@ -1960,20 +1968,22 @@ mod tests {
                 .is_none()
         );
         let ts = catalog.current_upper().await;
-        catalog
+        let result = catalog
             .transact(
                 None,
                 None,
                 ts,
                 None,
-                vec![Op::PublishClientReadRequirements {
+                vec![Op::GrantClientReadRequirements {
                     incarnation,
                     requirements,
                 }],
             )
             .await
             .expect("can commit historical grant");
-        client.protection.finish_publication(true);
+        client.protection.finish_grant_publication(
+            result.granted_client_read_requirements[&incarnation].clone(),
+        );
         let holds = client
             .protection
             .try_acquire(&bundle, &prepared.frontiers, &prepared.index_inputs)
@@ -2028,9 +2038,12 @@ mod tests {
         holds.downgrade(Timestamp::from(120));
         let requirements = client
             .protection
-            .prepare_publication_if_needed()
+            .prepare_updates_if_needed()
             .expect("advancement is due");
-        assert_eq!(requirements, BTreeMap::from([(id, Timestamp::from(120))]));
+        assert_eq!(
+            requirements,
+            BTreeMap::from([(id, Some(Timestamp::from(120)))])
+        );
         assert_eq!(
             catalog.state().client_read_requirements()[&(incarnation, id)],
             Timestamp::from(50)
@@ -2058,7 +2071,7 @@ mod tests {
                 None,
                 ts,
                 None,
-                vec![Op::PublishClientReadRequirements {
+                vec![Op::UpdateClientReadRequirements {
                     incarnation,
                     requirements,
                 }],
@@ -2074,7 +2087,7 @@ mod tests {
             catalog.state().client_read_requirements()[&(incarnation, id)],
             Timestamp::from(120)
         );
-        assert_eq!(client.protection.prepare_publication_if_needed(), None);
+        assert_eq!(client.protection.prepare_updates_if_needed(), None);
         writer
             .compare_and_append(
                 Vec::<((SourceData, ()), Timestamp, StorageDiff)>::new(),

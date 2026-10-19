@@ -366,7 +366,7 @@ impl ReplicaEnactment {
         cluster: ClusterId,
         build: &str,
         ops: Vec<Op>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<BTreeMap<GlobalId, Timestamp>> {
         let ts = self.io.wait(catalog.current_upper()).await;
         let mut catch_up =
             mz_catalog::catalog::TransactionCatchUp::new(self.protection.incarnation());
@@ -383,9 +383,12 @@ impl ReplicaEnactment {
             build,
             catch_up.updates.into_values().collect(),
         );
-        let result = result?;
+        let mut result = result?;
         absorb_updates(effects, catalog, cluster, build, result.catalog_updates);
-        Ok(())
+        Ok(result
+            .granted_client_read_requirements
+            .remove(&self.protection.incarnation())
+            .unwrap_or_default())
     }
 
     async fn acquire(
@@ -432,14 +435,17 @@ impl ReplicaEnactment {
             let extra = catalog
                 .state()
                 .expand_client_read_requirements(incarnation, requested.clone())?;
-            let requirements = self.protection.prepare_publication(extra);
+            let requirements = self.protection.prepare_grant_publication(extra);
             match self
                 .commit_grants(
                     catalog,
                     effects,
                     cluster,
                     build,
-                    requirements,
+                    Op::GrantClientReadRequirements {
+                        incarnation,
+                        requirements,
+                    },
                     "acquisition",
                 )
                 .await
@@ -924,21 +930,13 @@ impl ReplicaEnactment {
         effects: &mut ReplicaEffects,
         cluster: ClusterId,
         build: &str,
-        requirements: BTreeMap<GlobalId, Timestamp>,
+        op: Op,
         purpose: &'static str,
     ) -> anyhow::Result<()> {
         let incarnation = self.protection.incarnation();
+        let granting = matches!(&op, Op::GrantClientReadRequirements { .. });
         let result = self
-            .transact(
-                catalog,
-                effects,
-                cluster,
-                build,
-                vec![Op::PublishClientReadRequirements {
-                    incarnation,
-                    requirements,
-                }],
-            )
+            .transact(catalog, effects, cluster, build, vec![op])
             .instrument(tracing::debug_span!(
                 target: "mz_adapter::frontend_read_then_write",
                 "replica_read_protection",
@@ -946,8 +944,14 @@ impl ReplicaEnactment {
                 ?incarnation
             ))
             .await;
-        self.protection.finish_publication(result.is_ok());
-        result?;
+        match result {
+            Ok(grants) if granting => self.protection.finish_grant_publication(grants),
+            Ok(_) => self.protection.finish_publication(true),
+            Err(error) => {
+                self.protection.finish_publication(false);
+                return Err(error);
+            }
+        }
         self.configure_publication(
             catalog
                 .system_config()
@@ -1173,7 +1177,7 @@ impl ReplicaEnactment {
         }
         let publish_requirements = self.publication_clock.as_ref().expect("configured").due();
         if publish_requirements
-            && let Some(requirements) = self.protection.prepare_publication_if_needed()
+            && let Some(requirements) = self.protection.prepare_updates_if_needed()
         {
             match self
                 .commit_grants(
@@ -1181,7 +1185,10 @@ impl ReplicaEnactment {
                     effects,
                     cluster,
                     build,
-                    requirements,
+                    Op::UpdateClientReadRequirements {
+                        incarnation: self.protection.incarnation(),
+                        requirements,
+                    },
                     "aggregate_publication",
                 )
                 .await
@@ -1303,7 +1310,7 @@ impl ReplicaEnactment {
         }
         if !ops.is_empty() {
             match self.transact(catalog, effects, cluster, build, ops).await {
-                Ok(()) => (),
+                Ok(_) => (),
                 Err(error) if is_catalog_conflict(&error) => {
                     self.defer_publication();
                     return Err(error);
