@@ -800,12 +800,151 @@ impl FilterConstraints {
     }
 }
 
-async fn purify_create_source(
-    catalog: impl SessionCatalog,
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CreateSourcePreparation {
+    statement: CreateSourceStatement<Aug>,
+    connection: PreparedSourceConnection,
+    reference_policy: SourceReferencePolicy,
     now: u64,
-    mut create_source_stmt: CreateSourceStatement<Aug>,
+    clock_as_of: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PreparedSourceConnection {
+    Kafka(mz_storage_types::connections::KafkaConnection),
+    Postgres(
+        CatalogItemId,
+        mz_storage_types::connections::PostgresConnection,
+    ),
+    SqlServer(
+        CatalogItemId,
+        mz_storage_types::connections::SqlServerConnectionDetails,
+    ),
+    MySql(
+        CatalogItemId,
+        mz_storage_types::connections::MySqlConnection,
+    ),
+    LoadGenerator(mz_storage_types::sources::load_generator::LoadGenerator),
+}
+
+struct PreparedCreateSource {
+    create_progress_subsource: bool,
+    create_source_stmt: CreateSourceStatement<Aug>,
+    subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
+    available_source_references: crate::plan::SourceReferences,
+    format_options: SourceFormatOptions,
+}
+
+impl CreateSourcePreparation {
+    fn new(
+        catalog: &dyn SessionCatalog,
+        now: u64,
+        clock_as_of: u64,
+        statement: CreateSourceStatement<Aug>,
+    ) -> Result<Self, PlanError> {
+        if let Some(DeferredItemName::Named(_)) = &statement.progress_subsource {
+            sql_bail!("Cannot manually ID qualify progress subsource")
+        }
+        let scx = StatementContext::new(None, catalog);
+
+        // Depending on if the user must or can use the `CREATE TABLE .. FROM SOURCE` statement
+        // to add tables after this source is created we might need to enforce that
+        // auto-generated subsources are created or not created by this source statement.
+        let reference_policy = if scx.catalog.system_vars().enable_create_table_from_source()
+            && scx.catalog.system_vars().force_source_table_syntax()
+        {
+            SourceReferencePolicy::NotAllowed
+        } else if scx.catalog.system_vars().enable_create_table_from_source() {
+            SourceReferencePolicy::Optional
+        } else {
+            SourceReferencePolicy::Required
+        };
+        let connection = match &statement.connection {
+            CreateSourceConnection::Kafka { connection, .. } => {
+                if let Some(references) = &statement.external_references {
+                    return Err(KafkaSourcePurificationError::ReferencedSubsources(
+                        references.clone(),
+                    )
+                    .into());
+                }
+                let item = scx.get_item_by_resolved_name(connection)?;
+                let Connection::Kafka(connection) = item.connection()? else {
+                    return Err(KafkaSourcePurificationError::NotKafkaConnection(
+                        scx.catalog.resolve_full_name(item.name()),
+                    )
+                    .into());
+                };
+                PreparedSourceConnection::Kafka(connection.clone().into_inline_connection(catalog))
+            }
+            CreateSourceConnection::Postgres { connection, .. } => {
+                let item = scx.get_item_by_resolved_name(connection)?;
+                let Connection::Postgres(connection) = item.connection()? else {
+                    return Err(PgSourcePurificationError::NotPgConnection(
+                        scx.catalog.resolve_full_name(item.name()),
+                    )
+                    .into());
+                };
+                PreparedSourceConnection::Postgres(
+                    item.id(),
+                    connection.clone().into_inline_connection(catalog),
+                )
+            }
+            CreateSourceConnection::SqlServer { connection, .. } => {
+                let item = scx.get_item_by_resolved_name(connection)?;
+                let Connection::SqlServer(connection) = item.connection()? else {
+                    return Err(SqlServerSourcePurificationError::NotSqlServerConnection(
+                        scx.catalog.resolve_full_name(item.name()),
+                    )
+                    .into());
+                };
+                PreparedSourceConnection::SqlServer(
+                    item.id(),
+                    connection.clone().into_inline_connection(catalog),
+                )
+            }
+            CreateSourceConnection::MySql { connection, .. } => {
+                let item = scx.get_item_by_resolved_name(connection)?;
+                let Connection::MySql(connection) = item.connection()? else {
+                    return Err(MySqlSourcePurificationError::NotMySqlConnection(
+                        scx.catalog.resolve_full_name(item.name()),
+                    )
+                    .into());
+                };
+                PreparedSourceConnection::MySql(
+                    item.id(),
+                    connection.clone().into_inline_connection(catalog),
+                )
+            }
+            CreateSourceConnection::LoadGenerator { generator, options } => {
+                PreparedSourceConnection::LoadGenerator(load_generator_ast_to_generator(
+                    &scx,
+                    generator,
+                    options,
+                    &statement.include_metadata,
+                )?)
+            }
+        };
+        Ok(Self {
+            statement,
+            connection,
+            reference_policy,
+            now,
+            clock_as_of,
+        })
+    }
+}
+
+async fn execute_create_source_preparation(
+    request: CreateSourcePreparation,
     storage_configuration: &StorageConfiguration,
-) -> Result<PurifiedStatement, PlanError> {
+) -> Result<PreparedCreateSource, PlanError> {
+    let CreateSourcePreparation {
+        statement: mut create_source_stmt,
+        connection,
+        reference_policy,
+        now,
+        clock_as_of,
+    } = request;
     let CreateSourceStatement {
         name: source_name,
         col_names,
@@ -827,56 +966,20 @@ async fn purify_create_source(
         || external_references.is_some()
         || progress_subsource.is_some();
 
-    if let Some(DeferredItemName::Named(_)) = progress_subsource {
-        sql_bail!("Cannot manually ID qualify progress subsource")
-    }
-
     let mut requested_subsource_map = BTreeMap::new();
-
-    let scx = StatementContext::new(None, &catalog);
-
-    // Depending on if the user must or can use the `CREATE TABLE .. FROM SOURCE` statement
-    // to add tables after this source is created we might need to enforce that
-    // auto-generated subsources are created or not created by this source statement.
-    let reference_policy = if scx.catalog.system_vars().enable_create_table_from_source()
-        && scx.catalog.system_vars().force_source_table_syntax()
-    {
-        SourceReferencePolicy::NotAllowed
-    } else if scx.catalog.system_vars().enable_create_table_from_source() {
-        SourceReferencePolicy::Optional
-    } else {
-        SourceReferencePolicy::Required
-    };
 
     let mut format_options = SourceFormatOptions::Default;
 
     let retrieved_source_references: RetrievedSourceReferences;
 
-    match source_connection {
-        CreateSourceConnection::Kafka {
-            connection,
-            options: base_with_options,
-            ..
-        } => {
-            if let Some(external_references) = external_references {
-                Err(KafkaSourcePurificationError::ReferencedSubsources(
-                    external_references.clone(),
-                ))?;
-            }
-
-            let connection = {
-                let item = scx.get_item_by_resolved_name(connection)?;
-                // Get Kafka connection
-                match item.connection()? {
-                    Connection::Kafka(connection) => {
-                        connection.clone().into_inline_connection(&catalog)
-                    }
-                    _ => Err(KafkaSourcePurificationError::NotKafkaConnection(
-                        scx.catalog.resolve_full_name(item.name()),
-                    ))?,
-                }
-            };
-
+    match (source_connection, connection) {
+        (
+            CreateSourceConnection::Kafka {
+                options: base_with_options,
+                ..
+            },
+            PreparedSourceConnection::Kafka(connection),
+        ) => {
             let extracted_options: KafkaSourceConfigOptionExtracted =
                 base_with_options.clone().try_into()?;
 
@@ -968,19 +1071,10 @@ async fn purify_create_source(
 
             format_options = SourceFormatOptions::Kafka { topic };
         }
-        CreateSourceConnection::Postgres {
-            connection,
-            options,
-        } => {
-            let connection_item = scx.get_item_by_resolved_name(connection)?;
-            let connection = match connection_item.connection().map_err(PlanError::from)? {
-                Connection::Postgres(connection) => {
-                    connection.clone().into_inline_connection(&catalog)
-                }
-                _ => Err(PgSourcePurificationError::NotPgConnection(
-                    scx.catalog.resolve_full_name(connection_item.name()),
-                ))?,
-            };
+        (
+            CreateSourceConnection::Postgres { options, .. },
+            PreparedSourceConnection::Postgres(connection_id, connection),
+        ) => {
             let crate::plan::statement::PgConfigOptionExtracted {
                 publication,
                 text_columns,
@@ -996,7 +1090,7 @@ async fn purify_create_source(
             }
 
             let client = connection
-                .validate(connection_item.id(), storage_configuration)
+                .validate(connection_id, storage_configuration)
                 .await?;
 
             let reference_client = SourceReferenceClient::Postgres {
@@ -1063,21 +1157,12 @@ async fn purify_create_source(
                 )))),
             })
         }
-        CreateSourceConnection::SqlServer {
-            connection,
-            options,
-        } => {
+        (
+            CreateSourceConnection::SqlServer { options, .. },
+            PreparedSourceConnection::SqlServer(connection_id, connection),
+        ) => {
             // Connect to the upstream SQL Server instance so we can validate
             // we're compatible with CDC.
-            let connection_item = scx.get_item_by_resolved_name(connection)?;
-            let connection = match connection_item.connection()? {
-                Connection::SqlServer(connection) => {
-                    connection.clone().into_inline_connection(&catalog)
-                }
-                _ => Err(SqlServerSourcePurificationError::NotSqlServerConnection(
-                    scx.catalog.resolve_full_name(connection_item.name()),
-                ))?,
-            };
             let crate::plan::statement::ddl::SqlServerConfigOptionExtracted {
                 details,
                 text_columns,
@@ -1090,7 +1175,7 @@ async fn purify_create_source(
             }
 
             let mut client = connection
-                .validate(connection_item.id(), storage_configuration)
+                .validate(connection_id, storage_configuration)
                 .await?;
 
             let database: Arc<str> = connection.database.into();
@@ -1157,19 +1242,10 @@ async fn purify_create_source(
                 excl_cols_option.value = Some(WithOptionValue::Sequence(normalized_excl_columns));
             }
         }
-        CreateSourceConnection::MySql {
-            connection,
-            options,
-        } => {
-            let connection_item = scx.get_item_by_resolved_name(connection)?;
-            let connection = match connection_item.connection()? {
-                Connection::MySql(connection) => {
-                    connection.clone().into_inline_connection(&catalog)
-                }
-                _ => Err(MySqlSourcePurificationError::NotMySqlConnection(
-                    scx.catalog.resolve_full_name(connection_item.name()),
-                ))?,
-            };
+        (
+            CreateSourceConnection::MySql { options, .. },
+            PreparedSourceConnection::MySql(connection_id, connection),
+        ) => {
             let crate::plan::statement::ddl::MySqlConfigOptionExtracted {
                 details,
                 text_columns,
@@ -1182,7 +1258,7 @@ async fn purify_create_source(
             }
 
             let mut conn = connection
-                .validate(connection_item.id(), storage_configuration)
+                .validate(connection_id, storage_configuration)
                 .await
                 .map_err(MySqlSourcePurificationError::InvalidConnection)?;
 
@@ -1247,10 +1323,10 @@ async fn purify_create_source(
                     Some(WithOptionValue::Sequence(normalized_exclude_columns));
             }
         }
-        CreateSourceConnection::LoadGenerator { generator, options } => {
-            let load_generator =
-                load_generator_ast_to_generator(&scx, generator, options, include_metadata)?;
-
+        (
+            CreateSourceConnection::LoadGenerator { generator, options },
+            PreparedSourceConnection::LoadGenerator(load_generator),
+        ) => {
             let reference_client = SourceReferenceClient::LoadGenerator {
                 generator: &load_generator,
             };
@@ -1332,7 +1408,7 @@ async fn purify_create_source(
                     .iter()
                     .any(|p| p.name == LoadGeneratorOptionName::AsOf)
                 {
-                    let now = catalog.now();
+                    let now = clock_as_of;
                     options.push(LoadGeneratorOption {
                         name: LoadGeneratorOptionName::AsOf,
                         value: Some(WithOptionValue::Value(Value::Number(now.to_string()))),
@@ -1340,6 +1416,7 @@ async fn purify_create_source(
                 }
             }
         }
+        _ => unreachable!("source preparation inputs must match their statement"),
     }
 
     // Now that we know which subsources to create alongside this
@@ -1347,20 +1424,42 @@ async fn purify_create_source(
     // part of the `CREATE SOURCE` statement in the catalog.
     *external_references = None;
 
-    purify_source_format(
-        &catalog,
-        format,
-        &format_options,
-        envelope,
-        storage_configuration,
-    )
-    .await?;
-
-    Ok(PurifiedStatement::PurifiedCreateSource {
+    Ok(PreparedCreateSource {
+        format_options,
         create_progress_subsource: uses_old_syntax,
         create_source_stmt,
         subsources: requested_subsource_map,
         available_source_references: retrieved_source_references.available_source_references(),
+    })
+}
+
+async fn purify_create_source(
+    catalog: impl SessionCatalog,
+    now: u64,
+    create_source_stmt: CreateSourceStatement<Aug>,
+    storage_configuration: &StorageConfiguration,
+) -> Result<PurifiedStatement, PlanError> {
+    let request = CreateSourcePreparation::new(&catalog, now, catalog.now(), create_source_stmt)?;
+    let PreparedCreateSource {
+        create_progress_subsource,
+        mut create_source_stmt,
+        subsources,
+        available_source_references,
+        format_options,
+    } = execute_create_source_preparation(request, storage_configuration).await?;
+    purify_source_format(
+        &catalog,
+        &mut create_source_stmt.format,
+        &format_options,
+        &create_source_stmt.envelope,
+        storage_configuration,
+    )
+    .await?;
+    Ok(PurifiedStatement::PurifiedCreateSource {
+        create_progress_subsource,
+        create_source_stmt,
+        subsources,
+        available_source_references,
     })
 }
 
