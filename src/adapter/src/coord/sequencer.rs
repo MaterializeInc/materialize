@@ -100,7 +100,7 @@ impl Coordinator {
     /// Selects and records the execution cluster, checking its restrictions.
     pub(super) fn prepare_plan_execution(
         &mut self,
-        ctx: &mut ExecuteContext,
+        ctx: &ExecuteContext,
         plan: &Plan,
     ) -> Result<(TargetCluster, Option<mz_controller_types::ClusterId>), AdapterError> {
         // Scope the borrow of the Catalog because we need to mutate the Coordinator state below.
@@ -110,7 +110,7 @@ impl Coordinator {
             // If there isn't a current cluster set for a transaction, then try to auto route.
             None => {
                 let session_catalog = self.catalog.for_session(ctx.session());
-                catalog_serving::auto_run_on_catalog_server(&session_catalog, ctx.session(), &plan)
+                catalog_serving::auto_run_on_catalog_server(&session_catalog, ctx.session(), plan)
             }
         };
         let (target_cluster_id, target_cluster_name) = match self
@@ -133,7 +133,7 @@ impl Coordinator {
 
         if let Some(cluster_name) = &target_cluster_name {
             if let Err(e) =
-                catalog_serving::check_cluster_restrictions(cluster_name, &session_catalog, &plan)
+                catalog_serving::check_cluster_restrictions(cluster_name, &session_catalog, plan)
             {
                 return Err(e);
             }
@@ -187,7 +187,7 @@ impl Coordinator {
             };
 
             let (target_cluster, target_cluster_id) =
-                return_if_err!(self.prepare_plan_execution(&mut ctx, &plan), ctx);
+                return_if_err!(self.prepare_plan_execution(&ctx, &plan), ctx);
             let session_catalog = self.catalog.for_session(ctx.session());
 
             // The target-connection role only matters for `pg_cancel_backend`,

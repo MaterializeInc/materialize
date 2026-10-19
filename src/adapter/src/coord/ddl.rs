@@ -87,7 +87,7 @@ impl Coordinator {
         if self.controller.read_only() {
             return ctx.retire(Err(AdapterError::ReadOnly));
         }
-        if let Err(error) = self.prepare_plan_execution(&mut ctx, &plan) {
+        if let Err(error) = self.prepare_plan_execution(&ctx, &plan) {
             return ctx.retire(Err(error));
         }
         let command = Arc::new(command);
