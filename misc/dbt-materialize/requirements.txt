@@ -9,7 +9,7 @@ colorama==0.4.6
 daff==1.4.2
 dbt-adapters==1.24.5
 dbt-common==1.39.0
-dbt-core==1.12.5
+dbt-core==1.12.6
 dbt-extractor==0.6.0
 dbt-materialize @ file:///dbt-materialize
 dbt-postgres==1.11.0
@@ -35,7 +35,7 @@ orderly-set==5.5.0
 packaging==26.3
 parsedatetime==2.6
 pathspec==0.12.1
-pluggy==1.6.0
+pluggy==1.7.0
 protobuf==6.33.5
 psycopg2-binary==2.9.13
 pydantic==2.14.1
