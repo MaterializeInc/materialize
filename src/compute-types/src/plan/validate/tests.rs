@@ -488,12 +488,28 @@ fn rejects_predicate_before_support() {
 
 #[mz_ore::test]
 fn rejects_empty_constant() {
-    let errs = errors(&dataflow(&[], vec![(OUT, constant(vec![]))]));
+    let df = dataflow(&[], vec![(OUT, constant(vec![]))]);
+    let config = ValidateConfig {
+        enforce_function_allowlist: true,
+    };
+    let errs = errors_with(&df, &config);
     assert_error(
         &errs,
         Rule::Arity,
         "cannot infer the arity of an empty constant",
     );
+}
+
+/// The optimizer produces this shape for `EXPLAIN` of a peek that folds to a constant error,
+/// because it does not export the peek's index when explaining.
+#[mz_ore::test]
+fn accepts_unexported_error_constant_without_allowlist() {
+    let error = plan(LirRelationNode::Constant {
+        rows: Err(mz_expr::EvalError::DivisionByZero),
+    });
+    let df = dataflow(&[], vec![(OUT, error)]);
+    let types = validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+    assert!(!types.contains_key(&OUT));
 }
 
 #[mz_ore::test]

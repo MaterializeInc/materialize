@@ -103,11 +103,12 @@ pub struct ValidateConfig {
     /// only.
     ///
     /// In user plan mode, function applications must be admitted by [`allowlist`], every
-    /// column must have an inferable type, and every recursive binding must state an
-    /// iteration limit. Otherwise functions are typed by their output types only, columns
-    /// whose type cannot be inferred, such as all-null constant columns, are accepted, and
-    /// recursive bindings may lack a limit, as optimizer plans of recursive queries without
-    /// one do.
+    /// column must have an inferable type, every object must have an inferable arity, and
+    /// every recursive binding must state an iteration limit. Otherwise functions are typed by
+    /// their output types only, columns whose type cannot be inferred, such as all-null
+    /// constant columns, are accepted, an empty object that is neither exported nor read is
+    /// accepted, and recursive bindings may lack a limit, as optimizer plans of recursive
+    /// queries without one do.
     pub enforce_function_allowlist: bool,
 }
 
@@ -468,8 +469,13 @@ impl Validator {
         }
 
         // An empty object without export and without a reader has nothing to fix its arity.
+        // Rendering needs no arity for it, and optimizer dataflows of `EXPLAIN` peeks have no
+        // export, so only user plans must give it one.
         for object in &df.objects_to_build {
-            if empty_objects.contains(&object.id) && !self.read_globals.contains(&object.id) {
+            if self.typer.enforce
+                && empty_objects.contains(&object.id)
+                && !self.read_globals.contains(&object.id)
+            {
                 self.node_error(
                     &object.plan,
                     Rule::Arity,
