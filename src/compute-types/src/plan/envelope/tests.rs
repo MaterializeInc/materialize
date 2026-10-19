@@ -11,6 +11,7 @@ use mz_expr::{MapFilterProject, MfpPlan};
 use mz_repr::{Datum, ReprScalarType, Row};
 
 use super::*;
+use crate::dataflows::LirDataflowDescription;
 use crate::plan::scalar::LirScalarExpr;
 use crate::plan::{AvailableCollections, GetPlan, LirId};
 
@@ -239,4 +240,213 @@ fn substitute_global_ids_rewrites_gets() {
         },
     );
     assert_eq!(plan, expected);
+}
+
+/// The predicate the source import of [`extract_dataflow`] pushes down.
+fn pushdown_predicate() -> mz_expr::MirScalarExpr {
+    mz_expr::MirScalarExpr::column(1).call_is_null().not()
+}
+
+/// A dataflow that reads `u1` from persist with pushed-down operators and `u2` through its
+/// index `u3`, and builds `u10` from both and `u11` from `u10` and a constant.
+fn extract_dataflow() -> LirDataflowDescription {
+    use mz_expr::MirScalarExpr;
+    use mz_repr::{SqlRelationType, SqlScalarType, Timestamp};
+    use timely::progress::Antichain;
+
+    use crate::dataflows::{BuildDesc, IndexDesc, IndexImport, SourceImport};
+    use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
+
+    let typ = SqlRelationType::new(vec![
+        SqlScalarType::Int64.nullable(false),
+        SqlScalarType::Int64.nullable(true),
+    ]);
+    let mut df = LirDataflowDescription::new("extract".to_string());
+    df.source_imports.insert(
+        GlobalId::User(1),
+        SourceImport {
+            desc: SourceInstanceDesc {
+                arguments: SourceInstanceArguments {
+                    operators: Some(
+                        MapFilterProject::new(2)
+                            .filter([pushdown_predicate()])
+                            .project([1]),
+                    ),
+                },
+                storage_metadata: (),
+                typ: typ.clone(),
+            },
+            monotonic: false,
+            with_snapshot: true,
+            upper: Antichain::from_elem(Timestamp::MIN),
+        },
+    );
+    df.index_imports.insert(
+        GlobalId::User(3),
+        IndexImport {
+            desc: IndexDesc {
+                on_id: GlobalId::User(2),
+                key: vec![MirScalarExpr::column(0)],
+            },
+            typ: mz_repr::ReprRelationType::from(&typ),
+            monotonic: false,
+            with_snapshot: true,
+        },
+    );
+    let interval = node(
+        6,
+        LirRelationNode::Constant {
+            rows: Ok(vec![(
+                StableRow(Row::pack_slice(&[Datum::Interval(Default::default())])),
+                mz_repr::Timestamp::from(0u64),
+                mz_repr::Diff::from(1i64),
+            )]),
+        },
+    );
+    df.objects_to_build.push(BuildDesc {
+        id: GlobalId::User(10),
+        plan: node(
+            3,
+            LirRelationNode::Union {
+                inputs: vec![get(1, GlobalId::User(1)), get(2, GlobalId::User(2))],
+                consolidate_output: false,
+                temporal_bucketing_strategies: vec![],
+            },
+        ),
+    });
+    df.objects_to_build.push(BuildDesc {
+        id: GlobalId::User(11),
+        plan: node(
+            7,
+            LirRelationNode::Union {
+                inputs: vec![get(4, GlobalId::User(10)), interval],
+                consolidate_output: false,
+                temporal_bucketing_strategies: vec![],
+            },
+        ),
+    });
+    df
+}
+
+fn name_of(id: GlobalId) -> String {
+    id.to_string()
+}
+
+#[mz_ore::test]
+fn extract_then_parse_roundtrip() {
+    let df = extract_dataflow();
+    let envelope = extract_envelope(&df, GlobalId::User(11), &name_of).expect("extracts");
+
+    let (t1, t2, t3, t4, t5) = (
+        GlobalId::Transient(1),
+        GlobalId::Transient(2),
+        GlobalId::Transient(3),
+        GlobalId::Transient(4),
+        GlobalId::Transient(5),
+    );
+    let predicate = LirScalarExpr::try_from(&pushdown_predicate()).expect("materializable");
+    let pushdown = MfpPlan::create_from(
+        MapFilterProject::<LirScalarExpr>::new(2)
+            .filter([predicate])
+            .project([1]),
+    )
+    .expect("no temporal filters");
+    let mut output_plan = df.objects_to_build[1].plan.clone();
+    substitute_global_ids(
+        &mut output_plan,
+        &BTreeMap::from([(GlobalId::User(10), t4)]),
+    );
+    let expected = LirPlanEnvelope {
+        lir_version: LIR_VERSION,
+        imports: vec![
+            EnvelopeImport {
+                id: t1,
+                source: ImportSource::Name("u1".into()),
+                persist: true,
+                indexes: vec![],
+            },
+            EnvelopeImport {
+                id: t2,
+                source: ImportSource::Name("u2".into()),
+                persist: false,
+                indexes: vec![ImportSource::Name("u3".into())],
+            },
+        ],
+        objects: vec![
+            // The pushdown takes fresh LIR ids above the dataflow's largest, 7.
+            EnvelopeObject {
+                id: t3,
+                plan: node(
+                    9,
+                    LirRelationNode::Mfp {
+                        input: Box::new(get(8, t1)),
+                        mfp: pushdown,
+                        input_key_val: None,
+                    },
+                ),
+            },
+            EnvelopeObject {
+                id: t4,
+                plan: node(
+                    3,
+                    LirRelationNode::Union {
+                        inputs: vec![get(1, t3), get(2, t2)],
+                        consolidate_output: false,
+                        temporal_bucketing_strategies: vec![],
+                    },
+                ),
+            },
+            EnvelopeObject {
+                id: t5,
+                plan: output_plan,
+            },
+        ],
+        output: t5,
+    };
+    assert_eq!(envelope, expected);
+
+    // Rows without a readable form, like the interval, survive in the default form.
+    let json = envelope_to_json(&envelope);
+    assert_eq!(parse_envelope(&json), Ok(envelope));
+
+    assert_eq!(check_extract_round_trip(&df), Ok(()));
+}
+
+#[mz_ore::test]
+fn extract_rejects_output_that_is_not_an_object() {
+    let df = extract_dataflow();
+    let err = extract_envelope(&df, GlobalId::User(1), &name_of).unwrap_err();
+    assert!(err.contains("u1"), "{err}");
+}
+
+#[mz_ore::test]
+fn extract_rejects_pushdown_on_indexed_relation() {
+    let mut df = extract_dataflow();
+    let import = df.index_imports.get_mut(&GlobalId::User(3)).expect("index");
+    import.desc.on_id = GlobalId::User(1);
+    let err = extract_envelope(&df, GlobalId::User(11), &name_of).unwrap_err();
+    assert!(err.contains("u1"), "{err}");
+}
+
+#[mz_ore::test]
+fn extract_skips_identity_pushdown() {
+    let mut df = extract_dataflow();
+    let import = df
+        .source_imports
+        .get_mut(&GlobalId::User(1))
+        .expect("source");
+    import.desc.arguments.operators = Some(MapFilterProject::new(2));
+    let envelope = extract_envelope(&df, GlobalId::User(11), &name_of).expect("extracts");
+    assert_eq!(envelope.objects.len(), 2);
+    assert_eq!(check_extract_round_trip(&df), Ok(()));
+}
+
+#[mz_ore::test]
+fn round_trip_reports_lost_index_import() {
+    // A name that does not resolve back to the import it came from is a mismatch.
+    let df = extract_dataflow();
+    let mut envelope = extract_envelope(&df, GlobalId::User(11), &name_of).expect("extracts");
+    envelope.imports[1].indexes.clear();
+    let err = restore_and_compare(&df, GlobalId::User(11), &envelope).unwrap_err();
+    assert!(err.contains("index"), "{err}");
 }

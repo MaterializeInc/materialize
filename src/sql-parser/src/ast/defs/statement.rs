@@ -5199,6 +5199,8 @@ pub enum ExplainFormat {
     Json,
     /// Machine-consumable DOT (graphviz) format
     Dot,
+    /// The LIR plan envelope that `CREATE MATERIALIZED VIEW ... FROM PLAN` accepts
+    LirJson,
 }
 
 impl AstDisplay for ExplainFormat {
@@ -5208,6 +5210,7 @@ impl AstDisplay for ExplainFormat {
             Self::VerboseText => f.write_str("VERBOSE TEXT"),
             Self::Json => f.write_str("JSON"),
             Self::Dot => f.write_str("DOT"),
+            Self::LirJson => f.write_str("LIR JSON"),
         }
     }
 }

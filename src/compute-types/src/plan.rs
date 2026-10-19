@@ -855,6 +855,13 @@ impl LirRelationExpr {
                     plans.join("\n")
                 );
             }
+            // Every optimizer plan must survive extraction to an envelope and back.
+            if let Err(error) = envelope::check_extract_round_trip(&dataflow) {
+                mz_ore::soft_panic_or_log!(
+                    "LIR envelope round trip failed for dataflow {}: {error}",
+                    dataflow.debug_name
+                );
+            }
         }
 
         mz_repr::explain::trace_plan(&dataflow);

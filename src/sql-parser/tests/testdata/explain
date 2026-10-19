@@ -468,3 +468,25 @@ EXPLAIN OPTIMIZER TRACE FOR SUBSCRIBE t
 EXPLAIN OPTIMIZER TRACE FOR SUBSCRIBE t
 =>
 ExplainPlan(ExplainPlanStatement { stage: Some(Trace), with_options: [], format: None, explainee: Subscribe(SubscribeStatement { relation: Name(Name(UnresolvedItemName([Ident("t")]))), options: [], as_of: None, up_to: None, output: Diffs }, false) })
+
+parse-statement
+EXPLAIN PHYSICAL PLAN AS LIR JSON FOR MATERIALIZED VIEW mv
+----
+EXPLAIN PHYSICAL PLAN AS LIR JSON FOR MATERIALIZED VIEW mv
+=>
+ExplainPlan(ExplainPlanStatement { stage: Some(PhysicalPlan), with_options: [], format: Some(LirJson), explainee: MaterializedView(Name(UnresolvedItemName([Ident("mv")]))) })
+
+# Parses, planning rejects LIR JSON for other stages and explainees.
+parse-statement
+EXPLAIN OPTIMIZED PLAN AS LIR JSON FOR MATERIALIZED VIEW mv
+----
+EXPLAIN OPTIMIZED PLAN AS LIR JSON FOR MATERIALIZED VIEW mv
+=>
+ExplainPlan(ExplainPlanStatement { stage: Some(GlobalPlan), with_options: [], format: Some(LirJson), explainee: MaterializedView(Name(UnresolvedItemName([Ident("mv")]))) })
+
+parse-statement
+EXPLAIN PHYSICAL PLAN AS LIR FOR MATERIALIZED VIEW mv
+----
+error: Expected JSON, found FOR
+EXPLAIN PHYSICAL PLAN AS LIR FOR MATERIALIZED VIEW mv
+                             ^

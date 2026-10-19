@@ -13,15 +13,16 @@ use maplit::btreemap;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
+use mz_compute_types::plan::envelope::{envelope_to_json, extract_envelope};
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_ore::soft_panic_or_log;
-use mz_repr::explain::{ExprHumanizerExt, TransientItem};
+use mz_repr::explain::{ExplainFormat, ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{CatalogItemId, Datum, RelationVersion, Row, VersionedRelationDesc};
+use mz_repr::{CatalogItemId, Datum, GlobalId, RelationVersion, Row, VersionedRelationDesc};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
@@ -251,6 +252,27 @@ impl Coordinator {
             .override_from(&target_cluster.config.features())
             .override_from(&self.cluster_scoped_optimizer_overrides(view.cluster_id))
             .override_from(&config.features);
+
+        // Planning admits this format only for the physical plan.
+        if format == ExplainFormat::LirJson {
+            let Some(plan) = self.catalog().try_get_physical_plan(&gid) else {
+                tracing::error!("cannot find {stage} for materialized view {id} in catalog");
+                coord_bail!("cannot find {stage} for materialized view in catalog");
+            };
+            let Some(sink) = plan.sink_exports.values().next() else {
+                coord_bail!("the dataflow of materialized view {id} exports no sink");
+            };
+            let catalog = self.catalog();
+            let name_of = |id: GlobalId| {
+                let entry = catalog.get_entry_by_global_id(&id);
+                catalog.resolve_full_name(entry.name(), None).to_string()
+            };
+            let envelope =
+                extract_envelope(plan, sink.from, &name_of).map_err(AdapterError::Internal)?;
+            let json = envelope_to_json(&envelope);
+            let row = Row::pack_slice(&[Datum::from(json.as_str())]);
+            return Ok(Self::send_immediate_rows(row));
+        }
 
         let cardinality_stats = BTreeMap::new();
 

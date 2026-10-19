@@ -13,16 +13,21 @@
 //! output object. Rows inside plans are written in the readable `{"$row": [...]}` form of
 //! [`mz_repr::row_to_readable`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use mz_expr::Id;
+use mz_expr::{Id, MapFilterProject, MfpPlan, MirScalarExpr, SafeMfpPlan};
+use mz_ore::str::separated;
 use mz_repr::{
     CatalogItemId, GlobalId, RelationVersion, StableRow, row_from_readable, with_readable_rows,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::plan::{LIR_VERSION, LirRelationExpr, LirRelationNode};
+use crate::dataflows::LirDataflowDescription;
+use crate::plan::scalar::LirScalarExpr;
+use crate::plan::{
+    AvailableCollections, GetPlan, LIR_VERSION, LirId, LirRelationExpr, LirRelationNode,
+};
 
 /// A set of LIR plan objects together with the relations they import.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -115,11 +120,16 @@ pub const MAX_JSON_DEPTH: usize = 4096;
 const STACK_SEGMENT: usize = 64 * 1024 * 1024;
 
 /// Reports whether `json` nests arrays and objects deeper than [`MAX_JSON_DEPTH`].
+fn exceeds_max_depth(json: &str) -> bool {
+    json_depth(json) > MAX_JSON_DEPTH
+}
+
+/// The deepest nesting of arrays and objects in `json`.
 ///
 /// Iterative, and skips string contents so that brackets inside strings do not count.
 /// Malformed input is not diagnosed here, the parser does that.
-fn exceeds_max_depth(json: &str) -> bool {
-    let (mut depth, mut in_string, mut escaped) = (0usize, false, false);
+fn json_depth(json: &str) -> usize {
+    let (mut depth, mut max, mut in_string, mut escaped) = (0usize, 0usize, false, false);
     for byte in json.bytes() {
         if in_string {
             match (escaped, byte) {
@@ -134,15 +144,13 @@ fn exceeds_max_depth(json: &str) -> bool {
             b'"' => in_string = true,
             b'[' | b'{' => {
                 depth += 1;
-                if depth > MAX_JSON_DEPTH {
-                    return true;
-                }
+                max = max.max(depth);
             }
             b']' | b'}' => depth = depth.saturating_sub(1),
             _ => {}
         }
     }
-    false
+    max
 }
 
 /// Parses an envelope and checks its version.
@@ -209,7 +217,7 @@ fn rewrite_rows(root: &mut Value) -> Result<(), EnvelopeError> {
 /// Renders an envelope as pretty JSON with rows in their readable form.
 ///
 /// Rows without a readable form are written in the default serialization, which
-/// [`parse_envelope`] does not accept back.
+/// [`parse_envelope`] accepts as well.
 pub fn envelope_to_json(envelope: &LirPlanEnvelope) -> String {
     stacker::grow(STACK_SEGMENT, || {
         with_readable_rows(|| serde_json::to_string_pretty(envelope))
@@ -233,6 +241,340 @@ pub fn substitute_global_ids(plan: &mut LirRelationExpr, map: &BTreeMap<GlobalId
         }
         stack.extend(expr.node.children_mut());
     }
+}
+
+/// Extracts the envelope of `df`, whose result is the built object `output`.
+///
+/// Placeholders are `GlobalId::Transient(1..)`, assigned to the imported relations in id
+/// order, then to the objects. `name_of` names imported relations and indexes. One import
+/// stands for a relation's persist import and all its index imports. A source import with
+/// non-identity operators becomes a leading `Mfp` object over the raw import, and the plans
+/// read that object instead of the import.
+pub fn extract_envelope(
+    df: &LirDataflowDescription,
+    output: GlobalId,
+    name_of: &dyn Fn(GlobalId) -> String,
+) -> Result<LirPlanEnvelope, String> {
+    if !df.objects_to_build.iter().any(|build| build.id == output) {
+        return Err(format!("output {output} is not an object of the dataflow"));
+    }
+    let mut next = 0;
+    let mut fresh = || {
+        next += 1;
+        GlobalId::Transient(next)
+    };
+    // Original ids to placeholders.
+    let mut placeholders = BTreeMap::new();
+
+    let relations: BTreeSet<_> = df
+        .source_imports
+        .keys()
+        .copied()
+        .chain(df.index_imports.values().map(|import| import.desc.on_id))
+        .collect();
+    let mut imports = Vec::with_capacity(relations.len());
+    for relation in relations {
+        let id = fresh();
+        placeholders.insert(relation, id);
+        let indexes = df
+            .index_imports
+            .iter()
+            .filter(|(_, import)| import.desc.on_id == relation)
+            .map(|(index, _)| ImportSource::Name(name_of(*index)))
+            .collect();
+        imports.push(EnvelopeImport {
+            id,
+            source: ImportSource::Name(name_of(relation)),
+            persist: df.source_imports.contains_key(&relation),
+            indexes,
+        });
+    }
+
+    // Fresh LIR ids for the pushdown objects, so that LIR ids stay unique in the dataflow.
+    let mut next_lir_id = df
+        .objects_to_build
+        .iter()
+        .map(|build| max_lir_id(&build.plan))
+        .max()
+        .unwrap_or(0);
+    let mut fresh_lir_id = || {
+        next_lir_id = next_lir_id
+            .checked_add(1)
+            .ok_or_else(|| "LIR ids are exhausted".to_string())?;
+        Ok::<_, String>(LirId(next_lir_id))
+    };
+    let mut objects = Vec::with_capacity(df.objects_to_build.len());
+    for (relation, import) in &df.source_imports {
+        let Some(operators) = &import.desc.arguments.operators else {
+            continue;
+        };
+        if operators.is_identity() {
+            continue;
+        }
+        // A `Get` of the relation reads its index imports too, which the pushdown object
+        // would hide.
+        if df
+            .index_imports
+            .values()
+            .any(|index| index.desc.on_id == *relation)
+        {
+            return Err(format!(
+                "{relation} has both pushed-down source operators and index imports"
+            ));
+        }
+        let mfp =
+            pushdown_plan(operators).map_err(|e| format!("source operators of {relation}: {e}"))?;
+        let get = LirRelationExpr {
+            lir_id: fresh_lir_id()?,
+            node: LirRelationNode::Get {
+                id: Id::Global(placeholders[relation]),
+                keys: AvailableCollections::new_raw(),
+                plan: GetPlan::PassArrangements,
+            },
+        };
+        let plan = LirRelationExpr {
+            lir_id: fresh_lir_id()?,
+            node: LirRelationNode::Mfp {
+                input: Box::new(get),
+                mfp,
+                input_key_val: None,
+            },
+        };
+        let id = fresh();
+        // From here on, `Get`s of the relation read the pushdown object.
+        placeholders.insert(*relation, id);
+        objects.push(EnvelopeObject { id, plan });
+    }
+
+    for build in &df.objects_to_build {
+        placeholders.insert(build.id, fresh());
+    }
+    for build in &df.objects_to_build {
+        let mut plan = build.plan.clone();
+        substitute_global_ids(&mut plan, &placeholders);
+        objects.push(EnvelopeObject {
+            id: placeholders[&build.id],
+            plan,
+        });
+    }
+
+    Ok(LirPlanEnvelope {
+        lir_version: LIR_VERSION,
+        imports,
+        objects,
+        output: placeholders[&output],
+    })
+}
+
+/// The largest LIR id in `plan`.
+fn max_lir_id(plan: &LirRelationExpr) -> u64 {
+    let mut max = 0;
+    let mut stack = vec![plan];
+    while let Some(expr) = stack.pop() {
+        max = max.max(expr.lir_id.0);
+        stack.extend(expr.node.children());
+    }
+    max
+}
+
+/// Plans source operators the way rendering does, and translates the plan to LIR.
+///
+/// Planning extracts temporal predicates into bounds first, so operators with `mz_now()`
+/// translate as long as it only appears in such predicates.
+fn pushdown_plan(
+    operators: &MapFilterProject<MirScalarExpr>,
+) -> Result<MfpPlan<LirScalarExpr>, String> {
+    let (safe, lower, upper) = operators.clone().into_plan()?.into_parts();
+    let translate_one = |expr: &MirScalarExpr| {
+        LirScalarExpr::try_from(expr)
+            .map_err(|funcs| format!("LIR cannot express {}", separated(", ", funcs)))
+    };
+    let translate = |exprs: &[MirScalarExpr]| {
+        exprs
+            .iter()
+            .map(translate_one)
+            .collect::<Result<Vec<_>, _>>()
+    };
+    let mfp = safe.into_mfp();
+    let predicates = mfp
+        .predicates
+        .iter()
+        .map(|(position, predicate)| Ok((*position, translate_one(predicate)?)))
+        .collect::<Result<Vec<_>, String>>()?;
+    let mfp = MapFilterProject {
+        expressions: translate(&mfp.expressions)?,
+        predicates,
+        projection: mfp.projection,
+        input_arity: mfp.input_arity,
+    };
+    Ok(MfpPlan::from_parts(
+        SafeMfpPlan::from_mfp(mfp),
+        translate(&lower)?,
+        translate(&upper)?,
+    ))
+}
+
+/// Checks that extracting `df`, printing and parsing the envelope, and mapping its
+/// placeholders back restores the imports and objects of `df`, up to the pushdown rewrite of
+/// [`extract_envelope`].
+///
+/// Names in the envelope are the ids' display strings. The last built object is the output.
+pub(crate) fn check_extract_round_trip(df: &LirDataflowDescription) -> Result<(), String> {
+    let Some(output) = df.objects_to_build.last() else {
+        return Ok(());
+    };
+    let envelope = extract_envelope(df, output.id, &|id| id.to_string())?;
+    let json = envelope_to_json(&envelope);
+    let parsed = parse_envelope(&json).map_err(|e| {
+        format!(
+            "{e}, the printed envelope nests {} levels",
+            json_depth(&json)
+        )
+    })?;
+    if parsed != envelope {
+        return Err("parsing the printed envelope does not restore it".to_string());
+    }
+    restore_and_compare(df, output.id, &parsed)
+}
+
+/// Maps the placeholders of `envelope`, extracted from `df` with `output` and display-string
+/// names, back to the ids of `df`, and compares the result to `df`.
+fn restore_and_compare(
+    df: &LirDataflowDescription,
+    output: GlobalId,
+    envelope: &LirPlanEnvelope,
+) -> Result<(), String> {
+    let resolve = |source: &ImportSource| match source {
+        ImportSource::Name(name) => name
+            .parse::<GlobalId>()
+            .map_err(|e| format!("import name {name}: {e}")),
+        ImportSource::Item { .. } => Err(format!("unexpected resolved import {source:?}")),
+    };
+    // Placeholders to original ids.
+    let mut originals = BTreeMap::new();
+    fn bind(
+        originals: &mut BTreeMap<GlobalId, GlobalId>,
+        placeholder: GlobalId,
+        original: GlobalId,
+    ) -> Result<(), String> {
+        match originals.insert(placeholder, original) {
+            None => Ok(()),
+            Some(_) => Err(format!("placeholder {placeholder} is bound twice")),
+        }
+    }
+
+    let mut persist = BTreeSet::new();
+    let mut indexes = BTreeMap::new();
+    for import in &envelope.imports {
+        let relation = resolve(&import.source)?;
+        bind(&mut originals, import.id, relation)?;
+        if import.persist {
+            persist.insert(relation);
+        }
+        for index in &import.indexes {
+            indexes.insert(resolve(index)?, relation);
+        }
+    }
+    let expected: BTreeSet<_> = df.source_imports.keys().copied().collect();
+    if persist != expected {
+        return Err(format!(
+            "persist imports {persist:?} differ from the source imports {expected:?}"
+        ));
+    }
+    let expected: BTreeMap<_, _> = df
+        .index_imports
+        .iter()
+        .map(|(index, import)| (*index, import.desc.on_id))
+        .collect();
+    if indexes != expected {
+        return Err(format!(
+            "index imports {indexes:?} differ from the original index imports {expected:?}"
+        ));
+    }
+
+    let pushdowns = envelope
+        .objects
+        .len()
+        .checked_sub(df.objects_to_build.len())
+        .ok_or_else(|| "the envelope has fewer objects than the dataflow".to_string())?;
+    let (pushdown_objects, objects) = envelope.objects.split_at(pushdowns);
+    let mut pushed = BTreeSet::new();
+    for object in pushdown_objects {
+        let LirRelationNode::Mfp {
+            input,
+            mfp,
+            input_key_val: None,
+        } = &object.plan.node
+        else {
+            return Err(format!("pushdown object {} is not an Mfp", object.id));
+        };
+        let LirRelationNode::Get {
+            id: Id::Global(placeholder),
+            plan: GetPlan::PassArrangements,
+            ..
+        } = &input.node
+        else {
+            return Err(format!(
+                "pushdown object {} does not read an import",
+                object.id
+            ));
+        };
+        let relation = *originals
+            .get(placeholder)
+            .ok_or_else(|| format!("pushdown object {} reads {placeholder}", object.id))?;
+        let operators = df
+            .source_imports
+            .get(&relation)
+            .and_then(|import| import.desc.arguments.operators.as_ref())
+            .ok_or_else(|| format!("{relation} has no source operators"))?;
+        if *mfp != pushdown_plan(operators)? {
+            return Err(format!(
+                "the pushdown of {relation} differs from its operators"
+            ));
+        }
+        pushed.insert(relation);
+        bind(&mut originals, object.id, relation)?;
+    }
+    let expected: BTreeSet<_> = df
+        .source_imports
+        .iter()
+        .filter(|(_, import)| {
+            import
+                .desc
+                .arguments
+                .operators
+                .as_ref()
+                .is_some_and(|operators| !operators.is_identity())
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    if pushed != expected {
+        return Err(format!(
+            "pushdown objects for {pushed:?} differ from the sources with operators {expected:?}"
+        ));
+    }
+
+    for (index, object) in objects.iter().enumerate() {
+        bind(&mut originals, object.id, df.objects_to_build[index].id)?;
+    }
+    for (index, object) in objects.iter().enumerate() {
+        let original = &df.objects_to_build[index];
+        let mut plan = object.plan.clone();
+        substitute_global_ids(&mut plan, &originals);
+        if plan != original.plan {
+            return Err(format!(
+                "object {} differs after the round trip:\n{:?}\n!=\n{:?}",
+                original.id, plan, original.plan
+            ));
+        }
+    }
+    if originals.get(&envelope.output) != Some(&output) {
+        return Err(format!(
+            "output {} does not map back to {output}",
+            envelope.output
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

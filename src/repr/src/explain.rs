@@ -63,6 +63,8 @@ pub enum ExplainFormat {
     Text,
     Json,
     Dot,
+    /// The envelope of a physical plan, which only the adapter produces.
+    LirJson,
 }
 
 impl fmt::Display for ExplainFormat {
@@ -71,6 +73,7 @@ impl fmt::Display for ExplainFormat {
             ExplainFormat::Text => f.write_str("TEXT"),
             ExplainFormat::Json => f.write_str("JSON"),
             ExplainFormat::Dot => f.write_str("DOT"),
+            ExplainFormat::LirJson => f.write_str("LIR JSON"),
         }
     }
 }
@@ -308,6 +311,7 @@ pub trait Explain<'a>: 'a {
             ExplainFormat::Text => self.explain_text(context).map(|e| text_string(&e)),
             ExplainFormat::Json => self.explain_json(context).map(|e| json_string(&e)),
             ExplainFormat::Dot => self.explain_dot(context).map(|e| dot_string(&e)),
+            ExplainFormat::LirJson => Err(ExplainError::UnsupportedFormat(ExplainFormat::LirJson)),
         }
     }
 
