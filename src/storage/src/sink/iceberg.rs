@@ -998,8 +998,7 @@ fn struct_is_compatible(current: &StructType, expected: &StructType) -> bool {
 }
 
 fn field_is_compatible(current: &NestedField, expected: &NestedField) -> bool {
-    current.id == expected.id
-        && current.name == expected.name
+    current.name == expected.name
         && current.required == expected.required
         && match (&*current.field_type, &*expected.field_type) {
             // A uuid column written before uuids became strings.
