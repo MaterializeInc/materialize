@@ -438,8 +438,17 @@ def source_late_binding(c: Composition, interference: str, before_commit: bool) 
                         break
                     assert time.monotonic() < deadline, (schema, final_id, frontier)
                     time.sleep(0.1)
-                rows = execute(other, f"SELECT count(*) FROM {schema}.final").fetchall()
-                assert rows == [(3,)], (schema, rows)
+                rows = execute(
+                    other, f"SELECT * FROM {schema}.final ORDER BY 1"
+                ).fetchall()
+                if rows != [(1,), (2,), (3,)]:
+                    for statement in [
+                        f"SHOW CREATE SOURCE {schema}.source",
+                        f"SHOW CREATE TABLE {schema}.final",
+                        f"SELECT * FROM mz_internal.mz_frontiers WHERE object_id = '{final_id}'",
+                    ]:
+                        print(execute(other, statement).fetchall(), flush=True)
+                assert rows == [(1,), (2,), (3,)], (schema, rows)
             else:
                 assert state is not None, f"{schema}: unexpectedly committed"
                 assert after == before, (schema, before, after)
