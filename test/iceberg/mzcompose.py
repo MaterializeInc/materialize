@@ -248,6 +248,32 @@ def workflow_finite_source(c: Composition) -> None:
     )
 
 
+def workflow_restart_nested_column(c: Composition) -> None:
+    """A sink over a relation with an array column must survive a restart.
+    The REST catalog assigns its own field ids when it creates the table,
+    numbering a struct's direct children before any nested field, while the
+    sink numbers depth-first. On resume the two schemas differ only in ids
+    and the sink must still accept the table (SS-522). A flat relation is
+    sunk alongside as the control: its ids coincide under both schemes."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "restart-nested-column.td",
+    )
+
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.run_testdrive_files(
+        "--no-reset",
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "restart-nested-column-verify.td",
+    )
+
+
 def workflow_alter_table_add_column(c: Composition) -> None:
     """A sink pointed at an Iceberg table whose schema is narrower than the
     sink's input relation must not panic the storage worker. The writer builds
