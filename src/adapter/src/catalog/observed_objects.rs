@@ -30,89 +30,7 @@ use mz_sql::session::vars::OwnedVarInput;
 
 use super::{CatalogReadRecorder, CatalogState, ConnCatalog, ConnectionId};
 
-trait CatalogObject: 'static {
-    type Key: Clone + Debug + Send + Sync + 'static;
-
-    fn lookup<'a>(state: &'a CatalogState, key: &Self::Key) -> Option<&'a Self>;
-}
-
-macro_rules! keyed_object {
-    ($object:ty, $key:ty, $state:ident, $id:ident, $lookup:expr) => {
-        impl CatalogObject for $object {
-            type Key = $key;
-
-            fn lookup<'a>($state: &'a CatalogState, $id: &Self::Key) -> Option<&'a Self> {
-                $lookup
-            }
-        }
-    };
-}
-
-keyed_object!(
-    Database,
-    DatabaseId,
-    state,
-    id,
-    state.database_by_id.get(id)
-);
-keyed_object!(Role, RoleId, state, id, state.roles_by_id.get(id));
-keyed_object!(NetworkPolicy, NetworkPolicyId, state, id, {
-    state.network_policies_by_id.get(id)
-});
-keyed_object!(Cluster, ClusterId, state, id, state.clusters_by_id.get(id));
-keyed_object!(ClusterReplica, (ClusterId, ReplicaId), state, id, {
-    state.clusters_by_id.get(&id.0)?.replica(id.1)
-});
-keyed_object!(
-    Schema,
-    (ResolvedDatabaseSpecifier, SchemaSpecifier, ConnectionId),
-    state,
-    id,
-    state.try_get_schema(&id.0, &id.1, &id.2)
-);
-
-#[derive(Debug)]
-struct Observed<'a, T: CatalogObject> {
-    inner: &'a T,
-    key: T::Key,
-    recorder: CatalogReadRecorder,
-}
-
-impl<'a, T: CatalogObject> Observed<'a, T> {
-    fn new(inner: &'a T, key: T::Key, recorder: CatalogReadRecorder) -> Self {
-        let lookup_key = key.clone();
-        recorder.record("object exists", true, move |state| {
-            T::lookup(state, &lookup_key).is_some()
-        });
-        Self {
-            inner,
-            key,
-            recorder,
-        }
-    }
-
-    fn observe<U>(&self, label: &'static str, read: impl Fn(&T) -> U + Send + Sync + 'static)
-    where
-        U: PartialEq + Send + Sync + 'static,
-    {
-        let key = self.key.clone();
-        self.recorder
-            .record(label, Some(read(self.inner)), move |state| {
-                T::lookup(state, &key).map(&read)
-            });
-    }
-}
-
-macro_rules! properties {
-    ($($name:ident -> $result:ty => $read:expr;)*) => {
-        $(
-            fn $name(&self) -> $result {
-                self.observe(stringify!($name), $read);
-                self.inner.$name()
-            }
-        )*
-    };
-}
+use storage::Observed;
 
 macro_rules! factory {
     ($name:ident, $object:ty, $result:ident, $inner:ident, $key:expr) => {
@@ -191,115 +109,231 @@ impl ConnCatalog<'_> {
     }
 }
 
+macro_rules! properties {
+    ($($name:ident -> $result:ty => $value:ident => $snapshot:expr;)*) => {
+        $(
+            fn $name(&self) -> $result {
+                self.read(stringify!($name), |inner| inner.$name(), |inner| {
+                    let $value = inner.$name();
+                    $snapshot
+                })
+            }
+        )*
+    };
+}
+
 impl CatalogDatabase for Observed<'_, Database> {
     properties! {
-        name -> &str => |database| database.name().to_owned();
-        id -> DatabaseId => |database| database.id();
-        has_schemas -> bool => |database| database.has_schemas();
-        schema_ids -> &BTreeMap<String, SchemaId> => |database| database.schema_ids().clone();
-        owner_id -> RoleId => |database| database.owner_id();
-        privileges -> &PrivilegeMap => |database| database.privileges().clone();
+        name -> &str => value => value.to_owned();
+        id -> DatabaseId => value => value;
+        has_schemas -> bool => value => value;
+        schema_ids -> &BTreeMap<String, SchemaId> => value => value.clone();
+        owner_id -> RoleId => value => value;
+        privileges -> &PrivilegeMap => value => value.clone();
     }
-
     fn schemas(&self) -> Vec<CatalogSchemaRef<'_>> {
-        self.observe("schemas", |database| {
-            database.schemas_by_id.keys().copied().collect::<Vec<_>>()
-        });
-        self.inner
-            .schemas_by_id
-            .values()
-            .map(|schema| self.recorder.schema(schema, &SYSTEM_CONN_ID))
-            .collect()
+        self.schema_views()
     }
 }
 
 impl CatalogSchema for Observed<'_, Schema> {
     properties! {
-        database -> &ResolvedDatabaseSpecifier => |schema| *schema.database();
-        name -> &QualifiedSchemaName => |schema| schema.name().clone();
-        id -> &SchemaSpecifier => |schema| *schema.id();
-        has_items -> bool => |schema| schema.has_items();
+        database -> &ResolvedDatabaseSpecifier => value => *value;
+        name -> &QualifiedSchemaName => value => value.clone();
+        id -> &SchemaSpecifier => value => *value;
+        has_items -> bool => value => value;
         item_ids -> Box<dyn Iterator<Item = CatalogItemId> + '_> =>
-            |schema| schema.item_ids().collect::<Vec<_>>();
-        owner_id -> RoleId => |schema| schema.owner_id();
-        privileges -> &PrivilegeMap => |schema| schema.privileges().clone();
+            value => value.collect::<Vec<_>>();
+        owner_id -> RoleId => value => value;
+        privileges -> &PrivilegeMap => value => value.clone();
     }
 }
 
 impl CatalogRole for Observed<'_, Role> {
     properties! {
-        name -> &str => |role| role.name().to_owned();
-        id -> RoleId => |role| role.id();
-        membership -> &BTreeMap<RoleId, RoleId> => |role| role.membership().clone();
-        attributes -> &RoleAttributes => |role| role.attributes().clone();
+        name -> &str => value => value.to_owned();
+        id -> RoleId => value => value;
+        membership -> &BTreeMap<RoleId, RoleId> => value => value.clone();
+        attributes -> &RoleAttributes => value => value.clone();
     }
-
     fn vars(&self) -> &BTreeMap<String, OwnedVarInput> {
-        self.observe("vars", |role| CatalogRole::vars(role).clone());
-        CatalogRole::vars(self.inner)
+        self.read("vars", CatalogRole::vars, |role| {
+            CatalogRole::vars(role).clone()
+        })
     }
 }
 
 impl CatalogNetworkPolicy for Observed<'_, NetworkPolicy> {
     properties! {
-        name -> &str => |policy| policy.name().to_owned();
-        id -> NetworkPolicyId => |policy| policy.id();
-        owner_id -> RoleId => |policy| policy.owner_id();
-        privileges -> &PrivilegeMap => |policy| policy.privileges().clone();
+        name -> &str => value => value.to_owned();
+        id -> NetworkPolicyId => value => value;
+        owner_id -> RoleId => value => value;
+        privileges -> &PrivilegeMap => value => value.clone();
     }
 }
 
 impl CatalogCluster<'_> for Observed<'_, Cluster> {
     properties! {
-        name -> &str => |cluster| cluster.name().to_owned();
-        id -> ClusterId => |cluster| cluster.id();
-        bound_objects -> &BTreeSet<CatalogItemId> => |cluster| cluster.bound_objects().clone();
-        owner_id -> RoleId => |cluster| cluster.owner_id();
-        privileges -> &PrivilegeMap => |cluster| cluster.privileges().clone();
-        is_managed -> bool => |cluster| cluster.is_managed();
-        managed_size -> Option<&str> => |cluster| cluster.managed_size().map(str::to_owned);
-        schedule -> Option<&ClusterSchedule> => |cluster| cluster.schedule().cloned();
-        replication_factor -> Option<u32> => |cluster| cluster.replication_factor();
-        auto_scaling_strategy -> Option<&AutoScalingStrategy> =>
-            |cluster| cluster.auto_scaling_strategy().cloned();
-        try_to_plan -> Result<CreateClusterPlan, ClusterPlanError> =>
-            |cluster| cluster.try_to_plan();
+        name -> &str => value => value.to_owned();
+        id -> ClusterId => value => value;
+        bound_objects -> &BTreeSet<CatalogItemId> => value => value.clone();
+        owner_id -> RoleId => value => value;
+        privileges -> &PrivilegeMap => value => value.clone();
+        is_managed -> bool => value => value;
+        managed_size -> Option<&str> => value => value.map(str::to_owned);
+        schedule -> Option<&ClusterSchedule> => value => value.cloned();
+        replication_factor -> Option<u32> => value => value;
+        auto_scaling_strategy -> Option<&AutoScalingStrategy> => value => value.cloned();
+        try_to_plan -> Result<CreateClusterPlan, ClusterPlanError> => value => value;
     }
-
     fn replica_id(&self, name: &str) -> Option<ReplicaId> {
         let observed_name = name.to_owned();
-        self.observe("replica name", move |cluster| {
-            cluster.replica_id(&observed_name)
-        });
-        self.inner.replica_id(name)
+        self.read(
+            "replica name",
+            |cluster| cluster.replica_id(name),
+            move |cluster| cluster.replica_id(&observed_name),
+        )
     }
-
     fn replicas(&self) -> Vec<CatalogClusterReplicaRef<'_>> {
-        self.observe("replicas", |cluster| {
-            cluster
-                .replicas()
-                .map(|replica| replica.replica_id)
-                .collect::<Vec<_>>()
-        });
-        self.inner
-            .replicas()
-            .map(|replica| self.recorder.replica(replica))
-            .collect()
+        self.replica_views()
     }
-
     fn replica(&self, id: ReplicaId) -> CatalogClusterReplicaRef<'_> {
-        self.recorder
-            .replica(self.inner.replica(id).expect("catalog out of sync"))
+        self.replica_view(id)
     }
 }
 
 impl CatalogClusterReplica<'_> for Observed<'_, ClusterReplica> {
     properties! {
-        name -> &str => |replica| replica.name().to_owned();
-        cluster_id -> ClusterId => |replica| replica.cluster_id();
-        replica_id -> ReplicaId => |replica| replica.replica_id();
-        owner_id -> RoleId => |replica| replica.owner_id();
-        internal -> bool => |replica| replica.internal();
+        name -> &str => value => value.to_owned();
+        cluster_id -> ClusterId => value => value;
+        replica_id -> ReplicaId => value => value;
+        owner_id -> RoleId => value => value;
+        internal -> bool => value => value;
+    }
+}
+
+// Raw catalog objects stay behind this boundary. Accessors must supply a
+// snapshot covering their read or use a nested view that retains the recorder.
+mod storage {
+    use super::*;
+
+    pub(super) trait CatalogObject: 'static {
+        type Key: Clone + Debug + Send + Sync + 'static;
+
+        fn lookup<'a>(state: &'a CatalogState, key: &Self::Key) -> Option<&'a Self>;
+    }
+
+    macro_rules! keyed_object {
+        ($object:ty, $key:ty, $state:ident, $id:ident, $lookup:expr) => {
+            impl CatalogObject for $object {
+                type Key = $key;
+
+                fn lookup<'a>($state: &'a CatalogState, $id: &Self::Key) -> Option<&'a Self> {
+                    $lookup
+                }
+            }
+        };
+    }
+
+    keyed_object!(
+        Database,
+        DatabaseId,
+        state,
+        id,
+        state.database_by_id.get(id)
+    );
+    keyed_object!(Role, RoleId, state, id, state.roles_by_id.get(id));
+    keyed_object!(NetworkPolicy, NetworkPolicyId, state, id, {
+        state.network_policies_by_id.get(id)
+    });
+    keyed_object!(Cluster, ClusterId, state, id, state.clusters_by_id.get(id));
+    keyed_object!(ClusterReplica, (ClusterId, ReplicaId), state, id, {
+        state.clusters_by_id.get(&id.0)?.replica(id.1)
+    });
+    keyed_object!(
+        Schema,
+        (ResolvedDatabaseSpecifier, SchemaSpecifier, ConnectionId),
+        state,
+        id,
+        state.try_get_schema(&id.0, &id.1, &id.2)
+    );
+
+    #[derive(Debug)]
+    pub(super) struct Observed<'a, T: CatalogObject> {
+        inner: &'a T,
+        key: T::Key,
+        recorder: CatalogReadRecorder,
+    }
+
+    impl<'a, T: CatalogObject> Observed<'a, T> {
+        pub(super) fn read<'s, R, O>(
+            &'s self,
+            label: &'static str,
+            read: impl FnOnce(&'s T) -> R,
+            snapshot: impl Fn(&T) -> O + Send + Sync + 'static,
+        ) -> R
+        where
+            O: PartialEq + Send + Sync + 'static,
+        {
+            self.observe(label, snapshot);
+            read(self.inner)
+        }
+
+        pub(super) fn new(inner: &'a T, key: T::Key, recorder: CatalogReadRecorder) -> Self {
+            let lookup_key = key.clone();
+            recorder.record("object exists", true, move |state| {
+                T::lookup(state, &lookup_key).is_some()
+            });
+            Self {
+                inner,
+                key,
+                recorder,
+            }
+        }
+
+        fn observe<U>(&self, label: &'static str, read: impl Fn(&T) -> U + Send + Sync + 'static)
+        where
+            U: PartialEq + Send + Sync + 'static,
+        {
+            let key = self.key.clone();
+            self.recorder
+                .record(label, Some(read(self.inner)), move |state| {
+                    T::lookup(state, &key).map(&read)
+                });
+        }
+    }
+
+    impl Observed<'_, Database> {
+        pub(super) fn schema_views(&self) -> Vec<CatalogSchemaRef<'_>> {
+            self.observe("schemas", |database| {
+                database.schemas_by_id.keys().copied().collect::<Vec<_>>()
+            });
+            self.inner
+                .schemas_by_id
+                .values()
+                .map(|schema| self.recorder.schema(schema, &SYSTEM_CONN_ID))
+                .collect()
+        }
+    }
+
+    impl Observed<'_, Cluster> {
+        pub(super) fn replica_views(&self) -> Vec<CatalogClusterReplicaRef<'_>> {
+            self.observe("replicas", |cluster| {
+                cluster
+                    .replicas()
+                    .map(|replica| replica.replica_id)
+                    .collect::<Vec<_>>()
+            });
+            self.inner
+                .replicas()
+                .map(|replica| self.recorder.replica(replica))
+                .collect()
+        }
+
+        pub(super) fn replica_view(&self, id: ReplicaId) -> CatalogClusterReplicaRef<'_> {
+            self.recorder
+                .replica(self.inner.replica(id).expect("catalog out of sync"))
+        }
     }
 }
 
@@ -312,6 +346,49 @@ mod tests {
     use crate::AdapterError;
     use crate::catalog::{Catalog, Op};
     use crate::session::DEFAULT_DATABASE_NAME;
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // Catalog bootstrap uses unsupported foreign functions.
+    async fn nested_replica_names_do_not_broaden_membership_reads() {
+        Catalog::with_debug(|catalog| async move {
+            let mut state = catalog.state().clone();
+            let membership_reads = CatalogReadRecorder::default();
+            let direct_reads = CatalogReadRecorder::default();
+            let enumerated_reads = CatalogReadRecorder::default();
+            let (cluster_id, replica_id) = {
+                let cluster = state
+                    .clusters_by_id
+                    .values()
+                    .find(|cluster| cluster.replicas().next().is_some())
+                    .expect("bootstrap cluster with a replica");
+                let replica_id = cluster.replicas().next().expect("replica").replica_id;
+                assert!(!membership_reads.cluster(cluster).replicas().is_empty());
+                let observed = direct_reads.cluster(cluster);
+                assert!(!observed.replica(replica_id).name().is_empty());
+                for replica in enumerated_reads.cluster(cluster).replicas() {
+                    assert!(!replica.name().is_empty());
+                }
+                (cluster.id, replica_id)
+            };
+            state
+                .clusters_by_id
+                .get_mut(&cluster_id)
+                .expect("cluster")
+                .replicas_by_id_
+                .get_mut(&replica_id)
+                .expect("replica")
+                .name = "renamed_replica".to_owned();
+            assert!(membership_reads.snapshot().check(&state).is_ok());
+            for reads in [direct_reads, enumerated_reads] {
+                assert!(matches!(
+                    reads.snapshot().check(&state),
+                    Err(AdapterError::DDLTransactionRace)
+                ));
+            }
+            catalog.expire().await;
+        })
+        .await;
+    }
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // Catalog bootstrap uses unsupported foreign functions.
