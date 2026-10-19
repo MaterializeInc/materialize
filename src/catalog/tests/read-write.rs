@@ -220,6 +220,88 @@ async fn test_dry_run_transaction_rejects_mem_replace_escape() {
 }
 
 #[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_dry_run_fork_preserves_parent_commit() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let mut state = TestCatalogStateBuilder::new(persist_client)
+        .with_default_deploy_generation()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .expect("open catalog");
+    let _ = state
+        .sync_to_current_updates()
+        .await
+        .expect("drain bootstrap");
+    let event = |id, name: &str| {
+        VersionedEvent::V1(EventV1 {
+            id,
+            event_type: EventType::Create,
+            object_type: mz_audit_log::ObjectType::View,
+            details: EventDetails::IdNameV1(IdNameV1 {
+                id: "u1".to_string(),
+                name: name.to_string(),
+            }),
+            user: None,
+            occurred_at: 1,
+        })
+    };
+    let mut parent = state.transaction().await.expect("open parent");
+    parent
+        .set_setting("fork_isolation".into(), Some("parent".into()))
+        .expect("write parent setting");
+    let prefix_event = event(
+        parent
+            .allocate_audit_log_id()
+            .expect("allocate prefix audit"),
+        "prefix",
+    );
+    parent.insert_audit_log_event(prefix_event.clone());
+    let before = parent.current_snapshot();
+
+    let (fork_audit_id, fork_event) = {
+        let mut fork = parent.fork_dry_run().expect("fork parent");
+        assert_eq!(fork.current_snapshot(), before, "fork sees pending writes");
+        let fork = fork.transaction_mut();
+        fork.set_setting("fork_isolation".into(), Some("fork".into()))
+            .expect("write fork setting");
+        let fork_audit_id = fork.allocate_audit_log_id().expect("allocate fork audit");
+        let fork_event = event(fork_audit_id, "discarded");
+        fork.insert_audit_log_event(fork_event.clone());
+        let _ = fork.get_and_commit_op_updates();
+        (fork_audit_id, fork_event)
+    };
+
+    assert_eq!(
+        parent.current_snapshot(),
+        before,
+        "fork does not alter parent"
+    );
+    assert_eq!(
+        parent
+            .allocate_audit_log_id()
+            .expect("allocate parent audit"),
+        fork_audit_id,
+        "discarded fork does not consume IDs"
+    );
+    let commit_ts = parent.upper();
+    let expected = parent.current_snapshot();
+    parent.commit(commit_ts).await.expect("commit parent");
+    assert_eq!(
+        state.snapshot().await.expect("read committed state"),
+        expected
+    );
+    let audit = state.get_audit_logs().await.expect("read audit events");
+    assert!(audit.contains(&prefix_event), "parent audit survives fork");
+    assert!(
+        !audit.contains(&fork_event),
+        "fork audit must not be committed"
+    );
+    Box::new(state).expire().await;
+}
+
+#[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_advance_upper_at_least_semantics() {
     let persist_client = PersistClient::new_for_tests().await;
