@@ -19,8 +19,8 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::channels::pact::Pipeline;
 
-use crate::operators::arrange::{Agent, AgentWriter, Arranged, TraceAgent};
-use crate::trace::{BatchCursor, BatchDiff, BatchKey, BatchReader, BatchVal, BatchValOwn, Builder, Cursor, Description, ExertionLogic, Navigable, Trace, TraceReader};
+use crate::operators::arrange::{Agent, ArrangeContext, Arranged, TraceAgent, Writer};
+use crate::trace::{BatchCursor, BatchDiff, BatchKey, BatchReader, BatchVal, BatchValOwn, Builder, Cursor, Description, Navigable, Trace, TraceReader};
 use crate::trace::cursor::cursor_list;
 use crate::trace::implementations::containers::BatchContainer;
 
@@ -123,33 +123,41 @@ where
     Tr2: Trace<Time = Tr1::Time> + 'static,
     T: ReduceTactic<Tr1::Batch, Tr2::Batch> + 'static,
 {
-    reduce_with_tactic_and_agent::<_, _, _, TraceAgent<Tr2>>(trace, name, tactic)
+    reduce_with_tactic_with(trace, name, tactic, TraceAgent::<Tr2>::factory())
 }
 
-/// As [`reduce_trace`], maintaining the output trace behind an agent of type `A`.
-pub fn reduce_trace_with_agent<'scope, Tr1, Bu, Tr2, KC, L, P, A>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P) -> Arranged<'scope, A>
+/// As [`reduce_trace`], maintaining the output trace behind the agent and writer `factory`
+/// returns.
+///
+/// `factory` is called once, when the operator is built. See [`reduce_with_tactic_with`].
+pub fn reduce_trace_with<'scope, Tr1, Bu, A, KC, L, P, F>(trace: Arranged<'scope, Tr1>, name: &str, logic: L, push: P, factory: F) -> Arranged<'scope, A>
 where
     Tr1: TraceReader<Batch: Navigable> + 'static,
-    Tr2: Trace<Batch: Navigable, Time = Tr1::Time> + 'static,
+    A: Agent<Batch: Navigable, Time = Tr1::Time> + 'static,
     KC: BatchContainer,
     BatchCursor<Tr1>: Cursor<Time = Tr1::Time, KeyContainer = KC>,
     for<'a> BatchCursor<Tr1>: Cursor<Key<'a> = KC::ReadItem<'a>>,
-    for<'a> BatchCursor<Tr2>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = Tr2::Time>,
-    Bu: Builder<Time=Tr2::Time, Output = Tr2::Batch, Input: Default> + 'static,
-    L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>, &mut Vec<(BatchValOwn<Tr2>, BatchDiff<Tr2>)>)+'static,
-    P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<Tr2>, Tr2::Time, BatchDiff<Tr2>)>) + 'static,
-    A: Agent<Tr2> + 'static,
+    for<'a> BatchCursor<A>: Cursor<Key<'a> = KC::ReadItem<'a>, ValOwn: Data, Time = A::Time>,
+    Bu: Builder<Time=A::Time, Output = A::Batch, Input: Default> + 'static,
+    L: FnMut(KC::ReadItem<'_>, &[(BatchVal<'_, Tr1>, BatchDiff<Tr1>)], &mut Vec<(BatchValOwn<A>, BatchDiff<A>)>, &mut Vec<(BatchValOwn<A>, BatchDiff<A>)>)+'static,
+    P: FnMut(&mut Bu::Input, KC::ReadItem<'_>, &mut Vec<(BatchValOwn<A>, A::Time, BatchDiff<A>)>) + 'static,
+    F: FnOnce(ArrangeContext) -> (A, A::Writer),
 {
-    reduce_with_tactic_and_agent::<_, _, _, A>(trace, name, cursors::CursorTactic::<Tr1::Batch, Tr2::Batch, Bu, L, P>::new(logic, push))
+    reduce_with_tactic_with(trace, name, cursors::CursorTactic::<Tr1::Batch, A::Batch, Bu, L, P>::new(logic, push), factory)
 }
 
-/// As [`reduce_with_tactic`], maintaining the output trace behind an agent of type `A`.
-pub fn reduce_with_tactic_and_agent<'scope, Tr1, Tr2, T, A>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T) -> Arranged<'scope, A>
+/// As [`reduce_with_tactic`], maintaining the output trace behind the agent and writer `factory`
+/// returns.
+///
+/// `factory` is called once, when the operator is built. The operator reads its prior output
+/// through its clone of the agent, and returns another clone in the `Arranged`. See [`Agent`]
+/// for the contract.
+pub fn reduce_with_tactic_with<'scope, Tr1, A, T, F>(trace: Arranged<'scope, Tr1>, name: &str, mut tactic: T, factory: F) -> Arranged<'scope, A>
 where
     Tr1: TraceReader + 'static,
-    Tr2: Trace<Time = Tr1::Time> + 'static,
-    T: ReduceTactic<Tr1::Batch, Tr2::Batch> + 'static,
-    A: Agent<Tr2> + 'static,
+    A: Agent<Time = Tr1::Time> + 'static,
+    T: ReduceTactic<Tr1::Batch, A::Batch> + 'static,
+    F: FnOnce(ArrangeContext) -> (A, A::Writer),
 {
     let mut result_trace = None;
 
@@ -161,17 +169,7 @@ where
         let scope = trace.stream.scope();
         trace.stream.unary_frontier(Pipeline, name, move |_capability, operator_info| {
 
-            // Acquire a logger for arrange events.
-            let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
-
-            let activator = Some(scope.activator_for(std::rc::Rc::clone(&operator_info.address)));
-            let mut empty = Tr2::new(operator_info.clone(), logger.clone(), activator);
-            // If there is default exert logic set, install it.
-            if let Some(exert_logic) = scope.worker().config().get::<ExertionLogic>("differential/default_exert_logic").cloned() {
-                empty.set_exert_logic(exert_logic);
-            }
-
-            let (mut output_reader, mut output_writer) = A::new(empty, operator_info, logger);
+            let (mut output_reader, mut output_writer) = factory(ArrangeContext::new(&scope, operator_info));
 
             *result_trace = Some(output_reader.clone());
 

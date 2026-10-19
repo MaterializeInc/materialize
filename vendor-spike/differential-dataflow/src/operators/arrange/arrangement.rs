@@ -36,7 +36,7 @@ use trace::wrappers::enter::{TraceEnter, BatchEnter,};
 use trace::wrappers::enter_at::TraceEnter as TraceEnterAt;
 use trace::wrappers::enter_at::BatchEnter as BatchEnterAt;
 
-use super::{Agent, AgentWriter, TraceAgent};
+use super::{Agent, ArrangeContext, Writer, TraceAgent};
 
 /// An arranged collection of `(K,V)` values.
 ///
@@ -358,19 +358,21 @@ where
     Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output = Tr::Batch>,
     Tr: Trace+'static,
 {
-    arrange_core_with_agent::<_, _, Chu, Ba, Bu, Tr, TraceAgent<Tr>>(stream, pact, name)
+    arrange_core_with::<_, _, Chu, Ba, Bu, _, _>(stream, pact, name, TraceAgent::<Tr>::factory())
 }
 
-/// As [`arrange_core`], maintaining the trace behind an agent of type `A`.
-pub fn arrange_core_with_agent<'scope, P, C, Chu, Ba, Bu, Tr, A>(stream: Stream<'scope, Tr::Time, C>, pact: P, name: &str) -> Arranged<'scope, A>
+/// As [`arrange_core`], maintaining the trace behind the agent and writer `factory` returns.
+///
+/// `factory` is called once, when the operator is built. See [`Agent`] for the contract.
+pub fn arrange_core_with<'scope, P, C, Chu, Ba, Bu, A, F>(stream: Stream<'scope, A::Time, C>, pact: P, name: &str, factory: F) -> Arranged<'scope, A>
 where
     C: Container + Clone + 'static,
-    P: ParallelizationContract<Tr::Time, C>,
+    P: ParallelizationContract<A::Time, C>,
     Chu: ContainerBuilder<Container=Ba::Output> + for<'a> PushInto<&'a mut C> + 'static,
-    Ba: Batcher<Time=Tr::Time> + 'static,
-    Bu: Builder<Time=Tr::Time, Input=Ba::Output, Output = Tr::Batch>,
-    Tr: Trace+'static,
-    A: Agent<Tr> + 'static,
+    Ba: Batcher<Time=A::Time> + 'static,
+    Bu: Builder<Time=A::Time, Input=Ba::Output, Output = A::Batch>,
+    A: Agent + 'static,
+    F: FnOnce(ArrangeContext) -> (A, A::Writer),
 {
     // The `Arrange` operator is tasked with reacting to an advancing input
     // frontier by producing the sequence of batches whose lower and upper
@@ -395,28 +397,20 @@ where
 
     let stream = stream.unary_frontier(pact, name, move |_capability, info| {
 
-        // Acquire a logger for arrange events.
-        let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+        let context = ArrangeContext::new(&scope, info);
 
         // Where we will deposit received updates, and from which we extract batches.
-        let mut batcher = Ba::new(logger.clone(), info.global_id);
+        let mut batcher = Ba::new(context.logger.clone(), context.info.global_id);
 
         // Capabilities for the lower envelope of updates in `batcher`.
-        let mut capabilities = Antichain::<Capability<Tr::Time>>::new();
+        let mut capabilities = Antichain::<Capability<A::Time>>::new();
 
-        let activator = Some(scope.activator_for(std::rc::Rc::clone(&info.address)));
-        let mut empty_trace = Tr::new(info.clone(), logger.clone(), activator);
-        // If there is default exertion logic set, install it.
-        if let Some(exert_logic) = scope.worker().config().get::<trace::ExertionLogic>("differential/default_exert_logic").cloned() {
-            empty_trace.set_exert_logic(exert_logic);
-        }
-
-        let (reader_local, mut writer) = A::new(empty_trace, info, logger);
+        let (reader_local, mut writer) = factory(context);
 
         *reader_ref = Some(reader_local);
 
         // Initialize to the minimal input frontier.
-        let mut prev_frontier = Antichain::from_elem(Tr::Time::minimum());
+        let mut prev_frontier = Antichain::from_elem(<A::Time as Timestamp>::minimum());
 
         let mut chunker = Chu::default();
 

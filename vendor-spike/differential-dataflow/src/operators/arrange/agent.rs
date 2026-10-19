@@ -10,47 +10,95 @@ use timely::progress::Timestamp;
 use timely::progress::{Antichain, frontier::AntichainRef};
 use timely::dataflow::operators::CapabilitySet;
 
-use crate::trace::{Trace, TraceReader, BatchReader};
+use crate::lattice::Lattice;
+use crate::trace::{ExertionLogic, Trace, TraceReader, BatchReader};
 
 use timely::scheduling::Activator;
 
 use super::{TraceWriter, TraceAgentQueueWriter, TraceAgentQueueReader, Arranged};
 
-/// A shared handle to a trace, created together with the writer an arranging operator feeds.
+/// The write endpoint an arranging operator feeds.
 ///
-/// Arranging operators (`arrange_core_with_agent`, `reduce_with_tactic_and_agent`,
-/// `arrange_from_upsert_with_agent`) construct the agent for the trace they maintain, write
-/// through its writer, and read and compact through their own clone of it. [`TraceAgent`] is
-/// the default implementation.
-pub trait Agent<Tr: Trace>: TraceReader<Time = Tr::Time, Batch = Tr::Batch> + Clone {
-    /// The write endpoint the arranging operator inserts batches through.
-    type Writer: AgentWriter<Tr> + 'static;
-    /// Wraps `trace`, maintained by `operator`, into an agent and its writer.
-    fn new(trace: Tr, operator: OperatorInfo, logging: Option<crate::logging::Logger>) -> (Self, Self::Writer);
-}
-
-/// The write endpoint of an [`Agent`].
-pub trait AgentWriter<Tr: Trace> {
+/// The operator inserts every batch it produces, in order, seals the upper when its input
+/// frontier advances without data, and calls [`Writer::exert`] on every activation, including
+/// activations with no new data. What happens on drop belongs to the implementation, and the
+/// operators do not depend on it.
+pub trait Writer {
+    /// The timestamp of the batches written.
+    type Time: Timestamp + Lattice;
+    /// The batch type written.
+    type Batch: BatchReader<Time = Self::Time>;
     /// Appends `batch`, whose lower must equal the previous upper. `hint` is a time at or below
     /// every update in the batch, suitable as a capability, or `None` for an empty batch.
-    fn insert(&mut self, batch: Tr::Batch, hint: Option<Tr::Time>);
+    fn insert(&mut self, batch: Self::Batch, hint: Option<Self::Time>);
     /// Advances the upper to `upper` with an empty batch, if it moves.
-    fn seal(&mut self, upper: Antichain<Tr::Time>);
+    fn seal(&mut self, upper: Antichain<Self::Time>);
     /// Exerts merge effort on the trace, even without new batches.
     fn exert(&mut self);
 }
 
-impl<Tr: Trace + 'static> Agent<Tr> for TraceAgent<Tr> {
-    type Writer = TraceWriter<Tr>;
-    fn new(trace: Tr, operator: OperatorInfo, logging: Option<crate::logging::Logger>) -> (Self, Self::Writer) {
-        TraceAgent::new(trace, operator, logging)
+/// A shared handle to a trace that an arranging operator maintains through [`Agent::Writer`].
+///
+/// The `_with` entry points (`arrange_core_with`, `arrange_from_upsert_with`, `reduce_trace_with`,
+/// `reduce_with_tactic_with`) obtain the agent and its writer from a caller-supplied factory,
+/// called once with an [`ArrangeContext`] when the operator is built. [`TraceAgent`] is the default
+/// implementation, built by [`TraceAgent::factory`].
+///
+/// Reduce and upsert read their own output through their clone of the agent. A batch inserted
+/// through the writer must be visible to that clone's `batches_through` and `cursor_through`
+/// before the operator's next read.
+pub trait Agent: TraceReader + Clone {
+    /// The write endpoint the arranging operator inserts batches through.
+    type Writer: Writer<Time = Self::Time, Batch = Self::Batch> + 'static;
+}
+
+/// What an arranging operator offers the factory that builds its agent and writer.
+pub struct ArrangeContext {
+    /// The arranging operator.
+    pub info: OperatorInfo,
+    /// Schedules the arranging operator.
+    pub activator: Activator,
+    /// The worker's `differential/arrange` logger, if any.
+    pub logger: Option<crate::logging::Logger>,
+    /// The worker's `differential/default_exert_logic`, if set.
+    pub exert_logic: Option<ExertionLogic>,
+}
+
+impl ArrangeContext {
+    /// Collects the context for the operator `info` in `scope`.
+    pub(crate) fn new<T: Timestamp>(scope: &Scope<'_, T>, info: OperatorInfo) -> Self {
+        let logger = scope.worker().logger_for::<crate::logging::DifferentialEventBuilder>("differential/arrange").map(Into::into);
+        let activator = scope.activator_for(Rc::clone(&info.address));
+        let exert_logic = scope.worker().config().get::<ExertionLogic>("differential/default_exert_logic").cloned();
+        ArrangeContext { info, activator, logger, exert_logic }
     }
 }
 
-impl<Tr: Trace> AgentWriter<Tr> for TraceWriter<Tr> {
+impl<Tr: Trace + 'static> Agent for TraceAgent<Tr> {
+    type Writer = TraceWriter<Tr>;
+}
+
+impl<Tr: Trace> Writer for TraceWriter<Tr> {
+    type Time = Tr::Time;
+    type Batch = Tr::Batch;
     fn insert(&mut self, batch: Tr::Batch, hint: Option<Tr::Time>) { TraceWriter::insert(self, batch, hint) }
     fn seal(&mut self, upper: Antichain<Tr::Time>) { TraceWriter::seal(self, upper) }
     fn exert(&mut self) { TraceWriter::exert(self) }
+}
+
+impl<Tr: Trace + 'static> TraceAgent<Tr> {
+    /// The factory for the `_with` entry points that builds an empty `Tr` and wraps it in a
+    /// `TraceAgent`, as the entry points without `_with` do.
+    pub fn factory() -> impl FnOnce(ArrangeContext) -> (Self, TraceWriter<Tr>) {
+        |context: ArrangeContext| {
+            let ArrangeContext { info, activator, logger, exert_logic } = context;
+            let mut trace = Tr::new(info.clone(), logger.clone(), Some(activator));
+            if let Some(exert_logic) = exert_logic {
+                trace.set_exert_logic(exert_logic);
+            }
+            TraceAgent::new(trace, info, logger)
+        }
+    }
 }
 use super::TraceReplayInstruction;
 
