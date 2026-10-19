@@ -134,9 +134,10 @@ pub fn validate_dataflow(
         Err(abort) => {
             let message = match abort {
                 Abort::Recursion => format!("plan nests deeper than {RECURSION_LIMIT} operators"),
-                Abort::Budget => {
-                    format!("validating the plan takes more than {WORK_BUDGET} units of work")
-                }
+                Abort::Budget => format!(
+                    "validating the plan takes more than {} units of work",
+                    validator.budget
+                ),
             };
             validator.errors.push(ValidationError {
                 lir_id: None,
@@ -312,9 +313,20 @@ const LET_REC_TYPE_ITERATIONS: usize = 64;
 ///
 /// A plan without `LetRec` visits each operator once. A `LetRec` visits its values until the
 /// types of its bindings reach a fixpoint, and once more, so nested `LetRec`s multiply the
-/// visits of the values inside them. A validation of nested `LetRec`s that used up the
-/// budget took 0.2 s in a debug build.
+/// visits of the values inside them.
+///
+/// The budget is this constant plus [`PLAN_SIZE_FACTOR`] times the content of the whole plan,
+/// so that a plan is never rejected for being large, only for amplifying its size. A
+/// validation of nested `LetRec`s that used up 1,000,000 units took 0.2 s in a debug build, and
+/// one of a plan of 200,000 operators that used up its 17,000,000 units took 5 s.
 const WORK_BUDGET: usize = 1_000_000;
+
+/// The units of work the budget allows per unit of plan content, see [`WORK_BUDGET`].
+///
+/// One visit of every operator charges the plan's content plus the widths of the outputs,
+/// and the values of a `LetRec` are visited at least twice, so 8 leaves room for a few type
+/// passes over every operator.
+const PLAN_SIZE_FACTOR: usize = 8;
 
 /// Why validation stopped before visiting every operator.
 #[derive(Debug)]
@@ -360,6 +372,8 @@ struct Validator {
     typer: Typer,
     /// The units of work done so far, including discarded visits. See [`WORK_BUDGET`].
     work: usize,
+    /// The units of work allowed for the dataflow being validated.
+    budget: usize,
     errors: Vec<ValidationError>,
     recursion_guard: RecursionGuard,
     /// What `Get`s of global ids resolve to: the imported collections, and the objects built
@@ -396,6 +410,7 @@ impl Validator {
         Validator {
             typer,
             work: 0,
+            budget: WORK_BUDGET,
             errors: Vec::new(),
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
             globals: BTreeMap::new(),
@@ -465,6 +480,7 @@ impl Validator {
             )
             .collect();
         self.monotonicity = monotonic::Analysis::new(single_time, monotonic_ids);
+        self.budget = Self::budget(df);
         self.imports(df);
 
         self.objects = df.objects_to_build.iter().map(|o| o.id).collect();
@@ -1557,10 +1573,21 @@ impl Validator {
         }
     }
 
-    /// Adds `units` to the work done, and aborts once it exceeds [`WORK_BUDGET`].
+    /// The work budget of `df`, see [`WORK_BUDGET`]. Walks every operator once, iteratively.
+    fn budget(df: &LirDataflowDescription) -> usize {
+        let mut content: usize = 0;
+        let mut todo: Vec<&LirRelationExpr> = df.objects_to_build.iter().map(|o| &o.plan).collect();
+        while let Some(expr) = todo.pop() {
+            content = content.saturating_add(cost::content(&expr.node));
+            todo.extend(expr.node.children());
+        }
+        WORK_BUDGET.saturating_add(PLAN_SIZE_FACTOR.saturating_mul(content))
+    }
+
+    /// Adds `units` to the work done, and aborts once it exceeds the budget.
     fn charge(&mut self, units: usize) -> Result<(), Abort> {
         self.work = self.work.saturating_add(units);
-        if self.work > WORK_BUDGET {
+        if self.work > self.budget {
             return Err(Abort::Budget);
         }
         Ok(())
