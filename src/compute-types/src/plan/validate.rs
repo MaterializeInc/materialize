@@ -16,8 +16,9 @@
 //! One walk visits every node of every object once, in post-order, and computes a
 //! [`NodeInfo`] that describes the node's output. Each rule family checks one aspect of a
 //! node against the infos of its inputs. Scoping lives in this module, arity and shape in
-//! [`arity`], arrangement availability in [`arrangements`], and types in [`types`], with the
-//! functions user plans may apply in [`allowlist`]. Errors accumulate, so one call
+//! [`arity`], arrangement availability in [`arrangements`], types in [`types`], with the
+//! functions user plans may apply in [`allowlist`], operator-specific requirements in
+//! [`operators`], and monotonicity in [`monotonic`]. Errors accumulate, so one call
 //! reports every problem it can find. A node whose input broke a rule is skipped, so a
 //! problem is reported once, where it occurs.
 
@@ -25,7 +26,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::{Id, LocalId, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use mz_ore::vec::PartialOrdVecExt;
 use mz_repr::{GlobalId, ReprRelationType, ReprScalarType};
+use timely::PartialOrder;
 
 use crate::dataflows::LirDataflowDescription;
 use crate::plan::scalar::LirScalarExpr;
@@ -34,9 +37,12 @@ use crate::plan::{LirId, LirRelationExpr, LirRelationNode};
 pub mod allowlist;
 mod arity;
 mod arrangements;
+mod monotonic;
+mod operators;
 mod types;
 
 use arrangements::Available;
+use monotonic::Monotonicity;
 use types::{ColType, Typer};
 
 /// The rule a [`ValidationError`] reports a violation of.
@@ -97,6 +103,9 @@ pub struct ValidateConfig {
     /// [`allowlist`] and whose every column must have an inferable type. Otherwise functions
     /// are typed by their output types only, and columns whose type cannot be inferred, such
     /// as all-null constant columns, are accepted.
+    ///
+    /// A user plan must also state an iteration limit for every recursive binding, which
+    /// optimizer plans of recursive queries without one do not.
     pub enforce_function_allowlist: bool,
 }
 
@@ -150,12 +159,15 @@ struct NodeInfo {
     types: Option<Vec<ColType>>,
     /// The forms in which the output is available.
     available: Available,
-    /// Whether the output never retracts a row. `false` until monotonicity analysis fills it.
-    #[allow(dead_code)]
+    /// Whether the output never retracts a row. See [`monotonic`].
     monotonic: bool,
+    /// Whether the output's update stream has no negative diffs. See [`monotonic`].
+    physically_monotonic: bool,
 }
 
 impl NodeInfo {
+    /// Describes an output that is not monotonic. The walk sets the monotonicity of each
+    /// node after its rules have run.
     fn new(arity: usize, available: Available, types: Option<Vec<ColType>>) -> Self {
         NodeInfo {
             arity,
@@ -163,7 +175,13 @@ impl NodeInfo {
             types: types.filter(|t| t.len() == arity),
             available,
             monotonic: false,
+            physically_monotonic: false,
         }
+    }
+
+    fn set_monotonicity(&mut self, monotonicity: Monotonicity) {
+        self.monotonic = monotonicity.logical;
+        self.physically_monotonic = monotonicity.physical;
     }
 }
 
@@ -205,6 +223,18 @@ impl Output {
         match self {
             Output::Rows(info) => info.types.as_deref(),
             Output::Failed | Output::Empty(_) => None,
+        }
+    }
+
+    /// Whether the output retracts rows. An empty output has no rows to retract, and a failed
+    /// one is judged as empty, because its consumers are not checked.
+    fn monotonicity(&self) -> Monotonicity {
+        match self {
+            Output::Rows(info) => Monotonicity {
+                logical: info.monotonic,
+                physical: info.physically_monotonic,
+            },
+            Output::Failed | Output::Empty(_) => Monotonicity::NO_ROWS,
         }
     }
 
@@ -313,6 +343,9 @@ struct Validator {
     read_globals: BTreeSet<GlobalId>,
     /// The keys of index imports that exclude their snapshot, by the collection they index.
     snapshotless: BTreeMap<GlobalId, BTreeSet<Vec<LirScalarExpr>>>,
+    monotonicity: monotonic::Analysis,
+    /// The number of `LetRec` values the current node is inside of.
+    rec_depth: usize,
 }
 
 impl CheckedRecursion for Validator {
@@ -335,6 +368,8 @@ impl Validator {
             lir_ids: BTreeSet::new(),
             read_globals: BTreeSet::new(),
             snapshotless: BTreeMap::new(),
+            monotonicity: monotonic::Analysis::default(),
+            rec_depth: 0,
         }
     }
 
@@ -370,6 +405,28 @@ impl Validator {
         &mut self,
         df: &LirDataflowDescription,
     ) -> Result<BTreeMap<GlobalId, ReprRelationType>, Abort> {
+        // `is_single_time` soft-asserts that the as-of is not beyond the until, which a plan
+        // need not satisfy.
+        let single_time = df
+            .as_of
+            .as_ref()
+            .is_some_and(|as_of| PartialOrder::less_equal(as_of, &df.until))
+            && df.is_single_time();
+        // The same imports `refine_single_time_consolidation` passes to the single-time
+        // analysis.
+        let monotonic_ids = df
+            .source_imports
+            .iter()
+            .filter(|(_, import)| import.monotonic)
+            .map(|(id, _)| *id)
+            .chain(
+                df.index_imports
+                    .values()
+                    .filter(|import| import.monotonic)
+                    .map(|import| import.desc.on_id),
+            )
+            .collect();
+        self.monotonicity = monotonic::Analysis::new(single_time, monotonic_ids);
         self.imports(df);
 
         self.objects = df.objects_to_build.iter().map(|o| o.id).collect();
@@ -449,6 +506,16 @@ impl Validator {
                 Some(mfp) => {
                     let mut issues = Vec::new();
                     arity::check_mfp(&mut issues, "source MFP", mfp, Some(typ_arity));
+                    // Rendering plans the operators with `MfpPlan::create_from` and panics if
+                    // that fails, for example on a temporal predicate it cannot express as a
+                    // bound. Planning optimizes the operators first, which is only safe for
+                    // operators whose columns are in range.
+                    if issues.is_empty() && mz_expr::MfpPlan::create_from(mfp.clone()).is_err() {
+                        issues.push((
+                            Rule::Shape,
+                            "operators are not a valid MFP plan".to_string(),
+                        ));
+                    }
                     let typ = self.source_operator_types(&mut issues, mfp, &typ);
                     for (rule, message) in issues {
                         self.dataflow_error(rule, format!("source import {id}: {message}"));
@@ -501,8 +568,9 @@ impl Validator {
         for (id, arity) in arities {
             let forms = available.remove(&id).unwrap_or_default();
             let types = types.remove(&id);
-            self.globals
-                .insert(id, Output::Rows(NodeInfo::new(arity, forms, types)));
+            let mut info = NodeInfo::new(arity, forms, types);
+            info.set_monotonicity(self.monotonicity.import(id));
+            self.globals.insert(id, Output::Rows(info));
         }
     }
 
@@ -705,6 +773,13 @@ impl Validator {
                     }
                 }
             }
+            // A soft assertion in rendering, which panics where soft assertions are enabled.
+            if !sink.non_null_assertions.is_strictly_sorted() {
+                self.dataflow_error(
+                    Rule::Shape,
+                    format!("sink export {id}: non-null assertions are not strictly sorted"),
+                );
+            }
             let Ok(Some(arity)) = output.arity() else {
                 continue;
             };
@@ -767,6 +842,8 @@ impl Validator {
         }
         let mut issues = Vec::new();
         let typer = self.typer;
+        // The monotonicity of the inputs in order, or of the binding of a `Get`.
+        let mut input_monotonicity = Vec::new();
         let output = match &expr.node {
             LirRelationNode::Constant { rows } => match rows {
                 Ok(rows) if !rows.is_empty() => {
@@ -791,6 +868,7 @@ impl Validator {
             },
             LirRelationNode::Get { id, keys, plan } => {
                 let binding = self.resolve(expr, id);
+                input_monotonicity.push(binding.monotonicity());
                 Self::inputs(&binding).map(|(arity, input, types)| {
                     let out = arity::get(&mut issues, keys, plan, arity);
                     let forms = arrangements::get(&mut issues, keys, plan, input, arity);
@@ -830,6 +908,9 @@ impl Validator {
                         ),
                     ));
                 }
+                if self.typer.enforce {
+                    operators::let_rec_limits(&mut issues, ids, limits);
+                }
                 Some(self.let_rec(expr, ids, values, body)?)
             }
             LirRelationNode::Mfp {
@@ -838,6 +919,7 @@ impl Validator {
                 input_key_val,
             } => {
                 let input = self.visit(input, false)?;
+                input_monotonicity.push(input.monotonicity());
                 Self::inputs(&input).map(|(arity, forms, types)| {
                     let key = input_key_val.as_ref().map(|(key, _)| key.as_slice());
                     let out = arity::mfp(&mut issues, mfp, key, arity);
@@ -854,6 +936,7 @@ impl Validator {
                 mfp_after,
             } => {
                 let input = self.visit(input, false)?;
+                input_monotonicity.push(input.monotonicity());
                 Self::inputs(&input).map(|(arity, forms, types)| {
                     let out = arity::flat_map(
                         &mut issues,
@@ -880,8 +963,11 @@ impl Validator {
                 let mut forms = Vec::with_capacity(inputs.len());
                 let mut input_types = Vec::with_capacity(inputs.len());
                 let mut failed = false;
+                operators::join(&mut issues, plan);
                 for input in inputs {
-                    match Self::inputs(&self.visit(input, false)?) {
+                    let input = self.visit(input, false)?;
+                    input_monotonicity.push(input.monotonicity());
+                    match Self::inputs(&input) {
                         Some((arity, available, types)) => {
                             arities.push(arity);
                             forms.push(available.clone());
@@ -914,7 +1000,9 @@ impl Validator {
                 mfp_after,
                 temporal_bucketing_strategy: _,
             } => {
+                operators::reduce(&mut issues, key_val_plan, plan);
                 let input = self.visit(input, false)?;
+                input_monotonicity.push(input.monotonicity());
                 Self::inputs(&input).map(|(arity, forms, types)| {
                     let out = arity::reduce(
                         &mut issues,
@@ -941,9 +1029,11 @@ impl Validator {
             LirRelationNode::TopK {
                 input,
                 top_k_plan,
-                temporal_bucketing_strategy: _,
+                temporal_bucketing_strategy,
             } => {
+                operators::top_k(&mut issues, top_k_plan, temporal_bucketing_strategy);
                 let input = self.visit(input, false)?;
+                input_monotonicity.push(input.monotonicity());
                 Self::inputs(&input).map(|(arity, forms, types)| {
                     let out = arity::top_k(&mut issues, top_k_plan, arity);
                     let forms = arrangements::top_k(&mut issues, top_k_plan, forms);
@@ -953,6 +1043,7 @@ impl Validator {
             }
             LirRelationNode::Negate { input } => {
                 let input = self.visit(input, false)?;
+                input_monotonicity.push(input.monotonicity());
                 Self::inputs(&input).map(|(arity, forms, types)| {
                     arrangements::require_raw(&mut issues, "Negate", forms);
                     Self::unary(arity, Available::raw(), types.map(<[ColType]>::to_vec))
@@ -963,6 +1054,7 @@ impl Validator {
                 threshold_plan,
             } => {
                 let input = self.visit(input, false)?;
+                input_monotonicity.push(input.monotonicity());
                 Self::inputs(&input).map(|(arity, forms, types)| {
                     let out = arity::threshold(&mut issues, threshold_plan, arity);
                     let forms = arrangements::threshold(&mut issues, threshold_plan, forms, arity);
@@ -990,6 +1082,7 @@ impl Validator {
                 let mut types = None;
                 for (i, input) in inputs.iter().enumerate() {
                     let input = self.visit(input, false)?;
+                    input_monotonicity.push(input.monotonicity());
                     if let Some(forms) = input.available() {
                         arrangements::require_raw(&mut issues, &format!("Union input {i}"), forms);
                     }
@@ -1035,6 +1128,7 @@ impl Validator {
                 strategy: _,
             } => {
                 let input = self.visit(input, false)?;
+                input_monotonicity.push(input.monotonicity());
                 Self::inputs(&input).map(|(arity, available, types)| {
                     let out = arity::arrange_by(
                         &mut issues,
@@ -1061,6 +1155,25 @@ impl Validator {
                     Self::unary(out, available, types)
                 })
             }
+        };
+        // `Let` and `LetRec` pass on the output of their body.
+        let output = match output {
+            Some(Output::Rows(mut info))
+                if !matches!(
+                    expr.node,
+                    LirRelationNode::Let { .. } | LirRelationNode::LetRec { .. }
+                ) =>
+            {
+                let monotonicity = self.monotonicity.node(
+                    &mut issues,
+                    &expr.node,
+                    &input_monotonicity,
+                    self.rec_depth > 0,
+                );
+                info.set_monotonicity(monotonicity);
+                Some(Output::Rows(info))
+            }
+            output => output,
         };
         let clean = self.report(expr, issues);
         Ok(match output {
@@ -1186,13 +1299,19 @@ impl Validator {
         // value is visited, so later values in the same pass see them. These visits only
         // collect types, so their errors and bookkeeping are discarded. A last visit checks
         // the values against the fixpoint.
+        //
+        // The same passes find the greatest fixpoint of the bindings' monotonicity, starting
+        // from every binding being monotonic.
         let mut types: Vec<Option<Vec<ColType>>> = vec![None; ids.len()];
+        let mut monotonic = vec![true; ids.len()];
         let mut clean = true;
         let mut converged = false;
+        self.rec_depth += 1;
         for _ in 0..LET_REC_TYPE_ITERATIONS {
             let snapshot = self.snapshot();
             let scope = self.locals.len();
-            let pass = self.let_rec_values(expr, ids, values, &known, &mut types, true)?;
+            let pass =
+                self.let_rec_values(expr, ids, values, &known, &mut types, &mut monotonic, true)?;
             self.locals.truncate(scope);
             self.restore(snapshot);
             if let Some((id, c, a, b)) = pass.mismatch {
@@ -1214,7 +1333,7 @@ impl Validator {
                 expr,
                 Rule::Type,
                 format!(
-                    "the column types of the recursive bindings do not converge within {LET_REC_TYPE_ITERATIONS} iterations"
+                    "the column types or monotonicity of the recursive bindings do not converge within {LET_REC_TYPE_ITERATIONS} iterations"
                 ),
             );
             clean = false;
@@ -1222,8 +1341,9 @@ impl Validator {
 
         let scope = self.locals.len();
         let values_clean = self
-            .let_rec_values(expr, ids, values, &known, &mut types, false)?
+            .let_rec_values(expr, ids, values, &known, &mut types, &mut monotonic, false)?
             .clean;
+        self.rec_depth -= 1;
         for (_, binding) in self.locals.iter_mut().skip(scope) {
             binding.set_available(Available::raw());
         }
@@ -1236,11 +1356,12 @@ impl Validator {
         })
     }
 
-    /// Binds the ids of a `LetRec` with the given arities and column types, and visits its
-    /// values.
+    /// Binds the ids of a `LetRec` with the given arities, column types and logical
+    /// monotonicity, and visits its values.
     ///
     /// Leaves the bindings in `locals`, each with the forms of its value. With `update`, merges
-    /// each value's column types into `types` and into its binding right after visiting it.
+    /// each value's column types into `types` and its monotonicity into `monotonic`, and both
+    /// into its binding, right after visiting it.
     fn let_rec_values(
         &mut self,
         expr: &LirRelationExpr,
@@ -1248,6 +1369,7 @@ impl Validator {
         values: &[LirRelationExpr],
         known: &BTreeMap<LocalId, usize>,
         types: &mut [Option<Vec<ColType>>],
+        monotonic: &mut [bool],
         update: bool,
     ) -> Result<LetRecPass, Abort> {
         // Rendering binds each id to a raw-only `Variable` until its value is rendered, then to
@@ -1258,7 +1380,15 @@ impl Validator {
             let binding = match (known.get(id), values.get(i)) {
                 (Some(arity), _) => {
                     let types = types.get(i).cloned().flatten();
-                    Output::Rows(NodeInfo::new(*arity, Available::raw(), types))
+                    let mut info = NodeInfo::new(*arity, Available::raw(), types);
+                    // A recursive binding changes from one iteration to the next, so its
+                    // update stream may have negative diffs. `SingleTimeMonotonic` judges
+                    // every recursive binding so.
+                    info.set_monotonicity(Monotonicity {
+                        logical: monotonic.get(i).copied().unwrap_or(false),
+                        physical: false,
+                    });
+                    Output::Rows(info)
                 }
                 (None, Some(value)) if Self::is_empty_constant(value) => {
                     Output::Empty(Available::raw())
@@ -1287,6 +1417,15 @@ impl Validator {
             // A length mismatch between ids and values has been reported.
             let Some(id) = ids.get(i) else { continue };
             pass.clean &= self.let_rec_value(expr, scope + i, *id, known.get(id), &output);
+            if let Some(m) = monotonic.get_mut(i).filter(|m| update && **m) {
+                if !output.monotonicity().logical {
+                    *m = false;
+                    pass.changed = true;
+                    if let Some((_, Output::Rows(info))) = self.locals.get_mut(scope + i) {
+                        info.monotonic = false;
+                    }
+                }
+            }
             let Some(acc) = types.get_mut(i).filter(|_| update) else {
                 continue;
             };

@@ -24,10 +24,13 @@ use crate::dataflows::{BuildDesc, IndexDesc, IndexImport, SourceImport};
 use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
 use crate::plan::join::linear_join::LinearStagePlan;
 use crate::plan::join::{DeltaJoinPlan, JoinClosure, JoinPlan, LinearJoinPlan};
-use crate::plan::reduce::{AccumulablePlan, KeyValPlan, LirAggregateExpr, ReducePlan};
+use crate::plan::reduce::{
+    AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, LirAggregateExpr,
+    MonotonicPlan, ReducePlan, SingleBasicPlan,
+};
 use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
-use crate::plan::top_k::{BasicTopKPlan, TopKPlan};
+use crate::plan::top_k::{BasicTopKPlan, MonotonicTopKPlan, TopKPlan};
 use crate::plan::{ArrangementStrategy, AvailableCollections, GetPlan};
 use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
@@ -1678,5 +1681,515 @@ fn infers_types_of_long_binding_chains() {
     assert_eq!(
         types[&OUT].column_types,
         vec![ReprScalarType::Int64.nullable(false)]
+    );
+}
+
+/// Marks the source import `id` of `df` as monotonic.
+fn monotonic_import(df: &mut LirDataflowDescription, id: GlobalId) {
+    df.source_imports.get_mut(&id).expect("imported").monotonic = true;
+}
+
+/// Makes `df` a single-time dataflow.
+fn single_time(df: &mut LirDataflowDescription) {
+    df.as_of = Some(Antichain::from_elem(Timestamp::from(5)));
+    df.until = Antichain::from_elem(Timestamp::from(6));
+}
+
+/// A monotonic top-k by column 0 of a raw input with `arity` columns.
+fn monotonic_top_k(
+    input: LirRelationExpr,
+    arity: usize,
+    must_consolidate: bool,
+) -> LirRelationExpr {
+    plan(LirRelationNode::TopK {
+        input: Box::new(input),
+        top_k_plan: TopKPlan::MonotonicTopK(MonotonicTopKPlan {
+            group_key: vec![0],
+            order_key: vec![],
+            limit: None,
+            arity,
+            must_consolidate,
+        }),
+        temporal_bucketing_strategy: ArrangementStrategy::Direct,
+    })
+}
+
+/// A `Reduce` that groups a raw input of arity 2 by column 0 and aggregates column 1 with
+/// `reduce_plan`.
+fn reduce_by_first(input: LirRelationExpr, reduce_plan: ReducePlan) -> LirRelationExpr {
+    reduce_with_key_plan(
+        input,
+        SafeMfpPlan::from_mfp(raw_mfp(2, vec![], vec![], vec![0])),
+        reduce_plan,
+    )
+}
+
+fn reduce_with_key_plan(
+    input: LirRelationExpr,
+    key_plan: SafeMfpPlan<LirScalarExpr>,
+    reduce_plan: ReducePlan,
+) -> LirRelationExpr {
+    plan(LirRelationNode::Reduce {
+        input_key: None,
+        input: Box::new(input),
+        key_val_plan: KeyValPlan {
+            key_plan,
+            val_plan: SafeMfpPlan::from_mfp(raw_mfp(2, vec![], vec![], vec![1])),
+        },
+        plan: reduce_plan,
+        mfp_after: SafeMfpPlan::from_mfp(raw_mfp(2, vec![], vec![], vec![0, 1])),
+        temporal_bucketing_strategy: ArrangementStrategy::Direct,
+    })
+}
+
+/// The distinct values of column 0 of a raw input of arity 2.
+fn distinct_first(input: LirRelationExpr) -> LirRelationExpr {
+    plan(LirRelationNode::Reduce {
+        input_key: None,
+        input: Box::new(input),
+        key_val_plan: KeyValPlan {
+            key_plan: SafeMfpPlan::from_mfp(raw_mfp(2, vec![], vec![], vec![0])),
+            val_plan: SafeMfpPlan::from_mfp(raw_mfp(2, vec![], vec![], vec![])),
+        },
+        plan: ReducePlan::Distinct,
+        mfp_after: SafeMfpPlan::from_mfp(raw_mfp(1, vec![], vec![], vec![0])),
+        temporal_bucketing_strategy: ArrangementStrategy::Direct,
+    })
+}
+
+/// Forms the raw collection of a reduction's output, which is arranged by its first column
+/// only.
+fn raw_from_reduce(input: LirRelationExpr, arity: usize) -> LirRelationExpr {
+    plan(LirRelationNode::ArrangeBy {
+        input_key: Some(vec![col(0)]),
+        input: Box::new(input),
+        input_mfp: identity_mfp_plan(arity),
+        forms: AvailableCollections::new_raw(),
+        strategy: ArrangementStrategy::Direct,
+    })
+}
+
+fn monotonic_reduce_plan(funcs: Vec<mz_expr::AggregateFunc>) -> ReducePlan {
+    ReducePlan::Hierarchical(HierarchicalPlan::Monotonic(MonotonicPlan {
+        aggr_funcs: funcs,
+        must_consolidate: false,
+    }))
+}
+
+fn bucketed_reduce_plan(buckets: Vec<u64>) -> ReducePlan {
+    ReducePlan::Hierarchical(HierarchicalPlan::Bucketed(BucketedPlan {
+        aggr_funcs: vec![mz_expr::AggregateFunc::MaxInt64],
+        buckets,
+    }))
+}
+
+#[mz_ore::test]
+fn rejects_predicate_in_reduce_key_plan() {
+    let key_plan = SafeMfpPlan::from_mfp(raw_mfp(
+        2,
+        vec![],
+        vec![(1, col(0).call_unary(mz_expr::func::IsNull))],
+        vec![0],
+    ));
+    let reduce = reduce_with_key_plan(raw_t1(), key_plan, bucketed_reduce_plan(vec![16]));
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, reduce)]));
+    assert_error(&errs, Rule::Operator, "Reduce key plan has a predicate");
+}
+
+#[mz_ore::test]
+fn rejects_monotonic_reduce_with_non_monoid_aggregate() {
+    let mut df = dataflow(&[(T1, 2)], vec![]);
+    monotonic_import(&mut df, T1);
+    df.objects_to_build.push(BuildDesc {
+        id: OUT,
+        plan: reduce_by_first(
+            raw_t1(),
+            monotonic_reduce_plan(vec![mz_expr::AggregateFunc::SumInt64]),
+        ),
+    });
+    let errs = errors(&df);
+    assert_error(&errs, Rule::Operator, "aggregate sum, which has no monoid");
+}
+
+#[mz_ore::test]
+fn accepts_monotonic_reduce_over_monotonic_import() {
+    let mut df = dataflow(&[(T1, 2)], vec![]);
+    monotonic_import(&mut df, T1);
+    df.objects_to_build.push(BuildDesc {
+        id: OUT,
+        plan: reduce_by_first(
+            raw_t1(),
+            monotonic_reduce_plan(vec![mz_expr::AggregateFunc::MaxInt64]),
+        ),
+    });
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+}
+
+#[mz_ore::test]
+fn rejects_monotonic_reduce_over_non_monotonic_import() {
+    let reduce = reduce_by_first(
+        raw_t1(),
+        monotonic_reduce_plan(vec![mz_expr::AggregateFunc::MaxInt64]),
+    );
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, reduce)]));
+    assert_error(
+        &errs,
+        Rule::Monotonicity,
+        "monotonic Reduce requires a monotonic input",
+    );
+}
+
+#[mz_ore::test]
+fn rejects_accumulable_plan_with_hierarchical_aggregate() {
+    let plan = aggregate_by_first(raw_t1(), mz_expr::AggregateFunc::MaxInt64);
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, plan)]));
+    assert_error(
+        &errs,
+        Rule::Operator,
+        "accumulable Reduce plan has aggregate max, which reduces as Hierarchical",
+    );
+}
+
+#[mz_ore::test]
+fn rejects_bucketed_reduce_without_buckets() {
+    let plan = reduce_by_first(raw_t1(), bucketed_reduce_plan(vec![]));
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, plan)]));
+    assert_error(&errs, Rule::Operator, "bucketed Reduce plan has no buckets");
+}
+
+#[mz_ore::test]
+fn rejects_bucketed_reduce_with_zero_bucket() {
+    let plan = reduce_by_first(raw_t1(), bucketed_reduce_plan(vec![16, 0]));
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, plan)]));
+    assert_error(&errs, Rule::Operator, "Reduce bucket 1 is zero");
+}
+
+fn string_agg() -> LirAggregateExpr {
+    LirAggregateExpr {
+        func: mz_expr::AggregateFunc::StringAgg { order_by: vec![] },
+        expr: col(1),
+        distinct: false,
+    }
+}
+
+#[mz_ore::test]
+fn rejects_fused_unnest_list_for_unfusable_aggregate() {
+    let plan = reduce_by_first(
+        raw_t1(),
+        ReducePlan::Basic(BasicPlan::Single(SingleBasicPlan {
+            expr: string_agg(),
+            fused_unnest_list: true,
+        })),
+    );
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, plan)]));
+    assert_error(&errs, Rule::Operator, "cannot fuse with an unnested list");
+}
+
+#[mz_ore::test]
+fn rejects_multiple_basic_plan_of_one_aggregate() {
+    let plan = reduce_by_first(
+        raw_t1(),
+        ReducePlan::Basic(BasicPlan::Multiple(vec![string_agg()])),
+    );
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, plan)]));
+    assert_error(&errs, Rule::Operator, "has 1 aggregates, but at least 2");
+}
+
+#[mz_ore::test]
+fn rejects_topk_bucket_of_zero() {
+    let top_k = plan(LirRelationNode::TopK {
+        input: Box::new(raw_t1()),
+        top_k_plan: TopKPlan::Basic(BasicTopKPlan {
+            group_key: vec![0],
+            order_key: vec![],
+            offset: 0,
+            limit: None,
+            arity: 2,
+            buckets: vec![0],
+        }),
+        temporal_bucketing_strategy: ArrangementStrategy::Direct,
+    });
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, top_k)]));
+    assert_error(&errs, Rule::Operator, "TopK bucket 0 is zero");
+}
+
+#[mz_ore::test]
+fn rejects_temporally_bucketed_monotonic_topk_without_consolidation() {
+    let mut df = dataflow(&[(T1, 2)], vec![]);
+    monotonic_import(&mut df, T1);
+    let mut top_k = monotonic_top_k(raw_t1(), 2, false);
+    if let LirRelationNode::TopK {
+        temporal_bucketing_strategy,
+        ..
+    } = &mut top_k.node
+    {
+        *temporal_bucketing_strategy = ArrangementStrategy::TemporalBucketing;
+    }
+    df.objects_to_build.push(BuildDesc {
+        id: OUT,
+        plan: top_k,
+    });
+    let errs = errors(&df);
+    assert_error(
+        &errs,
+        Rule::Operator,
+        "with temporal bucketing must consolidate",
+    );
+}
+
+#[mz_ore::test]
+fn rejects_raw_delta_path_not_at_relation_zero() {
+    let mut df = dataflow(&[(T2, 2)], vec![]);
+    import_index(&mut df, GlobalId::Transient(3), T1, &[0], 2);
+    let join = plan(LirRelationNode::Join {
+        inputs: vec![
+            get_global(T1, arranged(&[0], 2)),
+            get_global(T2, AvailableCollections::new_raw()),
+        ],
+        plan: JoinPlan::Delta(DeltaJoinPlan {
+            path_plans: vec![DeltaPathPlan {
+                source_relation: 1,
+                source_key: None,
+                initial_closure: identity_closure(2),
+                stage_plans: vec![DeltaStagePlan {
+                    lookup_relation: 0,
+                    stream_key: vec![col(0)],
+                    stream_thinning: vec![1],
+                    lookup_key: vec![col(0)],
+                    closure: identity_closure(3),
+                }],
+                final_closure: None,
+            }],
+        }),
+    });
+    df.objects_to_build.push(BuildDesc {
+        id: OUT,
+        plan: join,
+    });
+    let errs = errors(&df);
+    assert_error(
+        &errs,
+        Rule::Operator,
+        "delta path from relation 1 reads its source raw",
+    );
+}
+
+#[mz_ore::test]
+fn rejects_unsorted_non_null_assertions() {
+    let mut df = dataflow(&[(T1, 1)], vec![]);
+    subscribe(&mut df, T1, None);
+    df.sink_exports
+        .get_mut(&GlobalId::Transient(30))
+        .expect("sink")
+        .non_null_assertions = vec![0, 0];
+    let errs = errors(&df);
+    assert_error(
+        &errs,
+        Rule::Shape,
+        "non-null assertions are not strictly sorted",
+    );
+}
+
+#[mz_ore::test]
+fn rejects_invalid_source_operators() {
+    let mut df = dataflow(&[(T1, 1)], vec![(OUT, raw_t1())]);
+    let now = MirScalarExpr::CallUnmaterializable(mz_expr::UnmaterializableFunc::MzNow);
+    let operators = MapFilterProject::new(1).filter([now.call_unary(mz_expr::func::IsNull)]);
+    df.source_imports
+        .get_mut(&T1)
+        .expect("imported")
+        .desc
+        .arguments
+        .operators = Some(operators);
+    let errs = errors(&df);
+    assert_error(
+        &errs,
+        Rule::Shape,
+        "source import t1: operators are not a valid MFP plan",
+    );
+}
+
+#[mz_ore::test]
+fn rejects_letrec_without_limit() {
+    let l1 = LocalId::new(1);
+    let plan = plan(LirRelationNode::LetRec {
+        ids: vec![l1],
+        values: vec![union(vec![raw_t1(), get_local(l1)])],
+        limits: vec![None],
+        body: Box::new(get_local(l1)),
+    });
+    let df = dataflow(&[(T1, 1)], vec![(OUT, plan)]);
+    let errs = errors_with(&df, &enforced());
+    assert_error(
+        &errs,
+        Rule::Operator,
+        "recursive binding l1 has no iteration limit",
+    );
+    // Optimizer plans of recursive queries without a limit have none.
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+}
+
+/// A monotonic top-k over the output of a reduction of `T1`.
+fn top_k_over_reduce() -> LirRelationExpr {
+    let reduce = aggregate_by_first(raw_t1(), mz_expr::AggregateFunc::SumInt64);
+    monotonic_top_k(raw_from_reduce(reduce, 2), 2, false)
+}
+
+#[mz_ore::test]
+fn rejects_monotonic_topk_over_reduce_in_mv() {
+    let mut df = dataflow(&[(T1, 2)], vec![(OUT, top_k_over_reduce())]);
+    monotonic_import(&mut df, T1);
+    let errs = errors(&df);
+    assert_error(
+        &errs,
+        Rule::Monotonicity,
+        "monotonic TopK requires a monotonic input",
+    );
+}
+
+#[mz_ore::test]
+fn accepts_monotonic_topk_over_reduce_single_time() {
+    let mut df = dataflow(&[(T1, 2)], vec![(OUT, top_k_over_reduce())]);
+    single_time(&mut df);
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+}
+
+#[mz_ore::test]
+fn accepts_monotonic_topk_over_monotonic_import() {
+    let mut df = dataflow(&[(T1, 2)], vec![(OUT, monotonic_top_k(raw_t1(), 2, false))]);
+    monotonic_import(&mut df, T1);
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+}
+
+#[mz_ore::test]
+fn rejects_monotonic_topk_over_non_monotonic_import() {
+    let df = dataflow(&[(T1, 2)], vec![(OUT, monotonic_top_k(raw_t1(), 2, false))]);
+    let errs = errors(&df);
+    assert_error(
+        &errs,
+        Rule::Monotonicity,
+        "monotonic TopK requires a monotonic input",
+    );
+}
+
+#[mz_ore::test]
+fn accepts_monotonic_topk_over_distinct_of_monotonic_import() {
+    // The optimizer's analysis passes monotonicity through a distinct, a threshold, and a
+    // union with a constant of positive diffs.
+    let distinct = distinct_first(raw_t1());
+    let input = union(vec![
+        raw_from_reduce(threshold(raw_from_reduce(distinct, 1), &[0], 1), 1),
+        constant(vec![vec![Datum::Int64(1)]]),
+    ]);
+    let mut df = dataflow(&[(T1, 2)], vec![(OUT, monotonic_top_k(input, 1, false))]);
+    monotonic_import(&mut df, T1);
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+}
+
+#[mz_ore::test]
+fn rejects_monotonic_topk_over_negated_union() {
+    let input = union(vec![raw_t1(), negate(raw_t1())]);
+    let mut df = dataflow(&[(T1, 2)], vec![(OUT, monotonic_top_k(input, 2, false))]);
+    monotonic_import(&mut df, T1);
+    let errs = errors(&df);
+    assert_error(
+        &errs,
+        Rule::Monotonicity,
+        "monotonic TopK requires a monotonic input",
+    );
+}
+
+#[mz_ore::test]
+fn rejects_monotonic_topk_over_temporal_filter() {
+    let upper = lit(
+        Datum::MzTimestamp(Timestamp::from(5)),
+        ReprScalarType::MzTimestamp,
+    );
+    let input = temporal_mfp(raw_t1(), 2, vec![], vec![upper]);
+    let mut df = dataflow(&[(T1, 2)], vec![(OUT, monotonic_top_k(input, 2, false))]);
+    monotonic_import(&mut df, T1);
+    let errs = errors(&df);
+    assert_error(
+        &errs,
+        Rule::Monotonicity,
+        "monotonic TopK requires a monotonic input",
+    );
+}
+
+#[mz_ore::test]
+fn monotonicity_reaches_later_objects() {
+    let mut df = dataflow(
+        &[(T1, 2)],
+        vec![
+            (T2, mfp(raw_t1(), 2, vec![], vec![], vec![0, 1])),
+            (
+                OUT,
+                monotonic_top_k(get_global(T2, AvailableCollections::new_raw()), 2, false),
+            ),
+        ],
+    );
+    monotonic_import(&mut df, T1);
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+}
+
+/// `l1 = T1 + step(l1)`, read by a monotonic top-k in the body.
+fn recursive_top_k(step: impl Fn(LirRelationExpr) -> LirRelationExpr) -> LirRelationExpr {
+    let l1 = LocalId::new(1);
+    plan(LirRelationNode::LetRec {
+        ids: vec![l1],
+        values: vec![union(vec![raw_t1(), step(get_local(l1))])],
+        limits: vec![limit()],
+        body: Box::new(monotonic_top_k(get_local(l1), 1, false)),
+    })
+}
+
+#[mz_ore::test]
+fn accepts_monotonic_topk_over_monotonic_recursion() {
+    let mut df = dataflow(&[(T1, 1)], vec![(OUT, recursive_top_k(|l| l))]);
+    monotonic_import(&mut df, T1);
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+}
+
+#[mz_ore::test]
+fn rejects_monotonic_topk_over_retracting_recursion() {
+    let mut df = dataflow(&[(T1, 1)], vec![(OUT, recursive_top_k(negate))]);
+    monotonic_import(&mut df, T1);
+    let errs = errors(&df);
+    assert_error(
+        &errs,
+        Rule::Monotonicity,
+        "monotonic TopK requires a monotonic input",
+    );
+}
+
+#[mz_ore::test]
+fn single_time_consolidation_serves_outside_recursion_only() {
+    // Consolidating the input of a single-time top-k removes its retractions, except in a
+    // recursion, where the input changes from one iteration to the next.
+    let mut df = dataflow(
+        &[(T1, 2)],
+        vec![(OUT, monotonic_top_k(negate(raw_t1()), 2, true))],
+    );
+    single_time(&mut df);
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+
+    let l1 = LocalId::new(1);
+    let value = union(vec![
+        raw_t1(),
+        monotonic_top_k(negate(get_local(l1)), 2, true),
+    ]);
+    let plan = plan(LirRelationNode::LetRec {
+        ids: vec![l1],
+        values: vec![value],
+        limits: vec![limit()],
+        body: Box::new(get_local(l1)),
+    });
+    let mut df = dataflow(&[(T1, 2)], vec![(OUT, plan)]);
+    single_time(&mut df);
+    let errs = errors(&df);
+    assert_error(
+        &errs,
+        Rule::Monotonicity,
+        "monotonic TopK requires a monotonic input",
     );
 }
