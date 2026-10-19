@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::{Id, LocalId, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
-use mz_repr::{GlobalId, ReprRelationType};
+use mz_repr::{GlobalId, ReprRelationType, ReprScalarType};
 
 use crate::dataflows::LirDataflowDescription;
 use crate::plan::scalar::LirScalarExpr;
@@ -118,12 +118,18 @@ pub fn validate_dataflow(
     });
     let types = match validator.dataflow(df) {
         Ok(types) => types,
-        Err(RecursionLimitError { .. }) => {
+        Err(abort) => {
+            let message = match abort {
+                Abort::Recursion => format!("plan nests deeper than {RECURSION_LIMIT} operators"),
+                Abort::Budget => {
+                    format!("validating the plan takes more than {VISIT_BUDGET} operator visits")
+                }
+            };
             validator.errors.push(ValidationError {
                 lir_id: None,
                 operator: "dataflow",
                 rule: Rule::Shape,
-                message: format!("plan nests deeper than {RECURSION_LIMIT} operators"),
+                message,
             });
             BTreeMap::new()
         }
@@ -202,6 +208,13 @@ impl Output {
         }
     }
 
+    /// Replaces the column types of an output with rows.
+    fn set_types(&mut self, types: Option<Vec<ColType>>) {
+        if let Output::Rows(info) = self {
+            info.types = types.filter(|t| t.len() == info.arity);
+        }
+    }
+
     /// Replaces the forms of a non-failed output.
     fn set_available(&mut self, forms: Available) {
         match self {
@@ -233,8 +246,42 @@ fn operator_name(node: &LirRelationNode) -> &'static str {
 
 /// The most times the values of one `LetRec` are visited to find the column types of its
 /// bindings. Each visit that does not reach the fixpoint makes some column of some binding
-/// less precise, and plans observed so far converge within three visits.
+/// less precise.
 const LET_REC_TYPE_ITERATIONS: usize = 64;
+
+/// The most operator visits one validation makes.
+///
+/// A plan without `LetRec` visits each operator once. A `LetRec` visits its values until the
+/// types of its bindings reach a fixpoint, and once more, so nested `LetRec`s multiply the
+/// visits of the values inside them. The budget bounds that work. It leaves room for plans
+/// of 100,000 operators visited ten times each, and a validation that used it up took 3 s
+/// in a debug build.
+const VISIT_BUDGET: usize = 1_000_000;
+
+/// Why validation stopped before visiting every operator.
+#[derive(Debug)]
+enum Abort {
+    /// The plan nests deeper than [`RECURSION_LIMIT`].
+    Recursion,
+    /// The walk used up [`VISIT_BUDGET`].
+    Budget,
+}
+
+impl From<RecursionLimitError> for Abort {
+    fn from(_: RecursionLimitError) -> Self {
+        Abort::Recursion
+    }
+}
+
+/// The result of visiting the values of a `LetRec` once.
+struct LetRecPass {
+    /// Whether the values agree with their bindings.
+    clean: bool,
+    /// Whether the column types of a binding changed.
+    changed: bool,
+    /// The first binding column whose value has another scalar type than the binding.
+    mismatch: Option<(LocalId, usize, ReprScalarType, ReprScalarType)>,
+}
 
 /// The state of [`Validator`] that visits change besides `locals`.
 struct Snapshot {
@@ -247,6 +294,8 @@ struct Snapshot {
 /// The state of one validation.
 struct Validator {
     typer: Typer,
+    /// The operator visits made so far, including discarded ones.
+    visits: usize,
     errors: Vec<ValidationError>,
     recursion_guard: RecursionGuard,
     /// What `Get`s of global ids resolve to: the imported collections, and the objects built
@@ -276,6 +325,7 @@ impl Validator {
     fn new(typer: Typer) -> Self {
         Validator {
             typer,
+            visits: 0,
             errors: Vec::new(),
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
             globals: BTreeMap::new(),
@@ -319,7 +369,7 @@ impl Validator {
     fn dataflow(
         &mut self,
         df: &LirDataflowDescription,
-    ) -> Result<BTreeMap<GlobalId, ReprRelationType>, RecursionLimitError> {
+    ) -> Result<BTreeMap<GlobalId, ReprRelationType>, Abort> {
         self.imports(df);
 
         self.objects = df.objects_to_build.iter().map(|o| o.id).collect();
@@ -694,11 +744,11 @@ impl Validator {
     /// and `LetRec`. `RenderPlan::try_from` accepts them only as a prefix of bindings above a
     /// binding-free body, with `Let` values binding-free and `LetRec` values again of that
     /// form, and the controller panics on any other plan.
-    fn visit(
-        &mut self,
-        expr: &LirRelationExpr,
-        binding_allowed: bool,
-    ) -> Result<Output, RecursionLimitError> {
+    fn visit(&mut self, expr: &LirRelationExpr, binding_allowed: bool) -> Result<Output, Abort> {
+        self.visits += 1;
+        if self.visits > VISIT_BUDGET {
+            return Err(Abort::Budget);
+        }
         self.checked_recur_mut(|this| this.visit_inner(expr, binding_allowed))
     }
 
@@ -706,7 +756,7 @@ impl Validator {
         &mut self,
         expr: &LirRelationExpr,
         binding_allowed: bool,
-    ) -> Result<Output, RecursionLimitError> {
+    ) -> Result<Output, Abort> {
         // `LetFreePlan` stores nodes in a map by `LirId`, so a duplicate replaces a node.
         if !self.lir_ids.insert(expr.lir_id) {
             self.node_error(
@@ -1104,7 +1154,7 @@ impl Validator {
         ids: &[LocalId],
         values: &[LirRelationExpr],
         body: &LirRelationExpr,
-    ) -> Result<Output, RecursionLimitError> {
+    ) -> Result<Output, Abort> {
         for id in ids {
             self.bind(expr, *id);
         }
@@ -1132,29 +1182,20 @@ impl Validator {
 
         // The column types of the bindings are a fixpoint too. The values are visited with the
         // binding types found so far, starting from no row reaching any binding, until the
-        // types they produce add nothing. These visits only collect types, so their errors
-        // and bookkeeping are discarded. A last visit checks the values against the fixpoint.
+        // types they produce add nothing. A binding takes its value's types as soon as the
+        // value is visited, so later values in the same pass see them. These visits only
+        // collect types, so their errors and bookkeeping are discarded. A last visit checks
+        // the values against the fixpoint.
         let mut types: Vec<Option<Vec<ColType>>> = vec![None; ids.len()];
         let mut clean = true;
         let mut converged = false;
         for _ in 0..LET_REC_TYPE_ITERATIONS {
             let snapshot = self.snapshot();
             let scope = self.locals.len();
-            let (outputs, _) = self.let_rec_values(expr, ids, values, &known, &types)?;
+            let pass = self.let_rec_values(expr, ids, values, &known, &mut types, true)?;
             self.locals.truncate(scope);
             self.restore(snapshot);
-            let mut next = types.clone();
-            let mut mismatch = None;
-            // A length mismatch between ids and values has been reported.
-            for (i, output) in outputs.iter().enumerate() {
-                let (Some(acc), Some(id)) = (next.get_mut(i), ids.get(i)) else {
-                    break;
-                };
-                if let Err((c, a, b)) = types::union_into(acc, output.types()) {
-                    mismatch.get_or_insert((*id, c, a, b));
-                }
-            }
-            if let Some((id, c, a, b)) = mismatch {
+            if let Some((id, c, a, b)) = pass.mismatch {
                 self.node_error(
                     expr,
                     Rule::Type,
@@ -1163,11 +1204,10 @@ impl Validator {
                 clean = false;
                 break;
             }
-            if next == types {
+            if !pass.changed {
                 converged = true;
                 break;
             }
-            types = next;
         }
         if clean && !converged {
             self.node_error(
@@ -1181,7 +1221,9 @@ impl Validator {
         }
 
         let scope = self.locals.len();
-        let (_, values_clean) = self.let_rec_values(expr, ids, values, &known, &types)?;
+        let values_clean = self
+            .let_rec_values(expr, ids, values, &known, &mut types, false)?
+            .clean;
         for (_, binding) in self.locals.iter_mut().skip(scope) {
             binding.set_available(Available::raw());
         }
@@ -1197,16 +1239,17 @@ impl Validator {
     /// Binds the ids of a `LetRec` with the given arities and column types, and visits its
     /// values.
     ///
-    /// Leaves the bindings in `locals`, each with the forms of its value. Returns the outputs
-    /// of the values, and whether they agree with the bindings.
+    /// Leaves the bindings in `locals`, each with the forms of its value. With `update`, merges
+    /// each value's column types into `types` and into its binding right after visiting it.
     fn let_rec_values(
         &mut self,
         expr: &LirRelationExpr,
         ids: &[LocalId],
         values: &[LirRelationExpr],
         known: &BTreeMap<LocalId, usize>,
-        types: &[Option<Vec<ColType>>],
-    ) -> Result<(Vec<Output>, bool), RecursionLimitError> {
+        types: &mut [Option<Vec<ColType>>],
+        update: bool,
+    ) -> Result<LetRecPass, Abort> {
         // Rendering binds each id to a raw-only `Variable` until its value is rendered, then to
         // the value's forms for the values that follow, and to its raw collection alone for
         // the body, because arrangements cannot leave the iterative scope.
@@ -1234,16 +1277,31 @@ impl Validator {
             self.locals.push((*id, binding));
         }
 
-        let mut clean = true;
-        let mut outputs = Vec::with_capacity(values.len());
+        let mut pass = LetRecPass {
+            clean: true,
+            changed: false,
+            mismatch: None,
+        };
         for (i, value) in values.iter().enumerate() {
             let output = self.visit(value, true)?;
-            if let Some(id) = ids.get(i) {
-                clean &= self.let_rec_value(expr, scope + i, *id, known.get(id), &output);
+            // A length mismatch between ids and values has been reported.
+            let Some(id) = ids.get(i) else { continue };
+            pass.clean &= self.let_rec_value(expr, scope + i, *id, known.get(id), &output);
+            let Some(acc) = types.get_mut(i).filter(|_| update) else {
+                continue;
+            };
+            let before = acc.clone();
+            if let Err((c, a, b)) = types::union_into(acc, output.types()) {
+                pass.mismatch.get_or_insert((*id, c, a, b));
             }
-            outputs.push(output);
+            if *acc != before {
+                pass.changed = true;
+                if let Some((_, binding)) = self.locals.get_mut(scope + i) {
+                    binding.set_types(acc.clone());
+                }
+            }
         }
-        Ok((outputs, clean))
+        Ok(pass)
     }
 
     /// Checks the output of the value of the `LetRec` binding at `locals[index]`, and makes

@@ -601,6 +601,7 @@ pub(super) fn reduce(
                 ));
             }
         }
+        accumulable_aggregates(issues, p);
     }
 
     let mfp_width = key_arity.saturating_add(count);
@@ -627,6 +628,58 @@ pub(super) fn reduce(
         ));
     }
     Some(mfp_after.projection.len())
+}
+
+/// Checks that an accumulable plan's per-path aggregate lists restate `full_aggrs`.
+///
+/// Rendering accumulates each value with the function in `simple_aggrs` or `distinct_aggrs`,
+/// and finalizes with the one in `full_aggrs`, which is the copy the type rules check. It
+/// soft-panics unless the two lists together have one entry per aggregate.
+fn accumulable_aggregates(issues: &mut Issues, plan: &AccumulablePlan) {
+    let count = plan.full_aggrs.len();
+    let listed = plan
+        .simple_aggrs
+        .len()
+        .saturating_add(plan.distinct_aggrs.len());
+    if count == 0 || listed != count {
+        issues.push((
+            Rule::Shape,
+            format!(
+                "Reduce has {count} accumulable aggregates, but lists {listed} simple and distinct ones"
+            ),
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    let lists = [
+        ("simple", false, &plan.simple_aggrs),
+        ("distinct", true, &plan.distinct_aggrs),
+    ];
+    for (kind, distinct, list) in lists {
+        for (index, aggregate) in list {
+            if !seen.insert(*index) {
+                issues.push((
+                    Rule::Shape,
+                    format!("Reduce lists aggregate position {index} more than once"),
+                ));
+            }
+            // Positions out of range have been reported.
+            let Some(full) = plan.full_aggrs.get(*index) else {
+                continue;
+            };
+            if aggregate != full || aggregate.distinct != distinct {
+                issues.push((
+                    Rule::Shape,
+                    format!(
+                        "Reduce {kind} aggregate at position {index} is {}{}, but aggregate {index} of the plan is {}{}",
+                        aggregate.func.name(),
+                        if aggregate.distinct { " (distinct)" } else { "" },
+                        full.func.name(),
+                        if full.distinct { " (distinct)" } else { "" },
+                    ),
+                ));
+            }
+        }
+    }
 }
 
 /// `TopK`: returns the output arity, which is the input arity.

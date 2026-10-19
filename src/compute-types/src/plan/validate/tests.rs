@@ -1255,7 +1255,17 @@ fn flat_map(
 
 /// A `Reduce` that groups a raw input of arity 2 by column 0 and aggregates column 1.
 fn aggregate_by_first(input: LirRelationExpr, func: mz_expr::AggregateFunc) -> LirRelationExpr {
-    let aggregate = LirAggregateExpr {
+    accumulate_by_first(input, func.clone(), func)
+}
+
+/// Like [`aggregate_by_first`], but states `accumulated` as the function the accumulation
+/// path applies.
+fn accumulate_by_first(
+    input: LirRelationExpr,
+    func: mz_expr::AggregateFunc,
+    accumulated: mz_expr::AggregateFunc,
+) -> LirRelationExpr {
+    let aggregate = |func| LirAggregateExpr {
         func,
         expr: col(1),
         distinct: false,
@@ -1268,8 +1278,8 @@ fn aggregate_by_first(input: LirRelationExpr, func: mz_expr::AggregateFunc) -> L
             val_plan: SafeMfpPlan::from_mfp(raw_mfp(2, vec![], vec![], vec![1])),
         },
         plan: ReducePlan::Accumulable(AccumulablePlan {
-            full_aggrs: vec![aggregate.clone()],
-            simple_aggrs: vec![(0, aggregate)],
+            full_aggrs: vec![aggregate(func)],
+            simple_aggrs: vec![(0, aggregate(accumulated))],
             distinct_aggrs: vec![],
         }),
         mfp_after: SafeMfpPlan::from_mfp(raw_mfp(2, vec![], vec![], vec![0, 1])),
@@ -1582,5 +1592,91 @@ fn accepts_wrap_when_enforced() {
     assert_eq!(
         types[&OUT].column_types,
         vec![ReprScalarType::Int64.nullable(false); 3]
+    );
+}
+
+#[mz_ore::test]
+fn rejects_accumulated_dummy() {
+    // Accumulating an `Int64` with `Dummy` panics in `datum_to_accumulator`.
+    let plan = accumulate_by_first(
+        raw_t1(),
+        mz_expr::AggregateFunc::Count,
+        mz_expr::AggregateFunc::Dummy,
+    );
+    let errs = errors_with(&dataflow(&[(T1, 2)], vec![(OUT, plan)]), &enforced());
+    assert_error(
+        &errs,
+        Rule::Shape,
+        "simple aggregate at position 0 is dummy, but aggregate 0 of the plan is count",
+    );
+}
+
+#[mz_ore::test]
+fn rejects_accumulated_any_over_int64() {
+    let plan = accumulate_by_first(
+        raw_t1(),
+        mz_expr::AggregateFunc::Count,
+        mz_expr::AggregateFunc::Any,
+    );
+    let errs = errors_with(&dataflow(&[(T1, 2)], vec![(OUT, plan)]), &enforced());
+    assert_error(
+        &errs,
+        Rule::Shape,
+        "simple aggregate at position 0 is any, but aggregate 0 of the plan is count",
+    );
+}
+
+/// `LetRec`s nested `depth` deep through their values. Each level's binding reads `T1`, of
+/// arity 1, and the innermost value reads the outermost-but-one binding, so each level needs
+/// two visits of its value to find its binding's types.
+fn nested_let_rec(depth: u64) -> LirRelationExpr {
+    let mut value = union(vec![raw_t1(), get_local(LocalId::new(1))]);
+    for level in 1..=depth {
+        let id = LocalId::new(level);
+        value = plan(LirRelationNode::LetRec {
+            ids: vec![id],
+            values: vec![value],
+            limits: vec![limit()],
+            body: Box::new(union(vec![raw_t1(), get_local(id)])),
+        });
+    }
+    value
+}
+
+#[mz_ore::test]
+fn accepts_nested_let_rec() {
+    let df = dataflow(&[(T1, 1)], vec![(OUT, nested_let_rec(4))]);
+    validate_dataflow(&df, &enforced()).expect("valid");
+}
+
+#[mz_ore::test]
+fn bounds_work_on_deeply_nested_let_rec() {
+    // Each level at least doubles the visits of the levels inside it, so without a bound
+    // this takes more than 2^40 visits.
+    let df = dataflow(&[(T1, 1)], vec![(OUT, nested_let_rec(40))]);
+    let errs = errors(&df);
+    assert_error(&errs, Rule::Shape, "operator visits");
+}
+
+#[mz_ore::test]
+fn infers_types_of_long_binding_chains() {
+    // l0 = T1 + l0, and l(i) = l(i - 1). Updating each binding as soon as its value is
+    // visited finds all types in one pass, where updating them after each pass would need
+    // one pass per binding, more than the iteration limit allows.
+    let n = 2 * u64::try_from(LET_REC_TYPE_ITERATIONS).expect("fits");
+    let ids: Vec<_> = (0..n).map(LocalId::new).collect();
+    let mut values = vec![union(vec![raw_t1(), get_local(ids[0])])];
+    values.extend(ids.iter().take(ids.len() - 1).map(|id| get_local(*id)));
+    let plan = plan(LirRelationNode::LetRec {
+        limits: vec![limit(); ids.len()],
+        body: Box::new(get_local(ids[ids.len() - 1])),
+        ids,
+        values,
+    });
+    let types =
+        validate_dataflow(&dataflow(&[(T1, 1)], vec![(OUT, plan)]), &enforced()).expect("valid");
+    assert_eq!(
+        types[&OUT].column_types,
+        vec![ReprScalarType::Int64.nullable(false)]
     );
 }
