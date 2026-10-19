@@ -2708,6 +2708,156 @@ pub fn generate_subsource_statements(
     Ok(statements)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CsrProtobufPreparation {
+    connection: mz_storage_types::connections::CsrConnection,
+    topic: String,
+    require_key: bool,
+}
+
+impl CsrProtobufPreparation {
+    async fn execute(
+        self,
+        storage_configuration: &StorageConfiguration,
+    ) -> Result<CsrSeedProtobuf, PlanError> {
+        let Self {
+            connection: ccsr_connection,
+            topic,
+            require_key,
+        } = self;
+        let ccsr_client = ccsr_connection
+            .connect(storage_configuration, InTask::No)
+            .await
+            .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
+
+        let value = compile_proto(&format!("{}-value", topic), &ccsr_client).await?;
+        let key = compile_proto(&format!("{}-key", topic), &ccsr_client)
+            .await
+            .ok();
+
+        if require_key && key.is_none() {
+            sql_bail!("Key schema is required for ENVELOPE DEBEZIUM");
+        }
+
+        Ok(CsrSeedProtobuf { value, key })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CsrAvroPreparation {
+    connection: mz_storage_types::connections::CsrConnection,
+    topic: String,
+    key_strategy: ReaderSchemaSelectionStrategy,
+    value_strategy: ReaderSchemaSelectionStrategy,
+    require_key: bool,
+}
+
+impl CsrAvroPreparation {
+    async fn execute(
+        self,
+        storage_configuration: &StorageConfiguration,
+    ) -> Result<CsrSeedAvro, PlanError> {
+        let Self {
+            connection: csr_connection,
+            topic,
+            key_strategy,
+            value_strategy,
+            require_key,
+        } = self;
+        let ccsr_client = csr_connection
+            .connect(storage_configuration, InTask::No)
+            .await
+            .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
+
+        let Schema {
+            key_schema,
+            value_schema,
+            key_reference_schemas,
+            value_reference_schemas,
+        } = get_remote_csr_schema(&ccsr_client, key_strategy, value_strategy, &topic).await?;
+        if require_key && key_schema.is_none() {
+            sql_bail!("Key schema is required for ENVELOPE DEBEZIUM");
+        }
+
+        Ok(CsrSeedAvro {
+            key_schema,
+            value_schema,
+            key_reference_schemas,
+            value_reference_schemas,
+        })
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct GlueAvroPreparation {
+    connection: mz_storage_types::connections::GlueSchemaRegistryConnection,
+    schema_name: String,
+}
+
+impl GlueAvroPreparation {
+    async fn execute(
+        self,
+        storage_configuration: &StorageConfiguration,
+    ) -> Result<GlueAvroSeed, PlanError> {
+        use crate::pure::error::GluePurificationError;
+        let Self {
+            connection: gsr_connection,
+            schema_name,
+        } = self;
+        // Use storage decoding's authentication and address policy.
+        let enforce_external_addresses = mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
+            .get(storage_configuration.config_set());
+        let sdk_config = gsr_connection
+            .aws_connection
+            .connection
+            .load_sdk_config(
+                &storage_configuration.connection_context,
+                gsr_connection.aws_connection.connection_id,
+                // We are in a normal tokio context during purification.
+                InTask::No,
+                enforce_external_addresses,
+            )
+            .await
+            .map_err(|e| GluePurificationError::LoadSdkConfigError(Arc::new(e)))?;
+        let glue_client = mz_aws_glue_schema_registry::ClientConfig::new(sdk_config).build();
+
+        let version = glue_client
+            .get_schema_version_latest_by_name(&gsr_connection.registry_name, &schema_name)
+            .await
+            .map_err(|e| GluePurificationError::SchemaLookupError {
+                registry: gsr_connection.registry_name.clone(),
+                schema: schema_name.clone(),
+                cause: Arc::new(e),
+            })?;
+        // The runtime decode path only handles Avro; reject other formats at
+        // planning time so the failure mode is a clear SQL error, not a
+        // permanent decode error on every record.
+        match &version.data_format {
+            Some(mz_aws_glue_schema_registry::DataFormat::Avro) => {}
+            other => {
+                return Err(GluePurificationError::UnsupportedDataFormat {
+                    registry: gsr_connection.registry_name.clone(),
+                    schema: schema_name.clone(),
+                    format: other
+                        .as_ref()
+                        .map(|f| f.as_str().to_string())
+                        .unwrap_or_else(|| "<unspecified>".to_string()),
+                }
+                .into());
+            }
+        }
+        let value_schema =
+            version
+                .definition
+                .ok_or_else(|| GluePurificationError::EmptyDefinition {
+                    registry: gsr_connection.registry_name.clone(),
+                    schema: schema_name.clone(),
+                })?;
+
+        Ok(GlueAvroSeed { value_schema })
+    }
+}
+
 async fn purify_csr_connection_proto(
     catalog: &dyn SessionCatalog,
     options: &SourceFormatOptions,
@@ -2735,21 +2885,15 @@ async fn purify_csr_connection_proto(
                 _ => sql_bail!("{} is not a schema registry connection", connection),
             };
 
-            let ccsr_client = ccsr_connection
-                .connect(storage_configuration, InTask::No)
-                .await
-                .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
-
-            let value = compile_proto(&format!("{}-value", topic), &ccsr_client).await?;
-            let key = compile_proto(&format!("{}-key", topic), &ccsr_client)
-                .await
-                .ok();
-
-            if matches!(envelope, Some(SourceEnvelope::Debezium)) && key.is_none() {
-                sql_bail!("Key schema is required for ENVELOPE DEBEZIUM");
-            }
-
-            *seed = Some(CsrSeedProtobuf { value, key });
+            *seed = Some(
+                CsrProtobufPreparation {
+                    connection: ccsr_connection,
+                    topic: topic.clone(),
+                    require_key: matches!(envelope, Some(SourceEnvelope::Debezium)),
+                }
+                .execute(storage_configuration)
+                .await?,
+            );
         }
         Some(_) => (),
     }
@@ -2780,33 +2924,17 @@ async fn purify_csr_connection_avro(
             Connection::Csr(connection) => connection.clone().into_inline_connection(catalog),
             _ => sql_bail!("{} is not a schema registry connection", connection),
         };
-        let ccsr_client = csr_connection
-            .connect(storage_configuration, InTask::No)
-            .await
-            .map_err(|e| CsrPurificationError::ClientError(Arc::new(e)))?;
-
-        let Schema {
-            key_schema,
-            value_schema,
-            key_reference_schemas,
-            value_reference_schemas,
-        } = get_remote_csr_schema(
-            &ccsr_client,
-            key_strategy.clone().unwrap_or_default(),
-            value_strategy.clone().unwrap_or_default(),
-            topic,
-        )
-        .await?;
-        if matches!(envelope, Some(SourceEnvelope::Debezium)) && key_schema.is_none() {
-            sql_bail!("Key schema is required for ENVELOPE DEBEZIUM");
-        }
-
-        *seed = Some(CsrSeedAvro {
-            key_schema,
-            value_schema,
-            key_reference_schemas,
-            value_reference_schemas,
-        })
+        *seed = Some(
+            CsrAvroPreparation {
+                connection: csr_connection,
+                topic: topic.clone(),
+                key_strategy: key_strategy.clone().unwrap_or_default(),
+                value_strategy: value_strategy.clone().unwrap_or_default(),
+                require_key: matches!(envelope, Some(SourceEnvelope::Debezium)),
+            }
+            .execute(storage_configuration)
+            .await?,
+        );
     }
 
     Ok(())
@@ -2873,58 +3001,14 @@ async fn purify_glue_connection_avro(
     }
     let gsr_connection = gsr_connection.into_inline_connection(catalog);
 
-    // Build the SDK config the same way the storage decoder does at runtime
-    // — same auth, region, and endpoint override resolution.
-    let enforce_external_addresses = mz_storage_types::dyncfgs::ENFORCE_EXTERNAL_ADDRESSES
-        .get(storage_configuration.config_set());
-    let sdk_config = gsr_connection
-        .aws_connection
-        .connection
-        .load_sdk_config(
-            &storage_configuration.connection_context,
-            gsr_connection.aws_connection.connection_id,
-            // We are in a normal tokio context during purification.
-            InTask::No,
-            enforce_external_addresses,
-        )
-        .await
-        .map_err(|e| GluePurificationError::LoadSdkConfigError(Arc::new(e)))?;
-    let glue_client = mz_aws_glue_schema_registry::ClientConfig::new(sdk_config).build();
-
-    let version = glue_client
-        .get_schema_version_latest_by_name(&gsr_connection.registry_name, &schema_name)
-        .await
-        .map_err(|e| GluePurificationError::SchemaLookupError {
-            registry: gsr_connection.registry_name.clone(),
-            schema: schema_name.clone(),
-            cause: Arc::new(e),
-        })?;
-    // The runtime decode path only handles Avro; reject other formats at
-    // planning time so the failure mode is a clear SQL error, not a
-    // permanent decode error on every record.
-    match &version.data_format {
-        Some(mz_aws_glue_schema_registry::DataFormat::Avro) => {}
-        other => {
-            return Err(GluePurificationError::UnsupportedDataFormat {
-                registry: gsr_connection.registry_name.clone(),
-                schema: schema_name.clone(),
-                format: other
-                    .as_ref()
-                    .map(|f| f.as_str().to_string())
-                    .unwrap_or_else(|| "<unspecified>".to_string()),
-            }
-            .into());
+    *seed = Some(
+        GlueAvroPreparation {
+            connection: gsr_connection,
+            schema_name,
         }
-    }
-    let value_schema =
-        version
-            .definition
-            .ok_or_else(|| GluePurificationError::EmptyDefinition {
-                registry: gsr_connection.registry_name.clone(),
-                schema: schema_name.clone(),
-            })?;
-
-    *seed = Some(GlueAvroSeed { value_schema });
+        .execute(storage_configuration)
+        .await?,
+    );
     Ok(())
 }
 
