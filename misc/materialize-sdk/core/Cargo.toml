@@ -15,5 +15,11 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
+[features]
+# The runner of the conformance vectors, for the packages' tests.
+conformance = []
+
 [dev-dependencies]
+# Turns on `conformance` for the core's own tests.
+materialize-sdk-core = { path = ".", features = ["conformance"] }
 proptest.workspace = true

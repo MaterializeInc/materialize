@@ -1,0 +1,20 @@
+[package]
+name = "materialize-sdk-python"
+description = "The Python binding of the Materialize SDK's protocol core."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+name = "_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+materialize-sdk-core = { path = "../core", features = ["conformance"] }
+pyo3.workspace = true
+serde_json.workspace = true

@@ -19,5 +19,19 @@ cd "$(dirname "$0")/../.."
 cargo deny --locked --manifest-path misc/materialize-sdk/Cargo.toml \
     check --config deny.toml licenses bans sources
 cd misc/materialize-sdk
-cargo clippy --locked --all-targets -- -D warnings
+cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked
+
+# The Python package: its binding, the binding's stubs, and the conformance
+# vectors through it.
+venv="$(mktemp -d)/venv"
+python3 -m venv "$venv"
+"$venv/bin/pip" install --quiet "maturin>=1.9,<2"
+(
+    cd python
+    export VIRTUAL_ENV="$venv" PATH="$venv/bin:$PATH"
+    maturin develop --locked --quiet --extras test
+    python -m mypy.stubtest materialize_sdk._core
+    mypy --strict materialize_sdk
+    python -m pytest --quiet tests
+)
