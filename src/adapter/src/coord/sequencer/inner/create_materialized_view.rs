@@ -370,7 +370,7 @@ impl Coordinator {
         let plan::CreateMaterializedViewPlan {
             materialized_view:
                 plan::MaterializedView {
-                    expr,
+                    definition,
                     cluster_id,
                     target_replica,
                     refresh_schedule,
@@ -379,6 +379,14 @@ impl Coordinator {
             ambiguous_columns,
             ..
         } = &plan;
+        let expr = match definition {
+            plan::MaterializedViewDefinition::Query(expr) => expr,
+            plan::MaterializedViewDefinition::Plan { .. } => {
+                return Err(AdapterError::Unsupported(
+                    "CREATE MATERIALIZED VIEW ... FROM PLAN",
+                ));
+            }
+        };
 
         // Validate any references in the materialized view's expression. We do
         // this on the unoptimized plan to better reflect what the user typed.
@@ -526,7 +534,14 @@ impl Coordinator {
                     ), AdapterError> {
                         let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                        let raw_expr = plan.materialized_view.expr.clone();
+                        let plan::MaterializedViewDefinition::Query(raw_expr) =
+                            &plan.materialized_view.definition
+                        else {
+                            return Err(AdapterError::Internal(
+                                "FROM PLAN materialized views are not optimized".into(),
+                            ));
+                        };
+                        let raw_expr = raw_expr.clone();
 
                         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
                         let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
@@ -616,7 +631,7 @@ impl Coordinator {
                     materialized_view:
                         plan::MaterializedView {
                             mut create_sql,
-                            expr: raw_expr,
+                            definition,
                             column_names,
                             dependencies,
                             replacement_target,
@@ -638,6 +653,12 @@ impl Coordinator {
             optimizer_features,
             ..
         } = stage;
+        let plan::MaterializedViewDefinition::Query(raw_expr) = definition else {
+            return Err(AdapterError::internal(
+                "create materialized view",
+                "FROM PLAN materialized views are not optimized",
+            ));
+        };
 
         // Validate the replacement target, if one is given.
         if let Some(target_id) = replacement_target {

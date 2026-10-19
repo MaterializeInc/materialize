@@ -1567,11 +1567,14 @@ impl_display_t!(CreateViewStatement);
 pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub if_exists: IfExistsBehavior,
     pub name: UnresolvedItemName,
+    /// Column names, only with [`MaterializedViewBody::Query`].
     pub columns: Vec<Ident>,
+    /// Column definitions, only and always with [`MaterializedViewBody::Plan`].
+    pub column_defs: Vec<ColumnDef<T>>,
     pub replacement_for: Option<T::ItemName>,
     pub in_cluster: Option<T::ClusterName>,
     pub in_cluster_replica: Option<Ident>,
-    pub query: Query<T>,
+    pub body: MaterializedViewBody<T>,
     pub as_of: Option<u64>,
     pub with_options: Vec<MaterializedViewOption<T>>,
 }
@@ -1598,6 +1601,12 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
         if !self.columns.is_empty() {
             f.write_str(" (");
             f.write_node(&display::comma_separated(&self.columns));
+            f.write_str(")");
+        }
+
+        if !self.column_defs.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.column_defs));
             f.write_str(")");
         }
 
@@ -1630,8 +1639,8 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
             f.write_str(")");
         }
 
-        f.write_str(" AS ");
-        f.write_node(&self.query);
+        f.write_str(" ");
+        f.write_node(&self.body);
 
         if let Some(time) = &self.as_of {
             f.write_str(" AS OF ");
@@ -1640,6 +1649,37 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
     }
 }
 impl_display_t!(CreateMaterializedViewStatement);
+
+/// What a `CREATE MATERIALIZED VIEW` computes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MaterializedViewBody<T: AstInfo> {
+    /// `AS <query>`
+    Query(Query<T>),
+    /// `FROM PLAN '<json>'`, a LIR plan envelope.
+    Plan(String),
+}
+
+impl<T: AstInfo> AstDisplay for MaterializedViewBody<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            MaterializedViewBody::Query(query) => {
+                f.write_str("AS ");
+                f.write_node(query);
+            }
+            MaterializedViewBody::Plan(json) => {
+                f.write_str("FROM PLAN ");
+                if f.redacted() {
+                    f.write_str("'<REDACTED>'");
+                } else {
+                    f.write_str("'");
+                    f.write_node(&display::escape_single_quote_string(json));
+                    f.write_str("'");
+                }
+            }
+        }
+    }
+}
+impl_display_t!(MaterializedViewBody);
 
 /// `ALTER SET CLUSTER`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

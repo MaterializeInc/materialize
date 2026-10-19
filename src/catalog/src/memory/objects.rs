@@ -1524,10 +1524,11 @@ impl MaterializedView {
             if_exists: old_stmt.if_exists,
             name: old_stmt.name,
             columns: rpl_stmt.columns,
+            column_defs: rpl_stmt.column_defs,
             replacement_for: None,
             in_cluster: rpl_stmt.in_cluster,
             in_cluster_replica: rpl_stmt.in_cluster_replica,
-            query: rpl_stmt.query,
+            body: rpl_stmt.body,
             as_of: rpl_stmt.as_of,
             with_options: rpl_stmt.with_options,
         };

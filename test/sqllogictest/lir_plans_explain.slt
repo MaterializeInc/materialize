@@ -11,6 +11,11 @@
 
 mode cockroach
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_lir_plans = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE t (a int8 NOT NULL, b int8)
 
@@ -324,6 +329,19 @@ EXPLAIN PHYSICAL PLAN AS LIR JSON FOR MATERIALIZED VIEW mv
   }
 }
 EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_lir_plans = false
+----
+COMPLETE 0
+
+query error LIR plan syntax \(FROM PLAN, AS LIR JSON\) is not available
+EXPLAIN PHYSICAL PLAN AS LIR JSON FOR MATERIALIZED VIEW mv
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_lir_plans = true
+----
+COMPLETE 0
 
 query error AS LIR JSON is only supported for EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW
 EXPLAIN OPTIMIZED PLAN AS LIR JSON FOR MATERIALIZED VIEW mv

@@ -22,6 +22,7 @@ use itertools::Itertools;
 use mz_adapter_types::dyncfgs::ENABLE_S3_TABLES_REGION_CHECK;
 use mz_ccsr::{Client, GetBySubjectError};
 use mz_cloud_provider::CloudProvider;
+use mz_compute_types::plan::envelope::{ImportSource, envelope_to_json};
 use mz_controller_types::ClusterId;
 use mz_kafka_util::client::MzClientContext;
 use mz_mysql_util::MySqlTableDesc;
@@ -32,7 +33,9 @@ use mz_ore::iter::IteratorExt;
 use mz_ore::str::StrExt;
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::RustType;
-use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp, strconv};
+use mz_repr::{
+    CatalogItemId, RelationDesc, RelationVersion, RelationVersionSelector, Timestamp, strconv,
+};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit::{Visit, visit_function};
 use mz_sql_parser::ast::visit_mut::{VisitMut, visit_expr_mut};
@@ -44,7 +47,7 @@ use mz_sql_parser::ast::{
     CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema,
     DeferredItemName, DocOnIdentifier, DocOnSchema, Expr, Function, FunctionArgs, GlueAvroOption,
     GlueAvroSeed, Ident, KafkaSourceConfigOption, KafkaSourceConfigOptionName, LoadGenerator,
-    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
+    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewBody, MaterializedViewOption,
     MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
     PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, RefreshAtOptionValue,
     RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, SqlServerConfigOption,
@@ -82,6 +85,7 @@ use crate::names::{
     ResolvedItemName,
 };
 use crate::plan::error::PlanError;
+use crate::plan::lir_plan;
 use crate::plan::statement::ddl::load_generator_ast_to_generator;
 use crate::plan::{SourceReferences, StatementContext};
 use crate::pure::error::{IcebergSinkPurificationError, SqlServerSourcePurificationError};
@@ -2947,6 +2951,48 @@ async fn compile_proto(
         schema,
         message_name,
     })
+}
+
+/// Resolves the imports of a `CREATE MATERIALIZED VIEW ... FROM PLAN` statement.
+///
+/// Rewrites every import and index name in the plan envelope to the item it names and that
+/// item's latest relation version, and adds the items to `resolved_ids`. The stored plan then
+/// names its inputs by id, so renaming an input does not change what the plan reads. Statements
+/// with a query body are left alone.
+pub fn purify_create_materialized_view_plan(
+    catalog: &dyn SessionCatalog,
+    stmt: &mut CreateMaterializedViewStatement<Aug>,
+    resolved_ids: &mut ResolvedIds,
+) -> Result<(), PlanError> {
+    if !matches!(stmt.body, MaterializedViewBody::Plan(_)) {
+        return Ok(());
+    }
+    StatementContext::new(None, catalog)
+        .require_feature_flag(&crate::session::vars::ENABLE_LIR_PLANS)?;
+    let cluster_id = crate::plan::resolve_cluster_for_materialized_view(catalog, stmt)?;
+    let MaterializedViewBody::Plan(json) = &mut stmt.body else {
+        unreachable!("checked above");
+    };
+    let mut envelope = lir_plan::parse_user_envelope(json)?;
+    for import in &mut envelope.imports {
+        let resolved = lir_plan::resolve_import(catalog, import, cluster_id, true)?;
+        resolved_ids.extend([(resolved.item.id(), resolved.global_id)]);
+        import.source = ImportSource::Item {
+            item_id: resolved.item.id(),
+            version: resolved.version,
+        };
+        for (index, (index_item, index_global_id)) in
+            import.indexes.iter_mut().zip_eq(resolved.indexes)
+        {
+            resolved_ids.extend([(index_item.id(), index_global_id)]);
+            *index = ImportSource::Item {
+                item_id: index_item.id(),
+                version: RelationVersion::root(),
+            };
+        }
+    }
+    *json = envelope_to_json(&envelope);
+    Ok(())
 }
 
 const MZ_NOW_NAME: &str = "mz_now";

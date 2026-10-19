@@ -17,8 +17,8 @@ use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_repr::{RelationDesc, SqlScalarType};
-use mz_sql::ast::Statement;
 use mz_sql::ast::display::{AstDisplay, escaped_string_literal};
+use mz_sql::ast::{MaterializedViewBody, Statement};
 use mz_sql::catalog::{NameReference, ObjectType};
 use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
@@ -130,7 +130,10 @@ fn make_builtin_materialized_views(builtin_items: &[Builtin<NameReference>]) -> 
                 panic!("invalid builtin MV SQL");
             };
 
-            let definition = format!("{};", stmt.query.to_ast_string_stable());
+            let MaterializedViewBody::Query(query) = &stmt.body else {
+                panic!("builtin MV SQL must have a query");
+            };
+            let definition = format!("{};", query.to_ast_string_stable());
             let definition = escaped_string_literal(&definition);
             let create_sql = stmt.to_ast_string_stable();
             let create_sql = escaped_string_literal(&create_sql);

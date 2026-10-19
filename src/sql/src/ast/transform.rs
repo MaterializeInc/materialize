@@ -21,8 +21,8 @@ use crate::ast::{
     AstInfo, CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
     CreateMetricSinkStatement, CreateSecretStatement, CreateSinkStatement, CreateSourceStatement,
     CreateSubsourceStatement, CreateTableStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, Expr, Ident, Query, Raw, RawDataType, RawItemName, Statement,
-    UnresolvedItemName, ViewDefinition,
+    CreateWebhookSourceStatement, Expr, Ident, MaterializedViewBody, Query, Raw, RawDataType,
+    RawItemName, Statement, UnresolvedItemName, ViewDefinition,
 };
 use crate::names::FullItemName;
 
@@ -237,13 +237,20 @@ pub fn create_stmt_rename_refs(
         }
         Statement::CreateMaterializedView(CreateMaterializedViewStatement {
             replacement_for,
-            query,
+            body,
             ..
         }) => {
             if let Some(target) = replacement_for {
                 maybe_update_item_name(target.name_mut());
             }
-            rewrite_query(from_name, to_item_name, query)?;
+            match body {
+                MaterializedViewBody::Query(query) => {
+                    rewrite_query(from_name, to_item_name, query)?;
+                }
+                // Purification rewrote the plan's imports to item ids, which renames do not
+                // affect.
+                MaterializedViewBody::Plan(_) => {}
+            }
         }
         Statement::CreateSource(_)
         | Statement::CreateSubsource(_)

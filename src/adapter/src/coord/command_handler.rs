@@ -47,6 +47,7 @@ use mz_sql::plan::{
 };
 use mz_sql::pure::{
     materialized_view_option_contains_temporal, purify_create_materialized_view_options,
+    purify_create_materialized_view_plan,
 };
 use mz_sql::rbac;
 use mz_sql::session::hint::ApplicationNameHint;
@@ -1674,6 +1675,16 @@ impl Coordinator {
                     )));
                 }
 
+                // Resolve the plan's imports first, so that `resolved_ids` covers them when
+                // `mz_now()` is resolved against the inputs.
+                if let Err(e) = purify_create_materialized_view_plan(
+                    &self.catalog().for_session(ctx.session()),
+                    &mut cmvs,
+                    &mut resolved_ids,
+                ) {
+                    return ctx.retire(Err(e.into()));
+                }
+
                 let mz_now = match self
                     .resolve_mz_now_for_create_materialized_view(
                         &cmvs,
@@ -1701,10 +1712,11 @@ impl Coordinator {
                         if_exists: cmvs.if_exists,
                         name: cmvs.name,
                         columns: cmvs.columns,
+                        column_defs: cmvs.column_defs,
                         replacement_for: cmvs.replacement_for,
                         in_cluster: cmvs.in_cluster,
                         in_cluster_replica: cmvs.in_cluster_replica,
-                        query: cmvs.query,
+                        body: cmvs.body,
                         with_options: cmvs.with_options,
                         as_of: None,
                     });

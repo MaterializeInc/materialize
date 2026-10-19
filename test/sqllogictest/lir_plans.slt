@@ -1,0 +1,137 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# CREATE MATERIALIZED VIEW ... FROM PLAN: syntax, feature flag, purification and planning errors.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (a int8 NOT NULL)
+
+statement ok
+CREATE TABLE u (a int8 NOT NULL)
+
+statement ok
+CREATE INDEX u_a ON u (a)
+
+statement ok
+CREATE VIEW v AS SELECT a FROM t
+
+statement ok
+CREATE INDEX v_a ON v (a)
+
+statement ok
+CREATE CLUSTER other REPLICAS ()
+
+# The syntax is gated.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_lir_plans = false
+----
+COMPLETE 0
+
+statement error LIR plan syntax \(FROM PLAN, AS LIR JSON\) is not available
+CREATE MATERIALIZED VIEW m (a int8 NOT NULL) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_lir_plans = true
+----
+COMPLETE 0
+
+# A valid plan passes purification and planning.
+# TODO: Installing the plan is not implemented yet.
+statement error CREATE MATERIALIZED VIEW \.\.\. FROM PLAN are not supported
+CREATE MATERIALIZED VIEW m (a int8 NOT NULL) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+# Column definitions.
+
+statement error type modifiers are not supported in FROM PLAN column definitions
+CREATE MATERIALIZED VIEW m (a numeric(10, 2)) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error type modifiers are not supported in FROM PLAN column definitions
+CREATE MATERIALIZED VIEW m (a varchar(3)) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error type modifiers are not supported in FROM PLAN column definitions
+CREATE MATERIALIZED VIEW m (a char(3)) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error type modifiers are not supported in FROM PLAN column definitions
+CREATE MATERIALIZED VIEW m (a timestamp(3)) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error type modifiers are not supported in FROM PLAN column definitions
+CREATE MATERIALIZED VIEW m (a timestamptz(3)) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error type modifiers are not supported in FROM PLAN column definitions
+CREATE MATERIALIZED VIEW m (a numeric(10, 2) list) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+# `char` means `char(1)`.
+statement error type modifiers are not supported in FROM PLAN column definitions
+CREATE MATERIALIZED VIEW m (a char) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error column "a" specified more than once
+CREATE MATERIALIZED VIEW m (a int8, a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error column option DEFAULT 1 in FROM PLAN column definitions not yet supported
+CREATE MATERIALIZED VIEW m (a int8 DEFAULT 1) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error column definitions are only supported with FROM PLAN
+CREATE MATERIALIZED VIEW m (a int8) AS SELECT 1
+
+statement error FROM PLAN requires column definitions
+CREATE MATERIALIZED VIEW m FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+# Envelopes.
+
+statement error unsupported lir_version 2, expected 1
+CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":2,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error invalid LIR plan envelope
+CREATE MATERIALIZED VIEW m (a int8) FROM PLAN 'not json'
+
+statement error import id u1 in LIR plan must be transient
+CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"User":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error object id u2 in LIR plan must be transient
+CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"User":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"User":2}}'
+
+statement error plans must read catalog relations through imports
+CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"User":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+# Imports.
+
+statement error unknown catalog item 'nope'
+CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"nope"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error unknown catalog item u999999 in LIR plan
+CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Item":{"item_id":{"User":999999},"version":0}},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error LIR plan cannot read from persist view v
+CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"v"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error LIR plan cannot import index u_a
+CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"u_a"},"persist":false,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error u_a is not an index on t
+CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":false,"indexes":[{"Name":"u_a"}]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error u is not an index on t
+CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":false,"indexes":[{"Name":"u"}]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error index u_a is on cluster quickstart, but the materialized view is on cluster other
+CREATE MATERIALIZED VIEW m (a int8) IN CLUSTER other FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"u"},"persist":false,"indexes":[{"Name":"u_a"}]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+# The index is on the materialized view's cluster.
+statement error CREATE MATERIALIZED VIEW \.\.\. FROM PLAN are not supported
+CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"u"},"persist":false,"indexes":[{"Name":"u_a"}]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+# A view is read through its index.
+statement error CREATE MATERIALIZED VIEW \.\.\. FROM PLAN are not supported
+CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"v"},"persist":false,"indexes":[{"Name":"v_a"}]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+statement error EXPLAIN CREATE MATERIALIZED VIEW \.\.\. FROM PLAN not yet supported
+EXPLAIN CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'

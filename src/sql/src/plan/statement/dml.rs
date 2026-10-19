@@ -32,8 +32,8 @@ use mz_sql_parser::ast::{
     CteBlock, ExplainAnalyzeClusterStatement, ExplainAnalyzeComputationProperties,
     ExplainAnalyzeComputationProperty, ExplainAnalyzeObjectStatement, ExplainAnalyzeProperty,
     ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement, ExplainSinkSchemaFor,
-    ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr,
-    SetExpr, SubscribeOutput, UnresolvedItemName,
+    ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr, IfExistsBehavior,
+    MaterializedViewBody, OrderByExpr, SetExpr, SubscribeOutput, UnresolvedItemName,
 };
 use mz_sql_parser::ident;
 use mz_storage_types::sinks::{
@@ -725,6 +725,9 @@ fn plan_explainee(
             crate::plan::Explainee::Statement(ExplaineeStatement::CreateView { broken, plan })
         }
         Explainee::CreateMaterializedView(mut stmt, broken) => {
+            if matches!(stmt.body, MaterializedViewBody::Plan(_)) {
+                bail_unsupported!("EXPLAIN CREATE MATERIALIZED VIEW ... FROM PLAN");
+            }
             if stmt.if_exists != IfExistsBehavior::Skip {
                 // If we don't force this parameter to Skip planning will
                 // fail for names that already exist in the catalog. This
@@ -812,6 +815,9 @@ pub fn plan_explain_plan(
 
     let explainee = plan_explainee(scx, explain.explainee, params)?;
 
+    if format == ExplainFormat::LirJson {
+        scx.require_feature_flag(&vars::ENABLE_LIR_PLANS)?;
+    }
     if format == ExplainFormat::LirJson
         && !(stage == ExplainStage::PhysicalPlan
             && matches!(explainee, crate::plan::Explainee::MaterializedView(_)))

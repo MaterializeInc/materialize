@@ -36,8 +36,9 @@ use crate::ast::visit::{Visit, VisitNode};
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
     self, AstInfo, Cte, CteBlock, CteMutRec, DocOnIdentifier, GrantTargetSpecification,
-    GrantTargetSpecificationInner, Ident, MutRecBlock, ObjectType, Query, Raw, RawClusterName,
-    RawDataType, RawItemName, Statement, UnresolvedItemName, UnresolvedObjectName,
+    GrantTargetSpecificationInner, Ident, MaterializedViewBody, MutRecBlock, ObjectType, Query,
+    Raw, RawClusterName, RawDataType, RawItemName, Statement, UnresolvedItemName,
+    UnresolvedObjectName,
 };
 use crate::catalog::{
     CatalogError, CatalogItem, CatalogItemType, CatalogTypeDetails, SessionCatalog,
@@ -1700,6 +1701,30 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         stmt: <Raw as AstInfo>::NestedStatement,
     ) -> <Aug as AstInfo>::NestedStatement {
         stmt
+    }
+
+    fn fold_materialized_view_body(
+        &mut self,
+        body: MaterializedViewBody<Raw>,
+    ) -> MaterializedViewBody<Aug> {
+        match body {
+            MaterializedViewBody::Query(query) => {
+                MaterializedViewBody::Query(self.fold_query(query))
+            }
+            MaterializedViewBody::Plan(json) => {
+                // Record the plan's resolved imports, so that a stored statement, whose imports
+                // purification resolved, references the same items as when it was created.
+                // A plan that does not parse references nothing, and planning reports it.
+                if let Ok(envelope) = crate::plan::lir_plan::parse_user_envelope(&json) {
+                    let ids =
+                        crate::plan::lir_plan::resolved_import_collections(self.catalog, &envelope);
+                    for (item_id, global_id) in ids {
+                        self.ids.entry(item_id).or_default().insert(global_id);
+                    }
+                }
+                MaterializedViewBody::Plan(json)
+            }
+        }
     }
 
     fn fold_query(&mut self, q: Query<Raw>) -> Query<Aug> {

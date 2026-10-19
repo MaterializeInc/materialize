@@ -76,7 +76,7 @@ use mz_sql::names::{
 use mz_sql::plan::{
     CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateMetricSinkPlan,
     CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, Params, Plan, PlanContext,
+    CreateViewPlan, MaterializedViewDefinition, Params, Plan, PlanContext,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -1589,56 +1589,75 @@ impl CatalogState {
                     .chain([(RelationVersion::root(), global_id)].into_iter())
                     .collect();
 
-                // Collect optimizer parameters.
-                let system_vars = session_catalog.system_vars();
-                let overrides = self
-                    .get_cluster(materialized_view.cluster_id)
-                    .config
-                    .features();
-                let optimizer_config =
-                    optimize::OptimizerConfig::from(system_vars).override_from(&overrides);
-                let previous_exprs = previous_item.map(|item| match item {
-                    CatalogItem::MaterializedView(materialized_view) => materialized_view
-                        .raw_expr
-                        .zip(materialized_view.locally_optimized_expr),
-                    item => unreachable!("expected materialized view, found: {item:#?}"),
-                });
-                // A previous item without a SQL definition has no expressions to reuse.
-                let previous_exprs = previous_exprs.flatten();
+                let (raw_expr, optimized_expr, mut typ, dependencies) = match materialized_view
+                    .definition
+                {
+                    MaterializedViewDefinition::Query(expr) => {
+                        // Collect optimizer parameters.
+                        let system_vars = session_catalog.system_vars();
+                        let overrides = self
+                            .get_cluster(materialized_view.cluster_id)
+                            .config
+                            .features();
+                        let optimizer_config =
+                            optimize::OptimizerConfig::from(system_vars).override_from(&overrides);
+                        let previous_exprs = previous_item.map(|item| match item {
+                            CatalogItem::MaterializedView(materialized_view) => materialized_view
+                                .raw_expr
+                                .zip(materialized_view.locally_optimized_expr),
+                            item => unreachable!("expected materialized view, found: {item:#?}"),
+                        });
+                        // A previous item without a SQL definition has no expressions to reuse.
+                        let previous_exprs = previous_exprs.flatten();
 
-                let (raw_expr, optimized_expr) = match (cached_expr, previous_exprs) {
-                    (Some(local_expr), _)
-                        if local_expr.optimizer_features == optimizer_config.features =>
-                    {
-                        debug!("local expression cache hit for {global_id:?}");
-                        (
-                            Arc::new(materialized_view.expr),
-                            Arc::new(local_expr.local_mir),
-                        )
-                    }
-                    // If the new expr is equivalent to the old expr, then we don't need to re-optimize.
-                    (_, Some((raw_expr, optimized_expr)))
-                        if *raw_expr == materialized_view.expr =>
-                    {
-                        (Arc::clone(&raw_expr), Arc::clone(&optimized_expr))
-                    }
-                    (cached_expr, _) => {
-                        let optimizer_features = optimizer_config.features.clone();
-                        // TODO(aalexandrov): ideally this should be a materialized_view::Optimizer.
-                        let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
+                        let (raw_expr, optimized_expr) = match (cached_expr, previous_exprs) {
+                            (Some(local_expr), _)
+                                if local_expr.optimizer_features == optimizer_config.features =>
+                            {
+                                debug!("local expression cache hit for {global_id:?}");
+                                (Arc::new(expr), Arc::new(local_expr.local_mir))
+                            }
+                            // If the new expr is equivalent to the old expr, then we don't need to re-optimize.
+                            (_, Some((raw_expr, optimized_expr))) if *raw_expr == expr => {
+                                (Arc::clone(&raw_expr), Arc::clone(&optimized_expr))
+                            }
+                            (cached_expr, _) => {
+                                let optimizer_features = optimizer_config.features.clone();
+                                // TODO(aalexandrov): ideally this should be a materialized_view::Optimizer.
+                                let mut optimizer =
+                                    optimize::view::Optimizer::new(optimizer_config, None);
 
-                        let raw_expr = materialized_view.expr;
-                        let optimized_expr = match optimizer.optimize(raw_expr.clone()) {
-                            Ok(optimized_expr) => optimized_expr,
-                            Err(err) => return Err((err.into(), cached_expr)),
+                                let raw_expr = expr;
+                                let optimized_expr = match optimizer.optimize(raw_expr.clone()) {
+                                    Ok(optimized_expr) => optimized_expr,
+                                    Err(err) => return Err((err.into(), cached_expr)),
+                                };
+
+                                uncached_expr = Some((optimized_expr.clone(), optimizer_features));
+
+                                (Arc::new(raw_expr), Arc::new(optimized_expr))
+                            }
                         };
+                        let typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
 
-                        uncached_expr = Some((optimized_expr.clone(), optimizer_features));
-
-                        (Arc::new(raw_expr), Arc::new(optimized_expr))
+                        // Resolve all item dependencies from the HIR expression.
+                        let dependencies = raw_expr
+                            .depends_on()
+                            .into_iter()
+                            .map(|gid| self.get_entry_by_global_id(&gid).id())
+                            .collect::<BTreeSet<_>>();
+                        (Some(raw_expr), Some(optimized_expr), typ, dependencies)
+                    }
+                    MaterializedViewDefinition::Plan { desc, .. } => {
+                        // The replacement target is lifecycle metadata, as for a query, whose
+                        // dependencies come from its expression.
+                        let mut dependencies = materialized_view.dependencies.0;
+                        if let Some(target) = materialized_view.replacement_target {
+                            dependencies.remove(&target);
+                        }
+                        (None, None, desc.into_typ(), dependencies)
                     }
                 };
-                let mut typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
 
                 for &i in &materialized_view.non_null_assertions {
                     typ.column_types[i].nullable = false;
@@ -1648,21 +1667,14 @@ impl CatalogState {
 
                 let initial_as_of = materialized_view.as_of.map(Antichain::from_elem);
 
-                // Resolve all item dependencies from the HIR expression.
-                let dependencies = raw_expr
-                    .depends_on()
-                    .into_iter()
-                    .map(|gid| self.get_entry_by_global_id(&gid).id())
-                    .collect();
-
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
                     collections,
-                    raw_expr: Some(raw_expr),
-                    locally_optimized_expr: Some(optimized_expr),
+                    raw_expr,
+                    locally_optimized_expr: optimized_expr,
                     desc,
                     resolved_ids,
-                    dependencies,
+                    dependencies: DependencyIds(dependencies),
                     replacement_target: materialized_view.replacement_target,
                     cluster_id: materialized_view.cluster_id,
                     target_replica: materialized_view.target_replica,

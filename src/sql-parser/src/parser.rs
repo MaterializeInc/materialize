@@ -4234,7 +4234,26 @@ impl<'a> Parser<'a> {
         }
 
         let name = self.parse_item_name()?;
-        let columns = self.parse_parenthesized_column_list(Optional)?;
+        // A bare name list is `(ident)` or `(ident, ...`. Anything else after `(` is a list of
+        // column definitions.
+        let bare_names = self.peek_nth_token(1) == Some(Token::RParen)
+            || matches!(
+                self.peek_nth_token(2),
+                Some(Token::Comma) | Some(Token::RParen)
+            );
+        let (columns, column_defs) = if self.peek_token() == Some(Token::LParen) && !bare_names {
+            let (column_defs, constraints) = self.parse_columns(Mandatory)?;
+            if !constraints.is_empty() {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "table constraints are not supported in materialized view column definitions"
+                );
+            }
+            (vec![], column_defs)
+        } else {
+            (self.parse_parenthesized_column_list(Optional)?, vec![])
+        };
         let replacement_for = if replacement {
             self.expect_keyword(FOR)?;
             Some(self.parse_raw_name()?)
@@ -4265,8 +4284,26 @@ impl<'a> Parser<'a> {
             vec![]
         };
 
-        self.expect_keyword(AS)?;
-        let query = self.parse_query()?;
+        let body = if self.parse_keywords(&[FROM, PLAN]) {
+            if column_defs.is_empty() {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "FROM PLAN requires column definitions"
+                );
+            }
+            MaterializedViewBody::Plan(self.parse_literal_string()?)
+        } else {
+            if !column_defs.is_empty() {
+                return parser_err!(
+                    self,
+                    self.peek_prev_pos(),
+                    "column definitions are only supported with FROM PLAN"
+                );
+            }
+            self.expect_keyword(AS)?;
+            MaterializedViewBody::Query(self.parse_query()?)
+        };
         let as_of = self.parse_optional_internal_as_of()?;
 
         Ok(Statement::CreateMaterializedView(
@@ -4274,10 +4311,11 @@ impl<'a> Parser<'a> {
                 if_exists,
                 name,
                 columns,
+                column_defs,
                 replacement_for,
                 in_cluster,
                 in_cluster_replica,
-                query,
+                body,
                 as_of,
                 with_options,
             },

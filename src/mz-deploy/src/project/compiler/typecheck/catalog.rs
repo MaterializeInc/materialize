@@ -51,7 +51,10 @@ use mz_sql::names::{
     QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
     SchemaSpecifier,
 };
-use mz_sql::plan::{ClusterSchedule, Params, Plan, PlanContext, PlanError, StatementDesc};
+use mz_sql::plan::{
+    ClusterSchedule, MaterializedViewDefinition, Params, Plan, PlanContext, PlanError,
+    StatementDesc,
+};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{OwnedVarInput, SystemVars};
 use mz_storage_types::connections::Connection;
@@ -572,10 +575,13 @@ fn build_local_item(
             )
         }
         Plan::CreateMaterializedView(plan) => {
-            let desc = RelationDesc::new(
-                plan.materialized_view.expr.top_level_typ(),
-                plan.materialized_view.column_names.clone(),
-            );
+            let desc = match &plan.materialized_view.definition {
+                MaterializedViewDefinition::Query(expr) => RelationDesc::new(
+                    expr.top_level_typ(),
+                    plan.materialized_view.column_names.clone(),
+                ),
+                MaterializedViewDefinition::Plan { desc, .. } => desc.clone(),
+            };
             (
                 plan.name,
                 CatalogItemType::MaterializedView,

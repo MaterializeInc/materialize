@@ -73,7 +73,7 @@ use mz_sql_parser::ast::{
     DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
     FormatSpecifier, GlueAvroOption, GlueAvroOptionName, IcebergSinkConfigOption, Ident,
     IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
+    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewBody, MaterializedViewOption,
     MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
     NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
     NetworkPolicyRuleOptionName, OnHydrationOptionValue, PgConfigOption, PgConfigOptionName,
@@ -162,11 +162,12 @@ use crate::plan::{
     CreateIndexPlan, CreateMaterializedViewPlan, CreateMetricSinkPlan, CreateNetworkPolicyPlan,
     CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
     CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
-    DropOwnedPlan, HirRelationExpr, Index, MaterializedView, MetricSink, NetworkPolicyRule,
-    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, OnHydration, Plan, PlanClusterOption,
-    PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table,
-    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
-    WebhookHeaders, WebhookValidation, literal, plan_utils, query, transform_ast,
+    DropOwnedPlan, HirRelationExpr, Index, MaterializedView, MaterializedViewDefinition,
+    MetricSink, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection,
+    OnHydration, Plan, PlanClusterOption, PlanNotice, PolicyAddress, QueryContext, ReplicaConfig,
+    Secret, Sink, Source, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
+    WebhookHeaderFilters, WebhookHeaders, WebhookValidation, lir_plan, literal, plan_utils, query,
+    transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_AUTO_SCALING_STRATEGY, ENABLE_CLUSTER_SCHEDULE_REFRESH,
@@ -2879,29 +2880,67 @@ pub fn plan_create_materialized_view(
     let partial_name = normalize::unresolved_item_name(stmt.name)?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
 
-    let query::PlannedRootQuery {
-        expr,
-        mut desc,
-        finishing,
-        scope: _,
-    } = query::plan_root_query(scx, stmt.query, QueryLifetime::MaterializedView)?;
-    // We get back a trivial finishing, see comment in `plan_view`.
-    assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
-        &finishing,
-        expr.arity()
-    ));
-    if expr.contains_parameters()? {
-        return Err(PlanError::ParameterNotAllowed(
-            "materialized views".to_string(),
-        ));
-    }
+    // The collections the definition reads, and the columns the plan declares `NOT NULL`.
+    let (definition, desc, depends_on, declared_not_null) = match stmt.body {
+        MaterializedViewBody::Query(query) => {
+            if !stmt.column_defs.is_empty() {
+                sql_bail!("column definitions are only supported with FROM PLAN");
+            }
+            let query::PlannedRootQuery {
+                expr,
+                mut desc,
+                finishing,
+                scope: _,
+            } = query::plan_root_query(scx, query, QueryLifetime::MaterializedView)?;
+            // We get back a trivial finishing, see comment in `plan_view`.
+            assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
+                &finishing,
+                expr.arity()
+            ));
+            if expr.contains_parameters()? {
+                return Err(PlanError::ParameterNotAllowed(
+                    "materialized views".to_string(),
+                ));
+            }
 
-    plan_utils::maybe_rename_columns_exact(
-        scx.catalog,
-        format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
-        &mut desc,
-        &stmt.columns,
-    )?;
+            plan_utils::maybe_rename_columns_exact(
+                scx.catalog,
+                format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
+                &mut desc,
+                &stmt.columns,
+            )?;
+            let depends_on = expr.depends_on();
+            (
+                MaterializedViewDefinition::Query(expr),
+                desc,
+                depends_on,
+                vec![],
+            )
+        }
+        MaterializedViewBody::Plan(json) => {
+            scx.require_feature_flag(&vars::ENABLE_LIR_PLANS)?;
+            if !stmt.columns.is_empty() {
+                sql_bail!("FROM PLAN requires column definitions");
+            }
+            let (desc, declared_not_null) = plan_lir_plan_columns(scx, &stmt.column_defs)?;
+            let envelope = lir_plan::parse_user_envelope(&json)?;
+            let mut depends_on = BTreeSet::new();
+            for import in &envelope.imports {
+                let resolved = lir_plan::resolve_import(scx.catalog, import, cluster_id, false)?;
+                depends_on.insert(resolved.global_id);
+                depends_on.extend(resolved.indexes.into_iter().map(|(_, id)| id));
+            }
+            (
+                MaterializedViewDefinition::Plan {
+                    envelope: Box::new(envelope),
+                    desc: desc.clone(),
+                },
+                desc,
+                depends_on,
+                declared_not_null,
+            )
+        }
+    };
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
 
     let MaterializedViewOptionExtracted {
@@ -3065,6 +3104,11 @@ pub fn plan_create_materialized_view(
         let dup = &column_names[*dup];
         sql_bail!("duplicate column {} in non-null assertions", dup.quoted());
     }
+    // A plan's nullability is not trusted, so a declared `NOT NULL` is checked on the sink.
+    // It may repeat an `ASSERT NOT NULL` option.
+    non_null_assertions.extend(declared_not_null);
+    non_null_assertions.sort();
+    non_null_assertions.dedup();
 
     if let Some(dup) = column_names.iter().duplicates().next() {
         sql_bail!("column {} specified more than once", dup.quoted());
@@ -3093,11 +3137,10 @@ pub fn plan_create_materialized_view(
 
             // Check if the new Materialized View depends on the item that we would be replacing.
             if let Some(id) = replace_id {
-                let dependencies = expr.depends_on();
                 let invalid_drop = scx
                     .get_item(&id)
                     .global_ids()
-                    .any(|gid| dependencies.contains(&gid));
+                    .any(|gid| depends_on.contains(&gid));
                 if invalid_drop {
                     let item = scx.catalog.get_item(&id);
                     sql_bail!(
@@ -3120,10 +3163,9 @@ pub fn plan_create_materialized_view(
                 .collect()
         })
         .unwrap_or_default();
-    let mut dependencies: BTreeSet<_> = expr
-        .depends_on()
-        .into_iter()
-        .map(|gid| scx.catalog.resolve_item_id(&gid))
+    let mut dependencies: BTreeSet<_> = depends_on
+        .iter()
+        .map(|gid| scx.catalog.resolve_item_id(gid))
         .collect();
 
     // Validate the replacement target, if one is given.
@@ -3195,7 +3237,7 @@ pub fn plan_create_materialized_view(
         name,
         materialized_view: MaterializedView {
             create_sql,
-            expr,
+            definition,
             dependencies: DependencyIds(dependencies),
             column_names,
             replacement_target,
@@ -3211,6 +3253,75 @@ pub fn plan_create_materialized_view(
         if_not_exists,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
     }))
+}
+
+/// Plans the column definitions of a `FROM PLAN` materialized view.
+///
+/// Returns the declared schema, without keys, and the positions of the columns declared
+/// `NOT NULL`. Types with modifiers are rejected, because nothing enforces a modifier on the
+/// values a plan writes.
+fn plan_lir_plan_columns(
+    scx: &StatementContext,
+    column_defs: &[ColumnDef<Aug>],
+) -> Result<(RelationDesc, Vec<usize>), PlanError> {
+    let mut builder = RelationDesc::builder();
+    let mut not_null = vec![];
+    let mut names = BTreeSet::new();
+    for (position, column) in column_defs.iter().enumerate() {
+        let name = normalize::column_name(column.name.clone());
+        if !names.insert(name.clone()) {
+            sql_bail!("column {} specified more than once", name.quoted());
+        }
+        if column.collation.is_some() {
+            bail_unsupported!("COLLATE in FROM PLAN column definitions");
+        }
+        let scalar_type = query::scalar_type_from_sql(scx, &column.data_type)?;
+        if has_type_modifier(&scalar_type) {
+            sql_bail!("type modifiers are not supported in FROM PLAN column definitions");
+        }
+        let mut nullable = true;
+        for option in &column.options {
+            match &option.option {
+                ColumnOption::NotNull => nullable = false,
+                ColumnOption::Null => nullable = true,
+                other => bail_unsupported!(format!(
+                    "column option {} in FROM PLAN column definitions",
+                    other.to_ast_string_simple()
+                )),
+            }
+        }
+        if !nullable {
+            not_null.push(position);
+        }
+        builder = builder.with_column(name, scalar_type.nullable(nullable));
+    }
+    Ok((builder.finish(), not_null))
+}
+
+/// Reports whether `typ` or any type nested in it carries a type modifier, such as the
+/// precision of `timestamp(3)` or the length of `char`, which defaults to 1.
+fn has_type_modifier(typ: &SqlScalarType) -> bool {
+    let mut stack = vec![typ];
+    while let Some(typ) = stack.pop() {
+        match typ {
+            SqlScalarType::Numeric { max_scale: Some(_) }
+            | SqlScalarType::Char { length: Some(_) }
+            | SqlScalarType::VarChar {
+                max_length: Some(_),
+            }
+            | SqlScalarType::Timestamp { precision: Some(_) }
+            | SqlScalarType::TimestampTz { precision: Some(_) } => return true,
+            SqlScalarType::Array(element_type)
+            | SqlScalarType::List { element_type, .. }
+            | SqlScalarType::Range { element_type } => stack.push(element_type),
+            SqlScalarType::Map { value_type, .. } => stack.push(value_type),
+            SqlScalarType::Record { fields, .. } => {
+                stack.extend(fields.iter().map(|(_, typ)| &typ.scalar_type))
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 generate_extracted_config!(
