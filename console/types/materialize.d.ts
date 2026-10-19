@@ -351,6 +351,21 @@ export interface MzBaseTypes {
   id: Generated<string>;
 }
 
+export interface MzClusterAutoScalingStrategies {
+  /**
+   * The ID of the cluster. Corresponds to `mz_clusters.id`.
+   */
+  cluster_id: string;
+  /**
+   * **Unstable** The configured autoscaling policy, as JSON. Currently an `on_hydration` sub-policy carrying its `hydration_size` and optional `linger_duration`.
+   */
+  strategy: Json;
+  /**
+   * **Unstable** The in-flight autoscaling runtime state, as JSON keyed by strategy, or `NULL` when nothing is running. Currently a `burst` key carrying the active hydration burst: its `burst_size`, `linger_duration`, and `steady_ready_at`.
+   */
+  state: Json | null;
+}
+
 export interface MzClusterDeploymentLineage {
   /**
    * The ID of the cluster. Corresponds to `mz_clusters.id` (though the cluster may no longer exist).
@@ -4321,6 +4336,7 @@ export interface DB {
   mz_aws_privatelink_connection_statuses: MzAwsPrivatelinkConnectionStatuses;
   mz_aws_privatelink_connections: MzAwsPrivatelinkConnections;
   mz_base_types: MzBaseTypes;
+  mz_cluster_auto_scaling_strategies: MzClusterAutoScalingStrategies;
   mz_cluster_deployment_lineage: MzClusterDeploymentLineage;
   mz_cluster_replica_frontiers: MzClusterReplicaFrontiers;
   mz_cluster_replica_history: MzClusterReplicaHistory;
