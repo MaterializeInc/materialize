@@ -642,9 +642,10 @@ impl<D: Data> CorrectionV2<D> {
 
 /// The number of updates [`sort_advanced`] sorts on the heap at a time.
 ///
-/// Each worker holds at most one run as owned updates, so this bounds the heap a since jump costs
-/// per worker. Rows of TPC-H lineitem's width take about 190 bytes owned, so a run takes about
-/// 12 MiB and spans about five chunks. Consolidation costs per update, so the bound is a count.
+/// Each worker holds at most one run as owned updates, plus the chunks its merges are building, so
+/// this bounds the heap a since jump costs per worker. Rows of TPC-H lineitem's width take about
+/// 190 bytes owned, so a run takes about 12 MiB and spans about five chunks. Below this length the
+/// merges' chunks dominate the heap, which a benchmark of 8 Mi such updates put at about 10 MiB. Consolidation costs per update, so the bound is a count.
 /// Halving the run adds a merge level, which cost 7 to 10% of the sort's time per level in a
 /// benchmark of 8 Mi such updates.
 const STALE_SORT_RUN: usize = 1 << 16;
@@ -653,13 +654,13 @@ const STALE_SORT_RUN: usize = 1 << 16;
 /// sorted and consolidated chain.
 ///
 /// Sorts runs of at most `run_len` updates on the heap and mints each as a chain before merging
-/// them, so the heap holds one run of owned updates rather than all of them. Each input chain is
+/// them, so the heap holds one run of owned updates rather than all of them. Each input chunk is
 /// dropped once read.
 fn sort_advanced<D: Data>(chains: Vec<Chain<D>>, since_ts: Timestamp, run_len: usize) -> Chain<D> {
     let mut runs = Vec::new();
     let mut run = Vec::with_capacity(run_len);
     for chain in chains {
-        for (data, time, diff) in chain.iter() {
+        for (data, time, diff) in chain.into_updates() {
             run.push((data, std::cmp::max(time, since_ts), diff));
             if run.len() >= run_len {
                 consolidate(&mut run);
@@ -691,18 +692,20 @@ fn mint_run<D: Data>(run: &mut Vec<(D, Timestamp, Diff)>) -> Chain<D> {
 ///
 /// The stack then holds runs of geometrically decreasing size, a number logarithmic in the
 /// updates, so the final merge stays narrow. Updates that cancel do so at the first merge that
-/// brings them together rather than in the final one.
+/// brings them together rather than in the final one. A merged run is one generation deeper than
+/// its inputs, so the pool can compress the runs that wait longest for the final merge.
 fn push_run<D: Data>(runs: &mut Vec<Chain<D>>, mut run: Chain<D>) {
     while let Some(prev) = runs.last() {
         if run.update_count * 2 < prev.update_count {
             break;
         }
         let prev = runs.pop().expect("checked above");
+        let depth = prev.depth.max(run.depth).saturating_add(1);
         let cursors = [prev, run]
             .into_iter()
             .filter_map(Chain::into_cursor)
             .collect();
-        run = merge_cursors(cursors, 0);
+        run = merge_cursors(cursors, depth);
     }
     if !run.is_empty() {
         runs.push(run);
@@ -1220,6 +1223,24 @@ impl<D: Data> Chain<D> {
         self.chunks.iter().flat_map(|c| {
             c.with_view(|view| {
                 (0..c.len())
+                    .map(|i| {
+                        let (d, t, r) = view.get(i);
+                        (D::into_owned(d), t, r)
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+    }
+
+    /// Return an iterator over the contained updates that drops each chunk once it is read.
+    ///
+    /// A spilled chunk is copied out of the pool to be read, so dropping it right after releases
+    /// its pool slot instead of keeping the whole chain alive until its last update is read. The
+    /// iterator holds at most one chunk's worth of owned updates.
+    fn into_updates(self) -> impl Iterator<Item = (D, Timestamp, Diff)> {
+        self.chunks.into_iter().flat_map(|chunk| {
+            chunk.with_view(|view| {
+                (0..chunk.len())
                     .map(|i| {
                         let (d, t, r) = view.get(i);
                         (D::into_owned(d), t, r)
@@ -2747,6 +2768,18 @@ mod tests {
             // The read is scoped: every body is still in the pool and none was materialized.
             assert_all_spilled(&chain);
             assert!(chain.chunks.iter().all(|c| c.resident.get().is_none()));
+
+            let mut expected = 0_u64;
+            for (d, t, r) in chain.into_updates() {
+                assert_eq!(d, i64::try_from(expected).expect("fits"));
+                assert_eq!(t, Timestamp::new(expected));
+                assert_eq!(r, Diff::ONE);
+                expected += 1;
+            }
+            assert_eq!(
+                expected, count,
+                "`into_updates` yields every update in order"
+            );
         });
     }
 
