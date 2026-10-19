@@ -64,7 +64,7 @@ pub struct PendingSourceStatement {
 pub struct PendingDdlCommit {
     context: DdlCommitContext,
     commands: Vec<catalog::command::CatalogCommand>,
-    responses: BTreeMap<usize, mz_sql::pure::SourcePreparationResponse>,
+    responses: BTreeMap<usize, catalog::CommandResponse>,
 }
 
 #[derive(Debug)]
@@ -124,6 +124,38 @@ impl DdlCommitContext {
 }
 
 impl Coordinator {
+    pub(super) async fn sequence_alter_connection_command(
+        &mut self,
+        mut ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        let command = catalog::command::connection::ConnectionStatement::new(
+            statement,
+            params,
+            ctx.session().meta(),
+        );
+        let compiled = match command.compile_alter(self.catalog().state()) {
+            Ok(compiled) => compiled,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        ctx.tx_mut()
+            .set_allowed(crate::ExecuteResponse::generated_from(
+                &mz_sql::plan::PlanKind::from(&compiled.plan),
+            ));
+        if let Err(error) = self.prepare_plan_execution(&ctx, &compiled.plan) {
+            return ctx.retire(Err(error));
+        }
+        self.sequence_ddl_commit(PendingDdlCommit::statement(
+            ctx,
+            crate::ExecuteResponse::AlteredObject(mz_sql::catalog::ObjectType::Connection),
+            vec![catalog::command::CatalogCommand::AlterConnection(Arc::new(
+                command,
+            ))],
+        ))
+        .await;
+    }
+
     pub(super) async fn sequence_source_statement(
         &mut self,
         ctx: ExecuteContext,
@@ -553,10 +585,29 @@ impl Coordinator {
                             catalog::command::CatalogCommand::Source(command) => {
                                 Arc::make_mut(command).record_ids(keys, ids);
                             }
-                            catalog::command::CatalogCommand::Rename(_) => {
-                                unreachable!("renames do not allocate IDs");
+                            catalog::command::CatalogCommand::Rename(_)
+                            | catalog::command::CatalogCommand::AlterConnection(_) => {
+                                unreachable!("this command does not allocate IDs");
                             }
                         }
+                    }
+                    catalog::CommandWork::Connection(request) => {
+                        let config = self.controller.storage.config().clone();
+                        let secrets = self.caching_secrets_reader.clone();
+                        let tx = self.internal_cmd_tx.clone();
+                        let otel_ctx = OpenTelemetryContext::obtain();
+                        task::spawn(|| "ddl_connection_preparation", async move {
+                            let response = request.execute(&config, &secrets).await;
+                            pending.responses.insert(
+                                index, catalog::CommandResponse::Connection(response),
+                            );
+                            if let Err(error) =
+                                tx.send(Message::DdlCommandsReady { pending, otel_ctx })
+                            {
+                                warn!("internal_cmd_rx dropped before connection preparation completed: {error:?}");
+                            }
+                        }.instrument(tracing::Span::current()));
+                        return;
                     }
                     catalog::CommandWork::Prepare(request) => {
                         let config = self.controller.storage.config().clone();
@@ -564,7 +615,9 @@ impl Coordinator {
                         let otel_ctx = OpenTelemetryContext::obtain();
                         task::spawn(|| "ddl_command_preparation", async move {
                             let response = request.execute(&config).await;
-                            pending.responses.insert(index, response);
+                            pending.responses.insert(
+                                index, catalog::CommandResponse::Source(response),
+                            );
                             if let Err(error) =
                                 tx.send(Message::DdlCommandsReady { pending, otel_ctx })
                             {
@@ -590,7 +643,7 @@ impl Coordinator {
         &mut self,
         ctx: &mut ExecuteContext,
         commands: &mut [catalog::command::CatalogCommand],
-        responses: &mut BTreeMap<usize, mz_sql::pure::SourcePreparationResponse>,
+        responses: &mut BTreeMap<usize, catalog::CommandResponse>,
     ) -> Result<(), catalog::CommandExecutionError> {
         if self.controller.read_only() {
             return Err(AdapterError::ReadOnly.into());

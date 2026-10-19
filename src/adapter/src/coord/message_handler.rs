@@ -43,8 +43,8 @@ use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReaso
 use crate::catalog::BuiltinTableUpdate;
 use crate::command::Command;
 use crate::coord::{
-    AlterConnectionValidationReady, ArrangementSizeRecord, ClusterReplicaStatuses, Coordinator,
-    CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
+    ArrangementSizeRecord, ClusterReplicaStatuses, Coordinator, CreateConnectionValidationReady,
+    Message, PurifiedStatementReady, WatchSetResponse,
 };
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::{AdapterNotice, TimestampContext};
@@ -108,11 +108,6 @@ impl Coordinator {
             }
             Message::CreateConnectionValidationReady(ready) => {
                 self.message_create_connection_validation_ready(ready)
-                    .boxed_local()
-                    .await
-            }
-            Message::AlterConnectionValidationReady(ready) => {
-                self.message_alter_connection_validation_ready(ready)
                     .boxed_local()
                     .await
             }
@@ -983,43 +978,6 @@ impl Coordinator {
                 plan,
                 resolved_ids,
             )
-            .await;
-        ctx.retire(result);
-    }
-
-    #[mz_ore::instrument(level = "debug")]
-    async fn message_alter_connection_validation_ready(
-        &mut self,
-        AlterConnectionValidationReady {
-            mut ctx,
-            result,
-            connection_id,
-            connection_gid: _,
-            mut plan_validity,
-            otel_ctx,
-            resolved_ids: _,
-        }: AlterConnectionValidationReady,
-    ) {
-        otel_ctx.attach_as_parent();
-
-        // Ensure that all dependencies still exist after validation, as a
-        // `DROP SECRET` may have sneaked in.
-        //
-        // WARNING: If we support `ALTER SECRET`, we'll need to also check
-        // for connectors that were altered while we were purifying.
-        if let Err(e) = plan_validity.check(self.catalog()) {
-            return ctx.retire(Err(e));
-        }
-
-        let conn = match result {
-            Ok(ok) => ok,
-            Err(e) => {
-                return ctx.retire(Err(e));
-            }
-        };
-
-        let result = self
-            .sequence_alter_connection_stage_finish(ctx.session_mut(), connection_id, conn)
             .await;
         ctx.retire(result);
     }

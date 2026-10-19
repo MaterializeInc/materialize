@@ -72,10 +72,9 @@ use mz_sql::session::vars::{
 };
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{ConnectionOptionName, Statement, TransactionMode, WithOptionValue};
+use mz_sql_parser::ast::{Statement, TransactionMode, WithOptionValue};
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::ExportDescription;
-use mz_storage_types::AlterCompatible;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::sources::SourceConnection;
@@ -93,8 +92,8 @@ use crate::command::ExecuteResponse;
 use crate::coord::appends::{BuiltinTableAppendNotify, PendingWriteTxn, UserWriteResponder};
 use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
-    AlterConnectionValidationReady, AlterMaterializedViewReadyContext, AlterSinkReadyContext,
-    Coordinator, CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext, Message,
+    AlterMaterializedViewReadyContext, AlterSinkReadyContext, Coordinator,
+    CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext, Message,
     NetworkPolicyError, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, StageResult,
     Staged, StagedContext, TargetCluster, WatchSetResponse, validate_ip_with_policy_rules,
 };
@@ -2729,147 +2728,12 @@ impl Coordinator {
             AlterConnectionAction::RotateKeys => {
                 self.sequence_rotate_keys(ctx, id).await;
             }
-            AlterConnectionAction::AlterOptions {
-                set_options,
-                drop_options,
-                validate,
-            } => {
-                self.sequence_alter_connection_options(ctx, id, set_options, drop_options, validate)
-                    .await
+            AlterConnectionAction::AlterOptions { .. } => {
+                ctx.retire(Err(AdapterError::Unsupported(
+                    "ALTER CONNECTION options require submitted intent",
+                )));
             }
         }
-    }
-
-    #[instrument]
-    async fn sequence_alter_connection_options(
-        &mut self,
-        mut ctx: ExecuteContext,
-        id: CatalogItemId,
-        set_options: BTreeMap<ConnectionOptionName, Option<WithOptionValue<mz_sql::names::Aug>>>,
-        drop_options: BTreeSet<ConnectionOptionName>,
-        validate: bool,
-    ) {
-        let rebuilt = catalog::command::connection::rebuild_connection(
-            &self.catalog().for_session(ctx.session()),
-            ctx.session(),
-            id,
-            set_options,
-            drop_options,
-        );
-        let conn = match rebuilt {
-            Ok(conn) => conn,
-            Err(e) => {
-                return ctx.retire(Err(e));
-            }
-        };
-
-        let connection_gid = conn.global_id();
-
-        if let Err(err) = self
-            .check_connection_secret_content_guards(&conn.details)
-            .await
-        {
-            return ctx.retire(Err(err));
-        }
-
-        if validate {
-            let connection = conn
-                .details
-                .to_connection()
-                .into_inline_connection(self.catalog().state());
-
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let catalog = self.owned_catalog();
-            let conn_id = ctx.session().conn_id().clone();
-            let otel_ctx = OpenTelemetryContext::obtain();
-            let role_metadata = ctx.session().role_metadata().clone();
-            let current_storage_parameters = self.controller.storage.config().clone();
-
-            task::spawn(
-                || format!("validate_alter_connection:{conn_id}"),
-                async move {
-                    let resolved_ids = conn.resolved_ids.clone();
-                    let dependency_ids: BTreeSet<_> = resolved_ids.items().copied().collect();
-                    let result = match std::panic::AssertUnwindSafe(
-                        connection.validate(id, &current_storage_parameters),
-                    )
-                    .ore_catch_unwind()
-                    .await
-                    {
-                        Ok(Ok(())) => Ok(conn),
-                        Ok(Err(err)) => Err(err.into()),
-                        Err(_panic) => {
-                            tracing::error!("alter connection validation panicked");
-                            Err(AdapterError::Internal(
-                                "connection validation panicked".into(),
-                            ))
-                        }
-                    };
-
-                    // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
-                    let result = internal_cmd_tx.send(Message::AlterConnectionValidationReady(
-                        AlterConnectionValidationReady {
-                            ctx,
-                            result,
-                            connection_id: id,
-                            connection_gid,
-                            plan_validity: PlanValidity::new(
-                                &catalog,
-                                dependency_ids.clone(),
-                                None,
-                                None,
-                                role_metadata,
-                            ),
-                            otel_ctx,
-                            resolved_ids,
-                        },
-                    ));
-                    if let Err(e) = result {
-                        tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                    }
-                },
-            );
-        } else {
-            let result = self
-                .sequence_alter_connection_stage_finish(ctx.session_mut(), id, conn)
-                .await;
-            ctx.retire(result);
-        }
-    }
-
-    #[instrument]
-    pub(crate) async fn sequence_alter_connection_stage_finish(
-        &mut self,
-        session: &Session,
-        id: CatalogItemId,
-        connection: Connection,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        match self.catalog.get_entry(&id).item() {
-            CatalogItem::Connection(curr_conn) => {
-                curr_conn
-                    .details
-                    .to_connection()
-                    .alter_compatible(curr_conn.global_id, &connection.details.to_connection())
-                    .map_err(StorageError::from)?;
-            }
-            _ => unreachable!("known to be a connection"),
-        };
-
-        let ops = vec![catalog::Op::UpdateItem {
-            id,
-            name: self.catalog.get_entry(&id).name().clone(),
-            to_item: CatalogItem::Connection(connection.clone()),
-        }];
-
-        self.catalog_transact(Some(session), ops).await?;
-
-        // NOTE: The rest of the alter connection logic (updating VPC endpoints
-        // and propagating connection changes to dependent sources, sinks, and
-        // tables) is handled in `apply_catalog_implications` via
-        // `handle_alter_connection`. The catalog transact above triggers that
-        // code path.
-
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Connection))
     }
 
     #[instrument]

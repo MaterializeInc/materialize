@@ -28,6 +28,7 @@ use crate::{AdapterError, AdapterNotice};
 #[derive(Clone, Debug)]
 pub enum CatalogCommand {
     Rename(Arc<RenameCommand>),
+    AlterConnection(Arc<connection::ConnectionStatement>),
     Source(Arc<source_statement::SourceCommand>),
 }
 
@@ -35,6 +36,7 @@ impl CatalogCommand {
     pub(crate) fn notices(&self) -> &[PlanNotice] {
         match self {
             Self::Rename(command) => command.notices(),
+            Self::AlterConnection(command) => command.notices(),
             Self::Source(command) => command.notices(),
         }
     }

@@ -440,8 +440,15 @@ pub struct TransactionResult {
 
 #[derive(Debug)]
 pub(crate) enum CommandWork {
+    Connection(super::command::connection::ConnectionPreparation),
     Prepare(mz_sql::pure::SourcePreparationRequest),
     Allocate(Vec<super::command::source::SourceObject>),
+}
+
+#[derive(Debug)]
+pub(crate) enum CommandResponse {
+    Source(mz_sql::pure::SourcePreparationResponse),
+    Connection(super::command::connection::ConnectionPreparationResponse),
 }
 
 #[derive(Debug)]
@@ -469,7 +476,7 @@ enum TransactionOperations<'a> {
     Raw(Vec<Op>),
     Commands {
         commands: &'a mut [super::command::CatalogCommand],
-        responses: &'a mut BTreeMap<usize, mz_sql::pure::SourcePreparationResponse>,
+        responses: &'a mut BTreeMap<usize, CommandResponse>,
     },
 }
 
@@ -828,7 +835,7 @@ impl Catalog {
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         commands: &mut [super::command::CatalogCommand],
-        responses: &mut BTreeMap<usize, mz_sql::pure::SourcePreparationResponse>,
+        responses: &mut BTreeMap<usize, CommandResponse>,
     ) -> Result<TransactionResult, CommandExecutionError> {
         fail::fail_point!("catalog_transact", |arg| {
             Err(AdapterError::Unstructured(anyhow::anyhow!("failpoint: {arg:?}")).into())
@@ -1176,13 +1183,65 @@ impl Catalog {
                 OperationGroup::Command(_, CatalogCommand::Rename(command)) => {
                     (command.execute(&preliminary_state)?, None)
                 }
+                OperationGroup::Command(index, CatalogCommand::AlterConnection(command)) => {
+                    use super::command::connection::ConnectionResolution;
+                    let command = Arc::make_mut(command);
+                    let response = match responses
+                        .as_mut()
+                        .and_then(|responses| responses.remove(&index))
+                    {
+                        Some(CommandResponse::Connection(response)) => Some(response),
+                        Some(CommandResponse::Source(_)) => {
+                            unreachable!("response belongs to its command")
+                        }
+                        None => None,
+                    };
+                    let compiled = match command.resolve_alter(&preliminary_state, response)? {
+                        ConnectionResolution::Prepare(request) => {
+                            return Err(CommandExecutionError::Pending {
+                                index,
+                                work: CommandWork::Connection(request),
+                            });
+                        }
+                        ConnectionResolution::Ready(compiled) => compiled,
+                    };
+                    let ops = match compiled.connection {
+                        Some((id, connection, _)) => {
+                            use mz_storage_types::AlterCompatible;
+                            let entry = preliminary_state.get_entry(&id);
+                            let current = entry.connection().map_err(AdapterError::from)?;
+                            current
+                                .details
+                                .to_connection()
+                                .alter_compatible(
+                                    current.global_id,
+                                    &connection.details.to_connection(),
+                                )
+                                .map_err(mz_storage_types::controller::StorageError::from)
+                                .map_err(AdapterError::from)?;
+                            vec![Op::UpdateItem {
+                                id,
+                                name: entry.name().clone(),
+                                to_item: CatalogItem::Connection(connection),
+                            }]
+                        }
+                        None => Vec::new(),
+                    };
+                    command.applied(compiled.notices);
+                    (ops, None)
+                }
                 OperationGroup::Command(index, CatalogCommand::Source(command)) => {
                     let command = Arc::make_mut(command);
                     let response = responses
                         .as_mut()
                         .and_then(|responses| responses.remove(&index));
                     let resolution = match response {
-                        Some(response) => command.statement.finish(&preliminary_state, response)?,
+                        Some(CommandResponse::Source(response)) => {
+                            command.statement.finish(&preliminary_state, response)?
+                        }
+                        Some(CommandResponse::Connection(_)) => {
+                            unreachable!("response belongs to its command")
+                        }
                         None => command.statement.resolve(&preliminary_state)?,
                     };
                     let mut compiled = match resolution {
