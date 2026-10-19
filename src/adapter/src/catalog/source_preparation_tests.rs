@@ -26,7 +26,7 @@ fn resolve(
     let statement = mz_sql_parser::parser::parse_statements(
         "CREATE SOURCE clock_src FROM LOAD GENERATOR CLOCK",
     )
-    .unwrap()
+    .expect("parse source statement")
     .remove(0)
     .ast;
     let (statement, _) = mz_sql::names::resolve(&catalog, statement)?;
@@ -46,7 +46,7 @@ async fn source_preparation_checks_current_inputs() {
             state
                 .system_config_mut()
                 .set(name, VarInput::Flat(value))
-                .unwrap();
+                .expect("set catalog parameter");
         }
         let clock = Arc::new(AtomicU64::new(1000));
         state.config.now = NowFn::from({
@@ -58,13 +58,18 @@ async fn source_preparation_checks_current_inputs() {
             mz_storage_types::dyncfgs::all_dyncfgs(Default::default()),
         );
         let mut preparation = SourcePreparation::new(1000);
-        let SourcePreparationStatus::Pending(request) = resolve(&preparation, &state).unwrap()
+        let SourcePreparationStatus::Pending(request) =
+            resolve(&preparation, &state).expect("resolve source preparation")
         else {
             panic!("metadata preparation must be requested");
         };
-        let original_input = request.execute(&storage).await.unwrap();
+        let original_input = request
+            .execute(&storage)
+            .await
+            .expect("prepare load-generator metadata");
         preparation.record(original_input.clone());
-        let SourcePreparationStatus::Ready(original) = resolve(&preparation, &state).unwrap()
+        let SourcePreparationStatus::Ready(original) =
+            resolve(&preparation, &state).expect("resolve source preparation")
         else {
             panic!("matching metadata must be reused");
         };
@@ -73,8 +78,10 @@ async fn source_preparation_checks_current_inputs() {
         state
             .system_config_mut()
             .set("max_tables", VarInput::Flat("999"))
-            .unwrap();
-        let SourcePreparationStatus::Ready(reused) = resolve(&preparation, &state).unwrap() else {
+            .expect("set catalog parameter");
+        let SourcePreparationStatus::Ready(reused) =
+            resolve(&preparation, &state).expect("resolve source preparation")
+        else {
             panic!("unrelated catalog changes must not require metadata preparation");
         };
         assert_eq!(
@@ -85,7 +92,7 @@ async fn source_preparation_checks_current_inputs() {
         state
             .system_config_mut()
             .set("enable_load_generator_clock", VarInput::Flat("false"))
-            .unwrap();
+            .expect("set catalog parameter");
         assert!(
             resolve(&preparation, &state).is_err(),
             "cached metadata must not bypass current feature checks"
@@ -93,28 +100,35 @@ async fn source_preparation_checks_current_inputs() {
         state
             .system_config_mut()
             .set("enable_load_generator_clock", VarInput::Flat("true"))
-            .unwrap();
+            .expect("set catalog parameter");
 
         state
             .system_config_mut()
             .set("force_source_table_syntax", VarInput::Flat("true"))
-            .unwrap();
-        let SourcePreparationStatus::Pending(changed) = resolve(&preparation, &state).unwrap()
+            .expect("set catalog parameter");
+        let SourcePreparationStatus::Pending(changed) =
+            resolve(&preparation, &state).expect("resolve source preparation")
         else {
             panic!("changed preparation inputs must not reuse old metadata");
         };
         assert_ne!(changed, request);
-        let changed_input = changed.execute(&storage).await.unwrap();
+        let changed_input = changed
+            .execute(&storage)
+            .await
+            .expect("prepare load-generator metadata");
         preparation.record(changed_input.clone());
 
         // A completion from superseded work cannot override current-input validation.
         preparation.record(original_input);
-        let SourcePreparationStatus::Pending(retry) = resolve(&preparation, &state).unwrap() else {
+        let SourcePreparationStatus::Pending(retry) =
+            resolve(&preparation, &state).expect("resolve source preparation")
+        else {
             panic!("late metadata for different inputs must not be accepted");
         };
         assert_eq!(retry, changed);
         preparation.record(changed_input);
-        let SourcePreparationStatus::Ready(reprepared) = resolve(&preparation, &state).unwrap()
+        let SourcePreparationStatus::Ready(reprepared) =
+            resolve(&preparation, &state).expect("resolve source preparation")
         else {
             panic!("metadata for the current inputs must be accepted");
         };
