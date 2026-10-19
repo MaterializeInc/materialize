@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/hir.rs
-revision: 8adfa9eb6e
+revision: 64e0242112
 ---
 
 # mz-sql::plan::hir
