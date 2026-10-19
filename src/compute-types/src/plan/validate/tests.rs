@@ -1724,6 +1724,29 @@ fn infers_types_of_long_binding_chains() {
     );
 }
 
+#[mz_ore::test]
+fn infers_types_of_long_reversed_binding_chains() {
+    // l(i) = l(i + 1), and the last binding is T1 + l0. Each pass types one more binding,
+    // so this needs one pass per binding, as the optimizer's plan of such a recursive query
+    // does.
+    let n = 2 * u64::try_from(LET_REC_TYPE_ITERATIONS).expect("fits");
+    let ids: Vec<_> = (0..n).map(LocalId::new).collect();
+    let mut values: Vec<_> = ids.iter().skip(1).map(|id| get_local(*id)).collect();
+    values.push(union(vec![raw_t1(), get_local(ids[0])]));
+    let plan = plan(LirRelationNode::LetRec {
+        limits: vec![limit(); ids.len()],
+        body: Box::new(get_local(ids[0])),
+        ids,
+        values,
+    });
+    let types =
+        validate_dataflow(&dataflow(&[(T1, 1)], vec![(OUT, plan)]), &enforced()).expect("valid");
+    assert_eq!(
+        types[&OUT].column_types,
+        vec![ReprScalarType::Int64.nullable(false)]
+    );
+}
+
 /// Marks the source import `id` of `df` as monotonic.
 fn monotonic_import(df: &mut LirDataflowDescription, id: GlobalId) {
     df.source_imports.get_mut(&id).expect("imported").monotonic = true;

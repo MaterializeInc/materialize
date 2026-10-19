@@ -278,8 +278,9 @@ fn operator_name(node: &LirRelationNode) -> &'static str {
 }
 
 /// The most times the values of one `LetRec` are visited to find the column types of its
-/// bindings. Each visit that does not reach the fixpoint makes some column of some binding
-/// less precise.
+/// bindings, per binding. Each visit that does not reach the fixpoint makes some column of
+/// some binding less precise. A pass can make progress on a single binding only, for example
+/// on a cycle of bindings where each reads the next, so the bound scales with the bindings.
 const LET_REC_TYPE_ITERATIONS: usize = 64;
 
 /// The most operator visits one validation makes.
@@ -1315,7 +1316,8 @@ impl Validator {
         let mut clean = true;
         let mut converged = false;
         self.rec_depth += 1;
-        for _ in 0..LET_REC_TYPE_ITERATIONS {
+        let max_passes = LET_REC_TYPE_ITERATIONS.saturating_mul(ids.len().max(1));
+        for _ in 0..max_passes {
             let snapshot = self.snapshot();
             let scope = self.locals.len();
             let pass =
@@ -1341,7 +1343,7 @@ impl Validator {
                 expr,
                 Rule::Type,
                 format!(
-                    "the column types or monotonicity of the recursive bindings do not converge within {LET_REC_TYPE_ITERATIONS} iterations"
+                    "the column types or monotonicity of the recursive bindings do not converge within {max_passes} iterations"
                 ),
             );
             clean = false;
