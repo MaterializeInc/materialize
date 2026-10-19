@@ -630,15 +630,12 @@ mod write {
 
         let advance_persist_frontiers_at_startup =
             MV_SINK_ADVANCE_PERSIST_FRONTIERS.get(&worker_config);
-        let shared_batch_max_bytes = MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config);
         let key_schema = Rc::new(persist_api.collection.relation_desc.clone());
         let write_metrics = WriteMetrics {
             wait_seconds: compute_metrics.mv_sink_write_wait_seconds_total.clone(),
             part_bytes: compute_metrics.mv_sink_write_part_bytes_total.clone(),
         };
-        // The write task decides whether to share a batch, and the operator sizes parts so a
-        // shareable batch fits one.
-        let task_max_bytes = MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config);
+        let shared_batch_max_bytes = MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config);
 
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<WriteCommand>(PARTS_IN_FLIGHT);
         // Batch writes share the one sender in turn, see `batch_in_flight`.
@@ -650,7 +647,7 @@ mod write {
         let write_task_handle = mz_ore::task::spawn(
             || operator_name(sink_id, "write::batch_writer"),
             async move {
-                let batch_writer = BatchWriter::new(&persist_api, task_max_bytes).await;
+                let batch_writer = BatchWriter::new(&persist_api, shared_batch_max_bytes).await;
                 let mut desc = None;
                 let mut write = None;
                 while let Some(cmd) = cmd_rx.recv().await {
@@ -663,7 +660,7 @@ mod write {
                             // including idle ones. A worker that never joins a shared batch
                             // cannot be the last holder responsible for delivering it.
                             let write =
-                                write.get_or_insert_with(|| batch_writer.shared.start(desc));
+                                write.get_or_insert_with(|| batch_writer.shared.start_parts(desc));
                             write.push_part(part).await;
                         }
                         WriteCommand::Finish => {
@@ -809,7 +806,7 @@ mod write {
                         corrections,
                         desc.clone(),
                         Rc::clone(&key_schema),
-                        PART_BYTES.max(shared_batch_max_bytes.get()),
+                        PART_BYTES,
                         Rc::clone(&cmd_tx),
                         write_metrics.clone(),
                     ))
