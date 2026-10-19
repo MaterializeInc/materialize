@@ -82,10 +82,6 @@ ALTER SOURCE my_source SET (TIMESTAMP INTERVAL = '1s');
 ALTER SOURCE my_source RESET (TIMESTAMP INTERVAL);
 ```
 
-`RESET` on its own has no effect on a source whose tick rate was never set
-explicitly, so run both statements. `'1s'` works because it falls within the
-default `min_timestamp_interval` and `max_timestamp_interval`.
-
 This adjusts the tick rate for all of the source's tables or subsources. Run
 `ALTER SOURCE` on the source itself, not on a subsource.
 
