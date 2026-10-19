@@ -295,7 +295,7 @@ impl Checkpoints {
         // `load` cached the document, and a patch dropped in flight must
         // leave nothing cached.
         self.known = None;
-        if current.checkpoint != write.expected {
+        if write.expected.as_deref() != Some(current.checkpoint.as_str()) {
             return WriteResult::NotApplied;
         }
         let next = current.after(write);
@@ -347,7 +347,7 @@ mod tests {
 
     fn write(kind: WriteKind) -> CheckpointWrite {
         CheckpointWrite {
-            expected: "a".into(),
+            expected: Some("a".into()),
             new: "b".into(),
             kind,
         }

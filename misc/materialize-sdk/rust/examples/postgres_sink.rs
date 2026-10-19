@@ -42,7 +42,7 @@ use std::path::Path;
 
 use materialize_sdk::{
     Change, CheckpointWrite, DurableOptions, DurableSink, Envelope, ObjectName, Sink, SinkBatch,
-    SinkError, SinkType, WriteKind, WriteResult,
+    SinkError, SinkType, WriteKind, WriteRequest, WriteResult,
 };
 use openssl::ssl::{SslConnector, SslFiletype, SslMethod};
 use openssl::x509::store::X509Lookup;
@@ -157,8 +157,13 @@ impl Postgres {
             .isolation_level(IsolationLevel::ReadCommitted)
             .start()
             .await?;
+        let Some(expected) = &write.expected else {
+            return Err(Failure::permanent(
+                "the first checkpoint is written without a batch".into(),
+            ));
+        };
         let replaced = tx
-            .execute(REPLACE_CHECKPOINT, &[&sink_id, &write.expected, &write.new])
+            .execute(REPLACE_CHECKPOINT, &[&sink_id, expected, &write.new])
             .await?;
         if replaced == 0 {
             tx.rollback().await?;
@@ -191,6 +196,29 @@ impl Postgres {
         tx.execute(DELETE_OLDER_GENERATIONS, &[&sink_id, &bigint(generation)?])
             .await?;
         Ok(())
+    }
+
+    /// Writes a checkpoint without a batch. The first one is inserted only if
+    /// the sink has none.
+    async fn write_checkpoint(&mut self, write: &CheckpointWrite) -> Result<WriteResult, Failure> {
+        let sink_id = self.sink_id.clone();
+        let client = self.client().await?;
+        let written = match &write.expected {
+            None => {
+                client
+                    .execute(
+                        "INSERT INTO mz_checkpoints VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                        &[&sink_id, &write.new],
+                    )
+                    .await
+            }
+            Some(expected) => {
+                client
+                    .execute(REPLACE_CHECKPOINT, &[&sink_id, expected, &write.new])
+                    .await
+            }
+        };
+        Ok(changed(written))
     }
 }
 
@@ -272,21 +300,6 @@ impl Sink for Postgres {
         SinkType::Transactional
     }
 
-    async fn create(&mut self, checkpoint: &str) -> WriteResult {
-        let sink_id = self.sink_id.clone();
-        let client = match self.client().await {
-            Ok(client) => client,
-            Err(failure) => return failure.into_result(),
-        };
-        let created = client
-            .execute(
-                "INSERT INTO mz_checkpoints VALUES ($1, $2) ON CONFLICT DO NOTHING",
-                &[&sink_id, &checkpoint],
-            )
-            .await;
-        changed(created)
-    }
-
     async fn load(&mut self) -> Result<Option<String>, SinkError> {
         let sink_id = self.sink_id.clone();
         let row = self
@@ -301,36 +314,18 @@ impl Sink for Postgres {
         Ok(row.map(|row| row.get(0)))
     }
 
-    async fn write(
-        &mut self,
-        batch: &SinkBatch,
-        checkpoint: Option<&CheckpointWrite>,
-    ) -> WriteResult {
-        let Some(write) = checkpoint else {
-            return WriteResult::Failed(SinkError::Target {
-                message: "a transactional sink writes with a checkpoint".into(),
-                permanent: true,
-            });
+    async fn write(&mut self, request: WriteRequest<'_>) -> WriteResult {
+        let written = match request {
+            WriteRequest::BatchAndCheckpoint(batch, write) => self.apply(batch, write).await,
+            WriteRequest::Checkpoint(write) => self.write_checkpoint(write).await,
+            WriteRequest::Batch(_) => {
+                return WriteResult::Failed(SinkError::Target {
+                    message: "a transactional sink writes with a checkpoint".into(),
+                    permanent: true,
+                });
+            }
         };
-        match self.apply(batch, write).await {
-            Ok(result) => result,
-            Err(failure) => failure.into_result(),
-        }
-    }
-
-    async fn commit(&mut self, checkpoint: &CheckpointWrite) -> WriteResult {
-        let sink_id = self.sink_id.clone();
-        let client = match self.client().await {
-            Ok(client) => client,
-            Err(failure) => return failure.into_result(),
-        };
-        let replaced = client
-            .execute(
-                REPLACE_CHECKPOINT,
-                &[&sink_id, &checkpoint.expected, &checkpoint.new],
-            )
-            .await;
-        changed(replaced)
+        written.unwrap_or_else(Failure::into_result)
     }
 
     async fn sweep_generations(&mut self, generation: u64) -> Result<(), SinkError> {

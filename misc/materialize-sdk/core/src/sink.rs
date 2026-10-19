@@ -18,7 +18,9 @@
 //!
 //! The sink interface itself belongs to each language package. Sink code
 //! treats the checkpoint text as opaque, so every fact it needs from a write
-//! travels in [`WriteKind`].
+//! travels in [`WriteKind`], except that the first checkpoint, whose kind is
+//! [`WriteKind::Create`], is also the one write with no expected text, which
+//! is what a sink's conditional write branches on.
 
 use std::collections::BTreeMap;
 
@@ -49,8 +51,9 @@ pub enum SinkType {
 /// with `new`, only if the stored text is still `expected`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct CheckpointWrite {
-    /// The text the write expects to find.
-    pub expected: String,
+    /// The text the write expects to find, or `None` for the first
+    /// checkpoint, which applies only if the sink has none.
+    pub expected: Option<String>,
     /// The text the write leaves. Equal to `expected` for a write that commits
     /// no frontier, which only checks the condition.
     pub new: String,
@@ -64,6 +67,8 @@ pub struct CheckpointWrite {
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum WriteKind {
+    /// The setup step creates the sink's first checkpoint.
+    Create,
     /// A starting worker takes the checkpoint over from its owner.
     TakeOver {
         /// The frontier the worker read, which it already knows is committed.
@@ -121,6 +126,20 @@ pub enum WriteError {
 }
 
 impl CheckpointWrite {
+    /// The write that creates a new sink's first checkpoint, of
+    /// `subscriptions`, and the checkpoint it leaves. See [`Checkpoint::new`].
+    pub fn create(
+        subscriptions: BTreeMap<String, Fingerprint>,
+    ) -> Result<(CheckpointWrite, Checkpoint), WriteError> {
+        let next = Checkpoint::new(subscriptions);
+        let write = CheckpointWrite {
+            expected: None,
+            new: next.encode()?,
+            kind: WriteKind::Create,
+        };
+        Ok((write, next))
+    }
+
     /// The write a starting worker sends to take over `stored`, and the
     /// checkpoint it leaves. See [`Checkpoint::take_over`].
     pub fn take_over(stored: &Checkpoint) -> Result<(CheckpointWrite, Checkpoint), WriteError> {
@@ -201,7 +220,7 @@ impl CheckpointWrite {
         kind: WriteKind,
     ) -> Result<CheckpointWrite, WriteError> {
         Ok(CheckpointWrite {
-            expected: expected.encode()?,
+            expected: Some(expected.encode()?),
             new: new.encode()?,
             kind,
         })
@@ -224,7 +243,10 @@ mod tests {
     fn a_write_expects_the_current_text_and_leaves_the_next() {
         let current = committed(10);
         let (write, next) = CheckpointWrite::commit(&current, frontier(20)).unwrap();
-        assert_eq!(Checkpoint::decode(&write.expected).unwrap(), current);
+        assert_eq!(
+            Checkpoint::decode(write.expected.as_deref().unwrap()).unwrap(),
+            current
+        );
         assert_eq!(Checkpoint::decode(&write.new).unwrap(), next);
         assert_eq!(next.frontier, Some(frontier(20)));
         assert_eq!(
@@ -265,7 +287,7 @@ mod tests {
         let (_, snapshot) =
             CheckpointWrite::start_snapshot(&committed(10), BTreeMap::new(), 40).unwrap();
         let write = CheckpointWrite::snapshot_write(&snapshot).unwrap();
-        assert_eq!(write.expected, write.new);
+        assert_eq!(write.expected.as_deref(), Some(write.new.as_str()));
         assert_eq!(write.kind, WriteKind::SnapshotWrite { generation: 2 });
         assert!(matches!(
             CheckpointWrite::snapshot_write(&committed(10)),

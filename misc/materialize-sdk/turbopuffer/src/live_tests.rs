@@ -26,7 +26,8 @@ use std::time::{Duration, SystemTime};
 use materialize_sdk::core::Checkpoint;
 use materialize_sdk::{
     Change, CheckpointWrite, Column, CommitConflict, DurableOptions, DurableSink, Envelope, Error,
-    Frontier, ObjectName, PayloadColumns, Sink, SinkBatch, SinkError, Update, WriteResult,
+    Frontier, ObjectName, PayloadColumns, Sink, SinkBatch, SinkError, Update, WriteKind,
+    WriteRequest, WriteResult,
 };
 use serde_json::{Value, json};
 use tokio_postgres::NoTls;
@@ -261,18 +262,21 @@ async fn setup_refuses_leftover_incarnations_but_runs_again_on_its_own() {
     let mut sink = TurbopufferSink::new(&connection(), "s", &name).unwrap();
 
     leave().await;
-    match sink.create(&text).await {
+    match create(&mut sink, &text).await {
         WriteResult::Failed(SinkError::Target { permanent, .. }) => assert!(permanent),
         other => panic!("expected a refusal, got {other:?}"),
     }
     client.delete_namespace(&leftover).await.unwrap();
     assert!(matches!(
-        sink.create(&text).await,
+        create(&mut sink, &text).await,
         WriteResult::Applied { .. }
     ));
     // A running sink's incarnations do not stop its setup from running again.
     leave().await;
-    assert!(matches!(sink.create(&text).await, WriteResult::NotApplied));
+    assert!(matches!(
+        create(&mut sink, &text).await,
+        WriteResult::NotApplied
+    ));
 }
 
 fn columns() -> PayloadColumns {
@@ -324,13 +328,16 @@ async fn data_writes_are_safe_to_repeat_and_to_apply_late() {
     };
 
     let first = batch(vec![upsert(5, "1", "a", "1"), upsert(5, "2", "b", "2")]);
-    applied(sink.write(&first, None).await);
+    applied(sink.write(WriteRequest::Batch(&first)).await);
     applied(
-        sink.write(&batch(vec![delete(7, "1"), upsert(7, "2", "B", "3")]), None)
-            .await,
+        sink.write(WriteRequest::Batch(&batch(vec![
+            delete(7, "1"),
+            upsert(7, "2", "B", "3"),
+        ])))
+        .await,
     );
     // A replay of the first batch, as after a crash before its commit.
-    applied(sink.write(&first, None).await);
+    applied(sink.write(WriteRequest::Batch(&first)).await);
     let documents = live_documents(&sink.client, &namespace).await;
     assert_eq!(
         documents,
@@ -344,8 +351,10 @@ async fn data_writes_are_safe_to_repeat_and_to_apply_late() {
 
     // A key that comes back after its tombstone.
     applied(
-        sink.write(&batch(vec![upsert(9, "1", "again", "4")]), None)
-            .await,
+        sink.write(WriteRequest::Batch(&batch(vec![upsert(
+            9, "1", "again", "4",
+        )])))
+        .await,
     );
     assert_eq!(
         live_documents(&sink.client, &namespace).await["1"],
@@ -372,10 +381,13 @@ async fn data_writes_are_safe_to_repeat_and_to_apply_late() {
 
     // An older tombstone that lands after a newer upsert changes nothing.
     applied(
-        sink.write(&batch(vec![upsert(13, "6", "f", "8")]), None)
+        sink.write(WriteRequest::Batch(&batch(vec![upsert(13, "6", "f", "8")])))
             .await,
     );
-    applied(sink.write(&batch(vec![delete(12, "6")]), None).await);
+    applied(
+        sink.write(WriteRequest::Batch(&batch(vec![delete(12, "6")])))
+            .await,
+    );
     assert!(
         live_documents(&sink.client, &namespace)
             .await
@@ -398,10 +410,10 @@ async fn data_writes_are_safe_to_repeat_and_to_apply_late() {
         .plan
         .extend([Fault::Pass, Fault::Drop]);
     assert!(matches!(
-        sink.write(&three, None).await,
+        sink.write(WriteRequest::Batch(&three)).await,
         WriteResult::Failed(_)
     ));
-    applied(sink.write(&three, None).await);
+    applied(sink.write(WriteRequest::Batch(&three)).await);
     assert_eq!(sink.client.faults.lock().unwrap().sent - sent_before, 3);
     assert_eq!(live_documents(&sink.client, &namespace).await.len(), 6);
 
@@ -420,12 +432,13 @@ async fn data_writes_are_safe_to_repeat_and_to_apply_late() {
         .plan
         .extend([Fault::Pass, Fault::Drop]);
     assert!(matches!(
-        sink.write(&batch(changes.clone()), None).await,
+        sink.write(WriteRequest::Batch(&batch(changes.clone())))
+            .await,
         WriteResult::Failed(_)
     ));
     let sent_before = sink.client.faults.lock().unwrap().sent;
     let elsewhere = SinkBatch::new(changes, columns(), 3, true);
-    applied(sink.write(&elsewhere, None).await);
+    applied(sink.write(WriteRequest::Batch(&elsewhere)).await);
     assert_eq!(sink.client.faults.lock().unwrap().sent - sent_before, 3);
     assert_eq!(
         live_documents(&sink.client, &data_namespace(&name, 3))
@@ -445,24 +458,24 @@ async fn the_completing_commit_makes_the_snapshot_active_once_indexed() {
         .max_unindexed_bytes(0);
     let created = Checkpoint::new(BTreeMap::new());
     assert!(matches!(
-        sink.create(&created.encode().unwrap()).await,
+        create(&mut sink, &created.encode().unwrap()).await,
         WriteResult::Applied { .. }
     ));
     let (take_over, taken) = CheckpointWrite::take_over(&created).unwrap();
     assert!(matches!(
-        sink.commit(&take_over).await,
+        commit(&mut sink, &take_over).await,
         WriteResult::Applied { .. }
     ));
     let (start, started) = CheckpointWrite::start_snapshot(&taken, BTreeMap::new(), 5).unwrap();
     assert!(matches!(
-        sink.commit(&start).await,
+        commit(&mut sink, &start).await,
         WriteResult::Applied { .. }
     ));
 
     let rows = (0..2000).map(|i| upsert(5, &i.to_string(), &"x".repeat(200), "1"));
     let snapshot = SinkBatch::new(rows.collect(), columns(), started.generation, true);
     assert!(matches!(
-        sink.write(&snapshot, None).await,
+        sink.write(WriteRequest::Batch(&snapshot)).await,
         WriteResult::Applied { .. }
     ));
     let namespace = data_namespace(&name, started.generation);
@@ -472,7 +485,7 @@ async fn the_completing_commit_makes_the_snapshot_active_once_indexed() {
     // whether this waits depends on turbopuffer.
     let mut waits = 0;
     loop {
-        match sink.commit(&complete).await {
+        match commit(&mut sink, &complete).await {
             WriteResult::Applied { .. } => break,
             WriteResult::Failed(SinkError::Throttled { .. }) => {
                 assert!(
@@ -503,18 +516,18 @@ async fn the_completing_commit_makes_the_snapshot_active_once_indexed() {
     let (restart, restarted) =
         CheckpointWrite::start_snapshot(&completed, BTreeMap::new(), 7).unwrap();
     assert!(matches!(
-        sink.commit(&restart).await,
+        commit(&mut sink, &restart).await,
         WriteResult::Applied { .. }
     ));
     let rows = vec![upsert(7, "a", "b", "1")];
     let snapshot = SinkBatch::new(rows, columns(), restarted.generation, true);
     assert!(matches!(
-        sink.write(&snapshot, None).await,
+        sink.write(WriteRequest::Batch(&snapshot)).await,
         WriteResult::Applied { .. }
     ));
     let (complete, _) = CheckpointWrite::commit(&restarted, Frontier::new(8).unwrap()).unwrap();
     loop {
-        match sink.commit(&complete).await {
+        match commit(&mut sink, &complete).await {
             WriteResult::Applied { .. } => break,
             WriteResult::Failed(SinkError::Throttled { .. }) => {
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -579,7 +592,7 @@ async fn embedded_texts_are_embedded_once_per_change() {
         2,
         true,
     );
-    applied(sink.write(&snapshot, None).await);
+    applied(sink.write(WriteRequest::Batch(&snapshot)).await);
     let after_snapshot = sink.embedding_tokens();
     assert!(after_snapshot > 0);
     let cat = vector(&sink.client, &namespace, "1").await;
@@ -599,7 +612,7 @@ async fn embedded_texts_are_embedded_once_per_change() {
         Some("a cat sleeping on a windowsill"),
         "10",
     )]);
-    applied(sink.write(&views, None).await);
+    applied(sink.write(WriteRequest::Batch(&views)).await);
     assert_eq!(sink.embedding_tokens(), after_snapshot);
     assert_eq!(vector(&sink.client, &namespace, "1").await, cat);
     assert_eq!(
@@ -622,10 +635,10 @@ async fn embedded_texts_are_embedded_once_per_change() {
         "11",
     )]);
     assert!(matches!(
-        sink.write(&more_views, None).await,
+        sink.write(WriteRequest::Batch(&more_views)).await,
         WriteResult::Failed(_)
     ));
-    applied(sink.write(&more_views, None).await);
+    applied(sink.write(WriteRequest::Batch(&more_views)).await);
     assert_eq!(sink.embedding_tokens(), after_snapshot);
     assert_eq!(
         live_documents(&sink.client, &namespace).await["1"]["views"],
@@ -635,15 +648,12 @@ async fn embedded_texts_are_embedded_once_per_change() {
     // A changed text is embedded again.
     let dog = vector(&sink.client, &namespace, "2").await;
     applied(
-        sink.write(
-            &live(vec![titled(
-                7,
-                "2",
-                Some("a puppy splashing in puddles"),
-                "2",
-            )]),
-            None,
-        )
+        sink.write(WriteRequest::Batch(&live(vec![titled(
+            7,
+            "2",
+            Some("a puppy splashing in puddles"),
+            "2",
+        )])))
         .await,
     );
     assert!(sink.embedding_tokens() > after_snapshot);
@@ -658,7 +668,7 @@ async fn embedded_texts_are_embedded_once_per_change() {
         },
     };
     let tokens = sink.embedding_tokens();
-    applied(sink.write(&live(vec![cleared]), None).await);
+    applied(sink.write(WriteRequest::Batch(&live(vec![cleared]))).await);
     assert_eq!(sink.embedding_tokens(), tokens);
     let document = &live_documents(&sink.client, &namespace).await["2"];
     assert_eq!(document["title"], json!("a puppy splashing in puddles"));
@@ -667,14 +677,11 @@ async fn embedded_texts_are_embedded_once_per_change() {
     // Tombstones and texts that go away carry placeholders, and a text that
     // arrives later replaces one.
     applied(
-        sink.write(
-            &live(vec![
-                delete(8, "3"),
-                titled(8, "4", Some("a kitten chasing a ball of yarn"), "4"),
-                titled(8, "1", None, "10"),
-            ]),
-            None,
-        )
+        sink.write(WriteRequest::Batch(&live(vec![
+            delete(8, "3"),
+            titled(8, "4", Some("a kitten chasing a ball of yarn"), "4"),
+            titled(8, "1", None, "10"),
+        ])))
         .await,
     );
     assert!(
@@ -704,7 +711,7 @@ async fn embedded_texts_are_embedded_once_per_change() {
     assert!(found.iter().all(|row| row["id"] != json!("3")));
 
     // A replay of an older change leaves the newer document alone.
-    applied(sink.write(&views, None).await);
+    applied(sink.write(WriteRequest::Batch(&views)).await);
     assert!(
         vector(&sink.client, &namespace, "1")
             .await
@@ -718,7 +725,12 @@ async fn embedded_texts_are_embedded_once_per_change() {
         .unwrap()
         .embed("title", MODEL, 512);
     match other
-        .write(&live(vec![titled(9, "5", Some("x"), "1")]), None)
+        .write(WriteRequest::Batch(&live(vec![titled(
+            9,
+            "5",
+            Some("x"),
+            "1",
+        )])))
         .await
     {
         WriteResult::Failed(SinkError::Target { permanent, .. }) => assert!(permanent),
@@ -741,7 +753,7 @@ async fn a_live_write_after_an_empty_snapshot_creates_the_namespace() {
         2,
         false,
     );
-    match sink.write(&first, None).await {
+    match sink.write(WriteRequest::Batch(&first)).await {
         WriteResult::Applied { rejected } => assert!(rejected.is_empty()),
         other => panic!("expected applied, got {other:?}"),
     }
@@ -759,7 +771,7 @@ async fn embedding_waits_for_room_in_the_rate_limit() {
         .unwrap()
         .embed("title", MODEL, 1024)
         .embedding_rate(1, 1024);
-    match too_low.write(&short, None).await {
+    match too_low.write(WriteRequest::Batch(&short)).await {
         WriteResult::Failed(SinkError::Target { permanent, .. }) => assert!(permanent),
         other => panic!("expected a refusal, got {other:?}"),
     }
@@ -780,7 +792,7 @@ async fn embedding_waits_for_room_in_the_rate_limit() {
         2,
         true,
     );
-    match sink.write(&batch, None).await {
+    match sink.write(WriteRequest::Batch(&batch)).await {
         WriteResult::Failed(SinkError::Throttled {
             retry_after: Some(wait),
         }) => assert!(
@@ -798,10 +810,24 @@ async fn embedding_waits_for_room_in_the_rate_limit() {
     );
 }
 
+/// Creates the first checkpoint, `text`.
+async fn create(sink: &mut TurbopufferSink, text: &str) -> WriteResult {
+    let write = CheckpointWrite {
+        expected: None,
+        new: text.into(),
+        kind: WriteKind::Create,
+    };
+    sink.write(WriteRequest::Checkpoint(&write)).await
+}
+
+async fn commit(sink: &mut TurbopufferSink, write: &CheckpointWrite) -> WriteResult {
+    sink.write(WriteRequest::Checkpoint(write)).await
+}
+
 /// Commits `write`, waiting while the sink waits for turbopuffer's index.
 async fn commit_until_applied(sink: &mut TurbopufferSink, write: &CheckpointWrite) {
     for _ in 0..120 {
-        match sink.commit(write).await {
+        match commit(sink, write).await {
             WriteResult::Applied { .. } => return,
             WriteResult::Failed(SinkError::Throttled { .. }) => {
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -830,7 +856,7 @@ async fn the_reader_follows_the_incarnation_readers_use() {
 
     let created = Checkpoint::new(BTreeMap::new());
     assert!(matches!(
-        sink.create(&created.encode().unwrap()).await,
+        create(&mut sink, &created.encode().unwrap()).await,
         WriteResult::Applied { .. }
     ));
     let (take_over, taken) = CheckpointWrite::take_over(&created).unwrap();
@@ -847,7 +873,7 @@ async fn the_reader_follows_the_incarnation_readers_use() {
     let snapshot = vec![upsert(5, "1", "a", "1"), upsert(5, "2", "b", "2")];
     let snapshot = SinkBatch::new(snapshot, columns(), first, true);
     assert!(matches!(
-        sink.write(&snapshot, None).await,
+        sink.write(WriteRequest::Batch(&snapshot)).await,
         WriteResult::Applied { .. }
     ));
     let (complete, completed) =
@@ -855,7 +881,7 @@ async fn the_reader_follows_the_incarnation_readers_use() {
     commit_until_applied(&mut sink, &complete).await;
     let deleted = SinkBatch::new(vec![delete(6, "2")], columns(), first, false);
     assert!(matches!(
-        sink.write(&deleted, None).await,
+        sink.write(WriteRequest::Batch(&deleted)).await,
         WriteResult::Applied { .. }
     ));
 
@@ -944,14 +970,14 @@ async fn a_long_write_yields_and_continues_where_it_stopped() {
     );
     // Each call sends one request, then yields before the next.
     for sent in 1..=2 {
-        match sink.write(&batch, None).await {
+        match sink.write(WriteRequest::Batch(&batch)).await {
             WriteResult::Failed(SinkError::Throttled { .. }) => {}
             other => panic!("expected the write to yield, got {other:?}"),
         }
         assert_eq!(sink.client.faults.lock().unwrap().sent, sent);
     }
     assert!(matches!(
-        sink.write(&batch, None).await,
+        sink.write(WriteRequest::Batch(&batch)).await,
         WriteResult::Applied { .. }
     ));
     assert_eq!(sink.client.faults.lock().unwrap().sent, 3);
@@ -989,14 +1015,14 @@ async fn writes_skip_acknowledged_documents_and_isolate_refused_rows() {
         .plan
         .extend([Fault::Pass, Fault::Drop]);
     assert!(matches!(
-        sink.write(&batch, None).await,
+        sink.write(WriteRequest::Batch(&batch)).await,
         WriteResult::Failed(_)
     ));
     let sent = sink.client.faults.lock().unwrap().sent;
     // Three rows a request: the three unacknowledged documents take one, and
     // all four would take two.
     sink.request_rows = 3;
-    match sink.write(&batch, None).await {
+    match sink.write(WriteRequest::Batch(&batch)).await {
         WriteResult::Applied { rejected } => assert!(rejected.is_empty()),
         other => panic!("expected applied, got {other:?}"),
     }
@@ -1019,7 +1045,7 @@ async fn writes_skip_acknowledged_documents_and_isolate_refused_rows() {
         2,
         false,
     );
-    match sink.write(&refused, None).await {
+    match sink.write(WriteRequest::Batch(&refused)).await {
         WriteResult::Applied { rejected } => {
             let found: Vec<_> = rejected
                 .iter()
@@ -1042,7 +1068,7 @@ async fn a_worker_whose_incarnation_was_retired_stops() {
     let mut owner = TurbopufferSink::new(&connection(), "s", &name).unwrap();
     let created = Checkpoint::new(BTreeMap::new());
     assert!(matches!(
-        owner.create(&created.encode().unwrap()).await,
+        create(&mut owner, &created.encode().unwrap()).await,
         WriteResult::Applied { .. }
     ));
     let (take_over, taken) = CheckpointWrite::take_over(&created).unwrap();
@@ -1063,12 +1089,12 @@ async fn a_worker_whose_incarnation_was_retired_stops() {
         )
     };
     assert!(matches!(
-        stale.write(&chunk("1"), None).await,
+        stale.write(WriteRequest::Batch(&chunk("1"))).await,
         WriteResult::Applied { .. }
     ));
     let (restart, _) = CheckpointWrite::start_snapshot(&started, BTreeMap::new(), 6).unwrap();
     commit_until_applied(&mut owner, &restart).await;
-    match stale.write(&chunk("2"), None).await {
+    match stale.write(WriteRequest::Batch(&chunk("2"))).await {
         WriteResult::Failed(SinkError::Target { permanent, .. }) => assert!(permanent),
         other => panic!("expected the stale worker to stop, got {other:?}"),
     }
@@ -1084,7 +1110,7 @@ async fn many_tombstones_fit_one_request_in_a_namespace_that_embeds() {
         .embed("title", MODEL, 1024);
     let first = SinkBatch::new(vec![titled(5, "0", Some("hello"), "1")], columns(), 2, true);
     assert!(matches!(
-        sink.write(&first, None).await,
+        sink.write(WriteRequest::Batch(&first)).await,
         WriteResult::Applied { .. }
     ));
     let sent = sink.client.faults.lock().unwrap().sent;
@@ -1095,7 +1121,7 @@ async fn many_tombstones_fit_one_request_in_a_namespace_that_embeds() {
         2,
         false,
     );
-    match sink.write(&deletes, None).await {
+    match sink.write(WriteRequest::Batch(&deletes)).await {
         WriteResult::Applied { rejected } => assert!(rejected.is_empty()),
         other => panic!("expected applied, got {other:?}"),
     }

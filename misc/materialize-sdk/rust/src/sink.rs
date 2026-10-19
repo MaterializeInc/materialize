@@ -23,7 +23,7 @@ use std::time::Duration;
 use materialize_sdk_core::checkpoint::MAX_BYTES;
 use materialize_sdk_core::{CheckpointWrite, PayloadColumns, SinkType, Update};
 
-/// The changes the SDK hands a sink in one [`Sink::write`].
+/// The changes the SDK hands a sink in one [`WriteRequest`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SinkBatch {
     updates: Vec<Update>,
@@ -138,6 +138,54 @@ pub enum SinkError {
     },
 }
 
+/// What the SDK asks a sink to write in one [`Sink::write`].
+///
+/// A [`SinkType::Transactional`] sink gets [`WriteRequest::BatchAndCheckpoint`]
+/// and [`WriteRequest::Checkpoint`], a [`SinkType::NonTransactional`] one gets
+/// [`WriteRequest::Batch`] and [`WriteRequest::Checkpoint`]. A sink whose
+/// [`Sink::load`] returns [`SinkError::NotSupported`] gets batches only.
+#[derive(Clone, Copy, Debug)]
+pub enum WriteRequest<'a> {
+    /// A batch alone. The write returns applied once the target durably
+    /// accepted every update it did not reject. A batch can
+    /// apply again, or late, so applying a change again or after a newer
+    /// change of the same key must leave the target as if it applied once and
+    /// in order.
+    Batch(&'a SinkBatch),
+    /// A batch and its checkpoint write, which the write applies in one
+    /// transaction, only if the checkpoint condition holds.
+    /// One whose checkpoint write leaves the text unchanged, such as part of a
+    /// snapshot, is sent again after an unknown result, so applying it again
+    /// must change nothing. Within one snapshot, each row at its `AS OF`, or
+    /// each key in the upsert envelope, arrives in one write with its full
+    /// count or value, because the server consolidates each timestamp (see
+    /// [`materialize_sdk_core::batch`]).
+    BatchAndCheckpoint(&'a SinkBatch, &'a CheckpointWrite),
+    /// A checkpoint write without a batch: the first checkpoint, a take-over,
+    /// the start of a snapshot, new fingerprints, and a non-transactional
+    /// sink's commit after its batches.
+    Checkpoint(&'a CheckpointWrite),
+}
+
+impl<'a> WriteRequest<'a> {
+    /// The batch to write, if any.
+    pub fn batch(self) -> Option<&'a SinkBatch> {
+        match self {
+            WriteRequest::Batch(batch) | WriteRequest::BatchAndCheckpoint(batch, _) => Some(batch),
+            WriteRequest::Checkpoint(_) => None,
+        }
+    }
+
+    /// The checkpoint write, if any.
+    pub fn checkpoint(self) -> Option<&'a CheckpointWrite> {
+        match self {
+            WriteRequest::Batch(_) => None,
+            WriteRequest::BatchAndCheckpoint(_, checkpoint)
+            | WriteRequest::Checkpoint(checkpoint) => Some(checkpoint),
+        }
+    }
+}
+
 /// A target the SDK writes a durable subscription to.
 ///
 /// A sink is built for one sink id and keeps its checkpoint under it. The
@@ -149,19 +197,12 @@ pub enum SinkError {
 ///
 /// A sink that keeps fields of its own next to the checkpoint, such as the
 /// namespace readers use, changes them only in the same atomic write as the
-/// checkpoint, in [`Sink::write`] or [`Sink::commit`]. Equal checkpoint text
-/// does not show whether those fields changed, so after a dropped or unknown
-/// write the sink settles that exact write itself before it accepts another.
+/// checkpoint. Equal checkpoint text does not show whether those fields
+/// changed, so after a dropped or unknown write the sink settles that exact
+/// write itself before it accepts another.
 pub trait Sink: Send {
     /// What the target can do. It must not change for a sink id.
     fn sink_type(&self) -> SinkType;
-
-    /// Creates the sink's first checkpoint, only if it has none. Returns not
-    /// applied if one exists.
-    fn create(&mut self, checkpoint: &str) -> impl Future<Output = WriteResult> + Send {
-        let _ = checkpoint;
-        async { WriteResult::Failed(SinkError::NotSupported) }
-    }
 
     /// The latest applied checkpoint, also after a write whose response was
     /// lost, or `None` if the sink was never set up.
@@ -169,39 +210,11 @@ pub trait Sink: Send {
         async { Err(SinkError::NotSupported) }
     }
 
-    /// Writes `batch`.
-    ///
-    /// With a [`SinkType::Transactional`] target, `checkpoint` is always set,
-    /// and the write applies the batch and replaces the expected checkpoint
-    /// with the new one in one transaction, only if the stored one is still
-    /// the expected one. It returns not applied only when that condition
-    /// failed, and unknown when the response to the commit was lost. A write
-    /// whose checkpoint write leaves the text unchanged, such as part of a
-    /// snapshot, is sent again after an unknown result, so applying it again
-    /// must change nothing. Within one snapshot, each row at its `AS OF`, or
-    /// each key in the upsert envelope, arrives in one write with its full
-    /// count or value,
-    /// because the server consolidates each timestamp (see
-    /// [`materialize_sdk_core::batch`]).
-    ///
-    /// With a [`SinkType::NonTransactional`] target, `checkpoint` is `None`,
-    /// and the write returns applied once the target durably accepted every
-    /// update it did not reject. A batch can apply again, or late, so applying
-    /// a change again or after a newer change of the same key must leave the
-    /// target as if it applied once and in order.
-    fn write(
-        &mut self,
-        batch: &SinkBatch,
-        checkpoint: Option<&CheckpointWrite>,
-    ) -> impl Future<Output = WriteResult> + Send;
-
-    /// Writes the checkpoint without a batch, only if the stored one is still
-    /// the expected one: a take-over, the start of a snapshot, new
-    /// fingerprints, and a non-transactional sink's commit after its writes.
-    fn commit(&mut self, checkpoint: &CheckpointWrite) -> impl Future<Output = WriteResult> + Send {
-        let _ = checkpoint;
-        async { WriteResult::Failed(SinkError::NotSupported) }
-    }
+    /// Writes `request`. A checkpoint write applies only if the stored
+    /// checkpoint is still the expected one, or, for the first checkpoint,
+    /// only if there is none. It returns not applied only when that condition
+    /// failed, and unknown when its response was lost.
+    fn write(&mut self, request: WriteRequest<'_>) -> impl Future<Output = WriteResult> + Send;
 
     /// The largest checkpoint text the sink stores, at most
     /// [`MAX_BYTES`].
@@ -232,7 +245,7 @@ mod tests {
             SinkType::NonTransactional
         }
 
-        async fn write(&mut self, _: &SinkBatch, _: Option<&CheckpointWrite>) -> WriteResult {
+        async fn write(&mut self, _: WriteRequest<'_>) -> WriteResult {
             WriteResult::applied()
         }
     }
@@ -241,10 +254,6 @@ mod tests {
     async fn a_sink_without_a_checkpoint_needs_only_write() {
         let mut sink = Events;
         assert!(matches!(sink.load().await, Err(SinkError::NotSupported)));
-        assert!(matches!(
-            sink.create("{}").await,
-            WriteResult::Failed(SinkError::NotSupported)
-        ));
         assert!(sink.sweep_generations(2).await.is_ok());
     }
 }

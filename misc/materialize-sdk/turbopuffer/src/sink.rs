@@ -21,7 +21,8 @@ use std::time::{Duration, Instant};
 use materialize_sdk::core::Checkpoint;
 use materialize_sdk::core::checkpoint::MAX_BYTES;
 use materialize_sdk::{
-    CheckpointWrite, Rejected, Sink, SinkBatch, SinkError, SinkType, WriteKind, WriteResult,
+    CheckpointWrite, Rejected, Sink, SinkBatch, SinkError, SinkType, WriteKind, WriteRequest,
+    WriteResult,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -209,54 +210,8 @@ impl TurbopufferSink {
         }
         Ok(())
     }
-}
 
-/// Refuses a name that cannot prefix the sink's namespaces.
-pub(crate) fn check_name(name: &str) -> Result<(), String> {
-    let valid = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.');
-    if name.is_empty() || name.len() > 100 || name.contains("__") || !name.chars().all(valid) {
-        return Err(format!(
-            "{name:?} cannot name turbopuffer namespaces: use up to 100 letters, digits, `-`, \
-             `_`, and `.`, without `__`"
-        ));
-    }
-    Ok(())
-}
-
-/// Refuses an embedding rate too low for one document, which turbopuffer
-/// would refuse every time.
-fn check_rate(pacer: &Pacer, layout: &Layout) -> Result<(), SinkError> {
-    let columns = u64::try_from(layout.embeddings().len()).unwrap_or(u64::MAX);
-    let needed = columns.saturating_mul(MAX_TOKENS_PER_TEXT);
-    if pacer.tokens_per_minute() < needed {
-        return Err(SinkError::Target {
-            message: format!(
-                "an embedding rate of {} tokens a minute is too low for one document, which \
-                 needs up to {needed}",
-                pacer.tokens_per_minute()
-            ),
-            permanent: true,
-        });
-    }
-    Ok(())
-}
-
-/// The namespace that holds the checkpoint of the sink named `name`.
-pub(crate) fn checkpoint_namespace(name: &str) -> String {
-    format!("{name}__checkpoint")
-}
-
-/// The namespace of the sink named `name` for `incarnation`, the generation
-/// of the snapshot that writes it.
-pub fn data_namespace(name: &str, incarnation: u64) -> String {
-    format!("{name}__i{incarnation}")
-}
-
-impl Sink for TurbopufferSink {
-    fn sink_type(&self) -> SinkType {
-        SinkType::NonTransactional
-    }
-
+    /// Creates the first checkpoint, `checkpoint`, and the checkpoint document.
     async fn create(&mut self, checkpoint: &str) -> WriteResult {
         if let Err(error) = self.check_layout(checkpoint) {
             return WriteResult::Failed(error);
@@ -293,15 +248,7 @@ impl Sink for TurbopufferSink {
         self.checkpoints.create(checkpoint).await
     }
 
-    async fn load(&mut self) -> Result<Option<String>, SinkError> {
-        Ok(self
-            .checkpoints
-            .load()
-            .await?
-            .map(|document| document.checkpoint))
-    }
-
-    async fn write(&mut self, batch: &SinkBatch, _: Option<&CheckpointWrite>) -> WriteResult {
+    async fn write_batch(&mut self, batch: &SinkBatch) -> WriteResult {
         let started = Instant::now();
         // A worker learns that it was fenced only at its next commit, which
         // a snapshot reaches after hours of embedding. Its incarnation being
@@ -453,6 +400,75 @@ impl Sink for TurbopufferSink {
             }
         }
         self.checkpoints.commit(checkpoint).await
+    }
+}
+
+/// Refuses a name that cannot prefix the sink's namespaces.
+pub(crate) fn check_name(name: &str) -> Result<(), String> {
+    let valid = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.');
+    if name.is_empty() || name.len() > 100 || name.contains("__") || !name.chars().all(valid) {
+        return Err(format!(
+            "{name:?} cannot name turbopuffer namespaces: use up to 100 letters, digits, `-`, \
+             `_`, and `.`, without `__`"
+        ));
+    }
+    Ok(())
+}
+
+/// Refuses an embedding rate too low for one document, which turbopuffer
+/// would refuse every time.
+fn check_rate(pacer: &Pacer, layout: &Layout) -> Result<(), SinkError> {
+    let columns = u64::try_from(layout.embeddings().len()).unwrap_or(u64::MAX);
+    let needed = columns.saturating_mul(MAX_TOKENS_PER_TEXT);
+    if pacer.tokens_per_minute() < needed {
+        return Err(SinkError::Target {
+            message: format!(
+                "an embedding rate of {} tokens a minute is too low for one document, which \
+                 needs up to {needed}",
+                pacer.tokens_per_minute()
+            ),
+            permanent: true,
+        });
+    }
+    Ok(())
+}
+
+/// The namespace that holds the checkpoint of the sink named `name`.
+pub(crate) fn checkpoint_namespace(name: &str) -> String {
+    format!("{name}__checkpoint")
+}
+
+/// The namespace of the sink named `name` for `incarnation`, the generation
+/// of the snapshot that writes it.
+pub fn data_namespace(name: &str, incarnation: u64) -> String {
+    format!("{name}__i{incarnation}")
+}
+
+impl Sink for TurbopufferSink {
+    fn sink_type(&self) -> SinkType {
+        SinkType::NonTransactional
+    }
+
+    async fn load(&mut self) -> Result<Option<String>, SinkError> {
+        Ok(self
+            .checkpoints
+            .load()
+            .await?
+            .map(|document| document.checkpoint))
+    }
+
+    async fn write(&mut self, request: WriteRequest<'_>) -> WriteResult {
+        match request {
+            WriteRequest::Batch(batch) => self.write_batch(batch).await,
+            WriteRequest::Checkpoint(write) if write.expected.is_none() => {
+                self.create(&write.new).await
+            }
+            WriteRequest::Checkpoint(write) => self.commit(write).await,
+            WriteRequest::BatchAndCheckpoint(..) => WriteResult::Failed(SinkError::Target {
+                message: "turbopuffer cannot write a batch and its checkpoint together".into(),
+                permanent: true,
+            }),
+        }
     }
 
     fn max_checkpoint_bytes(&self) -> usize {

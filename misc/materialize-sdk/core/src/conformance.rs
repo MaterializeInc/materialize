@@ -472,12 +472,17 @@ fn checkpoint_write(value: Value) -> Value {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Input {
-        current: Value,
+        /// Absent only for `create`, which has no checkpoint yet.
+        #[serde(default)]
+        current: Option<Value>,
         operation: Operation,
     }
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields, rename_all = "snake_case")]
     enum Operation {
+        Create {
+            subscriptions: BTreeMap<String, Fingerprint>,
+        },
         TakeOver,
         Commit {
             upper: Frontier,
@@ -492,22 +497,31 @@ fn checkpoint_write(value: Value) -> Value {
         },
     }
     let Input { current, operation } = input(value);
-    let Ok(current) = Checkpoint::decode(&sorted(current).to_string()) else {
-        return error("checkpoint");
+    let current = match current {
+        Some(current) => match Checkpoint::decode(&sorted(current).to_string()) {
+            Ok(current) => Some(current),
+            Err(_) => return error("checkpoint"),
+        },
+        None => None,
     };
+    let stored = || current.as_ref().expect("current");
     let built = match operation {
-        Operation::TakeOver => CheckpointWrite::take_over(&current).map(|(write, _)| write),
+        Operation::Create { subscriptions } => {
+            assert!(current.is_none(), "create has no current checkpoint");
+            CheckpointWrite::create(subscriptions).map(|(write, _)| write)
+        }
+        Operation::TakeOver => CheckpointWrite::take_over(stored()).map(|(write, _)| write),
         Operation::Commit { upper } => {
-            CheckpointWrite::commit(&current, upper).map(|(write, _)| write)
+            CheckpointWrite::commit(stored(), upper).map(|(write, _)| write)
         }
         Operation::StartSnapshot {
             subscriptions,
             as_of,
-        } => CheckpointWrite::start_snapshot(&current, subscriptions, u64_of(&as_of))
+        } => CheckpointWrite::start_snapshot(stored(), subscriptions, u64_of(&as_of))
             .map(|(write, _)| write),
-        Operation::SnapshotWrite => CheckpointWrite::snapshot_write(&current),
+        Operation::SnapshotWrite => CheckpointWrite::snapshot_write(stored()),
         Operation::Fingerprints { subscriptions } => {
-            CheckpointWrite::fingerprints(&current, subscriptions).map(|(write, _)| write)
+            CheckpointWrite::fingerprints(stored(), subscriptions).map(|(write, _)| write)
         }
     };
     match built {

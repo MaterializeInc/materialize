@@ -32,7 +32,7 @@ use tokio_postgres::{Client, Config, Socket};
 
 use crate::error::Error;
 use crate::live::{AbortOnDrop, LiveOptions, LiveSubscription, query, server_error_with};
-use crate::sink::{Rejected, Sink, SinkBatch, SinkError, WriteResult};
+use crate::sink::{Rejected, Sink, SinkBatch, SinkError, WriteRequest, WriteResult};
 use crate::store::CheckpointStore;
 
 /// How a durable subscription fetches, commits, and retries.
@@ -71,16 +71,17 @@ impl DurableOptions {
         self
     }
 
-    /// How long a [`Sink::write`] may run before its result counts as
-    /// unknown, and a [`Sink::sweep_generations`] before it counts as failed.
-    /// One minute by default.
+    /// How long a [`Sink::write`] with a batch may run before its result
+    /// counts as unknown, and a [`Sink::sweep_generations`] before it counts as
+    /// failed. One minute by default.
     pub fn write_timeout(mut self, timeout: Duration) -> DurableOptions {
         self.write_timeout = timeout;
         self
     }
 
-    /// How long a checkpoint read or write may run. A write that runs longer
-    /// counts as unknown, and a read as failed. 30 seconds by default.
+    /// How long a checkpoint read, or a checkpoint write without a batch, may
+    /// run, in the store or in the sink. A write that runs longer counts as
+    /// unknown, and a read as failed. 30 seconds by default.
     pub fn store_timeout(mut self, timeout: Duration) -> DurableOptions {
         self.store_timeout = timeout;
         self
@@ -99,15 +100,11 @@ impl DurableOptions {
 pub struct NoStore;
 
 impl CheckpointStore for NoStore {
-    async fn create(&mut self, _: &str, _: &str) -> WriteResult {
-        WriteResult::Failed(SinkError::NotSupported)
-    }
-
     async fn load(&mut self, _: &str) -> Result<Option<String>, SinkError> {
         Err(SinkError::NotSupported)
     }
 
-    async fn compare_and_set(&mut self, _: &str, _: &CheckpointWrite) -> WriteResult {
+    async fn write(&mut self, _: &str, _: &CheckpointWrite) -> WriteResult {
         WriteResult::Failed(SinkError::NotSupported)
     }
 }
@@ -185,28 +182,21 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
         };
         let fingerprint = found.fingerprint(envelope)?;
         fingerprint.payload_columns()?;
-        let text = Checkpoint::new(BTreeMap::from([(object.name.clone(), fingerprint)]))
-            .encode_within(self.max_checkpoint_bytes().await?)?;
-        self.create_checkpoint(&text).await
+        let (write, _) =
+            CheckpointWrite::create(BTreeMap::from([(object.name.clone(), fingerprint)]))
+                .map_err(write_error)?;
+        self.check_size(&write).await?;
+        self.create_checkpoint(&write).await
     }
 
-    /// Creates the first checkpoint `text`, and returns whether this call
-    /// created it.
-    async fn create_checkpoint(&mut self, text: &str) -> Result<bool, Error> {
+    /// Writes the first checkpoint, and returns whether this call created it.
+    async fn create_checkpoint(&mut self, write: &CheckpointWrite) -> Result<bool, Error> {
         let in_store = self.checkpoint_in_store().await?;
+        let text = write.new.as_str();
         let mut attempt = Attempts::new(&self.options, &self.sink_id);
         let mut lost = false;
         loop {
-            let created = if in_store {
-                tokio::time::timeout(
-                    self.options.store_timeout,
-                    self.store.create(&self.sink_id, text),
-                )
-                .await
-            } else {
-                tokio::time::timeout(self.options.store_timeout, self.sink.create(text)).await
-            };
-            let stored = match created.unwrap_or(WriteResult::Unknown) {
+            let stored = match self.write_checkpoint(write).await {
                 WriteResult::Applied { .. } => return Ok(true),
                 WriteResult::Failed(SinkError::NotSupported) if in_store => {
                     return Err(missing_store());
@@ -538,7 +528,7 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
         loop {
             let (write, next) = CheckpointWrite::take_over(&stored).map_err(write_error)?;
             self.check_size(&write).await?;
-            match self.commit(&write).await {
+            match self.write_checkpoint(&write).await {
                 WriteResult::Applied { .. } => return Ok(next),
                 // Two workers that start from the same checkpoint write the
                 // same take-over, so a read cannot tell whose landed. Only an
@@ -603,24 +593,28 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
     }
 
     /// Writes the checkpoint, through the store or the sink.
-    async fn commit(&mut self, write: &CheckpointWrite) -> WriteResult {
-        let committed = if self.in_store == Some(true) {
+    async fn write_checkpoint(&mut self, write: &CheckpointWrite) -> WriteResult {
+        let written = if self.in_store == Some(true) {
             tokio::time::timeout(
                 self.options.store_timeout,
-                self.store.compare_and_set(&self.sink_id, write),
+                self.store.write(&self.sink_id, write),
             )
             .await
         } else {
-            tokio::time::timeout(self.options.store_timeout, self.sink.commit(write)).await
+            tokio::time::timeout(
+                self.options.store_timeout,
+                self.sink.write(WriteRequest::Checkpoint(write)),
+            )
+            .await
         };
-        committed.unwrap_or(WriteResult::Unknown)
+        written.unwrap_or(WriteResult::Unknown)
     }
 
     async fn commit_until_applied(&mut self, write: &CheckpointWrite) -> Result<(), Error> {
         self.check_size(write).await?;
         let mut attempt = Attempts::new(&self.options, &self.sink_id);
         loop {
-            let result = self.commit(write).await;
+            let result = self.write_checkpoint(write).await;
             if self.settled(write, result, &mut attempt).await?.is_some() {
                 return Ok(());
             }
@@ -638,14 +632,16 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
         if let Some(write) = checkpoint {
             self.check_size(write).await?;
         }
+        let request = match checkpoint {
+            Some(write) => WriteRequest::BatchAndCheckpoint(batch, write),
+            None => WriteRequest::Batch(batch),
+        };
         let mut attempt = Attempts::new(&self.options, &self.sink_id);
         loop {
-            let written = tokio::time::timeout(
-                self.options.write_timeout,
-                self.sink.write(batch, checkpoint),
-            )
-            .await
-            .unwrap_or(WriteResult::Unknown);
+            let written =
+                tokio::time::timeout(self.options.write_timeout, self.sink.write(request))
+                    .await
+                    .unwrap_or(WriteResult::Unknown);
             let rejected = match checkpoint {
                 Some(write) => self.settled(write, written, &mut attempt).await?,
                 // Without a checkpoint write, sending the batch again is safe.
@@ -684,7 +680,12 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
             }
             WriteResult::NotApplied | WriteResult::Unknown => {
                 let stored = self.load().await?;
-                let expected = Checkpoint::decode(&write.expected)?;
+                // The first checkpoint is settled by `create_checkpoint`.
+                let expected = write
+                    .expected
+                    .as_deref()
+                    .ok_or_else(|| UsageError::new("a first checkpoint settles on its own"))?;
+                let expected = Checkpoint::decode(expected)?;
                 let new = Checkpoint::decode(&write.new)?;
                 match stored.settle(&expected, &new) {
                     Settlement::Applied => Ok(Some(Vec::new())),
@@ -1027,8 +1028,10 @@ mod tests {
         results: VecDeque<WriteResult>,
         loads: VecDeque<String>,
         calls: usize,
+        /// Every request sent, as its variant and its checkpoint write's kind.
+        requests: Vec<String>,
         /// The expected text of every checkpoint write sent.
-        expected: Vec<String>,
+        expected: Vec<Option<String>>,
     }
 
     impl Sink for Scripted {
@@ -1036,23 +1039,26 @@ mod tests {
             SinkType::Transactional
         }
 
-        async fn create(&mut self, _: &str) -> WriteResult {
-            self.calls += 1;
-            self.results.pop_front().unwrap()
-        }
-
         async fn load(&mut self) -> Result<Option<String>, SinkError> {
             Ok(self.loads.pop_front())
         }
 
-        async fn write(&mut self, _: &SinkBatch, _: Option<&CheckpointWrite>) -> WriteResult {
+        async fn write(&mut self, request: WriteRequest<'_>) -> WriteResult {
             self.calls += 1;
-            self.results.pop_front().unwrap()
-        }
-
-        async fn commit(&mut self, write: &CheckpointWrite) -> WriteResult {
-            self.calls += 1;
-            self.expected.push(write.expected.clone());
+            let kind = |write: &CheckpointWrite| {
+                serde_json::to_value(write).unwrap()["kind"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            };
+            self.requests.push(match request {
+                WriteRequest::Batch(_) => "batch".into(),
+                WriteRequest::BatchAndCheckpoint(_, write) => format!("batch and {}", kind(write)),
+                WriteRequest::Checkpoint(write) => kind(write),
+            });
+            if let Some(write) = request.checkpoint() {
+                self.expected.push(write.expected.clone());
+            }
             self.results.pop_front().unwrap()
         }
     }
@@ -1072,7 +1078,7 @@ mod tests {
     fn commit() -> (CheckpointWrite, String, String) {
         let before = Checkpoint::new(BTreeMap::new()).committed(Frontier::new(10).unwrap());
         let (write, _) = CheckpointWrite::commit(&before, Frontier::new(20).unwrap()).unwrap();
-        let (expected, new) = (write.expected.clone(), write.new.clone());
+        let (expected, new) = (write.expected.clone().unwrap(), write.new.clone());
         (write, expected, new)
     }
 
@@ -1100,6 +1106,7 @@ mod tests {
         );
         d.commit_until_applied(&write).await.unwrap();
         assert_eq!(d.sink.calls, 2);
+        assert_eq!(d.sink.requests, ["commit", "commit"]);
     }
 
     #[tokio::test(start_paused = true)]
@@ -1168,13 +1175,12 @@ mod tests {
             Ok(Some(read))
         }
 
-        async fn write(&mut self, _: &SinkBatch, _: Option<&CheckpointWrite>) -> WriteResult {
-            unreachable!("a take-over writes no batch")
-        }
-
-        async fn commit(&mut self, write: &CheckpointWrite) -> WriteResult {
+        async fn write(&mut self, request: WriteRequest<'_>) -> WriteResult {
+            let WriteRequest::Checkpoint(write) = request else {
+                unreachable!("a take-over writes no batch")
+            };
             let mut stored = self.0.lock().unwrap();
-            if *stored != write.expected {
+            if write.expected.as_deref() != Some(stored.as_str()) {
                 return WriteResult::NotApplied;
             }
             *stored = write.new.clone();
@@ -1196,7 +1202,8 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(500)).await;
                 let (write, next) =
                     CheckpointWrite::commit(&current, Frontier::new(frontier).unwrap()).unwrap();
-                if !matches!(owner.commit(&write).await, WriteResult::Applied { .. }) {
+                let written = owner.write(WriteRequest::Checkpoint(&write)).await;
+                if !matches!(written, WriteResult::Applied { .. }) {
                     return;
                 }
                 current = next;
@@ -1227,17 +1234,46 @@ mod tests {
             owned.epoch, 3,
             "only an applied response settles a take-over"
         );
-        assert_eq!(d.sink.expected[1], landed.encode().unwrap());
+        assert_eq!(d.sink.expected[1], Some(landed.encode().unwrap()));
+        assert_eq!(d.sink.requests, ["take_over", "take_over"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_first_checkpoint_is_not_settled_as_a_later_write() {
+        let mut d = durable(vec![], vec![first_text()]);
+        let mut attempt = Attempts::new(&d.options, "s");
+        let settled = d
+            .settled(
+                &create(BTreeMap::new()),
+                WriteResult::NotApplied,
+                &mut attempt,
+            )
+            .await;
+        assert!(matches!(settled, Err(Error::Usage(_))), "{settled:?}");
     }
 
     fn first_text() -> String {
         Checkpoint::new(BTreeMap::new()).encode().unwrap()
     }
 
+    fn create(subscriptions: BTreeMap<String, Fingerprint>) -> CheckpointWrite {
+        CheckpointWrite::create(subscriptions).unwrap().0
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_lost_create_that_applied_counts_as_created() {
         let mut d = durable(vec![WriteResult::Unknown], vec![first_text()]);
-        assert!(d.create_checkpoint(&first_text()).await.unwrap());
+        assert!(d.create_checkpoint(&create(BTreeMap::new())).await.unwrap());
+        assert_eq!(d.sink.requests, ["create"]);
+        assert_eq!(d.sink.expected, [None]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_lost_create_that_did_not_apply_is_sent_again() {
+        let mut d = durable(vec![WriteResult::Unknown, WriteResult::applied()], vec![]);
+        assert!(d.create_checkpoint(&create(BTreeMap::new())).await.unwrap());
+        assert_eq!(d.sink.requests, ["create", "create"]);
+        assert_eq!(d.sink.expected, [None, None]);
     }
 
     #[tokio::test(start_paused = true)]
@@ -1247,7 +1283,7 @@ mod tests {
             .take_over()
             .unwrap();
         let mut d = durable(vec![WriteResult::NotApplied], vec![owned.encode().unwrap()]);
-        assert!(!d.create_checkpoint(&first_text()).await.unwrap());
+        assert!(!d.create_checkpoint(&create(BTreeMap::new())).await.unwrap());
     }
 
     fn subscription(id: &str, shard: &str) -> BTreeMap<String, Fingerprint> {
@@ -1270,12 +1306,12 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_setup_again_after_a_replacement_keeps_the_checkpoint() {
         let stored = Checkpoint::new(subscription("u1", "s1")).encode().unwrap();
-        let replaced = Checkpoint::new(subscription("u2", "s1")).encode().unwrap();
+        let replaced = create(subscription("u2", "s1"));
         let mut d = durable(vec![WriteResult::NotApplied], vec![stored.clone()]);
         assert!(!d.create_checkpoint(&replaced).await.unwrap());
 
         // Other storage behind the name is another subscription.
-        let swapped = Checkpoint::new(subscription("u1", "s2")).encode().unwrap();
+        let swapped = create(subscription("u1", "s2"));
         let mut d = durable(vec![WriteResult::NotApplied], vec![stored]);
         assert!(d.create_checkpoint(&swapped).await.is_err());
     }
@@ -1298,7 +1334,7 @@ mod tests {
         )]));
         let mut d = durable(vec![WriteResult::NotApplied], vec![other.encode().unwrap()]);
         assert!(matches!(
-            d.create_checkpoint(&first_text()).await,
+            d.create_checkpoint(&create(BTreeMap::new())).await,
             Err(Error::Usage(_))
         ));
     }
@@ -1311,7 +1347,7 @@ mod tests {
             SinkType::Transactional
         }
 
-        async fn write(&mut self, _: &SinkBatch, _: Option<&CheckpointWrite>) -> WriteResult {
+        async fn write(&mut self, _: WriteRequest<'_>) -> WriteResult {
             unreachable!()
         }
     }
@@ -1331,7 +1367,7 @@ mod tests {
         let mut d = DurableSink::new("s", Events, DurableOptions::default());
         d.in_store = Some(true);
         assert!(matches!(
-            d.create_checkpoint(&first_text()).await,
+            d.create_checkpoint(&create(BTreeMap::new())).await,
             Err(Error::Usage(error)) if error.to_string().contains("with_store")
         ));
     }
@@ -1344,7 +1380,7 @@ mod tests {
             SinkType::NonTransactional
         }
 
-        async fn write(&mut self, _: &SinkBatch, _: Option<&CheckpointWrite>) -> WriteResult {
+        async fn write(&mut self, _: WriteRequest<'_>) -> WriteResult {
             unreachable!()
         }
     }

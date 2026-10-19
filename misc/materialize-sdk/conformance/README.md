@@ -137,9 +137,11 @@ apply the operation:
 
 Input: `current`, a checkpoint in its JSON form, and `operation`: `"take_over"`,
 `{"commit": {"upper"}}`, `{"start_snapshot": {"subscriptions", "as_of"}}`,
-`"snapshot_write"`, or `{"fingerprints": {"subscriptions"}}`. Build the write
-the SDK hands a sink and output `{"write": ...}`, with the `expected` and the
-`new` text and the `kind` with its fields. A commit's range errors are output
+`"snapshot_write"`, or `{"fingerprints": {"subscriptions"}}`. Or, without
+`current`, `{"create": {"subscriptions"}}`, the first checkpoint. Build the
+write the SDK hands a sink and output `{"write": ...}`, with the `expected` and
+the `new` text and the `kind` with its fields. `expected` is `null` only for
+the first checkpoint. A commit's range errors are output
 as in `checkpoint.json`, and a write that does not fit the checkpoint, such as
 a snapshot write with no snapshot in progress, as `{"error": "usage"}`.
 

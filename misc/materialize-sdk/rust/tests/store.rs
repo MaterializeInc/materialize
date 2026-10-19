@@ -60,6 +60,11 @@ fn first() -> Checkpoint {
     Checkpoint::new(BTreeMap::new())
 }
 
+/// The write that creates [`first`].
+fn create() -> CheckpointWrite {
+    CheckpointWrite::create(BTreeMap::new()).unwrap().0
+}
+
 #[tokio::test]
 #[ignore = "needs a running Materialize at MATERIALIZE_URL"]
 async fn setup_creates_the_checkpoint_only_once() {
@@ -68,11 +73,15 @@ async fn setup_creates_the_checkpoint_only_once() {
     let text = first().encode().unwrap();
     assert!(store.load("s").await.unwrap().is_none());
     assert!(matches!(
-        store.create("s", &text).await,
+        store.write("s", &create()).await,
         WriteResult::Applied { .. }
     ));
+    let other = CheckpointWrite {
+        new: "other".into(),
+        ..create()
+    };
     assert!(matches!(
-        store.create("s", "other").await,
+        store.write("s", &other).await,
         WriteResult::NotApplied
     ));
     assert_eq!(store.load("s").await.unwrap(), Some(text));
@@ -86,18 +95,15 @@ async fn a_write_applies_only_over_the_text_it_expects() {
     let (take_over, owned) = CheckpointWrite::take_over(&first()).unwrap();
     let (rival, _) = CheckpointWrite::start_snapshot(&first(), BTreeMap::new(), 40).unwrap();
     assert!(matches!(
-        store.create("s", &take_over.expected).await,
+        store.write("s", &create()).await,
         WriteResult::Applied { .. }
     ));
     assert!(matches!(
-        store.compare_and_set("s", &take_over).await,
+        store.write("s", &take_over).await,
         WriteResult::Applied { .. }
     ));
     assert!(
-        matches!(
-            store.compare_and_set("s", &rival).await,
-            WriteResult::NotApplied
-        ),
+        matches!(store.write("s", &rival).await, WriteResult::NotApplied),
         "a write from the replaced text does not apply"
     );
     assert_eq!(
@@ -113,23 +119,20 @@ async fn a_write_that_only_checks_applies_while_the_text_is_unchanged() {
     let mut store = store(&table).await;
     let (start, snapshot) = CheckpointWrite::start_snapshot(&first(), BTreeMap::new(), 40).unwrap();
     assert!(matches!(
-        store.create("s", &start.expected).await,
+        store.write("s", &create()).await,
         WriteResult::Applied { .. }
     ));
     let check = CheckpointWrite::snapshot_write(&snapshot).unwrap();
     assert!(
-        matches!(
-            store.compare_and_set("s", &check).await,
-            WriteResult::NotApplied
-        ),
+        matches!(store.write("s", &check).await, WriteResult::NotApplied),
         "the snapshot has not started yet"
     );
     assert!(matches!(
-        store.compare_and_set("s", &start).await,
+        store.write("s", &start).await,
         WriteResult::Applied { .. }
     ));
     assert!(matches!(
-        store.compare_and_set("s", &check).await,
+        store.write("s", &check).await,
         WriteResult::Applied { .. }
     ));
 }
@@ -139,9 +142,8 @@ async fn a_write_that_only_checks_applies_while_the_text_is_unchanged() {
 async fn only_one_of_racing_writes_applies() {
     const RACERS: usize = 8;
     let table = table("store_race").await;
-    let expected = first().encode().unwrap();
     assert!(matches!(
-        store(&table).await.create("s", &expected).await,
+        store(&table).await.write("s", &create()).await,
         WriteResult::Applied { .. }
     ));
     let mut stores = Vec::new();
@@ -157,7 +159,7 @@ async fn only_one_of_racing_writes_applies() {
         let start = Arc::clone(&start);
         racers.push(tokio::spawn(async move {
             start.wait().await;
-            (store.compare_and_set("s", &write).await, write.new)
+            (store.write("s", &write).await, write.new)
         }));
     }
     let mut applied = Vec::new();

@@ -31,7 +31,7 @@ use materialize_sdk::core::{Checkpoint, CommitConflict, Envelope};
 use materialize_sdk::{
     Change, CheckpointStore, CheckpointWrite, Classification, Column, DurableOptions, DurableSink,
     Error, ErrorKind, IdentityChange, LiveOptions, MaterializeStore, Row, Sink, SinkBatch,
-    SinkError, SinkType, WriteResult, checkpoint_table_sql,
+    SinkError, SinkType, WriteRequest, WriteResult, checkpoint_table_sql,
 };
 use tokio::task::JoinHandle;
 use tokio_postgres::NoTls;
@@ -75,8 +75,9 @@ impl Transactional {
     }
 }
 
+/// A first checkpoint expects none, so it applies only while there is none.
 fn compare_and_set(target: &mut Target, write: &CheckpointWrite) -> bool {
-    if target.checkpoint.as_deref() != Some(write.expected.as_str()) {
+    if target.checkpoint != write.expected {
         return false;
     }
     target.checkpoint = Some(write.new.clone());
@@ -88,27 +89,20 @@ impl Sink for Transactional {
         SinkType::Transactional
     }
 
-    async fn create(&mut self, checkpoint: &str) -> WriteResult {
-        let mut target = self.0.lock().unwrap();
-        if target.checkpoint.is_some() {
-            return WriteResult::NotApplied;
-        }
-        target.checkpoint = Some(checkpoint.to_string());
-        WriteResult::applied()
-    }
-
     async fn load(&mut self) -> Result<Option<String>, SinkError> {
         Ok(self.0.lock().unwrap().checkpoint.clone())
     }
 
-    async fn write(
-        &mut self,
-        batch: &SinkBatch,
-        checkpoint: Option<&CheckpointWrite>,
-    ) -> WriteResult {
-        let checkpoint = checkpoint.unwrap();
+    async fn write(&mut self, request: WriteRequest<'_>) -> WriteResult {
+        let checkpoint = request.checkpoint().expect("a checkpoint write");
         let mut target = self.0.lock().unwrap();
-        let chunk = checkpoint.expected == checkpoint.new;
+        let Some(batch) = request.batch() else {
+            return match compare_and_set(&mut target, checkpoint) {
+                true => WriteResult::applied(),
+                false => WriteResult::NotApplied,
+            };
+        };
+        let chunk = checkpoint.expected.as_deref() == Some(checkpoint.new.as_str());
         if chunk {
             target.chunk_writes += 1;
             if target.drop_chunks > 0 {
@@ -145,14 +139,6 @@ impl Sink for Transactional {
         WriteResult::applied()
     }
 
-    async fn commit(&mut self, checkpoint: &CheckpointWrite) -> WriteResult {
-        let applied = compare_and_set(&mut self.0.lock().unwrap(), checkpoint);
-        match applied {
-            true => WriteResult::applied(),
-            false => WriteResult::NotApplied,
-        }
-    }
-
     async fn sweep_generations(&mut self, generation: u64) -> Result<(), SinkError> {
         let mut target = self.0.lock().unwrap();
         target.rows.retain(|(written, _), _| *written >= generation);
@@ -183,7 +169,10 @@ impl Sink for Events {
         SinkType::NonTransactional
     }
 
-    async fn write(&mut self, batch: &SinkBatch, _: Option<&CheckpointWrite>) -> WriteResult {
+    async fn write(&mut self, request: WriteRequest<'_>) -> WriteResult {
+        let WriteRequest::Batch(batch) = request else {
+            unreachable!("the SDK keeps this sink's checkpoint")
+        };
         self.0.lock().unwrap().push(batch.clone());
         WriteResult::applied()
     }
