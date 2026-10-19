@@ -76,8 +76,9 @@ impl SystemParameterFrontendClient {}
 
 impl Drop for SystemParameterFrontendClient {
     fn drop(&mut self) {
-        let SystemParameterFrontendClient::LaunchDarkly { client, .. } = self else {
-            return;
+        let client = match self {
+            SystemParameterFrontendClient::LaunchDarkly { client, ctx: _ } => client,
+            SystemParameterFrontendClient::File { path: _ } => return,
         };
         // Dropping an `ld::Client` without `close` disconnects its event
         // dispatcher thread, which logs an error and discards the analytics
