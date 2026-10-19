@@ -1648,6 +1648,64 @@ mod tests {
         }
     }
 
+    /// Writes `create_sql` into `catalog` as item `id`, as a transaction would.
+    async fn create_item(
+        catalog: &mut Catalog,
+        id: CatalogItemId,
+        gid: GlobalId,
+        name: &str,
+        create_sql: &str,
+    ) {
+        let item = catalog
+            .state()
+            .deserialize_item(
+                gid,
+                create_sql,
+                &BTreeMap::new(),
+                &mut LocalExpressionCache::Closed,
+                None,
+            )
+            .expect("valid create_sql");
+        let commit_ts = catalog.current_upper().await;
+        catalog
+            .transact(
+                None,
+                commit_ts,
+                None,
+                vec![Op::CreateItem {
+                    item,
+                    name: QualifiedItemName {
+                        qualifiers: ItemQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Id(DatabaseId::User(1)),
+                            schema_spec: SchemaSpecifier::Id(SchemaId::User(3)),
+                        },
+                        item: name.to_string(),
+                    },
+                    id,
+                    owner_id: MZ_SYSTEM_ROLE_ID,
+                }],
+            )
+            .await
+            .expect("failed to transact");
+    }
+
+    /// Stages a refresh of `catalog` and commits it.
+    async fn refresh(catalog: &Catalog) -> Result<(), CatalogError> {
+        let mut storage = catalog.storage().await;
+        let mut tx = storage.transaction().await.expect("transaction");
+        catalog
+            .state()
+            .refresh_item_metadata(&mut tx)
+            .expect("refresh");
+        let commit_ts = tx.upper();
+        tx.commit(commit_ts).await
+    }
+
+    /// The durable snapshot of `catalog`.
+    async fn recorded(catalog: &Catalog) -> Snapshot {
+        catalog.storage().await.snapshot().await.expect("snapshot")
+    }
+
     /// The bootstrap refresh writes back rows that are missing, which is how
     /// items that predate the collections get theirs, and nothing else: a
     /// steady-state boot stages no writes. A read-only catalog commits a
@@ -1660,62 +1718,6 @@ mod tests {
         let persist_client = PersistClient::new_for_tests().await;
         let organization_id = Uuid::new_v4();
         let bootstrap_args = test_bootstrap_args();
-
-        async fn create_item(
-            catalog: &mut Catalog,
-            id: CatalogItemId,
-            gid: GlobalId,
-            name: &str,
-            create_sql: &str,
-        ) {
-            let item = catalog
-                .state()
-                .deserialize_item(
-                    gid,
-                    create_sql,
-                    &BTreeMap::new(),
-                    &mut LocalExpressionCache::Closed,
-                    None,
-                )
-                .expect("valid create_sql");
-            let commit_ts = catalog.current_upper().await;
-            catalog
-                .transact(
-                    None,
-                    commit_ts,
-                    None,
-                    vec![Op::CreateItem {
-                        item,
-                        name: QualifiedItemName {
-                            qualifiers: ItemQualifiers {
-                                database_spec: ResolvedDatabaseSpecifier::Id(DatabaseId::User(1)),
-                                schema_spec: SchemaSpecifier::Id(SchemaId::User(3)),
-                            },
-                            item: name.to_string(),
-                        },
-                        id,
-                        owner_id: MZ_SYSTEM_ROLE_ID,
-                    }],
-                )
-                .await
-                .expect("failed to transact");
-        }
-
-        // Stages a refresh of `catalog` and commits it.
-        async fn refresh(catalog: &Catalog) -> Result<(), CatalogError> {
-            let mut storage = catalog.storage().await;
-            let mut tx = storage.transaction().await.expect("transaction");
-            catalog
-                .state()
-                .refresh_item_metadata(&mut tx)
-                .expect("refresh");
-            let commit_ts = tx.upper();
-            tx.commit(commit_ts).await
-        }
-
-        async fn recorded(catalog: &Catalog) -> Snapshot {
-            catalog.storage().await.snapshot().await.expect("snapshot")
-        }
 
         let view_id = CatalogItemId::User(1);
         let index_id = CatalogItemId::User(2);
