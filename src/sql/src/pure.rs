@@ -2126,12 +2126,11 @@ async fn execute_table_from_source_preparation(
     Ok((purified_export, format_options))
 }
 
-async fn purify_create_table_from_source(
-    catalog: impl SessionCatalog,
-    mut stmt: CreateTableFromSourceStatement<Aug>,
-    storage_configuration: &StorageConfiguration,
-) -> Result<PurifiedStatement, PlanError> {
-    let scx = StatementContext::new(None, &catalog);
+fn prepare_table_from_source(
+    catalog: &dyn SessionCatalog,
+    stmt: &CreateTableFromSourceStatement<Aug>,
+) -> Result<TableFromSourcePreparation, PlanError> {
+    let scx = StatementContext::new(None, catalog);
     let CreateTableFromSourceStatement {
         name: _,
         columns,
@@ -2139,11 +2138,11 @@ async fn purify_create_table_from_source(
         source: source_name,
         if_not_exists: _,
         external_reference,
-        format,
-        envelope,
+        format: _,
+        envelope: _,
         include_metadata: _,
         with_options,
-    } = &mut stmt;
+    } = stmt;
 
     // Columns and constraints cannot be specified by the user but will be populated below.
     if matches!(columns, TableFromSourceColumns::Defined(_)) {
@@ -2224,7 +2223,7 @@ async fn purify_create_table_from_source(
         }])
     });
 
-    let request = TableFromSourcePreparation {
+    Ok(TableFromSourcePreparation {
         connection: desc.connection,
         requested_references,
         qualified_text_columns,
@@ -2232,19 +2231,22 @@ async fn purify_create_table_from_source(
         filter_constraints,
         exclude_all_not_null_constraints,
         unresolved_source_name,
-    };
-    let (purified_export, format_options) =
-        execute_table_from_source_preparation(request, storage_configuration).await?;
+    })
+}
 
-    purify_source_format(
-        &catalog,
-        format,
-        &format_options,
-        envelope,
-        storage_configuration,
-    )
-    .await?;
-
+fn finish_table_from_source(
+    catalog: &dyn SessionCatalog,
+    mut stmt: CreateTableFromSourceStatement<Aug>,
+    purified_export: PurifiedSourceExport,
+) -> Result<PurifiedStatement, PlanError> {
+    let scx = StatementContext::new(None, catalog);
+    let CreateTableFromSourceStatement {
+        columns,
+        constraints,
+        external_reference,
+        with_options,
+        ..
+    } = &mut stmt;
     // Update the external reference in the statement to the resolved fully-qualified
     // external reference
     *external_reference = Some(purified_export.external_reference.clone());
@@ -2465,6 +2467,25 @@ async fn purify_create_table_from_source(
     // available references table in the catalog, so plumb this through.
     // available_source_references: retrieved_source_references.available_source_references(),
     Ok(PurifiedStatement::PurifiedCreateTableFromSource { stmt })
+}
+
+async fn purify_create_table_from_source(
+    catalog: impl SessionCatalog,
+    mut stmt: CreateTableFromSourceStatement<Aug>,
+    storage_configuration: &StorageConfiguration,
+) -> Result<PurifiedStatement, PlanError> {
+    let request = prepare_table_from_source(&catalog, &stmt)?;
+    let (purified_export, format_options) =
+        execute_table_from_source_preparation(request, storage_configuration).await?;
+    purify_source_format(
+        &catalog,
+        &mut stmt.format,
+        &format_options,
+        &stmt.envelope,
+        storage_configuration,
+    )
+    .await?;
+    finish_table_from_source(&catalog, stmt, purified_export)
 }
 
 enum SourceFormatOptions {
@@ -2897,13 +2918,12 @@ impl GlueAvroPreparation {
     }
 }
 
-async fn purify_csr_connection_proto(
+fn prepare_csr_connection_proto(
     catalog: &dyn SessionCatalog,
     options: &SourceFormatOptions,
-    csr_connection: &mut CsrConnectionProtobuf<Aug>,
+    csr_connection: &CsrConnectionProtobuf<Aug>,
     envelope: &Option<SourceEnvelope>,
-    storage_configuration: &StorageConfiguration,
-) -> Result<(), PlanError> {
+) -> Result<Option<CsrProtobufPreparation>, PlanError> {
     let SourceFormatOptions::Kafka { topic } = options else {
         sql_bail!("Confluent Schema Registry is only supported with Kafka sources")
     };
@@ -2924,29 +2944,38 @@ async fn purify_csr_connection_proto(
                 _ => sql_bail!("{} is not a schema registry connection", connection),
             };
 
-            *seed = Some(
-                CsrProtobufPreparation {
-                    connection: ccsr_connection,
-                    topic: topic.clone(),
-                    require_key: matches!(envelope, Some(SourceEnvelope::Debezium)),
-                }
-                .execute(storage_configuration)
-                .await?,
-            );
+            return Ok(Some(CsrProtobufPreparation {
+                connection: ccsr_connection,
+                topic: topic.clone(),
+                require_key: matches!(envelope, Some(SourceEnvelope::Debezium)),
+            }));
         }
         Some(_) => (),
     }
 
-    Ok(())
+    Ok(None)
 }
 
-async fn purify_csr_connection_avro(
+async fn purify_csr_connection_proto(
     catalog: &dyn SessionCatalog,
     options: &SourceFormatOptions,
-    csr_connection: &mut CsrConnectionAvro<Aug>,
+    csr_connection: &mut CsrConnectionProtobuf<Aug>,
     envelope: &Option<SourceEnvelope>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<(), PlanError> {
+    if let Some(request) = prepare_csr_connection_proto(catalog, options, csr_connection, envelope)?
+    {
+        csr_connection.seed = Some(request.execute(storage_configuration).await?);
+    }
+    Ok(())
+}
+
+fn prepare_csr_connection_avro(
+    catalog: &dyn SessionCatalog,
+    options: &SourceFormatOptions,
+    csr_connection: &CsrConnectionAvro<Aug>,
+    envelope: &Option<SourceEnvelope>,
+) -> Result<Option<CsrAvroPreparation>, PlanError> {
     let SourceFormatOptions::Kafka { topic } = options else {
         sql_bail!("Confluent Schema Registry is only supported with Kafka sources")
     };
@@ -2963,30 +2992,39 @@ async fn purify_csr_connection_avro(
             Connection::Csr(connection) => connection.clone().into_inline_connection(catalog),
             _ => sql_bail!("{} is not a schema registry connection", connection),
         };
-        *seed = Some(
-            CsrAvroPreparation {
-                connection: csr_connection,
-                topic: topic.clone(),
-                key_strategy: key_strategy.clone().unwrap_or_default(),
-                value_strategy: value_strategy.clone().unwrap_or_default(),
-                require_key: matches!(envelope, Some(SourceEnvelope::Debezium)),
-            }
-            .execute(storage_configuration)
-            .await?,
-        );
+        return Ok(Some(CsrAvroPreparation {
+            connection: csr_connection,
+            topic: topic.clone(),
+            key_strategy: key_strategy.clone().unwrap_or_default(),
+            value_strategy: value_strategy.clone().unwrap_or_default(),
+            require_key: matches!(envelope, Some(SourceEnvelope::Debezium)),
+        }));
     }
 
+    Ok(None)
+}
+
+async fn purify_csr_connection_avro(
+    catalog: &dyn SessionCatalog,
+    options: &SourceFormatOptions,
+    csr_connection: &mut CsrConnectionAvro<Aug>,
+    envelope: &Option<SourceEnvelope>,
+    storage_configuration: &StorageConfiguration,
+) -> Result<(), PlanError> {
+    if let Some(request) = prepare_csr_connection_avro(catalog, options, csr_connection, envelope)?
+    {
+        csr_connection.seed = Some(request.execute(storage_configuration).await?);
+    }
     Ok(())
 }
 
-async fn purify_glue_connection_avro(
+fn prepare_glue_connection_avro(
     catalog: &dyn SessionCatalog,
     options: &SourceFormatOptions,
     connection: &ResolvedItemName,
     with_options: &[GlueAvroOption<Aug>],
-    seed: &mut Option<GlueAvroSeed>,
-    storage_configuration: &StorageConfiguration,
-) -> Result<(), PlanError> {
+    seed: &Option<GlueAvroSeed>,
+) -> Result<Option<GlueAvroPreparation>, PlanError> {
     use crate::pure::error::GluePurificationError;
     let SourceFormatOptions::Kafka { .. } = options else {
         sql_bail!("AWS Glue Schema Registry is only supported with Kafka sources")
@@ -3036,18 +3074,29 @@ async fn purify_glue_connection_avro(
         // before and re-parsed it from persisted create_sql, or a user supplied
         // the seed directly. Either way the reader schema is fixed, so skip the
         // Glue lookup. (The structural checks above still ran.)
-        return Ok(());
+        return Ok(None);
     }
     let gsr_connection = gsr_connection.into_inline_connection(catalog);
 
-    *seed = Some(
-        GlueAvroPreparation {
-            connection: gsr_connection,
-            schema_name,
-        }
-        .execute(storage_configuration)
-        .await?,
-    );
+    Ok(Some(GlueAvroPreparation {
+        connection: gsr_connection,
+        schema_name,
+    }))
+}
+
+async fn purify_glue_connection_avro(
+    catalog: &dyn SessionCatalog,
+    options: &SourceFormatOptions,
+    connection: &ResolvedItemName,
+    with_options: &[GlueAvroOption<Aug>],
+    seed: &mut Option<GlueAvroSeed>,
+    storage_configuration: &StorageConfiguration,
+) -> Result<(), PlanError> {
+    if let Some(request) =
+        prepare_glue_connection_avro(catalog, options, connection, with_options, seed)?
+    {
+        *seed = Some(request.execute(storage_configuration).await?);
+    }
     Ok(())
 }
 
