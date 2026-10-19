@@ -355,6 +355,8 @@ fn check_name(column: &Column) -> Result<(), String> {
 /// A document to write.
 #[derive(Clone, Debug)]
 pub(crate) struct Document {
+    /// The update's position in the batch.
+    pub(crate) index: usize,
     pub(crate) row: Value,
     pub(crate) bytes: usize,
     /// An estimate of the tokens turbopuffer bills to embed its texts.
@@ -419,7 +421,7 @@ pub(crate) fn documents(batch: &SinkBatch, layout: &Layout) -> (Vec<Document>, V
             let Some(update) = batch.updates().get(index) else {
                 continue;
             };
-            match document(&id, update, layout) {
+            match document(index, &id, update, layout) {
                 Ok(document) => {
                     documents.push(document);
                     break;
@@ -433,6 +435,7 @@ pub(crate) fn documents(batch: &SinkBatch, layout: &Layout) -> (Vec<Document>, V
 }
 
 fn document(
+    index: usize,
     id: &str,
     update: &Update,
     layout: &Layout,
@@ -472,7 +475,12 @@ fn document(
     if bytes > MAX_DOCUMENT_BYTES {
         return Err(("too_large", "the document is over 64 MiB".into()));
     }
-    Ok(Document { row, bytes, tokens })
+    Ok(Document {
+        index,
+        row,
+        bytes,
+        tokens,
+    })
 }
 
 /// The hash of a text to embed, empty for no text, so that two documents
@@ -805,6 +813,7 @@ mod tests {
     #[test]
     fn requests_split_by_bytes_rows_and_embedded_rows() {
         let document = |bytes, tokens| Document {
+            index: 0,
             row: json!(bytes),
             bytes,
             tokens,

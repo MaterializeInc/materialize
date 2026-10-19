@@ -730,6 +730,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-postgres",
+ "tracing",
 ]
 
 [[package]]
