@@ -981,3 +981,42 @@ SELECT * FROM txn_search_path_after.renamed
 
 statement ok
 RESET search_path
+
+# Identical unqualified names must retain each statement's search path at commit.
+statement ok
+CREATE SCHEMA ddl_context_first
+
+statement ok
+CREATE SCHEMA ddl_context_second
+
+statement ok
+CREATE VIEW ddl_context_first.v AS SELECT 1 AS value
+
+statement ok
+CREATE VIEW ddl_context_second.v AS SELECT 2 AS value
+
+statement ok
+BEGIN
+
+statement ok
+SET search_path = ddl_context_first
+
+statement ok
+ALTER VIEW v RENAME TO renamed
+
+statement ok
+SET search_path = ddl_context_second
+
+statement ok
+ALTER VIEW v RENAME TO renamed
+
+statement ok
+COMMIT
+
+query II
+SELECT a.value, b.value FROM ddl_context_first.renamed a, ddl_context_second.renamed b
+----
+1 2
+
+statement ok
+RESET search_path

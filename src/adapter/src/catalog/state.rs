@@ -485,26 +485,35 @@ impl CatalogState {
     }
 
     pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
-        let state = match session.transaction().catalog_state() {
-            Some(txn_catalog_state) => Cow::Borrowed(txn_catalog_state),
-            None => Cow::Borrowed(self),
-        };
-        let search_path = state.resolve_search_path(session);
-        let database = state
+        let state = session.transaction().catalog_state().unwrap_or(self);
+        let mut catalog = state.for_session_metadata(session, session.retain_notice_transmitter());
+        catalog.prepared_statements = Some(session.prepared_statements());
+        catalog.portals = Some(session.portals());
+        catalog
+    }
+
+    /// Binds statement context to this state without substituting a transaction snapshot.
+    pub(crate) fn for_session_metadata(
+        &self,
+        session: &dyn SessionMetadata,
+        notices_tx: mpsc::UnboundedSender<crate::AdapterNotice>,
+    ) -> ConnCatalog<'_> {
+        let search_path = self.resolve_search_path(session);
+        let database = self
             .database_by_name
             .get(session.vars().database())
             .map(|id| id.clone());
         ConnCatalog {
-            state,
+            state: Cow::Borrowed(self),
             unresolvable_ids: BTreeSet::new(),
             conn_id: session.conn_id().clone(),
             cluster: session.vars().cluster().into(),
             database,
             search_path,
             role_id: session.current_role_id().clone(),
-            prepared_statements: Some(session.prepared_statements()),
-            portals: Some(session.portals()),
-            notices_tx: session.retain_notice_transmitter(),
+            prepared_statements: None,
+            portals: None,
+            notices_tx,
             restrict_to_user_objects: session.vars().restrict_to_user_objects(),
         }
     }

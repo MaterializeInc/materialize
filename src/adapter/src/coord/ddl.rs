@@ -61,6 +61,55 @@ use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContext, catalog, flags};
 
 impl Coordinator {
+    pub(super) async fn sequence_rename_command(
+        &mut self,
+        mut ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        let prepared = {
+            let catalog = self.catalog().for_session(ctx.session());
+            catalog::command::RenameCommand::prepare(
+                catalog.state(),
+                statement,
+                params,
+                ctx.session().meta(),
+            )
+        };
+        let (command, plan) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        ctx.tx_mut()
+            .set_allowed(crate::ExecuteResponse::generated_from(
+                &mz_sql::plan::PlanKind::from(&plan),
+            ));
+        if self.controller.read_only() {
+            return ctx.retire(Err(AdapterError::ReadOnly));
+        }
+        if let Err(error) = self.prepare_plan_execution(&mut ctx, &plan) {
+            return ctx.retire(Err(error));
+        }
+        let command = Arc::new(command);
+        let result = self
+            .catalog_transact_with_ddl_transaction(
+                &mut ctx,
+                vec![Op::RenameCommand(Arc::clone(&command))],
+                |_, _| Box::pin(async {}),
+            )
+            .await;
+        match result {
+            Ok(()) => {
+                ctx.session()
+                    .add_notices(command.notices().iter().cloned().map(Into::into));
+                ctx.retire(Ok(crate::ExecuteResponse::AlteredObject(
+                    command.object_type(),
+                )));
+            }
+            Err(error) => ctx.retire(Err(error)),
+        }
+    }
+
     /// Same as [`Self::catalog_transact_with_context`] but takes a [`Session`].
     #[instrument(name = "coord::catalog_transact")]
     pub(crate) async fn catalog_transact(
@@ -290,8 +339,13 @@ impl Coordinator {
             return result;
         };
 
-        // Make sure our Catalog hasn't changed since openning the transaction.
-        if self.catalog().transient_revision() != *txn_revision {
+        // Precomputed writes require their original catalog revision.
+        if self.catalog().transient_revision() != *txn_revision
+            && !txn_ops
+                .iter()
+                .chain(&ops)
+                .all(|op| matches!(op, catalog::Op::RenameCommand(_)))
+        {
             self.metrics
                 .catalog_transact_seconds
                 .with_label_values(&["catalog_transact_with_ddl_transaction"])
@@ -308,6 +362,7 @@ impl Coordinator {
         // Clone what we need from the session before taking &mut below.
         let clone_start = Instant::now();
         let txn_ops_clone = txn_ops.clone();
+        let txn_revision = *txn_revision;
         let txn_state_clone = txn_state.clone();
         // NOTE: `txn_snapshot` is a deep clone of the durable `Snapshot`, which is
         // O(catalog size) in allocations, once per statement. `txn_state` next to
@@ -380,7 +435,7 @@ impl Coordinator {
                 ops: combined_ops,
                 state: new_state,
                 side_effects: vec![Box::new(side_effect)],
-                revision: self.catalog().transient_revision(),
+                revision: txn_revision,
                 snapshot: Some(new_snapshot),
             });
 
@@ -1365,6 +1420,7 @@ impl Coordinator {
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::UpdateScopedSystemParameters { .. }
                 | Op::Comment { .. }
+                | Op::RenameCommand(_)
                 | Op::CheckClusterState { .. }
                 | Op::InjectAuditEvents { .. } => {}
             }
