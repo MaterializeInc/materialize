@@ -247,7 +247,7 @@ async fn source_planning_retains_ids_when_exports_change() {
             state.config.connection_context.clone(),
             mz_storage_types::dyncfgs::all_dyncfgs(Default::default()),
         );
-        let sql = "CREATE SOURCE auction_src FROM LOAD GENERATOR AUCTION FOR ALL TABLES";
+        let sql = "CREATE SOURCE materialize.public.auction_src FROM LOAD GENERATOR AUCTION FOR ALL TABLES";
         let mut preparation = SourcePreparation::new(1000);
         let mut status = preparation
             .resolve(
