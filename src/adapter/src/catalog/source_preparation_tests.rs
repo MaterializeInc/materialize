@@ -10,6 +10,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use itertools::Itertools;
 use mz_ore::now::NowFn;
 use mz_sql::plan::PlanError;
 use mz_sql::pure::{SourcePreparation, SourcePreparationResponse, SourcePreparationStatus};
@@ -290,7 +291,7 @@ async fn source_planning_retains_ids_when_exports_change() {
                         .allocate_user_ids(count, ts)
                         .await
                         .expect("allocate IDs");
-                    ids.extend(keys.into_iter().zip(allocated));
+                    ids.extend(keys.into_iter().zip_eq(allocated));
                 }
             }
         };
