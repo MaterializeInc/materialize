@@ -973,7 +973,7 @@ async fn try_commit_batch(
 /// Whether the sink can write into a table that already carries `current`,
 /// where `expected` is the schema the sink would create today.
 ///
-/// Field ids, names and nullability have to match. Types have to match too,
+/// Names and nullability have to match. Types have to match too,
 /// except that a column may be `fixed[16]` where `expected` has `string`. Uuid
 /// columns were written as fixed binary before, and a table holding one stays
 /// writable, because the writer builds its Arrow columns from the table's own
@@ -983,11 +983,12 @@ async fn try_commit_batch(
 /// `fixed[16]` column where the relation has `text`. Such a table fails on the
 /// first row written instead of here. Only a table created outside Materialize
 /// can be in that state, since the sink never creates one.
+///
+/// Field IDs are not checked as Materialize may generate them differently than
+/// the catalog (i.e., DFS vs BFS for nested types), which could result in
+/// failures on sink restart.
 fn is_compatible(current: &Schema, expected: &Schema) -> bool {
-    current
-        .identifier_field_ids()
-        .eq(expected.identifier_field_ids())
-        && struct_is_compatible(current.as_struct(), expected.as_struct())
+    struct_is_compatible(current.as_struct(), expected.as_struct())
 }
 
 fn struct_is_compatible(current: &StructType, expected: &StructType) -> bool {
@@ -2508,8 +2509,8 @@ mod tests {
                 .id
         };
         assert_eq!(id_of(&catalog, "id"), id_of(&expected, "id"));
-        assert_ne!(id_of(&catalog, "a.items"), id_of(&expected, "a.items"));
-        assert_ne!(id_of(&catalog, "w"), id_of(&expected, "w"));
+        assert_eq!(id_of(&catalog, "a.items"), id_of(&expected, "a.items"));
+        assert_eq!(id_of(&catalog, "w"), id_of(&expected, "w"));
 
         // Renumbering must not hide a real difference: a top-level type ...
         let wrong_type = with_field_type(&catalog, "w", Type::Primitive(PrimitiveType::String));
