@@ -32,7 +32,9 @@ use mz_adapter::config::{
     SystemParameterSyncClientConfig, SystemParameterSyncConfig, system_parameter_sync,
 };
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
-use mz_adapter::{AdapterError, Client as AdapterClient, load_remote_system_parameters};
+use mz_adapter::{
+    AdapterError, Client as AdapterClient, RemoteSystemParameters, load_remote_system_parameters,
+};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL,
@@ -518,7 +520,10 @@ impl Listeners {
                 }
             };
 
-        let remote_system_parameters = load_remote_system_parameters(
+        let RemoteSystemParameters {
+            params: remote_system_parameters,
+            frontend: boot_frontend,
+        } = load_remote_system_parameters(
             &mut openable_adapter_storage,
             system_parameter_sync_config.clone(),
             config.config_sync_timeout,
@@ -907,6 +912,7 @@ impl Listeners {
                 || "system_parameter_sync",
                 AssertUnwindSafe(system_parameter_sync(
                     system_parameter_sync_config,
+                    boot_frontend,
                     adapter_client.clone(),
                     config.config_sync_loop_interval,
                 ))

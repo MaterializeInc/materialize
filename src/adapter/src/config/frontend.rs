@@ -65,7 +65,7 @@ pub enum SystemParameterFrontendClient {
     LaunchDarkly {
         /// An SDK client to mediate interactions with the LaunchDarkly client.
         #[derivative(Debug = "ignore")]
-        client: ld::Client,
+        client: Arc<ld::Client>,
         /// The context to use when querying LaunchDarkly using the SDK.
         /// This scopes down queries to a specific key.
         ctx: ld::Context,
@@ -73,6 +73,28 @@ pub enum SystemParameterFrontendClient {
 }
 
 impl SystemParameterFrontendClient {}
+
+impl Drop for SystemParameterFrontendClient {
+    fn drop(&mut self) {
+        let client = match self {
+            SystemParameterFrontendClient::LaunchDarkly { client, ctx: _ } => client,
+            SystemParameterFrontendClient::File { path: _ } => return,
+        };
+        // Dropping an `ld::Client` without `close` disconnects its event
+        // dispatcher thread, which logs an error and discards the analytics
+        // events it has not sent yet. `close` blocks until the final flush
+        // completes, so it must not run on an async worker thread.
+        let client = Arc::clone(client);
+        if tokio::runtime::Handle::try_current().is_ok() {
+            mz_ore::task::spawn_blocking(
+                || "SystemParameterFrontend close",
+                move || client.close(),
+            );
+        } else {
+            client.close();
+        }
+    }
+}
 
 /// The parsed contents of the config-sync file, a JSON object whose keys are
 /// parameter names.
@@ -575,7 +597,7 @@ async fn ld_client(
     base_uri: Option<&str>,
     metrics: &Metrics,
     now_fn: &NowFn,
-) -> Result<ld::Client, anyhow::Error> {
+) -> Result<Arc<ld::Client>, anyhow::Error> {
     let ld_client = ld::Client::build(ld_config(api_key, base_uri, metrics, now_fn))?;
     tracing::info!("waiting for SystemParameterFrontend to initialize");
     ld_client.start_with_default_executor();
@@ -598,7 +620,7 @@ async fn ld_client(
 
     tracing::info!("successfully initialized SystemParameterFrontend");
 
-    Ok(ld_client)
+    Ok(Arc::new(ld_client))
 }
 
 /// Identity of a cluster, used to build a `cluster` context kind for
