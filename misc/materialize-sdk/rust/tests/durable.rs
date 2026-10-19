@@ -465,14 +465,17 @@ async fn a_resume_past_an_index_history_names_the_index() {
 
     // An index on the session's cluster keeps a second of history, so once
     // its read frontier passes the resume point, the resume fails.
+    // Named for the table, so a run against a Materialize that an earlier run
+    // left an index in does not collide with it.
+    let index_name = format!("{}_id", object.name);
     execute(
         &admin,
-        &format!("CREATE INDEX durable_indexed_id ON {relation} (id)"),
+        &format!("CREATE INDEX {index_name} ON {relation} (id)"),
     )
     .await;
     let (_, found) = rows(
         &admin,
-        "SELECT id FROM mz_catalog.mz_indexes WHERE name = 'durable_indexed_id'",
+        &format!("SELECT id FROM mz_catalog.mz_indexes WHERE name = '{index_name}'"),
     )
     .await;
     let index = found[0][0].clone().unwrap();
