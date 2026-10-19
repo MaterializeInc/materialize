@@ -263,8 +263,6 @@ exclude = [
     "misc/wasm/*",
     # Ignore any Rust dependencies that python packages might pull in.
     "misc/python/venv/*",
-    # Spike: a vendored differential-dataflow patched below.
-    "vendor-spike/*",
     # The `src/*/fuzz` cargo-fuzz crates need no entry here: each sets
     # `package.workspace = "../../../test/cargo-fuzz"`, attaching it to the fuzz
     # workspace, and a crate nested under a workspace member is never
@@ -661,8 +659,8 @@ debug-assertions = true
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
 [patch.crates-io]
-# Spike: differential-dataflow with an agent-generic arrange.
-differential-dataflow = { path = "vendor-spike/differential-dataflow" }
+# Spike: differential-dataflow with a caller-chosen agent and writer, TimelyDataflow/differential-dataflow#961.
+differential-dataflow = { git = "https://github.com/antiguru/differential-dataflow", rev = "ad9208c9" }
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
