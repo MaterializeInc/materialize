@@ -25,14 +25,16 @@ use mz_sql::plan::{
     ExplainPlanPlan, ExplainTimestampPlan, Explainee, ExplaineeStatement, Plan, SubscribeFrom,
     SubscribePlan,
 };
+use mz_sql::session::metadata::SessionMetadata;
 use smallvec::SmallVec;
 
 use crate::AdapterError;
-use crate::catalog::ConnCatalog;
+use crate::catalog::{CatalogState, ConnCatalog};
 use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
 use crate::session::Session;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
+use mz_controller_types::ClusterId;
 
 /// Checks whether or not we should automatically run a query on the `mz_catalog_server`
 /// cluster, as opposed to whatever the current default cluster is.
@@ -282,4 +284,29 @@ pub fn check_cluster_restrictions(
     } else {
         Ok(())
     }
+}
+
+/// Checks that `plan` does not run a query on a cluster that
+/// [`CatalogState::source_only_cluster_restricted`] restricts for `session`.
+pub fn check_source_only_cluster_restrictions(
+    catalog: &CatalogState,
+    cluster_id: ClusterId,
+    session: &Session,
+    plan: &Plan,
+) -> Result<(), AdapterError> {
+    let runs_query = match plan {
+        Plan::Select(_) | Plan::Subscribe(_) | Plan::CopyTo(_) | Plan::ReadThenWrite(_) => true,
+        // Mirrors `check_cluster_restrictions`: an INSERT without
+        // dependencies is a write that needs no computation on the cluster.
+        Plan::Insert(plan) => !plan.values.depends_on().is_empty(),
+        _ => false,
+    };
+    let cluster = catalog.get_cluster(cluster_id);
+    if runs_query && catalog.source_only_cluster_restricted(cluster, Some(session.user())) {
+        return Err(AdapterError::SourceOnlyCluster {
+            cluster: cluster.name.clone(),
+            action: "run queries".into(),
+        });
+    }
+    Ok(())
 }

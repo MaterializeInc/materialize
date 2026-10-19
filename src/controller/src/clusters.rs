@@ -112,6 +112,11 @@ pub struct ReplicaAllocation {
     /// Whether instances of this type can be created.
     #[serde(default)]
     pub disabled: bool,
+    /// Whether clusters with replicas of this size may only host sources.
+    /// Such clusters cannot run queries or host other objects, which the
+    /// adapter enforces for user clusters and non-internal users.
+    #[serde(default)]
+    pub source_only: bool,
     /// Additional node selectors.
     #[serde(default)]
     pub selectors: BTreeMap<String, String>,
@@ -170,6 +175,7 @@ fn test_replica_allocation_deserialization() {
             credits_per_hour: 16.into(),
             disk_limit: Some(DiskLimit(ByteSize::mib(100))),
             disabled: false,
+            source_only: false,
             memory_limit: Some(MemoryLimit(ByteSize::gib(10))),
             cpu_limit: Some(CpuLimit::from_millicpus(1000)),
             cpu_request: None,
@@ -207,6 +213,7 @@ fn test_replica_allocation_deserialization() {
             credits_per_hour: 0.into(),
             disk_limit: Some(DiskLimit(ByteSize::mib(0))),
             disabled: true,
+            source_only: false,
             memory_limit: Some(MemoryLimit(ByteSize::gib(0))),
             cpu_limit: Some(CpuLimit::from_millicpus(0)),
             cpu_request: None,
@@ -227,6 +234,11 @@ fn test_replica_allocation_deserialization() {
     assert_err!(serde_json::from_str::<ReplicaAllocation>(data));
     let data = r#"{"scale": 1, "workers": 1, "credits_per_hour": "0"}"#;
     assert_ok!(serde_json::from_str::<ReplicaAllocation>(data));
+
+    let data = r#"{"scale": 1, "workers": 1, "credits_per_hour": "0", "source_only": true}"#;
+    let replica_allocation: ReplicaAllocation = serde_json::from_str(data)
+        .expect("deserialization from JSON succeeds for ReplicaAllocation");
+    assert!(replica_allocation.source_only);
 }
 
 #[mz_ore::test]

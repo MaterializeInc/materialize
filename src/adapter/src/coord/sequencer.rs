@@ -137,6 +137,14 @@ impl Coordinator {
                 return Err(e);
             }
         }
+        if let Some(cluster_id) = target_cluster_id {
+            catalog_serving::check_source_only_cluster_restrictions(
+                self.catalog().state(),
+                cluster_id,
+                ctx.session(),
+                plan,
+            )?;
+        }
 
         Ok((target_cluster, target_cluster_id))
     }
