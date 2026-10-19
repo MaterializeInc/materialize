@@ -134,7 +134,7 @@ pub fn validate_dataflow(
             let message = match abort {
                 Abort::Recursion => format!("plan nests deeper than {RECURSION_LIMIT} operators"),
                 Abort::Budget => {
-                    format!("validating the plan takes more than {VISIT_BUDGET} operator visits")
+                    format!("validating the plan takes more than {WORK_BUDGET} units of work")
                 }
             };
             validator.errors.push(ValidationError {
@@ -283,21 +283,24 @@ fn operator_name(node: &LirRelationNode) -> &'static str {
 /// on a cycle of bindings where each reads the next, so the bound scales with the bindings.
 const LET_REC_TYPE_ITERATIONS: usize = 64;
 
-/// The most operator visits one validation makes.
+/// The most units of work one validation does. A unit is an operator visit, or a node that
+/// the arity inference of recursive bindings walks.
 ///
 /// A plan without `LetRec` visits each operator once. A `LetRec` visits its values until the
 /// types of its bindings reach a fixpoint, and once more, so nested `LetRec`s multiply the
-/// visits of the values inside them. The budget bounds that work. It leaves room for plans
-/// of 100,000 operators visited ten times each, and a validation that used it up took 3 s
-/// in a debug build.
-const VISIT_BUDGET: usize = 1_000_000;
+/// visits of the values inside them. The budget bounds the number of visits and walked
+/// nodes. The work of one visit is proportional to the operator and the widths of its
+/// inputs, and restoring the bookkeeping after a discarded visit is proportional to the
+/// visits it discards. The budget leaves room for plans of 100,000 operators visited ten
+/// times each, and a validation that used it up took 3 s in a debug build.
+const WORK_BUDGET: usize = 1_000_000;
 
 /// Why validation stopped before visiting every operator.
 #[derive(Debug)]
 enum Abort {
     /// The plan nests deeper than [`RECURSION_LIMIT`].
     Recursion,
-    /// The walk used up [`VISIT_BUDGET`].
+    /// The walk used up [`WORK_BUDGET`].
     Budget,
 }
 
@@ -317,19 +320,25 @@ struct LetRecPass {
     mismatch: Option<(LocalId, usize, ReprScalarType, ReprScalarType)>,
 }
 
-/// The state of [`Validator`] that visits change besides `locals`.
+/// The state of [`Validator`] that visits change besides `locals`, as lengths of the logs
+/// that record the changes.
 struct Snapshot {
     errors: usize,
-    lir_ids: BTreeSet<LirId>,
-    bound_locals: BTreeSet<LocalId>,
-    read_globals: BTreeSet<GlobalId>,
+    undo: usize,
+}
+
+/// An insertion into a set of [`Validator`], for undoing it.
+enum Undo {
+    LirId(LirId),
+    BoundLocal(LocalId),
+    ReadGlobal(GlobalId),
 }
 
 /// The state of one validation.
 struct Validator {
     typer: Typer,
-    /// The operator visits made so far, including discarded ones.
-    visits: usize,
+    /// The units of work done so far, including discarded visits. See [`WORK_BUDGET`].
+    work: usize,
     errors: Vec<ValidationError>,
     recursion_guard: RecursionGuard,
     /// What `Get`s of global ids resolve to: the imported collections, and the objects built
@@ -345,6 +354,9 @@ struct Validator {
     lir_ids: BTreeSet<LirId>,
     /// Global ids read by `Get`s that resolved.
     read_globals: BTreeSet<GlobalId>,
+    /// The insertions into `lir_ids`, `bound_locals` and `read_globals` within the current
+    /// object, oldest first.
+    undo: Vec<Undo>,
     /// The keys of index imports that exclude their snapshot, by the collection they index.
     snapshotless: BTreeMap<GlobalId, BTreeSet<Vec<LirScalarExpr>>>,
     monotonicity: monotonic::Analysis,
@@ -362,7 +374,7 @@ impl Validator {
     fn new(typer: Typer) -> Self {
         Validator {
             typer,
-            visits: 0,
+            work: 0,
             errors: Vec::new(),
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
             globals: BTreeMap::new(),
@@ -371,6 +383,7 @@ impl Validator {
             bound_locals: BTreeSet::new(),
             lir_ids: BTreeSet::new(),
             read_globals: BTreeSet::new(),
+            undo: Vec::new(),
             snapshotless: BTreeMap::new(),
             monotonicity: monotonic::Analysis::default(),
             rec_depth: 0,
@@ -438,6 +451,8 @@ impl Validator {
         let mut empty_objects = Vec::new();
         for object in &df.objects_to_build {
             self.bound_locals.clear();
+            // No snapshot spans objects.
+            self.undo.clear();
             let mut output = self.visit(&object.plan, true)?;
             let declared = Self::declared_type(df, object.id);
             if let Output::Empty(available) = &output {
@@ -837,10 +852,7 @@ impl Validator {
     /// binding-free body, with `Let` values binding-free and `LetRec` values again of that
     /// form, and the controller panics on any other plan.
     fn visit(&mut self, expr: &LirRelationExpr, binding_allowed: bool) -> Result<Output, Abort> {
-        self.visits += 1;
-        if self.visits > VISIT_BUDGET {
-            return Err(Abort::Budget);
-        }
+        self.charge(1)?;
         self.checked_recur_mut(|this| this.visit_inner(expr, binding_allowed))
     }
 
@@ -850,7 +862,9 @@ impl Validator {
         binding_allowed: bool,
     ) -> Result<Output, Abort> {
         // `LetFreePlan` stores nodes in a map by `LirId`, so a duplicate replaces a node.
-        if !self.lir_ids.insert(expr.lir_id) {
+        if self.lir_ids.insert(expr.lir_id) {
+            self.undo.push(Undo::LirId(expr.lir_id));
+        } else {
             self.node_error(
                 expr,
                 Rule::Scoping,
@@ -1225,8 +1239,8 @@ impl Validator {
                 .map(|(_, output)| output.clone()),
             Id::Global(global) => {
                 let found = self.globals.get(global).cloned();
-                if found.is_some() {
-                    self.read_globals.insert(*global);
+                if found.is_some() && self.read_globals.insert(*global) {
+                    self.undo.push(Undo::ReadGlobal(*global));
                 }
                 found
             }
@@ -1255,7 +1269,9 @@ impl Validator {
     /// id would replace a binding that other parts of the plan still read, and a repeated id
     /// within one `LetRec` makes rendering panic.
     fn bind(&mut self, expr: &LirRelationExpr, id: LocalId) {
-        if !self.bound_locals.insert(id) {
+        if self.bound_locals.insert(id) {
+            self.undo.push(Undo::BoundLocal(id));
+        } else {
             self.node_error(
                 expr,
                 Rule::Scoping,
@@ -1292,7 +1308,7 @@ impl Validator {
                 if known.contains_key(id) {
                     continue;
                 }
-                if let Some(arity) = self.structural_arity(value, &known) {
+                if let Some(arity) = self.structural_arity(value, &known)? {
                     known.insert(*id, arity);
                     changed = true;
                 }
@@ -1499,23 +1515,29 @@ impl Validator {
     fn snapshot(&self) -> Snapshot {
         Snapshot {
             errors: self.errors.len(),
-            lir_ids: self.lir_ids.clone(),
-            bound_locals: self.bound_locals.clone(),
-            read_globals: self.read_globals.clone(),
+            undo: self.undo.len(),
         }
     }
 
     fn restore(&mut self, snapshot: Snapshot) {
-        let Snapshot {
-            errors,
-            lir_ids,
-            bound_locals,
-            read_globals,
-        } = snapshot;
+        let Snapshot { errors, undo } = snapshot;
         self.errors.truncate(errors);
-        self.lir_ids = lir_ids;
-        self.bound_locals = bound_locals;
-        self.read_globals = read_globals;
+        for change in self.undo.drain(undo..) {
+            match change {
+                Undo::LirId(id) => self.lir_ids.remove(&id),
+                Undo::BoundLocal(id) => self.bound_locals.remove(&id),
+                Undo::ReadGlobal(id) => self.read_globals.remove(&id),
+            };
+        }
+    }
+
+    /// Adds `units` to the work done, and aborts once it exceeds [`WORK_BUDGET`].
+    fn charge(&mut self, units: usize) -> Result<(), Abort> {
+        self.work = self.work.saturating_add(units);
+        if self.work > WORK_BUDGET {
+            return Err(Abort::Budget);
+        }
+        Ok(())
     }
 
     fn is_empty_constant(expr: &LirRelationExpr) -> bool {
@@ -1530,29 +1552,31 @@ impl Validator {
     /// Most operators state their output arity, for example in the projection of an MFP.
     /// For those that pass their input through, this looks at the input, iteratively.
     /// `recursive` holds the arities of the enclosing `LetRec`'s bindings found so far.
-    /// Returns `None` where the arity cannot be determined this way.
+    /// Returns `None` where the arity cannot be determined this way. Charges each node it
+    /// walks to the work budget.
     fn structural_arity(
-        &self,
+        &mut self,
         expr: &LirRelationExpr,
         recursive: &BTreeMap<LocalId, usize>,
-    ) -> Option<usize> {
+    ) -> Result<Option<usize>, Abort> {
         let mut todo = vec![expr];
         // Values of the `Let` and `LetRec` bindings within `expr` that have been passed
         // through, for example a nested `LetRec` whose body reads one of its own bindings. A
         // value is taken out when followed, so a cycle of bindings ends the walk.
         let mut inner = BTreeMap::new();
         while let Some(expr) = todo.pop() {
+            self.charge(1)?;
             match &expr.node {
                 LirRelationNode::Constant { rows } => {
                     if let Some((row, _, _)) = rows.as_ref().ok().and_then(|rows| rows.first()) {
-                        return Some(row.iter().count());
+                        return Ok(Some(row.iter().count()));
                     }
                 }
                 LirRelationNode::Get { id, plan, .. } => {
                     if let crate::plan::GetPlan::Arrangement(_, _, mfp)
                     | crate::plan::GetPlan::Collection(mfp) = plan
                     {
-                        return Some(arity::projection_len(mfp));
+                        return Ok(Some(arity::projection_len(mfp)));
                     }
                     if let Id::Local(local) = id {
                         if let Some(value) = inner.remove(local) {
@@ -1574,24 +1598,24 @@ impl Validator {
                             .and_then(|output| output.arity().ok().flatten()),
                     };
                     if binding.is_some() {
-                        return binding;
+                        return Ok(binding);
                     }
                 }
                 LirRelationNode::Mfp { mfp, .. } if !mfp.is_identity() => {
-                    return Some(arity::projection_len(mfp));
+                    return Ok(Some(arity::projection_len(mfp)));
                 }
                 LirRelationNode::FlatMap { mfp_after, .. } => {
-                    return Some(arity::projection_len(mfp_after));
+                    return Ok(Some(arity::projection_len(mfp_after)));
                 }
                 LirRelationNode::Reduce { mfp_after, .. } => {
-                    return Some(mfp_after.projection.len());
+                    return Ok(Some(mfp_after.projection.len()));
                 }
                 LirRelationNode::TopK { top_k_plan, .. } => {
-                    return Some(match top_k_plan {
+                    return Ok(Some(match top_k_plan {
                         crate::plan::top_k::TopKPlan::MonotonicTop1(p) => p.arity,
                         crate::plan::top_k::TopKPlan::MonotonicTopK(p) => p.arity,
                         crate::plan::top_k::TopKPlan::Basic(p) => p.arity,
-                    });
+                    }));
                 }
                 LirRelationNode::Join { inputs, plan } => {
                     let mut issues = Vec::new();
@@ -1599,7 +1623,7 @@ impl Validator {
                     // the arity from the closures, if the plan has any.
                     let unknown = vec![None; inputs.len()];
                     match arity::join(&mut issues, plan, &unknown) {
-                        Some(arity) => return Some(arity),
+                        Some(arity) => return Ok(Some(arity)),
                         None => todo.extend(inputs.iter().rev()),
                     }
                 }
@@ -1620,7 +1644,7 @@ impl Validator {
                 }
             }
         }
-        None
+        Ok(None)
     }
 }
 

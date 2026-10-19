@@ -1698,7 +1698,18 @@ fn bounds_work_on_deeply_nested_let_rec() {
     // this takes more than 2^40 visits.
     let df = dataflow(&[(T1, 1)], vec![(OUT, nested_let_rec(40))]);
     let errs = errors(&df);
-    assert_error(&errs, Rule::Shape, "operator visits");
+    assert_error(&errs, Rule::Shape, "units of work");
+}
+
+#[mz_ore::test]
+fn bounds_work_on_nested_let_rec_after_large_object() {
+    // The large object leaves 200,000 `LirId`s behind. Discarding the bookkeeping of a type
+    // pass must not cost work in the size of what came before the pass, or the passes of
+    // the nested `LetRec` take on the order of 1e10 steps within the budget.
+    let large = union((0..200_000).map(|_| raw_t1()).collect());
+    let df = dataflow(&[(T1, 1)], vec![(T2, large), (OUT, nested_let_rec(40))]);
+    let errs = errors(&df);
+    assert_error(&errs, Rule::Shape, "units of work");
 }
 
 #[mz_ore::test]
