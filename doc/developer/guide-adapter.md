@@ -86,6 +86,20 @@ those drops before the creates. An orchestrator can retry a failed create
 indefinitely. Queuing the drop behind it would deadlock a replacement against
 the same physical quota that catalog accounting correctly considered available.
 
+### Keep the coordinator loop live, including in read-only mode
+
+Slow message handling stalls the coordinator: nothing else runs while a handler
+awaits. Do network round trips, such as timestamp-oracle and persist calls, off
+the loop and hand the handler only the result, and keep per-message work from
+growing with catalog size. The loop is biased: it polls its sources in a fixed
+order, internal commands first, so a steady stream on an early source starves
+the later ones. A task that sends periodic internal commands must therefore
+pause after each reply. A `tokio::time::interval` does not: it fires an overdue
+tick immediately, whatever its missed-tick behavior.
+
+A read-only (0dt) coordinator needs the same liveness as the leader: it serves
+no queries, but a stall there blocks promotion.
+
 ## Correctness Invariants
 
 ### Timestamp selection must respect real-time bounds
