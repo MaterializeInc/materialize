@@ -66,6 +66,9 @@ export const AlterClusterModal = ({
   >(undefined);
   const toast = useToast();
   const { shadows } = useTheme<MaterializeTheme>();
+  // Not the replica count, which also counts a hydration burst's or a graceful
+  // resize's extra replicas, so submitting it while one runs would keep them.
+  const currentReplicas = cluster.replicationFactor ?? cluster.replicas.length;
 
   const {
     register,
@@ -78,7 +81,7 @@ export const AlterClusterModal = ({
     defaultValues: {
       name: cluster?.name,
       size: cluster?.size || undefined,
-      replicas: cluster?.replicas.length.toString(),
+      replicas: currentReplicas.toString(),
     },
   });
 
@@ -114,7 +117,7 @@ export const AlterClusterModal = ({
   };
 
   const warning =
-    replicas === "0" && cluster?.replicas.length !== 0
+    replicas === "0" && currentReplicas !== 0
       ? "Setting replicas to 0 will deactivate the cluster."
       : undefined;
 

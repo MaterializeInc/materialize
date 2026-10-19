@@ -7,12 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { HStack, Tag } from "@chakra-ui/react";
+import { HStack, IconButton, Tag } from "@chakra-ui/react";
 import React from "react";
 import { Navigate, Route, useParams, useSearchParams } from "react-router-dom";
 
+import { SettingsIcon } from "~/icons";
 import { PageHeading, PageTabStrip, Tab } from "~/layouts/BaseLayout";
-import ClusterReplicas from "~/platform/clusters/ClusterReplicas";
 import { ClusterParams } from "~/platform/clusters/ClusterRoutes";
 import { SentryRoutes } from "~/sentry";
 import { useAllClusters } from "~/store/allClusters";
@@ -23,6 +23,11 @@ import { ClusterMetrics } from "./ClusterMetrics";
 import { ClusterObjects } from "./ClusterObjects";
 import { CLUSTER_OBJECT_TYPES } from "./clusterObjectTypes";
 import { ClusterWorkers } from "./ClusterWorkers";
+import { ClusterConfigurationDrawer } from "./Configuration/ClusterConfigurationDrawer";
+import {
+  CONFIGURATION_SECTIONS,
+  ConfigurationSection,
+} from "./Configuration/clusterConfigurationModel";
 import { replicaSearch, WORKERS_TAB_PATH } from "./tabLinks";
 import { REPLICA_SEARCH_PARAM } from "./useSelectedReplica";
 
@@ -34,9 +39,11 @@ const tabs = (replicaName: string | undefined): Tab[] => [
     href: `../${WORKERS_TAB_PATH}${replicaSearch(replicaName)}`,
   },
   { label: "Objects", href: "../objects" },
-  // TODO: drop this tab once the cluster configuration drawer manages replicas.
-  { label: "Replicas", href: "../replicas" },
 ];
+
+// The configuration drawer's open section, in the URL so it survives a reload
+// and the classic Replicas tab's links can open it.
+const CONFIGURE_PARAM = "configure";
 
 const replicaCountLabel = (count: number) =>
   count === 0
@@ -48,9 +55,11 @@ const replicaCountLabel = (count: number) =>
 const ClusterTitle = ({
   name,
   clusterId,
+  onConfigure,
 }: {
   name: string;
   clusterId: string;
+  onConfigure: () => void;
 }) => {
   const { getClusterById } = useAllClusters();
   const cluster = getClusterById(clusterId);
@@ -64,21 +73,75 @@ const ClusterTitle = ({
           )}
           <Tag size="sm">{replicaCountLabel(cluster.replicas.length)}</Tag>
           {!cluster.managed && <Tag size="sm">Unmanaged</Tag>}
+          <IconButton
+            aria-label="Configure cluster"
+            title="Configure cluster"
+            icon={<SettingsIcon w="4" h="4" />}
+            size="sm"
+            variant="ghost"
+            onClick={onConfigure}
+          />
         </HStack>
       )}
     </HStack>
   );
 };
 
+const isSection = (value: string | null): value is ConfigurationSection =>
+  CONFIGURATION_SECTIONS.includes(value as ConfigurationSection);
+
+const useConfigurationSection = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const setSection = (next: ConfigurationSection | undefined) =>
+    setSearchParams(
+      (params) => {
+        if (next) params.set(CONFIGURE_PARAM, next);
+        else params.delete(CONFIGURE_PARAM);
+        return params;
+      },
+      { replace: true },
+    );
+  return [searchParams.get(CONFIGURE_PARAM), setSection] as const;
+};
+
+// Looks the cluster up itself, as the title does, for the same reason.
+const ConfigurationDrawer = ({
+  clusterId,
+  section,
+  onSectionChange,
+}: {
+  clusterId: string;
+  section: string | null;
+  onSectionChange: (section: ConfigurationSection | undefined) => void;
+}) => {
+  const { getClusterById } = useAllClusters();
+  const cluster = getClusterById(clusterId);
+  if (!cluster) return null;
+  return (
+    <ClusterConfigurationDrawer
+      isOpen={isSection(section)}
+      onClose={() => onSectionChange(undefined)}
+      cluster={cluster}
+      section={isSection(section) ? section : "overview"}
+      onSectionChange={onSectionChange}
+    />
+  );
+};
+
 /** The redesigned page's part of the shared header: its title row and tabs. */
 export const ClusterPageHeader = () => {
   const { clusterId, clusterName } = useParams<ClusterParams>();
-  const [searchParams] = useSearchParams();
   assert(clusterId);
   assert(clusterName);
+  const [, setSection] = useConfigurationSection();
+  const [searchParams] = useSearchParams();
   return (
     <>
-      <ClusterTitle name={clusterName} clusterId={clusterId} />
+      <ClusterTitle
+        name={clusterName}
+        clusterId={clusterId}
+        onConfigure={() => setSection("overview")}
+      />
       <PageTabStrip
         tabData={tabs(searchParams.get(REPLICA_SEARCH_PARAM) ?? undefined)}
       />
@@ -87,37 +150,54 @@ export const ClusterPageHeader = () => {
 };
 
 const ClusterPage = () => {
-  const { clusterName } = useParams<ClusterParams>();
+  const { clusterId, clusterName } = useParams<ClusterParams>();
+  assert(clusterId);
   assert(clusterName);
   useSubscribeToAllObjectsCollection();
+  const [section, setSection] = useConfigurationSection();
 
   // Keying route elements on the cluster name avoids stale state when the
   // breadcrumb menu switches clusters.
   return (
-    <SentryRoutes>
-      <Route index element={<ClusterMetrics key={clusterName} />} />
-      <Route
-        path={WORKERS_TAB_PATH}
-        element={<ClusterWorkers key={clusterName} />}
-      />
-      <Route
-        path="objects"
-        element={<Navigate to={CLUSTER_OBJECT_TYPES[0].path} replace />}
-      />
-      <Route
-        path="objects/:objectType"
-        element={<ClusterObjects key={clusterName} />}
-      />
-      <Route path="replicas" element={<ClusterReplicas key={clusterName} />} />
-      {/* The classic page's tab URLs, kept working for bookmarks and shared links. */}
-      {CLUSTER_OBJECT_TYPES.map(({ path }) => (
+    <>
+      <SentryRoutes>
+        <Route index element={<ClusterMetrics key={clusterName} />} />
         <Route
-          key={path}
-          path={path}
-          element={<Navigate to={`../objects/${path}`} replace />}
+          path={WORKERS_TAB_PATH}
+          element={<ClusterWorkers key={clusterName} />}
         />
-      ))}
-    </SentryRoutes>
+        <Route
+          path="objects"
+          element={<Navigate to={CLUSTER_OBJECT_TYPES[0].path} replace />}
+        />
+        <Route
+          path="objects/:objectType"
+          element={<ClusterObjects key={clusterName} />}
+        />
+        <Route
+          path="replicas"
+          element={
+            <Navigate
+              to={{ pathname: "..", search: `?${CONFIGURE_PARAM}=replicas` }}
+              replace
+            />
+          }
+        />
+        {/* The classic page's tab URLs, kept working for bookmarks and shared links. */}
+        {CLUSTER_OBJECT_TYPES.map(({ path }) => (
+          <Route
+            key={path}
+            path={path}
+            element={<Navigate to={`../objects/${path}`} replace />}
+          />
+        ))}
+      </SentryRoutes>
+      <ConfigurationDrawer
+        clusterId={clusterId}
+        section={section}
+        onSectionChange={setSection}
+      />
+    </>
   );
 };
 

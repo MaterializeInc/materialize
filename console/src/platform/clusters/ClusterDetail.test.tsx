@@ -187,7 +187,10 @@ describe("ClusterDetail redesign preview", () => {
           .filter((name) =>
             ["Metrics", "Workers", "Objects", "Replicas"].includes(name ?? ""),
           ),
-      ).toEqual(["Metrics", "Workers", "Objects", "Replicas"]);
+      ).toEqual(["Metrics", "Workers", "Objects"]);
+      expect(
+        screen.getByRole("button", { name: "Configure cluster" }),
+      ).toBeVisible();
       expect(
         screen.queryByRole("link", { name: "Materialized Views" }),
       ).not.toBeInTheDocument();
@@ -214,6 +217,36 @@ describe("ClusterDetail redesign preview", () => {
       expect(screen.getByText("Unmanaged")).toBeVisible();
       expect(screen.getByText("No replicas")).toBeVisible();
       expect(screen.queryByText("small")).not.toBeInTheDocument();
+    });
+
+    it("opens the configuration drawer from the gear next to the title", async () => {
+      const user = userEvent.setup();
+      await renderClusterDetail("/u1/default");
+
+      await user.click(
+        await screen.findByRole("button", { name: "Configure cluster" }),
+      );
+
+      expect(
+        await screen.findByRole("dialog", { name: "Configure default" }),
+      ).toBeVisible();
+      expect(screen.getByRole("button", { name: /^Overview/ })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
+
+    it("opens the classic Replicas tab's links on the drawer's replicas", async () => {
+      await renderClusterDetail("/u1/default/replicas");
+
+      await expectPathname("/u1/default");
+      expect(
+        await screen.findByRole("dialog", { name: "Configure default" }),
+      ).toBeVisible();
+      expect(screen.getByRole("button", { name: /^Replicas/ })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
     });
 
     it("opens the Objects tab on its first object type", async () => {

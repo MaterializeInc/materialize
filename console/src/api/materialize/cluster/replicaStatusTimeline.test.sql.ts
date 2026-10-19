@@ -112,7 +112,7 @@ describe("buildEnvironmentStartedAtQuery", () => {
     } = await executeSqlHttp(
       buildObjectCreationTimesQuery({
         objectIds: [id],
-        startDate: new Date(0).toISOString(),
+        objectTypes: ["index"],
       }).compile(),
     );
     const {

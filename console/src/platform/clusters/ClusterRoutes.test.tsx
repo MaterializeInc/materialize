@@ -41,6 +41,7 @@ const validCluster: Cluster = {
   name: "default",
   size: "50cc",
   managed: true,
+  replicationFactor: 1,
   ownerId: "u1",
   replicas: [
     {
