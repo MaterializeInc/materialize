@@ -1178,10 +1178,15 @@ The type definitions are generated or checked against the built binding:
 - Python: the stubs are written by hand, and `mypy.stubtest` fails when they
   no longer match the built module. The PyO3 stub generator required an older
   PyO3 and brought in dependencies that `deny.toml` refuses.
+- Values: the protocol core derives a JSON Schema for each value it hands out,
+  such as events and error classifications. A generator turns the schemas into
+  each package's types and its conversion of decimal strings to native
+  integers. `cargo test` fails while a generated file is stale, and checks
+  every value in the conformance vectors against the schemas.
 
 Each package will hand-write only the transport over its driver, the idiomatic
-API surface (iterators in Python, async iterators in Node), the conversion of
-the JSON form to native types, and the sink modules.
+API surface (iterators in Python, async iterators in Node), and the sink
+modules.
 
 Type mapping lives in the protocol core: it decodes each Materialize type into
 one documented value model, and each binding converts that model to the
