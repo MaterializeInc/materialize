@@ -1834,4 +1834,137 @@ mod tests {
             catalog.expire().await;
         }
     }
+
+    /// The bootstrap refresh rewrites rows that disagree with what the
+    /// running build's planner produces, and drops rows beyond its output.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
+    async fn refresh_rewrites_stale_item_metadata() {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let bootstrap_args = test_bootstrap_args();
+
+        let view_id = CatalogItemId::User(1);
+        let index_id = CatalogItemId::User(2);
+        let written = {
+            let mut catalog = Catalog::open_debug_catalog(
+                persist_client.clone(),
+                organization_id,
+                &bootstrap_args,
+            )
+            .await
+            .expect("unable to open debug catalog");
+            create_item(
+                &mut catalog,
+                view_id,
+                GlobalId::User(1),
+                "v",
+                r#"CREATE VIEW "materialize"."public"."v" AS SELECT 1 AS a, NULL::text AS b"#,
+            )
+            .await;
+            create_item(
+                &mut catalog,
+                index_id,
+                GlobalId::User(2),
+                "v_idx",
+                r#"CREATE INDEX "v_idx" IN CLUSTER [u1] ON [u1 AS "materialize"."public"."v"] ("a")"#,
+            )
+            .await;
+            let written = recorded(&catalog).await;
+            catalog.expire().await;
+            written
+        };
+        assert_eq!(written.item_columns.len(), 2, "{:?}", written.item_columns);
+        assert_eq!(
+            written.index_columns.len(),
+            1,
+            "{:?}",
+            written.index_columns
+        );
+
+        // Behind the catalog's back, swap the two columns' recorded values,
+        // change the index key's column and nullability, and add a column and a key
+        // beyond the planner's output.
+        {
+            let mut columns = written.item_columns.iter();
+            let (key_a, value_a) = columns.next().expect("column a");
+            let (key_b, value_b) = columns.next().expect("column b");
+            let (index_key, index_value) = written.index_columns.iter().next().expect("one key");
+            let mut surplus_column_key = key_a.clone();
+            surplus_column_key.position = 2;
+            let mut surplus_index_key = index_key.clone();
+            surplus_index_key.position = 1;
+            let mut changed_index_value = index_value.clone();
+            changed_index_value.column = changed_index_value.column.map(|column| column + 1);
+            changed_index_value.nullable = !changed_index_value.nullable;
+
+            let mut debug_state = TestCatalogStateBuilder::new(persist_client.clone())
+                .with_organization_id(organization_id)
+                .with_default_deploy_generation()
+                .unwrap_build()
+                .await
+                .open_debug()
+                .await
+                .expect("unable to open debug state");
+            for (key, value) in [
+                (key_a.clone(), value_b.clone()),
+                (key_b.clone(), value_a.clone()),
+                (surplus_column_key, value_a.clone()),
+            ] {
+                debug_state
+                    .edit::<ItemColumnCollection>(key, value)
+                    .await
+                    .expect("edit column");
+            }
+            for (key, value) in [
+                (index_key.clone(), changed_index_value),
+                (surplus_index_key, index_value.clone()),
+            ] {
+                debug_state
+                    .edit::<IndexColumnCollection>(key, value)
+                    .await
+                    .expect("edit index key");
+            }
+        }
+
+        // The next refresh stages a rewrite of every disagreeing row, a
+        // retraction and an addition each, and a retraction of each surplus
+        // row.
+        {
+            let catalog = Catalog::open_debug_read_only_catalog(
+                persist_client.clone(),
+                organization_id,
+                &bootstrap_args,
+            )
+            .await
+            .expect("unable to open read-only debug catalog");
+            let error = refresh(&catalog)
+                .await
+                .expect_err("a refresh with stale rows rewrites them");
+            let CatalogError::Durable(DurableCatalogError::NotWritable(message)) = error else {
+                panic!("unexpected error {error:?}");
+            };
+            assert!(
+                message.contains("8 updates")
+                    && message.contains("ItemColumn")
+                    && message.contains("IndexColumn"),
+                "{message}"
+            );
+            catalog.expire().await;
+        }
+        // A writable open puts the planner's rows back and drops the surplus.
+        {
+            let catalog = Catalog::open_debug_catalog(
+                persist_client.clone(),
+                organization_id,
+                &bootstrap_args,
+            )
+            .await
+            .expect("unable to open debug catalog");
+            let rewritten = recorded(&catalog).await;
+            assert_eq!(rewritten.item_columns, written.item_columns);
+            assert_eq!(rewritten.index_columns, written.index_columns);
+            catalog.expire().await;
+        }
+    }
 }
