@@ -919,8 +919,12 @@ impl ReplicaEnactment {
     }
 
     fn defer_publication(&mut self) {
-        let delay = conflict_delay();
-        self.publication_retry_after = Some(Instant::now() + delay);
+        // A definitive maintenance conflict retains committed protection and
+        // returns both aggregate and bounds work to the staggered cadence.
+        // Grant acquisition has its own retry policy and is not gated here.
+        let clock = self.publication_clock.as_mut().expect("configured");
+        clock.completed();
+        self.publication_retry_after = Some(clock.due);
         self.publication_needs_refresh = true;
     }
 

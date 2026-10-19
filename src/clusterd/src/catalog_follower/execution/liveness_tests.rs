@@ -408,6 +408,7 @@ async fn exercise_liveness() {
     ));
     assert!(driver.publication_needs_refresh);
     let retry_after = driver.publication_retry_after.unwrap();
+    assert_eq!(retry_after, driver.publication_clock.as_ref().unwrap().due);
     // Hold the gate far ahead while exercising callers, independent of host speed.
     driver.publication_retry_after = Some(Instant::now() + Duration::from_secs(3600));
     driver.io.catalog_catchup.notify_one();
@@ -559,6 +560,10 @@ async fn exercise_liveness() {
             .unwrap_err(),
     ));
     assert!(driver.publication_needs_refresh);
+    assert_eq!(
+        driver.publication_retry_after.unwrap(),
+        driver.publication_clock.as_ref().unwrap().due,
+    );
     let ts = fixture.writer.current_upper().await;
     fixture
         .writer

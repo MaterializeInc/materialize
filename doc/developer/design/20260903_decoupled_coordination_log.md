@@ -22,7 +22,7 @@ interactive debugging. The parallel-check workflow requires SQL Server, which
 does not run natively on ARM. Keep the 16-vCPU, 64-GiB, 500-GiB configuration,
 one worker, and renew its expiry as needed for this work without asking again.
 Current worker: `i-01023ce0e1db179f9`. Last recorded expiry:
-2026-10-20 20:27:43 UTC. Verify and extend it before further work.
+2026-10-21 05:41:44 UTC. Verify and extend it before further work.
 Scratch evidence is copied off-worker under
 `~/.local/share/aj/m2-evidence/scratch/`.
 Launch with `bin/scratch create decoupled-coordination
@@ -260,12 +260,20 @@ same effective S3/Postgres backends. Preserve this as preparation-cost evidence,
 not resolution of CI starvation. See `scratch/prepared-admission-report.md` and
 the archived comparison. Both fixture arms are stopped after inspection, with
 containers, volumes and off-worker evidence retained.
-Reproduce the statement-logging and HTTP-session cleanup observations separately
-from the replacement-MV replay correction. Evidence is under
+Keep the unexplained statement-logging and HTTP-session cleanup observations
+separate from the replacement-MV replay correction. Evidence is under
 `scratch/replacement-mv/` and `scratch/ci139617/`, with detailed outcomes in the PR.
 Original-budget SQL completion and sustained advancement remain unresolved.
-Use the fixed-seed workload with existing scoped tracing before reassessing
-shared-write arbitration. Preserve its in-flight verification when publishing fixes.
+Keep the shared content-priority signal parked. Align replica advancement/release
+and compaction-bound conflict retries with the adapter's normal staggered
+publication cadence. Retain committed protection and resample fresh state.
+Grant acquisition, the 1s default, deadlines and correctness checks stay unchanged.
+Measure attempts, successful content commits, SQL completion and committed-bound
+advancement separately in the existing fixed-seed workload.
+Classify the captured ALTER SINK transaction-open rejections without weakening
+catch-up checks. Keep long inline-retry responsiveness explicit and separate from
+the maintenance scheduling correction. Preserve in-flight verification when
+publishing fixes.
 Committed bounds advance elsewhere, without proving physical reclamation or
 fleet-wide progress. Snapshot waits and append conflicts remain open. A legacy CREATE
 CLUSTER retry turn occupies the coordinator for 8.87s. Keep the refresh-to-commit
