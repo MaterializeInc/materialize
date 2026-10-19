@@ -28,70 +28,18 @@ use mz_storage_types::sources::{SourceDesc, SourceExportDataConfig, SourceExport
 
 use super::CatalogReadRecorder;
 
-pub(super) fn item<'a>(
-    recorder: CatalogReadRecorder,
-    inner: &'a dyn CatalogItem,
-) -> CatalogItemRef<'a> {
-    let id = inner.id();
-    recorder.record("item exists", true, move |state| {
-        state.try_get_entry(&id).is_some()
-    });
-    CatalogRef::Owned(Box::new(ObservedItem {
-        inner,
-        recorder,
-        version: None,
-    }))
-}
+use storage::{ItemView, ObservedItem};
 
-trait ItemView {
-    fn as_item(&self) -> &dyn CatalogItem;
-}
-
-impl ItemView for &dyn CatalogItem {
-    fn as_item(&self) -> &dyn CatalogItem {
-        *self
-    }
-}
-
-impl ItemView for Box<dyn CatalogCollectionItem> {
-    fn as_item(&self) -> &dyn CatalogItem {
-        &**self
-    }
-}
-
-struct ObservedItem<I> {
-    inner: I,
-    recorder: CatalogReadRecorder,
-    version: Option<RelationVersionSelector>,
-}
-
-impl<I: ItemView> ObservedItem<I> {
-    fn observe<T>(
-        &self,
-        label: &'static str,
-        read: impl Fn(&dyn CatalogItem) -> T + Send + Sync + 'static,
-    ) where
-        T: PartialEq + Send + Sync + 'static,
-    {
-        let id = self.inner.as_item().id();
-        let version = self.version;
-        let expected = Some(read(self.inner.as_item()));
-        self.recorder.record(label, expected, move |state| {
-            let entry = state.try_get_entry(&id)?;
-            Some(match version {
-                Some(version) => read(&*entry.at_version(version)),
-                None => read(entry),
-            })
-        });
-    }
-}
+pub(super) use storage::item;
 
 macro_rules! properties {
-    ($($name:ident -> $result:ty => $read:expr;)*) => {
+    ($($name:ident -> $result:ty => $value:ident => $snapshot:expr;)*) => {
         $(
             fn $name(&self) -> $result {
-                self.observe(stringify!($name), $read);
-                self.inner.as_item().$name()
+                self.read(stringify!($name), |inner| inner.$name(), |inner| {
+                    let $value = inner.$name();
+                    $snapshot
+                })
             }
         )*
     };
@@ -99,84 +47,179 @@ macro_rules! properties {
 
 impl<I: ItemView> CatalogItem for ObservedItem<I> {
     properties! {
-        name -> &QualifiedItemName => |item| item.name().clone();
-        id -> CatalogItemId => |item| item.id();
+        name -> &QualifiedItemName => value => value.clone();
+        id -> CatalogItemId => value => value;
         global_ids -> Box<dyn Iterator<Item = GlobalId> + '_> =>
-            |item| item.global_ids().collect::<Vec<_>>();
-        oid -> u32 => |item| item.oid();
+            value => value.collect::<Vec<_>>();
+        oid -> u32 => value => value;
         func -> Result<&'static Func, CatalogError> =>
-            |item| item.func().map(|func| std::ptr::from_ref(func).addr());
+            value => value.map(|func| std::ptr::from_ref(func).addr());
         source_desc -> Result<Option<&SourceDesc<ReferencedConnection>>, CatalogError> =>
-            |item| item.source_desc().map(|desc| desc.cloned());
-        connection -> Result<Connection<ReferencedConnection>, CatalogError> =>
-            |item| item.connection();
-        item_type -> CatalogItemType => |item| item.item_type();
-        create_sql -> &str => |item| item.create_sql().to_owned();
-        references -> &ResolvedIds => |item| item.references().clone();
-        uses -> BTreeSet<CatalogItemId> => |item| item.uses();
-        referenced_by -> &[CatalogItemId] => |item| item.referenced_by().to_owned();
-        used_by -> &[CatalogItemId] => |item| item.used_by().to_owned();
-        subsource_details -> Option<(CatalogItemId, &UnresolvedItemName, &SourceExportDetails)> =>
-            |item| {
-                item.subsource_details()
-                    .map(|(id, name, details)| (id, name.clone(), details.clone()))
-            };
+            value => value.map(|desc| desc.cloned());
+        connection -> Result<Connection<ReferencedConnection>, CatalogError> => value => value;
+        item_type -> CatalogItemType => value => value;
+        create_sql -> &str => value => value.to_owned();
+        references -> &ResolvedIds => value => value.clone();
+        uses -> BTreeSet<CatalogItemId> => value => value;
+        referenced_by -> &[CatalogItemId] => value => value.to_owned();
+        used_by -> &[CatalogItemId] => value => value.to_owned();
+        subsource_details -> Option<(
+            CatalogItemId,
+            &UnresolvedItemName,
+            &SourceExportDetails,
+        )> =>
+            value => value.map(|(id, name, details)| (id, name.clone(), details.clone()));
         source_export_details -> Option<(
             CatalogItemId,
             &UnresolvedItemName,
             &SourceExportDetails,
             &SourceExportDataConfig<ReferencedConnection>,
-        )> => |item| item.source_export_details().map(|(id, name, details, config)|
+        )> => value => value.map(|(id, name, details, config)|
             (id, name.clone(), details.clone(), config.clone()));
-        is_progress_source -> bool => |item| item.is_progress_source();
-        progress_id -> Option<CatalogItemId> => |item| item.progress_id();
+        is_progress_source -> bool => value => value;
+        progress_id -> Option<CatalogItemId> => value => value;
         index_details -> Option<(&[MirScalarExpr], GlobalId)> =>
-            |item| item.index_details().map(|(keys, id)| (keys.to_owned(), id));
+            value => value.map(|(keys, id)| (keys.to_owned(), id));
         writable_table_details -> Option<&[Expr<Aug>]> =>
-            |item| item.writable_table_details().map(|exprs| exprs.to_owned());
-        replacement_target -> Option<CatalogItemId> => |item| item.replacement_target();
-        type_details -> Option<&CatalogTypeDetails<IdReference>> =>
-            |item| item.type_details().cloned();
-        owner_id -> RoleId => |item| item.owner_id();
-        privileges -> &PrivilegeMap => |item| item.privileges().clone();
-        cluster_id -> Option<ClusterId> => |item| item.cluster_id();
-        latest_version -> Option<RelationVersion> => |item| item.latest_version();
+            value => value.map(|exprs| exprs.to_owned());
+        replacement_target -> Option<CatalogItemId> => value => value;
+        type_details -> Option<&CatalogTypeDetails<IdReference>> => value => value.cloned();
+        owner_id -> RoleId => value => value;
+        privileges -> &PrivilegeMap => value => value.clone();
+        cluster_id -> Option<ClusterId> => value => value;
+        latest_version -> Option<RelationVersion> => value => value;
     }
 
     fn at_version(&self, version: RelationVersionSelector) -> Box<dyn CatalogCollectionItem> {
-        Box::new(ObservedItem {
-            inner: self.inner.as_item().at_version(version),
-            recorder: self.recorder.clone(),
-            version: Some(version),
-        })
+        self.collection_view(version)
     }
 }
 
 impl CatalogCollectionItem for ObservedItem<Box<dyn CatalogCollectionItem>> {
     fn relation_desc(&self) -> Option<Cow<'_, RelationDesc>> {
-        let id = self.inner.id();
-        let version = self.version.expect("collection view has a version");
-        let expected = Some(self.inner.relation_desc().map(Cow::into_owned));
-        self.recorder
-            .record("relation_desc", expected, move |state| {
-                let entry = state.try_get_entry(&id)?;
-                Some(entry.item().relation_desc(version).map(Cow::into_owned))
-            });
-        self.inner.relation_desc()
+        self.observed_relation_desc()
     }
 
     fn global_id(&self) -> GlobalId {
-        let id = self.inner.id();
-        let version = self.version.expect("collection view has a version");
-        let answer = self.inner.global_id();
-        self.recorder
-            .record("global_id", Some(answer), move |state| {
-                state
-                    .try_get_entry(&id)?
-                    .item()
-                    .global_id_for_version(version)
+        self.observed_global_id()
+    }
+}
+
+// Raw catalog objects stay behind this boundary. Accessors must supply a
+// snapshot covering their read or use a nested view that retains the recorder.
+mod storage {
+    use super::*;
+
+    pub(in crate::catalog) fn item<'a>(
+        recorder: CatalogReadRecorder,
+        inner: &'a dyn CatalogItem,
+    ) -> CatalogItemRef<'a> {
+        let id = inner.id();
+        recorder.record("item exists", true, move |state| {
+            state.try_get_entry(&id).is_some()
+        });
+        CatalogRef::Owned(Box::new(ObservedItem {
+            inner,
+            recorder,
+            version: None,
+        }))
+    }
+
+    pub(super) trait ItemView {
+        fn as_item(&self) -> &dyn CatalogItem;
+    }
+
+    impl ItemView for &dyn CatalogItem {
+        fn as_item(&self) -> &dyn CatalogItem {
+            *self
+        }
+    }
+
+    impl ItemView for Box<dyn CatalogCollectionItem> {
+        fn as_item(&self) -> &dyn CatalogItem {
+            &**self
+        }
+    }
+
+    pub(super) struct ObservedItem<I> {
+        inner: I,
+        recorder: CatalogReadRecorder,
+        version: Option<RelationVersionSelector>,
+    }
+
+    impl<I: ItemView> ObservedItem<I> {
+        pub(super) fn read<'s, T, O>(
+            &'s self,
+            label: &'static str,
+            read: impl FnOnce(&'s dyn CatalogItem) -> T,
+            snapshot: impl Fn(&dyn CatalogItem) -> O + Send + Sync + 'static,
+        ) -> T
+        where
+            O: PartialEq + Send + Sync + 'static,
+        {
+            self.observe(label, snapshot);
+            read(self.inner.as_item())
+        }
+
+        fn observe<T>(
+            &self,
+            label: &'static str,
+            read: impl Fn(&dyn CatalogItem) -> T + Send + Sync + 'static,
+        ) where
+            T: PartialEq + Send + Sync + 'static,
+        {
+            let id = self.inner.as_item().id();
+            let version = self.version;
+            let expected = Some(read(self.inner.as_item()));
+            self.recorder.record(label, expected, move |state| {
+                let entry = state.try_get_entry(&id)?;
+                Some(match version {
+                    Some(version) => read(&*entry.at_version(version)),
+                    None => read(entry),
+                })
             });
-        answer
+        }
+    }
+
+    impl<I: ItemView> ObservedItem<I> {
+        pub(super) fn collection_view(
+            &self,
+            version: RelationVersionSelector,
+        ) -> Box<dyn CatalogCollectionItem> {
+            Box::new(ObservedItem {
+                inner: self.inner.as_item().at_version(version),
+                recorder: self.recorder.clone(),
+                version: Some(version),
+            })
+        }
+    }
+
+    impl ObservedItem<Box<dyn CatalogCollectionItem>> {
+        pub(super) fn observed_relation_desc(&self) -> Option<Cow<'_, RelationDesc>> {
+            let id = self.inner.id();
+            let version = self.version.expect("collection view has a version");
+            let expected = Some(self.inner.relation_desc().map(Cow::into_owned));
+            self.recorder
+                .record("relation_desc", expected, move |state| {
+                    let entry = state.try_get_entry(&id)?;
+                    Some(entry.item().relation_desc(version).map(Cow::into_owned))
+                });
+            self.inner.relation_desc()
+        }
+
+        pub(super) fn observed_global_id(&self) -> GlobalId {
+            let id = self.inner.id();
+            let version = self.version.expect("collection view has a version");
+            let answer = self.inner.global_id();
+            self.recorder
+                .record("global_id", Some(answer), move |state| {
+                    state
+                        .try_get_entry(&id)?
+                        .item()
+                        .global_id_for_version(version)
+                });
+            answer
+        }
     }
 }
 
