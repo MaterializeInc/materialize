@@ -113,7 +113,7 @@ use mz_compute_client::controller::error::{
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::LirDataflowDescription;
 use mz_controller::clusters::{
-    ClusterConfig, ClusterEvent, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaLocation,
+    ClusterConfig, ClusterEvent, ClusterStatus, ProcessId, ReplicaLocation,
 };
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
@@ -4655,10 +4655,6 @@ impl Coordinator {
         self.catalog()
             .state()
             .current_credit_consumption_rate(exclude_cluster)
-    }
-
-    fn replica_credits_per_hour(&self, location: &ManagedReplicaLocation) -> Numeric {
-        self.catalog().state().replica_credits_per_hour(location)
     }
 }
 
