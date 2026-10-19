@@ -48,6 +48,7 @@ pub mod scalar;
 pub mod threshold;
 pub mod top_k;
 pub mod transform;
+pub mod validate;
 
 /// Metrics collected during MIR to LIR lowering.
 #[derive(Debug, Clone)]
