@@ -98,9 +98,11 @@ The handoff is a resume pointer, not a work log. Keep only current outcomes,
 live blockers, the next useful comparison, its decision point and evidence
 pointers. Replace current state and remove resolved work. Do not append a
 paragraph for each fix, experiment or verification run, or start another diary.
-Keep detailed implementation and validation status in the PR, with run logs,
-test inventories and intermediate measurements in linked evidence. Do not append
-to the archive.
+Keep the PR description concise and reviewer-facing: motivation, approach, scope,
+current verification and open blockers, with evidence links. Update that summary
+in place, not with per-commit or per-run history. Detailed logs, test inventories
+and intermediate measurements belong in linked evidence. Do not append to the
+archive.
 Design and prompt bodies are designer-owned unless documentation work is
 explicitly assigned. Flag resolved steering for removal. Re-read this prompt
 after compaction.

@@ -2,8 +2,9 @@
 
 The [design](20260903_decoupled_coordination.md) owns the contracts and M2 scope.
 The [prompt](20260903_decoupled_coordination_prompt.md) owns working rules.
-Detailed implementation and verification evidence belongs in the
-[PR](https://github.com/MaterializeInc/materialize/pull/38696), not this handoff.
+The [PR](https://github.com/MaterializeInc/materialize/pull/38696) provides a
+reviewer-facing summary and current verification. Detailed run records belong
+in linked evidence, not in either document.
 This is a resume pointer, not a work log. Replace current state and remove resolved
 work. Do not append a paragraph for each fix, experiment or verification run.
 
