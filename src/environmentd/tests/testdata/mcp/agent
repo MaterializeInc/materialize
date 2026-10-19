@@ -39,8 +39,8 @@ mcp-agent
 ----
 202 Accepted
 
-# An unknown method with params gets MethodNotFound, not a 422. Clients probe
-# for server/discover this way.
+# server/discover is only answered on 2026-07-28 with the flag on. Dual-era
+# clients probe with it and fall back to initialize on this error.
 mcp-agent
 {"jsonrpc":"2.0","id":3,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}
 ----

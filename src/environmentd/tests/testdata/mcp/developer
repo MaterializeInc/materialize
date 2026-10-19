@@ -182,13 +182,21 @@ mcp-developer
 200 OK
 {"jsonrpc":"2.0","id":41,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
 
-# An unknown method with params gets the same error, not a 422. Clients probe
-# for server/discover this way.
+# server/discover is only answered on 2026-07-28 with the flag on. Dual-era
+# clients probe with it and fall back to initialize on this error.
 mcp-developer
 {"jsonrpc":"2.0","id":42,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":42,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
+
+mcp-developer
+MCP-Protocol-Version: 2026-07-28
+Mcp-Method: server/discover
+{"jsonrpc":"2.0","id":44,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":44,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
 
 # With enable_mcp_protocol_2026_07_28 off, a 2026-07-28 request is served as
 # 2025-11-25, so its missing Mcp-Method is not checked.
