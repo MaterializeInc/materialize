@@ -209,7 +209,7 @@ fn validate_source_export_names<T>(
 pub enum PurifiedStatement {
     PurifiedCreateSource {
         // The progress subsource, if we are offloading progress info to a separate relation
-        create_progress_subsource_stmt: Option<CreateSubsourceStatement<Aug>>,
+        create_progress_subsource: bool,
         create_source_stmt: CreateSourceStatement<Aug>,
         // Map of subsource names to external details
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
@@ -816,7 +816,6 @@ async fn purify_create_source(
         include_metadata,
         external_references,
         progress_subsource,
-        with_options,
         ..
     } = &mut create_source_stmt;
 
@@ -834,23 +833,6 @@ async fn purify_create_source(
 
     let mut requested_subsource_map = BTreeMap::new();
 
-    let progress_desc = match &source_connection {
-        CreateSourceConnection::Kafka { .. } => {
-            &mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC
-        }
-        CreateSourceConnection::Postgres { .. } => {
-            &mz_storage_types::sources::postgres::PG_PROGRESS_DESC
-        }
-        CreateSourceConnection::SqlServer { .. } => {
-            &mz_storage_types::sources::sql_server::SQL_SERVER_PROGRESS_DESC
-        }
-        CreateSourceConnection::MySql { .. } => {
-            &mz_storage_types::sources::mysql::MYSQL_PROGRESS_DESC
-        }
-        CreateSourceConnection::LoadGenerator { .. } => {
-            &mz_storage_types::sources::load_generator::LOAD_GEN_PROGRESS_DESC
-        }
-    };
     let scx = StatementContext::new(None, &catalog);
 
     // Depending on if the user must or can use the `CREATE TABLE .. FROM SOURCE` statement
@@ -1365,78 +1347,6 @@ async fn purify_create_source(
     // part of the `CREATE SOURCE` statement in the catalog.
     *external_references = None;
 
-    // Generate progress subsource for old syntax
-    let create_progress_subsource_stmt = if uses_old_syntax {
-        // Take name from input or generate name
-        let name = match progress_subsource {
-            Some(name) => match name {
-                DeferredItemName::Deferred(name) => name.clone(),
-                // Already checked for this value above.
-                DeferredItemName::Named(_) => {
-                    sql_bail!("progress subsource name cannot be a resolved name")
-                }
-            },
-            None => {
-                let (item, prefix) = source_name
-                    .0
-                    .split_last()
-                    .ok_or_else(|| sql_err!("source name must have at least one component"))?;
-                let item_name =
-                    Ident::try_generate_name(item.to_string(), "_progress", |candidate| {
-                        let mut suggested_name = prefix.to_vec();
-                        suggested_name.push(candidate.clone());
-
-                        let partial =
-                            normalize::unresolved_item_name(UnresolvedItemName(suggested_name))?;
-                        let qualified = scx.allocate_qualified_name(partial)?;
-                        let item_exists = scx.catalog.get_item_by_name(&qualified).is_some();
-                        let type_exists = scx.catalog.get_type_by_name(&qualified).is_some();
-                        Ok::<_, PlanError>(!item_exists && !type_exists)
-                    })?;
-
-                let mut full_name = prefix.to_vec();
-                full_name.push(item_name);
-                let full_name = normalize::unresolved_item_name(UnresolvedItemName(full_name))?;
-                let qualified_name = scx.allocate_qualified_name(full_name)?;
-                let full_name = scx.catalog.resolve_full_name(&qualified_name);
-
-                UnresolvedItemName::from(full_name.clone())
-            }
-        };
-
-        let (columns, constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
-
-        // Create the subsource statement
-        let mut progress_with_options: Vec<_> = with_options
-            .iter()
-            .filter_map(|opt| match opt.name {
-                CreateSourceOptionName::TimestampInterval => None,
-                CreateSourceOptionName::RetainHistory => Some(CreateSubsourceOption {
-                    name: CreateSubsourceOptionName::RetainHistory,
-                    value: opt.value.clone(),
-                }),
-            })
-            .collect();
-        progress_with_options.push(CreateSubsourceOption {
-            name: CreateSubsourceOptionName::Progress,
-            value: Some(WithOptionValue::Value(Value::Boolean(true))),
-        });
-
-        Some(CreateSubsourceStatement {
-            name,
-            columns,
-            // Progress subsources do not refer to the source to which they belong.
-            // Instead the primary source depends on it (the opposite is true of
-            // ingestion exports, which depend on the primary source).
-            of_source: None,
-            constraints,
-            if_not_exists: false,
-            with_options: progress_with_options,
-        })
-    } else {
-        None
-    };
-
     purify_source_format(
         &catalog,
         format,
@@ -1447,7 +1357,7 @@ async fn purify_create_source(
     .await?;
 
     Ok(PurifiedStatement::PurifiedCreateSource {
-        create_progress_subsource_stmt,
+        create_progress_subsource: uses_old_syntax,
         create_source_stmt,
         subsources: requested_subsource_map,
         available_source_references: retrieved_source_references.available_source_references(),
@@ -2496,6 +2406,100 @@ async fn purify_source_format_single(
         | Format::Csv { .. } => (),
     }
     Ok(())
+}
+
+/// Generates a progress subsource, choosing an available name in the supplied catalog.
+pub fn generate_progress_subsource_statement(
+    scx: &StatementContext,
+    source: &CreateSourceStatement<Aug>,
+) -> Result<CreateSubsourceStatement<Aug>, PlanError> {
+    let CreateSourceStatement {
+        name: source_name,
+        connection: source_connection,
+        progress_subsource,
+        with_options,
+        ..
+    } = source;
+
+    let progress_desc = match source_connection {
+        CreateSourceConnection::Kafka { .. } => {
+            &mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC
+        }
+        CreateSourceConnection::Postgres { .. } => {
+            &mz_storage_types::sources::postgres::PG_PROGRESS_DESC
+        }
+        CreateSourceConnection::SqlServer { .. } => {
+            &mz_storage_types::sources::sql_server::SQL_SERVER_PROGRESS_DESC
+        }
+        CreateSourceConnection::MySql { .. } => {
+            &mz_storage_types::sources::mysql::MYSQL_PROGRESS_DESC
+        }
+        CreateSourceConnection::LoadGenerator { .. } => {
+            &mz_storage_types::sources::load_generator::LOAD_GEN_PROGRESS_DESC
+        }
+    };
+
+    let name = match progress_subsource {
+        Some(name) => match name {
+            DeferredItemName::Deferred(name) => name.clone(),
+            DeferredItemName::Named(_) => {
+                sql_bail!("progress subsource name cannot be a resolved name")
+            }
+        },
+        None => {
+            let (item, prefix) = source_name
+                .0
+                .split_last()
+                .ok_or_else(|| sql_err!("source name must have at least one component"))?;
+            let item_name = Ident::try_generate_name(item.to_string(), "_progress", |candidate| {
+                let mut suggested_name = prefix.to_vec();
+                suggested_name.push(candidate.clone());
+
+                let partial = normalize::unresolved_item_name(UnresolvedItemName(suggested_name))?;
+                let qualified = scx.allocate_qualified_name(partial)?;
+                let item_exists = scx.catalog.get_item_by_name(&qualified).is_some();
+                let type_exists = scx.catalog.get_type_by_name(&qualified).is_some();
+                Ok::<_, PlanError>(!item_exists && !type_exists)
+            })?;
+
+            let mut full_name = prefix.to_vec();
+            full_name.push(item_name);
+            let full_name = normalize::unresolved_item_name(UnresolvedItemName(full_name))?;
+            let qualified_name = scx.allocate_qualified_name(full_name)?;
+            let full_name = scx.catalog.resolve_full_name(&qualified_name);
+
+            UnresolvedItemName::from(full_name.clone())
+        }
+    };
+
+    let (columns, constraints) = scx.relation_desc_into_table_defs(progress_desc)?;
+
+    let mut progress_with_options: Vec<_> = with_options
+        .iter()
+        .filter_map(|opt| match opt.name {
+            CreateSourceOptionName::TimestampInterval => None,
+            CreateSourceOptionName::RetainHistory => Some(CreateSubsourceOption {
+                name: CreateSubsourceOptionName::RetainHistory,
+                value: opt.value.clone(),
+            }),
+        })
+        .collect();
+    progress_with_options.push(CreateSubsourceOption {
+        name: CreateSubsourceOptionName::Progress,
+        value: Some(WithOptionValue::Value(Value::Boolean(true))),
+    });
+
+    Ok(CreateSubsourceStatement {
+        name,
+        columns,
+        // Progress subsources do not refer to the source to which they belong.
+        // Instead the primary source depends on it (the opposite is true of
+        // ingestion exports, which depend on the primary source).
+        of_source: None,
+        constraints,
+        if_not_exists: false,
+        with_options: progress_with_options,
+    })
 }
 
 pub fn generate_subsource_statements(
