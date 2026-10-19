@@ -76,7 +76,7 @@ pub(crate) struct ResolvedImport<'a> {
 /// Resolves `import` and checks that the plan may read it.
 ///
 /// The relation must be a table, source, or materialized view, or a view read only through
-/// indexes. Each index must be an index on the relation at the resolved version, installed on
+/// at least one index. Each index must be an index on the relation at the resolved version, installed on
 /// `cluster_id`. With `allow_names` false, every source must be an [`ImportSource::Item`].
 pub(crate) fn resolve_import<'a>(
     catalog: &'a dyn SessionCatalog,
@@ -100,6 +100,10 @@ pub(crate) fn resolve_import<'a>(
             "import"
         };
         sql_bail!("LIR plan cannot {access} {} {name}", item.item_type());
+    }
+    // A view has no collection of its own, so a plan reads it only through its indexes.
+    if item.item_type() == CatalogItemType::View && import.indexes.is_empty() {
+        sql_bail!("LIR plan must import view {name} through at least one index");
     }
     let global_id = item
         .at_version(version_selector(item, version)?)

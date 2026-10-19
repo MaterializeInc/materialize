@@ -129,9 +129,19 @@ CREATE MATERIALIZED VIEW m (a int8) IN CLUSTER other FROM PLAN '{"lir_version":1
 statement error CREATE MATERIALIZED VIEW \.\.\. FROM PLAN are not supported
 CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"u"},"persist":false,"indexes":[{"Name":"u_a"}]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
 
-# A view is read through its index.
+# A view is read through at least one index.
+statement error LIR plan must import view v through at least one index
+CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"v"},"persist":false,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
 statement error CREATE MATERIALIZED VIEW \.\.\. FROM PLAN are not supported
 CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"v"},"persist":false,"indexes":[{"Name":"v_a"}]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
+
+# A replacement cannot import its own target.
+statement ok
+CREATE MATERIALIZED VIEW mvt AS SELECT a FROM t
+
+statement error replacement would cause mvt to depend on itself
+CREATE REPLACEMENT MATERIALIZED VIEW rp (a int8 NOT NULL) FOR mvt FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"mvt"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
 
 statement error EXPLAIN CREATE MATERIALIZED VIEW \.\.\. FROM PLAN not yet supported
 EXPLAIN CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'

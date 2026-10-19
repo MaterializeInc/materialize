@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_compute_types::plan::envelope::{ImportSource, envelope_to_json, parse_envelope};
 use mz_ore::str::StrExt;
 use mz_repr::CatalogItemId;
 use mz_sql_parser::ast::CreateTableFromSourceStatement;
@@ -534,5 +535,96 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlIdReplacer<'_> {
             }
             RawItemName::Name(_) => {}
         }
+    }
+
+    fn visit_materialized_view_body_mut(&mut self, body: &'ast mut MaterializedViewBody<Raw>) {
+        match body {
+            MaterializedViewBody::Query(query) => self.visit_query_mut(query),
+            MaterializedViewBody::Plan(json) => replace_plan_import_ids(json, self.ids),
+        }
+    }
+}
+
+/// Updates the item ids of the resolved imports in the LIR plan envelope `json`.
+///
+/// A plan that does not parse is left alone, planning reports it.
+fn replace_plan_import_ids(json: &mut String, ids: &BTreeMap<CatalogItemId, CatalogItemId>) {
+    let Ok(mut envelope) = parse_envelope(json) else {
+        return;
+    };
+    let mut changed = false;
+    let sources = envelope
+        .imports
+        .iter_mut()
+        .flat_map(|import| std::iter::once(&mut import.source).chain(&mut import.indexes));
+    for source in sources {
+        if let ImportSource::Item { item_id, .. } = source {
+            if let Some(new_id) = ids.get(item_id) {
+                *item_id = *new_id;
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        *json = envelope_to_json(&envelope);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use mz_compute_types::plan::envelope::{ImportSource, parse_envelope};
+    use mz_ore::collections::CollectionExt;
+    use mz_repr::{CatalogItemId, RelationVersion};
+
+    use crate::ast::{MaterializedViewBody, Raw, Statement};
+
+    use super::create_stmt_replace_ids;
+
+    const PLAN: &str = r#"{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Item":{"item_id":{"User":1},"version":0}},"persist":false,"indexes":[{"Item":{"item_id":{"User":2},"version":0}}]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}"#;
+
+    fn plan_mv(json: &str) -> Statement<Raw> {
+        let sql = format!(
+            "CREATE MATERIALIZED VIEW m (a int8) FROM PLAN '{}'",
+            json.replace('\'', "''")
+        );
+        crate::parse::parse(&sql).unwrap().into_element().ast
+    }
+
+    fn plan_json(stmt: &Statement<Raw>) -> &str {
+        let Statement::CreateMaterializedView(cmvs) = stmt else {
+            panic!("not a materialized view");
+        };
+        let MaterializedViewBody::Plan(json) = &cmvs.body else {
+            panic!("not a plan body");
+        };
+        json
+    }
+
+    #[mz_ore::test]
+    fn replace_ids_rewrites_plan_imports() {
+        let mut stmt = plan_mv(PLAN);
+        let ids = BTreeMap::from([
+            (CatalogItemId::User(1), CatalogItemId::User(10)),
+            (CatalogItemId::User(2), CatalogItemId::User(20)),
+        ]);
+        create_stmt_replace_ids(&mut stmt, &ids);
+        let envelope = parse_envelope(plan_json(&stmt)).unwrap();
+        let import = envelope.imports.into_element();
+        let item = |item_id| ImportSource::Item {
+            item_id,
+            version: RelationVersion::root(),
+        };
+        assert_eq!(import.source, item(CatalogItemId::User(10)));
+        assert_eq!(import.indexes, vec![item(CatalogItemId::User(20))]);
+    }
+
+    #[mz_ore::test]
+    fn replace_ids_keeps_unaffected_plan_text() {
+        let mut stmt = plan_mv(PLAN);
+        let ids = BTreeMap::from([(CatalogItemId::User(3), CatalogItemId::User(30))]);
+        create_stmt_replace_ids(&mut stmt, &ids);
+        assert_eq!(plan_json(&stmt), PLAN);
     }
 }
