@@ -4,6 +4,8 @@ Persist operates as a set of *shards* each representing a partial time-varying c
 
 To provide the persist contract persist needs somewhere to put bytes (*blob* store), and a place to agree on one ordering of writes (*consensus* log), which holds each shard's *state*: the metadata that points at its data in blob.
 
+[^frontiers]: `upper` is the frontier before which all writes are complete; `since` is the frontier before which history may have been consolidated.
+
 ## Contract to Callers
 
 Through the persist API, callers write to a shard, read from it, and supply the encoding of data. This section states what persist guarantees for each.
@@ -44,11 +46,11 @@ Through the persist API, callers write to a shard, read from it, and supply the 
 - Holding a handle has cost as it holds back `since`. Holding back `since` stops compaction from consolidating past it, and a `ReadHandle` that is held stops garbage collection from deleting old data, so the shard grows without bound. A `ReadHandle` that misses its heartbeats loses its hold. By contrast, a `SinceHandle` never expires so its owner must keep advancing (known as downgrading) it or `since` never advances.
 </details>
 
-**P5. PubSub.** Persist provides a *PubSub* interface to subscribers of shards to receive changes without needing to poll persist, which is a latency optimization. Critically the PubSub delivery mechanism is **not** assumed to be reliable or ordered and a subscriber can always fetch latest state.
+**P5. Listen.** `listen` is an interface to deliver updates beyond the `as_of` along with progress (`upper` advancing), without the caller needing to further poll persist.
 <details>
 <summary>Implications and Details</summary>
 
-- This is a two-sided mechanism: after every state change (e.g., a `compare_and_append`), persist pushes the change via `PubSubSender`, while readers consume via `PubSubReceiver`. A pushed change that follows directly on the reader's cached copy of the shard's state is applied to it. Otherwise it is dropped, and the reader catches up on its next poll of consensus.
+- Internally, persist uses *PubSub* to reduce `listen` latency. After every state change (e.g., `compare_and_append`), persist pushes the change via `PubSubSender`, while readers consume via `PubSubReceiver`. A pushed change that can be applied directly on the reader's cached copy of the shard's state is applied to it. Otherwise it is dropped, and the reader catches up on its next poll of consensus
 - PubSub does not need ordering or reliable delivery because correctness comes from consensus: a dropped or late change only costs latency.
 - Without PubSub, latency degrades to the polling interval.
 </details>
@@ -78,26 +80,18 @@ Through the persist API, callers write to a shard, read from it, and supply the 
 
 The following are not part of the contract. Callers that need them build them on top of persist or get them elsewhere.
 
-- **Atomic writes across shards.** `compare_and_append` is atomic within one shard. `txn-wal` builds atomic writes across shards on top of persist.
+- **Atomic writes across shards.** Persist currently offers atomicity only within one shard: `compare_and_append` commits through a single-shard compare-and-set in consensus, and persist depends on no cross-shard operation from consensus (see C2). `txn-wal` builds atomic writes across shards on top of persist.
 - **Point lookups.** Reads are a `snapshot` and `listen` over a whole shard; there is no "get the value for key k"[^pruning].
 - **Changing history.** Every write lands at or beyond `upper`. A caller can retract an earlier update by writing its negation at a new time, but cannot insert at an old time.
 - **Backup and disaster recovery.** Durability comes from blob and consensus; persist has no backup or restore primitive of its own. `persistcli admin restore-blob` is a repair tool that can undelete blobs that consensus still references, using the blob store's versioning.
 
-[^frontiers]: `upper` is the frontier before which all writes are complete; `since` is the frontier before which history may have been consolidated.
+[^snapshot-and-fetch]: `snapshot_and_fetch` is the exception: it returns a consolidated snapshot.
 
 [^gc]: *Compaction* merges batches into fewer, consolidated ones; *garbage collection* deletes data that no state references any more.
 
-[^snapshot-and-fetch]: `snapshot_and_fetch` is the exception: it returns a consolidated snapshot.
-
-[^pruning]: A reader can skip parts using their stats. This is *pruning* not a lookup.
-
 [^layout]: Compaction can write the data in a new, consolidated layout, but the old version stays in blob storage until no `ReadHandle` lease references it.
 
-[^multipart]: Blobs over 8 MB are uploaded in 8 MB parts (`DEFAULT_MULTIPART_THRESHOLD`, `DEFAULT_MULTIPART_CHUNK_SIZE`).
-
-[^retry-set]: A retried `set` may write the same bytes to the same key again, so the store must accept an identical overwrite.
-
-[^linearizable]: It is interesting to ponder whether we could tolerate a non linearizable blob storage layer since blobs once written are immutable and only visible after they are referenced in consensus.
+[^pruning]: A reader can skip parts using their stats. This is *pruning* not a lookup.
 
 ## Contract of Dependencies
 
@@ -114,13 +108,14 @@ Blob storage is an object store where the actual shard data is stored and manage
 - Persist keeps no second copy and does no repair, so durability is on the blob store (e.g., S3's replication).
 </details>
 
-**B2. Atomic writes.** Writes must be *atomic whole-blob writes*. Specifically persist `set`s each blob once using a writer-unique key and never updates it in place[^retry-set], and a `get` must see either the complete value or nothing.
+**B2. Complete writes.** Once a `set` returns, every `get` of that key must return the complete value. Persist `set`s each blob once using a writer-unique key and never updates it in place[^retry-set], and only reads a blob after its `set` returns and consensus references it, so what a `get` sees while a `set` is in flight does not matter.
 
 <details>
 <summary>Implications and Details</summary>
 
 - Note: because of the order of operations of a write in persist (first to blob and then to consensus) consumers will not read writes to blob storage that error, as they are not made visible through the ordered log (consensus).
-- If the blob storage exposes a partially-written blob or a truncated or mixed blob, subsequent reads would be corrupted.
+- A failed `set` must not leave a partial value at its key. Persist retries a failed `set` to the same key, so a failed attempt that lands later could replace the complete value with a truncated one.
+- If a `get` after a successful `set` returns a partial, truncated or mixed blob, subsequent reads would be corrupted.
 </details>
 
 **B3. Linearizable reads.** Reads must be *linearizable*[^linearizable], that is a `get` issued after a `set` of the same key completes must see that write and not report the key as missing.
@@ -143,16 +138,17 @@ Blob storage is an object store where the actual shard data is stored and manage
 </details>
 
 
-**B5. Delete.** Persist deletes a blob via `delete` once no state references it (garbage collection). A `delete` must be idempotent, that is deleting a key that does not exist succeeds (and reports that nothing was deleted) instead of erroring.
+**B5. Delete.** Persist deletes a blob via `delete` once no state references it (garbage collection). Deletion is a cost optimization (not a correctness requirement): a blob that no state references is never read, so leaving it in place only costs storage. A `delete` must be idempotent, that is deleting a key that does not exist succeeds (and reports that nothing was deleted) instead of erroring.
 
 <details>
 <summary>Implications and Details</summary>
 
 - More than one process may garbage collect the same blob, so a second `delete` of a key is expected.
-- If `delete` errors on a missing key then garbage collection errors out and stalls, and the bucket grows without bound.
+- Persist retries a failed `delete` indefinitely.
+- If `delete` errors on a missing key then garbage collection of that shard stalls, and since consensus is truncated only after its blobs are deleted, both the bucket and consensus grow without bound.
 </details>
 
-**B6. Listing.** The blob storage system must support a `list_keys` API that returns every key under a key prefix along with its size. Persist does not use this to decide what to delete, but it is needed for storage usage accounting and for admin tools (e.g., `persistcli inspect`).
+**B6. Listing.** The blob storage system must support a `list_keys` API[^listing] that returns every key under a key prefix along with its size. Persist does not use this to decide what to delete, but it is needed for storage usage accounting and for admin tools (e.g., `persistcli inspect`).
 
 <details>
 <summary>Implications and Details</summary>
@@ -171,7 +167,7 @@ Blob storage is an object store where the actual shard data is stored and manage
 
 </details>
 
-**B8. S3 compatibility.** Persist connects to blob storage through the AWS S3 client (`aws-sdk-s3`), so the store must be *S3 compatible*. When it opens the blob store it checks the connection by issuing a `get` of a `HEALTH_CHECK` key. Hence a misconfigured endpoint, credentials or TLS setup fails when persist starts.
+**B8. S3 compatibility.** Persist connects to blob storage through the AWS S3 client (`aws-sdk-s3`), so the store must be *S3 compatible*[^s3]. When it opens the blob store it checks the connection by issuing a `get` of a `HEALTH_CHECK` key. Hence a misconfigured endpoint, credentials or TLS setup fails when persist starts.
 
 <details>
 <summary>Implications and Details</summary>
@@ -187,13 +183,23 @@ Blob storage is an object store where the actual shard data is stored and manage
 
 #### Performance Expectations
 
-Rough latency targets for `get` and `set`, based on production today: p50 = 40 ms, p99 = 200 ms.
+Rough latency targets for `get` and `set`, based on production today: p50 = 40 ms, p99 = 200 ms. The p50 blob size is 50 KB and the p99 is 4 MB.
 
 Load is bursty as hydration can push read throughput to 10x their average or more.
 
 #### Non-goals
 - As blobs are never modified there is no need to support a read-modify-write, conditional-put or append operation; it is asked never to expose a partial blob.
 - Keys are chosen when a blob is written and never change, so there is no need to support rename, copy or move.
+
+[^retry-set]: A retried `set` may write the same bytes to the same key again, so the store must accept an identical overwrite.
+
+[^linearizable]: It is interesting to ponder whether we could tolerate a non linearizable blob storage layer since blobs once written are immutable and only visible after they are referenced in consensus.
+
+[^multipart]: Blobs over 8 MB are uploaded in 8 MB parts (`DEFAULT_MULTIPART_THRESHOLD`, `DEFAULT_MULTIPART_CHUNK_SIZE`).
+
+[^listing]: Persist could instead maintain the set of blob keys and their sizes itself, e.g., by recording keys in consensus as they are written, including blobs written but never referenced by state. Persist uses listing for this purpose today.
+
+[^s3]: Nothing in B1–B7 requires S3, e.g., we have a local file system (not durable, for development and testing) implementation, but this is the requirement for blob storage that uses the `aws-sdk-s3` client.
 
 ### Consensus
 Consensus is a single table in a SQL database where each shard's state is stored as an ordered log, and managed with a `head` (read the latest version), `compare_and_set`, `scan` and `truncate` API. Persist requires the following of the consensus layer.
