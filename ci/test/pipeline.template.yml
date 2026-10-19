@@ -304,6 +304,7 @@ steps:
       queue: hetzner-aarch64-8cpu-16gb
 
   - id: catalog-command-transactions
+    topics: [cockroach, iceberg, kafka, mysql, postgres, sql-server]
     label: Catalog command transactions
     depends_on: build-aarch64
     timeout_in_minutes: 30
