@@ -7,6 +7,7 @@ design is in `doc/developer/design/20260706_materialize_sdk.md`.
   package wraps.
 - `conformance/`: language-neutral test vectors that every package runs.
 - `rust/`: the Rust package, over `tokio-postgres`.
+- `python/`: the Python package, the core built with PyO3 under psycopg.
 
 This directory is its own Cargo workspace, outside the Materialize workspace.
 
@@ -43,6 +44,20 @@ cargo test --tests -- --ignored --skip before_a_restart --skip after_a_restart
 ```
 
 `bin/fmt` formats it with the rest of the repository.
+
+The Python package builds with maturin, in a virtual environment with
+Python 3.10 or later:
+
+```
+cd misc/materialize-sdk/python
+pip install "maturin>=1.9,<2"
+maturin develop --extras test
+python -m mypy.stubtest materialize_sdk._core
+python -m pytest tests
+```
+
+`_core.pyi` describes the compiled module by hand. stubtest fails when it no
+longer matches. The live tests run when `MATERIALIZE_URL` is set.
 
 ## Try it
 

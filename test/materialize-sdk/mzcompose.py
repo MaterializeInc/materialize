@@ -13,7 +13,9 @@ tests of each SDK package that need a running server.
 """
 
 import os
+import sys
 import tempfile
+from pathlib import Path
 
 from materialize import MZ_ROOT, spawn
 from materialize.mzcompose.composition import Composition
@@ -31,6 +33,7 @@ def workflow_default(c: Composition) -> None:
     with tempfile.TemporaryDirectory() as state:
         state_file = os.path.join(state, "restart.json")
         cargo_test(c, {}, "--skip", "before_a_restart", "--skip", "after_a_restart")
+        python_test(c)
         phase = {"MATERIALIZE_SDK_RESTART_STATE": state_file}
         cargo_test(
             c,
@@ -81,3 +84,27 @@ def cargo_test(c: Composition, env: dict[str, str], *filters: str) -> None:
             **env,
         },
     )
+
+
+def python_test(c: Composition) -> None:
+    """Builds the Python package into a fresh virtual environment and runs its
+    tests, the live ones included."""
+    package = MZ_ROOT / "misc" / "materialize-sdk" / "python"
+    with tempfile.TemporaryDirectory() as venv:
+        bin = Path(venv) / "bin"
+        env = {
+            **os.environ,
+            "VIRTUAL_ENV": venv,
+            "PATH": f"{bin}:{os.environ['PATH']}",
+            "MATERIALIZE_URL": "postgres://materialize@localhost:{}/materialize".format(
+                c.default_port("materialized")
+            ),
+        }
+        spawn.runv([sys.executable, "-m", "venv", venv])
+        spawn.runv([str(bin / "pip"), "install", "--quiet", "maturin>=1.9,<2"])
+        spawn.runv(
+            ["maturin", "develop", "--locked", "--quiet", "--extras", "test"],
+            cwd=package,
+            env=env,
+        )
+        spawn.runv(["python", "-m", "pytest", "--quiet", "tests"], cwd=package, env=env)

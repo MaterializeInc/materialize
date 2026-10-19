@@ -35,9 +35,12 @@
 )]
 
 pub mod batch;
+pub mod binding;
 pub mod catalog;
 pub mod checkpoint;
 pub mod classify;
+#[cfg(feature = "conformance")]
+pub mod conformance;
 pub mod decode;
 pub mod error;
 pub mod frontier;
