@@ -183,8 +183,13 @@ current-view fence lookups through the existing shared catalog index. Sharing
 does not establish a memory or SQL-latency improvement. Keep this candidate
 provisional rather than treating fewer raw readers as the contention repair.
 Original-budget stalls include repeated stale candidates and long catalog
-certification while holding admission. Separate oracle-handle acquisition,
-oracle reads, snapshot round trips and task scheduling before choosing a repair.
+certification while holding admission. The capture separates slow oracle-handle
+and snapshot round trips from short backing-oracle reads. Background clients now
+reuse the coordinator's live epoch handle without caching timestamps. Compilation
+and independent review pass. Verify the removed round trip and SQL completion
+in the existing workload before claiming a contention improvement. Snapshot waits,
+append conflicts and actual bound advancement remain open. The captured clusterd
+OOM kill occurs after job cancellation, not as its initiating cause.
 The requested CI queue also accepts larger hosts. Keep exact-instance diagnostic
 placement separate from production changes and out of the landing history.
 Keep the Python driver's file-descriptor issue parked.

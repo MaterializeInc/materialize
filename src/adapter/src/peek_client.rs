@@ -78,7 +78,7 @@ pub struct PeekClient {
     /// A generator for transient `GlobalId`s, shared with Coordinator.
     pub transient_id_gen: Arc<TransientIdGen>,
     pub optimizer_metrics: OptimizerMetrics,
-    /// Per-timeline oracles from the coordinator. Lazily populated.
+    /// Per-timeline oracle handles from the coordinator, fetched when absent.
     oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
     persist_client: PersistClient,
     /// Statement logging state for frontend peek sequencing.
@@ -152,6 +152,7 @@ impl PeekClient {
     pub(crate) fn new(
         coordinator_client: CoordinatorClient,
         catalog: &Arc<Catalog>,
+        oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
         storage_collections: Option<StorageCollectionsHandle>,
         query_client: Option<Arc<crate::query_client::QueryClient>>,
         transient_id_gen: Arc<TransientIdGen>,
@@ -172,7 +173,7 @@ impl PeekClient {
             transient_id_gen,
             optimizer_metrics,
             statement_logging_frontend,
-            oracles: Default::default(), // lazily populated
+            oracles,
             persist_client,
             occ_write_semaphore,
             group_commit_notifier,

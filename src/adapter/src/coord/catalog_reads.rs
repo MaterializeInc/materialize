@@ -127,12 +127,22 @@ impl Coordinator {
     /// loop. Requests return through the normal internal command channel.
     pub(crate) fn background_peek_client(&self, catalog: &Arc<Catalog>) -> PeekClient {
         let build_version = catalog.state().config().build_info.human_version(None);
+        // Certification can hold DDL admission. Reuse the live epoch oracle handle
+        // rather than queueing a request back to its owner just to clone it.
+        // This caches no timestamps: freshness reads still consult the oracle.
+        let oracles = self
+            .global_timelines
+            .get(&Timeline::EpochMilliseconds)
+            .map(|state| (Timeline::EpochMilliseconds, Arc::clone(&state.oracle)))
+            .into_iter()
+            .collect();
         PeekClient::new(
             CoordinatorClient::Background {
                 tx: self.internal_cmd_tx.clone(),
                 metrics: self.metrics.clone(),
             },
             catalog,
+            oracles,
             self.query_client
                 .is_none()
                 .then(|| Arc::clone(&self.controller.storage_collections)),

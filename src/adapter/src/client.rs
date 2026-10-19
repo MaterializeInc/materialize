@@ -315,6 +315,7 @@ impl Client {
         let peek_client = PeekClient::new(
             CoordinatorClient::Session(self.clone()),
             &catalog,
+            Default::default(),
             storage_collections,
             query_client,
             transient_id_gen,
