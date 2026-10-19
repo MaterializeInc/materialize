@@ -789,6 +789,16 @@ impl Catalog {
         })
     }
 
+    /// Captures matching in-memory and durable baselines before DDL preparation yields.
+    pub(crate) async fn ddl_transaction_snapshot(&self) -> (CatalogState, Snapshot) {
+        let mut storage = self.storage().await;
+        let tx = storage
+            .transaction()
+            .await
+            .unwrap_or_terminate("starting DDL snapshot transaction");
+        (self.state.clone(), tx.current_snapshot())
+    }
+
     /// Performs an incremental dry-run catalog transaction: processes only the
     /// NEW ops against an accumulated `CatalogState` from previous dry runs.
     /// This avoids the O(N^2) replay cost of replaying all accumulated ops.
@@ -4092,6 +4102,33 @@ mod tests {
             }],
             privileges.all_values_owned().collect::<Vec<_>>()
         );
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_ddl_snapshot_survives_intervening_commit() {
+        Catalog::with_debug(|mut catalog| async move {
+            let name = "ddl_snapshot_database";
+            let create = || Op::CreateDatabase {
+                name: name.to_string(),
+                owner_id: RoleId::SYSTEM,
+            };
+            let (base, snapshot) = catalog.ddl_transaction_snapshot().await;
+            let ts = catalog.current_upper().await;
+            catalog
+                .transact(None, ts, None, vec![create()])
+                .await
+                .expect("commit concurrent database");
+            let (candidate, _) = catalog
+                .transact_incremental_dry_run(&base, vec![create()], None, Some(snapshot), ts)
+                .await
+                .expect("speculative creation uses the captured durable baseline");
+            assert!(!base.database_by_name.contains_key(name));
+            assert!(candidate.database_by_name.contains_key(name));
+            assert!(catalog.state().database_by_name.contains_key(name));
+            catalog.expire().await;
+        })
+        .await
     }
 
     /// Verifies that `transact_incremental_dry_run` processes only new ops
