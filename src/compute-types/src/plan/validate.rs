@@ -24,7 +24,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mz_expr::{Id, LocalId, RECURSION_LIMIT};
+use mz_expr::{Id, LocalId, OptimizableExpr, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::vec::PartialOrdVecExt;
 use mz_repr::{GlobalId, ReprRelationType, ReprScalarType};
@@ -37,6 +37,7 @@ use crate::plan::{LirId, LirRelationExpr, LirRelationNode};
 pub mod allowlist;
 mod arity;
 mod arrangements;
+mod cost;
 mod monotonic;
 mod operators;
 mod types;
@@ -203,6 +204,24 @@ enum Output {
 }
 
 impl Output {
+    /// The size of what is known about the output: its columns and the expressions of its
+    /// arrangement keys.
+    fn width(&self) -> usize {
+        let available = |available: &Available| {
+            available
+                .keys
+                .iter()
+                .flatten()
+                .map(OptimizableExpr::size)
+                .fold(1, usize::saturating_add)
+        };
+        match self {
+            Output::Failed => 1,
+            Output::Empty(forms) => available(forms),
+            Output::Rows(info) => info.arity.saturating_add(available(&info.available)),
+        }
+    }
+
     /// The arity of the output, `None` for an empty output, or `Err` for a failed one.
     fn arity(&self) -> Result<Option<usize>, ()> {
         match self {
@@ -283,16 +302,18 @@ fn operator_name(node: &LirRelationNode) -> &'static str {
 /// on a cycle of bindings where each reads the next, so the bound scales with the bindings.
 const LET_REC_TYPE_ITERATIONS: usize = 64;
 
-/// The most units of work one validation does. A unit is an operator visit, or a node that
-/// the arity inference of recursive bindings walks.
+/// The most units of work one validation does.
+///
+/// A visit of an operator is charged the size of its own content ([`cost::content`]) and
+/// the width of its output ([`Output::width`]), which bound the work its rules do up to a
+/// constant factor. Each node that the arity inference of recursive bindings walks is charged
+/// one unit, and a join it reads the closures of is charged its content. Restoring the
+/// bookkeeping after a discarded visit is proportional to the visits it discards.
 ///
 /// A plan without `LetRec` visits each operator once. A `LetRec` visits its values until the
 /// types of its bindings reach a fixpoint, and once more, so nested `LetRec`s multiply the
-/// visits of the values inside them. The budget bounds the number of visits and walked
-/// nodes. The work of one visit is proportional to the operator and the widths of its
-/// inputs, and restoring the bookkeeping after a discarded visit is proportional to the
-/// visits it discards. The budget leaves room for plans of 100,000 operators visited ten
-/// times each, and a validation that used it up took 3 s in a debug build.
+/// visits of the values inside them. A validation of nested `LetRec`s that used up the
+/// budget took 0.2 s in a debug build.
 const WORK_BUDGET: usize = 1_000_000;
 
 /// Why validation stopped before visiting every operator.
@@ -852,8 +873,13 @@ impl Validator {
     /// binding-free body, with `Let` values binding-free and `LetRec` values again of that
     /// form, and the controller panics on any other plan.
     fn visit(&mut self, expr: &LirRelationExpr, binding_allowed: bool) -> Result<Output, Abort> {
-        self.charge(1)?;
-        self.checked_recur_mut(|this| this.visit_inner(expr, binding_allowed))
+        self.charge(cost::content(&expr.node))?;
+        let output = self.checked_recur_mut(|this| this.visit_inner(expr, binding_allowed))?;
+        // Producing the output, and the parent's work on it, such as copying it for a `Get`
+        // or unifying it with the other inputs of a `Union` or `Join`, is proportional to
+        // its width.
+        self.charge(output.width())?;
+        Ok(output)
     }
 
     fn visit_inner(
@@ -1618,6 +1644,7 @@ impl Validator {
                     }));
                 }
                 LirRelationNode::Join { inputs, plan } => {
+                    self.charge(cost::content(&expr.node))?;
                     let mut issues = Vec::new();
                     // With unknown input arities, the join rules check nothing and compute
                     // the arity from the closures, if the plan has any.
@@ -1639,7 +1666,12 @@ impl Validator {
                 LirRelationNode::LetRec {
                     ids, values, body, ..
                 } => {
-                    inner.extend(ids.iter().copied().zip(values.iter()));
+                    // A length mismatch has been reported, so ids without a value are skipped.
+                    for (i, id) in ids.iter().enumerate() {
+                        if let Some(value) = values.get(i) {
+                            inner.insert(*id, value);
+                        }
+                    }
                     todo.push(body);
                 }
             }

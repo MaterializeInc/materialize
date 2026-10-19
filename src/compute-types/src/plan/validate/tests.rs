@@ -1673,7 +1673,12 @@ fn rejects_accumulated_any_over_int64() {
 /// arity 1, and the innermost value reads the outermost-but-one binding, so each level needs
 /// two visits of its value to find its binding's types.
 fn nested_let_rec(depth: u64) -> LirRelationExpr {
-    let mut value = union(vec![raw_t1(), get_local(LocalId::new(1))]);
+    nested_let_rec_over(depth, raw_t1())
+}
+
+/// [`nested_let_rec`] with `base` in place of the innermost read of `T1`.
+fn nested_let_rec_over(depth: u64, base: LirRelationExpr) -> LirRelationExpr {
+    let mut value = union(vec![base, get_local(LocalId::new(1))]);
     for level in 1..=depth {
         let id = LocalId::new(level);
         value = plan(LirRelationNode::LetRec {
@@ -1708,6 +1713,28 @@ fn bounds_work_on_nested_let_rec_after_large_object() {
     // the nested `LetRec` take on the order of 1e10 steps within the budget.
     let large = union((0..200_000).map(|_| raw_t1()).collect());
     let df = dataflow(&[(T1, 1)], vec![(T2, large), (OUT, nested_let_rec(40))]);
+    let errs = errors(&df);
+    assert_error(&errs, Rule::Shape, "units of work");
+}
+
+#[mz_ore::test]
+fn bounds_work_on_large_constant_in_nested_let_rec() {
+    // Each visit of the constant decodes its 200,000 datums, and the nesting visits it
+    // about 2^20 times.
+    let rows = (0..200_000).map(|i| vec![Datum::Int64(i)]).collect();
+    let df = dataflow(
+        &[(T1, 1)],
+        vec![(OUT, nested_let_rec_over(20, constant(rows)))],
+    );
+    let errs = errors(&df);
+    assert_error(&errs, Rule::Shape, "units of work");
+}
+
+#[mz_ore::test]
+fn bounds_work_on_wide_union() {
+    // Each of the 200,000 reads copies and unifies 10,000 column types.
+    let large = union((0..200_000).map(|_| raw_t1()).collect());
+    let df = dataflow(&[(T1, 10_000)], vec![(OUT, large)]);
     let errs = errors(&df);
     assert_error(&errs, Rule::Shape, "units of work");
 }
