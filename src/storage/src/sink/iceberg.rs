@@ -2496,8 +2496,13 @@ mod tests {
             )
             .with_column("w", SqlScalarType::Int64.nullable(true))
             .finish();
-        let (_, expected) =
-            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+        let arrow_schema =
+            mz_arrow_util::builder::desc_to_schema_with_overrides(&desc, iceberg_type_overrides)
+                .expect("schema conversion should succeed");
+
+        let arrow_schema_with_ids = add_field_ids_to_arrow_schema(arrow_schema);
+        let expected = arrow_schema_to_schema(&arrow_schema_with_ids)
+            .expect("schema conversion should succeed");
         let catalog = with_catalog_field_ids(&expected);
 
         // The fixture really is what a catalog hands back: same shape, ids moved.
@@ -2508,8 +2513,8 @@ mod tests {
                 .id
         };
         assert_eq!(id_of(&catalog, "id"), id_of(&expected, "id"));
-        assert_eq!(id_of(&catalog, "a.items"), id_of(&expected, "a.items"));
-        assert_eq!(id_of(&catalog, "w"), id_of(&expected, "w"));
+        assert_ne!(id_of(&catalog, "a.items"), id_of(&expected, "a.items"));
+        assert_ne!(id_of(&catalog, "w"), id_of(&expected, "w"));
 
         // Renumbering must not hide a real difference: a top-level type ...
         let wrong_type = with_field_type(&catalog, "w", Type::Primitive(PrimitiveType::String));
