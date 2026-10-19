@@ -44,7 +44,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::logging::{Logger, TraceShare};
 use differential_dataflow::operators::arrange::{
-    Agent, ArrangeContext, Arranged, ShutdownButton, TraceReplayInstruction, Writer,
+    Agent, ArrangeContext, Arranged, Listen, Listener, TraceReplayInstruction, Writer,
 };
 use differential_dataflow::trace::cursor::Navigable;
 use differential_dataflow::trace::wrappers::frontier::{BatchFrontier, TraceFrontier};
@@ -702,7 +702,6 @@ fn chain_upper<B: BatchReader>(chain: &[B]) -> Antichain<B::Time> {
 }
 
 type LocalQueue<Tr> = VecDeque<TraceReplayInstruction<Tr>>;
-type LocalQueueReader<Tr> = Rc<(Activator, RefCell<LocalQueue<Tr>>)>;
 type LocalQueueWriter<Tr> = RcWeak<(Activator, RefCell<LocalQueue<Tr>>)>;
 
 /// A same-thread handle to a trace that can be published to other threads.
@@ -782,111 +781,6 @@ impl<Tr: Trace> SharedAgent<Tr> {
         on_seal: impl Fn() + 'static,
     ) {
         self.trace.borrow_mut().attach(shared, activator, on_seal);
-    }
-
-    /// Attaches a queue that replays the trace's batches and then follows its writer.
-    fn new_listener(&mut self, activator: Activator) -> LocalQueueReader<Tr> {
-        let mut new_queue = VecDeque::new();
-        let mut upper = None;
-        self.trace.borrow().trace.map_batches(|batch| {
-            new_queue.push_back(TraceReplayInstruction::Batch(
-                batch.clone(),
-                Some(Tr::Time::minimum()),
-            ));
-            upper = Some(batch.upper().clone());
-        });
-        if let Some(upper) = upper {
-            new_queue.push_back(TraceReplayInstruction::Frontier(upper));
-        }
-        let reference = Rc::new((activator, RefCell::new(new_queue)));
-        if let Some(queue) = self.queues.upgrade() {
-            queue.borrow_mut().push(Rc::downgrade(&reference));
-        }
-        reference.0.activate();
-        reference
-    }
-
-    /// Imports the trace into `scope`, restricted to `[since, until)`.
-    ///
-    /// The port of `TraceAgent::import_frontier_core`: updates are advanced to `since`, those at or
-    /// beyond `until` are suppressed, and the capability drops once the trace passes `until`.
-    pub fn import_frontier_core<'scope>(
-        &mut self,
-        scope: Scope<'scope, Tr::Time>,
-        name: &str,
-        since: Antichain<Tr::Time>,
-        until: Antichain<Tr::Time>,
-    ) -> (
-        Arranged<'scope, TraceFrontier<SharedAgent<Tr>>>,
-        ShutdownButton<CapabilitySet<Tr::Time>>,
-    )
-    where
-        Tr: 'static,
-    {
-        let trace = self.clone();
-        let trace = TraceFrontier::make_from(trace, since.borrow(), until.borrow());
-
-        let mut shutdown_button = None;
-
-        let stream = {
-            let shutdown_button_ref = &mut shutdown_button;
-            source(scope, name, move |capability, info| {
-                let capabilities = Rc::new(RefCell::new(Some(CapabilitySet::new())));
-
-                let activator = scope.activator_for(Rc::clone(&info.address));
-                let queue = self.new_listener(activator);
-
-                let activator = scope.activator_for(info.address);
-                *shutdown_button_ref =
-                    Some(ShutdownButton::new(Rc::clone(&capabilities), activator));
-
-                capabilities
-                    .borrow_mut()
-                    .as_mut()
-                    .expect("just created")
-                    .insert(capability);
-
-                move |output| {
-                    let mut capabilities = capabilities.borrow_mut();
-                    if let Some(ref mut capabilities) = *capabilities {
-                        let mut borrow = queue.1.borrow_mut();
-                        for instruction in borrow.drain(..) {
-                            // Without capabilities, `until` was reached and this import is done.
-                            if !capabilities.is_empty() {
-                                match instruction {
-                                    TraceReplayInstruction::Frontier(frontier) => {
-                                        if PartialOrder::less_equal(&until, &frontier) {
-                                            capabilities.downgrade(&[]);
-                                        } else {
-                                            capabilities.downgrade(&frontier.borrow()[..]);
-                                        }
-                                    }
-                                    TraceReplayInstruction::Batch(batch, hint) => {
-                                        if let Some(time) = hint {
-                                            if !batch.is_empty() {
-                                                let delayed = capabilities.delayed(&time);
-                                                output.session(&delayed).give(
-                                                    BatchFrontier::make_from(
-                                                        batch,
-                                                        since.borrow(),
-                                                        until.borrow(),
-                                                    ),
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            })
-        };
-
-        (
-            Arranged { stream, trace },
-            shutdown_button.expect("source constructor ran"),
-        )
     }
 }
 
@@ -1004,6 +898,31 @@ impl<Tr: Trace + 'static> SharedAgent<Tr> {
             }
             SharedAgent::new(trace, info, logger)
         }
+    }
+}
+
+impl<Tr: Trace + 'static> Listen for SharedAgent<Tr> {
+    type Instructions = Tr;
+
+    fn new_listener(&mut self, activator: Activator) -> Listener<Tr> {
+        let mut new_queue = VecDeque::new();
+        let mut upper = None;
+        self.trace.borrow().trace.map_batches(|batch| {
+            new_queue.push_back(TraceReplayInstruction::Batch(
+                batch.clone(),
+                Some(Tr::Time::minimum()),
+            ));
+            upper = Some(batch.upper().clone());
+        });
+        if let Some(upper) = upper {
+            new_queue.push_back(TraceReplayInstruction::Frontier(upper));
+        }
+        let reference = Rc::new((activator, RefCell::new(new_queue)));
+        if let Some(queue) = self.queues.upgrade() {
+            queue.borrow_mut().push(Rc::downgrade(&reference));
+        }
+        reference.0.activate();
+        reference
     }
 }
 

@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use differential_dataflow::lattice::antichain_join;
-use differential_dataflow::operators::arrange::{Arranged, ShutdownButton};
+use differential_dataflow::operators::arrange::{Arranged, Listen, ShutdownButton};
 use differential_dataflow::trace::cursor::Navigable;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use differential_dataflow::trace::{Batch, Trace, TraceReader};
