@@ -310,12 +310,19 @@ mcp-developer
 {"jsonrpc":"2.0","id":61,"error":{"code":-32602,"message":"Query validation failed: Query references non-system tables: mz_unsafe.mz_sleep_forever. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.","data":{"error_type":"ValidationError"}}}
 
 # =============================================================================
-# Null id notification
+# Invalid ids
 # =============================================================================
 
-# Null id deserializes to None, so it is treated as a notification too.
-# NOTE: JSON-RPC 2.0 calls an explicit null id a request, so this is a deviation.
+# An explicit null id makes a request, not a notification. MCP ids are strings
+# or numbers, so it and any other id type get -32600 with no id in the reply.
 mcp-developer
 {"jsonrpc":"2.0","id":null,"method":"tools/list"}
 ----
-202 Accepted
+200 OK
+{"jsonrpc":"2.0","error":{"code":-32600,"message":"Invalid request: id must be a string or a number","data":{"error_type":"InvalidRequest"}}}
+
+mcp-developer
+{"jsonrpc":"2.0","id":{"a":1},"method":"tools/list"}
+----
+200 OK
+{"jsonrpc":"2.0","error":{"code":-32600,"message":"Invalid request: id must be a string or a number","data":{"error_type":"InvalidRequest"}}}
