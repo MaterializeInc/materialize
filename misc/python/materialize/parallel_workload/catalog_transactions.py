@@ -362,6 +362,85 @@ def source_ddl(c: Composition) -> None:
         assert execute(other, f"SELECT * FROM {schema}.unrelated").fetchall() == [(7,)]
 
 
+def source_late_binding(c: Composition, interference: str, before_commit: bool) -> None:
+    results = []
+    for concurrent in (False, True):
+        schema = (
+            f"ddl_source_binding_{interference}_{int(before_commit)}_{int(concurrent)}"
+        )
+        with c.sql_connection() as txn, c.sql_connection() as other:
+            execute(other, f"CREATE SCHEMA {schema}")
+            execute(other, f"CREATE VIEW {schema}.sentinel AS SELECT 7")
+            execute(
+                other,
+                f"CREATE SOURCE {schema}.source FROM LOAD GENERATOR COUNTER "
+                "(AS OF 0, UP TO 1)",
+            )
+            batch = [
+                f"ALTER VIEW {schema}.sentinel RENAME TO pending",
+                f"CREATE TABLE {schema}.export FROM SOURCE {schema}.source",
+                f"ALTER TABLE {schema}.export RENAME TO final",
+            ]
+            split = len(batch) if before_commit else 2
+            if concurrent:
+                execute(txn, "BEGIN")
+                for statement in batch[:split]:
+                    execute(txn, statement)
+            if interference == "replacement":
+                execute(other, f"DROP SOURCE {schema}.source")
+                execute(
+                    other,
+                    f"CREATE SOURCE {schema}.source FROM LOAD GENERATOR COUNTER "
+                    "(AS OF 0, UP TO 3)",
+                )
+            elif interference == "rename_away":
+                execute(other, f"ALTER SOURCE {schema}.source RENAME TO away")
+            else:
+                raise AssertionError(interference)
+            objects = (
+                "SELECT id, name FROM mz_objects WHERE schema_id = "
+                f"(SELECT id FROM mz_schemas WHERE name = '{schema}')"
+            )
+            before = set(execute(other, objects).fetchall())
+            statements = (
+                [*batch[split:], "COMMIT"]
+                if concurrent
+                else ["BEGIN", *batch, "COMMIT"]
+            )
+            state = outcome(txn, statements)
+            after = set(execute(other, objects).fetchall())
+            print(
+                f"schedule={schema} outcome={state} before={before} after={after}",
+                flush=True,
+            )
+            if interference == "replacement":
+                assert state is None, (schema, state)
+                expected = {
+                    (id, "pending" if name == "sentinel" else name)
+                    for id, name in before
+                }
+                assert {(id, name) for id, name in after if name != "final"} == expected
+                assert len(after) == len(before) + 1, (schema, before, after)
+                assert execute(other, f"SELECT * FROM {schema}.pending").fetchall() == [
+                    (7,)
+                ]
+                assert execute(
+                    other, f"SELECT count(*) FROM {schema}.final"
+                ).fetchall() == [(3,)]
+            else:
+                assert state is not None, f"{schema}: unexpectedly committed"
+                assert after == before, (schema, before, after)
+                assert execute(
+                    other, f"SELECT * FROM {schema}.sentinel"
+                ).fetchall() == [(7,)]
+            results.append(
+                (state[0], state[1].replace(schema, "<schema>"))
+                if state is not None
+                else None
+            )
+    assert results[0] == results[1], (interference, before_commit, results)
+
+
 def source_noop_conflict(c: Composition) -> None:
     with c.sql_connection() as txn, c.sql_connection() as other:
         execute(other, "CREATE SOURCE ddl_existing FROM LOAD GENERATOR COUNTER")
