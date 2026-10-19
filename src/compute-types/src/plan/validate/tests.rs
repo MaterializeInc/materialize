@@ -14,7 +14,8 @@ use mz_expr::{
     LetRecLimit, MapFilterProject, MfpPlan, MirScalarExpr, SafeMfpPlan, permutation_for_arrangement,
 };
 use mz_repr::{
-    Datum, Diff, RelationDesc, Row, SqlRelationType, SqlScalarType, StableRow, Timestamp,
+    Datum, Diff, RelationDesc, ReprScalarType, Row, SqlRelationType, SqlScalarType, StableRow,
+    Timestamp,
 };
 use timely::progress::Antichain;
 
@@ -23,6 +24,7 @@ use crate::dataflows::{BuildDesc, IndexDesc, IndexImport, SourceImport};
 use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
 use crate::plan::join::linear_join::LinearStagePlan;
 use crate::plan::join::{DeltaJoinPlan, JoinClosure, JoinPlan, LinearJoinPlan};
+use crate::plan::reduce::{AccumulablePlan, KeyValPlan, LirAggregateExpr, ReducePlan};
 use crate::plan::scalar::LirScalarExpr;
 use crate::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use crate::plan::top_k::{BasicTopKPlan, TopKPlan};
@@ -194,7 +196,7 @@ fn accepts_minimal_valid_plan() {
         get_global(T1, AvailableCollections::new_raw()),
         2,
         vec![col(1)],
-        vec![(2, col(0))],
+        vec![(2, col(0).call_unary(mz_expr::func::IsNull))],
         vec![2, 0],
     );
     let df = dataflow(&[(T1, 2)], vec![(OUT, plan)]);
@@ -1176,4 +1178,409 @@ fn rejects_get_keys_of_wrong_length() {
     });
     let errs = errors(&df);
     assert_error(&errs, Rule::Arrangement, "a thinning of 1 entries");
+}
+
+fn enforced() -> ValidateConfig {
+    ValidateConfig {
+        enforce_function_allowlist: true,
+    }
+}
+
+/// Validates `df` with `config` and returns its errors, which must exist.
+fn errors_with(df: &LirDataflowDescription, config: &ValidateConfig) -> Vec<ValidationError> {
+    match validate_dataflow(df, config) {
+        Ok(_) => panic!("expected the dataflow to be rejected"),
+        Err(errs) => errs,
+    }
+}
+
+fn lit(datum: Datum, typ: ReprScalarType) -> LirScalarExpr {
+    LirScalarExpr::literal_ok(datum, typ)
+}
+
+fn raw_t1() -> LirRelationExpr {
+    get_global(T1, AvailableCollections::new_raw())
+}
+
+/// An `Mfp` with temporal bounds.
+fn temporal_mfp(
+    input: LirRelationExpr,
+    input_arity: usize,
+    lower: Vec<LirScalarExpr>,
+    upper: Vec<LirScalarExpr>,
+) -> LirRelationExpr {
+    let proj = (0..input_arity).collect();
+    plan(LirRelationNode::Mfp {
+        input: Box::new(input),
+        mfp: MfpPlan::from_parts(
+            SafeMfpPlan::from_mfp(raw_mfp(input_arity, vec![], vec![], proj)),
+            lower,
+            upper,
+        ),
+        input_key_val: None,
+    })
+}
+
+fn top_k_with_limit(input: LirRelationExpr, arity: usize, limit: LirScalarExpr) -> LirRelationExpr {
+    plan(LirRelationNode::TopK {
+        input: Box::new(input),
+        top_k_plan: TopKPlan::Basic(BasicTopKPlan {
+            group_key: vec![],
+            order_key: vec![],
+            offset: 0,
+            limit: Some(limit),
+            arity,
+            buckets: vec![],
+        }),
+        temporal_bucketing_strategy: ArrangementStrategy::Direct,
+    })
+}
+
+fn flat_map(
+    input: LirRelationExpr,
+    input_arity: usize,
+    exprs: Vec<LirScalarExpr>,
+    func: mz_expr::TableFunc,
+    func_arity: usize,
+) -> LirRelationExpr {
+    let width = input_arity + func_arity;
+    plan(LirRelationNode::FlatMap {
+        input_key: None,
+        input: Box::new(input),
+        exprs,
+        func,
+        mfp_after: identity_mfp_plan(width),
+    })
+}
+
+/// A `Reduce` that groups a raw input of arity 2 by column 0 and aggregates column 1.
+fn aggregate_by_first(input: LirRelationExpr, func: mz_expr::AggregateFunc) -> LirRelationExpr {
+    let aggregate = LirAggregateExpr {
+        func,
+        expr: col(1),
+        distinct: false,
+    };
+    plan(LirRelationNode::Reduce {
+        input_key: None,
+        input: Box::new(input),
+        key_val_plan: KeyValPlan {
+            key_plan: SafeMfpPlan::from_mfp(raw_mfp(2, vec![], vec![], vec![0])),
+            val_plan: SafeMfpPlan::from_mfp(raw_mfp(2, vec![], vec![], vec![1])),
+        },
+        plan: ReducePlan::Accumulable(AccumulablePlan {
+            full_aggrs: vec![aggregate.clone()],
+            simple_aggrs: vec![(0, aggregate)],
+            distinct_aggrs: vec![],
+        }),
+        mfp_after: SafeMfpPlan::from_mfp(raw_mfp(2, vec![], vec![], vec![0, 1])),
+        temporal_bucketing_strategy: ArrangementStrategy::Direct,
+    })
+}
+
+#[mz_ore::test]
+fn rejects_limit_not_int64() {
+    let plan = top_k_with_limit(raw_t1(), 2, lit(Datum::Int32(5), ReprScalarType::Int32));
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, plan)]));
+    assert_error(&errs, Rule::Type, "TopK limit has type Int32");
+}
+
+#[mz_ore::test]
+fn accepts_int64_limit() {
+    let plan = top_k_with_limit(raw_t1(), 2, lit(Datum::Int64(5), ReprScalarType::Int64));
+    validate_dataflow(&dataflow(&[(T1, 2)], vec![(OUT, plan)]), &enforced()).expect("valid");
+}
+
+#[mz_ore::test]
+fn rejects_non_bool_filter() {
+    let plan = mfp(raw_t1(), 2, vec![], vec![(1, col(0))], vec![0, 1]);
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, plan)]));
+    assert_error(&errs, Rule::Type, "predicate at position 1 has type Int64");
+}
+
+#[mz_ore::test]
+fn rejects_non_bool_if_condition() {
+    let cond = LirScalarExpr::If {
+        cond: Box::new(col(0)),
+        then: Box::new(col(0)),
+        els: Box::new(col(1)),
+    };
+    let plan = mfp(raw_t1(), 2, vec![cond], vec![], vec![2]);
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, plan)]));
+    assert_error(&errs, Rule::Type, "If condition has type Int64");
+}
+
+#[mz_ore::test]
+fn rejects_temporal_bound_not_mz_timestamp() {
+    let plan = temporal_mfp(raw_t1(), 2, vec![col(0)], vec![]);
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, plan)]));
+    assert_error(&errs, Rule::Type, "temporal bound has type Int64");
+}
+
+#[mz_ore::test]
+fn accepts_mz_timestamp_bounds_when_enforced() {
+    let to_ts = col(0).call_unary(mz_expr::func::CastInt64ToMzTimestamp);
+    let step = to_ts.clone().call_unary(mz_expr::func::StepMzTimestamp);
+    let plan = temporal_mfp(raw_t1(), 2, vec![to_ts], vec![step]);
+    validate_dataflow(&dataflow(&[(T1, 2)], vec![(OUT, plan)]), &enforced()).expect("valid");
+}
+
+#[mz_ore::test]
+fn rejects_literal_type_mismatch() {
+    let literal = lit(Datum::Int64(1), ReprScalarType::String);
+    let plan = mfp(raw_t1(), 2, vec![literal], vec![], vec![2]);
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, plan)]));
+    assert_error(
+        &errs,
+        Rule::Type,
+        "literal is not an instance of its declared type String",
+    );
+}
+
+#[mz_ore::test]
+fn rejects_literal_without_datum() {
+    let literal = LirScalarExpr::Literal(
+        Ok(StableRow(Row::default())),
+        ReprScalarType::Int64.nullable(false),
+    );
+    let plan = mfp(raw_t1(), 2, vec![literal], vec![], vec![2]);
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, plan)]));
+    assert_error(&errs, Rule::Shape, "literal holds 0 datums");
+}
+
+#[mz_ore::test]
+fn rejects_all_null_constant_column() {
+    let plan = constant(vec![vec![Datum::Null, Datum::Int64(1)]]);
+    let df = dataflow(&[], vec![(OUT, plan)]);
+    let errs = errors_with(&df, &enforced());
+    assert_error(
+        &errs,
+        Rule::Type,
+        "cannot infer the type of an all-null constant column",
+    );
+    // The optimizer folds `SELECT NULL` and similar queries into such constants.
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid when not enforced");
+}
+
+#[mz_ore::test]
+fn infers_constant_types() {
+    let plan = constant(vec![
+        vec![Datum::Int64(1), Datum::Null],
+        vec![Datum::Int64(2), Datum::String("a")],
+    ]);
+    let types = validate_dataflow(&dataflow(&[], vec![(OUT, plan)]), &enforced()).expect("valid");
+    assert_eq!(
+        types[&OUT].column_types,
+        vec![
+            ReprScalarType::Int64.nullable(false),
+            ReprScalarType::String.nullable(true)
+        ]
+    );
+}
+
+#[mz_ore::test]
+fn rejects_constant_column_of_mixed_types() {
+    let plan = constant(vec![vec![Datum::Int64(1)], vec![Datum::Int32(2)]]);
+    let errs = errors(&dataflow(&[], vec![(OUT, plan)]));
+    assert_error(
+        &errs,
+        Rule::Type,
+        "constant column 0 mixes types Int64 and Int32",
+    );
+}
+
+#[mz_ore::test]
+fn rejects_unlisted_function_when_enforced() {
+    let cast = col(0).call_unary(mz_expr::func::CastInt64ToString);
+    let plan = mfp(raw_t1(), 2, vec![cast], vec![], vec![2]);
+    let errs = errors_with(&dataflow(&[(T1, 2)], vec![(OUT, plan)]), &enforced());
+    assert_error(&errs, Rule::Function, "is not supported in user plans");
+}
+
+#[mz_ore::test]
+fn accepts_unlisted_function_when_not_enforced() {
+    let cast = col(0).call_unary(mz_expr::func::CastInt64ToString);
+    let plan = mfp(raw_t1(), 2, vec![cast], vec![], vec![2]);
+    let types = validate_dataflow(
+        &dataflow(&[(T1, 2)], vec![(OUT, plan)]),
+        &ValidateConfig::default(),
+    )
+    .expect("valid");
+    assert_eq!(
+        types[&OUT].column_types,
+        vec![ReprScalarType::String.nullable(false)]
+    );
+}
+
+#[mz_ore::test]
+fn rejects_eq_on_mismatched_types() {
+    let eq = col(0).call_binary(
+        lit(Datum::String("a"), ReprScalarType::String),
+        mz_expr::func::Eq,
+    );
+    let plan = mfp(raw_t1(), 2, vec![], vec![(1, eq)], vec![0, 1]);
+    let errs = errors_with(&dataflow(&[(T1, 2)], vec![(OUT, plan)]), &enforced());
+    assert_error(&errs, Rule::Type, "arguments of the same type");
+}
+
+#[mz_ore::test]
+fn accepts_allowlisted_functions_when_enforced() {
+    let sum = col(0).call_binary(col(1), mz_expr::func::AddInt64);
+    let eq = col(0).call_binary(
+        lit(Datum::Int64(3), ReprScalarType::Int64),
+        mz_expr::func::Eq,
+    );
+    let lt = col(1).call_binary(col(2), mz_expr::func::Lt);
+    let pred = LirScalarExpr::CallVariadic {
+        func: mz_expr::VariadicFunc::And(mz_expr::func::variadic::And),
+        exprs: vec![eq, lt.call_unary(mz_expr::func::Not)],
+    };
+    let plan = mfp(raw_t1(), 2, vec![sum], vec![(3, pred)], vec![2]);
+    let types =
+        validate_dataflow(&dataflow(&[(T1, 2)], vec![(OUT, plan)]), &enforced()).expect("valid");
+    assert_eq!(
+        types[&OUT].column_types,
+        vec![ReprScalarType::Int64.nullable(false)]
+    );
+}
+
+#[mz_ore::test]
+fn infers_output_types() {
+    let sum = col(0).call_binary(col(1), mz_expr::func::AddInt64);
+    let plan = mfp(raw_t1(), 2, vec![sum], vec![], vec![0, 2]);
+    let types = validate_dataflow(
+        &dataflow(&[(T1, 2)], vec![(OUT, plan)]),
+        &ValidateConfig::default(),
+    )
+    .expect("valid");
+    assert_eq!(
+        types[&OUT].column_types,
+        vec![
+            ReprScalarType::Int64.nullable(false),
+            ReprScalarType::Int64.nullable(false)
+        ]
+    );
+}
+
+#[mz_ore::test]
+fn infers_aggregate_types() {
+    let plan = aggregate_by_first(raw_t1(), mz_expr::AggregateFunc::SumInt64);
+    let types =
+        validate_dataflow(&dataflow(&[(T1, 2)], vec![(OUT, plan)]), &enforced()).expect("valid");
+    assert_eq!(
+        types[&OUT].column_types,
+        vec![
+            ReprScalarType::Int64.nullable(false),
+            ReprScalarType::Numeric.nullable(false)
+        ]
+    );
+}
+
+#[mz_ore::test]
+fn rejects_aggregate_of_wrong_type() {
+    // `any` over an int8 column panics in `datum_to_accumulator`.
+    let plan = aggregate_by_first(raw_t1(), mz_expr::AggregateFunc::Any);
+    let errs = errors_with(&dataflow(&[(T1, 2)], vec![(OUT, plan)]), &enforced());
+    assert_error(&errs, Rule::Type, "function any expects");
+}
+
+#[mz_ore::test]
+fn rejects_unlisted_aggregate_when_enforced() {
+    let plan = aggregate_by_first(raw_t1(), mz_expr::AggregateFunc::SumInt32);
+    let errs = errors_with(&dataflow(&[(T1, 2)], vec![(OUT, plan)]), &enforced());
+    assert_error(&errs, Rule::Function, "is not supported in user plans");
+}
+
+#[mz_ore::test]
+fn rejects_union_type_mismatch() {
+    let plan = union(vec![raw_t1(), constant(vec![vec![Datum::Int32(1)]])]);
+    let errs = errors(&dataflow(&[(T1, 1)], vec![(OUT, plan)]));
+    assert_error(&errs, Rule::Type, "Union input 1 column 0 has type Int32");
+}
+
+#[mz_ore::test]
+fn infers_recursive_binding_types() {
+    // l1 = T1 + (l1 with its first column incremented), read by the body.
+    let l1 = LocalId::new(1);
+    let step = col(0).call_binary(
+        lit(Datum::Int64(1), ReprScalarType::Int64),
+        mz_expr::func::AddInt64,
+    );
+    let value = union(vec![
+        raw_t1(),
+        mfp(get_local(l1), 2, vec![step], vec![], vec![2, 1]),
+    ]);
+    let plan = plan(LirRelationNode::LetRec {
+        ids: vec![l1],
+        values: vec![value],
+        limits: vec![limit()],
+        body: Box::new(get_local(l1)),
+    });
+    let types =
+        validate_dataflow(&dataflow(&[(T1, 2)], vec![(OUT, plan)]), &enforced()).expect("valid");
+    assert_eq!(
+        types[&OUT].column_types,
+        vec![ReprScalarType::Int64.nullable(false); 2]
+    );
+}
+
+#[mz_ore::test]
+fn checks_recursive_reads_against_inferred_types() {
+    // l1 = T1 + (l1 with `NOT` applied to its int8 column).
+    let l1 = LocalId::new(1);
+    let value = union(vec![
+        raw_t1(),
+        mfp(
+            get_local(l1),
+            1,
+            vec![col(0).call_unary(mz_expr::func::Not)],
+            vec![],
+            vec![1],
+        ),
+    ]);
+    let plan = plan(LirRelationNode::LetRec {
+        ids: vec![l1],
+        values: vec![value],
+        limits: vec![limit()],
+        body: Box::new(get_local(l1)),
+    });
+    let errs = errors_with(&dataflow(&[(T1, 1)], vec![(OUT, plan)]), &enforced());
+    assert_error(&errs, Rule::Type, "function NOT expects");
+}
+
+#[mz_ore::test]
+fn rejects_wrap_of_width_zero_when_enforced() {
+    let wrap = mz_expr::TableFunc::Wrap {
+        types: vec![],
+        width: 0,
+    };
+    let plan = flat_map(raw_t1(), 1, vec![col(0)], wrap, 0);
+    let errs = errors_with(&dataflow(&[(T1, 1)], vec![(OUT, plan)]), &enforced());
+    assert_error(&errs, Rule::Function, "is not supported in user plans");
+}
+
+#[mz_ore::test]
+fn rejects_wrap_of_partial_row() {
+    // Three arguments in rows of two leave a short last row.
+    let wrap = mz_expr::TableFunc::Wrap {
+        types: vec![SqlScalarType::Int64.nullable(false); 2],
+        width: 2,
+    };
+    let plan = flat_map(raw_t1(), 1, vec![col(0), col(0), col(0)], wrap, 2);
+    let errs = errors_with(&dataflow(&[(T1, 1)], vec![(OUT, plan)]), &enforced());
+    assert_error(&errs, Rule::Type, "got 3 arguments");
+}
+
+#[mz_ore::test]
+fn accepts_wrap_when_enforced() {
+    let wrap = mz_expr::TableFunc::Wrap {
+        types: vec![SqlScalarType::Int64.nullable(false); 2],
+        width: 2,
+    };
+    let plan = flat_map(raw_t1(), 1, vec![col(0), col(0)], wrap, 2);
+    let types =
+        validate_dataflow(&dataflow(&[(T1, 1)], vec![(OUT, plan)]), &enforced()).expect("valid");
+    assert_eq!(
+        types[&OUT].column_types,
+        vec![ReprScalarType::Int64.nullable(false); 3]
+    );
 }

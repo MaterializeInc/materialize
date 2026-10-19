@@ -16,7 +16,7 @@ fail.workspace = true
 itertools.workspace = true
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
-mz-ore = { path = "../ore", features = ["tracing", "metrics"] }
+mz-ore = { path = "../ore", features = ["metrics", "panic", "tracing"] }
 mz-repr = { path = "../repr", features = ["tracing"] }
 mz-storage-types = { path = "../storage-types" }
 serde.workspace = true

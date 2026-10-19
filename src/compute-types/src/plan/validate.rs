@@ -16,7 +16,8 @@
 //! One walk visits every node of every object once, in post-order, and computes a
 //! [`NodeInfo`] that describes the node's output. Each rule family checks one aspect of a
 //! node against the infos of its inputs. Scoping lives in this module, arity and shape in
-//! [`arity`], arrangement availability in [`arrangements`]. Errors accumulate, so one call
+//! [`arity`], arrangement availability in [`arrangements`], and types in [`types`], with the
+//! functions user plans may apply in [`allowlist`]. Errors accumulate, so one call
 //! reports every problem it can find. A node whose input broke a rule is skipped, so a
 //! problem is reported once, where it occurs.
 
@@ -24,16 +25,19 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_expr::{Id, LocalId, RECURSION_LIMIT};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
-use mz_repr::{GlobalId, ReprColumnType, ReprRelationType};
+use mz_repr::{GlobalId, ReprRelationType};
 
 use crate::dataflows::LirDataflowDescription;
 use crate::plan::scalar::LirScalarExpr;
 use crate::plan::{LirId, LirRelationExpr, LirRelationNode};
 
+pub mod allowlist;
 mod arity;
 mod arrangements;
+mod types;
 
 use arrangements::Available;
+use types::{ColType, Typer};
 
 /// The rule a [`ValidationError`] reports a violation of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -89,25 +93,29 @@ impl std::error::Error for ValidationError {}
 /// Options for [`validate_dataflow`].
 #[derive(Clone, Debug, Default)]
 pub struct ValidateConfig {
-    /// Whether every function application must be admitted for user plans.
+    /// Whether the dataflow is a user plan, whose function applications must be admitted by
+    /// [`allowlist`] and whose every column must have an inferable type. Otherwise functions
+    /// are typed by their output types only, and columns whose type cannot be inferred, such
+    /// as all-null constant columns, are accepted.
     pub enforce_function_allowlist: bool,
 }
 
 /// Validates a dataflow, and returns the output type of every built object.
 ///
-/// An object whose output is empty and that has no export has no type of its own and is
-/// left out of the result.
+/// An object with a column whose type is not inferred, for example because no row reaches
+/// it, takes its type from its export, and is left out of the result if it has none.
 ///
 /// Returns every violation found if the dataflow breaks a rule. Never panics.
 pub fn validate_dataflow(
     df: &LirDataflowDescription,
     config: &ValidateConfig,
 ) -> Result<BTreeMap<GlobalId, ReprRelationType>, Vec<ValidationError>> {
-    // No rule in this module consults the function allowlist.
     let ValidateConfig {
-        enforce_function_allowlist: _,
+        enforce_function_allowlist,
     } = config;
-    let mut validator = Validator::new();
+    let mut validator = Validator::new(Typer {
+        enforce: *enforce_function_allowlist,
+    });
     let types = match validator.dataflow(df) {
         Ok(types) => types,
         Err(RecursionLimitError { .. }) => {
@@ -132,8 +140,8 @@ pub fn validate_dataflow(
 struct NodeInfo {
     /// The number of columns.
     arity: usize,
-    /// The type of each column. Empty until type inference fills it.
-    types: Vec<ReprColumnType>,
+    /// The type of each column, or `None` if no row reaches the output. Has `arity` entries.
+    types: Option<Vec<ColType>>,
     /// The forms in which the output is available.
     available: Available,
     /// Whether the output never retracts a row. `false` until monotonicity analysis fills it.
@@ -142,10 +150,11 @@ struct NodeInfo {
 }
 
 impl NodeInfo {
-    fn new(arity: usize, available: Available) -> Self {
+    fn new(arity: usize, available: Available, types: Option<Vec<ColType>>) -> Self {
         NodeInfo {
             arity,
-            types: Vec::new(),
+            // Types disagree with the arity only where the arity rules reported a problem.
+            types: types.filter(|t| t.len() == arity),
             available,
             monotonic: false,
         }
@@ -185,6 +194,14 @@ impl Output {
         }
     }
 
+    /// The column types of the output, or `None` if no row reaches it or it failed.
+    fn types(&self) -> Option<&[ColType]> {
+        match self {
+            Output::Rows(info) => info.types.as_deref(),
+            Output::Failed | Output::Empty(_) => None,
+        }
+    }
+
     /// Replaces the forms of a non-failed output.
     fn set_available(&mut self, forms: Available) {
         match self {
@@ -214,8 +231,22 @@ fn operator_name(node: &LirRelationNode) -> &'static str {
     }
 }
 
+/// The most times the values of one `LetRec` are visited to find the column types of its
+/// bindings. Each visit that does not reach the fixpoint makes some column of some binding
+/// less precise, and plans observed so far converge within three visits.
+const LET_REC_TYPE_ITERATIONS: usize = 64;
+
+/// The state of [`Validator`] that visits change besides `locals`.
+struct Snapshot {
+    errors: usize,
+    lir_ids: BTreeSet<LirId>,
+    bound_locals: BTreeSet<LocalId>,
+    read_globals: BTreeSet<GlobalId>,
+}
+
 /// The state of one validation.
 struct Validator {
+    typer: Typer,
     errors: Vec<ValidationError>,
     recursion_guard: RecursionGuard,
     /// What `Get`s of global ids resolve to: the imported collections, and the objects built
@@ -242,8 +273,9 @@ impl CheckedRecursion for Validator {
 }
 
 impl Validator {
-    fn new() -> Self {
+    fn new(typer: Typer) -> Self {
         Validator {
+            typer,
             errors: Vec::new(),
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
             globals: BTreeMap::new(),
@@ -296,19 +328,20 @@ impl Validator {
         for object in &df.objects_to_build {
             self.bound_locals.clear();
             let mut output = self.visit(&object.plan, true)?;
+            let declared = Self::declared_type(df, object.id);
             if let Output::Empty(available) = &output {
-                match Self::declared_type(df, object.id) {
+                match &declared {
                     Some(typ) => {
-                        let mut info = NodeInfo::new(typ.arity(), available.clone());
-                        info.types = typ.column_types;
-                        output = Output::Rows(info);
+                        output = Output::Rows(NodeInfo::new(typ.arity(), available.clone(), None))
                     }
                     // Consumers of the object may still fix its arity.
                     None => empty_objects.push(object.id),
                 }
             }
             if let Output::Rows(info) = &output {
-                types.insert(object.id, ReprRelationType::new(info.types.clone()));
+                if let Some(typ) = Self::object_type(info, declared.as_ref()) {
+                    types.insert(object.id, typ);
+                }
             }
             // `DataflowDescription::depends_on`, which rendering calls, asserts that object ids
             // are unique.
@@ -352,22 +385,30 @@ impl Validator {
     fn imports(&mut self, df: &LirDataflowDescription) {
         let mut arities: BTreeMap<GlobalId, usize> = BTreeMap::new();
         let mut available: BTreeMap<GlobalId, Available> = BTreeMap::new();
+        let mut types: BTreeMap<GlobalId, Vec<ColType>> = BTreeMap::new();
         for (id, import) in &df.source_imports {
             let typ_arity = import.desc.typ.arity();
+            let typ: Vec<ColType> = ReprRelationType::from(&import.desc.typ)
+                .column_types
+                .into_iter()
+                .map(ColType::Known)
+                .collect();
             // The source's operators run inside the source, so `Get`s see their output.
-            let arity = match &import.desc.arguments.operators {
-                None => typ_arity,
+            let (arity, typ) = match &import.desc.arguments.operators {
+                None => (typ_arity, typ),
                 Some(mfp) => {
                     let mut issues = Vec::new();
                     arity::check_mfp(&mut issues, "source MFP", mfp, Some(typ_arity));
+                    let typ = self.source_operator_types(&mut issues, mfp, &typ);
                     for (rule, message) in issues {
                         self.dataflow_error(rule, format!("source import {id}: {message}"));
                     }
-                    mfp.projection.len()
+                    (mfp.projection.len(), typ)
                 }
             };
             arities.insert(*id, arity);
             available.insert(*id, Available::raw());
+            types.insert(*id, typ);
         }
         for (id, import) in &df.index_imports {
             let on_id = import.desc.on_id;
@@ -385,6 +426,15 @@ impl Validator {
                     self.snapshotless.entry(on_id).or_default().insert(key);
                 }
             }
+            types.entry(on_id).or_insert_with(|| {
+                import
+                    .typ
+                    .column_types
+                    .iter()
+                    .cloned()
+                    .map(ColType::Known)
+                    .collect()
+            });
             match arities.get(&on_id) {
                 Some(existing) if *existing != arity => self.dataflow_error(
                     Rule::Arity,
@@ -400,9 +450,52 @@ impl Validator {
         }
         for (id, arity) in arities {
             let forms = available.remove(&id).unwrap_or_default();
+            let types = types.remove(&id);
             self.globals
-                .insert(id, Output::Rows(NodeInfo::new(arity, forms)));
+                .insert(id, Output::Rows(NodeInfo::new(arity, forms, types)));
         }
+    }
+
+    /// The output types of a source's operators, given the types of the source.
+    ///
+    /// The operators are MIR expressions, typed through their LIR translation.
+    fn source_operator_types(
+        &self,
+        issues: &mut arity::Issues,
+        mfp: &mz_expr::MapFilterProject,
+        input: &[ColType],
+    ) -> Vec<ColType> {
+        let lir = |exprs: &[mz_expr::MirScalarExpr]| {
+            exprs
+                .iter()
+                .map(|e| LirScalarExpr::try_from(e).ok())
+                .collect::<Option<Vec<_>>>()
+        };
+        let predicates = mfp
+            .predicates
+            .iter()
+            .map(|(position, p)| Some((*position, LirScalarExpr::try_from(p).ok()?)))
+            .collect::<Option<Vec<_>>>();
+        let (Some(expressions), Some(predicates)) = (lir(&mfp.expressions), predicates) else {
+            // Such operators include temporal filters, which `mz_now()` makes inexpressible
+            // in LIR.
+            if self.typer.enforce {
+                issues.push((
+                    Rule::Function,
+                    "operators use a function that LIR cannot express".to_string(),
+                ));
+            }
+            return mfp.projection.iter().map(|_| ColType::Unknown).collect();
+        };
+        let lir_mfp = mz_expr::MapFilterProject {
+            expressions,
+            predicates,
+            projection: mfp.projection.clone(),
+            input_arity: mfp.input_arity,
+        };
+        self.typer.mfp(issues, "source MFP", &lir_mfp, &|c| {
+            types::col(Some(input), c)
+        })
     }
 
     /// Translates an index key to the LIR key rendering looks the arrangement up by.
@@ -428,6 +521,29 @@ impl Validator {
                 None
             }
         }
+    }
+
+    /// The output type of an object, with the columns whose types are not inferred taken
+    /// from the type its exports declare, or `None` if that does not determine every column.
+    fn object_type(
+        info: &NodeInfo,
+        declared: Option<&ReprRelationType>,
+    ) -> Option<ReprRelationType> {
+        let declared = declared.filter(|typ| typ.arity() == info.arity);
+        let Some(types) = &info.types else {
+            return declared.cloned();
+        };
+        let column_types = types
+            .iter()
+            .enumerate()
+            .map(|(c, t)| match t {
+                ColType::Known(t) => Some(t.clone()),
+                ColType::Bottom | ColType::Unknown => {
+                    declared.and_then(|typ| typ.column_types.get(c).cloned())
+                }
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(ReprRelationType::new(column_types))
     }
 
     /// The type the exports of object `id` declare for it, if it has an export.
@@ -563,6 +679,8 @@ impl Validator {
             }
             if let Some((key, mfp)) = &sink.from_arrangement {
                 arity::sink_arrangement(&mut issues, key, mfp, arity);
+                self.typer
+                    .sink_arrangement(&mut issues, key, mfp, output.types());
             }
             for (rule, message) in issues {
                 self.dataflow_error(rule, format!("sink export {id}: {message}"));
@@ -598,6 +716,7 @@ impl Validator {
             );
         }
         let mut issues = Vec::new();
+        let typer = self.typer;
         let output = match &expr.node {
             LirRelationNode::Constant { rows } => match rows {
                 Ok(rows) if !rows.is_empty() => {
@@ -615,16 +734,18 @@ impl Validator {
                             ),
                         ));
                     }
-                    Some(Output::Rows(NodeInfo::new(arity, Available::raw())))
+                    let types = typer.constant(&mut issues, rows);
+                    Some(Output::Rows(NodeInfo::new(arity, Available::raw(), types)))
                 }
                 _ => Some(Output::Empty(Available::raw())),
             },
             LirRelationNode::Get { id, keys, plan } => {
                 let binding = self.resolve(expr, id);
-                Self::inputs(&binding).map(|(arity, input)| {
+                Self::inputs(&binding).map(|(arity, input, types)| {
                     let out = arity::get(&mut issues, keys, plan, arity);
                     let forms = arrangements::get(&mut issues, keys, plan, input, arity);
-                    Self::unary(out, forms)
+                    let types = typer.get(&mut issues, plan, types);
+                    Self::unary(out, forms, types)
                 })
             }
             LirRelationNode::Let { id, value, body } => {
@@ -667,11 +788,12 @@ impl Validator {
                 input_key_val,
             } => {
                 let input = self.visit(input, false)?;
-                Self::inputs(&input).map(|(arity, forms)| {
+                Self::inputs(&input).map(|(arity, forms, types)| {
                     let key = input_key_val.as_ref().map(|(key, _)| key.as_slice());
                     let out = arity::mfp(&mut issues, mfp, key, arity);
                     let forms = arrangements::mfp(&mut issues, mfp.is_identity(), key, forms);
-                    Self::unary(out, forms)
+                    let types = typer.mfp_node(&mut issues, mfp, key, types);
+                    Self::unary(out, forms, types)
                 })
             }
             LirRelationNode::FlatMap {
@@ -682,7 +804,7 @@ impl Validator {
                 mfp_after,
             } => {
                 let input = self.visit(input, false)?;
-                Self::inputs(&input).map(|(arity, forms)| {
+                Self::inputs(&input).map(|(arity, forms, types)| {
                     let out = arity::flat_map(
                         &mut issues,
                         input_key.as_deref(),
@@ -692,18 +814,28 @@ impl Validator {
                         arity,
                     );
                     let forms = arrangements::flat_map(&mut issues, input_key.as_deref(), forms);
-                    Self::unary(out, forms)
+                    let types = typer.flat_map(
+                        &mut issues,
+                        input_key.as_deref(),
+                        exprs,
+                        func,
+                        mfp_after,
+                        types,
+                    );
+                    Self::unary(out, forms, Some(types))
                 })
             }
             LirRelationNode::Join { inputs, plan } => {
                 let mut arities = Vec::with_capacity(inputs.len());
                 let mut forms = Vec::with_capacity(inputs.len());
+                let mut input_types = Vec::with_capacity(inputs.len());
                 let mut failed = false;
                 for input in inputs {
                     match Self::inputs(&self.visit(input, false)?) {
-                        Some((arity, available)) => {
+                        Some((arity, available, types)) => {
                             arities.push(arity);
                             forms.push(available.clone());
+                            input_types.push(types.map(<[ColType]>::to_vec));
                         }
                         None => failed = true,
                     }
@@ -713,11 +845,14 @@ impl Validator {
                 } else {
                     let out = arity::join(&mut issues, plan, &arities);
                     let inputs: Vec<&Available> = forms.iter().collect();
-                    let forms = arrangements::join(&mut issues, plan, &inputs, &arities);
+                    let output_forms = arrangements::join(&mut issues, plan, &inputs, &arities);
                     if arities.iter().any(Option::is_none) {
-                        Some(Output::Empty(forms))
+                        Some(Output::Empty(output_forms))
                     } else {
-                        out.map(|arity| Output::Rows(NodeInfo::new(arity, forms)))
+                        let input_types: Vec<_> =
+                            input_types.iter().map(Option::as_deref).collect();
+                        let types = typer.join(&mut issues, plan, &input_types, &inputs);
+                        out.map(|arity| Output::Rows(NodeInfo::new(arity, output_forms, types)))
                     }
                 }
             }
@@ -730,7 +865,7 @@ impl Validator {
                 temporal_bucketing_strategy: _,
             } => {
                 let input = self.visit(input, false)?;
-                Self::inputs(&input).map(|(arity, forms)| {
+                Self::inputs(&input).map(|(arity, forms, types)| {
                     let out = arity::reduce(
                         &mut issues,
                         input_key.as_deref(),
@@ -742,7 +877,15 @@ impl Validator {
                     let key_arity = key_val_plan.key_plan.projection.len();
                     let forms =
                         arrangements::reduce(&mut issues, input_key.as_deref(), key_arity, forms);
-                    Self::unary(out, forms)
+                    let types = typer.reduce(
+                        &mut issues,
+                        input_key.as_deref(),
+                        key_val_plan,
+                        plan,
+                        mfp_after,
+                        types,
+                    );
+                    Self::unary(out, forms, Some(types))
                 })
             }
             LirRelationNode::TopK {
@@ -751,17 +894,18 @@ impl Validator {
                 temporal_bucketing_strategy: _,
             } => {
                 let input = self.visit(input, false)?;
-                Self::inputs(&input).map(|(arity, forms)| {
+                Self::inputs(&input).map(|(arity, forms, types)| {
                     let out = arity::top_k(&mut issues, top_k_plan, arity);
                     let forms = arrangements::top_k(&mut issues, top_k_plan, forms);
-                    Self::unary(out, forms)
+                    let types = typer.top_k(&mut issues, top_k_plan, types);
+                    Self::unary(out, forms, types)
                 })
             }
             LirRelationNode::Negate { input } => {
                 let input = self.visit(input, false)?;
-                Self::inputs(&input).map(|(arity, forms)| {
+                Self::inputs(&input).map(|(arity, forms, types)| {
                     arrangements::require_raw(&mut issues, "Negate", forms);
-                    Self::unary(arity, Available::raw())
+                    Self::unary(arity, Available::raw(), types.map(<[ColType]>::to_vec))
                 })
             }
             LirRelationNode::Threshold {
@@ -769,10 +913,10 @@ impl Validator {
                 threshold_plan,
             } => {
                 let input = self.visit(input, false)?;
-                Self::inputs(&input).map(|(arity, forms)| {
+                Self::inputs(&input).map(|(arity, forms, types)| {
                     let out = arity::threshold(&mut issues, threshold_plan, arity);
                     let forms = arrangements::threshold(&mut issues, threshold_plan, forms, arity);
-                    Self::unary(out, forms)
+                    Self::unary(out, forms, types.map(<[ColType]>::to_vec))
                 })
             }
             LirRelationNode::Union {
@@ -793,10 +937,19 @@ impl Validator {
                 }
                 let mut failed = false;
                 let mut output = None;
+                let mut types = None;
                 for (i, input) in inputs.iter().enumerate() {
                     let input = self.visit(input, false)?;
                     if let Some(forms) = input.available() {
                         arrangements::require_raw(&mut issues, &format!("Union input {i}"), forms);
+                    }
+                    if let Err((c, expected, t)) = types::union_into(&mut types, input.types()) {
+                        issues.push((
+                            Rule::Type,
+                            format!(
+                                "Union input {i} column {c} has type {t:?}, but an earlier input has type {expected:?}"
+                            ),
+                        ));
                     }
                     match input.arity() {
                         Err(()) => failed = true,
@@ -817,7 +970,9 @@ impl Validator {
                     None
                 } else {
                     Some(match output {
-                        Some((_, arity)) => Output::Rows(NodeInfo::new(arity, Available::raw())),
+                        Some((_, arity)) => {
+                            Output::Rows(NodeInfo::new(arity, Available::raw(), types))
+                        }
                         None => Output::Empty(Available::raw()),
                     })
                 }
@@ -830,13 +985,21 @@ impl Validator {
                 strategy: _,
             } => {
                 let input = self.visit(input, false)?;
-                Self::inputs(&input).map(|(arity, available)| {
+                Self::inputs(&input).map(|(arity, available, types)| {
                     let out = arity::arrange_by(
                         &mut issues,
                         input_key.as_deref(),
                         input_mfp,
                         forms,
                         arity,
+                    );
+                    let types = typer.arrange_by(
+                        &mut issues,
+                        input_key.as_deref(),
+                        input_mfp,
+                        forms,
+                        available,
+                        types,
                     );
                     let available = arrangements::arrange_by(
                         &mut issues,
@@ -845,7 +1008,7 @@ impl Validator {
                         available,
                         arity,
                     );
-                    Self::unary(out, available)
+                    Self::unary(out, available, types)
                 })
             }
         };
@@ -856,20 +1019,20 @@ impl Validator {
         })
     }
 
-    /// The arity and forms of a visited input, or `None` if it failed.
-    fn inputs(input: &Output) -> Option<(Option<usize>, &Available)> {
-        Some((input.arity().ok()?, input.available()?))
+    /// The arity, forms and column types of a visited input, or `None` if it failed.
+    fn inputs(input: &Output) -> Option<(Option<usize>, &Available, Option<&[ColType]>)> {
+        Some((input.arity().ok()?, input.available()?, input.types()))
     }
 
-    /// The output of a unary operator, given the output arity the arity rules computed and
-    /// the forms the arrangement rules computed.
+    /// The output of a unary operator, given the output arity the arity rules computed, the
+    /// forms the arrangement rules computed, and the column types the type rules computed.
     ///
     /// An operator that states its output arity has that arity even over an empty input,
     /// which subjects its consumers to the full checks. One that passes its input's arity
     /// through is empty over an empty input.
-    fn unary(output: Option<usize>, available: Available) -> Output {
+    fn unary(output: Option<usize>, available: Available, types: Option<Vec<ColType>>) -> Output {
         match output {
-            Some(arity) => Output::Rows(NodeInfo::new(arity, available)),
+            Some(arity) => Output::Rows(NodeInfo::new(arity, available, types)),
             None => Output::Empty(available),
         }
     }
@@ -933,7 +1096,8 @@ impl Validator {
     ///
     /// A value can read its own binding, so the arities of the bindings come from
     /// [`structural_arity`] before the values are visited, and are then checked against
-    /// the visited values.
+    /// the visited values. The column types of the bindings come from visiting the values
+    /// until their types reach a fixpoint.
     fn let_rec(
         &mut self,
         expr: &LirRelationExpr,
@@ -966,13 +1130,93 @@ impl Validator {
             }
         }
 
+        // The column types of the bindings are a fixpoint too. The values are visited with the
+        // binding types found so far, starting from no row reaching any binding, until the
+        // types they produce add nothing. These visits only collect types, so their errors
+        // and bookkeeping are discarded. A last visit checks the values against the fixpoint.
+        let mut types: Vec<Option<Vec<ColType>>> = vec![None; ids.len()];
+        let mut clean = true;
+        let mut converged = false;
+        for _ in 0..LET_REC_TYPE_ITERATIONS {
+            let snapshot = self.snapshot();
+            let scope = self.locals.len();
+            let (outputs, _) = self.let_rec_values(expr, ids, values, &known, &types)?;
+            self.locals.truncate(scope);
+            self.restore(snapshot);
+            let mut next = types.clone();
+            let mut mismatch = None;
+            // A length mismatch between ids and values has been reported.
+            for (i, output) in outputs.iter().enumerate() {
+                let (Some(acc), Some(id)) = (next.get_mut(i), ids.get(i)) else {
+                    break;
+                };
+                if let Err((c, a, b)) = types::union_into(acc, output.types()) {
+                    mismatch.get_or_insert((*id, c, a, b));
+                }
+            }
+            if let Some((id, c, a, b)) = mismatch {
+                self.node_error(
+                    expr,
+                    Rule::Type,
+                    format!("recursive binding {id} column {c} has type {a:?} and type {b:?}"),
+                );
+                clean = false;
+                break;
+            }
+            if next == types {
+                converged = true;
+                break;
+            }
+            types = next;
+        }
+        if clean && !converged {
+            self.node_error(
+                expr,
+                Rule::Type,
+                format!(
+                    "the column types of the recursive bindings do not converge within {LET_REC_TYPE_ITERATIONS} iterations"
+                ),
+            );
+            clean = false;
+        }
+
+        let scope = self.locals.len();
+        let (_, values_clean) = self.let_rec_values(expr, ids, values, &known, &types)?;
+        for (_, binding) in self.locals.iter_mut().skip(scope) {
+            binding.set_available(Available::raw());
+        }
+        let body = self.visit(body, true)?;
+        self.locals.truncate(scope);
+        Ok(if clean && values_clean {
+            body
+        } else {
+            Output::Failed
+        })
+    }
+
+    /// Binds the ids of a `LetRec` with the given arities and column types, and visits its
+    /// values.
+    ///
+    /// Leaves the bindings in `locals`, each with the forms of its value. Returns the outputs
+    /// of the values, and whether they agree with the bindings.
+    fn let_rec_values(
+        &mut self,
+        expr: &LirRelationExpr,
+        ids: &[LocalId],
+        values: &[LirRelationExpr],
+        known: &BTreeMap<LocalId, usize>,
+        types: &[Option<Vec<ColType>>],
+    ) -> Result<(Vec<Output>, bool), RecursionLimitError> {
         // Rendering binds each id to a raw-only `Variable` until its value is rendered, then to
         // the value's forms for the values that follow, and to its raw collection alone for
         // the body, because arrangements cannot leave the iterative scope.
         let scope = self.locals.len();
         for (i, id) in ids.iter().enumerate() {
             let binding = match (known.get(id), values.get(i)) {
-                (Some(arity), _) => Output::Rows(NodeInfo::new(*arity, Available::raw())),
+                (Some(arity), _) => {
+                    let types = types.get(i).cloned().flatten();
+                    Output::Rows(NodeInfo::new(*arity, Available::raw(), types))
+                }
                 (None, Some(value)) if Self::is_empty_constant(value) => {
                     Output::Empty(Available::raw())
                 }
@@ -991,47 +1235,80 @@ impl Validator {
         }
 
         let mut clean = true;
+        let mut outputs = Vec::with_capacity(values.len());
         for (i, value) in values.iter().enumerate() {
             let output = self.visit(value, true)?;
-            let Some(id) = ids.get(i) else { continue };
-            if let Some(forms) = output.available() {
-                // Rendering unwraps the raw collection of each value to bind it.
-                if !forms.raw {
-                    self.node_error(
-                        expr,
-                        Rule::Arrangement,
-                        format!("LetRec value of {id} lacks the raw collection"),
-                    );
-                    clean = false;
-                }
-                let forms = forms.clone();
-                if let Some((_, binding)) = self.locals.get_mut(scope + i) {
-                    binding.set_available(forms);
-                }
+            if let Some(id) = ids.get(i) {
+                clean &= self.let_rec_value(expr, scope + i, *id, known.get(id), &output);
             }
-            let Ok(Some(arity)) = output.arity() else {
-                continue;
-            };
-            if let Some(expected) = known.get(id) {
-                if *expected != arity {
-                    self.node_error(
-                        expr,
-                        Rule::Arity,
-                        format!(
-                            "recursive binding {id} has arity {expected}, but its value has arity {arity}"
-                        ),
-                    );
-                    clean = false;
-                }
-            }
+            outputs.push(output);
         }
+        Ok((outputs, clean))
+    }
 
-        for (_, binding) in self.locals.iter_mut().skip(scope) {
-            binding.set_available(Available::raw());
+    /// Checks the output of the value of the `LetRec` binding at `locals[index]`, and makes
+    /// the value's forms the binding's. Returns whether the value agrees with the binding.
+    fn let_rec_value(
+        &mut self,
+        expr: &LirRelationExpr,
+        index: usize,
+        id: LocalId,
+        expected: Option<&usize>,
+        output: &Output,
+    ) -> bool {
+        let mut clean = true;
+        if let Some(forms) = output.available() {
+            // Rendering unwraps the raw collection of each value to bind it.
+            if !forms.raw {
+                self.node_error(
+                    expr,
+                    Rule::Arrangement,
+                    format!("LetRec value of {id} lacks the raw collection"),
+                );
+                clean = false;
+            }
+            let forms = forms.clone();
+            if let Some((_, binding)) = self.locals.get_mut(index) {
+                binding.set_available(forms);
+            }
         }
-        let body = self.visit(body, true)?;
-        self.locals.truncate(scope);
-        Ok(if clean { body } else { Output::Failed })
+        if let (Ok(Some(arity)), Some(expected)) = (output.arity(), expected) {
+            if *expected != arity {
+                self.node_error(
+                    expr,
+                    Rule::Arity,
+                    format!(
+                        "recursive binding {id} has arity {expected}, but its value has arity {arity}"
+                    ),
+                );
+                clean = false;
+            }
+        }
+        clean
+    }
+
+    /// The state that visiting a node changes besides `locals`, for visits whose results
+    /// are discarded.
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            errors: self.errors.len(),
+            lir_ids: self.lir_ids.clone(),
+            bound_locals: self.bound_locals.clone(),
+            read_globals: self.read_globals.clone(),
+        }
+    }
+
+    fn restore(&mut self, snapshot: Snapshot) {
+        let Snapshot {
+            errors,
+            lir_ids,
+            bound_locals,
+            read_globals,
+        } = snapshot;
+        self.errors.truncate(errors);
+        self.lir_ids = lir_ids;
+        self.bound_locals = bound_locals;
+        self.read_globals = read_globals;
     }
 
     fn is_empty_constant(expr: &LirRelationExpr) -> bool {
