@@ -75,7 +75,7 @@ use tracing::trace;
 use crate::compute_state::ComputeState;
 use crate::render::StartSignal;
 use crate::render::errors::DataflowErrorSer;
-use crate::sink::correction::{ChannelLogging, Correction, CorrectionLogger};
+use crate::sink::correction::{Correction, CorrectionLogging};
 use crate::sink::materialized_view::{
     BatchDescription, BatchesStream, DescsStream, DesiredStreams, OkErr, PersistApi,
     PersistStreams, SharedSinkFrontier, advance, operator_name, persist_source,
@@ -572,23 +572,17 @@ mod write {
         let mut builder = OperatorBuilderRc::new(name, scope.clone());
         let info = builder.operator_info();
 
-        // `Correction` reports its size through a channel, which `CorrectionLogger` drains into
-        // the Timely loggers.
-        let mut channel_logging = None;
-        let mut correction_logger = None;
+        let mut logging = None;
         if let (Some(compute_logger), Some(differential_logger)) = (
             scope.worker().logger_for("materialize/compute"),
             scope.worker().logger_for("differential/arrange"),
         ) {
             let operator_info = builder.operator_info();
-            let (tx, rx) = mpsc::unbounded_channel();
-            channel_logging = Some(ChannelLogging::new(tx));
-            correction_logger = Some(CorrectionLogger::new(
+            logging = Some(CorrectionLogging::new(
                 compute_logger,
                 differential_logger.into(),
                 operator_info.global_id,
                 operator_info.address.to_vec(),
-                rx,
             ));
         }
 
@@ -617,15 +611,10 @@ mod write {
             Correction::new(
                 sink_metrics.clone(),
                 worker_metrics.clone(),
-                channel_logging.clone(),
+                logging.clone(),
                 &worker_config,
             ),
-            Correction::new(
-                sink_metrics,
-                worker_metrics,
-                channel_logging,
-                &worker_config,
-            ),
+            Correction::new(sink_metrics, worker_metrics, logging, &worker_config),
         );
 
         let advance_persist_frontiers_at_startup =
@@ -720,9 +709,6 @@ mod write {
                 advance_persist_frontiers_at_startup,
                 read_only,
             );
-
-            // On drop, the logger drains remaining events and retracts all logged state.
-            let mut correction_logger = correction_logger;
 
             move |frontiers| {
                 // Keep task handles alive so they are aborted when the operator is dropped.
@@ -820,12 +806,6 @@ mod write {
                         write_metrics.clone(),
                     ))
                 });
-
-                // Drain last, so the events of this activation's correction work reach the log
-                // without waiting for another activation.
-                if let Some(logger) = &mut correction_logger {
-                    logger.apply_events();
-                }
             }
         });
 
