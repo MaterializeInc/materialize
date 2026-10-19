@@ -13,7 +13,7 @@ use std::sync::{Arc, Weak};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::operators::arrange::arrangement::arrange_core_with_agent;
+use differential_dataflow::operators::arrange::arrangement::arrange_core_with;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
@@ -151,7 +151,7 @@ where
     {
         // Allow access to `arrange_named` because we're within Mz's wrapper.
         #[allow(clippy::disallowed_methods)]
-        arrange_core_with_agent::<_, _, Chu, Ba, Bu, Tr, SharedAgent<Tr>>(self, pact, name)
+        arrange_core_with::<_, _, Chu, Ba, Bu, _, _>(self, pact, name, SharedAgent::<Tr>::factory())
             .log_arrangement_size()
     }
 }

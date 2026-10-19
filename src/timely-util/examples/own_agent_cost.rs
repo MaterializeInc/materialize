@@ -33,7 +33,7 @@ mod api {
     use std::sync::Arc;
 
     use differential_dataflow::operators::arrange::Arranged;
-    use differential_dataflow::operators::arrange::arrangement::arrange_core_with_agent;
+    use differential_dataflow::operators::arrange::arrangement::arrange_core_with;
     use differential_dataflow::trace::TraceReader;
     use differential_dataflow::trace::implementations::{
         ContainerChunker, ValBatcher, ValBuilder, ValSpine,
@@ -49,15 +49,15 @@ mod api {
     pub const NAME: &str = "own";
 
     pub fn arrange<'s>(stream: Stream<'s, u64, Vec<super::Update>>) -> Arranged<'s, Agent> {
-        arrange_core_with_agent::<
+        arrange_core_with::<
             _,
             _,
             ContainerChunker<Vec<super::Update>>,
             ValBatcher<u64, u64, u64, isize>,
             ValBuilder<u64, u64, u64, isize>,
-            Spine,
-            Agent,
-        >(stream, Pipeline, "arrange")
+            _,
+            _,
+        >(stream, Pipeline, "arrange", Agent::factory())
     }
 
     pub fn publish(agent: &Agent, worker: &Worker, shared: Arc<Shared<Batch>>) {

@@ -44,7 +44,7 @@ use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::logging::{Logger, TraceShare};
 use differential_dataflow::operators::arrange::{
-    Agent, AgentWriter, Arranged, ShutdownButton, TraceReplayInstruction,
+    Agent, ArrangeContext, Arranged, ShutdownButton, TraceReplayInstruction, Writer,
 };
 use differential_dataflow::trace::cursor::Navigable;
 use differential_dataflow::trace::wrappers::frontier::{BatchFrontier, TraceFrontier};
@@ -981,11 +981,29 @@ impl<Tr: Trace> Drop for SharedAgent<Tr> {
     }
 }
 
-impl<Tr: Trace + 'static> Agent<Tr> for SharedAgent<Tr> {
+impl<Tr: Trace + 'static> Agent for SharedAgent<Tr> {
     type Writer = SharedWriter<Tr>;
+}
 
-    fn new(trace: Tr, operator: OperatorInfo, logging: Option<Logger>) -> (Self, Self::Writer) {
-        SharedAgent::new(trace, operator, logging)
+impl<Tr: Trace + 'static> SharedAgent<Tr> {
+    /// The factory for differential's `_with` arranging entry points: it builds an empty `Tr` as
+    /// `TraceAgent::factory` does, and wraps it in a `SharedAgent`.
+    ///
+    /// The trace starts unpublished. [`SharedAgent::publish`] attaches it to a point later.
+    pub fn factory() -> impl FnOnce(ArrangeContext) -> (Self, SharedWriter<Tr>) {
+        |context: ArrangeContext| {
+            let ArrangeContext {
+                info,
+                activator,
+                logger,
+                exert_logic,
+            } = context;
+            let mut trace = Tr::new(info.clone(), logger.clone(), Some(activator));
+            if let Some(exert_logic) = exert_logic {
+                trace.set_exert_logic(exert_logic);
+            }
+            SharedAgent::new(trace, info, logger)
+        }
     }
 }
 
@@ -1064,7 +1082,10 @@ impl<Tr: Trace> SharedWriter<Tr> {
     }
 }
 
-impl<Tr: Trace> AgentWriter<Tr> for SharedWriter<Tr> {
+impl<Tr: Trace> Writer for SharedWriter<Tr> {
+    type Time = Tr::Time;
+    type Batch = Tr::Batch;
+
     fn insert(&mut self, batch: Tr::Batch, hint: Option<Tr::Time>) {
         SharedWriter::insert(self, batch, hint)
     }

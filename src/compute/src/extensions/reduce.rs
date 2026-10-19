@@ -17,7 +17,7 @@ use columnation::Columnation;
 use differential_dataflow::Data;
 use differential_dataflow::difference::Abelian;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::operators::reduce::reduce_trace_with_agent;
+use differential_dataflow::operators::reduce::reduce_trace_with;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchDiff, BatchVal, BatchValOwn};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace, TraceReader};
@@ -144,14 +144,15 @@ where
             differential_dataflow::consolidation::consolidate(change);
         };
 
-        // Allow access to `reduce_trace_with_agent` since we're within Mz's wrapper and force
+        // Allow access to `reduce_trace_with` since we're within Mz's wrapper and force
         // arrangement size logging.
         #[allow(clippy::disallowed_methods)]
-        reduce_trace_with_agent::<_, Bu, T2, KC, _, _, SharedAgent<T2>>(
+        reduce_trace_with::<_, Bu, _, KC, _, _, _>(
             self,
             name,
             logic,
             push_closure,
+            SharedAgent::<T2>::factory(),
         )
         .log_arrangement_size()
     }
