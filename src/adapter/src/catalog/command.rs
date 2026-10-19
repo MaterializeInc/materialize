@@ -9,6 +9,8 @@
 
 //! Catalog commands retain intent, not the writes derived from a speculative catalog.
 
+pub(crate) mod source;
+
 use std::sync::Arc;
 
 use mz_sql::ast::{Raw, Statement};

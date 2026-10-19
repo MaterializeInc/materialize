@@ -33,19 +33,16 @@ use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::future::OreFutureExt;
 use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{assert_none, instrument, soft_panic_or_log};
+use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::json::json_string;
 use mz_repr::explain::{ExprHumanizer, ExprHumanizerExt, TransientItem};
 use mz_repr::role_id::RoleId;
-use mz_repr::{
-    CatalogItemId, Datum, Diff, GlobalId, RelationDesc, RelationVersionSelector, Row, Timestamp,
-};
+use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_secrets::SecretsReader;
 use mz_sql::ast::{
-    AlterSourceAddSubsourceOption, CreateSinkOption, CreateSinkOptionName, CreateSourceOptionName,
-    CreateSubsourceOption, CreateSubsourceOptionName, SqlServerConfigOption,
+    AlterSourceAddSubsourceOption, CreateSinkOption, CreateSinkOptionName, SqlServerConfigOption,
     SqlServerConfigOptionName,
 };
 use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
@@ -62,9 +59,7 @@ use mz_sql::plan::{
     AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule, PlanError,
     StatementContext,
 };
-use mz_sql::pure::{
-    PurifiedSourceExport, generate_progress_subsource_statement, generate_subsource_statements,
-};
+use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_timestamp_oracle::TimestampOracle;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
@@ -82,9 +77,8 @@ use mz_sql::session::vars::{
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ConnectionOption, ConnectionOptionName, CreateSourceConnection, DeferredItemName,
-    MySqlConfigOption, PgConfigOption, PgConfigOptionName, Statement, TransactionMode,
-    WithOptionValue,
+    ConnectionOption, ConnectionOptionName, CreateSourceConnection, MySqlConfigOption,
+    PgConfigOption, PgConfigOptionName, Statement, TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::ExportDescription;
@@ -502,119 +496,52 @@ impl Coordinator {
         ctx: &ExecuteContext,
         params: Params,
         create_progress_subsource: bool,
-        mut source_stmt: mz_sql::ast::CreateSourceStatement<Aug>,
+        source_stmt: mz_sql::ast::CreateSourceStatement<Aug>,
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
         available_source_references: plan::SourceReferences,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
-        let mut create_source_plans = Vec::with_capacity(subsources.len() + 2);
+        use catalog::command::source::{SourcePlanning, plan_create_source};
 
-        // 1. First plan the progress subsource, if any.
-        if create_progress_subsource {
-            let progress_stmt = {
-                let catalog = self.catalog().for_session(ctx.session());
-                let scx = StatementContext::new(None, &catalog);
-                generate_progress_subsource_statement(&scx, &source_stmt)?
-            };
-            // The primary source depends on this subsource because the primary
-            // source needs to know its shard ID, and the easiest way of
-            // guaranteeing that the shard ID is discoverable is to create this
-            // collection first.
-            assert_none!(progress_stmt.of_source);
-            let (item_id, global_id) = self.allocate_user_id().await?;
-            let progress_plan =
-                self.plan_subsource(ctx.session(), &params, progress_stmt, item_id, global_id)?;
-            let progress_full_name = self
-                .catalog()
-                .for_session(ctx.session())
-                .resolve_full_name(&progress_plan.plan.name);
-            let progress_subsource = ResolvedItemName::Item {
-                id: progress_plan.item_id,
-                qualifiers: progress_plan.plan.name.qualifiers.clone(),
-                full_name: progress_full_name,
-                print_id: true,
-                version: RelationVersionSelector::Latest,
-            };
-
-            create_source_plans.push(progress_plan);
-
-            source_stmt.progress_subsource = Some(DeferredItemName::Named(progress_subsource));
-        }
-
-        let catalog = self.catalog().for_session(ctx.session());
-        let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &source_stmt);
-
-        let propagated_with_options: Vec<_> = source_stmt
-            .with_options
-            .iter()
-            .filter_map(|opt| match opt.name {
-                CreateSourceOptionName::TimestampInterval => None,
-                CreateSourceOptionName::RetainHistory => Some(CreateSubsourceOption {
-                    name: CreateSubsourceOptionName::RetainHistory,
-                    value: opt.value.clone(),
-                }),
-            })
-            .collect();
-
-        // 2. Then plan the main source.
-        let source_plan = match self.plan_statement(
-            ctx.session(),
-            Statement::CreateSource(source_stmt),
-            &params,
-            &resolved_ids,
-        )? {
-            (Plan::CreateSource(plan), _sql_impl_ids) => plan,
-            (p, _) => unreachable!("s must be CreateSourcePlan but got {:?}", p),
+        let purified = mz_sql::pure::PurifiedStatement::PurifiedCreateSource {
+            create_progress_subsource,
+            create_source_stmt: source_stmt,
+            subsources,
+            available_source_references,
         };
-
-        let (item_id, global_id) = self.allocate_user_id().await?;
-
-        let source_full_name = self
-            .catalog()
-            .for_session(ctx.session())
-            .resolve_full_name(&source_plan.name);
-        let of_source = ResolvedItemName::Item {
-            id: item_id,
-            qualifiers: source_plan.name.qualifiers.clone(),
-            full_name: source_full_name,
-            print_id: true,
-            version: RelationVersionSelector::Latest,
-        };
-
-        // Generate subsource statements
-        let session_catalog = self.catalog().for_session(ctx.session());
-        let conn_catalog = session_catalog.for_system_session();
-        let pcx = plan::PlanContext::zero();
-        let scx = StatementContext::new(Some(&pcx), &conn_catalog);
-
-        let mut subsource_stmts = generate_subsource_statements(&scx, of_source, subsources)?;
-
-        for subsource_stmt in subsource_stmts.iter_mut() {
-            subsource_stmt
-                .with_options
-                .extend(propagated_with_options.iter().cloned())
+        let session = ctx.session().meta();
+        let mut ids = BTreeMap::new();
+        loop {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let result = {
+                let session_catalog = self.catalog().for_session(ctx.session());
+                let catalog = session_catalog.state().for_session_metadata(&session, tx);
+                plan_create_source(&catalog, session.pcx(), &params, purified.clone(), &ids)
+            };
+            let mut notices = Vec::new();
+            while let Ok(notice) = rx.try_recv() {
+                notices.push(notice);
+            }
+            match result {
+                Ok(SourcePlanning::NeedsIds(keys)) => {
+                    let allocated = match self.allocate_user_ids(u64::cast_from(keys.len())).await {
+                        Ok(ids) => ids,
+                        Err(error) => {
+                            ctx.session().add_notices(notices);
+                            return Err(error);
+                        }
+                    };
+                    ids.extend(keys.into_iter().zip_eq(allocated));
+                }
+                Ok(SourcePlanning::Ready(plans)) => {
+                    ctx.session().add_notices(notices);
+                    return Ok((Plan::CreateSources(plans), ResolvedIds::empty()));
+                }
+                Err(error) => {
+                    ctx.session().add_notices(notices);
+                    return Err(error);
+                }
+            }
         }
-
-        create_source_plans.push(CreateSourcePlanBundle {
-            item_id,
-            global_id,
-            plan: source_plan,
-            resolved_ids: resolved_ids.clone(),
-            available_source_references: Some(available_source_references),
-        });
-
-        // 3. Finally, plan all the subsources
-        let ids = self
-            .allocate_user_ids(u64::cast_from(subsource_stmts.len()))
-            .await?;
-        for (stmt, (item_id, global_id)) in subsource_stmts.into_iter().zip_eq(ids) {
-            let plan = self.plan_subsource(ctx.session(), &params, stmt, item_id, global_id)?;
-            create_source_plans.push(plan);
-        }
-
-        Ok((
-            Plan::CreateSources(create_source_plans),
-            ResolvedIds::empty(),
-        ))
     }
 
     #[instrument]

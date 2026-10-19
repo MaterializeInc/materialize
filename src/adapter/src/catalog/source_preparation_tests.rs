@@ -227,3 +227,96 @@ async fn source_preparation_checks_failure_inputs() {
     })
     .await;
 }
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn source_planning_retains_ids_when_exports_change() {
+    use crate::catalog::command::source::{SourcePlanning, plan_create_source};
+    use mz_sql::plan::{Params, PlanContext};
+    use mz_sql::pure::PurifiedStatement;
+    use std::collections::BTreeMap;
+
+    Catalog::with_debug(|catalog| async move {
+        let mut state = catalog.state().clone();
+        state
+            .system_config_mut()
+            .set("force_source_table_syntax", VarInput::Flat("false"))
+            .expect("allow generated exports");
+        let storage = StorageConfiguration::new(
+            state.config.connection_context.clone(),
+            mz_storage_types::dyncfgs::all_dyncfgs(Default::default()),
+        );
+        let sql = "CREATE SOURCE auction_src FROM LOAD GENERATOR AUCTION FOR ALL TABLES";
+        let mut preparation = SourcePreparation::new(1000);
+        let mut status = preparation
+            .resolve(
+                &state.for_system_session(),
+                source_statement(&state, sql).expect("resolve auction"),
+            )
+            .expect("resolve preparation");
+        let mut purified = loop {
+            match status {
+                SourcePreparationStatus::Ready(statement) => break *statement,
+                SourcePreparationStatus::Pending(request) => {
+                    let response = request.execute(&storage).await;
+                    status = preparation
+                        .finish(
+                            &state.for_system_session(),
+                            source_statement(&state, sql).expect("resolve auction"),
+                            response,
+                        )
+                        .expect("prepare auction exports");
+                }
+            }
+        };
+        let mut ids = BTreeMap::new();
+        let pcx = PlanContext::zero();
+        let params = Params::empty();
+        let original = loop {
+            match plan_create_source(
+                &state.for_system_session(),
+                &pcx,
+                &params,
+                purified.clone(),
+                &ids,
+            )
+            .expect("plan auction")
+            {
+                SourcePlanning::Ready(plans) => break plans,
+                SourcePlanning::NeedsIds(keys) => {
+                    let count = u64::try_from(keys.len()).expect("ID count fits");
+                    let ts = catalog.current_upper().await;
+                    let allocated = catalog
+                        .allocate_user_ids(count, ts)
+                        .await
+                        .expect("allocate IDs");
+                    ids.extend(keys.into_iter().zip(allocated));
+                }
+            }
+        };
+        let PurifiedStatement::PurifiedCreateSource { subsources, .. } = &mut purified else {
+            panic!("expected source metadata");
+        };
+        let removed = subsources.pop_first();
+        assert!(removed.is_some(), "auction has generated exports");
+        let SourcePlanning::Ready(replanned) =
+            plan_create_source(&state.for_system_session(), &pcx, &params, purified, &ids)
+                .expect("replan remaining exports")
+        else {
+            panic!("remaining objects already have allocated IDs");
+        };
+        assert_eq!(replanned.len() + 1, original.len());
+        for plan in replanned {
+            let previous = original
+                .iter()
+                .find(|previous| previous.plan.name == plan.plan.name)
+                .expect("remaining name was present");
+            assert_eq!(
+                (plan.item_id, plan.global_id),
+                (previous.item_id, previous.global_id)
+            );
+        }
+        catalog.expire().await;
+    })
+    .await;
+}
