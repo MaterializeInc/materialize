@@ -21,9 +21,9 @@
 //! `FlatMap`, `Reduce`, `ArrangeBy`, and join sources, and the lookup value layout of each
 //! join stage, whose width is the lookup key plus the canonical thinning of the lookup input.
 //! A join stage's stream layout instead comes from its stated `stream_thinning`. The
-//! arrangement rules check that every `(key, permutation, thinning)` triple in `Get` keys,
-//! `ArrangeBy` forms, and threshold plans, every join `stream_thinning`, and every
-//! arrangement a join looks up has the canonical thinning.
+//! arrangement rules check that the triples of `ArrangeBy` forms and threshold plans, and
+//! every join `stream_thinning`, are canonical, so every arrangement has the canonical
+//! layout.
 
 use std::collections::BTreeSet;
 

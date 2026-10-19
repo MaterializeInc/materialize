@@ -1142,3 +1142,38 @@ fn letrec_arrangements_reach_later_values_only() {
     let errs = errors(&dataflow(&[(T1, 1)], vec![(OUT, rejected)]));
     assert_error(&errs, Rule::Arrangement, "arranged by [#0]");
 }
+
+#[mz_ore::test]
+fn accepts_get_keys_with_identity_permutation() {
+    // Lowering states an identity permutation and a trivial thinning for an arrangement by a
+    // non-prefix key once a residual MFP is the identity under its permutation, and copies
+    // them into `Get`s of the binding.
+    let l1 = LocalId::new(1);
+    let mut df = dataflow(&[], vec![]);
+    import_index(&mut df, GlobalId::Transient(3), T1, &[1], 3);
+    let stated =
+        AvailableCollections::new_arranged(vec![(vec![col(1)], vec![0, 1, 2], vec![0, 1])]);
+    let let_ = plan(LirRelationNode::Let {
+        id: l1,
+        value: Box::new(get_global(T1, arranged(&[1], 3))),
+        body: Box::new(get_local_keys(l1, stated)),
+    });
+    df.objects_to_build.push(BuildDesc {
+        id: OUT,
+        plan: let_,
+    });
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+}
+
+#[mz_ore::test]
+fn rejects_get_keys_of_wrong_length() {
+    let mut df = dataflow(&[], vec![]);
+    import_index(&mut df, GlobalId::Transient(3), T1, &[1], 3);
+    let stated = AvailableCollections::new_arranged(vec![(vec![col(1)], vec![0, 1, 2], vec![0])]);
+    df.objects_to_build.push(BuildDesc {
+        id: OUT,
+        plan: get_global(T1, stated),
+    });
+    let errs = errors(&df);
+    assert_error(&errs, Rule::Arrangement, "a thinning of 1 entries");
+}

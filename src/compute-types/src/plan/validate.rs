@@ -516,7 +516,7 @@ impl Validator {
                 if !forms.raw {
                     let message = match &sink.from_arrangement {
                         None => Some(format!(
-                            "sink export {id} reads the raw collection of {}, which is only arranged, and names no arrangement",
+                            "sink export {id} reads the raw collection of {}, which has none, and names no arrangement",
                             sink.from
                         )),
                         Some((key, _))
@@ -760,7 +760,7 @@ impl Validator {
             LirRelationNode::Negate { input } => {
                 let input = self.visit(input, false)?;
                 Self::inputs(&input).map(|(arity, forms)| {
-                    arrangements::raw_input(&mut issues, "Negate", forms);
+                    arrangements::require_raw(&mut issues, "Negate", forms);
                     Self::unary(arity, Available::raw())
                 })
             }
@@ -796,7 +796,7 @@ impl Validator {
                 for (i, input) in inputs.iter().enumerate() {
                     let input = self.visit(input, false)?;
                     if let Some(forms) = input.available() {
-                        arrangements::raw_input(&mut issues, &format!("Union input {i}"), forms);
+                        arrangements::require_raw(&mut issues, &format!("Union input {i}"), forms);
                     }
                     match input.arity() {
                         Err(()) => failed = true,

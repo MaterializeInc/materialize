@@ -17,11 +17,11 @@
 //! its inputs and returns the forms rendering gives its output.
 //!
 //! Arrangements are tracked by key alone, because rendering never reads the permutation and
-//! thinning a plan states for an existing arrangement. Every `(key, permutation, thinning)`
-//! triple a plan states must instead be the one `permutation_for_arrangement` produces, and so
-//! must every join stream thinning. Index imports are assumed to have that layout too, as
-//! lowering assumes. Every arrangement then has the canonical layout of its key, which is what
-//! the arity rules compute widths from.
+//! thinning a plan states for an existing arrangement. The triples that set a layout, those of
+//! `ArrangeBy` forms and `Threshold`, and every join stream thinning, must be the ones
+//! `permutation_for_arrangement` produces. Index imports are assumed to have that layout too,
+//! as lowering assumes. Every arrangement then has the canonical layout of its key, which is
+//! what the arity rules compute widths from.
 
 use std::collections::BTreeSet;
 
@@ -78,11 +78,13 @@ pub(super) fn key_name(key: &[LirScalarExpr]) -> String {
 }
 
 /// Reports a read of the raw collection of an input that has none.
-fn require_raw(issues: &mut Issues, what: &str, input: &Available) {
+pub(super) fn require_raw(issues: &mut Issues, what: &str, input: &Available) {
     if !input.raw {
         issues.push((
             Rule::Arrangement,
-            format!("{what} reads the raw collection of its input, but the input is only arranged"),
+            format!(
+                "{what} reads the raw collection of its input, but the input has no raw collection"
+            ),
         ));
     }
 }
@@ -165,7 +167,26 @@ pub(super) fn get(
     input: &Available,
     arity: Option<usize>,
 ) -> Available {
-    check_triples(issues, "Get", keys, arity);
+    // Rendering reads only the keys of these triples, and the producer of each arrangement
+    // fixes its layout. Lowering states an identity permutation and a trivial thinning for an
+    // arrangement whose permutation turns a residual MFP into the identity, and passes them
+    // on to `Get`s of bindings, so only the lengths are checked.
+    if let Some(arity) = arity {
+        for (key, permutation, thinning) in &keys.arranged {
+            let values = arranged_width(key, arity) - key.len();
+            if permutation.len() != arity || thinning.len() != values {
+                issues.push((
+                    Rule::Arrangement,
+                    format!(
+                        "Get arrangement by {} has a permutation of {} entries and a thinning of {} entries, but arity {arity} needs {arity} and {values}",
+                        key_name(key),
+                        permutation.len(),
+                        thinning.len()
+                    ),
+                ));
+            }
+        }
+    }
     match plan {
         GetPlan::PassArrangements => {
             for (key, _, _) in &keys.arranged {
@@ -364,11 +385,6 @@ pub(super) fn threshold(
     Available::arranged(key.clone())
 }
 
-/// `Negate` and every `Union` input read the raw collection.
-pub(super) fn raw_input(issues: &mut Issues, what: &str, input: &Available) {
-    require_raw(issues, what, input);
-}
-
 /// `ArrangeBy`: returns the forms of the output.
 pub(super) fn arrange_by(
     issues: &mut Issues,
@@ -403,7 +419,7 @@ pub(super) fn arrange_by(
             Some(key) => require_key(issues, "ArrangeBy", input, key),
             None => issues.push((
                 Rule::Arrangement,
-                "ArrangeBy reads the raw collection of its input to form its output, but the input is only arranged and the ArrangeBy names no input key".to_string(),
+                "ArrangeBy reads the raw collection of its input to form its output, but the input has no raw collection and the ArrangeBy names no input key".to_string(),
             )),
         }
     }
