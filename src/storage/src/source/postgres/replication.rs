@@ -1300,6 +1300,19 @@ enum SchemaValidationError {
     },
 }
 
+impl SchemaValidationError {
+    /// The `(oid, output_index)` of the one output this error ends, or `None`
+    /// if it ends the whole source.
+    fn output(&self) -> Option<(u32, usize)> {
+        match self {
+            Self::Schema {
+                oid, output_index, ..
+            } => Some((*oid, *output_index)),
+            Self::Postgres(_) | Self::PhysicalReplicaChanged { .. } => None,
+        }
+    }
+}
+
 fn spawn_schema_validator(
     client: Client,
     config: &RawSourceCreationConfig,
@@ -1334,8 +1347,8 @@ fn spawn_schema_validator(
 
 /// Runs `validate` once per `interval` and sends each failure to `tx` once.
 ///
-/// Stops after the first failure that is not a [`SchemaValidationError::Schema`]
-/// error, or once the receiver is dropped.
+/// Stops after the first failure that ends the whole source, or once the
+/// receiver is dropped.
 async fn run_schema_validator(
     tx: mpsc::UnboundedSender<SchemaValidationError>,
     interval: impl Fn() -> Duration,
@@ -1349,19 +1362,13 @@ async fn run_schema_validator(
     while !tx.is_closed() {
         let validation_start = Instant::now();
         for error in validate().await {
-            match &error {
-                SchemaValidationError::Schema {
-                    oid, output_index, ..
-                } => {
-                    // The replication loop errors the output for good on the
-                    // first report and ignores repeats.
-                    if reported.insert((*oid, *output_index)) {
+            match error.output() {
+                Some(output) => {
+                    if reported.insert(output) {
                         let _ = tx.send(error);
                     }
                 }
-                _ => {
-                    // The replication loop ends the source on any other error,
-                    // so later rounds have nothing to add.
+                None => {
                     let _ = tx.send(error);
                     return;
                 }
