@@ -146,7 +146,7 @@ impl S3BlobMetrics {
     fn http_pool_metrics(registry: &MetricsRegistry) -> HttpPoolMetrics {
         let http_pool = HttpPoolMetrics::new(registry.register(metric!(
             name: "mz_persist_s3_http_pool_requests",
-            help: "number of requests (including retries) sent through the pool of HTTP clients",
+            help: "number of requests (including retries but excluding hedged gets) sent through the pool of HTTP clients",
         )));
         let register = |opts, get: fn(&HttpPoolMetrics) -> usize| {
             let http_pool = http_pool.clone();

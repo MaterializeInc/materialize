@@ -2745,7 +2745,9 @@ metrics:
   source: src/persist/src/metrics.rs
   visibility: internal
 - name: mz_persist_s3_http_pool_requests
-  help: number of requests (including retries) sent through the pool of HTTP clients
+  help: >-
+    number of requests (including retries but excluding hedged gets) sent through
+    the pool of HTTP clients
   source: src/persist/src/metrics.rs
   visibility: internal
 - name: mz_persist_s3_operation_attempt_timeouts
