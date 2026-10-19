@@ -21,10 +21,10 @@
 //! the CPU work) and a Tokio task (which owns persist I/O state). They communicate via `mpsc`
 //! command channels, which preserve send order on a single sender. Each operator instance
 //! constructs its own `(tx, rx)` pair inside `render` and never clones the sender, so there is
-//! exactly one producer per channel — sends are totally ordered. Different worker instances of the
-//! same operator never share a channel, so cross-worker ordering is not a concern. The correctness
-//! of the operators relies on a few ordering invariants between the messages sent within a single
-//! Timely activation:
+//! exactly one producer per channel, and its sends are totally ordered. Different worker instances
+//! of the same operator never share a channel, so cross-worker ordering is not a concern. The
+//! correctness of the operators relies on a few ordering invariants between the messages sent
+//! within a single Timely activation:
 //!
 //!  * **`mint`**: the `persist_watch` Tokio task is the sole producer of persist-frontier updates
 //!    and emits them in monotonically increasing order, terminated by the empty frontier. The
@@ -638,7 +638,7 @@ mod write {
         let shared_batch_max_bytes = MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config);
 
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<WriteCommand>(PARTS_IN_FLIGHT);
-        // Batch writes share the one sender in turn, see `batch_in_flight`.
+        // Batch writes take turns on the one sender, see `Write`.
         let cmd_tx = Rc::new(cmd_tx);
         let (resp_tx, mut resp_rx) = mpsc::unbounded_channel::<WriteResponse>();
 
@@ -670,7 +670,8 @@ mod write {
                                 None => Vec::new(),
                             };
                             batch_writer.respond(&resp_tx, batches).await;
-                            // ArcActivator suppresses redundant activations, so this is cheap.
+                            // Activate the operator to emit the batches. ArcActivator suppresses
+                            // redundant activations, so this is cheap.
                             activator.activate();
                         }
                     }
@@ -701,6 +702,10 @@ mod write {
             .abort_on_drop()
         });
 
+        // A sync operator, not the async bridge. The bridge queues input updates verbatim until its
+        // future polls them. This operator consolidates them into the corrections as they arrive.
+        // It only needs async to yield while the write task holds the parts it can take, which
+        // `write_batch` covers.
         builder.build(move |capabilities| {
             // We will use the data capabilities from the `descs` input to produce output, so no
             // need to hold onto the initial capabilities.
@@ -727,6 +732,10 @@ mod write {
                 // Acknowledge activation so the Tokio task can activate us again.
                 activation_ack.ack();
 
+                // `write_batch` is async because `cmd_tx` is bounded, so a send can wait for the
+                // write task. While the channel is full, the future is pending and the operator
+                // returns, so other Timely operators on this worker run. The write task taking a
+                // command wakes `waker`, which activates the operator to poll the future again.
                 let mut cx = Context::from_waker(&waker);
                 state.poll_write(&mut cx);
 
@@ -738,21 +747,21 @@ mod write {
                 });
 
                 // NOTE: While a batch write holds the corrections, the data inputs stay unread
-                // and their frontiers unobserved. Timely holds the updates until the write
-                // finishes, and the frontiers are read afresh then, so no batch starts before the
-                // updates it covers are in the corrections. A batch only starts once `desired`
-                // passed its `upper`, so what accumulates meanwhile are updates that arrive
-                // during the write, not the snapshot.
+                // and their frontiers unobserved. Timely holds the updates until the write returns
+                // the corrections. The frontiers are read afresh then, so no batch starts before
+                // its updates are in the corrections. A batch starts only once `desired` passed
+                // its `upper`. The updates that wait meanwhile arrived during the write, and are
+                // not the snapshot.
                 if let Some(corrections) = state.write.corrections_mut() {
                     // `desired` updates enter the corrections as positive contributions and
                     // `persist` updates as negative ones, so the buffers hold `desired - persist`,
                     // the updates that bring the shard in line with `desired`.
                     //
-                    // NOTE: Inserting here, rather than handing the updates to another thread,
-                    // keeps this worker busy for as long as the buffers take to absorb them, which
-                    // holds back the operators feeding it. Under memory pressure that is the rate
-                    // at which the buffers page out, and without it the updates pile up unbounded
-                    // in front of them.
+                    // NOTE: Inserting on this worker keeps it busy until the buffers absorb the
+                    // updates, which holds back the operators feeding it. Under memory pressure,
+                    // this limits the input to the rate at which the buffers page out. Handing the
+                    // updates to another thread lets them pile up unbounded in front of the
+                    // buffers.
                     desired_ok_input.for_each(|_cap, data| corrections.ok.insert(data));
                     desired_err_input.for_each(|_cap, data| corrections.err.insert(data));
                     persist_ok_input.for_each(|_cap, data| corrections.ok.insert_negated(data));
@@ -847,8 +856,8 @@ mod write {
     /// Writes the corrections before `desc.upper` as one batch and returns them.
     ///
     /// Sends the write task a `Start`, the updates cut into parts of `part_bytes`, and a
-    /// `Finish`. The future is pending while the write task holds [`PARTS_IN_FLIGHT`] parts, so a
-    /// batch never sits in memory as parts in full.
+    /// `Finish`. The future is pending while `cmd_tx` is full, and the write task receiving a
+    /// command wakes it.
     async fn write_batch(
         mut corrections: Corrections,
         desc: BatchDescription,
@@ -994,9 +1003,8 @@ mod write {
         /// consolidation instead. In read-only mode this is re-armed after each firing so it
         /// keeps sweeping forward as the frontiers advance (see `maybe_force_consolidation`).
         force_consolidation_after: Option<Antichain<Timestamp>>,
-        /// Whether the sink is in read-only mode. While read-only the `write` operator mints no
-        /// batches, so the batch-write path never sweeps `consolidate_before(upper)` forward;
-        /// the forced consolidation stands in for it and is re-armed as long as this holds.
+        /// Whether the sink is in read-only mode. While read-only, the forced consolidation
+        /// re-arms after each firing (see `maybe_force_consolidation`).
         read_only: bool,
         /// The corrections, and the batch write that holds them, if any.
         write: Write,
@@ -1033,6 +1041,10 @@ mod write {
             // its observed persist frontier is >= the batch description's `lower`, which (assuming
             // no other writers) would be never if we didn't advance the observed persist frontier
             // to the `as_of`.
+            //
+            // NOTE: This also advances the since of the corrections to the `as_of`. Without that,
+            // snapshot updates stay at times below the `as_of`, and the first batch, with
+            // `lower = as_of`, trips persist's `UpdateNotBeyondLower`.
             if advance_persist_frontiers_at_startup {
                 state.advance_persist_frontiers(as_of.borrow(), as_of.borrow());
             }
@@ -1065,12 +1077,7 @@ mod write {
             }
         }
 
-        /// Advances the `persist` frontiers, and the since of the corrections along with them.
-        ///
-        /// A batch only holds times at or beyond its `lower`, which is at least the `persist`
-        /// frontier, so the corrections can forget the distinction between earlier times.
-        /// Advancing the since together with the frontier also keeps the corrections from handing
-        /// a batch an update below its `lower`, which persist rejects.
+        /// Advances the `persist` frontiers, and the since of the corrections to them.
         ///
         /// Does nothing while a batch write holds the corrections.
         fn advance_persist_frontiers(
@@ -1083,6 +1090,10 @@ mod write {
             };
             let ok_advanced = advance(&mut self.persist_frontiers.ok, ok);
             let err_advanced = advance(&mut self.persist_frontiers.err, err);
+            // The since is the `persist` frontier, and a batch starts only once its `lower` is at
+            // or before that frontier. Rounding update times up to the since therefore lifts
+            // every update to at least the `lower` of the next batch to start, as persist
+            // requires.
             if ok_advanced || err_advanced {
                 let since = self.persist_frontiers.frontier().to_owned();
                 corrections.ok.advance_since(since.clone());
@@ -1112,13 +1123,13 @@ mod write {
             if PartialOrder::less_than(request, desired_frontier)
                 && PartialOrder::less_than(request, persist_frontier)
             {
-                // In read-only mode the sink mints no batches, so the batch-write path never
-                // sweeps `consolidate_before(upper)` forward and a single forced consolidation
-                // only covers the band below the `since` at the moment it fires, leaving the
-                // forward region uncancelled for the whole read-only window (CLU-131). Re-arm at
-                // the current persist frontier so the forced consolidation keeps sweeping forward
-                // as `desired`/`persist` advance, mirroring the read-write path. Once writes are
-                // allowed, the batch-write path takes over and we disarm.
+                // In read-only mode the sink mints no batches, so no batch write sweeps
+                // `consolidate_before(upper)` forward. A single forced consolidation only covers
+                // the band below the `since` at the moment it fires. That leaves the forward
+                // region uncancelled for the whole read-only window (CLU-131). Re-arming at the
+                // current persist frontier keeps the forced consolidation sweeping forward as
+                // `desired` and `persist` advance. Once writes are allowed, batch writes take
+                // over and the request disarms.
                 self.force_consolidation_after = if self.read_only {
                     Some(persist_frontier.to_owned())
                 } else {
@@ -1130,9 +1141,8 @@ mod write {
             }
         }
 
-        /// Update read-only mode. While read-only the forced consolidation re-arms itself; once
-        /// writes are allowed the still-armed request fires one final time and then disarms, after
-        /// which the batch-write path drives consolidation.
+        /// Update read-only mode. Once writes are allowed, a still-armed forced consolidation
+        /// fires one final time and then disarms.
         fn set_read_only(&mut self, read_only: bool) {
             self.read_only = read_only;
         }
