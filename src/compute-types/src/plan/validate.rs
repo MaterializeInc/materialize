@@ -99,13 +99,15 @@ impl std::error::Error for ValidationError {}
 /// Options for [`validate_dataflow`].
 #[derive(Clone, Debug, Default)]
 pub struct ValidateConfig {
-    /// Whether the dataflow is a user plan, whose function applications must be admitted by
-    /// [`allowlist`] and whose every column must have an inferable type. Otherwise functions
-    /// are typed by their output types only, and columns whose type cannot be inferred, such
-    /// as all-null constant columns, are accepted.
+    /// User plan mode. Enables the function allowlist and the rules that hold for user plans
+    /// only.
     ///
-    /// A user plan must also state an iteration limit for every recursive binding, which
-    /// optimizer plans of recursive queries without one do not.
+    /// In user plan mode, function applications must be admitted by [`allowlist`], every
+    /// column must have an inferable type, and every recursive binding must state an
+    /// iteration limit. Otherwise functions are typed by their output types only, columns
+    /// whose type cannot be inferred, such as all-null constant columns, are accepted, and
+    /// recursive bindings may lack a limit, as optimizer plans of recursive queries without
+    /// one do.
     pub enforce_function_allowlist: bool,
 }
 
@@ -493,7 +495,14 @@ impl Validator {
         let mut arities: BTreeMap<GlobalId, usize> = BTreeMap::new();
         let mut available: BTreeMap<GlobalId, Available> = BTreeMap::new();
         let mut types: BTreeMap<GlobalId, Vec<ColType>> = BTreeMap::new();
+        // Collections whose source operators have a temporal predicate.
+        let mut temporal = BTreeSet::new();
         for (id, import) in &df.source_imports {
+            if let Some(mfp) = &import.desc.arguments.operators {
+                if mfp.predicates.iter().any(|(_, p)| p.contains_temporal()) {
+                    temporal.insert(*id);
+                }
+            }
             let typ_arity = import.desc.typ.arity();
             let typ: Vec<ColType> = ReprRelationType::from(&import.desc.typ)
                 .column_types
@@ -569,7 +578,8 @@ impl Validator {
             let forms = available.remove(&id).unwrap_or_default();
             let types = types.remove(&id);
             let mut info = NodeInfo::new(arity, forms, types);
-            info.set_monotonicity(self.monotonicity.import(id));
+            let monotonicity = self.monotonicity.import(id, temporal.contains(&id));
+            info.set_monotonicity(monotonicity);
             self.globals.insert(id, Output::Rows(info));
         }
     }
@@ -844,7 +854,7 @@ impl Validator {
         let typer = self.typer;
         // The monotonicity of the inputs in order, or of the binding of a `Get`.
         let mut input_monotonicity = Vec::new();
-        let output = match &expr.node {
+        let mut output = match &expr.node {
             LirRelationNode::Constant { rows } => match rows {
                 Ok(rows) if !rows.is_empty() => {
                     let arity = rows[0].0.iter().count();
@@ -963,7 +973,8 @@ impl Validator {
                 let mut forms = Vec::with_capacity(inputs.len());
                 let mut input_types = Vec::with_capacity(inputs.len());
                 let mut failed = false;
-                operators::join(&mut issues, plan);
+                let single_path = self.monotonicity.single_time() && self.rec_depth == 0;
+                operators::join(&mut issues, plan, inputs.len(), single_path);
                 for input in inputs {
                     let input = self.visit(input, false)?;
                     input_monotonicity.push(input.monotonicity());
@@ -1156,25 +1167,16 @@ impl Validator {
                 })
             }
         };
-        // `Let` and `LetRec` pass on the output of their body.
-        let output = match output {
-            Some(Output::Rows(mut info))
-                if !matches!(
-                    expr.node,
-                    LirRelationNode::Let { .. } | LirRelationNode::LetRec { .. }
-                ) =>
-            {
-                let monotonicity = self.monotonicity.node(
-                    &mut issues,
-                    &expr.node,
-                    &input_monotonicity,
-                    self.rec_depth > 0,
-                );
+        if let Some(Output::Rows(info)) = output.as_mut() {
+            if let Some(monotonicity) = self.monotonicity.node(
+                &mut issues,
+                &expr.node,
+                &input_monotonicity,
+                self.rec_depth > 0,
+            ) {
                 info.set_monotonicity(monotonicity);
-                Some(Output::Rows(info))
             }
-            output => output,
-        };
+        }
         let clean = self.report(expr, issues);
         Ok(match output {
             Some(output) if clean => output,

@@ -2193,3 +2193,124 @@ fn single_time_consolidation_serves_outside_recursion_only() {
         "monotonic TopK requires a monotonic input",
     );
 }
+
+/// A dataflow joining `T1` and `T2`, both indexed by column 0, with a delta join of the
+/// given `(source, lookup)` paths.
+fn delta_join_dataflow(paths: &[(usize, usize)]) -> LirDataflowDescription {
+    let mut df = dataflow(&[], vec![]);
+    import_index(&mut df, GlobalId::Transient(3), T1, &[0], 2);
+    import_index(&mut df, GlobalId::Transient(4), T2, &[0], 2);
+    let path = |&(source, lookup): &(usize, usize)| DeltaPathPlan {
+        source_relation: source,
+        source_key: Some(vec![col(0)]),
+        initial_closure: identity_closure(2),
+        stage_plans: vec![DeltaStagePlan {
+            lookup_relation: lookup,
+            stream_key: vec![col(0)],
+            stream_thinning: vec![1],
+            lookup_key: vec![col(0)],
+            closure: identity_closure(3),
+        }],
+        final_closure: None,
+    };
+    let join = plan(LirRelationNode::Join {
+        inputs: vec![
+            get_global(T1, arranged(&[0], 2)),
+            get_global(T2, arranged(&[0], 2)),
+        ],
+        plan: JoinPlan::Delta(DeltaJoinPlan {
+            path_plans: paths.iter().map(path).collect(),
+        }),
+    });
+    df.objects_to_build.push(BuildDesc {
+        id: OUT,
+        plan: join,
+    });
+    df
+}
+
+#[mz_ore::test]
+fn rejects_delta_join_missing_path() {
+    let errs = errors(&delta_join_dataflow(&[(0, 1)]));
+    assert_error(
+        &errs,
+        Rule::Operator,
+        "delta join has 1 paths, but 2 inputs",
+    );
+}
+
+#[mz_ore::test]
+fn accepts_delta_join_of_first_path_in_single_time() {
+    // `finalize_dataflow` keeps only this path in single-time dataflows.
+    let mut df = delta_join_dataflow(&[(0, 1)]);
+    single_time(&mut df);
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+}
+
+#[mz_ore::test]
+fn rejects_delta_join_duplicate_path() {
+    let errs = errors(&delta_join_dataflow(&[(0, 1), (0, 1)]));
+    assert_error(
+        &errs,
+        Rule::Operator,
+        "delta path 1 starts at relation 0, but must start at relation 1",
+    );
+}
+
+#[mz_ore::test]
+fn rejects_delta_path_reading_an_input_twice() {
+    let errs = errors(&delta_join_dataflow(&[(0, 1), (1, 1)]));
+    assert_error(
+        &errs,
+        Rule::Operator,
+        "delta path from relation 1 reads input 1 more than once",
+    );
+    assert_error(
+        &errs,
+        Rule::Operator,
+        "delta path from relation 1 does not read input 0",
+    );
+}
+
+#[mz_ore::test]
+fn rejects_linear_join_stage_missing_input() {
+    let mut join = linear_join(
+        vec![
+            get_global(T1, AvailableCollections::new_raw()),
+            get_global(T2, AvailableCollections::new_raw()),
+        ],
+        None,
+        vec![1],
+    );
+    if let LirRelationNode::Join {
+        plan: JoinPlan::Linear(plan),
+        ..
+    } = &mut join.node
+    {
+        plan.stage_plans[0].lookup_relation = 0;
+    }
+    let errs = errors(&dataflow(&[(T1, 2), (T2, 2)], vec![(OUT, join)]));
+    assert_error(&errs, Rule::Operator, "linear join does not read input 1");
+}
+
+#[mz_ore::test]
+fn rejects_monotonic_topk_over_temporally_filtered_source() {
+    // The source's operators drop rows once `mz_now()` passes column 0.
+    let mut df = dataflow(&[(T1, 2)], vec![(OUT, monotonic_top_k(raw_t1(), 2, false))]);
+    monotonic_import(&mut df, T1);
+    let now = MirScalarExpr::CallUnmaterializable(mz_expr::UnmaterializableFunc::MzNow);
+    let bound = MirScalarExpr::column(0).call_unary(mz_expr::func::CastInt64ToMzTimestamp);
+    let operators = MapFilterProject::new(2).filter([now.call_binary(bound, mz_expr::func::Lt)]);
+    df.source_imports
+        .get_mut(&T1)
+        .expect("imported")
+        .desc
+        .arguments
+        .operators = Some(operators);
+    let errs = errors(&df);
+    assert_error(
+        &errs,
+        Rule::Monotonicity,
+        "monotonic TopK requires a monotonic input",
+    );
+}

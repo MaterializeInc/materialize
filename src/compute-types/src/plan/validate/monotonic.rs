@@ -15,7 +15,8 @@
 //! a row.
 //!
 //! The walk derives two judgements for every node. A collection is logically monotonic if it
-//! never retracts a row. That holds for imports marked monotonic and passes through `Get`,
+//! never retracts a row. That holds for imports marked monotonic whose source operators have
+//! no temporal predicate, which would retract rows as time passes, and passes through `Get`,
 //! `Mfp` and `FlatMap` without temporal bounds or retracting table functions, `ArrangeBy`,
 //! joins and unions of monotonic inputs, distinct `Reduce`s and `Threshold`s of a monotonic
 //! input, and `Let` and `LetRec` bindings, and it holds for constants of positive diffs. It
@@ -78,11 +79,18 @@ impl Analysis {
         }
     }
 
-    /// The monotonicity of the imported collection `id`.
-    pub(super) fn import(&self, id: GlobalId) -> Monotonicity {
+    pub(super) fn single_time(&self) -> bool {
+        self.single_time
+    }
+
+    /// The monotonicity of the imported collection `id`, where `temporal` says whether the
+    /// operators of one of its source imports have a temporal predicate.
+    pub(super) fn import(&self, id: GlobalId, temporal: bool) -> Monotonicity {
         let monotonic = self.monotonic_ids.contains(&id);
         Monotonicity {
-            logical: monotonic,
+            logical: monotonic && !temporal,
+            // `SingleTimeMonotonic` judges imports by their flag alone, and a single time
+            // has no later time at which a temporal predicate retracts.
             physical: self.single_time && monotonic,
         }
     }
@@ -91,14 +99,15 @@ impl Analysis {
     /// inputs in order, or of its binding for a `Get`.
     ///
     /// Checks that monotonic variants receive a monotonic input. `in_rec` says whether `node`
-    /// is inside the value of a `LetRec`. A `Let` or `LetRec` passes its first input through.
+    /// is inside the value of a `LetRec`. Returns `None` for `Let` and `LetRec`, whose output
+    /// is their body's, with the body's monotonicity.
     pub(super) fn node(
         &self,
         issues: &mut Issues,
         node: &LirRelationNode,
         inputs: &[Monotonicity],
         in_rec: bool,
-    ) -> Monotonicity {
+    ) -> Option<Monotonicity> {
         let interpreter = SingleTimeMonotonic::new(&self.monotonic_ids);
         let mut ctx = Context::default();
         ctx.is_rec = in_rec;
@@ -140,9 +149,7 @@ impl Analysis {
                     interpreter.get(&ctx, id, keys, plan),
                 )
             }
-            LirRelationNode::Let { .. } | LirRelationNode::LetRec { .. } => {
-                (first.logical, first_physical)
-            }
+            LirRelationNode::Let { .. } | LirRelationNode::LetRec { .. } => return None,
             LirRelationNode::Mfp {
                 mfp, input_key_val, ..
             } => (
@@ -216,10 +223,10 @@ impl Analysis {
                 interpreter.arrange_by(&ctx, first_physical, forms, input_key, input_mfp),
             ),
         };
-        Monotonicity {
+        Some(Monotonicity {
             logical,
             physical: self.single_time && physical,
-        }
+        })
     }
 
     /// Checks that the input of a monotonic variant of `operator` is monotonic.

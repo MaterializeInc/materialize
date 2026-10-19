@@ -163,14 +163,54 @@ pub(super) fn top_k(issues: &mut Issues, plan: &TopKPlan, strategy: &Arrangement
     }
 }
 
-/// `Join`: a delta path reads its source raw only from relation 0.
-pub(super) fn join(issues: &mut Issues, plan: &JoinPlan) {
-    let JoinPlan::Delta(plan) = plan else {
-        return;
+/// `Join`: paths cover the inputs, and a delta path reads its source raw only from relation 0.
+///
+/// A linear join and each delta path read every one of the `inputs` exactly once, as source
+/// or lookup. A delta join has one path per input, path `i` starting at relation `i`. With
+/// `single_path`, a delta join may instead have the path from relation 0 alone.
+///
+/// Rendering accepts other plans but computes a different result: it drops the matches of
+/// an input no stage reads, and counts an update once per path that starts at its relation.
+pub(super) fn join(issues: &mut Issues, plan: &JoinPlan, inputs: usize, single_path: bool) {
+    let plan = match plan {
+        JoinPlan::Linear(plan) => {
+            let lookups = plan.stage_plans.iter().map(|s| s.lookup_relation);
+            cover(issues, "linear join", plan.source_relation, lookups, inputs);
+            return;
+        }
+        JoinPlan::Delta(plan) => plan,
     };
+    let paths = &plan.path_plans;
+    // `finalize_dataflow` keeps only the path from relation 0 of delta joins outside
+    // recursions in single-time dataflows, where the other paths produce nothing.
+    let truncated = single_path && paths.len() == 1 && paths[0].source_relation == 0;
+    if !truncated {
+        if paths.len() != inputs {
+            push(
+                issues,
+                format!("delta join has {} paths, but {inputs} inputs", paths.len()),
+            );
+        }
+        for (i, path) in paths.iter().enumerate() {
+            if path.source_relation != i {
+                push(
+                    issues,
+                    format!(
+                        "delta path {i} starts at relation {}, but must start at relation {i}",
+                        path.source_relation
+                    ),
+                );
+            }
+        }
+    }
+    for path in paths {
+        let lookups = path.stage_plans.iter().map(|s| s.lookup_relation);
+        let what = format!("delta path from relation {}", path.source_relation);
+        cover(issues, &what, path.source_relation, lookups, inputs);
+    }
     // `build_update_stream_stream` asserts it, because only the first relation's path keeps
     // the updates at the as-of, which a raw collection has no times to filter by.
-    for path in &plan.path_plans {
+    for path in paths {
         if path.source_key.is_none() && path.source_relation != 0 {
             push(
                 issues,
@@ -180,6 +220,32 @@ pub(super) fn join(issues: &mut Issues, plan: &JoinPlan) {
                 ),
             );
         }
+    }
+}
+
+/// Checks that `source` and `lookups` read each of the `inputs` exactly once.
+fn cover(
+    issues: &mut Issues,
+    what: &str,
+    source: usize,
+    lookups: impl Iterator<Item = usize>,
+    inputs: usize,
+) {
+    let mut read = vec![false; inputs];
+    for relation in std::iter::once(source).chain(lookups) {
+        // Relations out of range have been reported by the arity rules.
+        if let Some(read) = read.get_mut(relation) {
+            if *read {
+                push(
+                    issues,
+                    format!("{what} reads input {relation} more than once"),
+                );
+            }
+            *read = true;
+        }
+    }
+    if let Some(relation) = read.iter().position(|read| !read) {
+        push(issues, format!("{what} does not read input {relation}"));
     }
 }
 
