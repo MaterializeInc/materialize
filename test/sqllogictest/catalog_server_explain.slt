@@ -4597,6 +4597,30 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_array_types";
+----
+mz_catalog.mz_array_types:
+  →With
+    cte l0 =
+      →Arrange (#0{schema_name}, #1{name})
+        →Read mz_internal.mz_catalog_raw
+  →Return
+    →Delta Join [%0[#0{schema_name}, #1{name}] » %1:l0[#0{schema_name}, #1{name}] » %2:l0[#0{schema_name}, #1{name}]] [%1:l0[#0{schema_name}, #1{name}] » %0[#0{schema_name}, #1{name}] » %2:l0[#0{schema_name}, #1{name}]] [%2:l0[#0{schema_name}, #1{name}] » %0[#2{element_schema_name}, #3{element_name}] » %1:l0[#0{schema_name}, #1{name}]]
+      →Arrange (#0{schema_name}, #1{name}) (#2{element_schema_name}, #3{element_name})
+        →Constant (38 rows)
+      →Arranged l0
+      →Arranged l0
+
+Source mz_internal.mz_catalog_raw
+  project=(#3, #2, #4)
+  filter=(("GidMapping" = (#0{data} ->> "kind")) AND ("7" = (#1 ->> "object_type")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL)
+  map=((#0{data} -> "key"), (#1 ->> "object_name"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_audit_events";
 ----
 mz_catalog.mz_audit_events:
@@ -4616,6 +4640,34 @@ EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_aws_privatelink_connections";
 ----
 mz_catalog.mz_aws_privatelink_connections:
   →Constant (0 rows)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_base_types";
+----
+mz_catalog.mz_base_types:
+  →Union
+    →Differential Join %0[#0{schema_name}, #1{name}] » %1:mz_catalog_raw[#0{schema_name}, #1{name}]
+      →Arrange (#0{schema_name}, #1{name})
+        →Constant (37 rows)
+      →Arrange (#0{schema_name}, #1{name})
+        →Fused with Child Map/Filter/Project
+          Project: #4, #3, #5
+          Filter: ("7" = (#0 ->> "object_type")) AND ("GidMapping" = #2) AND (#3) IS NOT NULL AND (#4) IS NOT NULL
+          Map: (#0 ->> "object_name"), (#0 ->> "schema_name"), ("s" || (#1 ->> "catalog_id"))
+            →Read mz_internal.mz_catalog_raw
+    →Fused with Child Map/Filter/Project
+      Project: #4
+      Filter: ("Item" = #2) AND ("type" = (#3 ->> "type")) AND ("record" = (#3 ->> "type_kind"))
+      Map: parse_catalog_create_sql((((#1 -> "definition") -> "V1") ->> "create_sql")), parse_catalog_id((#0 -> "gid"))
+        →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#1..=#3)
+  map=((#0{data} -> "key"), (#0{data} -> "value"), (#0{data} ->> "kind"))
 
 Target cluster: mz_catalog_server
 
@@ -4930,7 +4982,7 @@ mz_catalog.mz_columns:
                               →Read l1
       →Differential Join %1:mz_catalog_raw[#1{schema_name}, #2{name}] » %0[#0{schema_name}, #1{relation_name}]
         →Arrange (#0{schema_name}, #1{relation_name})
-          →Constant (1937 rows)
+          →Constant (1961 rows)
         →Arrange (#1{schema_name}, #2{name})
           →Fused with Child Map/Filter/Project
             Project: #6, #4, #3
@@ -4986,6 +5038,172 @@ Source mz_internal.mz_catalog_raw
   project=(#2..=#7)
   filter=(("DefaultPrivileges" = (#0{data} ->> "kind")))
   map=((#0{data} -> "key"), parse_catalog_id((#1 -> "role_id")), case when (json_null != (#1 -> "database_id")) then parse_catalog_id(((#0{data} -> "key") -> "database_id")) else null end, case when (json_null != (#1 -> "schema_id")) then parse_catalog_id(((#0{data} -> "key") -> "schema_id")) else null end, case when ("1" = (#1 ->> "object_type")) then "table" else case when ("2" = ((#0{data} -> "key") ->> "object_type")) then "view" else case when ("3" = ((#0{data} -> "key") ->> "object_type")) then "materialized view" else case when ("4" = ((#0{data} -> "key") ->> "object_type")) then "source" else case when ("5" = ((#0{data} -> "key") ->> "object_type")) then "sink" else case when ("6" = ((#0{data} -> "key") ->> "object_type")) then "index" else case when ("7" = ((#0{data} -> "key") ->> "object_type")) then "type" else case when ("8" = ((#0{data} -> "key") ->> "object_type")) then "role" else case when ("9" = ((#0{data} -> "key") ->> "object_type")) then "cluster" else case when ("10" = ((#0{data} -> "key") ->> "object_type")) then "cluster replica" else case when ("11" = ((#0{data} -> "key") ->> "object_type")) then "secret" else case when ("12" = ((#0{data} -> "key") ->> "object_type")) then "connection" else case when ("13" = ((#0{data} -> "key") ->> "object_type")) then "database" else case when ("14" = ((#0{data} -> "key") ->> "object_type")) then "schema" else case when ("15" = ((#0{data} -> "key") ->> "object_type")) then "function" else case when ("17" = ((#0{data} -> "key") ->> "object_type")) then "network policy" else null end end end end end end end end end end end end end end end end, parse_catalog_id((#1 -> "grantee")), parse_catalog_acl_mode(((#0{data} -> "value") -> "privileges")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_functions";
+----
+mz_catalog.mz_functions:
+  →With
+    cte l0 =
+      →Delta Join [%0[#1{schema_name}, #2{name}] » %1:mz_catalog_raw[#0{schema_name}, #1{name}] » %2:mz_schemas[#1{name}]] [%1:mz_catalog_raw[#0{schema_name}] » %0[#1{schema_name}, #2{name}] » %2:mz_schemas[#1{name}]] [%2:mz_schemas[#1{name}] » %1:mz_catalog_raw[#0{schema_name}] » %0[#1{schema_name}, #2{name}]]
+        →Arrange (#1{schema_name}, #2{name})
+          →Constant (639 rows)
+        →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
+          →Fused with Child Map/Filter/Project
+            Project: #4, #3, #5
+            Filter: ("8" = #2) AND (#4) IS NOT NULL
+            Map: (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id"))
+              →Read mz_internal.mz_catalog_raw
+        →Arrange (#1{name})
+          →Fused with Child Map/Filter/Project
+            Project: #1, #3
+            Filter: (#0{database_id}) IS NULL
+              →Arranged mz_catalog.mz_schemas
+                Key: (#2{database_id})
+    cte l1 =
+      →Non-incremental GroupAggregate
+        Aggregation: array_agg[order_by=[#0 asc nulls_last]](row(array[#2{id}], #1{ordinality}))
+        Key:
+          Project: #0
+        →Differential Join %1:mz_catalog_raw[#0{name}] » %0[#1{name}]
+          →Arrange (#1{name})
+            →Constant (937 rows)
+          →Arrange (#0{name})
+            →Fused with Child Map/Filter/Project
+              Project: #3, #4
+              Filter: ("7" = #2)
+              Map: ("s" || ((#0{data} -> "value") ->> "catalog_id"))
+                →Read mz_internal.mz_catalog_raw
+    cte l2 =
+      →Union
+        →Fused with Child Map/Filter/Project
+          Project: #2, #3
+            →Read l0
+        →Constant (1 row)
+    cte l3 =
+      →Negate Diffs
+        →Fused with Child Map/Filter/Project
+          Project: #3
+          Filter: ("7" = #2)
+            →Read mz_internal.mz_catalog_raw
+    cte l4 =
+      →Fused with Child Map/Filter/Project
+        Project: #3..=#5
+        Filter: ("7" = #2)
+        Map: ("s" || ((#0{data} -> "value") ->> "catalog_id")), true
+          →Read mz_internal.mz_catalog_raw
+  →Return
+    →Delta Join [%0:l0[#0] » %1[#0] » %2[#0] » %3[#0]] [%1[#0] » %0:l0[#0] » %2[#0] » %3[#0]] [%2[#0] » %0:l0[#2] » %1[#0] » %3[#0]] [%3[#0] » %0:l0[#3] » %1[#0] » %2[#0]]
+      path %0:
+        after %1:
+          Project: #0..=#6, #9
+          Map: case when (#8) IS NULL then {} else coalesce(#7, {}) end
+        after %2:
+          Project: #1..=#7, #10
+          Map: case when (#9) IS NULL then null else #8 end
+        after %3:
+          Project: #1..=#7, #10
+          Map: case when (#9) IS NULL then null else #8 end
+        Final closure:
+          Project: #3, #0, #4, #1, #5..=#7, #2, #8
+          Map: "s1"
+      path %1:
+        after %2:
+          Project: #1..=#7, #10
+          Map: case when (#9) IS NULL then null else #8 end
+        after %3:
+          Project: #1..=#7, #10
+          Map: case when (#9) IS NULL then null else #8 end
+        Final closure:
+          Project: #3, #0, #4, #1, #5..=#7, #2, #8
+          Map: "s1"
+      path %2:
+        after %1:
+          Project: #0..=#6, #9
+          Map: case when (#8) IS NULL then {} else coalesce(#7, {}) end
+        after %3:
+          Project: #1..=#7, #10
+          Map: case when (#9) IS NULL then null else #8 end
+        Final closure:
+          Project: #3, #0, #4, #1, #6, #5, #7, #2, #8
+          Map: "s1"
+      path %3:
+        after %1:
+          Project: #0..=#6, #9
+          Map: case when (#8) IS NULL then {} else coalesce(#7, {}) end
+        after %2:
+          Project: #1..=#7, #10
+          Map: case when (#9) IS NULL then null else #8 end
+        Final closure:
+          Project: #3, #0, #4, #1, #6, #7, #5, #2, #8
+          Map: "s1"
+      →Arrange (#0) (#2) (#3)
+        →Stream l0
+      →Arrange (#0)
+        →Union
+          →Fused with Child Map/Filter/Project
+            Project: #0..=#2
+            Map: true
+              →Arranged l1
+                Key: (#0)
+          →Map/Filter/Project
+            Project: #0..=#2
+            Map: null, null
+              →Threshold Diffs #0
+                →Arrange (#0)
+                  →Consolidating Union
+                    →Negate Diffs
+                      →Fused with Child Map/Filter/Project
+                        Project: #0
+                          →Arranged l1
+                            Key: (#0)
+                    →Unarranged Raw Stream
+                      →Distinct GroupAggregate
+                        →Fused with Child Map/Filter/Project
+                          Project: #0
+                            →Read l0
+      →Arrange (#0)
+        →Union
+          →Stream l4
+          →Map/Filter/Project
+            Project: #0..=#2
+            Map: null, null
+              →Threshold Diffs #0
+                →Arrange (#0)
+                  →Union
+                    →Stream l3
+                    →Unarranged Raw Stream
+                      →Distinct GroupAggregate
+                        →Fused with Child Map/Filter/Project
+                          Project: #0
+                            →Read l2
+      →Arrange (#0)
+        →Union
+          →Stream l4
+          →Map/Filter/Project
+            Project: #0..=#2
+            Map: null, null
+              →Threshold Diffs #0
+                →Arrange (#0)
+                  →Union
+                    →Stream l3
+                    →Unarranged Raw Stream
+                      →Distinct GroupAggregate
+                        →Fused with Child Map/Filter/Project
+                          Project: #1
+                            →Read l2
+
+Source mz_internal.mz_catalog_raw
+  project=(#0, #1, #3, #2)
+  filter=(("GidMapping" = (#0{data} ->> "kind")) AND (#2) IS NOT NULL)
+  map=((#0{data} -> "key"), (#1 ->> "object_name"), (#1 ->> "object_type"))
+
+Used Indexes:
+  - mz_catalog.mz_schemas_ind (*** full scan ***)
 
 Target cluster: mz_catalog_server
 
@@ -5307,6 +5525,36 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_list_types";
+----
+mz_catalog.mz_list_types:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#2..=#4)
+  filter=(("Item" = (#0{data} ->> "kind")) AND ("list" = (#1 ->> "type_kind")) AND ("type" = (#1 ->> "type")))
+  map=(parse_catalog_create_sql(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql")), parse_catalog_id(((#0{data} -> "key") -> "gid")), (#1{parsed} ->> "element_id"), strtolist((#1{parsed} ->> "element_modifiers")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_map_types";
+----
+mz_catalog.mz_map_types:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#2..=#6)
+  filter=(("Item" = (#0{data} ->> "kind")) AND ("map" = (#1 ->> "type_kind")) AND ("type" = (#1 ->> "type")))
+  map=(parse_catalog_create_sql(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql")), parse_catalog_id(((#0{data} -> "key") -> "gid")), (#1{parsed} ->> "key_id"), (#1{parsed} ->> "value_id"), strtolist((#1{parsed} ->> "key_modifiers")), strtolist((#1{parsed} ->> "value_modifiers")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_materialized_views";
 ----
 mz_catalog.mz_materialized_views:
@@ -5343,7 +5591,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (51 rows)
+        →Constant (60 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -5370,6 +5618,81 @@ Source mz_internal.mz_catalog_raw
 Used Indexes:
   - mz_catalog.mz_clusters_ind (*** full scan ***)
   - mz_catalog.mz_schemas_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_operators";
+----
+mz_catalog.mz_operators:
+  →With
+    cte l0 =
+      →Arrange (#0{name})
+        →Read mz_internal.mz_catalog_raw
+    cte l1 =
+      →Differential Join %1[#0] » %0[#0{oid}]
+        →Arrange (#0{oid})
+          →Constant (344 rows)
+        →Non-incremental GroupAggregate
+          Aggregation: array_agg[order_by=[#0 asc nulls_last]](row(array[#2{id}], #1{ordinality}))
+          Key:
+            Project: #0
+          →Differential Join %1:l0[#0{name}] » %0[#1{name}]
+            →Arrange (#1{name})
+              →Constant (674 rows)
+            →Arranged l0
+    cte l2 =
+      →Arrange (#2{return_type_name})
+        →Stream l1
+    cte l3 =
+      →Differential Join %1:l0[#0{name}] » %0:l2[#2{return_type_name}]
+        →Arranged l2
+        →Arranged l0
+  →Return
+    →Union
+      →Map/Filter/Project
+        Project: #0..=#3
+        Map: null
+          →Consolidating Union
+            →Negate Diffs
+              →Differential Join %1[#0] » %0:l2[#2{return_type_name}]
+                →Arranged l2
+                →Distinct GroupAggregate
+                  →Fused with Child Map/Filter/Project
+                    Project: #2
+                      →Read l3
+            →Fused with Child Map/Filter/Project
+              Project: #0, #1, #3
+                →Read l1
+      →Fused with Child Map/Filter/Project
+        Project: #0, #1, #3, #4
+          →Read l3
+
+Source mz_internal.mz_catalog_raw
+  project=(#2, #3)
+  filter=(("GidMapping" = (#0{data} ->> "kind")) AND ("7" = (#1 ->> "object_type")) AND (#2) IS NOT NULL)
+  map=((#0{data} -> "key"), (#1 ->> "object_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_pseudo_types";
+----
+mz_catalog.mz_pseudo_types:
+  →Differential Join %0[#0{schema_name}, #1{name}] » %1:mz_catalog_raw[#0{schema_name}, #1{name}]
+    →Arrange (#0{schema_name}, #1{name})
+      →Constant (15 rows)
+    →Arrange (#0{schema_name}, #1{name})
+      →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#3, #2, #4)
+  filter=(("GidMapping" = (#0{data} ->> "kind")) AND ("7" = (#1 ->> "object_type")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL)
+  map=((#0{data} -> "key"), (#1 ->> "object_name"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id")))
 
 Target cluster: mz_catalog_server
 
@@ -5688,7 +6011,7 @@ mz_catalog.mz_tables:
           Project: #3, #0, #4, #1, #5, #2, #6, #6, #6
           Map: "s1", null
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (23 rows)
+        →Constant (13 rows)
       →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #5, #4, #6
@@ -5704,6 +6027,55 @@ mz_catalog.mz_tables:
 
 Source mz_internal.mz_catalog_raw
   project=(#0..=#3)
+  map=((#0{data} -> "key"), (#0{data} -> "value"), (#0{data} ->> "kind"))
+
+Used Indexes:
+  - mz_catalog.mz_schemas_ind (*** full scan ***)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_types";
+----
+mz_catalog.mz_types:
+  →Union
+    →Fused with Child Map/Filter/Project
+      Project: #5..=#11, #3, #12
+      Filter: ("Item" = #2) AND ("type" = (#4 ->> "type"))
+      Map: (((#1 -> "definition") -> "V1") ->> "create_sql"), parse_catalog_create_sql(#3), parse_catalog_id((#0 -> "gid")), text_to_oid((#1 ->> "oid")), parse_catalog_id((#1 -> "schema_id")), (#1 ->> "name"), (#4 ->> "category"), parse_catalog_id((#1 -> "owner_id")), parse_catalog_privileges((#1 -> "privileges")), redact_sql(#3)
+        →Read mz_internal.mz_catalog_raw
+    →Delta Join [%0[#1{schema_name}, #2{name}] » %1:mz_catalog_raw[#0{schema_name}, #1{name}] » %2:mz_schemas[#1{name}]] [%1:mz_catalog_raw[#0{schema_name}] » %0[#1{schema_name}, #2{name}] » %2:mz_schemas[#1{name}]] [%2:mz_schemas[#1{name}] » %1:mz_catalog_raw[#0{schema_name}] » %0[#1{schema_name}, #2{name}]]
+      path %0:
+        Final closure:
+          Project: #3, #0, #4, #1, #2, #6, #5, #7, #7
+          Map: {=U/s1, s1=U/s1}, "s1", null
+      path %1:
+        Final closure:
+          Project: #3, #0, #4, #1, #2, #6, #5, #7, #7
+          Map: {=U/s1, s1=U/s1}, "s1", null
+      path %2:
+        Final closure:
+          Project: #3, #0, #4, #1, #2, #6, #5, #7, #7
+          Map: {=U/s1, s1=U/s1}, "s1", null
+      →Arrange (#1{schema_name}, #2{name})
+        →Constant (90 rows)
+      →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
+        →Fused with Child Map/Filter/Project
+          Project: #4, #3, #5
+          Filter: ("7" = (#0 ->> "object_type")) AND ("GidMapping" = #2) AND (#3) IS NOT NULL AND (#4) IS NOT NULL
+          Map: (#0 ->> "object_name"), (#0 ->> "schema_name"), ("s" || (#1 ->> "catalog_id"))
+            →Read mz_internal.mz_catalog_raw
+      →Arrange (#1{name})
+        →Fused with Child Map/Filter/Project
+          Project: #1, #3
+          Filter: (#0{database_id}) IS NULL
+            →Arranged mz_catalog.mz_schemas
+              Key: (#2{database_id})
+
+Source mz_internal.mz_catalog_raw
+  project=(#1..=#3)
   map=((#0{data} -> "key"), (#0{data} -> "value"), (#0{data} ->> "kind"))
 
 Used Indexes:
@@ -5743,7 +6115,7 @@ mz_catalog.mz_views:
           Project: #5, #0, #6, #1, #2, #8, #3, #4, #7
           Map: "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (198 rows)
+        →Constant (202 rows)
       →Arrange (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #5, #4, #6
@@ -5884,7 +6256,7 @@ mz_internal.mz_history_retention_strategies:
           Project: #3, #5
           Map: ("s" || ((#4{data} -> "value") ->> "catalog_id"))
         →Arrange (#2{name}, #0{object_type}, #1{schema_name})
-          →Constant (180 rows)
+          →Constant (179 rows)
         →Arrange (((#0{data} -> "key") ->> "object_name"), ((#0{data} -> "key") ->> "object_type"), ((#0{data} -> "key") ->> "schema_name"))
           →Fused with Child Map/Filter/Project
             Project: #0
@@ -6046,7 +6418,7 @@ mz_internal.mz_materialized_view_refresh_strategies:
         Project: #0..=#3, #3
         Map: "on-commit", null, null
       →Arrange (#1{name}, #0{schema_name})
-        →Constant (51 rows)
+        →Constant (60 rows)
       →Arrange (((#0{data} -> "key") ->> "object_name"), ((#0{data} -> "key") ->> "schema_name"))
         →Fused with Child Map/Filter/Project
           Project: #0
@@ -6230,7 +6602,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1088 rows)
+            →Constant (1135 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -6536,6 +6908,25 @@ Source mz_internal.mz_catalog_raw
 
 Used Indexes:
   - mz_catalog.mz_sources_ind (delta join lookup)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_internal"."mz_type_pg_metadata";
+----
+mz_internal.mz_type_pg_metadata:
+  →Differential Join %0[#0{schema_name}, #1{name}] » %1:mz_catalog_raw[#0{schema_name}, #1{name}]
+    →Arrange (#0{schema_name}, #1{name})
+      →Constant (77 rows)
+    →Arrange (#0{schema_name}, #1{name})
+      →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#3, #2, #4)
+  filter=(("GidMapping" = (#0{data} ->> "kind")) AND ("7" = (#1 ->> "object_type")) AND (#2) IS NOT NULL AND (#3) IS NOT NULL)
+  map=((#0{data} -> "key"), (#1 ->> "object_name"), (#1 ->> "schema_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id")))
 
 Target cluster: mz_catalog_server
 
@@ -8758,6 +9149,16 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_aggregates";
+----
+Explained Query (fast path):
+  →Constant (65 rows)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_aws_privatelink_connection_statuses";
 ----
 Explained Query:
@@ -8796,7 +9197,17 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_columns";
 ----
 Explained Query (fast path):
-  →Constant (1937 rows)
+  →Constant (1961 rows)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_functions";
+----
+Explained Query (fast path):
+  →Constant (639 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8836,7 +9247,17 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (51 rows)
+  →Constant (60 rows)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_operators";
+----
+Explained Query (fast path):
+  →Constant (344 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8856,7 +9277,17 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_tables";
 ----
 Explained Query (fast path):
-  →Constant (23 rows)
+  →Constant (13 rows)
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_types";
+----
+Explained Query (fast path):
+  →Constant (90 rows)
 
 Target cluster: mz_catalog_server
 
@@ -8866,7 +9297,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_views";
 ----
 Explained Query (fast path):
-  →Constant (198 rows)
+  →Constant (202 rows)
 
 Target cluster: mz_catalog_server
 
@@ -10784,7 +11215,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1088 rows)
+            →Constant (1135 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -17733,12 +18164,8 @@ EOF
 query T multiline
 EXPLAIN SELECT * FROM "pg_catalog"."pg_aggregate";
 ----
-Explained Query:
-  →Read mz_internal.mz_aggregates
-
-Source mz_internal.mz_aggregates
-  project=(#0..=#2, #4, #3, #3, #3, #3, #3, #3, #3, #5..=#7, #7..=#10, #8, #10, #11, #11)
-  map=(0, null, false, false, null, 0, null, null, null)
+Explained Query (fast path):
+  →Constant (65 rows)
 
 Target cluster: mz_catalog_server
 
