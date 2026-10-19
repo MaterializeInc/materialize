@@ -10,6 +10,7 @@
 """Check catalog transaction isolation without retrying SQL statements."""
 
 import random
+import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
@@ -424,9 +425,21 @@ def source_late_binding(c: Composition, interference: str, before_commit: bool) 
                 assert execute(other, f"SELECT * FROM {schema}.pending").fetchall() == [
                     (7,)
                 ]
-                assert execute(
-                    other, f"SELECT count(*) FROM {schema}.final"
-                ).fetchall() == [(3,)]
+                final_id = next(id for id, name in after if name == "final")
+                deadline = time.monotonic() + 120
+                # DDL completion does not imply that the bounded generator has finished.
+                while True:
+                    frontier = execute(
+                        other,
+                        "SELECT write_frontier IS NULL FROM mz_internal.mz_frontiers "
+                        f"WHERE object_id = '{final_id}'",
+                    ).fetchall()
+                    if frontier == [(True,)]:
+                        break
+                    assert time.monotonic() < deadline, (schema, final_id, frontier)
+                    time.sleep(0.1)
+                rows = execute(other, f"SELECT count(*) FROM {schema}.final").fetchall()
+                assert rows == [(3,)], (schema, rows)
             else:
                 assert state is not None, f"{schema}: unexpectedly committed"
                 assert after == before, (schema, before, after)
