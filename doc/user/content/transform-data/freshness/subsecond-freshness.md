@@ -70,15 +70,21 @@ The new value applies as follows:
 | ------ | ------ |
 | Tables | Use the new tick rate immediately. |
 | Sources created after the change | Use the new tick rate. |
-| Sources created before the change | Keep their existing tick rate. See [Step 2](#step-2-update-existing-sources). |
+| Sources created before the change | Keep their existing tick rate until Materialize restarts, for example during an upgrade. To apply the new tick rate now, see [Step 2](#step-2-update-existing-sources). |
 
 ## Step 2. Update existing sources
 
-For each existing source, reset its tick rate to the new default:
+For each existing source, set an explicit tick rate and then reset it, so that
+the source picks up the new default:
 
 ```mzsql
+ALTER SOURCE my_source SET (TIMESTAMP INTERVAL = '1s');
 ALTER SOURCE my_source RESET (TIMESTAMP INTERVAL);
 ```
+
+`RESET` on its own has no effect on a source whose tick rate was never set
+explicitly, so run both statements. `'1s'` works because it falls within the
+default `min_timestamp_interval` and `max_timestamp_interval`.
 
 This adjusts the tick rate for all of the source's tables or subsources. Run
 `ALTER SOURCE` on the source itself, not on a subsource.
