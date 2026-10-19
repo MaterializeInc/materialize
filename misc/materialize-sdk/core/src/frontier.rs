@@ -90,6 +90,27 @@ impl Serialize for Frontier {
     }
 }
 
+/// A decimal string with the format `frontier`, from 1 to 2^64, which does
+/// not fit a `uint64`.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for Frontier {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Frontier".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "format": "frontier",
+            "pattern": "^[1-9][0-9]*$",
+        })
+    }
+}
+
 impl<'de> Deserialize<'de> for Frontier {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;

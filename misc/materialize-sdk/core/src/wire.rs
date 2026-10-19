@@ -26,7 +26,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A `u64` in its JSON form, a decimal string.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct U64(u64);
+pub(crate) struct U64(u64);
 
 impl Serialize for U64 {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -199,5 +199,50 @@ mod tests {
     fn json_numbers_are_rejected() {
         assert!(serde_json::from_str::<U64>("1").is_err());
         assert_eq!(serde_json::from_str::<U64>("\"1\"").unwrap(), U64(1));
+    }
+}
+
+/// The schema of [`U64`]: a decimal string with the format `uint64`, which
+/// the packages' generated types turn into their native integer.
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for U64 {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "U64".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "format": "uint64",
+            "pattern": "^(0|[1-9][0-9]*)$",
+        })
+    }
+}
+
+/// The schema of an [`i64_string`] field: a decimal string with the format
+/// `int64`.
+#[cfg(feature = "schema")]
+pub(crate) struct I64;
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for I64 {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "I64".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "format": "int64",
+            "pattern": "^(0|-?[1-9][0-9]*)$",
+        })
     }
 }

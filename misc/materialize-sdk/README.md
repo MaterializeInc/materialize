@@ -6,6 +6,8 @@ design is in `doc/developer/design/20260706_materialize_sdk.md`.
 - `core/`: the protocol core, a Rust library with no I/O that every language
   package wraps.
 - `conformance/`: language-neutral test vectors that every package runs.
+- `schema/`: the JSON Schemas of the values the core hands to the packages,
+  which `codegen/` generates along with each package's types.
 - `rust/`: the Rust package, over `tokio-postgres`.
 - `python/`: the Python package, the core built with PyO3 under psycopg.
 - `node/`: the Node package, the core built for WebAssembly under
@@ -46,6 +48,17 @@ cargo test --tests -- --ignored --skip before_a_restart --skip after_a_restart
 ```
 
 `bin/fmt` formats it with the rest of the repository.
+
+The Python and Node packages' value types, and their conversion of decimal
+strings to native integers, are generated from the core's types. After changing
+a value the core hands out, regenerate them:
+
+```
+cargo run -p materialize-sdk-codegen
+```
+
+`cargo test` fails while a generated file is stale, and checks every value in
+the conformance vectors against the schemas.
 
 The Python package builds with maturin, in a virtual environment with
 Python 3.10 or later:
