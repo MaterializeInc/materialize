@@ -13,15 +13,21 @@ use std::num::NonZeroU64;
 use mz_expr::{
     LetRecLimit, MapFilterProject, MfpPlan, MirScalarExpr, SafeMfpPlan, permutation_for_arrangement,
 };
-use mz_repr::{Datum, Diff, Row, SqlRelationType, SqlScalarType, StableRow, Timestamp};
+use mz_repr::{
+    Datum, Diff, RelationDesc, Row, SqlRelationType, SqlScalarType, StableRow, Timestamp,
+};
 use timely::progress::Antichain;
 
 use super::*;
 use crate::dataflows::{BuildDesc, IndexDesc, IndexImport, SourceImport};
+use crate::plan::join::delta_join::{DeltaPathPlan, DeltaStagePlan};
 use crate::plan::join::linear_join::LinearStagePlan;
-use crate::plan::join::{JoinClosure, JoinPlan, LinearJoinPlan};
+use crate::plan::join::{DeltaJoinPlan, JoinClosure, JoinPlan, LinearJoinPlan};
 use crate::plan::scalar::LirScalarExpr;
-use crate::plan::{ArrangementStrategy, GetPlan};
+use crate::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
+use crate::plan::top_k::{BasicTopKPlan, TopKPlan};
+use crate::plan::{ArrangementStrategy, AvailableCollections, GetPlan};
+use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
 thread_local! {
@@ -651,4 +657,488 @@ fn deep_plan_does_not_overflow() {
         .expect("drop does not panic");
     let errs = result.expect_err("too deep");
     assert_error(&errs, Rule::Shape, "nests deeper than");
+}
+
+/// Imports index `idx` on `on` by `key` columns, over a collection of `arity` columns.
+fn import_index(
+    df: &mut LirDataflowDescription,
+    idx: GlobalId,
+    on: GlobalId,
+    key: &[usize],
+    arity: usize,
+) {
+    df.index_imports.insert(
+        idx,
+        IndexImport {
+            desc: IndexDesc {
+                on_id: on,
+                key: key.iter().map(|c| MirScalarExpr::column(*c)).collect(),
+            },
+            typ: ReprRelationType::from(&int8_type(arity)),
+            monotonic: false,
+            with_snapshot: true,
+        },
+    );
+}
+
+fn index_export(
+    df: &mut LirDataflowDescription,
+    id: GlobalId,
+    on: GlobalId,
+    key: &[usize],
+    arity: usize,
+) {
+    df.index_exports.insert(
+        id,
+        (
+            IndexDesc {
+                on_id: on,
+                key: key.iter().map(|c| MirScalarExpr::column(*c)).collect(),
+            },
+            ReprRelationType::from(&int8_type(arity)),
+        ),
+    );
+}
+
+fn arranged(key: &[usize], arity: usize) -> AvailableCollections {
+    AvailableCollections::new_arranged(vec![triple(key, arity)])
+}
+
+fn raw_and_arranged(key: &[usize], arity: usize) -> AvailableCollections {
+    AvailableCollections {
+        raw: true,
+        arranged: vec![triple(key, arity)],
+    }
+}
+
+fn get_local_keys(id: LocalId, keys: AvailableCollections) -> LirRelationExpr {
+    plan(LirRelationNode::Get {
+        id: Id::Local(id),
+        keys,
+        plan: GetPlan::PassArrangements,
+    })
+}
+
+/// A closure that passes on all of its `width` columns.
+fn identity_closure(width: usize) -> JoinClosure {
+    JoinClosure {
+        ready_equivalences: vec![],
+        before: SafeMfpPlan::from_mfp(raw_mfp(width, vec![], vec![], (0..width).collect())),
+    }
+}
+
+/// A linear join of two inputs of two columns each on their column 0, with the given source
+/// key and stream thinning.
+fn linear_join(
+    inputs: Vec<LirRelationExpr>,
+    source_key: Option<Vec<LirScalarExpr>>,
+    stream_thinning: Vec<usize>,
+) -> LirRelationExpr {
+    plan(LirRelationNode::Join {
+        inputs,
+        plan: JoinPlan::Linear(LinearJoinPlan {
+            source_relation: 0,
+            source_key,
+            initial_closure: None,
+            stage_plans: vec![LinearStagePlan {
+                lookup_relation: 1,
+                stream_key: vec![col(0)],
+                stream_thinning,
+                lookup_key: vec![col(0)],
+                closure: identity_closure(3),
+            }],
+            final_closure: None,
+        }),
+    })
+}
+
+fn identity_mfp_plan(arity: usize) -> MfpPlan<LirScalarExpr> {
+    MfpPlan::from_parts(
+        SafeMfpPlan::from_mfp(MapFilterProject::new(arity)),
+        vec![],
+        vec![],
+    )
+}
+
+fn arrange_by(
+    input: LirRelationExpr,
+    forms: AvailableCollections,
+    arity: usize,
+) -> LirRelationExpr {
+    plan(LirRelationNode::ArrangeBy {
+        input_key: None,
+        input: Box::new(input),
+        input_mfp: identity_mfp_plan(arity),
+        forms,
+        strategy: ArrangementStrategy::Direct,
+    })
+}
+
+fn threshold(input: LirRelationExpr, key: &[usize], arity: usize) -> LirRelationExpr {
+    plan(LirRelationNode::Threshold {
+        input: Box::new(input),
+        threshold_plan: ThresholdPlan::Basic(BasicThresholdPlan {
+            ensure_arrangement: triple(key, arity),
+        }),
+    })
+}
+
+#[mz_ore::test]
+fn rejects_missing_join_arrangement() {
+    // T2 is imported raw only, but the stage looks it up arranged by column 0.
+    let join = linear_join(
+        vec![
+            get_global(T1, AvailableCollections::new_raw()),
+            get_global(T2, AvailableCollections::new_raw()),
+        ],
+        None,
+        vec![1],
+    );
+    let errs = errors(&dataflow(&[(T1, 2), (T2, 2)], vec![(OUT, join)]));
+    assert_error(&errs, Rule::Arrangement, "input 1 arranged by [#0]");
+}
+
+#[mz_ore::test]
+fn accepts_join_with_arranged_inputs() {
+    // Both inputs are indexes by column 0, and the join streams T1's arrangement.
+    let mut df = dataflow(&[], vec![]);
+    import_index(&mut df, GlobalId::Transient(3), T1, &[0], 2);
+    import_index(&mut df, GlobalId::Transient(4), T2, &[0], 2);
+    let join = linear_join(
+        vec![
+            get_global(T1, arranged(&[0], 2)),
+            get_global(T2, arranged(&[0], 2)),
+        ],
+        Some(vec![col(0)]),
+        vec![1],
+    );
+    df.objects_to_build.push(BuildDesc {
+        id: OUT,
+        plan: join,
+    });
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+}
+
+#[mz_ore::test]
+fn accepts_delta_join_with_arranged_inputs() {
+    let mut df = dataflow(&[], vec![]);
+    import_index(&mut df, GlobalId::Transient(3), T1, &[0], 2);
+    import_index(&mut df, GlobalId::Transient(4), T2, &[0], 2);
+    let path = |source: usize, lookup: usize| DeltaPathPlan {
+        source_relation: source,
+        source_key: Some(vec![col(0)]),
+        initial_closure: identity_closure(2),
+        stage_plans: vec![DeltaStagePlan {
+            lookup_relation: lookup,
+            stream_key: vec![col(0)],
+            stream_thinning: vec![1],
+            lookup_key: vec![col(0)],
+            closure: identity_closure(3),
+        }],
+        final_closure: None,
+    };
+    let join = plan(LirRelationNode::Join {
+        inputs: vec![
+            get_global(T1, arranged(&[0], 2)),
+            get_global(T2, arranged(&[0], 2)),
+        ],
+        plan: JoinPlan::Delta(DeltaJoinPlan {
+            path_plans: vec![path(0, 1), path(1, 0)],
+        }),
+    });
+    df.objects_to_build.push(BuildDesc {
+        id: OUT,
+        plan: join,
+    });
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+}
+
+#[mz_ore::test]
+fn rejects_non_canonical_stream_thinning() {
+    let mut df = dataflow(&[(T1, 2)], vec![]);
+    import_index(&mut df, GlobalId::Transient(4), T2, &[0], 2);
+    let join = linear_join(
+        vec![
+            get_global(T1, AvailableCollections::new_raw()),
+            get_global(T2, arranged(&[0], 2)),
+        ],
+        None,
+        vec![0],
+    );
+    df.objects_to_build.push(BuildDesc {
+        id: OUT,
+        plan: join,
+    });
+    let errs = errors(&df);
+    assert_error(&errs, Rule::Arrangement, "stream thinning [0]");
+}
+
+#[mz_ore::test]
+fn rejects_pass_arrangements_missing_key() {
+    let plan = get_global(T1, arranged(&[0], 2));
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, plan)]));
+    assert_error(&errs, Rule::Arrangement, "arranged by [#0]");
+}
+
+#[mz_ore::test]
+fn rejects_pass_arrangements_missing_raw() {
+    let mut df = dataflow(&[], vec![]);
+    import_index(&mut df, GlobalId::Transient(3), T1, &[0], 2);
+    df.objects_to_build.push(BuildDesc {
+        id: OUT,
+        plan: get_global(T1, AvailableCollections::new_raw()),
+    });
+    let errs = errors(&df);
+    assert_error(&errs, Rule::Arrangement, "Get reads the raw collection");
+}
+
+#[mz_ore::test]
+fn rejects_get_passing_no_form() {
+    let mut df = dataflow(&[], vec![]);
+    import_index(&mut df, GlobalId::Transient(3), T1, &[0], 2);
+    df.objects_to_build.push(BuildDesc {
+        id: OUT,
+        plan: get_global(T1, AvailableCollections::default()),
+    });
+    let errs = errors(&df);
+    assert_error(&errs, Rule::Arrangement, "passes on no form");
+}
+
+#[mz_ore::test]
+fn rejects_topk_without_raw_collection() {
+    let mut df = dataflow(&[], vec![]);
+    import_index(&mut df, GlobalId::Transient(3), T1, &[0], 2);
+    let top_k = plan(LirRelationNode::TopK {
+        input: Box::new(get_global(T1, arranged(&[0], 2))),
+        top_k_plan: TopKPlan::Basic(BasicTopKPlan {
+            group_key: vec![0],
+            order_key: vec![],
+            offset: 0,
+            limit: None,
+            arity: 2,
+            buckets: vec![],
+        }),
+        temporal_bucketing_strategy: ArrangementStrategy::Direct,
+    });
+    df.objects_to_build.push(BuildDesc {
+        id: OUT,
+        plan: top_k,
+    });
+    let errs = errors(&df);
+    assert_error(&errs, Rule::Arrangement, "TopK reads the raw collection");
+}
+
+#[mz_ore::test]
+fn rejects_wrong_thinning() {
+    let (key, permutation, _thinning) = triple(&[0], 2);
+    let forms = AvailableCollections::new_arranged(vec![(key, permutation, vec![0, 1])]);
+    let plan = arrange_by(get_global(T1, AvailableCollections::new_raw()), forms, 2);
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, plan)]));
+    assert_error(&errs, Rule::Arrangement, "thinning [0, 1]");
+}
+
+#[mz_ore::test]
+fn rejects_arrange_by_existing_key() {
+    let mut df = dataflow(&[], vec![]);
+    import_index(&mut df, GlobalId::Transient(3), T1, &[0], 2);
+    let plan = arrange_by(get_global(T1, arranged(&[0], 2)), arranged(&[0], 2), 2);
+    df.objects_to_build.push(BuildDesc { id: OUT, plan });
+    let errs = errors(&df);
+    assert_error(&errs, Rule::Arrangement, "already arranged by [#0]");
+}
+
+#[mz_ore::test]
+fn rejects_arrange_by_without_raw_or_input_key() {
+    // Forming a new arrangement from an arranged-only input needs an input key.
+    let mut df = dataflow(&[], vec![]);
+    import_index(&mut df, GlobalId::Transient(3), T1, &[0], 2);
+    let plan = arrange_by(get_global(T1, arranged(&[0], 2)), arranged(&[1], 2), 2);
+    df.objects_to_build.push(BuildDesc { id: OUT, plan });
+    let errs = errors(&df);
+    assert_error(
+        &errs,
+        Rule::Arrangement,
+        "ArrangeBy reads the raw collection",
+    );
+}
+
+#[mz_ore::test]
+fn rejects_negate_of_threshold() {
+    // Threshold produces only its arrangement, and Negate reads the raw collection.
+    let plan = negate(threshold(
+        arrange_by(
+            get_global(T1, AvailableCollections::new_raw()),
+            arranged(&[0, 1], 2),
+            2,
+        ),
+        &[0, 1],
+        2,
+    ));
+    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, plan)]));
+    assert_error(&errs, Rule::Arrangement, "Negate reads the raw collection");
+}
+
+#[mz_ore::test]
+fn checks_arrangements_over_empty_input() {
+    // No rows reach the Threshold, but rendering still looks up its arrangement.
+    let mut df = dataflow(&[], vec![(OUT, threshold(constant(vec![]), &[0], 1))]);
+    index_export(&mut df, OUT, OUT, &[0], 1);
+    let errs = errors(&df);
+    assert_error(
+        &errs,
+        Rule::Arrangement,
+        "Threshold reads the arrangement by [#0]",
+    );
+}
+
+#[mz_ore::test]
+fn rejects_index_export_without_arrangement() {
+    let mut df = dataflow(
+        &[(T1, 1)],
+        vec![(OUT, get_global(T1, AvailableCollections::new_raw()))],
+    );
+    index_export(&mut df, OUT, T1, &[0], 1);
+    let errs = errors(&df);
+    assert_error(
+        &errs,
+        Rule::Arrangement,
+        "index export t10 reads the arrangement by [#0]",
+    );
+}
+
+#[mz_ore::test]
+fn rejects_sink_without_readable_form() {
+    let mut df = dataflow(
+        &[(T1, 1)],
+        vec![(
+            OUT,
+            threshold(
+                arrange_by(
+                    get_global(T1, AvailableCollections::new_raw()),
+                    arranged(&[0], 1),
+                    1,
+                ),
+                &[0],
+                1,
+            ),
+        )],
+    );
+    subscribe(&mut df, OUT, None);
+    let errs = errors(&df);
+    assert_error(&errs, Rule::Arrangement, "sink export t30");
+}
+
+/// Adds a subscribe `t30` of the one-column collection `from`, reading `from_arrangement`.
+fn subscribe(
+    df: &mut LirDataflowDescription,
+    from: GlobalId,
+    from_arrangement: Option<(Vec<LirScalarExpr>, MfpPlan<LirScalarExpr>)>,
+) {
+    df.sink_exports.insert(
+        GlobalId::Transient(30),
+        ComputeSinkDesc {
+            from,
+            from_desc: RelationDesc::from_names_and_types([(
+                "a",
+                SqlScalarType::Int64.nullable(false),
+            )]),
+            connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
+                output: vec![],
+            }),
+            with_snapshot: false,
+            up_to: Antichain::new(),
+            non_null_assertions: vec![],
+            refresh_schedule: None,
+            from_arrangement,
+        },
+    );
+}
+
+#[mz_ore::test]
+fn snapshotless_index_serves_sinks_only() {
+    // Without its snapshot, the index import provides its arrangement or the raw collection,
+    // depending on the replica's configuration. A sink reads either, an object neither.
+    let mut df = dataflow(&[], vec![]);
+    import_index(&mut df, GlobalId::Transient(3), T1, &[0], 1);
+    df.index_imports
+        .get_mut(&GlobalId::Transient(3))
+        .expect("imported")
+        .with_snapshot = false;
+    subscribe(&mut df, T1, Some((vec![col(0)], identity_mfp_plan(1))));
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+
+    df.objects_to_build.push(BuildDesc {
+        id: OUT,
+        plan: get_global(T1, arranged(&[0], 1)),
+    });
+    let errs = errors(&df);
+    assert_error(&errs, Rule::Arrangement, "arranged by [#0]");
+}
+
+#[mz_ore::test]
+fn rejects_index_key_lir_cannot_express() {
+    let mut df = dataflow(&[], vec![]);
+    import_index(&mut df, GlobalId::Transient(3), T1, &[0], 1);
+    df.index_imports
+        .get_mut(&GlobalId::Transient(3))
+        .expect("imported")
+        .desc
+        .key = vec![MirScalarExpr::CallUnmaterializable(
+        mz_expr::UnmaterializableFunc::MzNow,
+    )];
+    let errs = errors(&df);
+    assert_error(&errs, Rule::Function, "index import t3 key");
+}
+
+#[mz_ore::test]
+fn rejects_letrec_value_without_raw() {
+    let l1 = LocalId::new(1);
+    let value = threshold(
+        arrange_by(
+            get_global(T1, AvailableCollections::new_raw()),
+            arranged(&[0], 1),
+            1,
+        ),
+        &[0],
+        1,
+    );
+    let plan = plan(LirRelationNode::LetRec {
+        ids: vec![l1],
+        values: vec![value],
+        limits: vec![limit()],
+        body: Box::new(get_local(l1)),
+    });
+    let errs = errors(&dataflow(&[(T1, 1)], vec![(OUT, plan)]));
+    assert_error(
+        &errs,
+        Rule::Arrangement,
+        "value of l1 lacks the raw collection",
+    );
+}
+
+#[mz_ore::test]
+fn letrec_arrangements_reach_later_values_only() {
+    // l1 is arranged, l2 reads that arrangement, and the body sees only raw collections.
+    let l1 = LocalId::new(1);
+    let l2 = LocalId::new(2);
+    let letrec = |body: LirRelationExpr| {
+        let v1 = arrange_by(
+            get_global(T1, AvailableCollections::new_raw()),
+            raw_and_arranged(&[0], 1),
+            1,
+        );
+        let v2 = get_local_keys(l1, raw_and_arranged(&[0], 1));
+        plan(LirRelationNode::LetRec {
+            ids: vec![l1, l2],
+            values: vec![v1, v2],
+            limits: vec![limit(), limit()],
+            body: Box::new(body),
+        })
+    };
+    let accepted = letrec(get_local_keys(l1, AvailableCollections::new_raw()));
+    let df = dataflow(&[(T1, 1)], vec![(OUT, accepted)]);
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+    let rejected = letrec(get_local_keys(l1, arranged(&[0], 1)));
+    let errs = errors(&dataflow(&[(T1, 1)], vec![(OUT, rejected)]));
+    assert_error(&errs, Rule::Arrangement, "arranged by [#0]");
 }

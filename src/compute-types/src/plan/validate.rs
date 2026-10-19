@@ -16,8 +16,9 @@
 //! One walk visits every node of every object once, in post-order, and computes a
 //! [`NodeInfo`] that describes the node's output. Each rule family checks one aspect of a
 //! node against the infos of its inputs. Scoping lives in this module, arity and shape in
-//! [`arity`]. Errors accumulate, so one call reports every problem it can find. A node
-//! whose input broke a rule is skipped, so a problem is reported once, where it occurs.
+//! [`arity`], arrangement availability in [`arrangements`]. Errors accumulate, so one call
+//! reports every problem it can find. A node whose input broke a rule is skipped, so a
+//! problem is reported once, where it occurs.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -26,9 +27,13 @@ use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::{GlobalId, ReprColumnType, ReprRelationType};
 
 use crate::dataflows::LirDataflowDescription;
-use crate::plan::{AvailableCollections, LirId, LirRelationExpr, LirRelationNode};
+use crate::plan::scalar::LirScalarExpr;
+use crate::plan::{LirId, LirRelationExpr, LirRelationNode};
 
 mod arity;
+mod arrangements;
+
+use arrangements::Available;
 
 /// The rule a [`ValidationError`] reports a violation of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -129,21 +134,19 @@ struct NodeInfo {
     arity: usize,
     /// The type of each column. Empty until type inference fills it.
     types: Vec<ReprColumnType>,
-    /// The forms in which the output is available. Raw-less and empty until arrangement
-    /// tracking fills it.
-    #[allow(dead_code)]
-    available: AvailableCollections,
+    /// The forms in which the output is available.
+    available: Available,
     /// Whether the output never retracts a row. `false` until monotonicity analysis fills it.
     #[allow(dead_code)]
     monotonic: bool,
 }
 
 impl NodeInfo {
-    fn with_arity(arity: usize) -> Self {
+    fn new(arity: usize, available: Available) -> Self {
         NodeInfo {
             arity,
             types: Vec::new(),
-            available: AvailableCollections::default(),
+            available,
             monotonic: false,
         }
     }
@@ -156,8 +159,9 @@ enum Output {
     Failed,
     /// The node produces no rows, because every path to its output starts at an empty or
     /// error `Constant`. The plan does not fix its arity, and since no datum reaches its
-    /// consumers, they check only what does not depend on it.
-    Empty,
+    /// consumers, they check only what does not depend on it. Rendering still builds the
+    /// forms it is available in.
+    Empty(Available),
     /// The node produces rows as described.
     Rows(NodeInfo),
 }
@@ -167,8 +171,26 @@ impl Output {
     fn arity(&self) -> Result<Option<usize>, ()> {
         match self {
             Output::Failed => Err(()),
-            Output::Empty => Ok(None),
+            Output::Empty(_) => Ok(None),
             Output::Rows(info) => Ok(Some(info.arity)),
+        }
+    }
+
+    /// The forms the output is available in, or `None` for a failed one.
+    fn available(&self) -> Option<&Available> {
+        match self {
+            Output::Failed => None,
+            Output::Empty(available) => Some(available),
+            Output::Rows(info) => Some(&info.available),
+        }
+    }
+
+    /// Replaces the forms of a non-failed output.
+    fn set_available(&mut self, forms: Available) {
+        match self {
+            Output::Failed => {}
+            Output::Empty(available) => *available = forms,
+            Output::Rows(info) => info.available = forms,
         }
     }
 }
@@ -209,6 +231,8 @@ struct Validator {
     lir_ids: BTreeSet<LirId>,
     /// Global ids read by `Get`s that resolved.
     read_globals: BTreeSet<GlobalId>,
+    /// The keys of index imports that exclude their snapshot, by the collection they index.
+    snapshotless: BTreeMap<GlobalId, BTreeSet<Vec<LirScalarExpr>>>,
 }
 
 impl CheckedRecursion for Validator {
@@ -228,6 +252,7 @@ impl Validator {
             bound_locals: BTreeSet::new(),
             lir_ids: BTreeSet::new(),
             read_globals: BTreeSet::new(),
+            snapshotless: BTreeMap::new(),
         }
     }
 
@@ -271,10 +296,10 @@ impl Validator {
         for object in &df.objects_to_build {
             self.bound_locals.clear();
             let mut output = self.visit(&object.plan, true)?;
-            if let Output::Empty = output {
+            if let Output::Empty(available) = &output {
                 match Self::declared_type(df, object.id) {
                     Some(typ) => {
-                        let mut info = NodeInfo::with_arity(typ.arity());
+                        let mut info = NodeInfo::new(typ.arity(), available.clone());
                         info.types = typ.column_types;
                         output = Output::Rows(info);
                     }
@@ -319,8 +344,14 @@ impl Validator {
     ///
     /// Sources are bound at their own ids, and indexes at the ids of the collections they
     /// index. Several imports of one collection must agree on its arity.
+    ///
+    /// A source import provides the raw collection, and an index import its arrangement. An
+    /// index import that excludes its snapshot provides either its arrangement or the raw
+    /// collection, depending on the replica's configuration (`import_index` in rendering), so
+    /// it provides neither for certain and is recorded in `snapshotless` instead.
     fn imports(&mut self, df: &LirDataflowDescription) {
         let mut arities: BTreeMap<GlobalId, usize> = BTreeMap::new();
+        let mut available: BTreeMap<GlobalId, Available> = BTreeMap::new();
         for (id, import) in &df.source_imports {
             let typ_arity = import.desc.typ.arity();
             // The source's operators run inside the source, so `Get`s see their output.
@@ -336,6 +367,7 @@ impl Validator {
                 }
             };
             arities.insert(*id, arity);
+            available.insert(*id, Available::raw());
         }
         for (id, import) in &df.index_imports {
             let on_id = import.desc.on_id;
@@ -344,6 +376,14 @@ impl Validator {
             arity::export_key(&mut issues, "index key", &import.desc.key, arity);
             for (rule, message) in issues {
                 self.dataflow_error(rule, format!("index import {id}: {message}"));
+            }
+            if let Some(key) = self.lir_key(&format!("index import {id}"), &import.desc.key) {
+                let forms = available.entry(on_id).or_default();
+                if import.with_snapshot {
+                    forms.keys.insert(key);
+                } else {
+                    self.snapshotless.entry(on_id).or_default().insert(key);
+                }
             }
             match arities.get(&on_id) {
                 Some(existing) if *existing != arity => self.dataflow_error(
@@ -359,8 +399,34 @@ impl Validator {
             }
         }
         for (id, arity) in arities {
+            let forms = available.remove(&id).unwrap_or_default();
             self.globals
-                .insert(id, Output::Rows(NodeInfo::with_arity(arity)));
+                .insert(id, Output::Rows(NodeInfo::new(arity, forms)));
+        }
+    }
+
+    /// Translates an index key to the LIR key rendering looks the arrangement up by.
+    ///
+    /// Rendering translates index keys with `IndexDesc::as_lir`, which panics on functions
+    /// that LIR cannot express. Reports those and returns `None`.
+    fn lir_key(
+        &mut self,
+        what: &str,
+        key: &[mz_expr::MirScalarExpr],
+    ) -> Option<Vec<LirScalarExpr>> {
+        match key
+            .iter()
+            .map(LirScalarExpr::try_from)
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(key) => Some(key),
+            Err(_) => {
+                self.dataflow_error(
+                    Rule::Function,
+                    format!("{what} key uses a function that LIR cannot express"),
+                );
+                None
+            }
         }
     }
 
@@ -397,6 +463,23 @@ impl Validator {
                     ),
                 );
             }
+            // Rendering exports the arrangement of the object by the index key, and panics if
+            // there is none.
+            let forms = self.globals.get(id).and_then(Output::available).cloned();
+            if let (Some(forms), Some(key)) = (
+                forms,
+                self.lir_key(&format!("index export {id}"), &desc.key),
+            ) {
+                if !forms.keys.contains(&key) {
+                    let key = arrangements::key_name(&key);
+                    self.dataflow_error(
+                        Rule::Arrangement,
+                        format!(
+                            "index export {id} reads the arrangement by {key}, but object {id} is not arranged by {key}"
+                        ),
+                    );
+                }
+            }
             let Ok(Some(arity)) = self.globals.get(id).map_or(Err(()), Output::arity) else {
                 continue;
             };
@@ -416,7 +499,7 @@ impl Validator {
             }
         }
         for (id, sink) in &df.sink_exports {
-            let Some(output) = self.globals.get(&sink.from) else {
+            let Some(output) = self.globals.get(&sink.from).cloned() else {
                 self.dataflow_error(
                     Rule::Scoping,
                     format!(
@@ -426,6 +509,36 @@ impl Validator {
                 );
                 continue;
             };
+            // Rendering reads the raw collection if there is one, and otherwise the arrangement
+            // `from_arrangement` names. An arrangement of a snapshotless index import serves
+            // too, because the raw collection replaces it where the import omits it.
+            if let Some(forms) = output.available() {
+                if !forms.raw {
+                    let message = match &sink.from_arrangement {
+                        None => Some(format!(
+                            "sink export {id} reads the raw collection of {}, which is only arranged, and names no arrangement",
+                            sink.from
+                        )),
+                        Some((key, _))
+                            if !forms.keys.contains(key)
+                                && !self
+                                    .snapshotless
+                                    .get(&sink.from)
+                                    .is_some_and(|keys| keys.contains(key)) =>
+                        {
+                            let key = arrangements::key_name(key);
+                            Some(format!(
+                                "sink export {id} reads the arrangement by {key}, but {} is not arranged by {key}",
+                                sink.from
+                            ))
+                        }
+                        Some(_) => None,
+                    };
+                    if let Some(message) = message {
+                        self.dataflow_error(Rule::Arrangement, message);
+                    }
+                }
+            }
             let Ok(Some(arity)) = output.arity() else {
                 continue;
             };
@@ -502,19 +615,17 @@ impl Validator {
                             ),
                         ));
                     }
-                    Some(Output::Rows(NodeInfo::with_arity(arity)))
+                    Some(Output::Rows(NodeInfo::new(arity, Available::raw())))
                 }
-                _ => Some(Output::Empty),
+                _ => Some(Output::Empty(Available::raw())),
             },
             LirRelationNode::Get { id, keys, plan } => {
                 let binding = self.resolve(expr, id);
-                match binding.arity() {
-                    Err(()) => None,
-                    Ok(arity) => {
-                        let out = arity::get(&mut issues, keys, plan, arity);
-                        Some(Self::unary(out))
-                    }
-                }
+                Self::inputs(&binding).map(|(arity, input)| {
+                    let out = arity::get(&mut issues, keys, plan, arity);
+                    let forms = arrangements::get(&mut issues, keys, plan, input, arity);
+                    Self::unary(out, forms)
+                })
             }
             LirRelationNode::Let { id, value, body } => {
                 if !binding_allowed {
@@ -556,9 +667,11 @@ impl Validator {
                 input_key_val,
             } => {
                 let input = self.visit(input, false)?;
-                input.arity().ok().map(|arity| {
+                Self::inputs(&input).map(|(arity, forms)| {
                     let key = input_key_val.as_ref().map(|(key, _)| key.as_slice());
-                    Self::unary(arity::mfp(&mut issues, mfp, key, arity))
+                    let out = arity::mfp(&mut issues, mfp, key, arity);
+                    let forms = arrangements::mfp(&mut issues, mfp.is_identity(), key, forms);
+                    Self::unary(out, forms)
                 })
             }
             LirRelationNode::FlatMap {
@@ -569,7 +682,7 @@ impl Validator {
                 mfp_after,
             } => {
                 let input = self.visit(input, false)?;
-                input.arity().ok().map(|arity| {
+                Self::inputs(&input).map(|(arity, forms)| {
                     let out = arity::flat_map(
                         &mut issues,
                         input_key.as_deref(),
@@ -578,26 +691,33 @@ impl Validator {
                         mfp_after,
                         arity,
                     );
-                    Self::unary(out)
+                    let forms = arrangements::flat_map(&mut issues, input_key.as_deref(), forms);
+                    Self::unary(out, forms)
                 })
             }
             LirRelationNode::Join { inputs, plan } => {
                 let mut arities = Vec::with_capacity(inputs.len());
+                let mut forms = Vec::with_capacity(inputs.len());
                 let mut failed = false;
                 for input in inputs {
-                    match self.visit(input, false)?.arity() {
-                        Ok(arity) => arities.push(arity),
-                        Err(()) => failed = true,
+                    match Self::inputs(&self.visit(input, false)?) {
+                        Some((arity, available)) => {
+                            arities.push(arity);
+                            forms.push(available.clone());
+                        }
+                        None => failed = true,
                     }
                 }
                 if failed {
                     None
                 } else {
                     let out = arity::join(&mut issues, plan, &arities);
+                    let inputs: Vec<&Available> = forms.iter().collect();
+                    let forms = arrangements::join(&mut issues, plan, &inputs, &arities);
                     if arities.iter().any(Option::is_none) {
-                        Some(Output::Empty)
+                        Some(Output::Empty(forms))
                     } else {
-                        out.map(|arity| Output::Rows(NodeInfo::with_arity(arity)))
+                        out.map(|arity| Output::Rows(NodeInfo::new(arity, forms)))
                     }
                 }
             }
@@ -610,7 +730,7 @@ impl Validator {
                 temporal_bucketing_strategy: _,
             } => {
                 let input = self.visit(input, false)?;
-                input.arity().ok().map(|arity| {
+                Self::inputs(&input).map(|(arity, forms)| {
                     let out = arity::reduce(
                         &mut issues,
                         input_key.as_deref(),
@@ -619,7 +739,10 @@ impl Validator {
                         mfp_after,
                         arity,
                     );
-                    Self::unary(out)
+                    let key_arity = key_val_plan.key_plan.projection.len();
+                    let forms =
+                        arrangements::reduce(&mut issues, input_key.as_deref(), key_arity, forms);
+                    Self::unary(out, forms)
                 })
             }
             LirRelationNode::TopK {
@@ -628,24 +751,29 @@ impl Validator {
                 temporal_bucketing_strategy: _,
             } => {
                 let input = self.visit(input, false)?;
-                input
-                    .arity()
-                    .ok()
-                    .map(|arity| Self::unary(arity::top_k(&mut issues, top_k_plan, arity)))
+                Self::inputs(&input).map(|(arity, forms)| {
+                    let out = arity::top_k(&mut issues, top_k_plan, arity);
+                    let forms = arrangements::top_k(&mut issues, top_k_plan, forms);
+                    Self::unary(out, forms)
+                })
             }
             LirRelationNode::Negate { input } => {
                 let input = self.visit(input, false)?;
-                input.arity().ok().map(Self::unary)
+                Self::inputs(&input).map(|(arity, forms)| {
+                    arrangements::raw_input(&mut issues, "Negate", forms);
+                    Self::unary(arity, Available::raw())
+                })
             }
             LirRelationNode::Threshold {
                 input,
                 threshold_plan,
             } => {
                 let input = self.visit(input, false)?;
-                input
-                    .arity()
-                    .ok()
-                    .map(|arity| Self::unary(arity::threshold(&mut issues, threshold_plan, arity)))
+                Self::inputs(&input).map(|(arity, forms)| {
+                    let out = arity::threshold(&mut issues, threshold_plan, arity);
+                    let forms = arrangements::threshold(&mut issues, threshold_plan, forms, arity);
+                    Self::unary(out, forms)
+                })
             }
             LirRelationNode::Union {
                 inputs,
@@ -666,7 +794,11 @@ impl Validator {
                 let mut failed = false;
                 let mut output = None;
                 for (i, input) in inputs.iter().enumerate() {
-                    match self.visit(input, false)?.arity() {
+                    let input = self.visit(input, false)?;
+                    if let Some(forms) = input.available() {
+                        arrangements::raw_input(&mut issues, &format!("Union input {i}"), forms);
+                    }
+                    match input.arity() {
                         Err(()) => failed = true,
                         Ok(None) => {}
                         Ok(Some(arity)) => match output {
@@ -685,8 +817,8 @@ impl Validator {
                     None
                 } else {
                     Some(match output {
-                        Some((_, arity)) => Output::Rows(NodeInfo::with_arity(arity)),
-                        None => Output::Empty,
+                        Some((_, arity)) => Output::Rows(NodeInfo::new(arity, Available::raw())),
+                        None => Output::Empty(Available::raw()),
                     })
                 }
             }
@@ -698,7 +830,7 @@ impl Validator {
                 strategy: _,
             } => {
                 let input = self.visit(input, false)?;
-                input.arity().ok().map(|arity| {
+                Self::inputs(&input).map(|(arity, available)| {
                     let out = arity::arrange_by(
                         &mut issues,
                         input_key.as_deref(),
@@ -706,7 +838,14 @@ impl Validator {
                         forms,
                         arity,
                     );
-                    Self::unary(out)
+                    let available = arrangements::arrange_by(
+                        &mut issues,
+                        input_key.as_deref(),
+                        forms,
+                        available,
+                        arity,
+                    );
+                    Self::unary(out, available)
                 })
             }
         };
@@ -717,15 +856,21 @@ impl Validator {
         })
     }
 
-    /// The output of a unary operator, given the output arity the arity rules computed.
+    /// The arity and forms of a visited input, or `None` if it failed.
+    fn inputs(input: &Output) -> Option<(Option<usize>, &Available)> {
+        Some((input.arity().ok()?, input.available()?))
+    }
+
+    /// The output of a unary operator, given the output arity the arity rules computed and
+    /// the forms the arrangement rules computed.
     ///
     /// An operator that states its output arity has that arity even over an empty input,
     /// which subjects its consumers to the full checks. One that passes its input's arity
     /// through is empty over an empty input.
-    fn unary(output: Option<usize>) -> Output {
+    fn unary(output: Option<usize>, available: Available) -> Output {
         match output {
-            Some(arity) => Output::Rows(NodeInfo::with_arity(arity)),
-            None => Output::Empty,
+            Some(arity) => Output::Rows(NodeInfo::new(arity, available)),
+            None => Output::Empty(available),
         }
     }
 
@@ -821,11 +966,16 @@ impl Validator {
             }
         }
 
+        // Rendering binds each id to a raw-only `Variable` until its value is rendered, then to
+        // the value's forms for the values that follow, and to its raw collection alone for
+        // the body, because arrangements cannot leave the iterative scope.
         let scope = self.locals.len();
         for (i, id) in ids.iter().enumerate() {
             let binding = match (known.get(id), values.get(i)) {
-                (Some(arity), _) => Output::Rows(NodeInfo::with_arity(*arity)),
-                (None, Some(value)) if Self::is_empty_constant(value) => Output::Empty,
+                (Some(arity), _) => Output::Rows(NodeInfo::new(*arity, Available::raw())),
+                (None, Some(value)) if Self::is_empty_constant(value) => {
+                    Output::Empty(Available::raw())
+                }
                 (None, Some(_)) => {
                     self.node_error(
                         expr,
@@ -843,7 +993,23 @@ impl Validator {
         let mut clean = true;
         for (i, value) in values.iter().enumerate() {
             let output = self.visit(value, true)?;
-            let (Some(id), Ok(Some(arity))) = (ids.get(i), output.arity()) else {
+            let Some(id) = ids.get(i) else { continue };
+            if let Some(forms) = output.available() {
+                // Rendering unwraps the raw collection of each value to bind it.
+                if !forms.raw {
+                    self.node_error(
+                        expr,
+                        Rule::Arrangement,
+                        format!("LetRec value of {id} lacks the raw collection"),
+                    );
+                    clean = false;
+                }
+                let forms = forms.clone();
+                if let Some((_, binding)) = self.locals.get_mut(scope + i) {
+                    binding.set_available(forms);
+                }
+            }
+            let Ok(Some(arity)) = output.arity() else {
                 continue;
             };
             if let Some(expected) = known.get(id) {
@@ -860,6 +1026,9 @@ impl Validator {
             }
         }
 
+        for (_, binding) in self.locals.iter_mut().skip(scope) {
+            binding.set_available(Available::raw());
+        }
         let body = self.visit(body, true)?;
         self.locals.truncate(scope);
         Ok(if clean { body } else { Output::Failed })

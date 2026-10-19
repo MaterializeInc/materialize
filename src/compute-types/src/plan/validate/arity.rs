@@ -183,7 +183,10 @@ fn check_mfp_plan(
 }
 
 /// The width an operator reading `input_key` of an input with `arity` columns sees.
-fn read_width(input_key: Option<&[LirScalarExpr]>, arity: Option<usize>) -> Option<usize> {
+pub(super) fn read_width(
+    input_key: Option<&[LirScalarExpr]>,
+    arity: Option<usize>,
+) -> Option<usize> {
     match input_key {
         None => arity,
         Some(key) => arity.map(|a| arranged_width(key, a)),
@@ -321,25 +324,25 @@ fn join_input(
 }
 
 /// One join path: a source, optionally arranged, and stages that each look up one input.
-struct JoinPath<'a> {
-    source_relation: usize,
-    source_key: Option<&'a [LirScalarExpr]>,
-    initial_closure: Option<&'a JoinClosure>,
-    stages: Vec<JoinStage<'a>>,
-    final_closure: Option<&'a JoinClosure>,
+pub(super) struct JoinPath<'a> {
+    pub(super) source_relation: usize,
+    pub(super) source_key: Option<&'a [LirScalarExpr]>,
+    pub(super) initial_closure: Option<&'a JoinClosure>,
+    pub(super) stages: Vec<JoinStage<'a>>,
+    pub(super) final_closure: Option<&'a JoinClosure>,
 }
 
 /// One stage of a join path.
-struct JoinStage<'a> {
-    lookup_relation: usize,
-    stream_key: &'a [LirScalarExpr],
-    stream_thinning: &'a [usize],
-    lookup_key: &'a [LirScalarExpr],
-    closure: &'a JoinClosure,
+pub(super) struct JoinStage<'a> {
+    pub(super) lookup_relation: usize,
+    pub(super) stream_key: &'a [LirScalarExpr],
+    pub(super) stream_thinning: &'a [usize],
+    pub(super) lookup_key: &'a [LirScalarExpr],
+    pub(super) closure: &'a JoinClosure,
 }
 
 impl<'a> JoinPath<'a> {
-    fn linear(plan: &'a LinearJoinPlan) -> Self {
+    pub(super) fn linear(plan: &'a LinearJoinPlan) -> Self {
         JoinPath {
             source_relation: plan.source_relation,
             source_key: plan.source_key.as_deref(),
@@ -359,7 +362,7 @@ impl<'a> JoinPath<'a> {
         }
     }
 
-    fn delta(plan: &'a DeltaJoinPlan) -> Vec<Self> {
+    pub(super) fn delta(plan: &'a DeltaJoinPlan) -> Vec<Self> {
         plan.path_plans
             .iter()
             .map(|p| JoinPath {
