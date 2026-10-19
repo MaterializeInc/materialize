@@ -1016,7 +1016,8 @@ COMMIT
 query II
 SELECT a.value, b.value FROM ddl_context_first.renamed a, ddl_context_second.renamed b
 ----
-1 2
+1
+2
 
 statement ok
 RESET search_path
