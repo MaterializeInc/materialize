@@ -22,7 +22,7 @@ interactive debugging. The parallel-check workflow requires SQL Server, which
 does not run natively on ARM. Keep the 16-vCPU, 64-GiB, 500-GiB configuration,
 one worker, and renew its expiry as needed for this work without asking again.
 Current worker: `i-01023ce0e1db179f9`. Last recorded expiry:
-2026-10-20 05:30:24 UTC. Verify and extend it before further work.
+2026-10-20 20:27:43 UTC. Verify and extend it before further work.
 Scratch evidence is copied off-worker under
 `~/.local/share/aj/m2-evidence/scratch/`.
 Launch with `bin/scratch create decoupled-coordination
@@ -195,8 +195,20 @@ statement-by-statement continuation migrations. In a reduced three-check compari
 snapshot-local, strongest-first shared traversal lowers median creator expansion
 from 3.43ms to 1.66ms. Both arms commit all seven MVs and complete SQL quickly, so
 this establishes a narrower validation window, not resolution of CI starvation.
-The protection-boundary test and existing traversal regressions pass. Verify the
-candidate in the original workload on actual 8CPU/16GB CI hosts.
+Six focused protection tests and catalog Clippy pass. Original-budget CI139528
+passes 4,289 Cargo tests but both parallel shards still fail. Ordinary adapter
+expansion falls from 15.074ms to 7.026ms median at similar map cardinality, while
+the jsonb victim loses all 11 candidates alongside 5,674 successful replica
+publications. Its fetched-target-to-CAS median remains 40.060ms versus 5.216ms
+for winning publications. Even a DROP with microsecond validation loses.
+The original replica-targeted MV completes in 44.316s with one content commit,
+but that is not fleet-wide progress. Hold content-priority/yield work. Carry
+incremental local hold accounting through changed per-client frontier publication,
+with additive acquisition/creator grants and exact acknowledgement. Then finish
+MV admission from its prepared definition and dependencies without reconstructing
+unchanged SQL or edges on frontier-only retries. Preserve shared committed-diff
+effects. Use a small scaling check and boundary regressions before original-budget
+verification. Reassess arbitration only if contention remains after these slices.
 Committed bounds advance elsewhere, without proving physical reclamation or
 fleet-wide progress. Snapshot waits and append conflicts remain open. A legacy CREATE
 CLUSTER retry turn occupies the coordinator for 8.87s. Keep the refresh-to-commit
