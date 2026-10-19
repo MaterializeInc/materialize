@@ -904,9 +904,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-rs"
-version = "1.18.1"
+version = "1.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b281d307588d634de920874890732659e2e7672f72b5e10e81badc1a8a83621e"
+checksum = "faac5829c2b74c28f830747e7818ccfb684261b5f48a1118b1e2a13d36dfab13"
 dependencies = [
  "aws-lc-sys",
  "untrusted 0.7.1",
@@ -915,9 +915,9 @@ dependencies = [
 
 [[package]]
 name = "aws-lc-sys"
-version = "0.45.0"
+version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9bff6c3b54fad79a2e60b8102caf565819711497c1f5f092f49508e2f5c31b27"
+checksum = "f1622d8446a2d4b2ce0c7eefc73dd43a99779028d5ee5c2dd8073a658ba8a2bc"
 dependencies = [
  "cc",
  "cmake",
@@ -1030,7 +1030,7 @@ dependencies = [
  "hmac 0.13.0",
  "http 1.5.0",
  "http-body",
- "lru 0.18.5",
+ "lru",
  "percent-encoding",
  "regex-lite",
  "sha2 0.11.0",
@@ -5584,9 +5584,9 @@ dependencies = [
 
 [[package]]
 name = "launchdarkly-server-sdk"
-version = "3.3.0"
+version = "3.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b08c5734d4f33ae97b4225cf9c629c2de116d5ad8976712be827e8f25b409eea"
+checksum = "831983987c39eb960757d15d359b4e6633066a3c84637baf8ca7c3359d04360c"
 dependencies = [
  "aws-lc-rs",
  "bitflags 2.13.2",
@@ -5600,7 +5600,7 @@ dependencies = [
  "launchdarkly-sdk-transport",
  "launchdarkly-server-sdk-evaluation",
  "log",
- "lru 0.16.3",
+ "lru",
  "moka",
  "parking_lot",
  "percent-encoding",
@@ -5915,12 +5915,6 @@ dependencies = [
 
 [[package]]
 name = "lru"
-version = "0.16.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1dc47f592c06f33f8e3aea9591776ec7c9f9e4124778ff8a3c3b87159f7e593"
-
-[[package]]
-name = "lru"
 version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef9ac18847474e638e3702b76c65d4eb93428471a74778ef0f1be711717f89b5"
@@ -6138,7 +6132,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "keyed_priority_queue",
- "lru 0.18.5",
+ "lru",
  "mysql_common",
  "native-tls",
  "pem 3.0.6",
@@ -7451,7 +7445,7 @@ dependencies = [
  "derivative",
  "futures",
  "jsonwebtoken",
- "lru 0.18.5",
+ "lru",
  "mz-auth",
  "mz-ore",
  "prometheus",
@@ -11071,7 +11065,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "petgraph",
@@ -11092,7 +11086,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
