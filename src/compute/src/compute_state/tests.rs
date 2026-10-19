@@ -14,7 +14,6 @@ use mz_dyncfg::ConfigUpdates;
 use std::rc::Rc;
 
 use differential_dataflow::input::{Input, InputSession};
-use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::{Builder, Description, Trace};
 use mz_compute_types::dataflows::{BuildDesc, DataflowClass, IndexDesc};
 use mz_compute_types::plan::LirRelationExpr;
@@ -26,6 +25,7 @@ use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::{Datum, Diff, RelationDesc, ReprRelationType, SqlScalarType};
 use mz_row_spine::{RowRowBatcher, RowRowBuilder};
 use mz_timely_util::columnation::{ColumnationChunker, ColumnationStack};
+use mz_timely_util::shared_trace::SharedAgent;
 use timely::container::PushInto;
 use timely::dataflow::operators::generic::OperatorInfo;
 use timely::progress::Timestamp as _;
@@ -99,7 +99,7 @@ fn oks_trace_with_rows(
     let spine: RowRowSpine<Timestamp, Diff> =
         Trace::new(OperatorInfo::new(0, 0, Rc::from(vec![0])), None, None);
     let (agent, mut writer) =
-        TraceAgent::new(spine, OperatorInfo::new(1, 0, Rc::from(vec![0])), None);
+        SharedAgent::new(spine, OperatorInfo::new(1, 0, Rc::from(vec![0])), None);
 
     let description = Description::new(
         Antichain::from_elem(Timestamp::minimum()),
@@ -122,7 +122,7 @@ fn errs_trace_empty(upper: Timestamp) -> PaddedTrace<ErrAgent<Timestamp, Diff>> 
     let spine: ErrSpine<Timestamp, Diff> =
         Trace::new(OperatorInfo::new(2, 0, Rc::from(vec![0])), None, None);
     let (agent, mut writer) =
-        TraceAgent::new(spine, OperatorInfo::new(3, 0, Rc::from(vec![0])), None);
+        SharedAgent::new(spine, OperatorInfo::new(3, 0, Rc::from(vec![0])), None);
 
     let description = Description::new(
         Antichain::from_elem(Timestamp::minimum()),

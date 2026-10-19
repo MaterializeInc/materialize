@@ -18,9 +18,9 @@ use differential_dataflow::trace::cursor::{CursorList, cursor_list};
 use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_row_spine::{RowRowBatcher, RowRowBuilder};
 use mz_timely_util::columnation::ColumnationChunker;
-use mz_timely_util::shared_trace::SharedSpine;
+use mz_timely_util::shared_trace::SharedAgent;
 
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::cursor::Navigable;
 use differential_dataflow::trace::{BatchReader, Trace, TraceReader};
 use timely::progress::Antichain;
@@ -153,12 +153,10 @@ impl<B: BatchReader + Clone> SharedReaderExt<B> for SharedReader<B> {
 /// keep `arranged.trace` or a clone alive for the life of the test. Creates a [`Published::new`] sized to the arrangement's
 /// own scope, installs `arranged`'s publisher into it via [`adopt_trace`], and returns
 /// the now-backed point.
-fn adopt_fresh<'a, Inner>(
-    arranged: &Arranged<'a, TraceAgent<SharedSpine<Inner>>>,
-) -> Published<SharedSpine<Inner>>
+fn adopt_fresh<'a, Tr>(arranged: &Arranged<'a, SharedAgent<Tr>>) -> Published<Tr>
 where
-    Inner: Trace + 'static,
-    Inner::Time: timely::order::TotalOrder,
+    Tr: Trace + 'static,
+    Tr::Time: timely::order::TotalOrder,
 {
     let published = Published::new();
     adopt_trace(
@@ -424,7 +422,7 @@ fn tick(
 #[mz_ore::test]
 fn publish_without_readers_does_not_pin_compaction() {
     timely::execute_directly(move |worker| {
-        // Keep a writer handle (a plain `TraceAgent` clone) alongside the publication, and mint no
+        // Keep a writer handle (a plain `SharedAgent` clone) alongside the publication, and mint no
         // `SharedReader` until after compaction: that keeps `logical_holds` empty, so the
         // publisher has zero registered reader holds throughout.
         let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
@@ -856,20 +854,25 @@ fn empty_logical_request_releases_the_hold() {
                 Timestamp::from(t + 1),
             );
         }
+        // The writer's own agent holds in the same accumulation as readers, so the reader is
+        // minted while `since` is at the minimum and the writer then holds above it. The
+        // accumulation sits at the reader's hold until the reader releases.
+        let mut hold = published.handle();
         let target = Antichain::from_elem(Timestamp::from(2_u64));
         writer.set_logical_compaction(target.borrow());
-
-        assert!(published.logical_holds().is_empty());
+        assert_eq!(
+            published.logical_holds(),
+            Antichain::from_elem(Timestamp::MIN)
+        );
 
         // A reduce over a finished input does exactly this: `upper_limit` becomes the empty
         // antichain and it forwards that to its source trace.
-        let mut hold = published.handle();
-        assert!(!published.logical_holds().is_empty());
         hold.set_logical_compaction(Antichain::new().borrow());
 
-        assert!(
-            published.logical_holds().is_empty(),
-            "an empty request must release the hold"
+        assert_eq!(
+            published.logical_holds(),
+            target,
+            "an empty request must release the hold, leaving only the writer's"
         );
     });
 }
@@ -915,7 +918,11 @@ fn an_emptied_accumulation_does_not_release_the_trace() {
             Timestamp::from(4_u64),
         );
 
-        assert!(published.logical_holds().is_empty());
+        // Only the trace's own agent, at the minimum, still holds.
+        assert_eq!(
+            published.logical_holds(),
+            Antichain::from_elem(Timestamp::MIN)
+        );
         let since = published.handle().frontiers().0;
         assert_eq!(
             since,
@@ -1038,7 +1045,7 @@ fn reader_floor_bounds_merges_and_no_reader_merges_freely() {
 #[mz_ore::test]
 fn clone_registers_at_its_sources_physical_frontier() {
     timely::execute_directly(move |worker| {
-        let (published, mut input, _keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
+        let (published, mut input, mut keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
             let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
             let arranged = collection.mz_arrange::<
                 ColumnationChunker<_>,
@@ -1056,6 +1063,9 @@ fn clone_registers_at_its_sources_physical_frontier() {
                 Timestamp::from(t + 1),
             );
         }
+        // The kept agent holds in the same accumulation as readers. Raising it to the coverage, as
+        // the trace manager's maintenance does, leaves the readers' holds as the floor.
+        keep.set_physical_compaction(Antichain::from_elem(Timestamp::from(4_u64)).borrow());
 
         // The chain now covers 4, while the published `since` is still the minimum, so a hold at
         // the coverage is distinguishable from one at `since`.
@@ -1264,7 +1274,7 @@ fn publish_updates(
 ) -> (
     Published<RowRowSpine<Timestamp, Diff>>,
     differential_dataflow::input::InputSession<Timestamp, (Row, Row), Diff>,
-    TraceAgent<RowRowSpine<Timestamp, Diff>>,
+    SharedAgent<RowRowSpine<Timestamp, Diff>>,
 ) {
     let (published, mut input, keep) = worker.dataflow::<Timestamp, _, _>(|scope| {
         let (input, collection) = scope.new_collection::<(Row, Row), Diff>();

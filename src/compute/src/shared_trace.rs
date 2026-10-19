@@ -9,11 +9,11 @@
 
 //! Sharing arrangements across timely runtimes.
 //!
-//! Every spine in [`crate::typedefs`] is a
-//! [`SharedSpine`](mz_timely_util::shared_trace::SharedSpine): a trace that, once attached to a
-//! publication point, mirrors its batch chain and frontiers there after every mutation, and applies
-//! the holds readers register there to its own compaction. This module is the Materialize-side
-//! glue over that primitive.
+//! Every agent in [`crate::typedefs`] is a
+//! [`SharedAgent`](mz_timely_util::shared_trace::SharedAgent): a trace handle whose trace, once
+//! published to a point, mirrors its batch chain and frontiers there after every mutation, and
+//! applies the holds readers register there to its own compaction. This module is the
+//! Materialize-side glue over that primitive.
 //!
 //! * [`Published`] is a publication point. A runtime that reads it as a peer holds it through a
 //!   logical-only *peer handle*, which tracks the frontier that runtime has applied.

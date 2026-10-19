@@ -19,7 +19,7 @@ use columnar::{Columnar, Index};
 use differential_dataflow::AsCollection;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchValOwn};
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
@@ -42,6 +42,7 @@ use mz_row_spine::{
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::shared_trace::SharedAgent;
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::Pipeline;
@@ -530,7 +531,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
         arity: usize,
         must_consolidate: bool,
     ) -> (
-        Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
+        Arranged<'s, SharedAgent<RowRowSpine<T, Diff>>>,
         VecCollection<'s, T, DataflowErrorSer, Diff>,
     ) {
         // The arrangement we build below is keyed by `group_key` and its value is the winning
@@ -694,8 +695,8 @@ fn build_topk_negated_stage<'s, T, Bu, Tr>(
     limit: Option<LirScalarExpr>,
     arity: usize,
 ) -> (
-    Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
-    Arranged<'s, TraceAgent<Tr>>,
+    Arranged<'s, SharedAgent<RowRowSpine<T, Diff>>>,
+    Arranged<'s, SharedAgent<Tr>>,
 )
 where
     T: MzTimestamp,
@@ -712,7 +713,7 @@ where
             Time = T,
             Diff = Diff,
         >,
-    Arranged<'s, TraceAgent<Tr>>: ArrangementSize,
+    Arranged<'s, SharedAgent<Tr>>: ArrangementSize,
 {
     let mut datum_vec = mz_repr::DatumVec::new();
 

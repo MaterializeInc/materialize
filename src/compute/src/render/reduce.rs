@@ -21,7 +21,7 @@ use differential_dataflow::columnar::layout::Coltainer;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
-use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchDiff, BatchValOwn};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
@@ -42,6 +42,7 @@ use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::shared_trace::SharedAgent;
 use num_traits::Float;
 use serde::{Deserialize, Serialize};
 use timely::Container;
@@ -289,7 +290,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         collection: VecCollection<'s, T, (Row, Row), Diff>,
         mfp_after: Option<SafeMfpPlan<LirScalarExpr>>,
     ) -> (
-        Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
+        Arranged<'s, SharedAgent<RowRowSpine<T, Diff>>>,
         VecCollection<'s, T, DataflowErrorSer, Diff>,
     ) {
         let error_logger = self.error_logger();
@@ -779,7 +780,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         &self,
         input: VecCollection<'s, T, Row, Diff>,
         name_tag: Option<&str>,
-    ) -> Arranged<'s, TraceAgent<Tr>>
+    ) -> Arranged<'s, SharedAgent<Tr>>
     where
         Tr: Trace<Batch: Navigable, Time = T> + 'static,
         for<'a> BatchCursor<Tr>: Cursor<
@@ -796,7 +797,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                            + PushInto<((Row, BatchValOwn<Tr>), Tr::Time, BatchDiff<Tr>)>,
                 Output = Tr::Batch,
             > + 'static,
-        Arranged<'s, TraceAgent<Tr>>: ArrangementSize,
+        Arranged<'s, SharedAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
 
@@ -1127,8 +1128,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         input: VecCollection<'s, T, (Row, Row), Diff>,
         aggrs: Vec<AggregateFunc>,
     ) -> (
-        Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
-        Arranged<'s, TraceAgent<Tr>>,
+        Arranged<'s, SharedAgent<RowRowSpine<T, Diff>>>,
+        Arranged<'s, SharedAgent<Tr>>,
     )
     where
         Tr: Trace<Batch: Navigable, Time = T> + 'static,
@@ -1146,7 +1147,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                            + PushInto<((Row, BatchValOwn<Tr>), Tr::Time, BatchDiff<Tr>)>,
                 Output = Tr::Batch,
             > + 'static,
-        Arranged<'s, TraceAgent<Tr>>: ArrangementSize,
+        Arranged<'s, SharedAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
         // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
