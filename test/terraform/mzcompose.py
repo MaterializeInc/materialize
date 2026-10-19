@@ -29,6 +29,7 @@ from textwrap import dedent
 from typing import IO
 
 import psycopg
+import requests
 import yaml
 
 from materialize import MZ_ROOT, ci_util, spawn
@@ -666,6 +667,16 @@ class State:
             ],
             preexec_fn=os.setpgrp,
         )
+
+    def environmentd_metric(self, name: str) -> float:
+        """Value of the unlabeled metric `name` on environmentd, which must be
+        forwarded by `connect`."""
+        metrics = requests.get("http://127.0.0.1:6878/metrics", timeout=30)
+        metrics.raise_for_status()
+        for line in metrics.text.splitlines():
+            if line.startswith(f"{name} "):
+                return float(line.split()[1])
+        raise ValueError(f"environmentd has no metric {name}")
 
     def connect(self, c: Composition) -> None:
         # Find services by name pattern (they're named like mz<id>-environmentd)
@@ -1694,6 +1705,13 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
 
         if args.test:
             state.test(c, tag, args.run_testdrive_files, args.files)
+            # Persist data lives in GCS, and gcp-temporary/main.tf defaults
+            # `persist_blob_http_pool` to 'gcs', which uses the pool only if
+            # `S3Blob` recognizes the endpoint as GCS.
+            pool_requests = state.environmentd_metric(
+                "mz_persist_s3_http_pool_requests"
+            )
+            assert pool_requests > 0, "no persist request went through the pool"
     finally:
         state.cleanup()
 

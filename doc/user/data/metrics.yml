@@ -2518,6 +2518,32 @@ metrics:
   - op
   source: src/persist/src/metrics.rs
   visibility: internal
+- name: mz_persist_s3_http_pool_client_in_flight_max
+  help: most requests in flight on one HTTP client in the pool
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_s3_http_pool_client_in_flight_min
+  help: fewest requests in flight on one HTTP client in the pool
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_s3_http_pool_clients
+  help: number of HTTP clients in the pool, whether or not requests use the pool
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_s3_http_pool_clients_in_use
+  help: number of HTTP clients in the pool with at least one request in flight
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_s3_http_pool_in_flight
+  help: number of requests in flight through the pool of HTTP clients
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_s3_http_pool_requests
+  help: >-
+    number of requests (including retries but excluding hedged gets) sent through
+    the pool of HTTP clients
+  source: src/persist/src/metrics.rs
+  visibility: internal
 - name: mz_persist_s3_operation_attempt_timeouts
   help: number of operation attempt timeouts (within a single retry)
   source: src/persist/src/metrics.rs
