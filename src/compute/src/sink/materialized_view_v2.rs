@@ -709,25 +709,15 @@ mod write {
             // need to hold onto the initial capabilities.
             drop(capabilities);
 
-            let mut corrections = corrections;
             let read_only = *read_only_rx.borrow_and_update();
             let mut state = State::new(
                 sink_id,
                 worker_id,
-                &mut corrections,
+                corrections,
                 as_of,
                 advance_persist_frontiers_at_startup,
                 read_only,
             );
-            // `None` while a batch write holds the corrections.
-            let mut corrections = Some(corrections);
-            // The batch write waiting for the write task to take its parts, if any.
-            let mut write: Option<Pin<Box<dyn Future<Output = Corrections>>>> = None;
-
-            // Whether a batch write is currently in flight in the Tokio task. Set from the start
-            // of a batch write until the write task answers its `Finish`, so it also covers
-            // `write`.
-            let mut batch_in_flight: Option<(BatchDescription, Capability<Timestamp>)> = None;
 
             // On drop, the logger drains remaining events and retracts all logged state.
             let mut correction_logger = correction_logger;
@@ -741,12 +731,7 @@ mod write {
                 activation_ack.ack();
 
                 let mut cx = Context::from_waker(&waker);
-                if let Some(pending) = &mut write {
-                    if let Poll::Ready(returned) = pending.as_mut().poll(&mut cx) {
-                        corrections = Some(returned);
-                        write = None;
-                    }
-                }
+                state.poll_write(&mut cx);
 
                 descs_input.for_each(|cap, data| {
                     let cap = cap.retain(0);
@@ -761,7 +746,7 @@ mod write {
                 // updates it covers are in the corrections. A batch only starts once `desired`
                 // passed its `upper`, so what accumulates meanwhile are updates that arrive
                 // during the write, not the snapshot.
-                if let Some(corrections) = &mut corrections {
+                if let Some(corrections) = state.write.corrections_mut() {
                     // `desired` updates enter the corrections as positive contributions and
                     // `persist` updates as negative ones, so the buffers hold `desired - persist`,
                     // the updates that bring the shard in line with `desired`.
@@ -783,9 +768,8 @@ mod write {
                     state.advance_persist_frontiers(
                         frontiers[2].frontier(),
                         frontiers[3].frontier(),
-                        corrections,
                     );
-                    state.maybe_force_consolidation(corrections);
+                    state.maybe_force_consolidation();
                 }
 
                 // Track read-only mode so the forced consolidation stops re-arming once writes
@@ -799,16 +783,17 @@ mod write {
                 loop {
                     match resp_rx.try_recv() {
                         Ok(resp) => {
-                            if let Some((desc, cap)) = batch_in_flight.take() {
-                                if resp.batches.is_empty() {
-                                    state.trace("skipping empty batch");
-                                } else {
-                                    state.trace(format!("wrote {} batches", resp.batches.len()));
-                                    let mut out = batches_output.activate();
-                                    let mut session = out.session(&cap);
-                                    for batch in resp.batches {
-                                        session.give((desc.clone(), batch));
-                                    }
+                            let (desc, cap) = state
+                                .complete_write()
+                                .expect("the write task only answers a finished batch write");
+                            if resp.batches.is_empty() {
+                                state.trace("skipping empty batch");
+                            } else {
+                                state.trace(format!("wrote {} batches", resp.batches.len()));
+                                let mut out = batches_output.activate();
+                                let mut session = out.session(&cap);
+                                for batch in resp.batches {
+                                    session.give((desc.clone(), batch));
                                 }
                             }
                         }
@@ -819,24 +804,16 @@ mod write {
                     }
                 }
 
-                if batch_in_flight.is_none() {
-                    if let Some((desc, cap)) = state.maybe_start_batch() {
-                        let taken = corrections.take().expect("no batch write in flight");
-                        let mut pending = Box::pin(write_batch(
-                            taken,
-                            desc.clone(),
-                            Rc::clone(&key_schema),
-                            PART_BYTES.max(shared_batch_max_bytes.get()),
-                            Rc::clone(&cmd_tx),
-                            write_metrics.clone(),
-                        ));
-                        match pending.as_mut().poll(&mut cx) {
-                            Poll::Ready(returned) => corrections = Some(returned),
-                            Poll::Pending => write = Some(pending),
-                        }
-                        batch_in_flight = Some((desc, cap));
-                    }
-                }
+                state.maybe_start_batch(&mut cx, |corrections, desc| {
+                    Box::pin(write_batch(
+                        corrections,
+                        desc.clone(),
+                        Rc::clone(&key_schema),
+                        PART_BYTES.max(shared_batch_max_bytes.get()),
+                        Rc::clone(&cmd_tx),
+                        write_metrics.clone(),
+                    ))
+                });
 
                 // Drain last, so the events of this activation's correction work reach the log
                 // without waiting for another activation.
@@ -955,6 +932,46 @@ mod write {
         }
     }
 
+    /// A batch write in progress, which returns the corrections once the write task has taken all
+    /// of its parts.
+    type BatchWriteFuture = Pin<Box<dyn Future<Output = Corrections>>>;
+
+    /// A batch write whose parts the write task has taken.
+    struct WrittenBatch {
+        corrections: Corrections,
+        desc: BatchDescription,
+        /// The capability to emit the batch's response with.
+        cap: Capability<Timestamp>,
+    }
+
+    /// The batch write of the `write` operator.
+    enum Write {
+        /// No batch write is in flight.
+        Idle(Corrections),
+        /// A batch write holds the corrections while it waits for the write task to take its
+        /// parts.
+        Pending(Pin<Box<dyn Future<Output = WrittenBatch>>>),
+        /// The batch write returned the corrections and waits for the write task's response.
+        AwaitingResponse(WrittenBatch),
+    }
+
+    impl Write {
+        /// Returns the corrections, unless a pending batch write holds them.
+        fn corrections_mut(&mut self) -> Option<&mut Corrections> {
+            match self {
+                Write::Idle(corrections)
+                | Write::AwaitingResponse(WrittenBatch { corrections, .. }) => Some(corrections),
+                Write::Pending(_) => None,
+            }
+        }
+
+        /// Moves the state out, leaving a pending write that never completes in its place.
+        fn take(&mut self) -> Self {
+            // `pending()` is zero-sized, so boxing it does not allocate.
+            std::mem::replace(self, Write::Pending(Box::pin(std::future::pending())))
+        }
+    }
+
     /// State maintained by the `write` operator.
     struct State {
         sink_id: GlobalId,
@@ -984,13 +1001,15 @@ mod write {
         /// batches, so the batch-write path never sweeps `consolidate_before(upper)` forward;
         /// the forced consolidation stands in for it and is re-armed as long as this holds.
         read_only: bool,
+        /// The corrections, and the batch write that holds them, if any.
+        write: Write,
     }
 
     impl State {
         fn new(
             sink_id: GlobalId,
             worker_id: usize,
-            corrections: &mut Corrections,
+            corrections: Corrections,
             as_of: Antichain<Timestamp>,
             advance_persist_frontiers_at_startup: bool,
             read_only: bool,
@@ -1007,6 +1026,7 @@ mod write {
                 batch_description: None,
                 force_consolidation_after,
                 read_only,
+                write: Write::Idle(corrections),
             };
 
             // Immediately advance the persist frontier tracking to the `as_of`.
@@ -1017,7 +1037,7 @@ mod write {
             // no other writers) would be never if we didn't advance the observed persist frontier
             // to the `as_of`.
             if advance_persist_frontiers_at_startup {
-                state.advance_persist_frontiers(as_of.borrow(), as_of.borrow(), corrections);
+                state.advance_persist_frontiers(as_of.borrow(), as_of.borrow());
             }
 
             state
@@ -1054,30 +1074,39 @@ mod write {
         /// frontier, so the corrections can forget the distinction between earlier times.
         /// Advancing the since together with the frontier also keeps the corrections from handing
         /// a batch an update below its `lower`, which persist rejects.
+        ///
+        /// Does nothing while a batch write holds the corrections.
         fn advance_persist_frontiers(
             &mut self,
             ok: AntichainRef<Timestamp>,
             err: AntichainRef<Timestamp>,
-            corrections: &mut Corrections,
         ) {
+            let Some(corrections) = self.write.corrections_mut() else {
+                return;
+            };
             let ok_advanced = advance(&mut self.persist_frontiers.ok, ok);
-            if ok_advanced {
-                self.trace("advanced `persist` ok frontier");
-            }
             let err_advanced = advance(&mut self.persist_frontiers.err, err);
-            if err_advanced {
-                self.trace("advanced `persist` err frontier");
-            }
             if ok_advanced || err_advanced {
                 let since = self.persist_frontiers.frontier().to_owned();
                 corrections.ok.advance_since(since.clone());
                 corrections.err.advance_since(since);
             }
+            if ok_advanced {
+                self.trace("advanced `persist` ok frontier");
+            }
+            if err_advanced {
+                self.trace("advanced `persist` err frontier");
+            }
         }
 
         /// Consolidate the corrections if a forced consolidation is due.
-        fn maybe_force_consolidation(&mut self, corrections: &mut Corrections) {
+        ///
+        /// Does nothing while a batch write holds the corrections.
+        fn maybe_force_consolidation(&mut self) {
             let Some(request) = &self.force_consolidation_after else {
+                return;
+            };
+            let Some(corrections) = self.write.corrections_mut() else {
                 return;
             };
 
@@ -1086,7 +1115,6 @@ mod write {
             if PartialOrder::less_than(request, desired_frontier)
                 && PartialOrder::less_than(request, persist_frontier)
             {
-                self.trace("forcing correction consolidation");
                 // In read-only mode the sink mints no batches, so the batch-write path never
                 // sweeps `consolidate_before(upper)` forward and a single forced consolidation
                 // only covers the band below the `since` at the moment it fires, leaving the
@@ -1101,6 +1129,7 @@ mod write {
                 };
                 corrections.ok.consolidate_at_since();
                 corrections.err.consolidate_at_since();
+                self.trace("forced correction consolidation");
             }
         }
 
@@ -1129,22 +1158,77 @@ mod write {
             self.trace("set batch description");
         }
 
-        /// Take the current batch description if a batch can be written for it.
-        fn maybe_start_batch(&mut self) -> Option<(BatchDescription, Capability<Timestamp>)> {
-            let (desc, _cap) = self.batch_description.as_ref()?;
+        /// Polls the batch write, if one is pending.
+        fn poll_write(&mut self, cx: &mut Context<'_>) {
+            if let Write::Pending(future) = &mut self.write {
+                if let Poll::Ready(written) = future.as_mut().poll(cx) {
+                    self.write = Write::AwaitingResponse(written);
+                }
+            }
+        }
+
+        /// Starts a batch write for the current batch description if no batch write is in flight
+        /// and a batch can be written for the description.
+        ///
+        /// `write_batch` returns the future that writes the corrections for the description.
+        fn maybe_start_batch(
+            &mut self,
+            cx: &mut Context<'_>,
+            write_batch: impl FnOnce(Corrections, &BatchDescription) -> BatchWriteFuture,
+        ) {
+            let corrections = match self.write.take() {
+                Write::Idle(corrections) => corrections,
+                in_flight => {
+                    self.write = in_flight;
+                    return;
+                }
+            };
 
             // We can write a new batch if we have seen all `persist` updates before `lower` and
             // all `desired` updates before `upper`.
-            let persist_ready =
-                PartialOrder::less_equal(&desc.lower, self.persist_frontiers.frontier());
-            let desired_ready =
-                PartialOrder::less_equal(&desc.upper, self.desired_frontiers.frontier());
-            if !persist_ready || !desired_ready {
-                return None;
-            }
+            let persist_frontier = self.persist_frontiers.frontier();
+            let desired_frontier = self.desired_frontiers.frontier();
+            let ready = self.batch_description.take_if(|(desc, _cap)| {
+                PartialOrder::less_equal(&desc.lower, persist_frontier)
+                    && PartialOrder::less_equal(&desc.upper, desired_frontier)
+            });
+            let Some((desc, cap)) = ready else {
+                self.write = Write::Idle(corrections);
+                return;
+            };
 
-            self.trace("write batch description");
-            self.batch_description.take()
+            self.trace(format!("write batch description: {desc:?}"));
+            let future = write_batch(corrections, &desc);
+            self.write = Write::Pending(Box::pin(async move {
+                let corrections = future.await;
+                WrittenBatch {
+                    corrections,
+                    desc,
+                    cap,
+                }
+            }));
+            self.poll_write(cx);
+        }
+
+        /// Completes the batch write the write task answered, returning the description and
+        /// capability of its batch.
+        ///
+        /// Returns `None` unless a batch write awaits a response.
+        fn complete_write(&mut self) -> Option<(BatchDescription, Capability<Timestamp>)> {
+            match self.write.take() {
+                Write::AwaitingResponse(WrittenBatch {
+                    corrections,
+                    desc,
+                    cap,
+                }) => {
+                    self.write = Write::Idle(corrections);
+                    Some((desc, cap))
+                }
+                other => {
+                    self.write = other;
+                    None
+                }
+            }
         }
     }
 
