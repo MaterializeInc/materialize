@@ -185,11 +185,15 @@ provisional rather than treating fewer raw readers as the contention repair.
 Original-budget stalls include repeated stale candidates and long catalog
 certification while holding admission. The capture separates slow oracle-handle
 and snapshot round trips from short backing-oracle reads. Background clients now
-reuse the coordinator's live epoch handle without caching timestamps. Compilation
-and independent review pass. Verify the removed round trip and SQL completion
-in the existing workload before claiming a contention improvement. Snapshot waits,
-append conflicts and actual bound advancement remain open. The captured clusterd
-OOM kill occurs after job cancellation, not as its initiating cause.
+reuse the coordinator's live epoch handle without caching timestamps. Cargo
+regressions pass and the new traces confirm the handle round trip is gone.
+Both original-budget parallel shards still time out on CREATE MV. One victim
+spends 292s outside admission and commits none of its 19 candidates. Committed
+bounds advance elsewhere, without proving physical reclamation or fleet-wide
+progress. Snapshot waits and append conflicts remain open. A legacy CREATE
+CLUSTER retry turn occupies the coordinator for 8.87s. Keep the refresh-to-commit
+cost distinct from queue amplification before expanding continuations.
+The earlier captured clusterd OOM kill follows job cancellation, not its initiation.
 The requested CI queue also accepts larger hosts. Keep exact-instance diagnostic
 placement separate from production changes and out of the landing history.
 Keep the Python driver's file-descriptor issue parked.

@@ -1620,7 +1620,9 @@ impl Catalog {
             &admitted_plans,
             mode,
         )?;
+        let admission_elapsed = validation_started.elapsed();
         for (incarnation, mut requirements, minimums) in creator_publications {
+            let merge_started = Instant::now();
             let mut grants = BTreeMap::new();
             for (id, minimum) in minimums {
                 // A peer may have admitted this target already. Its reconstruction
@@ -1662,11 +1664,17 @@ impl Catalog {
                     .or_insert(frontier);
             }
             let requested_count = requirements.len();
+            let merge_elapsed = merge_started.elapsed();
+            let expansion_started = Instant::now();
             let requirements =
                 preliminary_state.expand_client_read_requirements(incarnation, requirements)?;
+            let expansion_elapsed = expansion_started.elapsed();
+            let publication_started = Instant::now();
             tx.publish_client_read_requirements(incarnation, requirements.clone())?;
             debug!(target: "mz_adapter::frontend_read_then_write",
                 incarnation, requested_count, expanded_count = requirements.len(), creator = true,
+                ?merge_elapsed, ?expansion_elapsed,
+                publication_elapsed = ?publication_started.elapsed(),
                 "catalog client protection staged");
             creator_read_requirements.insert(incarnation, requirements);
         }
@@ -1734,7 +1742,8 @@ impl Catalog {
         tx.validate_read_protection()?;
         tx.validate_prewarming_writes()?;
         debug!(target: "mz_adapter::frontend_read_then_write",
-            phase = "candidate_validation", elapsed = ?validation_started.elapsed(),
+            phase = "candidate_validation", ?admission_elapsed,
+            elapsed = ?validation_started.elapsed(),
             "catalog candidate section complete");
 
         // Storage preparation can retract permission staged by an earlier op

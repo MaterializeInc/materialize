@@ -578,6 +578,10 @@ prefix is applied to the matching projection. Frontier catch-up satisfies that
 condition under the durable handle before constructing a fresh candidate. It does
 not reuse a candidate or skip synchronization.
 
+Post-conflict catch-up does not reserve its ending upper either. Avoiding a
+subsequent upper fetch can move rejection past candidate reconstruction rather
+than improve progress.
+
 ### Session records in the durable catalog
 
 **What:** Write a durable catalog record (`StateUpdateKind::Session`) on every
