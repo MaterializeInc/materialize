@@ -4661,28 +4661,27 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tanstack/db-ivm@npm:0.1.26":
-  version: 0.1.26
-  resolution: "@tanstack/db-ivm@npm:0.1.26"
+"@tanstack/db-ivm@npm:0.2.0":
+  version: 0.2.0
+  resolution: "@tanstack/db-ivm@npm:0.2.0"
   dependencies:
     fractional-indexing: "npm:^3.2.0"
-    sorted-btree: "npm:^1.8.1"
   peerDependencies:
     typescript: ">=4.7"
-  checksum: 10c0/b98329daf7f0dfb09566139361d7621587e8e64b230dabbed316c3b940dcc6c7331b24308c8b7c852dffdbc34277a7658bfa9f9e9134b1f32af7999aca0d62be
+  checksum: 10c0/bc8cb435b741c37b3fabd83d2f138c0ebe4ca551ed24f355e634399c2fb2a5d66efef80c66fc0cc5cf29de5689320b4cbe4a87b07328601fba230641b56ab5cd
   languageName: node
   linkType: hard
 
-"@tanstack/db@npm:0.12.3":
-  version: 0.12.3
-  resolution: "@tanstack/db@npm:0.12.3"
+"@tanstack/db@npm:0.15.0":
+  version: 0.15.0
+  resolution: "@tanstack/db@npm:0.15.0"
   dependencies:
     "@standard-schema/spec": "npm:^1.1.0"
-    "@tanstack/db-ivm": "npm:0.1.26"
+    "@tanstack/db-ivm": "npm:0.2.0"
     "@tanstack/pacer-lite": "npm:^0.2.1"
   peerDependencies:
     typescript: ">=4.7"
-  checksum: 10c0/ab035b5a3dae31ba59cff38fafa2ece7c0add75efb8f37a63910b553cb664a14ff22c5662f2e99d5e0b425362bfb155808f3a5b7f1a2c0c0a6059d5f867d2cf1
+  checksum: 10c0/a6bec954e5591b5b2e0dae62891a23a67c0ab6708c089281d2dec5fd7536a97e9713a7f7b67f24615aaf3650dc8049f34c3586fd4baf2f84f81786a209dfb406
   languageName: node
   linkType: hard
 
@@ -4743,14 +4742,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tanstack/react-db@npm:0.5.7":
-  version: 0.5.7
-  resolution: "@tanstack/react-db@npm:0.5.7"
+"@tanstack/react-db@npm:0.5.10":
+  version: 0.5.10
+  resolution: "@tanstack/react-db@npm:0.5.10"
   dependencies:
-    "@tanstack/db": "npm:0.12.3"
+    "@tanstack/db": "npm:0.15.0"
   peerDependencies:
     react: ">=18.0.0"
-  checksum: 10c0/161775c6ba879e86c854dab0770763653500b8fbb6c55382b46d6826aa38388e1987e3ddf5441cc32f4061c4abac042fbd79c08c4566a307ef03b1e684f392ca
+  checksum: 10c0/ebb426120c8bb871464a421aefca4b6c20c83910d7f8202e594ab64487c50317e42f51af70237172a1e85c91b051444c54f55fe557ca8c817d5587c6456dc9dc
   languageName: node
   linkType: hard
 
@@ -11791,9 +11790,9 @@ __metadata:
     "@stripe/react-stripe-js": "npm:^7.0.0"
     "@stripe/stripe-js": "npm:^10.0.0"
     "@svgr/babel-plugin-transform-svg-component": "npm:^8.0.0"
-    "@tanstack/db": "npm:0.12.3"
+    "@tanstack/db": "npm:0.15.0"
     "@tanstack/eslint-plugin-query": "npm:^5.104.1"
-    "@tanstack/react-db": "npm:0.5.7"
+    "@tanstack/react-db": "npm:0.5.10"
     "@tanstack/react-query": "npm:^5.104.3"
     "@tanstack/react-query-devtools": "npm:^5.104.3"
     "@tanstack/react-table": "npm:^8.21.3"
@@ -14586,13 +14585,6 @@ __metadata:
   peerDependencies:
     solid-js: ^1.6.12
   checksum: 10c0/584656bedefb03fd91801d858c9abf0de5afc175e9a7bea2023000faa5ed3af4c6e4b8b99dd7ed1069595d362b002d4ae8ca08d030e422b65dc23742fb2ac681
-  languageName: node
-  linkType: hard
-
-"sorted-btree@npm:^1.8.1":
-  version: 1.8.1
-  resolution: "sorted-btree@npm:1.8.1"
-  checksum: 10c0/96b1d920ad40bc9dfcf13698a209532cebe50fa063426d59bd9a862930ab025afec5c5597c254724403b5107f7b7ca91572565f4efc2214ce05d9c617c6b1142
   languageName: node
   linkType: hard
 
