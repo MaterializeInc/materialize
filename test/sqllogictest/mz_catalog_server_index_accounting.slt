@@ -325,6 +325,7 @@ mz_cluster_replica_sizes  disk_bytes
 mz_cluster_replica_sizes  memory_bytes
 mz_cluster_replica_sizes  processes
 mz_cluster_replica_sizes  size
+mz_cluster_replica_sizes  source_only
 mz_cluster_replica_sizes  workers
 mz_cluster_replica_status_history  occurred_at
 mz_cluster_replica_status_history  process_id

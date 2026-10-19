@@ -552,6 +552,12 @@ impl PeekClient {
             &conn_catalog,
             &plan,
         )?;
+        coord::catalog_serving::check_source_only_cluster_restrictions(
+            catalog.state(),
+            target_cluster_id,
+            session,
+            &plan,
+        )?;
 
         rbac::check_plan(
             &conn_catalog,

@@ -48,7 +48,7 @@ use mz_ore::future::InTask;
 use mz_ore::instrument;
 use mz_ore::retry::Retry;
 use mz_ore::task;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion, RelationVersionSelector};
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, RelationVersionSelector};
 use mz_sql::plan::ConnectionDetails;
 use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::PostgresConnection;
@@ -224,6 +224,22 @@ impl Coordinator {
     }
 
     #[instrument(level = "debug")]
+    /// Repacks `mz_cluster_replica_sizes` if `enforce_source_only_cluster_families`
+    /// differs from the value its rows were packed with.
+    fn repack_replica_sizes_if_source_only_families_changed(&mut self) {
+        let state = self.catalog().state();
+        let families = state.source_only_cluster_families();
+        if families == self.replica_sizes_source_only_families {
+            return;
+        }
+        let mut updates = state
+            .pack_replica_size_updates(&self.replica_sizes_source_only_families, Diff::MINUS_ONE);
+        updates.extend(state.pack_replica_size_updates(&families, Diff::ONE));
+        let updates = state.resolve_builtin_table_updates(updates);
+        self.replica_sizes_source_only_families = families;
+        let _notify = self.builtin_table_update().defer(updates);
+    }
+
     async fn apply_catalog_implications_inner(
         &mut self,
         ctx: Option<&mut ExecuteContext>,
@@ -241,6 +257,7 @@ impl Coordinator {
         // idempotent reads, so we fire them once, up front.
         if system_config_changed {
             self.catalog().system_config().notify_all_callbacks();
+            self.repack_replica_sizes_if_source_only_families_changed();
         }
 
         let mut tables_to_drop = BTreeSet::new();

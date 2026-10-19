@@ -222,6 +222,19 @@ pub enum AdapterError {
     SubscribeOnlyTransaction,
     /// An error occurred in the optimizer.
     Optimizer(OptimizerError),
+    /// The cluster uses a source-only replica size, so it may not run queries
+    /// or host objects other than sources. `action` completes the sentence
+    /// "cluster ... cannot", e.g. "run queries".
+    SourceOnlyCluster {
+        cluster: String,
+        action: String,
+    },
+    /// The change would give a cluster that hosts objects other than sources
+    /// a source-only replica size.
+    SourceOnlySizeIntroduced {
+        cluster: String,
+        size: String,
+    },
     /// A query depends on items which are not allowed to be referenced from the current cluster.
     UnallowedOnCluster {
         depends_on: SmallVec<[String; 2]>,
@@ -864,6 +877,12 @@ impl AdapterError {
                     .into(),
             ),
             AdapterError::PlanError(e) => e.hint(),
+            AdapterError::SourceOnlyCluster { .. } => {
+                Some("Use a cluster whose size is not source-only.".into())
+            }
+            AdapterError::SourceOnlySizeIntroduced { .. } => {
+                Some("Choose a cluster size that is not source-only.".into())
+            }
             AdapterError::UnallowedOnCluster { cluster, .. } => {
                 (cluster != MZ_CATALOG_SERVER_CLUSTER.name).then(||
                     "Use `SET CLUSTER = <cluster-name>` to change your cluster and re-run the query."
@@ -1050,6 +1069,10 @@ impl AdapterError {
                 OptimizerError::InternalUnsafeMfpPlan(_) => SqlState::INTERNAL_ERROR,
             },
             AdapterError::UnallowedOnCluster { .. } => {
+                SqlState::S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED
+            }
+            AdapterError::SourceOnlyCluster { .. }
+            | AdapterError::SourceOnlySizeIntroduced { .. } => {
                 SqlState::S_R_E_PROHIBITED_SQL_STATEMENT_ATTEMPTED
             }
             AdapterError::Unauthorized(_) => SqlState::INSUFFICIENT_PRIVILEGE,
@@ -1451,6 +1474,18 @@ impl fmt::Display for AdapterError {
                 f.write_str("SUBSCRIBE in transactions must be the only read statement")
             }
             AdapterError::Optimizer(e) => e.fmt(f),
+            AdapterError::SourceOnlyCluster { cluster, action } => write!(
+                f,
+                "cluster {} is source-only and cannot {action}",
+                cluster.quoted()
+            ),
+            AdapterError::SourceOnlySizeIntroduced { cluster, size } => write!(
+                f,
+                "cannot use source-only cluster size {} on cluster {} because it hosts \
+                objects other than sources",
+                size.quoted(),
+                cluster.quoted()
+            ),
             AdapterError::UnallowedOnCluster {
                 depends_on,
                 cluster,

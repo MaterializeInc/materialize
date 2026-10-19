@@ -2047,6 +2047,11 @@ pub struct Coordinator {
     /// Tracks the statuses of all cluster replicas.
     cluster_replica_statuses: ClusterReplicaStatuses,
 
+    /// The `enforce_source_only_cluster_families` value that the rows of
+    /// `mz_cluster_replica_sizes` were last packed with. Retracting those rows
+    /// after the setting changes requires packing them the same way.
+    replica_sizes_source_only_families: BTreeSet<String>,
+
     /// Whether or not to start controllers in read-only mode. This is only
     /// meant for use during development of read-only clusters and 0dt upgrades
     /// and should go away once we have proper orchestration during upgrades.
@@ -2783,11 +2788,15 @@ impl Coordinator {
         }
 
         // Expose mapping from T-shirt sizes to actual sizes
+        let source_only_families = self.catalog().state().source_only_cluster_families();
         builtin_table_updates.extend(
             self.catalog().state().resolve_builtin_table_updates(
-                self.catalog().state().pack_all_replica_size_updates(),
+                self.catalog()
+                    .state()
+                    .pack_all_replica_size_updates(&source_only_families),
             ),
         );
+        self.replica_sizes_source_only_families = source_only_families;
 
         debug!("startup: coordinator init: bootstrap: initializing migrated builtin tables");
         // When 0dt is enabled, we create new shards for any migrated builtin storage collections.
@@ -5222,6 +5231,7 @@ pub fn serve(
                     installed_watch_sets: BTreeMap::new(),
                     connection_watch_sets: BTreeMap::new(),
                     cluster_replica_statuses: ClusterReplicaStatuses::new(),
+                    replica_sizes_source_only_families: BTreeSet::new(),
                     read_only_controllers,
                     buffered_builtin_table_updates: Some(Vec::new()),
                     license_key,

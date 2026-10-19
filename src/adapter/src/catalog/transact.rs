@@ -45,6 +45,7 @@ use mz_cluster_controller::ctx::RefreshWindowDecision;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
+use mz_ore::str::StrExt;
 use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist_types::ShardId;
 use mz_repr::adt::interval::Interval;
@@ -1707,6 +1708,19 @@ impl Catalog {
                         return Err(AdapterError::Catalog(Error::new(
                             ErrorKind::ReadOnlyCluster(cluster_name),
                         )));
+                    }
+                }
+
+                // Source-only clusters may host sources and nothing else.
+                if let Some(cluster_id) = item.cluster_id()
+                    && !matches!(item, CatalogItem::Source(_))
+                {
+                    let cluster = &state.clusters_by_id[&cluster_id];
+                    if state.source_only_cluster_restricted(cluster, session.map(|s| s.user())) {
+                        return Err(AdapterError::SourceOnlyCluster {
+                            cluster: cluster.name.clone(),
+                            action: format!("host {} {}", item.typ(), name.item.quoted()),
+                        });
                     }
                 }
 

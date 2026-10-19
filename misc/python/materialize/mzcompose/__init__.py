@@ -407,6 +407,14 @@ def get_variable_system_parameters(
             "true" if version >= MzVersion.parse_mz("v26.18.0-dev") else "false",
             ["true", "false"],
         ),
+        # sqllogictest and `TestHarness` sizes are all in the `legacy` family,
+        # so enforcing it would reject nearly every query they run.
+        # `test/testdrive/source-only-cluster.td` sets it.
+        VariableSystemParameter(
+            "enforce_source_only_cluster_families",
+            "[]",
+            ["[]"],
+        ),
         VariableSystemParameter(
             "enable_simplify_from_less_existence",
             "true",
@@ -1090,6 +1098,7 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
         disabled: bool = False,
         is_cc: bool = True,
         memory_limit: str = "4 GiB",
+        source_only: bool = False,
     ) -> dict[str, Any]:
         return {
             "cpu_exclusive": False,
@@ -1100,6 +1109,7 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
             "is_cc": is_cc,
             "memory_limit": memory_limit,
             "scale": scale,
+            "source_only": source_only,
             "workers": workers,
             # "selectors": {},
         }
@@ -1109,6 +1119,7 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
         "scale=2,workers=4": replica_size(2, 4),
         "scale=1,workers=1,legacy": replica_size(1, 1, is_cc=False),
         "scale=1,workers=2,legacy": replica_size(1, 2, is_cc=False),
+        "scale=1,workers=1,source-only": replica_size(1, 1, source_only=True),
         # Intentionally not following the naming scheme
         "free": replica_size(1, 1, disabled=True),
     }

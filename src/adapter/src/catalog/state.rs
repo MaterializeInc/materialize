@@ -20,6 +20,7 @@ use ipnet::IpNet;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::ENFORCE_SOURCE_ONLY_CLUSTER_FAMILIES;
 use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent};
 use mz_build_info::DUMMY_BUILD_INFO;
 use mz_catalog::SYSTEM_CONN_ID;
@@ -30,10 +31,10 @@ use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
 use mz_catalog::expr_cache::{LocalExpressions, latest_item_version};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
-    Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, MetricSink,
-    NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
-    TableDataSource, Type, View,
+    CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, ClusterVariant,
+    CommentsMap, Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
+    MetricSink, NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences,
+    Table, TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
     ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation, UnmanagedReplicaLocation,
@@ -80,7 +81,7 @@ use mz_sql::plan::{
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, User};
 use mz_sql::session::vars::{DEFAULT_DATABASE_NAME, SystemVars, Var, VarInput};
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageMetadata;
@@ -92,7 +93,7 @@ use mz_transform::notice::OptimizerNotice;
 use serde::Serialize;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
@@ -2670,6 +2671,105 @@ impl CatalogState {
         Ok(location)
     }
 
+    /// The replica size families that `enforce_source_only_cluster_families`
+    /// makes source-only.
+    ///
+    /// NOTE: A value that is not a JSON array of strings enforces no families,
+    /// so a malformed setting lifts the restrictions it would otherwise add.
+    pub(crate) fn source_only_cluster_families(&self) -> BTreeSet<String> {
+        let value = ENFORCE_SOURCE_ONLY_CLUSTER_FAMILIES.get(self.system_config().dyncfgs());
+        serde_json::from_value(value).unwrap_or_else(|e| {
+            error!("invalid enforce_source_only_cluster_families, enforcing no families: {e}");
+            BTreeSet::new()
+        })
+    }
+
+    /// Reports whether `size` names a source-only replica size. Unknown sizes
+    /// are not source-only.
+    fn is_source_only_replica_size(&self, size: &str, families: &BTreeSet<String>) -> bool {
+        self.cluster_replica_sizes
+            .0
+            .get(size)
+            .is_some_and(|allocation| is_source_only_allocation(allocation, families))
+    }
+
+    /// Reports whether `cluster` is configured with a source-only replica
+    /// size or has any replica of a source-only size.
+    fn cluster_uses_source_only_size(
+        &self,
+        cluster: &Cluster,
+        families: &BTreeSet<String>,
+    ) -> bool {
+        let managed_size_is_source_only = match &cluster.config.variant {
+            ClusterVariant::Managed(managed) => {
+                self.is_source_only_replica_size(&managed.size, families)
+            }
+            ClusterVariant::Unmanaged => false,
+        };
+        managed_size_is_source_only
+            || cluster
+                .replicas()
+                .any(|replica| match &replica.config.location {
+                    ReplicaLocation::Managed(location) => {
+                        is_source_only_allocation(&location.allocation, families)
+                    }
+                    ReplicaLocation::Unmanaged(_) => false,
+                })
+    }
+
+    /// Reports whether source-only restrictions apply to `user` acting on
+    /// `cluster`. A `user` of `None` is an internal caller and is exempt, as
+    /// are internal users and system clusters.
+    fn source_only_restrictions_apply(cluster: &Cluster, user: Option<&User>) -> bool {
+        cluster.id.is_user() && user.is_some_and(|user| !user.is_internal())
+    }
+
+    /// Reports whether `user` may not run queries on `cluster`, or create
+    /// objects other than sources in it, because the cluster uses a
+    /// source-only replica size.
+    pub(crate) fn source_only_cluster_restricted(
+        &self,
+        cluster: &Cluster,
+        user: Option<&User>,
+    ) -> bool {
+        Self::source_only_restrictions_apply(cluster, user)
+            && self.cluster_uses_source_only_size(cluster, &self.source_only_cluster_families())
+    }
+
+    /// Fails if giving `cluster` a replica of `size` would bring objects
+    /// other than sources that it already hosts onto a source-only size.
+    ///
+    /// A cluster that already uses a source-only size passes, so objects it
+    /// hosts from before its size became source-only keep operating, e.g.
+    /// when its replication factor changes.
+    pub(crate) fn ensure_source_only_size_not_introduced(
+        &self,
+        cluster: &Cluster,
+        size: &str,
+        user: &User,
+    ) -> Result<(), AdapterError> {
+        let hosts_non_sources = || {
+            cluster
+                .bound_objects
+                .iter()
+                .any(|id| !matches!(self.get_entry(id).item(), CatalogItem::Source(_)))
+        };
+        if !Self::source_only_restrictions_apply(cluster, Some(user)) {
+            return Ok(());
+        }
+        let families = self.source_only_cluster_families();
+        if self.is_source_only_replica_size(size, &families)
+            && !self.cluster_uses_source_only_size(cluster, &families)
+            && hosts_non_sources()
+        {
+            return Err(AdapterError::SourceOnlySizeIntroduced {
+                cluster: cluster.name.clone(),
+                size: size.to_string(),
+            });
+        }
+        Ok(())
+    }
+
     pub(crate) fn ensure_valid_replica_size(
         &self,
         allowed_sizes: &[String],
@@ -3056,6 +3156,15 @@ impl Catalog {
     pub fn as_optimizer_catalog(self: Arc<Self>) -> Arc<dyn OptimizerCatalog> {
         self
     }
+}
+
+/// Reports whether `allocation` is source-only, either by its own setting or
+/// because its family is in `source_only_families`.
+pub(super) fn is_source_only_allocation(
+    allocation: &ReplicaAllocation,
+    source_only_families: &BTreeSet<String>,
+) -> bool {
+    allocation.source_only || source_only_families.contains(allocation.family())
 }
 
 #[cfg(test)]

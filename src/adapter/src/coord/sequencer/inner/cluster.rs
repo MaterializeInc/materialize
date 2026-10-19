@@ -264,6 +264,12 @@ impl Coordinator {
             }
         }
 
+        if let (Managed(managed), Set(_)) = (&new_config.variant, &options.size) {
+            self.catalog()
+                .state()
+                .ensure_source_only_size_not_introduced(cluster, &managed.size, session.user())?;
+        }
+
         match &options.workload_class {
             Set(wc) => new_config.workload_class.clone_from(wc),
             Reset => new_config.workload_class = None,
@@ -1306,6 +1312,12 @@ impl Coordinator {
                     }
                     None => None,
                 };
+                let state = self.catalog().state();
+                state.ensure_source_only_size_not_introduced(
+                    state.get_cluster(cluster_id),
+                    &size,
+                    session.user(),
+                )?;
                 let location = mz_catalog::durable::ReplicaLocation::Managed {
                     // The user-pinned `AVAILABILITY ZONE`, if any, as a zero- or
                     // one-element list.

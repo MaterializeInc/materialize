@@ -190,6 +190,15 @@ pub const OIDC_AUDIENCE: Config<fn() -> serde_json::Value> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Replica size families whose sizes are source-only, in addition to sizes
+/// that set `source_only` themselves.
+pub const ENFORCE_SOURCE_ONLY_CLUSTER_FAMILIES: Config<fn() -> serde_json::Value> = Config::new(
+    "enforce_source_only_cluster_families",
+    || serde_json::json!([]),
+    "Replica size families whose sizes are source-only. A JSON array of strings. Clusters using such a size cannot run queries or host objects other than sources.",
+    ParameterScope::Environment,
+);
+
 /// OIDC authentication claim to use as username
 pub const OIDC_AUTHENTICATION_CLAIM: Config<&'static str> = Config::new(
     "oidc_authentication_claim",
@@ -582,6 +591,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&READ_THEN_WRITE_MAX_DEPENDENCIES)
         .add(&OIDC_ISSUER)
         .add(&OIDC_AUDIENCE)
+        .add(&ENFORCE_SOURCE_ONLY_CLUSTER_FAMILIES)
         .add(&OIDC_AUTHENTICATION_CLAIM)
         .add(&OIDC_GROUP_ROLE_SYNC_ENABLED)
         .add(&OIDC_GROUP_CLAIM)

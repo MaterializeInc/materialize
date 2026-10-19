@@ -9,6 +9,8 @@
 
 mod notice;
 
+use std::collections::BTreeSet;
+
 use bytesize::ByteSize;
 use ipnet::IpNet;
 use mz_audit_log::VersionedStorageUsage;
@@ -48,6 +50,7 @@ use uuid::Uuid;
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::active_compute_sink::ActiveSubscribe;
 use crate::catalog::CatalogState;
+use crate::catalog::state::is_source_only_allocation;
 use crate::coord::ConnMeta;
 
 /// An update to a built-in table.
@@ -610,7 +613,12 @@ impl CatalogState {
         Ok(BuiltinTableUpdate::row(id, row, Diff::ONE))
     }
 
-    pub fn pack_all_replica_size_updates(&self) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+    /// Packs the rows of the replica size tables, with `source_only`
+    /// derived from `source_only_families`.
+    pub fn pack_all_replica_size_updates(
+        &self,
+        source_only_families: &BTreeSet<String>,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut updates = Vec::new();
         for (size, alloc) in &self.cluster_replica_sizes.0 {
             // Just invent something when the limits are `None`, which only happens in non-prod
@@ -636,11 +644,29 @@ impl CatalogState {
                 internal_row,
                 Diff::ONE,
             ));
+        }
 
+        updates.extend(self.pack_replica_size_updates(source_only_families, Diff::ONE));
+        updates
+    }
+
+    /// Packs the rows of `mz_cluster_replica_sizes`, with `source_only`
+    /// derived from `source_only_families` rather than the current
+    /// `enforce_source_only_cluster_families`, so that callers can retract
+    /// rows packed under an earlier value.
+    pub fn pack_replica_size_updates(
+        &self,
+        source_only_families: &BTreeSet<String>,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let mut updates = Vec::new();
+        for (size, alloc) in &self.cluster_replica_sizes.0 {
             if alloc.disabled {
                 continue;
             }
 
+            let DiskLimit(ByteSize(disk_bytes)) =
+                (alloc.disk_limit).unwrap_or(DiskLimit::ARBITRARY);
             let cpu_limit = alloc.cpu_limit.unwrap_or(CpuLimit::MAX);
             let MemoryLimit(ByteSize(memory_bytes)) =
                 (alloc.memory_limit).unwrap_or(MemoryLimit::MAX);
@@ -653,15 +679,15 @@ impl CatalogState {
                 memory_bytes.into(),
                 disk_bytes.into(),
                 (alloc.credits_per_hour).into(),
+                Datum::from(is_source_only_allocation(alloc, source_only_families)),
             ]);
 
             updates.push(BuiltinTableUpdate::row(
                 &*MZ_CLUSTER_REPLICA_SIZES,
                 row,
-                Diff::ONE,
+                diff,
             ));
         }
-
         updates
     }
 
