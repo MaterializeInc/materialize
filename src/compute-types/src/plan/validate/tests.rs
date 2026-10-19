@@ -14,8 +14,8 @@ use mz_expr::{
     LetRecLimit, MapFilterProject, MfpPlan, MirScalarExpr, SafeMfpPlan, permutation_for_arrangement,
 };
 use mz_repr::{
-    Datum, Diff, RelationDesc, ReprScalarType, Row, SqlRelationType, SqlScalarType, StableRow,
-    Timestamp,
+    ColumnName, Datum, Diff, RelationDesc, ReprScalarType, Row, SqlRelationType, SqlScalarType,
+    StableRow, Timestamp,
 };
 use timely::progress::Antichain;
 
@@ -1737,6 +1737,48 @@ fn bounds_work_on_wide_union() {
     let df = dataflow(&[(T1, 10_000)], vec![(OUT, large)]);
     let errs = errors(&df);
     assert_error(&errs, Rule::Shape, "units of work");
+}
+
+#[mz_ore::test]
+fn bounds_work_on_copies_of_large_column_types() {
+    // T1's column is a record nested 200 deep. T2 repeats it 10,000 times, and each of the
+    // 20,000 reads of T2 copies all of these types.
+    let mut typ = SqlScalarType::Int64;
+    for _ in 0..200 {
+        typ = SqlScalarType::Record {
+            fields: vec![(ColumnName::from("f"), typ.nullable(false))].into_boxed_slice(),
+            custom_id: None,
+        };
+    }
+    let wide = mfp(raw_t1(), 1, vec![], vec![], vec![0; 10_000]);
+    let reads = union(
+        (0..20_000)
+            .map(|_| get_global(T2, AvailableCollections::new_raw()))
+            .collect(),
+    );
+    let mut df = dataflow(&[(T1, 1)], vec![(T2, wide), (OUT, reads)]);
+    df.source_imports.get_mut(&T1).expect("imported").desc.typ =
+        SqlRelationType::new(vec![typ.nullable(false)]);
+    let errs = errors(&df);
+    assert_error(&errs, Rule::Shape, "units of work");
+}
+
+#[mz_ore::test]
+fn resolves_many_locals_quickly() {
+    // 100,000 bindings, and a body of 100,000 reads of the first. Scanning the bindings for
+    // each read takes 1e10 steps.
+    let ids: Vec<_> = (0..100_000).map(LocalId::new).collect();
+    let values = ids.iter().map(|_| constant(vec![])).collect();
+    let body = union(ids.iter().map(|_| get_local(ids[0])).collect());
+    let plan = plan(LirRelationNode::LetRec {
+        limits: vec![limit(); ids.len()],
+        body: Box::new(body),
+        ids,
+        values,
+    });
+    let df = dataflow(&[], vec![(OUT, plan)]);
+    // The plan may pass or fail. It must be validated quickly.
+    let _ = validate_dataflow(&df, &ValidateConfig::default());
 }
 
 #[mz_ore::test]

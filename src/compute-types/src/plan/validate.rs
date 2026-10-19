@@ -205,8 +205,8 @@ enum Output {
 }
 
 impl Output {
-    /// The size of what is known about the output: its columns and the expressions of its
-    /// arrangement keys.
+    /// The size of what is known about the output: the sizes of its column types, bounded
+    /// by [`types::TYPE_SIZE_LIMIT`] each, and the expressions of its arrangement keys.
     fn width(&self) -> usize {
         let available = |available: &Available| {
             available
@@ -219,7 +219,16 @@ impl Output {
         match self {
             Output::Failed => 1,
             Output::Empty(forms) => available(forms),
-            Output::Rows(info) => info.arity.saturating_add(available(&info.available)),
+            Output::Rows(info) => {
+                let columns = match &info.types {
+                    Some(types) => types
+                        .iter()
+                        .map(ColType::size)
+                        .fold(0, usize::saturating_add),
+                    None => info.arity,
+                };
+                columns.saturating_add(available(&info.available))
+            }
         }
     }
 
@@ -367,6 +376,66 @@ enum Undo {
     ReadGlobal(GlobalId),
 }
 
+/// The local bindings in scope, innermost last, with a lookup by id.
+#[derive(Default)]
+struct Locals {
+    entries: Vec<(LocalId, Output)>,
+    /// The positions in `entries` of the bindings of each id, innermost last.
+    positions: BTreeMap<LocalId, Vec<usize>>,
+}
+
+impl Locals {
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn push(&mut self, id: LocalId, output: Output) {
+        self.positions
+            .entry(id)
+            .or_default()
+            .push(self.entries.len());
+        self.entries.push((id, output));
+    }
+
+    fn pop(&mut self) {
+        self.truncate(self.entries.len().saturating_sub(1));
+    }
+
+    /// Removes the bindings from position `len` on.
+    fn truncate(&mut self, len: usize) {
+        while self.entries.len() > len {
+            let Some((id, _)) = self.entries.pop() else {
+                break;
+            };
+            if let Some(positions) = self.positions.get_mut(&id) {
+                positions.pop();
+                if positions.is_empty() {
+                    self.positions.remove(&id);
+                }
+            }
+        }
+    }
+
+    /// The innermost binding of `id`.
+    fn get(&self, id: &LocalId) -> Option<&Output> {
+        let position = *self.positions.get(id)?.last()?;
+        self.entries.get(position).map(|(_, output)| output)
+    }
+
+    /// The binding at `position`.
+    fn get_mut(&mut self, position: usize) -> Option<&mut Output> {
+        self.entries.get_mut(position).map(|(_, output)| output)
+    }
+
+    /// The bindings from position `start` on.
+    fn iter_mut_from(&mut self, start: usize) -> impl Iterator<Item = &mut Output> {
+        self.entries
+            .iter_mut()
+            .skip(start)
+            .map(|(_, output)| output)
+    }
+}
+
 /// The state of one validation.
 struct Validator {
     typer: Typer,
@@ -382,7 +451,7 @@ struct Validator {
     /// The ids of built objects, including those built later than the current one.
     objects: BTreeSet<GlobalId>,
     /// Local bindings in scope, innermost last.
-    locals: Vec<(LocalId, Output)>,
+    locals: Locals,
     /// Local ids bound so far in the current object.
     bound_locals: BTreeSet<LocalId>,
     /// `LirId`s seen so far in the dataflow.
@@ -415,7 +484,7 @@ impl Validator {
             recursion_guard: RecursionGuard::with_limit(RECURSION_LIMIT),
             globals: BTreeMap::new(),
             objects: BTreeSet::new(),
-            locals: Vec::new(),
+            locals: Locals::default(),
             bound_locals: BTreeSet::new(),
             lir_ids: BTreeSet::new(),
             read_globals: BTreeSet::new(),
@@ -480,8 +549,14 @@ impl Validator {
             )
             .collect();
         self.monotonicity = monotonic::Analysis::new(single_time, monotonic_ids);
-        self.budget = Self::budget(df);
         self.imports(df);
+        // The imports' types are part of the plan's content.
+        let imported = self
+            .globals
+            .values()
+            .map(Output::width)
+            .fold(0, usize::saturating_add);
+        self.budget = Self::budget(df).saturating_add(PLAN_SIZE_FACTOR.saturating_mul(imported));
 
         self.objects = df.objects_to_build.iter().map(|o| o.id).collect();
         let mut types = BTreeMap::new();
@@ -566,7 +641,7 @@ impl Validator {
             let typ: Vec<ColType> = ReprRelationType::from(&import.desc.typ)
                 .column_types
                 .into_iter()
-                .map(ColType::Known)
+                .map(ColType::of)
                 .collect();
             // The source's operators run inside the source, so `Get`s see their output.
             let (arity, typ) = match &import.desc.arguments.operators {
@@ -617,7 +692,7 @@ impl Validator {
                     .column_types
                     .iter()
                     .cloned()
-                    .map(ColType::Known)
+                    .map(ColType::of)
                     .collect()
             });
             match arities.get(&on_id) {
@@ -955,7 +1030,7 @@ impl Validator {
                 }
                 let value = self.visit(value, false)?;
                 self.bind(expr, *id);
-                self.locals.push((*id, value));
+                self.locals.push(*id, value);
                 let body = self.visit(body, true)?;
                 self.locals.pop();
                 Some(body)
@@ -1273,12 +1348,7 @@ impl Validator {
     /// Resolves the collection a `Get` reads.
     fn resolve(&mut self, expr: &LirRelationExpr, id: &Id) -> Output {
         let found = match id {
-            Id::Local(local) => self
-                .locals
-                .iter()
-                .rev()
-                .find(|(l, _)| l == local)
-                .map(|(_, output)| output.clone()),
+            Id::Local(local) => self.locals.get(local).cloned(),
             Id::Global(global) => {
                 let found = self.globals.get(global).cloned();
                 if found.is_some() && self.read_globals.insert(*global) {
@@ -1412,7 +1482,7 @@ impl Validator {
             .let_rec_values(expr, ids, values, &known, &mut types, &mut monotonic, false)?
             .clean;
         self.rec_depth -= 1;
-        for (_, binding) in self.locals.iter_mut().skip(scope) {
+        for binding in self.locals.iter_mut_from(scope) {
             binding.set_available(Available::raw());
         }
         let body = self.visit(body, true)?;
@@ -1472,7 +1542,7 @@ impl Validator {
                 // The length mismatch has been reported.
                 (None, None) => Output::Failed,
             };
-            self.locals.push((*id, binding));
+            self.locals.push(*id, binding);
         }
 
         let mut pass = LetRecPass {
@@ -1489,7 +1559,7 @@ impl Validator {
                 if !output.monotonicity().logical {
                     *m = false;
                     pass.changed = true;
-                    if let Some((_, Output::Rows(info))) = self.locals.get_mut(scope + i) {
+                    if let Some(Output::Rows(info)) = self.locals.get_mut(scope + i) {
                         info.monotonic = false;
                     }
                 }
@@ -1503,7 +1573,7 @@ impl Validator {
             }
             if *acc != before {
                 pass.changed = true;
-                if let Some((_, binding)) = self.locals.get_mut(scope + i) {
+                if let Some(binding) = self.locals.get_mut(scope + i) {
                     binding.set_types(acc.clone());
                 }
             }
@@ -1533,7 +1603,7 @@ impl Validator {
                 clean = false;
             }
             let forms = forms.clone();
-            if let Some((_, binding)) = self.locals.get_mut(index) {
+            if let Some(binding) = self.locals.get_mut(index) {
                 binding.set_available(forms);
             }
         }
@@ -1622,6 +1692,7 @@ impl Validator {
             match &expr.node {
                 LirRelationNode::Constant { rows } => {
                     if let Some((row, _, _)) = rows.as_ref().ok().and_then(|rows| rows.first()) {
+                        self.charge(row.data_len())?;
                         return Ok(Some(row.iter().count()));
                     }
                 }
@@ -1640,10 +1711,8 @@ impl Validator {
                     let binding = match id {
                         Id::Local(local) => recursive.get(local).copied().or_else(|| {
                             self.locals
-                                .iter()
-                                .rev()
-                                .find(|(l, _)| l == local)
-                                .and_then(|(_, output)| output.arity().ok().flatten())
+                                .get(local)
+                                .and_then(|output| output.arity().ok().flatten())
                         }),
                         Id::Global(global) => self
                             .globals

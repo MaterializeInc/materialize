@@ -58,7 +58,50 @@ pub(super) enum ColType {
     Known(ReprColumnType),
 }
 
+/// The most nodes a column type the validator tracks may have. Larger types are treated as
+/// unknown, which bounds the work of cloning, comparing and unifying a column type by a
+/// constant.
+pub(super) const TYPE_SIZE_LIMIT: usize = 256;
+
+/// The number of nodes of `typ`, or `None` if it exceeds [`TYPE_SIZE_LIMIT`]. Costs work
+/// proportional to its result.
+pub(super) fn type_size(typ: &ReprColumnType) -> Option<usize> {
+    let mut size: usize = 0;
+    let mut todo = vec![&typ.scalar_type];
+    while let Some(t) = todo.pop() {
+        size += 1;
+        if size > TYPE_SIZE_LIMIT {
+            return None;
+        }
+        match t {
+            ReprScalarType::Array(t)
+            | ReprScalarType::List { element_type: t }
+            | ReprScalarType::Map { value_type: t }
+            | ReprScalarType::Range { element_type: t } => todo.push(t),
+            ReprScalarType::Record { fields } => todo.extend(fields.iter().map(|f| &f.scalar_type)),
+            _ => {}
+        }
+    }
+    Some(size)
+}
+
 impl ColType {
+    /// `typ` as a known column type, or unknown if it exceeds [`TYPE_SIZE_LIMIT`].
+    pub(super) fn of(typ: ReprColumnType) -> ColType {
+        match type_size(&typ) {
+            Some(_) => ColType::Known(typ),
+            None => ColType::Unknown,
+        }
+    }
+
+    /// The units of work charged for handling this column type once.
+    pub(super) fn size(&self) -> usize {
+        match self {
+            ColType::Known(t) => type_size(t).unwrap_or(TYPE_SIZE_LIMIT),
+            ColType::Bottom | ColType::Unknown => 1,
+        }
+    }
+
     fn known(&self) -> Option<&ReprColumnType> {
         match self {
             ColType::Known(t) => Some(t),
@@ -203,7 +246,7 @@ impl Typer {
         f: impl FnOnce() -> ReprColumnType,
     ) -> ColType {
         match mz_ore::panic::catch_unwind(AssertUnwindSafe(f)) {
-            Ok(t) => ColType::Known(t),
+            Ok(t) => ColType::of(t),
             Err(_) => {
                 if self.enforce {
                     issues.push((
@@ -258,7 +301,7 @@ impl Typer {
         typ: &ReprColumnType,
     ) -> ColType {
         let Ok(row) = value else {
-            return ColType::Known(typ.clone());
+            return ColType::of(typ.clone());
         };
         // Evaluation unpacks the first datum and panics if there is none.
         let mut datums = row.iter();
@@ -273,7 +316,7 @@ impl Typer {
             return ColType::Unknown;
         };
         if datum.is_instance_of(typ) {
-            ColType::Known(typ.clone())
+            ColType::of(typ.clone())
         } else {
             let nullability = if datum.is_null() { " non-null" } else { "" };
             issues.push((
@@ -536,7 +579,7 @@ impl Typer {
             .into_iter()
             .enumerate()
             .map(|(c, (column, nullable))| match column {
-                ConstantColumn::Known(t) => ColType::Known(t.nullable(nullable)),
+                ConstantColumn::Known(t) => ColType::of(t.nullable(nullable)),
                 ConstantColumn::Null => {
                     if self.enforce {
                         issues.push((
@@ -650,7 +693,7 @@ impl Typer {
         let output = mz_ore::panic::catch_unwind(AssertUnwindSafe(|| func.output_type()));
         let mut types: Vec<ColType> = match output {
             Ok(typ) if Some(typ.arity()) == arity => {
-                typ.column_types.into_iter().map(ColType::Known).collect()
+                typ.column_types.into_iter().map(ColType::of).collect()
             }
             _ => {
                 if self.enforce {
