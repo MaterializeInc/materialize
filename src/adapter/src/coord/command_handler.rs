@@ -1586,7 +1586,11 @@ impl Coordinator {
         if matches!(
             &*stmt,
             Statement::CreateSource(_) | Statement::CreateTableFromSource(_)
-        ) {
+        ) || matches!(&*stmt, Statement::AlterSource(stmt)
+            if matches!(stmt.action,
+                mz_sql::ast::AlterSourceAction::AddSubsources { .. }
+                | mz_sql::ast::AlterSourceAction::RefreshReferences))
+        {
             self.sequence_source_statement(ctx, stmt, params).await;
             return;
         }

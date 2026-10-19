@@ -109,8 +109,17 @@ impl SourceStatement {
         notices: mpsc::UnboundedSender<AdapterNotice>,
     ) -> Result<(ConnCatalog<'a>, Statement<Aug>), AdapterError> {
         let catalog = state.for_session_metadata(self.session.as_ref(), notices);
-        let (statement, resolved_ids) =
+        let (statement, mut resolved_ids) =
             mz_sql::names::resolve(&catalog, (*self.statement).clone())?;
+        if matches!(&statement, Statement::AlterSource(stmt)
+            if matches!(stmt.action, mz_sql::ast::AlterSourceAction::AddSubsources { .. }))
+        {
+            if let Some(item) = mz_sql::pure::statement_source(&catalog, &statement) {
+                if let Some(source) = state.get_entry(&item.id()).source() {
+                    resolved_ids.extend_from(&source.resolved_ids);
+                }
+            }
+        }
         mz_sql::rbac::check_purification(
             &catalog,
             self.session.as_ref(),
@@ -132,7 +141,7 @@ impl SourceStatement {
             }
             SourcePreparationStatus::Ready(statement) => *statement,
         };
-        let (plan, resolved_ids, sql_impl_ids) = match purified {
+        let (plan, mut resolved_ids, sql_impl_ids) = match purified {
             source @ PurifiedStatement::PurifiedCreateSource { .. } => {
                 match plan_create_source(
                     catalog,
@@ -163,7 +172,65 @@ impl SourceStatement {
                 )?;
                 (plan, resolved_ids, sql_impl_ids)
             }
-            _ => return Err(AdapterError::Unsupported("non-creation source command")),
+            source @ PurifiedStatement::PurifiedAlterSourceAddSubsources { .. } => {
+                match super::source::plan_alter_source_add_subsources(
+                    catalog,
+                    self.session.pcx(),
+                    &self.params,
+                    source,
+                    &self.ids,
+                )? {
+                    SourcePlanning::NeedsIds(keys) => return Ok(SourceResolution::Allocate(keys)),
+                    SourcePlanning::Ready(plan) => {
+                        (plan, ResolvedIds::empty(), ResolvedIds::empty())
+                    }
+                }
+            }
+            PurifiedStatement::PurifiedAlterSourceRefreshReferences {
+                source_name,
+                available_source_references,
+            } => (
+                super::source::plan_alter_source_refresh_references(
+                    catalog,
+                    source_name,
+                    available_source_references,
+                )?,
+                ResolvedIds::empty(),
+                ResolvedIds::empty(),
+            ),
+            PurifiedStatement::PurifiedAlterSource { alter_source_stmt } => {
+                let statement = Statement::AlterSource(alter_source_stmt);
+                let resolved_ids = mz_sql::names::visit_dependencies(catalog, &statement);
+                let (plan, sql_impl_ids) = mz_sql::plan::plan(
+                    Some(self.session.pcx()),
+                    catalog,
+                    statement,
+                    &self.params,
+                    &resolved_ids,
+                )?;
+                (plan, resolved_ids, sql_impl_ids)
+            }
+            _ => return Err(AdapterError::Unsupported("unsupported source command")),
+        };
+        let mut altered_source = match &plan {
+            Plan::AlterSource(mz_sql::plan::AlterSourcePlan {
+                item_id,
+                action:
+                    mz_sql::plan::AlterSourceAction::AddSubsourceExports {
+                        options,
+                        subsources,
+                    },
+                ..
+            }) => {
+                let source =
+                    super::source::alter::rebuild_source(catalog, *item_id, options.clone())?;
+                resolved_ids.extend_from(&source.resolved_ids);
+                for subsource in subsources {
+                    resolved_ids.extend_from(&subsource.resolved_ids);
+                }
+                Some(source)
+            }
+            _ => None,
         };
         mz_sql::rbac::check_plan(
             catalog,
@@ -177,45 +244,31 @@ impl SourceStatement {
         let owner_id = self.session.role_metadata().current_role;
         let mut ops = Vec::new();
         let mut if_not_exists = BTreeMap::new();
-        match &plan {
-            Plan::CreateSources(plans) => {
-                for bundle in plans {
-                    let mz_sql::plan::CreateSourcePlanBundle {
-                        item_id,
-                        global_id,
-                        plan,
-                        resolved_ids,
-                        available_source_references,
-                    } = bundle;
-                    if matches!(
-                        &plan.source.data_source,
-                        mz_sql::plan::DataSourceDesc::Webhook { .. }
-                    ) {
-                        return Err(AdapterError::Unsupported("webhook source command"));
-                    }
-                    if plan.if_not_exists {
-                        if_not_exists.insert(*item_id, plan.name.clone());
-                    }
-                    ops.push(Op::CreateItem {
+        let creations: &[mz_sql::plan::CreateSourcePlanBundle] = match &plan {
+            Plan::CreateSources(plans) => plans,
+            Plan::AlterSource(mz_sql::plan::AlterSourcePlan {
+                item_id, action, ..
+            }) => match action {
+                mz_sql::plan::AlterSourceAction::AddSubsourceExports { subsources, .. } => {
+                    ops.push(Op::UpdateItem {
                         id: *item_id,
-                        name: plan.name.clone(),
-                        item: CatalogItem::Source(Source::new(
-                            plan.clone(),
-                            *global_id,
-                            resolved_ids.clone(),
-                            None,
-                            false,
-                        )),
-                        owner_id,
+                        name: catalog.state().get_entry(item_id).name().clone(),
+                        to_item: CatalogItem::Source(
+                            altered_source.take().expect("rebuilt source"),
+                        ),
                     });
-                    if let Some(references) = available_source_references {
-                        ops.push(Op::UpdateSourceReferences {
-                            source_id: *item_id,
-                            references: references.clone().into(),
-                        });
-                    }
+                    subsources
                 }
-            }
+                mz_sql::plan::AlterSourceAction::RefreshReferences { references } => {
+                    ops.push(Op::UpdateSourceReferences {
+                        source_id: *item_id,
+                        references: references.clone().into(),
+                    });
+                    &[]
+                }
+            },
+            Plan::AlterNoop(_) => &[],
+
             Plan::CreateTable(plan) => {
                 if plan.table.temporary {
                     return Err(AdapterError::Unsupported("temporary source table command"));
@@ -237,8 +290,45 @@ impl SourceStatement {
                     )),
                     owner_id,
                 });
+                &[]
             }
-            _ => return Err(AdapterError::Unsupported("non-creation source plan")),
+            _ => return Err(AdapterError::Unsupported("unsupported source plan")),
+        };
+        for bundle in creations {
+            let mz_sql::plan::CreateSourcePlanBundle {
+                item_id,
+                global_id,
+                plan,
+                resolved_ids,
+                available_source_references,
+            } = bundle;
+            if matches!(
+                &plan.source.data_source,
+                mz_sql::plan::DataSourceDesc::Webhook { .. }
+            ) {
+                return Err(AdapterError::Unsupported("webhook source command"));
+            }
+            if plan.if_not_exists {
+                if_not_exists.insert(*item_id, plan.name.clone());
+            }
+            ops.push(Op::CreateItem {
+                id: *item_id,
+                name: plan.name.clone(),
+                item: CatalogItem::Source(Source::new(
+                    plan.clone(),
+                    *global_id,
+                    resolved_ids.clone(),
+                    None,
+                    false,
+                )),
+                owner_id,
+            });
+            if let Some(references) = available_source_references {
+                ops.push(Op::UpdateSourceReferences {
+                    source_id: *item_id,
+                    references: references.clone().into(),
+                });
+            }
         }
         let mut notices = Vec::new();
         while let Ok(notice) = notices_rx.try_recv() {

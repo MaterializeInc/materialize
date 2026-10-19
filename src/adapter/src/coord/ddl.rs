@@ -208,6 +208,12 @@ impl Coordinator {
         let response = match &prepared.plan {
             mz_sql::plan::Plan::CreateSources(_) => crate::ExecuteResponse::CreatedSource,
             mz_sql::plan::Plan::CreateTable(_) => crate::ExecuteResponse::CreatedTable,
+            mz_sql::plan::Plan::AlterSource(_) => {
+                crate::ExecuteResponse::AlteredObject(mz_sql::catalog::ObjectType::Source)
+            }
+            mz_sql::plan::Plan::AlterNoop(plan) => {
+                crate::ExecuteResponse::AlteredObject(plan.object_type)
+            }
             _ => unreachable!("source command plan"),
         };
         if ctx.session().transaction().is_ddl() {

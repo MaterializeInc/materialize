@@ -41,11 +41,8 @@ use mz_repr::explain::{ExprHumanizer, ExprHumanizerExt, TransientItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_secrets::SecretsReader;
-use mz_sql::ast::{
-    AlterSourceAddSubsourceOption, CreateSinkOption, CreateSinkOptionName, SqlServerConfigOption,
-    SqlServerConfigOptionName,
-};
-use mz_sql::ast::{CreateSubsourceStatement, MySqlConfigOptionName, UnresolvedItemName};
+use mz_sql::ast::UnresolvedItemName;
+use mz_sql::ast::{AlterSourceAddSubsourceOption, CreateSinkOption, CreateSinkOptionName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
     CatalogItem as SqlCatalogItem, CatalogRole, CatalogSchema, CatalogTypeDetails,
@@ -57,9 +54,8 @@ use mz_sql::names::{
 };
 use mz_sql::plan::{
     AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule, PlanError,
-    StatementContext,
 };
-use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
+use mz_sql::pure::PurifiedSourceExport;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_timestamp_oracle::TimestampOracle;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
@@ -77,8 +73,7 @@ use mz_sql::session::vars::{
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ConnectionOption, ConnectionOptionName, CreateSourceConnection, MySqlConfigOption,
-    PgConfigOption, PgConfigOptionName, Statement, TransactionMode, WithOptionValue,
+    ConnectionOption, ConnectionOptionName, Statement, TransactionMode, WithOptionValue,
 };
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::ExportDescription;
@@ -382,32 +377,6 @@ impl Coordinator {
         })
     }
 
-    /// Subsources are planned differently from other statements because they
-    /// are typically synthesized from other statements, e.g. `CREATE SOURCE`.
-    /// Because of this, we have usually "missed" the opportunity to plan them
-    /// through the normal statement execution life cycle (the exception being
-    /// during bootstrapping).
-    ///
-    /// The caller needs to provide a `CatalogItemId` and `GlobalId` for the sub-source.
-    pub(crate) fn plan_subsource(
-        &self,
-        session: &Session,
-        params: &mz_sql::plan::Params,
-        subsource_stmt: CreateSubsourceStatement<mz_sql::names::Aug>,
-        item_id: CatalogItemId,
-        global_id: GlobalId,
-    ) -> Result<CreateSourcePlanBundle, AdapterError> {
-        let catalog = self.catalog().for_session(session);
-        catalog::command::plan_subsource(
-            &catalog,
-            session.pcx(),
-            params,
-            subsource_stmt,
-            item_id,
-            global_id,
-        )
-    }
-
     /// Prepares an `ALTER SOURCE...ADD SUBSOURCE`.
     pub(crate) async fn plan_purified_alter_source_add_subsource(
         &mut self,
@@ -417,46 +386,29 @@ impl Coordinator {
         options: Vec<AlterSourceAddSubsourceOption<Aug>>,
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
-        let mut subsource_plans = Vec::with_capacity(subsources.len());
-
-        // Generate subsource statements
-        let conn_catalog = self.catalog().for_system_session();
-        let pcx = plan::PlanContext::zero();
-        let scx = StatementContext::new(Some(&pcx), &conn_catalog);
-
-        let entry = self.catalog().get_entry(source_name.item_id());
-        let source = entry.source().ok_or_else(|| {
-            AdapterError::internal(
-                "plan alter source",
-                format!("expected Source found {entry:?}"),
-            )
-        })?;
-
-        let item_id = entry.id();
-        let ingestion_id = source.global_id();
-        let subsource_stmts = generate_subsource_statements(&scx, source_name, subsources)?;
-
-        let ids = self
-            .allocate_user_ids(u64::cast_from(subsource_stmts.len()))
-            .await?;
-        for (subsource_stmt, (item_id, global_id)) in subsource_stmts.into_iter().zip_eq(ids) {
-            let s = self.plan_subsource(session, &params, subsource_stmt, item_id, global_id)?;
-            subsource_plans.push(s);
-        }
-
-        let action = mz_sql::plan::AlterSourceAction::AddSubsourceExports {
-            subsources: subsource_plans,
+        use catalog::command::source::{SourcePlanning, plan_alter_source_add_subsources};
+        let purified = mz_sql::pure::PurifiedStatement::PurifiedAlterSourceAddSubsources {
+            source_name,
             options,
+            subsources,
         };
-
-        Ok((
-            Plan::AlterSource(mz_sql::plan::AlterSourcePlan {
-                item_id,
-                ingestion_id,
-                action,
-            }),
-            ResolvedIds::empty(),
-        ))
+        let mut ids = BTreeMap::new();
+        loop {
+            let result = plan_alter_source_add_subsources(
+                &self.catalog().for_session(session),
+                session.pcx(),
+                &params,
+                purified.clone(),
+                &ids,
+            )?;
+            match result {
+                SourcePlanning::Ready(plan) => return Ok((plan, ResolvedIds::empty())),
+                SourcePlanning::NeedsIds(keys) => {
+                    let allocated = self.allocate_user_ids(u64::cast_from(keys.len())).await?;
+                    ids.extend(keys.into_iter().zip_eq(allocated));
+                }
+            }
+        }
     }
 
     /// Prepares an `ALTER SOURCE...REFRESH REFERENCES`.
@@ -467,25 +419,12 @@ impl Coordinator {
         source_name: ResolvedItemName,
         available_source_references: plan::SourceReferences,
     ) -> Result<(Plan, ResolvedIds), AdapterError> {
-        let entry = self.catalog().get_entry(source_name.item_id());
-        let source = entry.source().ok_or_else(|| {
-            AdapterError::internal(
-                "plan alter source",
-                format!("expected Source found {entry:?}"),
-            )
-        })?;
-        let action = mz_sql::plan::AlterSourceAction::RefreshReferences {
-            references: available_source_references,
-        };
-
-        Ok((
-            Plan::AlterSource(mz_sql::plan::AlterSourcePlan {
-                item_id: entry.id(),
-                ingestion_id: source.global_id(),
-                action,
-            }),
-            ResolvedIds::empty(),
-        ))
+        let plan = catalog::command::source::plan_alter_source_refresh_references(
+            &self.catalog().for_system_session(),
+            source_name,
+            available_source_references,
+        )?;
+        Ok((plan, ResolvedIds::empty()))
     }
 
     /// Prepares a `CREATE SOURCE` statement to create its progress subsource,
@@ -3046,294 +2985,20 @@ impl Coordinator {
         session: &Session,
         plan::AlterSourcePlan {
             item_id,
-            ingestion_id,
+            ingestion_id: _,
             action,
         }: plan::AlterSourcePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let cur_entry = self.catalog().get_entry(&item_id);
-        let cur_source = cur_entry.source().expect("known to be source");
-
-        let create_sql_to_stmt_deps = |coord: &Coordinator, err_cx, create_source_sql| {
-            // Parse statement.
-            let create_source_stmt = match mz_sql::parse::parse(create_source_sql)
-                .expect("invalid create sql persisted to catalog")
-                .into_element()
-                .ast
-            {
-                Statement::CreateSource(stmt) => stmt,
-                _ => unreachable!("proved type is source"),
-            };
-
-            let catalog = coord.catalog().for_system_session();
-
-            // Resolve items in statement
-            mz_sql::names::resolve(&catalog, create_source_stmt)
-                .map_err(|e| AdapterError::internal(err_cx, e))
-        };
-
         match action {
             plan::AlterSourceAction::AddSubsourceExports {
                 subsources,
                 options,
             } => {
-                const ALTER_SOURCE: &str = "ALTER SOURCE...ADD SUBSOURCES";
-
-                let mz_sql::plan::AlterSourceAddSubsourceOptionExtracted {
-                    text_columns: mut new_text_columns,
-                    exclude_columns: mut new_exclude_columns,
-                    ..
-                } = options.try_into()?;
-
-                // Resolve items in statement
-                let (mut create_source_stmt, resolved_ids) =
-                    create_sql_to_stmt_deps(self, ALTER_SOURCE, cur_entry.create_sql())?;
-
-                // Get all currently referred-to items
-                let catalog = self.catalog();
-                let curr_references: BTreeSet<_> = catalog
-                    .get_entry(&item_id)
-                    .used_by()
-                    .into_iter()
-                    .filter_map(|subsource| {
-                        catalog
-                            .get_entry(subsource)
-                            .subsource_details()
-                            .map(|(_id, reference, _details)| reference)
-                    })
-                    .collect();
-
-                // We are doing a lot of unwrapping, so just make an error to reference; all of
-                // these invariants are guaranteed to be true because of how we plan subsources.
-                let purification_err =
-                    || AdapterError::internal(ALTER_SOURCE, "error in subsource purification");
-
-                // TODO(roshan): Remove all the text-column/ignore-column option merging here once
-                // we remove support for implicitly created subsources from a `CREATE SOURCE`
-                // statement.
-                match &mut create_source_stmt.connection {
-                    CreateSourceConnection::Postgres {
-                        options: curr_options,
-                        ..
-                    } => {
-                        let mz_sql::plan::PgConfigOptionExtracted {
-                            mut text_columns, ..
-                        } = curr_options.clone().try_into()?;
-
-                        // Drop text columns; we will add them back in
-                        // as appropriate below.
-                        curr_options.retain(|o| !matches!(o.name, PgConfigOptionName::TextColumns));
-
-                        // Drop all text columns that are not currently referred to.
-                        text_columns.retain(|column_qualified_reference| {
-                            mz_ore::soft_assert_eq_or_log!(
-                                column_qualified_reference.0.len(),
-                                4,
-                                "all TEXT COLUMNS values must be column-qualified references"
-                            );
-                            let mut table = column_qualified_reference.clone();
-                            table.0.truncate(3);
-                            curr_references.contains(&table)
-                        });
-
-                        // Merge the current text columns into the new text columns.
-                        new_text_columns.extend(text_columns);
-
-                        // If we have text columns, add them to the options.
-                        if !new_text_columns.is_empty() {
-                            new_text_columns.sort();
-                            let new_text_columns = new_text_columns
-                                .into_iter()
-                                .map(WithOptionValue::UnresolvedItemName)
-                                .collect();
-
-                            curr_options.push(PgConfigOption {
-                                name: PgConfigOptionName::TextColumns,
-                                value: Some(WithOptionValue::Sequence(new_text_columns)),
-                            });
-                        }
-                    }
-                    CreateSourceConnection::MySql {
-                        options: curr_options,
-                        ..
-                    } => {
-                        let mz_sql::plan::MySqlConfigOptionExtracted {
-                            mut text_columns,
-                            mut exclude_columns,
-                            ..
-                        } = curr_options.clone().try_into()?;
-
-                        // Drop both ignore and text columns; we will add them back in
-                        // as appropriate below.
-                        curr_options.retain(|o| {
-                            !matches!(
-                                o.name,
-                                MySqlConfigOptionName::TextColumns
-                                    | MySqlConfigOptionName::ExcludeColumns
-                            )
-                        });
-
-                        // Drop all text / exclude columns that are not currently referred to.
-                        let column_referenced =
-                            |column_qualified_reference: &UnresolvedItemName| {
-                                mz_ore::soft_assert_eq_or_log!(
-                                    column_qualified_reference.0.len(),
-                                    3,
-                                    "all TEXT COLUMNS & EXCLUDE COLUMNS values must be column-qualified references"
-                                );
-                                let mut table = column_qualified_reference.clone();
-                                table.0.truncate(2);
-                                curr_references.contains(&table)
-                            };
-                        text_columns.retain(column_referenced);
-                        exclude_columns.retain(column_referenced);
-
-                        // Merge the current text / exclude columns into the new text / exclude columns.
-                        new_text_columns.extend(text_columns);
-                        new_exclude_columns.extend(exclude_columns);
-
-                        // If we have text columns, add them to the options.
-                        if !new_text_columns.is_empty() {
-                            new_text_columns.sort();
-                            let new_text_columns = new_text_columns
-                                .into_iter()
-                                .map(WithOptionValue::UnresolvedItemName)
-                                .collect();
-
-                            curr_options.push(MySqlConfigOption {
-                                name: MySqlConfigOptionName::TextColumns,
-                                value: Some(WithOptionValue::Sequence(new_text_columns)),
-                            });
-                        }
-                        // If we have exclude columns, add them to the options.
-                        if !new_exclude_columns.is_empty() {
-                            new_exclude_columns.sort();
-                            let new_exclude_columns = new_exclude_columns
-                                .into_iter()
-                                .map(WithOptionValue::UnresolvedItemName)
-                                .collect();
-
-                            curr_options.push(MySqlConfigOption {
-                                name: MySqlConfigOptionName::ExcludeColumns,
-                                value: Some(WithOptionValue::Sequence(new_exclude_columns)),
-                            });
-                        }
-                    }
-                    CreateSourceConnection::SqlServer {
-                        options: curr_options,
-                        ..
-                    } => {
-                        let mz_sql::plan::SqlServerConfigOptionExtracted {
-                            mut text_columns,
-                            mut exclude_columns,
-                            ..
-                        } = curr_options.clone().try_into()?;
-
-                        // Drop both ignore and text columns; we will add them back in
-                        // as appropriate below.
-                        curr_options.retain(|o| {
-                            !matches!(
-                                o.name,
-                                SqlServerConfigOptionName::TextColumns
-                                    | SqlServerConfigOptionName::ExcludeColumns
-                            )
-                        });
-
-                        // Drop all text / exclude columns that are not currently referred to.
-                        // SQL Server text/exclude column refs are 3-part (schema.table.col),
-                        // which truncate to 2-part (schema.table). But external references
-                        // are 3-part (database.schema.table). Use suffix matching since
-                        // a SQL Server source connects to a single database.
-                        let column_referenced =
-                            |column_qualified_reference: &UnresolvedItemName| {
-                                mz_ore::soft_assert_eq_or_log!(
-                                    column_qualified_reference.0.len(),
-                                    3,
-                                    "all TEXT COLUMNS & EXCLUDE COLUMNS values must be column-qualified references"
-                                );
-                                let mut table = column_qualified_reference.clone();
-                                table.0.truncate(2);
-                                curr_references.iter().any(|r| r.0.ends_with(&table.0))
-                            };
-                        text_columns.retain(column_referenced);
-                        exclude_columns.retain(column_referenced);
-
-                        // Merge the current text / exclude columns into the new text / exclude columns.
-                        new_text_columns.extend(text_columns);
-                        new_exclude_columns.extend(exclude_columns);
-
-                        // If we have text columns, add them to the options.
-                        if !new_text_columns.is_empty() {
-                            new_text_columns.sort();
-                            let new_text_columns = new_text_columns
-                                .into_iter()
-                                .map(WithOptionValue::UnresolvedItemName)
-                                .collect();
-
-                            curr_options.push(SqlServerConfigOption {
-                                name: SqlServerConfigOptionName::TextColumns,
-                                value: Some(WithOptionValue::Sequence(new_text_columns)),
-                            });
-                        }
-                        // If we have exclude columns, add them to the options.
-                        if !new_exclude_columns.is_empty() {
-                            new_exclude_columns.sort();
-                            let new_exclude_columns = new_exclude_columns
-                                .into_iter()
-                                .map(WithOptionValue::UnresolvedItemName)
-                                .collect();
-
-                            curr_options.push(SqlServerConfigOption {
-                                name: SqlServerConfigOptionName::ExcludeColumns,
-                                value: Some(WithOptionValue::Sequence(new_exclude_columns)),
-                            });
-                        }
-                    }
-                    _ => return Err(purification_err()),
-                };
-
-                let mut catalog = self.catalog().for_system_session();
-                catalog.mark_id_unresolvable_for_replanning(cur_entry.id());
-
-                // Re-define our source in terms of the amended statement
-                let planned = mz_sql::plan::plan(
-                    None,
-                    &catalog,
-                    Statement::CreateSource(create_source_stmt),
-                    &Params::empty(),
-                    &resolved_ids,
-                )
-                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
-                let plan = match planned {
-                    (Plan::CreateSource(plan), _sql_impl_ids) => plan,
-                    (p, _) => {
-                        unreachable!("create source plan is only valid response, got {:?}", p)
-                    }
-                };
-
-                // Asserting that we've done the right thing with dependencies
-                // here requires mocking out objects in the catalog, which is a
-                // large task for an operation we have to cover in tests anyway.
-                let source = Source::new(
-                    plan,
-                    cur_source.global_id,
-                    resolved_ids,
-                    cur_source.custom_logical_compaction_window,
-                    cur_source.is_retained_metrics_object,
-                );
-
-                // Get new ingestion description for storage.
-                let desc = match &source.data_source {
-                    DataSourceDesc::Ingestion { desc, .. }
-                    | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
-                        desc.clone().into_inline_connection(self.catalog().state())
-                    }
-                    _ => unreachable!("already verified of type ingestion"),
-                };
-
-                self.controller
-                    .storage
-                    .check_alter_ingestion_source_desc(ingestion_id, &desc)
-                    .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+                let source = catalog::command::source::alter::rebuild_source(
+                    &self.catalog().for_session(session),
+                    item_id,
+                    options,
+                )?;
 
                 // Redefine source. This must be done before we create any new
                 // subsources so that it has the right ingestion.
