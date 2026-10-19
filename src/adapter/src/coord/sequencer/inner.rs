@@ -404,25 +404,14 @@ impl Coordinator {
         global_id: GlobalId,
     ) -> Result<CreateSourcePlanBundle, AdapterError> {
         let catalog = self.catalog().for_session(session);
-        let resolved_ids = mz_sql::names::visit_dependencies(&catalog, &subsource_stmt);
-
-        let (plan, _sql_impl_ids) = self.plan_statement(
-            session,
-            Statement::CreateSubsource(subsource_stmt),
+        catalog::command::plan_subsource(
+            &catalog,
+            session.pcx(),
             params,
-            &resolved_ids,
-        )?;
-        let plan = match plan {
-            Plan::CreateSource(plan) => plan,
-            _ => unreachable!(),
-        };
-        Ok(CreateSourcePlanBundle {
+            subsource_stmt,
             item_id,
             global_id,
-            plan,
-            resolved_ids,
-            available_source_references: None,
-        })
+        )
     }
 
     /// Prepares an `ALTER SOURCE...ADD SUBSOURCE`.
