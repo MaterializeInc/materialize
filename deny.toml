@@ -94,8 +94,6 @@ skip = [
     { name = "tungstenite", version = "0.29.0" },
     # libduckdb-sys still pulls 6.
     { name = "zip", version = "6.0.0" },
-    # launchdarkly-server-sdk still uses 0.16, up to its latest release 3.3.
-    { name = "lru", version = "0.16.3" },
     # flate2 is on 0.9, while apache-avro and backtrace still pull 0.8.
     { name = "miniz_oxide", version = "0.8.9" },
     # reqsign-core is on 0.7, while opendal still pulls 0.6.
@@ -245,10 +243,8 @@ name = "strum-macros"
 name = "log"
 wrappers = [
     "apache-avro",
-    "bindgen",
     "buildid",
     "cookie_store",
-    "deadpool-postgres",
     "eventsource-client",
     "fail",
     "globset",
@@ -284,7 +280,6 @@ wrappers = [
     "tracing-log",
     "tracing",
     "tungstenite",
-    "want",
     "zopfli",
 ]
 
@@ -293,7 +288,6 @@ wrappers = [
 [[bans.deny]]
 name = "lazy_static"
 wrappers = [
-    "dynfmt",
     "findshlibs",
     "launchdarkly-server-sdk-evaluation",
     "num-bigint-dig",
@@ -306,7 +300,6 @@ wrappers = [
 [[bans.deny]]
 name = "unicase"
 wrappers = [
-    "mime_guess",
     "pulldown-cmark",
 ]
 
