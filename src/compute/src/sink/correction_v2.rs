@@ -643,9 +643,11 @@ impl<D: Data> CorrectionV2<D> {
 /// The number of updates [`sort_advanced`] sorts on the heap at a time.
 ///
 /// Each worker holds at most one run as owned updates, so this bounds the heap a since jump costs
-/// per worker. A row of a wide table takes a few hundred bytes owned, so a run stays in the
-/// hundreds of MiB.
-const STALE_SORT_RUN: usize = 1 << 20;
+/// per worker. Rows of TPC-H lineitem's width take about 190 bytes owned, so a run takes about
+/// 12 MiB and spans about five chunks. Consolidation costs per update, so the bound is a count.
+/// Halving the run adds a merge level, which cost 7 to 10% of the sort's time per level in a
+/// benchmark of 8 Mi such updates.
+const STALE_SORT_RUN: usize = 1 << 16;
 
 /// Advance the times of the updates in `chains` to at least `since_ts` and return them as one
 /// sorted and consolidated chain.
