@@ -25,10 +25,11 @@ The prototype is done when a recorded terminal session shows the following, end 
 3. Edit the JSON into a better plan with a script.
 4. Submit a broken variant, which validation rejects with a readable error naming the node and the violated rule.
 5. Install the improved plan as a new materialized view, query it, and show that it returns the same results as the SQL view.
-6. Swap the improved plan under the original SQL view through the replacement path.
+6. Swap a plan under an existing SQL materialized view through the replacement path.
+   The target has no inferred keys (see [Install](#install)), so it need not be the view from step 1.
 7. Compile a recursive query (transitive closure) written in a toy Datalog-like language to LIR JSON with a small Python program, install it, and query it.
 
-No syntactically valid plan may crash a replica or `environmentd`.
+No syntactically valid plan may crash or hang a replica or `environmentd`.
 Every plan that would misbehave at render time or evaluation time must be rejected at submission with an error.
 
 ## Out of scope
@@ -48,7 +49,7 @@ The prototype fails, even if the demo runs, if any of the following hold:
 * A plan that passes validation panics a replica or `environmentd`.
 * The validator accepts a plan by trusting a property it could check.
 * User plans fork the LIR format from the one pinned LIR stores.
-  Every plan format change must go through the existing `LIR_VERSION` snapshot tests.
+  Every plan format change must go through the existing `LIR_VERSION` snapshot tests, and the envelope is added to the `lir_schema` snapshot, which today traces only `LirRelationExpr`.
 
 ## Current state
 
@@ -61,11 +62,13 @@ The design builds on the following, all on `main`:
 * **Serde everywhere.**
   `LirRelationExpr`, `LirScalarExpr`, `AvailableCollections`, the join, reduce and top-k plans, and `DataflowDescription` derive `Serialize` and `Deserialize`.
 * **Explain.**
-  `EXPLAIN PHYSICAL PLAN AS JSON` dumps each `LirRelationExpr` with serde but drops the dataflow envelope: imports with their types and monotonicity, exports, and the ids of the built objects (`src/expr/src/explain/json.rs`).
+  `EXPLAIN PHYSICAL PLAN AS JSON` dumps each `LirRelationExpr` with serde, with humanized ids for the built objects and sources, but drops the access path, types and monotonicity of imports, and the exports (`src/expr/src/explain/json.rs`).
+  It carries a `TODO: fix plans with Constants`.
 * **No validation.**
   The only check on LIR is `LirDataflowDescription::check_invariants`, which checks `LirId` uniqueness and runs as a soft assertion after lowering.
-  Rendering trusts the plan and panics in about thirty places when it is wrong, for example on a missing arrangement (`src/compute/src/render/context.rs`), an out-of-range column (`LirScalarExpr::Column` evaluation in `src/compute-types/src/plan/scalar.rs`), or an unknown `Get` (`src/compute/src/render.rs`).
-  The compute controller checks read holds and `as_of`, not plans (`Instance::create_dataflow` in `src/compute-client/src/controller/instance.rs`).
+  Rendering trusts the plan and has about 86 `panic!`, `expect`, `unreachable!` and `assert!` sites in `src/compute/src/render.rs` and `src/compute/src/render/`, for example on a missing arrangement (`render/context.rs`), an out-of-range column (`LirScalarExpr::Column` evaluation in `src/compute-types/src/plan/scalar.rs`), or an unknown `Get` (`render.rs`).
+  Evaluation adds more, for example a temporal bound that is not an `mz_timestamp` (`src/expr/src/linear.rs`).
+  The compute controller checks read holds, `as_of`, and that every import exists on the instance, but not plans (`Instance::create_dataflow` in `src/compute-client/src/controller/instance.rs`).
 * **Catalog.**
   The durable catalog stores only `create_sql` for a materialized view and re-plans it on every boot (`bootstrap_dataflow_plans` in `src/adapter/src/coord.rs`), with a best-effort, version-keyed expression cache.
 * **Replacements.**
@@ -115,11 +118,15 @@ Imports bind placeholder ids to catalog names.
 At install time, `environmentd` resolves each name to a `CatalogItemId` and the `GlobalId` of its current `RelationVersion`, and substitutes it for the placeholder throughout the plan, the same substitution pinned LIR's `CLONE OBJECTS` needs.
 For an index import, `environmentd` fills in the `IndexImport` (key, type, monotonicity) from the catalog.
 For a persist import, it fills in the `SourceImport` (`RelationDesc`, monotonicity).
-A persist import may carry an optional `MapFilterProject` to push into the source, because optimizer-produced `SourceImport`s carry one and the round trip must preserve it.
+Optimizer-produced `SourceImport`s also carry a `MapFilterProject<MirScalarExpr>` pushed into the source (`src/compute-types/src/dataflows.rs`).
+That is MIR, whose serde is not stable, so the envelope does not carry it.
+Extraction instead emits the pushed-down operators as an explicit `Mfp` node on top of the import's `Get`, which computes the same result.
+The round-trip test therefore compares dataflows modulo this pushdown, and the findings record whether the envelope needs an LIR form of source pushdown for performance.
 `lir_version` must equal the running `LIR_VERSION`, otherwise installation fails with an error that names both versions.
 
 Literal rows are the one place the pinned-LIR format is not writable by hand or by a simple compiler, because `StableRow` serializes as protobuf bytes.
 The envelope therefore accepts literals in a readable JSON encoding of datums for the scalar types the demo needs, at least `int8`, `text`, `bool`, `numeric` and null.
+Each readable datum carries its type, because `Constant` rows carry no column types (`LirRelationNode::Constant` in `src/compute-types/src/plan.rs`) and the validator types them from the datums.
 The builder decides whether this is a separate serde mode of `StableRow` or a preprocessing step that rewrites readable literals into `StableRow` before deserialization.
 Either way, extraction emits the readable form where the type is supported, so the round trip stays readable.
 
@@ -143,36 +150,46 @@ It checks the following, derived from what rendering trusts today:
 1. **Scoping.**
    Every `Get` of a `GlobalId` refers to an import or an earlier built object, and every `Get` of a `LocalId` is bound by an enclosing `Let` or `LetRec`.
    `LirId`s are unique, and every export refers to a built object.
-2. **Arity.**
+2. **Arity and shape.**
    Every node has a computed arity, and every column reference in every scalar expression, key, permutation, thinning, join closure, group key and aggregate is in range.
+   An empty `Constant` has no arity to compute and is rejected unless its arity is fixed by its context, which the builder decides how to express.
+   Parallel vectors have equal lengths, for example `LetRec` ids, values and limits, which rendering zips with `zip_eq`.
+   Join plans index only existing inputs through `source_relation` and `lookup_relation`.
+   Each `MapFilterProject` predicate's evaluation position is after every expression it references, because evaluation reads `datums[index]` before checking that the expression exists.
+   The builder extends this list from the render-time assertions.
 3. **Arrangement availability.**
    The validator simulates the `AvailableCollections` each node produces, and checks every consumer's request against it, including raw-versus-keyed and exact key equality.
    This covers `GetPlan::PassArrangements`, join lookups, threshold, top-k and flat-map inputs, `LetRec` values, and index exports.
    The `(key, permutation, thinning)` triples must equal what `permutation_for_arrangement` produces.
 4. **Types.**
-   The validator infers a `ReprColumnType` for every column of every node, starting from the import types and literals, and checks every scalar function application against the function's input signature.
-   It also checks aggregate input types, that a top-k limit is `int8`, and that filter and `If` conditions are `bool`.
-   Exact input signatures exist only for functions generated by the `sqlfunc` macro (`FuncName::sqlfunc_input_types`).
-   Hand-written functions and functions over `Datum` parameters, which include the polymorphic list, array, record, range, jsonb and map functions, have none.
-   The validator therefore rejects any function not on an allowlist of functions with exact signatures, with an error naming the function.
-   The excluded functions are recorded as a finding.
+   The validator infers a `ReprColumnType` for every column of every node, starting from the import types, and checks every function application against a typing rule.
+   Literals are checked with `Datum::is_instance_of` against their declared type, and `Constant` rows are typed from their datums and unified across rows.
+   Further checks: a top-k limit is `int8`, filter and `If` conditions are `bool`, and the temporal bounds of every `MfpPlan` (in `Mfp`, `FlatMap` and `GetPlan`) are `mz_timestamp`, because evaluation panics on any other type.
+   The repository has no input signatures to check against for most functions.
+   `FuncName::sqlfunc_input_types` is `None` for hand-written functions and for parameters typed as bare `Datum`, which includes `=`, `<` and the other comparisons, and `AND` and `OR` are hand-written.
+   Table functions (`TableFunc::output_type` takes no input type) and aggregates (`AggregateFunc::output_type` takes the input type but does not check it) have none either.
+   The validator therefore accepts only scalar, table and aggregate functions on an allowlist, where each entry carries a hand-written typing rule, for example "both arguments have the same type" for comparisons or "all arguments are `bool`" for `AND`.
+   An entry is admitted only if its body cannot panic on inputs that satisfy the rule, which the builder checks by reading the body.
+   The allowlist covers what the demo and the toy compiler need, and the excluded functions are recorded as a finding.
 5. **Operator rules.**
-   Reduce key and value plans have no predicates, monotonic reduce uses only aggregates that have a monoid, delta join paths start at relation zero, and a reduce's `must_validate` wiring matches its aggregates.
+   Reduce key and value plans have no predicates, monotonic reduce uses only aggregates that have a monoid, and delta join paths start at relation zero.
+   Every `LetRec` binding has a limit, because a non-converging recursion would occupy the replica's workers indefinitely.
    The builder extends this list from the render-time assertions.
 6. **Monotonicity.**
-   Every operator variant that requires monotonic input (monotonic reduce and top-k) either has an input that the existing `physically_monotonic` analysis derives as monotonic from monotonic imports, or has `must_consolidate` set.
-   The optimizer chooses these variants on logical monotonicity and lowering sets `must_consolidate` unless the input is physically monotonic (`relax_must_consolidate.rs`), so this rule accepts every optimizer-produced plan.
-   With `must_consolidate` set, a false monotonicity claim surfaces as an error in the dataflow through `ensure_monotonic`, not as a panic.
-   The builder verifies that no assertion downstream of `ensure_monotonic`, such as the positivity assertion in `ReductionMonoid::multiply`, is reachable with a negative diff.
+   Every operator variant that requires monotonic input (monotonic reduce and top-k) has an input that is logically monotonic, meaning it never retracts a row.
+   The validator derives logical monotonicity on LIR from imports marked monotonic, through `Get`, `Mfp`, `FlatMap`, `ArrangeBy`, joins of monotonic inputs and unions of monotonic inputs, and through no other operator.
+   The existing `physically_monotonic` analysis does not fit, because it treats every `Reduce`, `TopK` and `Threshold` output as monotonic, which holds only for single-time dataflows (`SingleTimeMonotonic` in `src/compute-types/src/plan/interpret/physically_monotonic.rs`).
+   A materialized view is not single-time, and lowering then sets monotonic variants from the optimizer's logical monotonicity without consolidation relaxation (`src/compute-types/src/plan/lowering.rs`).
+   The builder verifies that every optimizer-produced materialized view plan passes this rule, which tests whether the LIR analysis matches the MIR one.
 7. **Output.**
    The output's inferred `RelationDesc` is compatible with the declared schema of the installed object (see [Install](#install)).
 
 The validator also runs as a hard assertion on every optimizer-produced plan in tests, so the optimizer's output is the validator's first test corpus.
 A rule that rejects an optimizer-produced plan is either a validator bug or an optimizer bug, and both are findings.
 
-Type checking does not make evaluation total.
-About 145 call sites in scalar function bodies call `Datum::unwrap_*` and panic on an unexpected datum.
-Type checking against exact signatures keeps well-typed plans away from them, which is why rule 4 rejects functions without one.
+Type checking does not make evaluation total on its own.
+About 145 call sites in scalar function bodies call `Datum::unwrap_*` and panic on an unexpected datum, and table functions index and unwrap their arguments.
+The allowlist with per-function typing rules is what keeps validated plans away from them.
 
 Explaining a user plan is `EXPLAIN PHYSICAL PLAN` on the installed object, rendered from the stored plan with the existing text renderer.
 `EXPLAIN PHYSICAL PLAN AS ... FOR PLAN '<json>'` (spelling is the builder's call) validates and renders a plan without installing it.
@@ -201,15 +218,22 @@ On every boot, `environmentd` re-parses the statement, re-validates, and install
 A stored plan that fails to load at boot then has only one cause left, an `LIR_VERSION` change, and panics `environmentd` the way invalid persisted SQL does today.
 That is acceptable for the prototype, and the findings record what pinned LIR's best-effort replanning would need instead, since a user plan has no SQL to fall back to.
 
-Everything after optimization is the existing materialized view path: timestamp selection, read holds, `create_collections` for the shard, and shipping the dataflow.
-`CatalogItem::MaterializedView` requires a `raw_expr` and a `locally_optimized_expr`, which a plan-only view does not have.
-The builder makes them optional or introduces a plan-only variant, and adjusts their readers.
+After the plan is built, the path is the existing materialized view path: timestamp selection, read holds, `create_collections` for the shard, and shipping the dataflow.
+Three seams assume an optimizer and need a plan-only branch:
+
+* `CatalogItem::MaterializedView` requires a `raw_expr` and a `locally_optimized_expr` (`src/catalog/src/memory/objects.rs`), which a plan-only view does not have.
+  The builder makes them optional or introduces a plan-only variant, and adjusts their readers.
+* Sequencing takes the `RelationDesc` from the optimizer's `GlobalLirPlan::desc()`, including for the replacement check (`src/adapter/src/coord/sequencer/inner/create_materialized_view.rs`).
+  A `FROM PLAN` view takes it from the declared schema, with no keys.
+* `bootstrap_dataflow_plans` builds an optimizer for each materialized view at boot (`src/adapter/src/coord.rs`).
+  A `FROM PLAN` view instead loads, resolves and validates its stored plan.
 
 Replacement reuses the existing mechanism.
 `CREATE REPLACEMENT MATERIALIZED VIEW name (...) FOR target FROM PLAN '<json>'` creates a read-only dataflow writing to the target's shard, and `ALTER MATERIALIZED VIEW target APPLY REPLACEMENT name` swaps it in.
 The declared schema must equal the target's `RelationDesc`, and the existing check compares keys as well as columns, types and nullability (`RelationDesc::diff`).
 A `FROM PLAN` object has no keys, because LIR has no key analysis and the design accepts no key claims, so only a target without keys can be replaced.
-The demo picks such a target, and the findings record that replacing keyed objects needs either checkable key claims or key inference on LIR.
+Aggregates and most decorrelated subqueries produce keys, so the demo's replacement target is a SQL view chosen for having none, such as a `UNION ALL` or a join without unique inputs.
+The findings record that replacing keyed objects needs either checkable key claims or key inference on LIR.
 Whether replacing a plan in place deserves its own syntax is a question for the findings.
 
 All new syntax is gated behind a feature flag, `enable_lir_plans`, off by default, which the demo turns on.
@@ -233,7 +257,7 @@ reachable(x, y) :- edges(x, y).
 reachable(x, z) :- reachable(x, y), edges(y, z).
 ```
 
-It emits imports by name, arrangements for joins, a `Reduce` for set semantics, and literals in the readable encoding.
+It emits imports by name, arrangements for joins, a `Reduce` for set semantics, a `LetRec` limit on every recursive binding, and literals in the readable encoding.
 It lives under `misc/` as a demo artifact and imports nothing from Materialize.
 Its value is to show that the format can be targeted from outside the repository with only the documentation and the snapshot, and the findings record every place where that was not true.
 
