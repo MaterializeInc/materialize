@@ -29,8 +29,8 @@ $ psql-execute command="\d tbl"
 \                Table "public.tbl"
  Column |  Type   | Collation | Nullable | Default
 --------+---------+-----------+----------+---------
- a      | integer |           |          | NULL
- b      | text    |           |          | NULL
+ a      | integer |           |          |
+ b      | text    |           |          |
 Indexes:
     "tbl_ind" arrangement (b)
     "tbl_lower_ind" arrangement (pg_catalog.lower(b),a)
