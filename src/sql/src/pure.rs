@@ -95,6 +95,11 @@ use self::error::{
 
 pub(crate) mod error;
 mod references;
+mod source_preparation;
+
+pub use source_preparation::{
+    PreparedSourceInput, SourcePreparation, SourcePreparationRequest, SourcePreparationStatus,
+};
 
 pub mod mysql;
 pub mod postgres;
@@ -359,7 +364,7 @@ pub async fn purify_statement(
             )
         }
         Statement::CreateTableFromSource(stmt) => (
-            purify_create_table_from_source(catalog, stmt, storage_configuration).await,
+            purify_create_table_from_source(catalog, now, stmt, storage_configuration).await,
             None,
         ),
         o => (
@@ -827,6 +832,7 @@ enum PreparedSourceConnection {
     LoadGenerator(mz_storage_types::sources::load_generator::LoadGenerator),
 }
 
+#[derive(Clone, Debug)]
 struct PreparedCreateSource {
     create_progress_subsource: bool,
     create_source_stmt: CreateSourceStatement<Aug>,
@@ -1449,32 +1455,16 @@ async fn execute_create_source_preparation(
 async fn purify_create_source(
     catalog: impl SessionCatalog,
     now: u64,
-    create_source_stmt: CreateSourceStatement<Aug>,
+    statement: CreateSourceStatement<Aug>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<PurifiedStatement, PlanError> {
-    let request =
-        CreateSourcePreparation::new(&catalog, now, || catalog.now(), create_source_stmt)?;
-    let PreparedCreateSource {
-        create_progress_subsource,
-        mut create_source_stmt,
-        subsources,
-        available_source_references,
-        format_options,
-    } = execute_create_source_preparation(request, storage_configuration).await?;
-    purify_source_format(
+    source_preparation::purify(
         &catalog,
-        &mut create_source_stmt.format,
-        &format_options,
-        &create_source_stmt.envelope,
+        now,
+        Statement::CreateSource(statement),
         storage_configuration,
     )
-    .await?;
-    Ok(PurifiedStatement::PurifiedCreateSource {
-        create_progress_subsource,
-        create_source_stmt,
-        subsources,
-        available_source_references,
-    })
+    .await
 }
 
 /// On success, returns the details on new subsources and updated
@@ -2471,114 +2461,23 @@ fn finish_table_from_source(
 
 async fn purify_create_table_from_source(
     catalog: impl SessionCatalog,
-    mut stmt: CreateTableFromSourceStatement<Aug>,
+    now: u64,
+    statement: CreateTableFromSourceStatement<Aug>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<PurifiedStatement, PlanError> {
-    let request = prepare_table_from_source(&catalog, &stmt)?;
-    let (purified_export, format_options) =
-        execute_table_from_source_preparation(request, storage_configuration).await?;
-    purify_source_format(
+    source_preparation::purify(
         &catalog,
-        &mut stmt.format,
-        &format_options,
-        &stmt.envelope,
+        now,
+        Statement::CreateTableFromSource(statement),
         storage_configuration,
     )
-    .await?;
-    finish_table_from_source(&catalog, stmt, purified_export)
+    .await
 }
 
+#[derive(Clone, Debug)]
 enum SourceFormatOptions {
     Default,
     Kafka { topic: String },
-}
-
-async fn purify_source_format(
-    catalog: &dyn SessionCatalog,
-    format: &mut Option<FormatSpecifier<Aug>>,
-    options: &SourceFormatOptions,
-    envelope: &Option<SourceEnvelope>,
-    storage_configuration: &StorageConfiguration,
-) -> Result<(), PlanError> {
-    if matches!(format, Some(FormatSpecifier::KeyValue { .. }))
-        && !matches!(options, SourceFormatOptions::Kafka { .. })
-    {
-        sql_bail!("Kafka sources are the only source type that can provide KEY/VALUE formats")
-    }
-
-    match format.as_mut() {
-        None => {}
-        Some(FormatSpecifier::Bare(format)) => {
-            purify_source_format_single(catalog, format, options, envelope, storage_configuration)
-                .await?;
-        }
-
-        Some(FormatSpecifier::KeyValue { key, value: val }) => {
-            purify_source_format_single(catalog, key, options, envelope, storage_configuration)
-                .await?;
-            purify_source_format_single(catalog, val, options, envelope, storage_configuration)
-                .await?;
-        }
-    }
-    Ok(())
-}
-
-async fn purify_source_format_single(
-    catalog: &dyn SessionCatalog,
-    format: &mut Format<Aug>,
-    options: &SourceFormatOptions,
-    envelope: &Option<SourceEnvelope>,
-    storage_configuration: &StorageConfiguration,
-) -> Result<(), PlanError> {
-    match format {
-        Format::Avro(schema) => match schema {
-            AvroSchema::Csr { csr_connection } => {
-                purify_csr_connection_avro(
-                    catalog,
-                    options,
-                    csr_connection,
-                    envelope,
-                    storage_configuration,
-                )
-                .await?
-            }
-            AvroSchema::InlineSchema { .. } => {}
-            AvroSchema::Glue {
-                connection,
-                with_options,
-                seed,
-            } => {
-                purify_glue_connection_avro(
-                    catalog,
-                    options,
-                    connection,
-                    with_options,
-                    seed,
-                    storage_configuration,
-                )
-                .await?
-            }
-        },
-        Format::Protobuf(schema) => match schema {
-            ProtobufSchema::Csr { csr_connection } => {
-                purify_csr_connection_proto(
-                    catalog,
-                    options,
-                    csr_connection,
-                    envelope,
-                    storage_configuration,
-                )
-                .await?;
-            }
-            ProtobufSchema::InlineSchema { .. } => {}
-        },
-        Format::Bytes
-        | Format::Regex(_)
-        | Format::Json { .. }
-        | Format::Text
-        | Format::Csv { .. } => (),
-    }
-    Ok(())
 }
 
 /// Generates a progress subsource, choosing an available name in the supplied catalog.
@@ -2956,20 +2855,6 @@ fn prepare_csr_connection_proto(
     Ok(None)
 }
 
-async fn purify_csr_connection_proto(
-    catalog: &dyn SessionCatalog,
-    options: &SourceFormatOptions,
-    csr_connection: &mut CsrConnectionProtobuf<Aug>,
-    envelope: &Option<SourceEnvelope>,
-    storage_configuration: &StorageConfiguration,
-) -> Result<(), PlanError> {
-    if let Some(request) = prepare_csr_connection_proto(catalog, options, csr_connection, envelope)?
-    {
-        csr_connection.seed = Some(request.execute(storage_configuration).await?);
-    }
-    Ok(())
-}
-
 fn prepare_csr_connection_avro(
     catalog: &dyn SessionCatalog,
     options: &SourceFormatOptions,
@@ -3002,20 +2887,6 @@ fn prepare_csr_connection_avro(
     }
 
     Ok(None)
-}
-
-async fn purify_csr_connection_avro(
-    catalog: &dyn SessionCatalog,
-    options: &SourceFormatOptions,
-    csr_connection: &mut CsrConnectionAvro<Aug>,
-    envelope: &Option<SourceEnvelope>,
-    storage_configuration: &StorageConfiguration,
-) -> Result<(), PlanError> {
-    if let Some(request) = prepare_csr_connection_avro(catalog, options, csr_connection, envelope)?
-    {
-        csr_connection.seed = Some(request.execute(storage_configuration).await?);
-    }
-    Ok(())
 }
 
 fn prepare_glue_connection_avro(
@@ -3082,22 +2953,6 @@ fn prepare_glue_connection_avro(
         connection: gsr_connection,
         schema_name,
     }))
-}
-
-async fn purify_glue_connection_avro(
-    catalog: &dyn SessionCatalog,
-    options: &SourceFormatOptions,
-    connection: &ResolvedItemName,
-    with_options: &[GlueAvroOption<Aug>],
-    seed: &mut Option<GlueAvroSeed>,
-    storage_configuration: &StorageConfiguration,
-) -> Result<(), PlanError> {
-    if let Some(request) =
-        prepare_glue_connection_avro(catalog, options, connection, with_options, seed)?
-    {
-        *seed = Some(request.execute(storage_configuration).await?);
-    }
-    Ok(())
 }
 
 #[derive(Debug)]
