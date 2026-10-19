@@ -22,6 +22,9 @@ skip = [
     # version from duplicate checks. Remove this exception once those
     # dependencies no longer bring in tower-http 0.6.11.
     { name = "tower-http", version = "=0.6.11" },
+    # Materialize uses serde-saphyr 2.0.0. kube-client 4.2.0 still requires
+    # 0.0.29. Remove this exception once kube-client moves to serde-saphyr 2.
+    { name = "serde-saphyr", version = "=0.0.29" },
 
     # arrayvec had a significant API change in 0.7
     { name = "arrayvec", version = "0.5.2" },
