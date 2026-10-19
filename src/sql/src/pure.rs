@@ -806,7 +806,7 @@ struct CreateSourcePreparation {
     connection: PreparedSourceConnection,
     reference_policy: SourceReferencePolicy,
     now: u64,
-    clock_as_of: u64,
+    clock_as_of: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -839,7 +839,7 @@ impl CreateSourcePreparation {
     fn new(
         catalog: &dyn SessionCatalog,
         now: u64,
-        clock_as_of: u64,
+        clock_as_of: impl FnOnce() -> u64,
         statement: CreateSourceStatement<Aug>,
     ) -> Result<Self, PlanError> {
         if let Some(DeferredItemName::Named(_)) = &statement.progress_subsource {
@@ -923,6 +923,18 @@ impl CreateSourcePreparation {
                     &statement.include_metadata,
                 )?)
             }
+        };
+        let clock_as_of = match &statement.connection {
+            CreateSourceConnection::LoadGenerator {
+                generator: LoadGenerator::Clock,
+                options,
+            } if !options
+                .iter()
+                .any(|option| option.name == LoadGeneratorOptionName::AsOf) =>
+            {
+                Some(clock_as_of())
+            }
+            _ => None,
         };
         Ok(Self {
             statement,
@@ -1408,7 +1420,8 @@ async fn execute_create_source_preparation(
                     .iter()
                     .any(|p| p.name == LoadGeneratorOptionName::AsOf)
                 {
-                    let now = clock_as_of;
+                    let now =
+                        clock_as_of.expect("implicit CLOCK AS OF was captured during preparation");
                     options.push(LoadGeneratorOption {
                         name: LoadGeneratorOptionName::AsOf,
                         value: Some(WithOptionValue::Value(Value::Number(now.to_string()))),
@@ -1439,7 +1452,8 @@ async fn purify_create_source(
     create_source_stmt: CreateSourceStatement<Aug>,
     storage_configuration: &StorageConfiguration,
 ) -> Result<PurifiedStatement, PlanError> {
-    let request = CreateSourcePreparation::new(&catalog, now, catalog.now(), create_source_stmt)?;
+    let request =
+        CreateSourcePreparation::new(&catalog, now, || catalog.now(), create_source_stmt)?;
     let PreparedCreateSource {
         create_progress_subsource,
         mut create_source_stmt,
