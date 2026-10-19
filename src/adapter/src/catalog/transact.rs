@@ -4111,7 +4111,7 @@ mod tests {
             let name = "ddl_snapshot_database";
             let create = || Op::CreateDatabase {
                 name: name.to_string(),
-                owner_id: RoleId::SYSTEM,
+                owner_id: MZ_SYSTEM_ROLE_ID,
             };
             let (base, snapshot) = catalog.ddl_transaction_snapshot().await;
             let ts = catalog.current_upper().await;
