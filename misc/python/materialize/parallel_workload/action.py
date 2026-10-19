@@ -2998,6 +2998,7 @@ class FlipFlagsAction(Action):
             "'^u1'",
             "'.*'",
         ]
+        self.flags_with_values["persist_shard_info_metric"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_part_decode_batch_rows"] = [
             "''",
             "7",
