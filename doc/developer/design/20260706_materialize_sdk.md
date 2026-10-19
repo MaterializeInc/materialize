@@ -126,7 +126,15 @@ against the same limit and fails with "result exceeds max size", without "total"
 (`SubscribeBatch::to_error_if_exceeds` in
 `src/compute-client/src/protocol/response.rs`).
 
-An initial snapshot is one timestamp, so the whole snapshot must fit. A resume
+The replica checks only after it has collected the whole batch. Each worker
+keeps every update below the frontier, builds the batch, and only then is its
+size compared (`send_batch` in `src/compute/src/sink/subscribe.rs`,
+`process_subscribes` in `src/compute/src/compute_state.rs`). A peek checks
+while it collects, so a large `SELECT` fails early. A large subscribe batch can
+instead run the replica out of memory before the limit fails it.
+
+An initial snapshot is one timestamp, so the whole snapshot cannot exceed
+`max_result_size`. A resume
 after long downtime can hit the same limit when the frontier advances in one
 step. The failure is deterministic, so a retry repeats it, and nothing the
 client does with chunks can avoid it.
@@ -287,9 +295,13 @@ The rest of this doc uses these terms:
 ### Batches
 
 A batch will hold every change below its frontier that was not in an earlier
-batch, and nothing at or above it. Apart from the snapshot chunks
-described under "Live streams", users will not be able to observe a
-half-delivered timestamp.
+batch, and nothing at or above it. So:
+
+- A batch holds zero or more timestamps. An empty batch only moves the
+  frontier, which keeps an idle sink's checkpoint moving.
+- A timestamp is never split between batches. The one exception is the
+  snapshot's timestamp, whose chunks come before the batch that completes it
+  (see "Live streams").
 
 Every change will keep its `mz_timestamp` (R6). Changes in a batch will be
 ordered by timestamp and consolidated per timestamp, never across timestamps.
@@ -563,8 +575,9 @@ When delivery fails, a policy will return one of three results:
 - `stall`: exit, and an operator resumes from the checkpoint.
 
 The default will be exponential backoff from 1s to 1m for ten attempts, then
-`stall` (R2, R3). `skip` moves the checkpoint past real data, so it will never
-be a default and will always be logged.
+`stall` (R2, R3). `skip` moves the checkpoint past changes the target could
+take, so it will never be a default and will always be logged. A
+`key_violation` row is not such a change (see "Sink module").
 
 A sink can mark a delivery error as permanent, such as a request the target will
 never accept. The policy sees that mark: the default policy stalls at once
@@ -938,11 +951,13 @@ The SDK guarantees every sink that:
   checkpoint the sink did not write.
 - It calls `sweep_generations` after the write that completes a snapshot, and
   at every worker start while the checkpoint has a frontier, so a crash in
-  between leaves nothing behind.
+  between leaves nothing behind. A sweep that fails or times out goes to the
+  retry policy like any other call, and the worker stops after the last
+  attempt. The next start sweeps again.
 - It applies the store's timeout to `create`, `load`, and `commit`, and a
-  timeout the sink sets to `write`. On a timeout it drops the call, and treats
-  a write as unknown and a `load` as an error for the retry policy, so every
-  call must be safe to drop.
+  timeout the sink sets to `write` and `sweep_generations`. On a timeout it
+  drops the call, and treats a write as unknown and a `load` or a sweep as an
+  error for the retry policy, so every call must be safe to drop.
 - A worker learns that it was fenced from a failed checkpoint write, and then
   stops. How a single long write learns it sooner is deferred question 14.
 
@@ -980,7 +995,13 @@ Each call guarantees the SDK:
   sends it again or reads its whole stored record back before it accepts
   another write.
 - `sweep_generations` deletes the rows each subscription wrote under a
-  generation older than the one given. Until it returns, readers can still see
+  generation older than the one given. It can run again with the same
+  generations, after a retry or a restart, and must change nothing more then.
+  It runs between writes, so a long sweep delays the next write. Fetching
+  continues into the bounded buffer meanwhile, and a sweep that outlasts the
+  buffer ends the stream with `ConsumerFellBehind`. A sink with much to delete
+  commits its deletes in parts, so each attempt keeps the progress of the one
+  before. Until it returns, readers can still see
   such rows, for example keys deleted before the snapshot's `AS OF`. A sink
   whose readers must never see them hides older generations in the write that
   completes the snapshot. A sink that switched readers to a new incarnation in
@@ -1012,7 +1033,30 @@ re-snapshot leaves behind.
 
 A target without such a transaction will re-snapshot into a new incarnation, a
 fresh namespace, keyspace, or table, and switch readers when the snapshot
-completes. In place, a key that was deleted before the snapshot's `AS OF` never
+completes.
+
+The two terms are not the same thing:
+
+- The generation is the SDK's. It lives in the checkpoint, every `Batch` and
+  snapshot-start `CheckpointWrite` carries it, and only the SDK raises it.
+- An incarnation is the sink's: the copy of the target it writes for one
+  generation, named after it. The SDK has no call for it. Incarnations are a
+  pattern for sinks without transactions, which need a fresh copy per
+  snapshot.
+
+An incarnation's lifecycle follows the generation's checkpoint writes:
+
+- It is created by the write that starts a snapshot, which raises the
+  generation and records the snapshot's `AS OF`.
+- It becomes active in the write that completes the snapshot, which also
+  switches readers to it.
+- The active one is retired by the next completed snapshot, and a never
+  completed one by the next start. The sink records retired incarnations next
+  to the checkpoint and deletes them later.
+
+So the sink decides how to name and store incarnations, and the SDK decides
+when each starts and completes. Such a sink does nothing in
+`sweep_generations`. In place, a key that was deleted before the snapshot's `AS OF` never
 reaches the target, so nothing marks it deleted. A stale worker's older write of
 that key would create it with nothing left to remove it. Per-document conditions
 cannot stop that write, because there is no document to compare against.
@@ -1047,7 +1091,12 @@ lands, a sink must declare its key as not enforced, the same acknowledgement
 makes deletes wrong.
 
 The SDK will treat `key_violation` rows as rejected by default, and a sink can
-choose `stall` instead, so a key violation never crashes the process.
+choose `stall` instead, so a key violation never crashes the process. A
+`key_violation` row has no value to write: the key had several rows at that
+timestamp, so the target keeps the key's previous value. Rejecting it logs it
+with its category and continues, as Materialize's own Kafka and Iceberg sinks
+warn on a key that is not unique and continue (`PkViolationWarner` in
+`src/storage/src/render/sinks.rs`).
 
 Event targets (webhooks, queues, notifications) will read the diff envelope
 at least once, with the idempotency key above. They will declare what a
@@ -1308,29 +1357,32 @@ program.
    behind, and a result over `max_result_size`. Today these share codes with
    other errors (see "Errors").
 2. SQL-528: a final progress row clamped to `UP TO`.
-3. Server-side chunking: pass the updates between two progress messages on in
+3. A subscribe size check while the replica collects a batch, as peeks do, so
+   a batch over `max_result_size` fails before it can exhaust the replica's
+   memory (see "Buffering limits").
+4. Server-side chunking: pass the updates between two progress messages on in
    bounded pieces, so a snapshot or catch-up larger than `max_result_size` can
    be delivered. Durable subscriptions do not change this, because a snapshot is
    one timestamp. #38789 is a proof of concept that supports larger results and
    moves snapshot processing out of `environmentd`. Running subscribes on
    clusters with direct reads from persist would also suit sinks, which read
    storage-backed objects only.
-4. Durable subscriptions (#38468).
-5. Snapshot elision for a projection and filter without a temporal predicate.
+5. Durable subscriptions (#38468).
+6. Snapshot elision for a projection and filter without a temporal predicate.
    #38468 needs it, and it would let sinks accept a projection and filter later
    without a snapshot read on every resume.
-6. Non-poisoning subscribe errors (database-issues#5182). #38916 proposes
+7. Non-poisoning subscribe errors (database-issues#5182). #38916 proposes
    letting a subscribe ignore errors. A subscribe that emitted both its data and
    its errors would let a sink dead-letter bad rows (R3) instead of stopping on
    `StreamPoisoned`.
-7. Docs that cross-link the durable-subscriptions pattern from every client page
+8. Docs that cross-link the durable-subscriptions pattern from every client page
    now, and lead with the SDK once it ships.
-8. A stable WebSocket `SUBSCRIBE`, the gate for browser and function transports.
-9. Upsert key validation for `SUBSCRIBE`: check the `ENVELOPE UPSERT` key
+9. A stable WebSocket `SUBSCRIBE`, the gate for browser and function transports.
+10. Upsert key validation for `SUBSCRIBE`: check the `ENVELOPE UPSERT` key
    against the unique keys Materialize infers, with the same `NOT ENFORCED`
    escape as `CREATE SINK`, or expose those keys in the catalog so the SDK can
    check them. Until then, a sink's key is unchecked.
-10. `RETAIN HISTORY` out of private preview for tables, sources, and
+11. `RETAIN HISTORY` out of private preview for tables, sources, and
     materialized views, unless durable subscriptions (#38468) land first.
     Durable mode needs one of the two (deferred question 13).
 
@@ -1389,7 +1441,7 @@ follows by demand.
 GA requires dedicated SQLSTATEs released, the client docs rewritten on the SDK,
 every published language passing the same vectors and end-to-end suite, the
 Postgres sink passing the convergence and lost-response tests, upsert key
-validation (workstream item 9) or a duplicate-key check in each keyed sink, and
+validation (workstream item 10) or a duplicate-key check in each keyed sink, and
 an answer to snapshot size: either server-side chunking, or a documented
 per-sink size limit with sizing guidance for environments that run many sinks.
 
@@ -1770,7 +1822,7 @@ deferred question 5 asks whether that is enough.
 
 Every re-snapshot, after history loss or a name swap (see "Object identity"),
 writes into new namespaces. Namespace names carry an incarnation number, for
-example `articles__i3`. The incarnation number is the checkpoint's generation.
+example `articles__i3`, where 3 is the generation (see "Sink module").
 The SDK raises it for every new snapshot and keeps it when a crashed attempt
 continues, so a number is never given to a different `AS OF`, and it gives the
 generation to the sink. The active incarnation in the checkpoint document is the
