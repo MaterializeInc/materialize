@@ -60,9 +60,17 @@ enum RequestKind {
 
 /// An external result paired with the exact request that produced it.
 #[derive(Clone, Debug)]
-pub struct PreparedSourceInput {
+struct PreparedSourceInput {
     request: SourcePreparationRequest,
     value: Arc<PreparationValue>,
+}
+
+/// An external completion whose success or failure must be checked against current inputs.
+#[derive(Debug)]
+#[must_use = "pass completions to SourcePreparation::finish to validate their inputs"]
+pub struct SourcePreparationResponse {
+    request: SourcePreparationRequest,
+    result: Result<Arc<PreparationValue>, PlanError>,
 }
 
 #[derive(Debug)]
@@ -111,12 +119,37 @@ impl SourcePreparation {
         }
     }
 
-    /// Record completed work. Resolution still validates its inputs before using it.
-    pub fn record(&mut self, input: PreparedSourceInput) {
-        // A changed earlier request can change the requests that follow it.
-        self.inputs
-            .retain(|position, _| *position < input.request.position);
-        self.inputs.insert(input.request.position, input);
+    /// Accept completed work, reporting a failure only if its request is still required.
+    pub fn finish(
+        &mut self,
+        catalog: &dyn SessionCatalog,
+        statement: Statement<Aug>,
+        response: SourcePreparationResponse,
+    ) -> Result<SourcePreparationStatus, PlanError> {
+        match response.result {
+            Ok(value) => {
+                // A changed earlier request can change the requests that follow it.
+                self.inputs
+                    .retain(|position, _| *position < response.request.position);
+                self.inputs.insert(
+                    response.request.position,
+                    PreparedSourceInput {
+                        request: response.request,
+                        value,
+                    },
+                );
+                self.resolve(catalog, statement)
+            }
+            Err(error) => {
+                let status = self.resolve(catalog, statement)?;
+                match status {
+                    SourcePreparationStatus::Pending(request) if request == response.request => {
+                        Err(error)
+                    }
+                    status => Ok(status),
+                }
+            }
+        }
     }
 }
 
@@ -125,7 +158,17 @@ impl SourcePreparationRequest {
     pub async fn execute(
         &self,
         storage_configuration: &StorageConfiguration,
-    ) -> Result<PreparedSourceInput, PlanError> {
+    ) -> SourcePreparationResponse {
+        SourcePreparationResponse {
+            request: self.clone(),
+            result: self.execute_inner(storage_configuration).await,
+        }
+    }
+
+    async fn execute_inner(
+        &self,
+        storage_configuration: &StorageConfiguration,
+    ) -> Result<Arc<PreparationValue>, PlanError> {
         let value = match &self.kind {
             RequestKind::Source(request) => PreparationValue::Source(Box::new(
                 execute_create_source_preparation((**request).clone(), storage_configuration)
@@ -145,10 +188,7 @@ impl SourcePreparationRequest {
                 PreparationValue::Glue((**request).clone().execute(storage_configuration).await?)
             }
         };
-        Ok(PreparedSourceInput {
-            request: self.clone(),
-            value: Arc::new(value),
-        })
+        Ok(Arc::new(value))
     }
 }
 
@@ -326,11 +366,13 @@ pub(super) async fn purify(
     storage_configuration: &StorageConfiguration,
 ) -> Result<PurifiedStatement, PlanError> {
     let mut preparation = SourcePreparation::new(now);
+    let mut status = preparation.resolve(catalog, statement.clone())?;
     loop {
-        match preparation.resolve(catalog, statement.clone())? {
+        match status {
             SourcePreparationStatus::Ready(statement) => return Ok(*statement),
             SourcePreparationStatus::Pending(request) => {
-                preparation.record(request.execute(storage_configuration).await?);
+                let response = request.execute(storage_configuration).await;
+                status = preparation.finish(catalog, statement.clone(), response)?;
             }
         }
     }

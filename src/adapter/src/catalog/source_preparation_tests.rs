@@ -12,25 +12,46 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use mz_ore::now::NowFn;
 use mz_sql::plan::PlanError;
-use mz_sql::pure::{SourcePreparation, SourcePreparationStatus};
+use mz_sql::pure::{SourcePreparation, SourcePreparationResponse, SourcePreparationStatus};
 use mz_sql::session::vars::VarInput;
 use mz_storage_types::configuration::StorageConfiguration;
 
 use crate::catalog::{Catalog, CatalogState};
 
+fn source_statement(
+    state: &CatalogState,
+    sql: &str,
+) -> Result<mz_sql::ast::Statement<mz_sql::names::Aug>, PlanError> {
+    let statement = mz_sql_parser::parser::parse_statements(sql)
+        .expect("parse source statement")
+        .remove(0)
+        .ast;
+    let (statement, _) = mz_sql::names::resolve(&state.for_system_session(), statement)?;
+    Ok(statement)
+}
+
+const CLOCK_SOURCE: &str = "CREATE SOURCE clock_src FROM LOAD GENERATOR CLOCK";
+
 fn resolve(
     preparation: &SourcePreparation,
     state: &CatalogState,
 ) -> Result<SourcePreparationStatus, PlanError> {
-    let catalog = state.for_system_session();
-    let statement = mz_sql_parser::parser::parse_statements(
-        "CREATE SOURCE clock_src FROM LOAD GENERATOR CLOCK",
+    preparation.resolve(
+        &state.for_system_session(),
+        source_statement(state, CLOCK_SOURCE)?,
     )
-    .expect("parse source statement")
-    .remove(0)
-    .ast;
-    let (statement, _) = mz_sql::names::resolve(&catalog, statement)?;
-    preparation.resolve(&catalog, statement)
+}
+
+fn finish(
+    preparation: &mut SourcePreparation,
+    state: &CatalogState,
+    response: SourcePreparationResponse,
+) -> Result<SourcePreparationStatus, PlanError> {
+    preparation.finish(
+        &state.for_system_session(),
+        source_statement(state, CLOCK_SOURCE)?,
+        response,
+    )
 }
 
 #[mz_ore::test(tokio::test)]
@@ -63,13 +84,10 @@ async fn source_preparation_checks_current_inputs() {
         else {
             panic!("metadata preparation must be requested");
         };
-        let original_input = request
-            .execute(&storage)
-            .await
-            .expect("prepare load-generator metadata");
-        preparation.record(original_input.clone());
+        let original_input = request.execute(&storage).await;
+        let late_input = request.execute(&storage).await;
         let SourcePreparationStatus::Ready(original) =
-            resolve(&preparation, &state).expect("resolve source preparation")
+            finish(&mut preparation, &state, original_input).expect("accept source preparation")
         else {
             panic!("matching metadata must be reused");
         };
@@ -112,27 +130,99 @@ async fn source_preparation_checks_current_inputs() {
             panic!("changed preparation inputs must not reuse old metadata");
         };
         assert_ne!(changed, request);
-        let changed_input = changed
-            .execute(&storage)
-            .await
-            .expect("prepare load-generator metadata");
-        preparation.record(changed_input.clone());
+        let changed_input = changed.execute(&storage).await;
+        assert!(matches!(
+            finish(&mut preparation, &state, changed_input).expect("accept current metadata"),
+            SourcePreparationStatus::Ready(_)
+        ));
 
         // A completion from superseded work cannot override current-input validation.
-        preparation.record(original_input);
         let SourcePreparationStatus::Pending(retry) =
-            resolve(&preparation, &state).expect("resolve source preparation")
+            finish(&mut preparation, &state, late_input).expect("reject obsolete metadata")
         else {
             panic!("late metadata for different inputs must not be accepted");
         };
         assert_eq!(retry, changed);
-        preparation.record(changed_input);
+        let changed_input = changed.execute(&storage).await;
         let SourcePreparationStatus::Ready(reprepared) =
-            resolve(&preparation, &state).expect("resolve source preparation")
+            finish(&mut preparation, &state, changed_input).expect("accept current metadata")
         else {
             panic!("metadata for the current inputs must be accepted");
         };
         assert_eq!(reprepared, original);
+        catalog.expire().await;
+    })
+    .await;
+}
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn source_preparation_checks_failure_inputs() {
+    Catalog::with_debug(|catalog| async move {
+        let mut state = catalog.state().clone();
+        for name in [
+            "enable_create_table_from_source",
+            "force_source_table_syntax",
+        ] {
+            state
+                .system_config_mut()
+                .set(name, VarInput::Flat("false"))
+                .expect("require explicit multi-output exports");
+        }
+        let storage = StorageConfiguration::new(
+            state.config.connection_context.clone(),
+            mz_storage_types::dyncfgs::all_dyncfgs(Default::default()),
+        );
+        let sql = "CREATE SOURCE auction_src FROM LOAD GENERATOR AUCTION";
+        let mut preparation = SourcePreparation::new(1000);
+        let SourcePreparationStatus::Pending(request) = preparation
+            .resolve(
+                &state.for_system_session(),
+                source_statement(&state, sql).expect("resolve auction"),
+            )
+            .expect("request auction metadata")
+        else {
+            panic!("auction metadata must be requested");
+        };
+        let response = request.execute(&storage).await;
+        assert!(
+            preparation
+                .finish(
+                    &state.for_system_session(),
+                    source_statement(&state, sql).expect("resolve auction"),
+                    response,
+                )
+                .is_err(),
+            "the current requirement for explicit exports must fail"
+        );
+
+        let obsolete_failure = request.execute(&storage).await;
+        state
+            .system_config_mut()
+            .set("enable_create_table_from_source", VarInput::Flat("true"))
+            .expect("allow exports to be created separately");
+        let SourcePreparationStatus::Pending(current) = preparation
+            .finish(
+                &state.for_system_session(),
+                source_statement(&state, sql).expect("resolve auction"),
+                obsolete_failure,
+            )
+            .expect("an obsolete failure must not abort current preparation")
+        else {
+            panic!("metadata must be requested with the current export policy");
+        };
+        assert_ne!(current, request);
+        let response = current.execute(&storage).await;
+        assert!(matches!(
+            preparation
+                .finish(
+                    &state.for_system_session(),
+                    source_statement(&state, sql).expect("resolve auction"),
+                    response,
+                )
+                .expect("accept current auction metadata"),
+            SourcePreparationStatus::Ready(_)
+        ));
         catalog.expire().await;
     })
     .await;

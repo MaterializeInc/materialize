@@ -98,7 +98,7 @@ mod references;
 mod source_preparation;
 
 pub use source_preparation::{
-    PreparedSourceInput, SourcePreparation, SourcePreparationRequest, SourcePreparationStatus,
+    SourcePreparation, SourcePreparationRequest, SourcePreparationResponse, SourcePreparationStatus,
 };
 
 pub mod mysql;
