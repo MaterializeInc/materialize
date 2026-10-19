@@ -1598,12 +1598,13 @@ impl CatalogState {
                 let optimizer_config =
                     optimize::OptimizerConfig::from(system_vars).override_from(&overrides);
                 let previous_exprs = previous_item.map(|item| match item {
-                    CatalogItem::MaterializedView(materialized_view) => (
-                        materialized_view.raw_expr,
-                        materialized_view.locally_optimized_expr,
-                    ),
+                    CatalogItem::MaterializedView(materialized_view) => materialized_view
+                        .raw_expr
+                        .zip(materialized_view.locally_optimized_expr),
                     item => unreachable!("expected materialized view, found: {item:#?}"),
                 });
+                // A previous item without a SQL definition has no expressions to reuse.
+                let previous_exprs = previous_exprs.flatten();
 
                 let (raw_expr, optimized_expr) = match (cached_expr, previous_exprs) {
                     (Some(local_expr), _)
@@ -1657,8 +1658,8 @@ impl CatalogState {
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
                     collections,
-                    raw_expr,
-                    locally_optimized_expr: optimized_expr,
+                    raw_expr: Some(raw_expr),
+                    locally_optimized_expr: Some(optimized_expr),
                     desc,
                     resolved_ids,
                     dependencies,

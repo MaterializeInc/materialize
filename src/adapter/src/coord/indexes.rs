@@ -56,7 +56,14 @@ impl DataflowBuilder<'_> {
                         todo.extend(view.locally_optimized_expr.0.depends_on());
                     }
                     CatalogItem::MaterializedView(mview) if mview.replacement_target.is_some() => {
-                        todo.extend(mview.locally_optimized_expr.0.depends_on());
+                        todo.extend(
+                            mview
+                                .locally_optimized_expr
+                                .as_ref()
+                                .expect("SQL materialized view has a raw expression")
+                                .0
+                                .depends_on(),
+                        );
                     }
                     CatalogItem::Source(_)
                     | CatalogItem::Table(_)

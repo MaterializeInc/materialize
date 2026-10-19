@@ -217,6 +217,8 @@ impl Catalog {
                         // need to block and wait for the materialized view to advance.
                         timelines.insert(TimelineContext::TimestampDependent);
                         let item_ids = optimized_expr
+                            .as_ref()
+                            .expect("SQL materialized view has a raw expression")
                             .depends_on()
                             .into_iter()
                             .map(|gid| self.resolve_item_id(&gid));

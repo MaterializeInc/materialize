@@ -299,15 +299,19 @@ pub(crate) fn validate_read_then_write_dependencies(
             });
         };
 
-        if let CatalogItem::View(objects::View {
-            locally_optimized_expr: optimized_expr,
-            ..
-        })
-        | CatalogItem::MaterializedView(objects::MaterializedView {
-            locally_optimized_expr: optimized_expr,
-            ..
-        }) = entry.item()
-        {
+        // Materialized views without a SQL definition have no local expression to inspect.
+        let optimized_expr = match entry.item() {
+            CatalogItem::View(objects::View {
+                locally_optimized_expr,
+                ..
+            }) => Some(locally_optimized_expr),
+            CatalogItem::MaterializedView(objects::MaterializedView {
+                locally_optimized_expr,
+                ..
+            }) => locally_optimized_expr.as_ref(),
+            _ => None,
+        };
+        if let Some(optimized_expr) = optimized_expr {
             if optimized_expr.contains_temporal() {
                 return Err(AdapterError::Unsupported(
                     "calls to mz_now in write statements",

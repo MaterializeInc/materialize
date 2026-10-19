@@ -358,7 +358,10 @@ impl<'a> DataflowBuilder<'a> {
                     }
                     CatalogItem::MaterializedView(mview) if mview.replacement_target.is_some() => {
                         // Can't read from replacements, use the view definition directly.
-                        let expr = mview.locally_optimized_expr.as_ref();
+                        let expr = mview
+                            .locally_optimized_expr
+                            .as_ref()
+                            .expect("SQL materialized view has a raw expression");
                         self.import_view_into_dataflow(id, expr, dataflow, features)?;
                     }
                     CatalogItem::MaterializedView(mview) => {

@@ -255,24 +255,42 @@ impl Coordinator {
         let cardinality_stats = BTreeMap::new();
 
         let explain = match stage {
-            ExplainStage::RawPlan => explain_plan(
-                view.raw_expr.as_ref().clone(),
-                format,
-                &config,
-                &features,
-                &self.catalog().for_session(ctx.session()),
-                cardinality_stats,
-                Some(target_cluster.name.as_str()),
-            )?,
-            ExplainStage::LocalPlan => explain_plan(
-                view.locally_optimized_expr.as_inner().clone(),
-                format,
-                &config,
-                &features,
-                &self.catalog().for_session(ctx.session()),
-                cardinality_stats,
-                Some(target_cluster.name.as_str()),
-            )?,
+            ExplainStage::RawPlan => {
+                let Some(raw_expr) = &view.raw_expr else {
+                    coord_bail!(
+                        "materialized view {} has no SQL definition",
+                        self.catalog()
+                            .resolve_full_name(self.catalog().get_entry(&id).name(), None)
+                    );
+                };
+                explain_plan(
+                    raw_expr.as_ref().clone(),
+                    format,
+                    &config,
+                    &features,
+                    &self.catalog().for_session(ctx.session()),
+                    cardinality_stats,
+                    Some(target_cluster.name.as_str()),
+                )?
+            }
+            ExplainStage::LocalPlan => {
+                let Some(locally_optimized_expr) = &view.locally_optimized_expr else {
+                    coord_bail!(
+                        "materialized view {} has no SQL definition",
+                        self.catalog()
+                            .resolve_full_name(self.catalog().get_entry(&id).name(), None)
+                    );
+                };
+                explain_plan(
+                    locally_optimized_expr.as_inner().clone(),
+                    format,
+                    &config,
+                    &features,
+                    &self.catalog().for_session(ctx.session()),
+                    cardinality_stats,
+                    Some(target_cluster.name.as_str()),
+                )?
+            }
             ExplainStage::GlobalPlan => {
                 let Some(plan) = self.catalog().try_get_optimized_plan(&gid).cloned() else {
                     tracing::error!("cannot find {stage} for materialized view {id} in catalog");
@@ -679,8 +697,8 @@ impl Coordinator {
                 name: name.clone(),
                 item: CatalogItem::MaterializedView(MaterializedView {
                     create_sql,
-                    raw_expr: raw_expr.into(),
-                    locally_optimized_expr: local_mir_plan.expr().into(),
+                    raw_expr: Some(raw_expr.into()),
+                    locally_optimized_expr: Some(local_mir_plan.expr().into()),
                     desc,
                     collections,
                     resolved_ids,

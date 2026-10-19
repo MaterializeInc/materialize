@@ -885,14 +885,18 @@ impl Catalog {
                         );
                     }
                     CatalogItem::MaterializedView(mv) => {
-                        exprs.insert(
-                            mv.global_id_writes(),
-                            LocalExpressions {
-                                local_mir: (*mv.locally_optimized_expr).clone(),
-                                optimizer_features: optimizer_features.clone(),
-                                item_version: latest_item_version(&mv.collections),
-                            },
-                        );
+                        // Materialized views without a SQL definition have no local
+                        // expression to cache.
+                        if let Some(local_mir) = &mv.locally_optimized_expr {
+                            exprs.insert(
+                                mv.global_id_writes(),
+                                LocalExpressions {
+                                    local_mir: (**local_mir).clone(),
+                                    optimizer_features: optimizer_features.clone(),
+                                    item_version: latest_item_version(&mv.collections),
+                                },
+                            );
+                        }
                     }
                     CatalogItem::Table(_)
                     | CatalogItem::Source(_)
