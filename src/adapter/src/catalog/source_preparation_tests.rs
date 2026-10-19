@@ -427,6 +427,9 @@ async fn source_command_preserves_only_observed_outcomes() {
             .expect("allow source syntax");
         let mut session = Session::dummy();
         session.initialize_role_metadata(mz_sql::session::user::MZ_SYSTEM_ROLE_ID);
+        session
+            .start_transaction(mz_ore::now::to_datetime(1000), None, None)
+            .expect("start invoking transaction");
         let sql = "CREATE SOURCE IF NOT EXISTS ddl_outcome IN CLUSTER mz_system FROM LOAD GENERATOR COUNTER";
         let staged = stage(&catalog, &session, sql).await;
         let competing = stage(&catalog, &session, sql).await;
