@@ -846,6 +846,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "persist_blob_read_timeout",
     "persist_blob_hedged_get_max_concurrent",
     "persist_blob_hedged_get_warm_interval",
+    "persist_blob_http_pool_max_in_flight_per_client",
     "persist_stats_collection_enabled",
     "persist_stats_filter_enabled",
     "persist_stats_budget_bytes",

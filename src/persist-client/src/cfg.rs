@@ -28,7 +28,7 @@ use mz_ore::instrument;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::BlobKnobs;
 use mz_persist::retry::Retry;
-use mz_persist::s3::BlobHttpPool;
+use mz_persist::s3::{BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT, BlobHttpPool};
 use mz_postgres_client::PostgresClientKnobs;
 use proptest_derive::Arbitrary;
 use semver::Version;
@@ -855,6 +855,10 @@ impl BlobKnobs for PersistConfig {
 
     fn http_pool(&self) -> BlobHttpPool {
         BlobHttpPool::get(self)
+    }
+
+    fn http_pool_max_in_flight_per_client(&self) -> usize {
+        BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT.get(self)
     }
 }
 

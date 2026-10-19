@@ -41,6 +41,7 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::hedge::BLOB_HEDGED_GET_BUDGET_RATIO)
         .add(&crate::hedge::BLOB_HEDGED_GET_WARM_INTERVAL)
         .add(&crate::s3::BLOB_HTTP_POOL)
+        .add(&crate::s3::BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT)
 }
 
 /// Opens the sibling handle that [crate::hedge::HedgedBlob] runs hedge
@@ -134,6 +135,10 @@ pub trait BlobKnobs: std::fmt::Debug + Send + Sync {
     /// Which S3 endpoints send requests through a pool of HTTP clients.
     fn http_pool(&self) -> BlobHttpPool {
         BlobHttpPool::default()
+    }
+    /// See [`crate::s3::BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT`].
+    fn http_pool_max_in_flight_per_client(&self) -> usize {
+        *crate::s3::BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT.default()
     }
 }
 

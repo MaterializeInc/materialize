@@ -43,7 +43,7 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_ore::secure::SecureString;
 use mz_persist::location::Blob;
 use mz_persist::metrics::S3BlobMetrics;
-use mz_persist::s3::{S3Blob, S3BlobConfig};
+use mz_persist::s3::{BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT, S3Blob, S3BlobConfig};
 
 use crate::cfg::PersistConfig;
 
@@ -170,7 +170,10 @@ async fn open(
     .await?;
     let http_client = match client {
         ClientKind::Sdk => SharedHttpClient::new(mz_aws_util::http_client()),
-        ClientKind::Pooled => SharedHttpClient::new(mz_aws_util::pooled_http_client(pool_metrics)),
+        ClientKind::Pooled => SharedHttpClient::new(mz_aws_util::pooled_http_client(
+            || *BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT.default(),
+            pool_metrics,
+        )),
     };
     let config = config.with_http_client(TimedHttpClient {
         inner: http_client,

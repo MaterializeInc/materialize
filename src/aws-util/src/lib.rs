@@ -57,8 +57,18 @@ pub fn http_client() -> impl HttpClient {
 ///
 /// Use it for servers that speak HTTP/2, like GCS. Over HTTP/2, [`http_client`]
 /// sends every request to a host over one connection, which caps throughput.
-pub fn pooled_http_client(metrics: HttpPoolMetrics) -> impl HttpClient {
-    PooledHttpClient::new(|| SharedHttpClient::new(http_client()), metrics)
+///
+/// A request opens a new connection once every connection has
+/// `max_in_flight()` requests in flight, read per request. 0 counts as 1.
+pub fn pooled_http_client(
+    max_in_flight: impl Fn() -> usize + Send + Sync + 'static,
+    metrics: HttpPoolMetrics,
+) -> impl HttpClient {
+    PooledHttpClient::new(
+        || SharedHttpClient::new(http_client()),
+        max_in_flight,
+        metrics,
+    )
 }
 
 /// Returns an HTTP client for use with the AWS SDK that sends each request
@@ -66,11 +76,12 @@ pub fn pooled_http_client(metrics: HttpPoolMetrics) -> impl HttpClient {
 /// is sent, and through [`http_client`] otherwise.
 pub fn switched_http_client(
     use_pool: impl Fn() -> bool + Send + Sync + 'static,
+    pool_max_in_flight: impl Fn() -> usize + Send + Sync + 'static,
     pool_metrics: HttpPoolMetrics,
 ) -> impl HttpClient {
     SwitchedHttpClient::new(
         SharedHttpClient::new(http_client()),
-        SharedHttpClient::new(pooled_http_client(pool_metrics)),
+        SharedHttpClient::new(pooled_http_client(pool_max_in_flight, pool_metrics)),
         use_pool,
     )
 }

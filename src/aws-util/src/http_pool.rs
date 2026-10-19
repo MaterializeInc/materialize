@@ -38,14 +38,6 @@ use mz_ore::metrics::IntCounter;
 /// that limit, but a pool of 10 did not.
 const MIN_CLIENTS: usize = 32;
 
-/// A request goes to a new client once every client has this many requests in
-/// flight.
-///
-/// Matches the `MAX_CONCURRENT_STREAMS: 100` that GCS advertised in its HTTP/2
-/// settings, as observed in October 2026 with
-/// `curl -v --trace-config http/2 --http2 https://storage.googleapis.com/`.
-const MAX_IN_FLIGHT_PER_CLIENT: usize = 100;
-
 /// Metrics for one pool. A pool created with a clone of these metrics replaces
 /// the pool they described before.
 #[derive(Clone, Debug)]
@@ -113,9 +105,13 @@ pub(crate) struct PooledHttpClient {
 }
 
 impl PooledHttpClient {
-    pub(crate) fn new(new_client: fn() -> SharedHttpClient, metrics: HttpPoolMetrics) -> Self {
+    pub(crate) fn new(
+        new_client: fn() -> SharedHttpClient,
+        max_in_flight: impl Fn() -> usize + Send + Sync + 'static,
+        metrics: HttpPoolMetrics,
+    ) -> Self {
         PooledHttpClient {
-            pool: Pool::new(new_client, metrics),
+            pool: Pool::new(new_client, max_in_flight, metrics),
         }
     }
 }
@@ -161,6 +157,7 @@ impl HttpClient for PooledHttpClient {
 #[derive(Debug)]
 struct Pool {
     new_client: fn() -> SharedHttpClient,
+    max_in_flight: Getter<usize>,
     metrics: HttpPoolMetrics,
     /// Holds at least [`MIN_CLIENTS`]. Members are never removed. An idle member's connections
     /// close on the SDK client's idle timeout, so it costs only memory.
@@ -168,9 +165,14 @@ struct Pool {
 }
 
 impl Pool {
-    fn new(new_client: fn() -> SharedHttpClient, metrics: HttpPoolMetrics) -> Arc<Self> {
+    fn new(
+        new_client: fn() -> SharedHttpClient,
+        max_in_flight: impl Fn() -> usize + Send + Sync + 'static,
+        metrics: HttpPoolMetrics,
+    ) -> Arc<Self> {
         let pool = Arc::new(Pool {
             new_client,
+            max_in_flight: Getter::new(max_in_flight),
             metrics,
             members: Mutex::new(
                 (0..MIN_CLIENTS)
@@ -188,16 +190,18 @@ impl Pool {
     }
 
     /// Picks the member with the fewest requests in flight, adding a member
-    /// if every one is at [`MAX_IN_FLIGHT_PER_CLIENT`]. The request counts
-    /// against the member until the returned clone is dropped.
+    /// if every one is at `max_in_flight`. The request counts against the
+    /// member until the returned clone is dropped.
     fn pick(&self) -> Member {
+        // A limit of 0 would add a member on every request, and members are never removed.
+        let max_in_flight = self.max_in_flight.get().max(1);
         let mut members = self.members.lock().expect("lock poisoned");
         let least = members
             .iter()
             .min_by_key(|member| member.in_flight())
             .expect("never empty");
         // Cloned while holding the lock, so concurrent picks see the count.
-        if least.in_flight() < MAX_IN_FLIGHT_PER_CLIENT {
+        if least.in_flight() < max_in_flight {
             least.clone()
         } else {
             let member = Member::new((self.new_client)());
@@ -266,7 +270,7 @@ impl HttpConnector for PooledConnector {
 pub(crate) struct SwitchedHttpClient {
     plain: SharedHttpClient,
     pooled: SharedHttpClient,
-    use_pool: UsePool,
+    use_pool: Getter<bool>,
 }
 
 impl SwitchedHttpClient {
@@ -278,17 +282,28 @@ impl SwitchedHttpClient {
         SwitchedHttpClient {
             plain,
             pooled,
-            use_pool: UsePool(Arc::new(use_pool)),
+            use_pool: Getter::new(use_pool),
         }
     }
 }
 
+/// A setting read each time it is used, so a change applies to existing clients.
 #[derive(Clone)]
-struct UsePool(Arc<dyn Fn() -> bool + Send + Sync>);
+struct Getter<T>(Arc<dyn Fn() -> T + Send + Sync>);
 
-impl std::fmt::Debug for UsePool {
+impl<T> Getter<T> {
+    fn new(get: impl Fn() -> T + Send + Sync + 'static) -> Self {
+        Getter(Arc::new(get))
+    }
+
+    fn get(&self) -> T {
+        (self.0)()
+    }
+}
+
+impl<T> std::fmt::Debug for Getter<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("UsePool")
+        f.write_str("Getter")
     }
 }
 
@@ -336,12 +351,12 @@ impl HttpClient for SwitchedHttpClient {
 struct SwitchedConnector {
     plain: SharedHttpConnector,
     pooled: SharedHttpConnector,
-    use_pool: UsePool,
+    use_pool: Getter<bool>,
 }
 
 impl HttpConnector for SwitchedConnector {
     fn call(&self, request: HttpRequest) -> HttpConnectorFuture {
-        if (self.use_pool.0)() {
+        if self.use_pool.get() {
             self.pooled.call(request)
         } else {
             self.plain.call(request)
@@ -370,9 +385,12 @@ mod tests {
         }
     }
 
-    fn pool() -> Arc<Pool> {
+    const MAX_IN_FLIGHT: usize = 3;
+
+    fn pool(max_in_flight: impl Fn() -> usize + Send + Sync + 'static) -> Arc<Pool> {
         Pool::new(
             || SharedHttpClient::new(UnusedClient),
+            max_in_flight,
             HttpPoolMetrics::unreported(),
         )
     }
@@ -384,12 +402,12 @@ mod tests {
 
     #[mz_ore::test]
     fn grows_when_every_member_is_full() {
-        let pool = pool();
+        let pool = pool(|| MAX_IN_FLIGHT);
         let metrics = pool.metrics.clone();
         assert_eq!(in_flight(&pool), [0; MIN_CLIENTS]);
         assert_eq!(metrics.clients(), MIN_CLIENTS);
-        let full = [MAX_IN_FLIGHT_PER_CLIENT; MIN_CLIENTS];
-        let mut held: Vec<_> = (0..MIN_CLIENTS * MAX_IN_FLIGHT_PER_CLIENT)
+        let full = [MAX_IN_FLIGHT; MIN_CLIENTS];
+        let mut held: Vec<_> = (0..MIN_CLIENTS * MAX_IN_FLIGHT)
             .map(|_| pool.pick())
             .collect();
         assert_eq!(in_flight(&pool), full);
@@ -406,7 +424,7 @@ mod tests {
 
     #[mz_ore::test]
     fn picks_least_loaded_member() {
-        let pool = pool();
+        let pool = pool(|| MAX_IN_FLIGHT);
         let mut held: Vec<_> = (0..MIN_CLIENTS).map(|_| pool.pick()).collect();
         assert_eq!(in_flight(&pool), [1; MIN_CLIENTS]);
         drop(held.remove(3));
@@ -417,12 +435,45 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn max_in_flight_change_applies_to_next_pick() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let max_in_flight = Arc::new(AtomicUsize::new(1));
+        let pool = pool({
+            let max_in_flight = Arc::clone(&max_in_flight);
+            move || max_in_flight.load(Ordering::Relaxed)
+        });
+        #[allow(clippy::collection_is_never_read)]
+        let mut held: Vec<_> = (0..MIN_CLIENTS).map(|_| pool.pick()).collect();
+        max_in_flight.store(2, Ordering::Relaxed);
+        held.push(pool.pick());
+        assert_eq!(in_flight(&pool), [&[2][..], &[1; MIN_CLIENTS - 1]].concat());
+        max_in_flight.store(1, Ordering::Relaxed);
+        held.push(pool.pick());
+        assert_eq!(
+            in_flight(&pool),
+            [&[2][..], &[1; MIN_CLIENTS - 1], &[1]].concat()
+        );
+        max_in_flight.store(0, Ordering::Relaxed);
+        held.push(pool.pick());
+        assert_eq!(
+            in_flight(&pool),
+            [&[2][..], &[1; MIN_CLIENTS - 1], &[1, 1]].concat(),
+            "0 acts as 1",
+        );
+    }
+
+    #[mz_ore::test]
     fn metrics_follow_newest_pool() {
-        let old = pool();
+        let old = pool(|| MAX_IN_FLIGHT);
         let metrics = old.metrics.clone();
         let _old_held = old.pick();
         assert_eq!(metrics.in_flight(), 1);
-        let new = Pool::new(|| SharedHttpClient::new(UnusedClient), metrics.clone());
+        let new = Pool::new(
+            || SharedHttpClient::new(UnusedClient),
+            || MAX_IN_FLIGHT,
+            metrics.clone(),
+        );
         assert_eq!(
             metrics.in_flight(),
             0,
@@ -484,6 +535,7 @@ mod tests {
     async fn request_counts_until_body_dropped() {
         let pool = Pool::new(
             || SharedHttpClient::new(FakeClient { fail: false }),
+            || MAX_IN_FLIGHT,
             HttpPoolMetrics::unreported(),
         );
         let response = connector(&pool).call(HttpRequest::empty());
@@ -537,6 +589,7 @@ mod tests {
     async fn failed_or_abandoned_request_stops_counting() {
         let pool = Pool::new(
             || SharedHttpClient::new(FakeClient { fail: true }),
+            || MAX_IN_FLIGHT,
             HttpPoolMetrics::unreported(),
         );
         let response = connector(&pool).call(HttpRequest::empty());

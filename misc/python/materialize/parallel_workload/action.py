@@ -2932,6 +2932,10 @@ class FlipFlagsAction(Action):
         ]
         self.flags_with_values["persist_blob_hedged_get_enabled"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_blob_http_pool"] = ["off", "gcs", "on"]
+        self.flags_with_values["persist_blob_http_pool_max_in_flight_per_client"] = [
+            "1",
+            "100",
+        ]
         self.flags_with_values["persist_blob_hedged_get_delay"] = [
             "'0s'",
             "'10ms'",

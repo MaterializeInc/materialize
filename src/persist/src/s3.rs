@@ -70,6 +70,20 @@ pub const BLOB_HTTP_POOL: Config<&'static str> = Config::new(
     ParameterScope::Environment,
 );
 
+/// The `max_in_flight` that [`BLOB_HTTP_POOL`]'s pool passes to
+/// [`mz_aws_util::pooled_http_client`].
+///
+/// The default matches the `MAX_CONCURRENT_STREAMS: 100` that GCS advertised in its HTTP/2
+/// settings, as observed in October 2026 with
+/// `curl -v --trace-config http/2 --http2 https://storage.googleapis.com/`.
+pub const BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT: Config<usize> = Config::new(
+    "persist_blob_http_pool_max_in_flight_per_client",
+    100,
+    "When `persist_blob_http_pool` applies, a blob request goes to a new HTTP client once every \
+    client in the pool has this many requests in flight. 0 means 1.",
+    ParameterScope::Environment,
+);
+
 /// The values of [`BLOB_HTTP_POOL`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlobHttpPool {
@@ -219,8 +233,13 @@ impl S3BlobConfig {
             let knobs = Arc::clone(&knobs);
             move || knobs.http_pool().use_pool(is_google)
         };
+        let pool_max_in_flight = {
+            let knobs = Arc::clone(&knobs);
+            move || knobs.http_pool_max_in_flight_per_client()
+        };
         loader = loader.http_client(mz_aws_util::switched_http_client(
             use_pool,
+            pool_max_in_flight,
             metrics.http_pool(),
         ));
 
