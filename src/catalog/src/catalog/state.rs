@@ -380,6 +380,9 @@ pub(crate) enum LocalExpressionCache {
         cached_exprs: BTreeMap<GlobalId, LocalExpressions>,
         /// The local expressions that were NOT cached in the expression cache.
         uncached_exprs: BTreeMap<GlobalId, LocalExpressions>,
+        /// Transaction-local definitions whose planning context was validated by
+        /// the caller. Durable replay and bootstrap do not populate this map.
+        prepared_materialized_views: Arc<BTreeMap<GlobalId, MaterializedView>>,
     },
     /// The cache is not being used.
     Closed,
@@ -387,10 +390,44 @@ pub(crate) enum LocalExpressionCache {
 
 impl LocalExpressionCache {
     pub(super) fn new(cached_exprs: BTreeMap<GlobalId, LocalExpressions>) -> Self {
+        Self::for_transaction(cached_exprs, Arc::new(BTreeMap::new()))
+    }
+
+    pub(super) fn for_transaction(
+        cached_exprs: BTreeMap<GlobalId, LocalExpressions>,
+        prepared_materialized_views: Arc<BTreeMap<GlobalId, MaterializedView>>,
+    ) -> Self {
         Self::Open {
             cached_exprs,
             uncached_exprs: BTreeMap::new(),
+            prepared_materialized_views,
         }
+    }
+
+    fn prepared_materialized_view(
+        &self,
+        global_id: GlobalId,
+        create_sql: &str,
+        extra_versions: &BTreeMap<RelationVersion, GlobalId>,
+    ) -> Option<MaterializedView> {
+        let Self::Open {
+            prepared_materialized_views,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        let mv = prepared_materialized_views.get(&global_id)?;
+        // Same-batch definition changes must take the ordinary parsing path.
+        // Matching only the collection identity would silently discard them.
+        (mv.create_sql == create_sql
+            && mv.collections.get(&RelationVersion::root()) == Some(&global_id)
+            && mv
+                .collections
+                .iter()
+                .filter(|(version, _)| **version != RelationVersion::root())
+                .eq(extra_versions.iter()))
+        .then(|| mv.clone())
     }
 
     pub(super) fn remove_cached_expression(&mut self, id: &GlobalId) -> Option<LocalExpressions> {
@@ -1468,7 +1505,8 @@ impl CatalogState {
         Ok((plan, resolved_ids))
     }
 
-    /// Parses the given SQL string into a pair of [`CatalogItem`].
+    /// Restores an item from durable SQL, reusing validated transaction-local
+    /// preparation only when its serialized definition matches exactly.
     pub(crate) fn deserialize_item(
         &self,
         global_id: GlobalId,
@@ -1477,6 +1515,16 @@ impl CatalogState {
         local_expression_cache: &mut LocalExpressionCache,
         previous_item: Option<CatalogItem>,
     ) -> Result<CatalogItem, ItemError> {
+        if let Some(mut mv) =
+            local_expression_cache.prepared_materialized_view(global_id, create_sql, extra_versions)
+        {
+            if let Some(previous) = previous_item {
+                mv.optimized_plan = previous.optimized_plan().cloned();
+                mv.physical_plan = previous.physical_plan().cloned();
+                mv.dataflow_metainfo = previous.dataflow_metainfo().cloned();
+            }
+            return Ok(CatalogItem::MaterializedView(mv));
+        }
         self.parse_item(
             global_id,
             create_sql,

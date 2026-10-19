@@ -2593,6 +2593,9 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
     ///
     /// This function requires that all provided items have unique item IDs.
     fn sort_items_topological(items: &mut Vec<(crate::durable::Item, Timestamp, StateDiff)>) {
+        if items.len() < 2 {
+            return;
+        }
         tracing::debug!(?items, "sorting items by dependencies");
 
         let key_fn = |item: &(crate::durable::Item, _, _)| item.0.id;

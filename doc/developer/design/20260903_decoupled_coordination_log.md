@@ -235,6 +235,31 @@ progress. The diagnostic is archived and removed. See
 `scratch/incremental-protection-scaling-report.md` and the matching evidence
 archives under the off-worker evidence directory. Original-budget workload
 verification remains open.
+Prepared-MV admission is implemented locally. Shared application reuses
+validated definitions only on exact SQL/global-ID/version matching. Birth stamping
+keeps preliminary dependency edges installed, while the complete durable diffs
+still drive final application and committed effects. Revision `e181a4eee5` passes
+four-crate Clippy, 35 transaction tests and eight retention/retry tests, including
+full-definition replay comparison and same-batch RETAIN HISTORY coverage.
+Independent review found no concrete safety issue. Preparation is shared without
+redundant MV expression copies. Singleton item batches
+do not rediscover dependencies for sorting. Birth SQL still uses the existing
+parser/serializer once per candidate, rather than a string-suffix assumption or
+another retained-AST lifetime. Evidence and review notes are preserved off-worker
+as `scratch/prepared-mv-{initial,boundaries}.tar.gz` and
+`scratch/prepared-mv-review.md`.
+A fresh matched three-check run compares `a8cf29e4` with `23daf7b2` under the
+aggregate 8CPU/16GiB scratch budget. Both pass with seven MV content commits,
+one per completed MV statement, two index commits and no rejected MV commits.
+Median MV preparation falls from 3.841ms to 1.151ms, validation from 2.480ms to
+0.181ms. Publication expands one requested key rather than 322–398 keys.
+SQL completion does not improve: median 33.416ms to 36.852ms, maximum 38.800ms
+to 85.354ms. Both arms observe finite committed-bound advancement, not proof of
+physical since advancement. All 15 fixture containers use the budget, with the
+same effective S3/Postgres backends. Preserve this as preparation-cost evidence,
+not resolution of CI starvation. See `scratch/prepared-admission-report.md` and
+the archived comparison. Candidate services remain available on the worker.
+Original-workload verification on actual original-budget hosts remains open.
 Committed bounds advance elsewhere, without proving physical reclamation or
 fleet-wide progress. Snapshot waits and append conflicts remain open. A legacy CREATE
 CLUSTER retry turn occupies the coordinator for 8.87s. Keep the refresh-to-commit

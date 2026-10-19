@@ -22,7 +22,7 @@ use crate::durable::{
     CatalogError as DurableError, DryRunTransaction, DurableCatalogError, NetworkPolicy, Snapshot,
     Transaction,
 };
-use crate::expr_cache::{LocalExpressions, latest_item_version};
+use crate::expr_cache::LocalExpressions;
 use crate::memory::error::{AmbiguousRename, Error, ErrorKind};
 use crate::memory::objects::{
     CatalogEntry, CatalogItem, ClusterConfig, ClusterVariant, DataSourceDesc, DefaultPrivileges,
@@ -1317,17 +1317,8 @@ impl Catalog {
                             },
                         );
                     }
-                    CatalogItem::MaterializedView(mv) => {
-                        exprs.insert(
-                            mv.global_id_writes(),
-                            LocalExpressions {
-                                local_mir: (*mv.locally_optimized_expr).clone(),
-                                optimizer_features: optimizer_features.clone(),
-                                item_version: latest_item_version(&mv.collections),
-                            },
-                        );
-                    }
-                    CatalogItem::Table(_)
+                    CatalogItem::MaterializedView(_)
+                    | CatalogItem::Table(_)
                     | CatalogItem::Source(_)
                     | CatalogItem::Log(_)
                     | CatalogItem::Sink(_)
@@ -1383,10 +1374,22 @@ impl Catalog {
             return Ok(TransactInnerResult::default());
         }
 
-        // Extract optimized expressions from CreateItem ops to avoid re-optimization
-        // during apply_updates. We extract before the loop since `ops` is moved there.
+        // Views reuse optimized expressions. MVs reuse their complete prepared
+        // definition, including its shared expression, without eagerly copying
+        // MIR they will not consume. Same-batch MV SQL edits take the parsing path.
         let optimizer_features = OptimizerFeatures::from(state.system_config());
         let cached_exprs = Self::extract_expressions_from_ops(&ops, &optimizer_features);
+        let mut prepared_mvs = Arc::new(
+            ops.iter()
+                .filter_map(|op| match op {
+                    Op::CreateItem {
+                        item: CatalogItem::MaterializedView(mv),
+                        ..
+                    } => Some((mv.collections[&RelationVersion::root()], mv.clone())),
+                    _ => None,
+                })
+                .collect::<BTreeMap<_, _>>(),
+        );
 
         let mut storage_collections_to_create = BTreeSet::new();
         let mut storage_collections_to_drop = BTreeSet::new();
@@ -1482,7 +1485,10 @@ impl Catalog {
                 let update_count = op_updates.len();
                 // Clone the cache so each apply_updates call has access to cached expressions.
                 // The cache uses `remove` semantics, so we need a fresh clone for each call.
-                let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+                let mut local_expr_cache = LocalExpressionCache::for_transaction(
+                    cached_exprs.clone(),
+                    Arc::clone(&prepared_mvs),
+                );
                 let outputs = preliminary_state
                     .to_mut()
                     .apply_updates(op_updates.clone(), &mut local_expr_cache)
@@ -1630,13 +1636,18 @@ impl Catalog {
         // Batch extraction repeats this check for other durable callers.
         let validation_started = Instant::now();
         super::retention::admit_index_bounds(tx, &preliminary_state, &admitted_plans)?;
-        let admitted_mvs = admit_automatic_materialized_views(
-            tx,
-            &preliminary_state,
-            &born_mvs,
-            &admitted_plans,
-            mode,
-        )?;
+        let admitted_mvs = if born_mvs.is_empty() {
+            BTreeSet::new()
+        } else {
+            admit_automatic_materialized_views(
+                tx,
+                preliminary_state.to_mut(),
+                &born_mvs,
+                &admitted_plans,
+                mode,
+                Arc::make_mut(&mut prepared_mvs),
+            )?
+        };
         let admission_elapsed = validation_started.elapsed();
         for (incarnation, mut requirements, minimums, creator) in grant_publications {
             let merge_started = Instant::now();
@@ -1681,14 +1692,29 @@ impl Catalog {
                 .or_default()
                 .extend(requirements);
         }
-        if admitted_mvs || !granted_client_read_requirements.is_empty() {
+        if !admitted_mvs.is_empty() || !granted_client_read_requirements.is_empty() {
             // Apply derived grants with birth definitions and requirements so
             // final validation sees one projection of the admission updates.
             let mut admission_updates = tx.get_and_commit_op_updates();
-            let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+            let mut local_expr_cache = LocalExpressionCache::for_transaction(
+                cached_exprs.clone(),
+                Arc::clone(&prepared_mvs),
+            );
+            // Admission changes only birth fields on these preliminary entries.
+            // Their dependency edges remain installed. Keep the complete durable
+            // updates below: the final projection and effects still come from
+            // shared application of the consolidated transaction.
+            let preliminary_updates = admission_updates
+                .iter()
+                .filter(|update| {
+                    !matches!(&update.kind, StateUpdateKind::Item(item)
+                        if admitted_mvs.contains(&item.id))
+                })
+                .cloned()
+                .collect();
             let outputs = preliminary_state
                 .to_mut()
-                .apply_updates(admission_updates.clone(), &mut local_expr_cache)
+                .apply_updates(preliminary_updates, &mut local_expr_cache)
                 .await;
             preliminary_apply_count += 1;
             preliminary_outputs = (preliminary_apply_count == 1).then_some(outputs);
@@ -1770,7 +1796,10 @@ impl Catalog {
                 state = preliminary_state;
                 preliminary_outputs.expect("one preliminary application retains its outputs")
             } else {
-                let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+                let mut local_expr_cache = LocalExpressionCache::for_transaction(
+                    cached_exprs.clone(),
+                    Arc::clone(&prepared_mvs),
+                );
                 state
                     .to_mut()
                     .apply_updates(updates.clone(), &mut local_expr_cache)
@@ -4554,15 +4583,16 @@ fn materialized_view_recovery_inputs(
 /// conflicts can reconsider the timestamp without repeating optimization.
 fn admit_automatic_materialized_views(
     tx: &mut Transaction<'_>,
-    state: &CatalogState,
+    state: &mut CatalogState,
     born: &BTreeSet<GlobalId>,
     selected: &BTreeSet<GlobalId>,
     mode: TransactInnerMode,
-) -> Result<bool, CatalogError> {
+    prepared_mvs: &mut BTreeMap<GlobalId, MaterializedView>,
+) -> Result<BTreeSet<CatalogItemId>, CatalogError> {
     if !state.catalog_read_protection_enabled() {
-        return Ok(false);
+        return Ok(BTreeSet::new());
     }
-    let mut changed = false;
+    let mut changed = BTreeSet::new();
     for id in born {
         let Some(entry) = state.try_get_entry_by_global_id(id) else {
             continue;
@@ -4573,6 +4603,7 @@ fn admit_automatic_materialized_views(
         if mv.initial_as_of.is_some() {
             continue;
         }
+        let entry_id = entry.id();
         if mv.refresh_schedule.is_some() {
             return Err(CatalogError::internal(
                 "materialized view admission",
@@ -4606,7 +4637,7 @@ fn admit_automatic_materialized_views(
             })?;
             floor = floor.max(*timestamp);
         }
-        let mut item = tx.get_item(&entry.id()).expect("born materialized view");
+        let mut item = tx.get_item(&entry_id).expect("born materialized view");
         let Statement::CreateMaterializedView(mut stmt) = mz_sql::parse::parse(&item.create_sql)
             .map_err(|error| CatalogError::internal("materialized view admission", error))?
             .into_element()
@@ -4616,13 +4647,30 @@ fn admit_automatic_materialized_views(
         };
         stmt.as_of = Some(floor.into());
         item.create_sql = stmt.to_ast_string_stable();
-        tx.update_item(entry.id(), item)?;
+        let mut admitted = mv.clone();
+        admitted.create_sql = item.create_sql.clone();
+        admitted.initial_as_of = Some(timely::progress::Antichain::from_elem(floor));
+        prepared_mvs.insert(
+            admitted.collections[&RelationVersion::root()],
+            admitted.clone(),
+        );
+        tx.update_item(entry_id, item)?;
         tx.set_maintained_read_requirement(*id, logical_inputs, Some(floor))?;
         // Replacement writers share the target shard and inherit its permission.
         if mv.replacement_target.is_none() {
             tx.set_collection_compaction_bound(*id, Some(floor))?;
         }
-        changed = true;
+        let CatalogItem::MaterializedView(projected) = &mut state
+            .entry_by_id
+            .get_mut(&entry_id)
+            .expect("born materialized view")
+            .item
+        else {
+            unreachable!("materialized view definition");
+        };
+        projected.create_sql = admitted.create_sql;
+        projected.initial_as_of = admitted.initial_as_of;
+        changed.insert(entry_id);
     }
     Ok(changed)
 }
@@ -6391,7 +6439,32 @@ mod tests {
                     panic!("expected materialized view");
                 };
                 assert_eq!(restored.initial_as_of, Some(Antichain::from_elem(floor)));
+                assert_eq!(
+                    serde_json::to_value(&restored).expect("serialize replayed definition"),
+                    serde_json::to_value(mv).expect("serialize admitted definition"),
+                    "prepared admission and durable replay must agree on the full definition",
+                );
             }
+
+            // A same-batch SQL edit must not be replaced by the prepared CREATE
+            // definition when applying the consolidated transaction.
+            let window = mz_adapter_types::compaction::CompactionWindow::Duration(
+                mz_repr::Timestamp::new(2_000),
+            );
+            let mut altered_ops = automatic_ops;
+            altered_ops.insert(1, Op::AlterRetainHistory {
+                id: automatic_id,
+                value: Some(mz_sql_parser::ast::Value::String("2s".into())),
+                window,
+            });
+            let (altered, _) = catalog.transact_incremental_dry_run(
+                &indexed, altered_ops, None, Some(indexed_snapshot), birth,
+            ).await.expect("admit same-batch retain-history change");
+            assert_eq!(
+                altered.get_entry(&automatic_id).materialized_view()
+                    .expect("altered materialized view").custom_logical_compaction_window,
+                Some(window),
+            );
 
             // A final drop retires protection, including a same-batch creation.
             let mut dropped = ops.clone();
