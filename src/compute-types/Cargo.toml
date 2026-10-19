@@ -20,8 +20,8 @@ mz-ore = { path = "../ore", features = ["tracing", "metrics"] }
 mz-repr = { path = "../repr", features = ["tracing"] }
 mz-storage-types = { path = "../storage-types" }
 serde.workspace = true
-stacker.workspace = true
 serde_json.workspace = true
+stacker.workspace = true
 timely.workspace = true
 tracing.workspace = true
 

@@ -103,20 +103,64 @@ impl std::fmt::Display for EnvelopeError {
 
 impl std::error::Error for EnvelopeError {}
 
+/// The deepest JSON nesting [`parse_envelope`] accepts, counting every array and object.
+///
+/// Parsing, deserializing, and dropping recurse once per level, so this bounds their stack
+/// use. A nested `Negate` operator costs three levels, so the cap allows roughly 1300 of them.
+pub const MAX_JSON_DEPTH: usize = 4096;
+
 /// The size of the stack segment that parsing and printing run on. The segment is mapped
-/// lazily, so the large size costs address space only for deeply nested input.
-const STACK_SEGMENT: usize = 256 * 1024 * 1024;
+/// lazily. Parsing [`MAX_JSON_DEPTH`] levels in an unoptimized build stays well below this
+/// size, which the depth tests exercise.
+const STACK_SEGMENT: usize = 64 * 1024 * 1024;
+
+/// Reports whether `json` nests arrays and objects deeper than [`MAX_JSON_DEPTH`].
+///
+/// Iterative, and skips string contents so that brackets inside strings do not count.
+/// Malformed input is not diagnosed here, the parser does that.
+fn exceeds_max_depth(json: &str) -> bool {
+    let (mut depth, mut in_string, mut escaped) = (0usize, false, false);
+    for byte in json.bytes() {
+        if in_string {
+            match (escaped, byte) {
+                (true, _) => escaped = false,
+                (false, b'\\') => escaped = true,
+                (false, b'"') => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'[' | b'{' => {
+                depth += 1;
+                if depth > MAX_JSON_DEPTH {
+                    return true;
+                }
+            }
+            b']' | b'}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    false
+}
 
 /// Parses an envelope and checks its version.
 ///
-/// Never panics and does not overflow the stack on deeply nested input. Semantic validation
-/// of the plans is the caller's job.
+/// Never panics. Input nested deeper than [`MAX_JSON_DEPTH`] is rejected with
+/// [`EnvelopeError::Json`] before parsing, so the returned envelope is bounded in depth and
+/// dropping it on an ordinary thread stack is safe. Semantic validation of the plans is the
+/// caller's job.
 pub fn parse_envelope(json: &str) -> Result<LirPlanEnvelope, EnvelopeError> {
+    if exceeds_max_depth(json) {
+        return Err(EnvelopeError::Json(format!(
+            "nesting is deeper than the maximum of {MAX_JSON_DEPTH} levels"
+        )));
+    }
     // serde_json's recursion limit is disabled below, and neither the `Value` deserializer
-    // nor the derived impls have one of their own. One large stack segment covers the
-    // recursion of all three. NOTE: `grow` rather than `maybe_grow`, because `maybe_grow`
-    // stays on the current stack while it has more than the red zone left, and a single
-    // deeply nested input overflows that stack.
+    // nor the derived impls have one of their own. The depth check above bounds all three.
+    // NOTE: `grow` rather than `maybe_grow`, because `maybe_grow` stays on the current stack
+    // while it has more than the red zone left.
     stacker::grow(STACK_SEGMENT, || {
         let mut value = {
             let mut de = serde_json::Deserializer::from_str(json);

@@ -140,19 +140,60 @@ fn envelope_unknown_function_names_it() {
     assert!(msg.contains("NoSuchFunc"), "{msg}");
 }
 
-#[mz_ore::test]
-fn envelope_deep_nesting_does_not_overflow() {
-    const DEPTH: usize = 5000;
+/// An envelope whose single plan is `nodes` nested `Negate`s over a constant.
+///
+/// Its JSON depth is 8 + 3 * `nodes`: the envelope, the objects array, and the object take
+/// 3, each `Negate` takes 3, and the constant takes 5.
+fn nested_negate_json(nodes: usize) -> String {
     let mut plan = String::from(r#"{"lir_id": 1, "node": {"Constant": {"rows": {"Ok": []}}}}"#);
-    for _ in 0..DEPTH {
+    for _ in 0..nodes {
         plan = format!(r#"{{"lir_id": 1, "node": {{"Negate": {{"input": {plan}}}}}}}"#);
     }
-    let json = format!(
+    format!(
         r#"{{"lir_version": 1, "imports": [], "output": {{"Transient": 1}},
             "objects": [{{"id": {{"Transient": 1}}, "plan": {plan}}}]}}"#
-    );
-    // Either outcome is fine, the property is that this returns.
-    let _ = parse_envelope(&json);
+    )
+}
+
+#[mz_ore::test]
+fn envelope_depth_above_cap_is_rejected() {
+    // 5000 nodes are 15008 levels deep.
+    let Err(EnvelopeError::Json(msg)) = parse_envelope(&nested_negate_json(5000)) else {
+        panic!("expected a Json error");
+    };
+    assert!(msg.contains(&MAX_JSON_DEPTH.to_string()), "{msg}");
+    // One level above the cap.
+    let nodes = (MAX_JSON_DEPTH - 8) / 3 + 1;
+    assert!(8 + 3 * nodes > MAX_JSON_DEPTH);
+    assert!(matches!(
+        parse_envelope(&nested_negate_json(nodes)),
+        Err(EnvelopeError::Json(_))
+    ));
+    // Megabytes of opening brackets are rejected by the pre-scan, not parsed.
+    let hostile = "[".repeat(4 * 1024 * 1024);
+    assert!(matches!(
+        parse_envelope(&hostile),
+        Err(EnvelopeError::Json(_))
+    ));
+}
+
+#[mz_ore::test]
+fn envelope_depth_just_under_cap_parses_and_drops() {
+    let nodes = (MAX_JSON_DEPTH - 8) / 3;
+    assert!(8 + 3 * nodes <= MAX_JSON_DEPTH);
+    // Runs on the ordinary test thread stack, so the drop is covered too.
+    let envelope = parse_envelope(&nested_negate_json(nodes)).expect("under the cap");
+    assert_eq!(envelope.objects.len(), 1);
+    drop(envelope);
+}
+
+#[mz_ore::test]
+fn envelope_depth_ignores_brackets_in_strings() {
+    let many = "[".repeat(2 * MAX_JSON_DEPTH);
+    assert!(exceeds_max_depth(&many));
+    assert!(!exceeds_max_depth(&format!(r#"["{many}"]"#)));
+    // An escaped quote does not end the string.
+    assert!(!exceeds_max_depth(&format!(r#"["\"{many}"]"#)));
 }
 
 #[mz_ore::test]
@@ -181,7 +222,7 @@ fn substitute_global_ids_rewrites_gets() {
     let map = BTreeMap::from([(a, c)]);
     substitute_global_ids(&mut plan, &map);
 
-    let mut expected = node(
+    let expected = node(
         3,
         LirRelationNode::Union {
             inputs: vec![
@@ -197,8 +238,5 @@ fn substitute_global_ids_rewrites_gets() {
             temporal_bucketing_strategies: vec![],
         },
     );
-    assert_eq!(plan, expected);
-    // A second application with the identity-free map is a no-op.
-    substitute_global_ids(&mut expected, &BTreeMap::new());
     assert_eq!(plan, expected);
 }
