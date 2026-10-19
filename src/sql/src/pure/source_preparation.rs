@@ -36,6 +36,7 @@ pub struct SourcePreparation {
 }
 
 /// The result of resolving source preparation against a catalog.
+#[derive(Debug)]
 pub enum SourcePreparationStatus {
     Ready(Box<PurifiedStatement>),
     Pending(SourcePreparationRequest),
