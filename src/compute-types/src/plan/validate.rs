@@ -1535,6 +1535,10 @@ impl Validator {
         recursive: &BTreeMap<LocalId, usize>,
     ) -> Option<usize> {
         let mut todo = vec![expr];
+        // Values of the `Let` and `LetRec` bindings within `expr` that have been passed
+        // through, for example a nested `LetRec` whose body reads one of its own bindings. A
+        // value is taken out when followed, so a cycle of bindings ends the walk.
+        let mut inner = BTreeMap::new();
         while let Some(expr) = todo.pop() {
             match &expr.node {
                 LirRelationNode::Constant { rows } => {
@@ -1547,6 +1551,12 @@ impl Validator {
                     | crate::plan::GetPlan::Collection(mfp) = plan
                     {
                         return Some(arity::projection_len(mfp));
+                    }
+                    if let Id::Local(local) = id {
+                        if let Some(value) = inner.remove(local) {
+                            todo.push(value);
+                            continue;
+                        }
                     }
                     let binding = match id {
                         Id::Local(local) => recursive.get(local).copied().or_else(|| {
@@ -1596,8 +1606,15 @@ impl Validator {
                 | LirRelationNode::Threshold { input, .. }
                 | LirRelationNode::ArrangeBy { input, .. } => todo.push(input),
                 LirRelationNode::Union { inputs, .. } => todo.extend(inputs.iter().rev()),
-                LirRelationNode::Let { body, .. } | LirRelationNode::LetRec { body, .. } => {
-                    todo.push(body)
+                LirRelationNode::Let { id, value, body } => {
+                    inner.insert(*id, &**value);
+                    todo.push(body);
+                }
+                LirRelationNode::LetRec {
+                    ids, values, body, ..
+                } => {
+                    inner.extend(ids.iter().copied().zip(values.iter()));
+                    todo.push(body);
                 }
             }
         }

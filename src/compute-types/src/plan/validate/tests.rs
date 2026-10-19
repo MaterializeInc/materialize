@@ -321,6 +321,30 @@ fn accepts_recursive_binding() {
 }
 
 #[mz_ore::test]
+fn accepts_recursive_binding_of_nested_letrec() {
+    // l2 = (l1 = T1 + l1, returning l1), read by the body. The arity of l2 comes from the
+    // binding of the inner `LetRec` that its body reads.
+    let (l1, l2) = (LocalId::new(1), LocalId::new(2));
+    let inner = plan(LirRelationNode::LetRec {
+        ids: vec![l1],
+        values: vec![union(vec![
+            get_global(T1, AvailableCollections::new_raw()),
+            get_local(l1),
+        ])],
+        limits: vec![limit()],
+        body: Box::new(get_local(l1)),
+    });
+    let plan = plan(LirRelationNode::LetRec {
+        ids: vec![l2],
+        values: vec![inner],
+        limits: vec![limit()],
+        body: Box::new(get_local(l2)),
+    });
+    let df = dataflow(&[(T1, 2)], vec![(OUT, plan)]);
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+}
+
+#[mz_ore::test]
 fn rejects_recursive_binding_without_arity() {
     // l1 = l1 has no rows and no arity.
     let l1 = LocalId::new(1);
