@@ -134,7 +134,7 @@
     "@svgr/babel-plugin-transform-svg-component": "^8.0.0",
     "@tanstack/eslint-plugin-query": "^5.104.3",
     "@testing-library/dom": "^10.4.2",
-    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",
     "@types/base32-encoding": "^1.0.2",
