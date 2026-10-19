@@ -1851,10 +1851,15 @@ fn rejects_accumulable_plan_with_hierarchical_aggregate() {
 }
 
 #[mz_ore::test]
-fn rejects_bucketed_reduce_without_buckets() {
+fn accepts_bucketed_reduce_without_buckets() {
     let plan = reduce_by_first(raw_t1(), bucketed_reduce_plan(vec![]));
-    let errs = errors(&dataflow(&[(T1, 2)], vec![(OUT, plan)]));
-    assert_error(&errs, Rule::Operator, "bucketed Reduce plan has no buckets");
+    let df = dataflow(&[(T1, 2)], vec![(OUT, plan)]);
+    for enforce_function_allowlist in [false, true] {
+        let config = ValidateConfig {
+            enforce_function_allowlist,
+        };
+        validate_dataflow(&df, &config).expect("valid");
+    }
 }
 
 #[mz_ore::test]

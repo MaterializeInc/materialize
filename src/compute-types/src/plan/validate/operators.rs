@@ -65,11 +65,8 @@ pub(super) fn reduce(issues: &mut Issues, key_val_plan: &KeyValPlan, plan: &Redu
                 ReductionType::Hierarchical,
             );
             if let HierarchicalPlan::Bucketed(b) = h {
-                // Only the bucket stages validate their input, and rendering expects one to
-                // have done so. Each stage takes a hash modulo its bucket.
-                if b.buckets.is_empty() {
-                    push(issues, "bucketed Reduce plan has no buckets".to_string());
-                }
+                // Each stage takes a hash modulo its bucket. A plan without buckets is valid:
+                // the final stage of `build_bucketed` validates when no bucket stage did.
                 if let Some(i) = b.buckets.iter().position(|b| *b == 0) {
                     push(issues, format!("Reduce bucket {i} is zero"));
                 }
