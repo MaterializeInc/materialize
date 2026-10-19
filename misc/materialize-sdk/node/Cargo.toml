@@ -1,0 +1,21 @@
+[package]
+name = "materialize-sdk-node"
+description = "The WebAssembly binding of the Materialize SDK's protocol core, for Node."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+materialize-sdk-core = { path = "../core", features = ["conformance"] }
+serde.workspace = true
+serde_json.workspace = true
+wasm-bindgen.workspace = true
+

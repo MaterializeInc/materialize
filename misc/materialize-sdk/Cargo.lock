@@ -723,6 +723,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "materialize-sdk-node"
+version = "0.0.0"
+dependencies = [
+ "materialize-sdk-core",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "materialize-sdk-python"
 version = "0.0.0"
 dependencies = [

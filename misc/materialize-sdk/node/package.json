@@ -1,0 +1,30 @@
+{
+  "name": "materialize-sdk",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Consume SUBSCRIBE from Materialize correctly.",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "imports": {
+    "#core": "./core/materialize_sdk_node.js",
+    "#errors": "./dist/errors.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npm run build:wasm && tsc",
+    "build:wasm": "wasm-pack build --release --target nodejs --out-dir core --out-name materialize_sdk_node --no-pack",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/pg": "8.23.1",
+    "typescript": "7.0.2"
+  }
+}

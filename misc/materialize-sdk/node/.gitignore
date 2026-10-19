@@ -1,0 +1,5 @@
+# Build outputs: the WebAssembly glue, the compiled package, and its
+# dependencies.
+core/
+dist/
+node_modules/

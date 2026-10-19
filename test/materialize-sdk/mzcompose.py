@@ -34,6 +34,7 @@ def workflow_default(c: Composition) -> None:
         state_file = os.path.join(state, "restart.json")
         cargo_test(c, {}, "--skip", "before_a_restart", "--skip", "after_a_restart")
         python_test(c)
+        node_test(c)
         phase = {"MATERIALIZE_SDK_RESTART_STATE": state_file}
         cargo_test(
             c,
@@ -108,3 +109,17 @@ def python_test(c: Composition) -> None:
             env=env,
         )
         spawn.runv(["python", "-m", "pytest", "--quiet", "tests"], cwd=package, env=env)
+
+
+def node_test(c: Composition) -> None:
+    """Builds the Node package and runs its tests, the live ones included."""
+    package = MZ_ROOT / "misc" / "materialize-sdk" / "node"
+    env = {
+        **os.environ,
+        "MATERIALIZE_URL": "postgres://materialize@localhost:{}/materialize".format(
+            c.default_port("materialized")
+        ),
+    }
+    spawn.runv(["npm", "ci", "--quiet"], cwd=package, env=env)
+    spawn.runv(["npm", "run", "build"], cwd=package, env=env)
+    spawn.runv(["npm", "test"], cwd=package, env=env)
