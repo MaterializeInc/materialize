@@ -2493,6 +2493,7 @@ pub static PG_AGGREGATE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
         .with_column("aggmtransspace", SqlScalarType::Int32.nullable(true))
         .with_column("agginitval", SqlScalarType::String.nullable(true))
         .with_column("aggminitval", SqlScalarType::String.nullable(true))
+        .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::new(),
     sql: "SELECT
