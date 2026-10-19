@@ -612,8 +612,17 @@ impl CatalogState {
         &self,
         ids: impl IntoIterator<Item = GlobalId>,
     ) -> BTreeSet<GlobalId> {
+        self.logical_collection_inputs_with_seen(ids, &mut BTreeSet::new())
+    }
+
+    /// Returns inputs not reached by preceding traversals. Every node in `seen`
+    /// must already have its transitive inputs accounted for by the caller.
+    pub(super) fn logical_collection_inputs_with_seen(
+        &self,
+        ids: impl IntoIterator<Item = GlobalId>,
+        seen: &mut BTreeSet<GlobalId>,
+    ) -> BTreeSet<GlobalId> {
         let mut pending: Vec<_> = ids.into_iter().collect();
-        let mut seen = BTreeSet::new();
         let mut inputs = BTreeSet::new();
         while let Some(id) = pending.pop() {
             if !seen.insert(id) {
@@ -4521,6 +4530,55 @@ mod tests {
                 BTreeSet::from([table]),
                 "indexes are not inputs and do not change traversal"
             );
+            catalog.expire().await;
+        })
+        .await;
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn client_read_requirements_preserve_strongest_overlapping_input() {
+        Catalog::with_debug(|mut catalog| async move {
+            let mut ids = Vec::new();
+            for (name, sql) in [
+                ("t", "CREATE TABLE materialize.public.t (a int)"),
+                ("other", "CREATE TABLE materialize.public.other (a int)"),
+                ("v", "CREATE VIEW materialize.public.v AS SELECT * FROM materialize.public.t"),
+                ("w", "CREATE VIEW materialize.public.w AS SELECT * FROM materialize.public.v UNION ALL SELECT * FROM materialize.public.other"),
+                ("t_idx", "CREATE INDEX t_idx IN CLUSTER quickstart ON materialize.public.t (a)"),
+                ("v_idx", "CREATE INDEX v_idx IN CLUSTER quickstart ON materialize.public.v (a)"),
+                ("w_idx", "CREATE INDEX w_idx IN CLUSTER quickstart ON materialize.public.w (a)"),
+            ] {
+                ids.push(create_collection_input_item(&mut catalog, name, sql).await);
+            }
+            let [table, other, _, _, table_index, view_index, nested_index] = ids[..] else {
+                unreachable!()
+            };
+            catalog.state.client_incarnations.insert(
+                1,
+                crate::durable::objects::ClientIncarnationValue {
+                    deployment_generation: 0,
+                    replica_id: None,
+                },
+            );
+            for direct in [5, 50] {
+                let requested = BTreeMap::from([
+                    (table_index, Timestamp::from(30)),
+                    (view_index, Timestamp::from(20)),
+                    (nested_index, Timestamp::from(10)),
+                    (other, Timestamp::from(direct)),
+                ]);
+                let mut expected = requested.clone();
+                expected.insert(table, Timestamp::from(10));
+                expected.insert(other, Timestamp::from(direct.min(10)));
+                assert_eq!(
+                    catalog
+                        .state
+                        .expand_client_read_requirements(1, requested)
+                        .expect("live index and storage inputs"),
+                    expected,
+                );
+            }
             catalog.expire().await;
         })
         .await;

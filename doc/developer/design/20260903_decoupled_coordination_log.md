@@ -188,9 +188,17 @@ and snapshot round trips from short backing-oracle reads. Background clients now
 reuse the coordinator's live epoch handle without caching timestamps. Cargo
 regressions pass and the new traces confirm the handle round trip is gone.
 Both original-budget parallel shards still time out on CREATE MV. One victim
-spends 292s outside admission and commits none of its 19 candidates. Committed
-bounds advance elsewhere, without proving physical reclamation or fleet-wide
-progress. Snapshot waits and append conflicts remain open. A legacy CREATE
+spends 292s outside admission and commits none of its 19 candidates while replicas
+commit 5,359 aggregate publications during its execute lifetime. Focus on this
+foreground/publication asymmetry at the shared catalog boundary, not further
+statement-by-statement continuation migrations. In a reduced three-check comparison,
+snapshot-local, strongest-first shared traversal lowers median creator expansion
+from 3.43ms to 1.66ms. Both arms commit all seven MVs and complete SQL quickly, so
+this establishes a narrower validation window, not resolution of CI starvation.
+The protection-boundary test and existing traversal regressions pass. Verify the
+candidate in the original workload on actual 8CPU/16GB CI hosts.
+Committed bounds advance elsewhere, without proving physical reclamation or
+fleet-wide progress. Snapshot waits and append conflicts remain open. A legacy CREATE
 CLUSTER retry turn occupies the coordinator for 8.87s. Keep the refresh-to-commit
 cost distinct from queue amplification before expanding continuations.
 The earlier captured clusterd OOM kill follows job cancellation, not its initiation.

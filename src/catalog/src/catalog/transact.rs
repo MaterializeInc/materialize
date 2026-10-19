@@ -4492,6 +4492,7 @@ impl CatalogState {
             ));
         }
         let requested = requirements.clone();
+        let mut indexed_inputs = BTreeSet::new();
         for (id, frontier) in requested {
             let Some(entry) = self.try_get_entry_by_global_id(&id) else {
                 // An index can be gone while its local tokens still retain their
@@ -4510,25 +4511,32 @@ impl CatalogState {
                 ));
             };
             if let CatalogItem::Index(index) = entry.item() {
-                for input in self.logical_collection_inputs([index.on]) {
-                    // Logging inputs are compute-local. Their index's permission
-                    // protects its trace, not a nonexistent Persist collection.
-                    if matches!(
-                        self.get_entry_by_global_id(&input).item(),
-                        CatalogItem::Log(_)
-                    ) {
-                        continue;
-                    }
-                    requirements
-                        .entry(input)
-                        .and_modify(|held| *held = (*held).min(frontier))
-                        .or_insert(frontier);
-                }
+                indexed_inputs.insert((frontier, index.on));
             } else if !entry.item().is_storage_collection() {
                 return Err(CatalogError::internal(
                     "publish client read protection",
                     format!("collection {id} is not readable"),
                 ));
+            }
+        }
+        // Visit the strongest requirements first. Once a node is reached, every
+        // subsequent path requires the same or less history, so its inputs need
+        // not be traversed again. `seen` belongs only to this catalog snapshot.
+        let mut seen = BTreeSet::new();
+        for (frontier, on) in indexed_inputs {
+            for input in self.logical_collection_inputs_with_seen([on], &mut seen) {
+                // Logging inputs are compute-local. Their index's permission
+                // protects its trace, not a nonexistent Persist collection.
+                if matches!(
+                    self.get_entry_by_global_id(&input).item(),
+                    CatalogItem::Log(_)
+                ) {
+                    continue;
+                }
+                requirements
+                    .entry(input)
+                    .and_modify(|held| *held = (*held).min(frontier))
+                    .or_insert(frontier);
             }
         }
         Ok(requirements)
