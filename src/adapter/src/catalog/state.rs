@@ -513,15 +513,12 @@ impl CatalogState {
             .get(session.vars().database())
             .map(|id| id.clone());
         ConnCatalog {
-            state,
-            read_recorder,
+            state: super::access::CatalogAccess::new(state, read_recorder, database, search_path),
             unresolvable_ids: BTreeSet::new(),
             conn_id: session.conn_id().clone(),
             cluster: session.vars().cluster().into(),
             database_name: Cow::Borrowed(session.vars().database()),
-            database,
             raw_search_path: Cow::Borrowed(session.vars().search_path()),
-            search_path,
             role_id: session.current_role_id().clone(),
             prepared_statements: Some(session.prepared_statements()),
             portals: Some(session.portals()),
@@ -535,19 +532,20 @@ impl CatalogState {
         let cluster = self.system_configuration.default_cluster();
 
         ConnCatalog {
-            state: Cow::Borrowed(self),
-            read_recorder: None,
+            state: super::access::CatalogAccess::new(
+                Cow::Borrowed(self),
+                None,
+                self.resolve_database(DEFAULT_DATABASE_NAME)
+                    .ok()
+                    .map(|db| db.id()),
+                Vec::new(),
+            ),
             unresolvable_ids: BTreeSet::new(),
             conn_id: SYSTEM_CONN_ID.clone(),
             cluster,
             database_name: Cow::Borrowed(DEFAULT_DATABASE_NAME),
-            database: self
-                .resolve_database(DEFAULT_DATABASE_NAME)
-                .ok()
-                .map(|db| db.id()),
             // Leaving the system's search path empty allows us to catch issues
             // where catalog object names have not been normalized correctly.
-            search_path: Vec::new(),
             raw_search_path: Cow::Borrowed(&[]),
             role_id,
             prepared_statements: None,

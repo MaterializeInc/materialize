@@ -336,7 +336,8 @@ impl Coordinator {
         let session_meta = session.meta();
         let catalog = self.catalog().clone();
         let conn_catalog = catalog.for_session_without_preparation(session);
-        let catalog_state = conn_catalog.state();
+        // NOTE: COPY cannot commit inside a DDL transaction, where these snapshots can differ.
+        let catalog_state = catalog.state();
         let optimizer_config = optimize::OptimizerConfig::from(conn_catalog.system_vars());
 
         // Determine if we need column rewriting (defaults/reordering).

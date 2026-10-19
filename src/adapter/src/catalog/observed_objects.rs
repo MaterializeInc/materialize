@@ -28,7 +28,7 @@ use mz_sql::names::{
 use mz_sql::plan::{AutoScalingStrategy, ClusterSchedule, CreateClusterPlan};
 use mz_sql::session::vars::OwnedVarInput;
 
-use super::{CatalogReadRecorder, CatalogState, ConnCatalog, ConnectionId};
+use super::{CatalogReadRecorder, CatalogState, ConnectionId};
 
 use storage::Observed;
 
@@ -66,46 +66,6 @@ impl CatalogReadRecorder {
     ) -> CatalogSchemaRef<'a> {
         let key = (inner.name.database, inner.id, conn_id.clone());
         CatalogRef::Owned(Box::new(Observed::new(inner, key, self.clone())))
-    }
-}
-
-macro_rules! view {
-    ($name:ident, $method:ident, $object:ty, $result:ident) => {
-        pub(super) fn $name<'a>(&self, inner: &'a $object) -> $result<'a> {
-            match &self.read_recorder {
-                Some(recorder) => recorder.$method(inner),
-                None => CatalogRef::Borrowed(inner),
-            }
-        }
-    };
-}
-
-impl ConnCatalog<'_> {
-    view!(database_view, database, Database, CatalogDatabaseRef);
-    view!(role_view, role, Role, CatalogRoleRef);
-    view!(
-        network_policy_view,
-        network_policy,
-        NetworkPolicy,
-        CatalogNetworkPolicyRef
-    );
-    view!(cluster_view, cluster, Cluster, CatalogClusterRef);
-    view!(
-        replica_view,
-        replica,
-        ClusterReplica,
-        CatalogClusterReplicaRef
-    );
-
-    pub(super) fn schema_view<'a>(
-        &self,
-        inner: &'a Schema,
-        conn_id: &ConnectionId,
-    ) -> CatalogSchemaRef<'a> {
-        match &self.read_recorder {
-            Some(recorder) => recorder.schema(inner, conn_id),
-            None => CatalogRef::Borrowed(inner),
-        }
     }
 }
 
