@@ -78,7 +78,10 @@ use crate::session::{
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError, PeekClient, PeekResponseUnary, StartupResponse};
+use crate::{
+    AdapterNotice, AppendWebhookError, ExecutionTime, ExecutionTimeKind, PeekClient,
+    PeekResponseUnary, StartupResponse, StatementWrites,
+};
 
 /// A handle to a running coordinator.
 ///
@@ -791,13 +794,15 @@ impl SessionClient {
     ///
     /// `outer_ctx_extra` is Some when we are executing as part of an outer statement, e.g., a FETCH
     /// triggering the execution of the underlying query.
+    ///
+    /// Returns the response and the statement's [`StatementStart`].
     #[mz_ore::instrument(level = "debug")]
     pub async fn execute(
         &mut self,
         portal_name: String,
         cancel_future: impl Future<Output = std::io::Error> + Send,
         outer_ctx_extra: Option<ExecuteContextGuard>,
-    ) -> Result<(ExecuteResponse, Instant), AdapterError> {
+    ) -> Result<(ExecuteResponse, StatementStart), AdapterError> {
         let execute_started = Instant::now();
         let cancel_future = cancel_future.map(|_| ()).shared();
 
@@ -809,21 +814,32 @@ impl SessionClient {
         let result = self
             .execute_attempts(portal_name, &mut logging, cancel_future)
             .await;
+        let writes = result
+            .as_ref()
+            .map_or(StatementWrites::No, |(_, writes)| *writes);
+        let result = result.map(|(response, _)| response);
 
         logging.retire(&result);
 
-        result.map(|response| (response, execute_started))
+        result.map(|response| {
+            let start = StatementStart {
+                started: execute_started,
+                writes,
+            };
+            (response, start)
+        })
     }
 
     /// Runs the execution paths in order of preference: frontend peek
     /// sequencing, frontend read-then-write sequencing, and finally the
-    /// coordinator via `Command::Execute`.
+    /// coordinator via `Command::Execute`. Also returns whether the statement
+    /// it ran writes.
     async fn execute_attempts(
         &mut self,
         portal_name: String,
         logging: &mut ExecutionLogging,
         cancel_future: impl Future<Output = ()> + Send + Clone,
-    ) -> Result<ExecuteResponse, AdapterError> {
+    ) -> Result<(ExecuteResponse, StatementWrites), AdapterError> {
         // Unroll SQL `EXECUTE <prepared> (...)` so the inner statement
         // flows through `try_frontend_peek` /
         // `try_frontend_read_then_write` below, rather than being
@@ -837,6 +853,13 @@ impl SessionClient {
         // `mz_statement_execution_history` records `EXECUTE foo (...)`
         // rather than the inner SQL.
         let portal_name = self.unroll_sql_execute(portal_name, logging).await?;
+        let writes = {
+            let session = self.session.as_ref().expect("SessionClient invariant");
+            session
+                .get_portal_unverified(&portal_name)
+                .and_then(|portal| portal.stmt.as_deref())
+                .map_or(StatementWrites::No, StatementWrites::of)
+        };
 
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
@@ -844,7 +867,7 @@ impl SessionClient {
         let peek_result = self.try_frontend_peek(&portal_name, logging).await?;
         if let Some(resp) = peek_result {
             debug!("frontend peek succeeded");
-            return Ok(resp);
+            return Ok((resp, writes));
         }
         debug!("frontend peek did not happen, trying frontend read-then-write");
 
@@ -854,7 +877,7 @@ impl SessionClient {
             .await?;
         if let Some(resp) = rtw_result {
             debug!("frontend read-then-write succeeded");
-            return Ok(resp);
+            return Ok((resp, writes));
         }
         debug!("frontend read-then-write did not happen, falling back to `Command::Execute`");
 
@@ -871,6 +894,7 @@ impl SessionClient {
             cancel_future,
         )
         .await
+        .map(|resp| (resp, writes))
     }
 
     /// If the named portal binds a SQL `EXECUTE <prepared>`, resolve the
@@ -1075,8 +1099,9 @@ impl SessionClient {
 
     /// Settles a statement whose result is about to be reported. If `commit_implicit_transaction`
     /// and the session is in an implicit transaction, commits it first, which clears the session's
-    /// transaction state, portals included. Returns the parameters the commit reverted, or the
-    /// commit's error.
+    /// transaction state, portals included. Returns the parameters the commit reverted and the
+    /// opted-in execution time notice for `timing`, or the commit's error. The notice's time
+    /// includes that commit, except for a read that returns rows.
     ///
     /// Committing before the result means that a client sees the statement's success or the
     /// commit's failure, never both, as with the last statement of a simple query in PostgreSQL
@@ -1084,15 +1109,27 @@ impl SessionClient {
     pub async fn settle_statement(
         &mut self,
         commit_implicit_transaction: bool,
+        timing: StatementTiming,
     ) -> Result<SettledStatement, AdapterError> {
         let mut reverted = BTreeMap::new();
+        let mut commit = Duration::ZERO;
         if commit_implicit_transaction && self.session().transaction().is_implicit() {
+            let commit_started = Instant::now();
             let response = self.end_transaction(EndTransactionAction::Commit).await?;
             if let ExecuteResponse::TransactionCommitted { params } = response {
                 reverted = params;
             }
+            commit = commit_started.elapsed();
         }
-        Ok(SettledStatement { reverted })
+        // Read after the commit: a write that it applied is no longer staged.
+        let session = self.session();
+        let execution_time = timing
+            .execution_time(commit, session.has_staged_writes())
+            .and_then(|time| session.execution_time_notice(time));
+        Ok(SettledStatement {
+            reverted,
+            execution_time,
+        })
     }
 
     /// Fails a transaction.
@@ -2149,11 +2186,73 @@ pub struct SettledStatement {
     /// Session parameters that committing the statement's implicit transaction reverted, if any,
     /// such as a value set with `SET LOCAL`.
     pub reverted: BTreeMap<&'static str, String>,
+    /// The opted-in execution time notice. It is returned rather than queued, because a notice
+    /// queued at this point reaches the client only after the statement's completion message, which
+    /// this notice must precede.
+    pub execution_time: Option<AdapterNotice>,
+}
+
+/// When a statement started executing, and whether it writes.
+#[derive(Clone, Copy, Debug)]
+pub struct StatementStart {
+    /// When execution of the bound statement started, after parsing and binding.
+    pub started: Instant,
+    /// Whether the statement writes, for a SQL `EXECUTE` the prepared statement it runs.
+    pub writes: StatementWrites,
+}
+
+/// A statement's execution time, without the commit that its result may wait for.
+#[derive(Debug)]
+pub enum StatementTiming {
+    /// A statement that returns rows, with its time to the first row or to the end of an empty
+    /// result.
+    Rows {
+        time: ExecutionTime,
+        writes: StatementWrites,
+    },
+    /// A statement whose response carries no rows, which executed for `execution`.
+    NoRows {
+        writes: StatementWrites,
+        execution: Duration,
+    },
+    /// A statement, or a step of one, that reports no execution time.
+    Untimed,
+}
+
+impl StatementTiming {
+    /// The execution time, once the statement's result has waited `commit` for the commit of its
+    /// implicit transaction. `staged` is as for [`ExecutionTimeKind::for_write`], read after that
+    /// commit.
+    fn execution_time(self, commit: Duration, staged: bool) -> Option<ExecutionTime> {
+        match self {
+            // A read's time ends at its first row, before the commit.
+            StatementTiming::Rows {
+                time,
+                writes: StatementWrites::No,
+            } => Some(time),
+            // A write's first row says nothing about whether the write was applied.
+            StatementTiming::Rows {
+                time,
+                writes: StatementWrites::Yes,
+            } => Some(ExecutionTime {
+                kind: ExecutionTimeKind::for_write(staged),
+                elapsed: time.elapsed + commit,
+            }),
+            StatementTiming::NoRows { writes, execution } => Some(ExecutionTime {
+                kind: match writes {
+                    StatementWrites::No => ExecutionTimeKind::Completed,
+                    StatementWrites::Yes => ExecutionTimeKind::for_write(staged),
+                },
+                elapsed: execution + commit,
+            }),
+            StatementTiming::Untimed => None,
+        }
+    }
 }
 
 /// A wrapper around a Stream of PeekResponseUnary that records when it sees the
-/// first row data in the given histogram. It also keeps track of whether we have already observed
-/// the end of the underlying stream.
+/// first row data in the given histogram, and the statement's execution time. It also keeps track
+/// of whether we have already observed the end of the underlying stream.
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct RecordFirstRowStream {
@@ -2173,13 +2272,22 @@ pub struct RecordFirstRowStream {
     pub no_more_rows: bool,
     /// Whether the first-to-last-byte metric has already been recorded for this stream.
     pub metric_recorded: bool,
+    writes: StatementWrites,
+    /// The execution time at the first row, or at the end of a result without rows, reported
+    /// at most once through [`RecordFirstRowStream::take_timing`].
+    ///
+    /// NOTE: Unlike `recorded_first_row_instant`, this skips batches without rows. Such batches
+    /// can precede the first row of a peek result stashed in blob storage: its response sends its
+    /// inline rows first, possibly none, and an `OFFSET` can drop whole stashed batches.
+    execution_time: Option<ExecutionTime>,
+    execution_time_reported: bool,
 }
 
 impl RecordFirstRowStream {
     /// Create a new [`RecordFirstRowStream`]
     pub fn new(
         rows: Box<dyn Stream<Item = PeekResponseUnary> + Unpin + Send + Sync>,
-        execute_started: Instant,
+        start: StatementStart,
         client: &SessionClient,
         instance_id: Option<ComputeInstanceId>,
         strategy: Option<StatementExecutionStrategy>,
@@ -2187,12 +2295,15 @@ impl RecordFirstRowStream {
         let histogram = Self::histogram(client, instance_id, strategy);
         Self {
             rows,
-            execute_started,
+            execute_started: start.started,
             time_to_first_row_seconds: histogram,
             saw_rows: false,
             recorded_first_row_instant: None,
             no_more_rows: false,
             metric_recorded: false,
+            writes: start.writes,
+            execution_time: None,
+            execution_time_reported: false,
         }
     }
 
@@ -2225,17 +2336,59 @@ impl RecordFirstRowStream {
     }
 
     pub async fn recv(&mut self) -> Option<PeekResponseUnary> {
-        let msg = self.rows.next().await;
+        let mut msg = self.rows.next().await;
         if !self.saw_rows && matches!(msg, Some(PeekResponseUnary::Rows(_))) {
             self.saw_rows = true;
             self.time_to_first_row_seconds
                 .observe(self.execute_started.elapsed().as_secs_f64());
             self.recorded_first_row_instant = Some(Instant::now());
         }
-        if msg.is_none() {
-            self.no_more_rows = true;
+        match &mut msg {
+            Some(PeekResponseUnary::Rows(rows)) => {
+                if self.execution_time.is_none() && rows.peek().is_some() {
+                    self.record_execution_time(ExecutionTimeKind::FirstRow);
+                }
+            }
+            None => {
+                self.no_more_rows = true;
+                if self.execution_time.is_none() {
+                    self.record_execution_time(ExecutionTimeKind::EmptyResult);
+                }
+            }
+            _ => {}
         }
         msg
+    }
+
+    fn record_execution_time(&mut self, kind: ExecutionTimeKind) {
+        self.execution_time = Some(ExecutionTime {
+            kind,
+            elapsed: self.execute_started.elapsed(),
+        });
+    }
+
+    /// Makes [`RecordFirstRowStream::take_timing`] report nothing, for a `SUBSCRIBE`, which
+    /// reports no execution time.
+    pub fn without_execution_time(mut self) -> Self {
+        self.execution_time_reported = true;
+        self
+    }
+
+    /// The statement's timing: `Rows` if this is the first call and the first row or the end of
+    /// the rows has been seen, and `Untimed` otherwise. Only the first call can report, so a portal
+    /// or cursor read in several steps reports on the step that started it, whose interval
+    /// contains no client pause.
+    pub fn take_timing(&mut self) -> StatementTiming {
+        if std::mem::replace(&mut self.execution_time_reported, true) {
+            return StatementTiming::Untimed;
+        }
+        match &self.execution_time {
+            Some(time) => StatementTiming::Rows {
+                time: time.clone(),
+                writes: self.writes,
+            },
+            None => StatementTiming::Untimed,
+        }
     }
 }
 

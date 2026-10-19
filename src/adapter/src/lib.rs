@@ -78,7 +78,7 @@ pub use crate::coord::timestamp_selection::{
 };
 pub use crate::coord::{Config, RemoteSystemParameters, load_remote_system_parameters, serve};
 pub use crate::error::{AdapterError, AuthenticationError};
-pub use crate::notice::AdapterNotice;
+pub use crate::notice::{AdapterNotice, ExecutionTime, ExecutionTimeKind, StatementWrites};
 pub use crate::util::{ResultExt, verify_datum_desc};
 pub use crate::webhook::{
     AppendWebhookError, AppendWebhookResponse, AppendWebhookValidator, WebhookAppenderCache,

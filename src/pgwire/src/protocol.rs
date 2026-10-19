@@ -20,7 +20,9 @@ use byteorder::{ByteOrder, NetworkEndian};
 use csv_core::ReadRecordResult;
 use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::Itertools;
-use mz_adapter::client::{RecordFirstRowStream, redact_sql_for_logging};
+use mz_adapter::client::{
+    RecordFirstRowStream, StatementStart, StatementTiming, redact_sql_for_logging,
+};
 use mz_adapter::session::{
     EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState, Session,
     SessionConfig, TransactionStatus,
@@ -1159,7 +1161,7 @@ where
             .execute(EMPTY_PORTAL.to_string(), self.conn.wait_closed(), None)
             .await
         {
-            Ok((response, execute_started)) => {
+            Ok((response, start)) => {
                 self.send_pending_notices().await?;
                 self.send_execute_response(
                     response,
@@ -1169,7 +1171,7 @@ where
                     portal_exec_message,
                     None,
                     ExecuteTimeout::None,
-                    execute_started,
+                    start,
                     ends_simple_query,
                 )
                 .await
@@ -1497,22 +1499,29 @@ where
     }
 
     /// Settles a statement, or a step of one, right before its completion message
-    /// (`CommandComplete` or `PortalSuspended`). If `ends_simple_query`, the statement is the last
-    /// of a simple query, and its implicit transaction commits now. Returns the commit's error,
-    /// which takes the place of the completion message. The parameters that the commit reverts are
-    /// announced before the next `ReadyForQuery`.
-    async fn settle_statement(&mut self, ends_simple_query: bool) -> Option<ErrorResponse> {
-        match self
+    /// (`CommandComplete` or `PortalSuspended`), and sends the opted-in execution time notice, if
+    /// any. If `ends_simple_query`, the statement is the last of a simple query, and its implicit
+    /// transaction commits now. Returns the commit's error, which takes the place of the completion
+    /// message. The parameters that the commit reverts are announced before the next
+    /// `ReadyForQuery`.
+    async fn settle_statement(
+        &mut self,
+        ends_simple_query: bool,
+        timing: StatementTiming,
+    ) -> Result<Option<ErrorResponse>, io::Error> {
+        let settled = match self
             .adapter_client
-            .settle_statement(ends_simple_query)
+            .settle_statement(ends_simple_query, timing)
             .await
         {
-            Ok(settled) => {
-                self.reverted_parameters.extend(settled.reverted);
-                None
-            }
-            Err(err) => Some(err.into_response(Severity::Error)),
+            Ok(settled) => settled,
+            Err(err) => return Ok(Some(err.into_response(Severity::Error))),
+        };
+        self.reverted_parameters.extend(settled.reverted);
+        if let Some(notice) = settled.execution_time {
+            self.send(notice.into_response()).await?;
         }
+        Ok(None)
     }
 
     /// Announces changed parameters, restricted to those the client is told
@@ -1782,7 +1791,7 @@ where
                         )
                         .await
                     {
-                        Ok((response, execute_started)) => {
+                        Ok((response, start)) => {
                             self.send_pending_notices().await?;
                             self.send_execute_response(
                                 response,
@@ -1792,7 +1801,7 @@ where
                                 get_response,
                                 fetch_portal_name,
                                 timeout,
-                                execute_started,
+                                start,
                                 ends_simple_query,
                             )
                             .await
@@ -1881,7 +1890,10 @@ where
                             },
                         );
                     }
-                    if let Some(err) = self.settle_statement(ends_simple_query).await {
+                    if let Some(err) = self
+                        .settle_statement(ends_simple_query, StatementTiming::Untimed)
+                        .await?
+                    {
                         return self.send_error_and_get_state(err).await;
                     }
                     self.send(BackendMessage::CommandComplete { tag }).await?;
@@ -2168,14 +2180,18 @@ where
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
-        execute_started: Instant,
+        start: StatementStart,
         ends_simple_query: bool,
     ) -> Result<State, io::Error> {
         let mut tag = response.tag();
 
         macro_rules! command_complete {
             () => {{
-                if let Some(err) = self.settle_statement(ends_simple_query).await {
+                let timing = StatementTiming::NoRows {
+                    writes: start.writes,
+                    execution: start.started.elapsed(),
+                };
+                if let Some(err) = self.settle_statement(ends_simple_query, timing).await? {
                     return self.send_error_and_get_state(err).await;
                 }
                 self.send(BackendMessage::CommandComplete {
@@ -2233,7 +2249,7 @@ where
                     portal_name,
                     InProgressRows::new(RecordFirstRowStream::new(
                         Box::new(rows),
-                        execute_started,
+                        start,
                         &self.adapter_client,
                         Some(instance_id),
                         Some(strategy),
@@ -2261,7 +2277,7 @@ where
                     portal_name,
                     InProgressRows::new(RecordFirstRowStream::new(
                         Box::new(stream),
-                        execute_started,
+                        start,
                         &self.adapter_client,
                         None,
                         Some(StatementExecutionStrategy::Constant),
@@ -2321,13 +2337,16 @@ where
                     .send_rows(
                         row_desc,
                         portal_name,
-                        InProgressRows::new(RecordFirstRowStream::new(
-                            rx,
-                            execute_started,
-                            &self.adapter_client,
-                            Some(instance_id),
-                            None,
-                        )),
+                        InProgressRows::new(
+                            RecordFirstRowStream::new(
+                                rx,
+                                start,
+                                &self.adapter_client,
+                                Some(instance_id),
+                                None,
+                            )
+                            .without_execution_time(),
+                        ),
                         max_rows,
                         get_response,
                         fetch_portal_name,
@@ -2381,7 +2400,7 @@ where
                                 row_desc,
                                 RecordFirstRowStream::new(
                                     rx,
-                                    execute_started,
+                                    start,
                                     &self.adapter_client,
                                     Some(instance_id),
                                     None,
@@ -2435,7 +2454,7 @@ where
                                 row_desc,
                                 RecordFirstRowStream::new(
                                     Box::new(rows),
-                                    execute_started,
+                                    start,
                                     &self.adapter_client,
                                     Some(instance_id),
                                     Some(strategy),
@@ -2461,7 +2480,7 @@ where
                                 row_desc,
                                 RecordFirstRowStream::new(
                                     Box::new(rows),
-                                    execute_started,
+                                    start,
                                     &self.adapter_client,
                                     None,
                                     Some(StatementExecutionStrategy::Constant),
@@ -2768,6 +2787,7 @@ where
             }
         }
 
+        let timing = rows.remaining.take_timing();
         let portal = self
             .adapter_client
             .session()
@@ -2827,7 +2847,7 @@ where
         }
 
         // Committing clears the session's portals, so this comes after their last use above.
-        let state = match self.settle_statement(ends_simple_query).await {
+        let state = match self.settle_statement(ends_simple_query, timing).await? {
             Some(err) => self.send_error_and_get_state(err).await?,
             None => {
                 self.send(response_message).await?;
@@ -2995,7 +3015,10 @@ where
 
         let tag = format!("COPY {}", count);
         self.send(BackendMessage::CopyDone).await?;
-        let state = match self.settle_statement(ends_simple_query).await {
+        let state = match self
+            .settle_statement(ends_simple_query, StatementTiming::Untimed)
+            .await?
+        {
             Some(err) => self.send_error_and_get_state(err).await?,
             None => {
                 self.send(BackendMessage::CommandComplete { tag }).await?;
@@ -3344,7 +3367,10 @@ where
                 .await;
         }
 
-        if let Some(err) = self.settle_statement(ends_simple_query).await {
+        if let Some(err) = self
+            .settle_statement(ends_simple_query, StatementTiming::Untimed)
+            .await?
+        {
             self.adapter_client.retire_execute(
                 std::mem::take(ctx_extra),
                 StatementEndedExecutionReason::Errored {

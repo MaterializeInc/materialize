@@ -62,7 +62,7 @@ use crate::coord::{Coordinator, ExplainContext};
 use crate::error::AdapterError;
 use crate::metrics::{Metrics, SessionMetrics};
 use crate::statement_logging::PreparedStatementLoggingInfo;
-use crate::{AdapterNotice, ExecuteContext};
+use crate::{AdapterNotice, ExecuteContext, ExecutionTime};
 use mz_catalog::durable::Snapshot;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
@@ -550,6 +550,27 @@ impl Session {
             }
         }
         notices
+    }
+
+    /// The notice reporting `time`, if the session opted in with `emit_execution_time_notice`
+    /// and `client_min_messages` admits it.
+    pub(crate) fn execution_time_notice(&self, time: ExecutionTime) -> Option<AdapterNotice> {
+        if !self.vars.emit_execution_time_notice() {
+            return None;
+        }
+        self.notice_filter(AdapterNotice::ExecutionTime(time))
+    }
+
+    /// Whether the current transaction holds writes for its commit. A staged write that affected
+    /// no rows still counts, because it leaves a `Writes` op behind.
+    pub(crate) fn has_staged_writes(&self) -> bool {
+        matches!(
+            self.transaction().inner(),
+            Some(Transaction {
+                ops: TransactionOps::Writes(_),
+                ..
+            })
+        )
     }
 
     /// Returns Some if the notice should be reported, otherwise None.

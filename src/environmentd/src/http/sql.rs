@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -25,7 +25,7 @@ use futures::future::BoxFuture;
 
 use http::StatusCode;
 use itertools::Itertools;
-use mz_adapter::client::{RecordFirstRowStream, redact_sql_for_logging};
+use mz_adapter::client::{RecordFirstRowStream, StatementTiming, redact_sql_for_logging};
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
@@ -503,15 +503,9 @@ async fn forward_notices(
     ws: &mut WebSocket,
     notices: impl IntoIterator<Item = AdapterNotice>,
 ) -> Result<(), Error> {
-    let ws_notices = notices.into_iter().map(|notice| {
-        WebSocketResponse::Notice(Notice {
-            message: notice.to_string(),
-            code: notice.code().code().to_string(),
-            severity: notice.severity().as_str().to_lowercase(),
-            detail: notice.detail(),
-            hint: notice.hint(),
-        })
-    });
+    let ws_notices = notices
+        .into_iter()
+        .map(|notice| WebSocketResponse::Notice(Notice::from(notice)));
 
     for notice in ws_notices {
         send_ws_response(ws, notice).await?;
@@ -624,6 +618,10 @@ pub enum SqlResult {
         /// Note: skip serializing this field in a response if the list of parameters is empty.
         #[serde(skip_serializing_if = "Vec::is_empty")]
         parameters: Vec<ParameterStatus>,
+        /// The opted-in execution time notice, kept apart from `notices` because the WebSocket API
+        /// sends it before `CommandComplete` and the other notices after.
+        #[serde(skip)]
+        execution_time: Option<Notice>,
     },
     /// The query returned an error.
     Err {
@@ -733,15 +731,21 @@ impl SqlResult {
 
         // TODO(SQL-815): `SqlResult::Rows` has no `parameters` field, so the parameters the
         // commit reverted (a `SET LOCAL` earlier in the group) are dropped.
-        if let Err(err) = client.settle_statement(ends_group).await {
-            return Ok(SqlResult::err(client, err));
-        }
+        let settled = match client
+            .settle_statement(ends_group, rows_stream.take_timing())
+            .await
+        {
+            Ok(settled) => settled,
+            Err(err) => return Ok(SqlResult::err(client, err)),
+        };
+        let mut notices = make_notices(client);
+        notices.extend(settled.execution_time.map(Notice::from));
         let tag = format!("SELECT {}", rows.len());
         Ok(SqlResult::Rows {
             tag,
             rows,
             desc: Description::from(desc),
-            notices: make_notices(client),
+            notices,
         })
     }
 
@@ -760,14 +764,16 @@ impl SqlResult {
         tag: String,
         mut params: Vec<ParameterStatus>,
         ends_group: bool,
+        timing: StatementTiming,
     ) -> SqlResult {
-        match client.settle_statement(ends_group).await {
+        match client.settle_statement(ends_group, timing).await {
             Ok(settled) => {
                 params.extend(notify_params(client, settled.reverted));
                 SqlResult::Ok {
                     ok: tag,
                     parameters: params,
                     notices: make_notices(client),
+                    execution_time: settled.execution_time.map(Notice::from),
                 }
             }
             Err(err) => SqlResult::err(client, err),
@@ -939,7 +945,15 @@ impl ResultSender for SqlResponse {
         Option<(StatementEndedExecutionReason, ExecuteContextGuard)>,
     ) {
         let (res, stmt_logging) = match res {
-            StatementResult::SqlResult(res) => {
+            StatementResult::SqlResult(mut res) => {
+                if let SqlResult::Ok {
+                    notices,
+                    execution_time,
+                    ..
+                } = &mut res
+                {
+                    notices.extend(execution_time.take());
+                }
                 let is_err = matches!(res, SqlResult::Err { .. });
                 self.results.push(res);
                 let res = if is_err { Err(()) } else { Ok(()) };
@@ -1069,8 +1083,15 @@ impl ResultSender for WebSocket {
                 ok,
                 parameters,
                 notices,
+                execution_time,
             }) => {
-                let mut msgs = vec![WebSocketResponse::CommandComplete(ok)];
+                // The execution time precedes `CommandComplete`, so clients attribute it to this
+                // statement rather than to the next one.
+                let mut msgs: Vec<_> = execution_time
+                    .into_iter()
+                    .map(WebSocketResponse::Notice)
+                    .collect();
+                msgs.push(WebSocketResponse::CommandComplete(ok));
                 msgs.extend(notices.into_iter().map(WebSocketResponse::Notice));
                 msgs.extend(
                     parameters
@@ -1368,8 +1389,11 @@ async fn stream_ws_peek_rows(
                 ));
             }
             None => {
-                let reverted = match client.settle_statement(ends_group).await {
-                    Ok(settled) => notify_params(client, settled.reverted),
+                let settled = match client
+                    .settle_statement(ends_group, rows_stream.take_timing())
+                    .await
+                {
+                    Ok(settled) => settled,
                     Err(err) => {
                         return Ok(ws_peek_result(
                             client,
@@ -1385,8 +1409,14 @@ async fn stream_ws_peek_rows(
                 }
                 let command_complete =
                     WebSocketResponse::CommandComplete(format!("SELECT {rows_returned}"));
-                let (is_err, mut msgs, stmt_logging) =
-                    ws_peek_result(client, false, vec![command_complete]);
+                let msgs = settled
+                    .execution_time
+                    .map(|notice| WebSocketResponse::Notice(Notice::from(notice)))
+                    .into_iter()
+                    .chain([command_complete])
+                    .collect();
+                let (is_err, mut msgs, stmt_logging) = ws_peek_result(client, false, msgs);
+                let reverted = notify_params(client, settled.reverted);
                 msgs.extend(reverted.into_iter().map(WebSocketResponse::ParameterStatus));
                 return Ok((is_err, msgs, stmt_logging));
             }
@@ -1763,6 +1793,9 @@ async fn execute_stmt<S: ResultSender>(
     let res = client
         .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
         .await;
+    // The execution time of a statement whose response carries no rows is taken here, before
+    // notices are sent.
+    let executed = Instant::now();
 
     if S::SUPPORTS_STREAMING_NOTICES {
         sender
@@ -1770,11 +1803,15 @@ async fn execute_stmt<S: ResultSender>(
             .await?;
     }
 
-    let (res, execute_started) = match res {
+    let (res, start) = match res {
         Ok(res) => res,
         Err(e) => {
             return Ok(SqlResult::err(client, e).into());
         }
+    };
+    let no_rows_timing = StatementTiming::NoRows {
+        writes: start.writes,
+        execution: executed.duration_since(start.started),
     };
     let tag = res.tag();
 
@@ -1824,6 +1861,7 @@ async fn execute_stmt<S: ResultSender>(
             tag.expect("ok only called on tag-generating results"),
             Vec::default(),
             ends_group,
+            no_rows_timing,
         )
         .await
         .into(),
@@ -1836,6 +1874,7 @@ async fn execute_stmt<S: ResultSender>(
                 tag.expect("ok only called on tag-generating results"),
                 params,
                 ends_group,
+                no_rows_timing,
             )
             .await
             .into()
@@ -1858,6 +1897,7 @@ async fn execute_stmt<S: ResultSender>(
                 tag.expect("ok only called on tag-generating results"),
                 params,
                 ends_group,
+                no_rows_timing,
             )
             .await
             .into()
@@ -1871,7 +1911,7 @@ async fn execute_stmt<S: ResultSender>(
 
             let rows_stream = RecordFirstRowStream::new(
                 Box::new(rows),
-                execute_started,
+                start,
                 client,
                 Some(instance_id),
                 Some(strategy),
@@ -1888,8 +1928,7 @@ async fn execute_stmt<S: ResultSender>(
             let max_result_size = max_result_size(client).await;
 
             let rows = futures::stream::once(futures::future::ready(PeekResponseUnary::Rows(rows)));
-            let rows_stream =
-                RecordFirstRowStream::new(Box::new(rows), execute_started, client, None, None);
+            let rows_stream = RecordFirstRowStream::new(Box::new(rows), start, client, None, None);
 
             StatementResult::Rows {
                 desc: desc.relation_desc.expect("RelationDesc must exist"),
@@ -1905,7 +1944,8 @@ async fn execute_stmt<S: ResultSender>(
         } => StatementResult::Subscribe {
             tag: "SUBSCRIBE".into(),
             desc: desc.relation_desc.unwrap(),
-            rx: RecordFirstRowStream::new(rx, execute_started, client, Some(instance_id), None),
+            rx: RecordFirstRowStream::new(rx, start, client, Some(instance_id), None)
+                .without_execution_time(),
             ctx_extra,
         },
         res @ (ExecuteResponse::Fetch { .. }
@@ -1959,14 +1999,20 @@ fn make_notices(client: &mut SessionClient) -> Vec<Notice> {
         .session()
         .drain_notices()
         .into_iter()
-        .map(|notice| Notice {
+        .map(Notice::from)
+        .collect()
+}
+
+impl From<AdapterNotice> for Notice {
+    fn from(notice: AdapterNotice) -> Self {
+        Notice {
             message: notice.to_string(),
             code: notice.code().code().to_string(),
             severity: notice.severity().as_str().to_lowercase(),
             detail: notice.detail(),
             hint: notice.hint(),
-        })
-        .collect()
+        }
+    }
 }
 
 // Duplicated from protocol.rs.
