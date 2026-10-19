@@ -825,6 +825,17 @@ impl<'a> Transaction<'a> {
                 && index_columns.iter().all(|column| column.id == id),
             "metadata recorded for item {id} belongs to another item"
         );
+        soft_assert_or_log!(
+            columns
+                .iter()
+                .map(|column| column.position)
+                .eq(0..columns.len())
+                && index_columns
+                    .iter()
+                    .map(|column| column.position)
+                    .eq(0..index_columns.len()),
+            "metadata recorded for item {id} does not fill positions from zero"
+        );
 
         self.truncate_item_metadata(id, columns.len(), index_columns.len());
         for column in columns {
@@ -845,6 +856,8 @@ impl<'a> Transaction<'a> {
 
     /// Deletes the recorded columns of item `id` from position `columns_len` on
     /// and its recorded index keys from position `index_columns_len` on.
+    /// Column positions are expected to be contiguous otherwise
+    /// the truncations stops at the first missing position.
     fn truncate_item_metadata(
         &mut self,
         id: CatalogItemId,
