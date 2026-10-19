@@ -16,6 +16,7 @@ import {
   useTheme,
   VStack,
 } from "@chakra-ui/react";
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { sql } from "kysely";
 import React from "react";
 import { useForm } from "react-hook-form";
@@ -49,7 +50,7 @@ import { MaterializeTheme } from "~/theme";
 import { assert, capitalizeSentence } from "~/util";
 
 import {
-  useAvailableClusterSizes,
+  availableClusterSizesQuery,
   useClusters,
   useMaxReplicasPerCluster,
 } from "./queries";
@@ -72,7 +73,7 @@ const NewClusterForm = () => {
   const { colors } = useTheme<MaterializeTheme>();
   const { track } = useSegment();
 
-  const { data: clusterSizes } = useAvailableClusterSizes();
+  const { data: clusterSizes } = useSuspenseQuery(availableClusterSizesQuery());
   const { data: maxReplicas } = useMaxReplicasPerCluster();
 
   const { formState, handleSubmit, register, setError, setFocus } =
