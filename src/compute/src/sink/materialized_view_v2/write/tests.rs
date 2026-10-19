@@ -172,11 +172,16 @@ fn write_operator_absorbs_updates_after_a_pending_write() {
 
         let dataflow_index = worker.next_dataflow_index();
         let (mut desired, mut persist, mut descs) = worker.dataflow::<Timestamp, _, _>(|scope| {
-            let (desired_ok, desired_ok_stream) = scope.new_input();
-            let (desired_err, desired_err_stream) = scope.new_input();
-            let (persist_ok, persist_ok_stream) = scope.new_input();
-            let (persist_err, persist_err_stream) = scope.new_input();
-            let (descs, descs_stream) = scope.new_input();
+            // NOTE: The container types are spelled out because inferring them from `render`'s
+            // signature makes rustc on macOS overflow while evaluating `Iterator` candidates
+            // (E0275 on `&jaq_std::input::RcIter<_>`).
+            let (desired_ok, desired_ok_stream) = scope.new_input::<Vec<(Row, Timestamp, Diff)>>();
+            let (desired_err, desired_err_stream) =
+                scope.new_input::<Vec<(DataflowErrorSer, Timestamp, Diff)>>();
+            let (persist_ok, persist_ok_stream) = scope.new_input::<Vec<(Row, Timestamp, Diff)>>();
+            let (persist_err, persist_err_stream) =
+                scope.new_input::<Vec<(DataflowErrorSer, Timestamp, Diff)>>();
+            let (descs, descs_stream) = scope.new_input::<Vec<BatchDescription>>();
             let written = Rc::clone(&written);
             render(
                 GlobalId::User(1),
