@@ -597,6 +597,10 @@ pub struct Args {
     /// File containing a valid Materialize license key.
     #[clap(long, env = "LICENSE_KEY")]
     license_key: Option<String>,
+    /// Root-signed intermediate certificates whose keys may also sign the
+    /// license key.
+    #[clap(long, env = "LICENSE_KEY_INTERMEDIATE_CERTS", value_delimiter = ',')]
+    license_key_intermediate_cert: Vec<String>,
 
     // === AWS options. ===
     /// The AWS account ID, which will be used to generate ARNs for
@@ -684,8 +688,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let license_key = if let Some(license_key_file) = args.license_key {
         let license_key_text = std::fs::read_to_string(&license_key_file)
             .context("failed to open license key file")?;
-        let license_key = mz_license_keys::validate(license_key_text.trim())
-            .context("failed to validate license key file")?;
+        let license_key =
+            mz_license_keys::validate(license_key_text.trim(), &args.license_key_intermediate_cert)
+                .context("failed to validate license key file")?;
         if license_key.expired {
             let message = format!(
                 "The license key provided at {license_key_file} is expired! Please contact Materialize for assistance."
