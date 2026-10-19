@@ -325,24 +325,6 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_kafka_source_tables",
         ),
-        // `mz_type_pg_metadata` gained a trailing `typsend` column. See the NOTE
-        // above: this version must stay at the workspace's current dev version
-        // until the change ships.
-        MigrationStep::replacement(
-            "26.40.0-dev.0",
-            CatalogItemType::Table,
-            MZ_INTERNAL_SCHEMA,
-            "mz_type_pg_metadata",
-        ),
-        // `mz_type_pg_metadata` gained a trailing `typlen` column. See the NOTE
-        // above: this version must stay at the workspace's current dev version
-        // until the change ships.
-        MigrationStep::replacement(
-            "26.47.0-dev.0",
-            CatalogItemType::Table,
-            MZ_INTERNAL_SCHEMA,
-            "mz_type_pg_metadata",
-        ),
         // Converting the connection-detail builtin tables to materialized views
         // changes their catalog fingerprint, so each needs an explicit
         // replacement step.
@@ -551,6 +533,53 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             CatalogItemType::MaterializedView,
             MZ_INTERNAL_SCHEMA,
             "mz_materialized_view_refresh_strategies",
+        ),
+        // Converting the type relations from builtin tables to materialized
+        // views over mz_catalog_raw changes their catalog fingerprint, so each
+        // needs an explicit replacement step. See the NOTE above: this version
+        // must stay at the workspace's current dev version until the change
+        // ships.
+        MigrationStep::replacement(
+            "26.48.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_types",
+        ),
+        MigrationStep::replacement(
+            "26.48.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_array_types",
+        ),
+        MigrationStep::replacement(
+            "26.48.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_base_types",
+        ),
+        MigrationStep::replacement(
+            "26.48.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_list_types",
+        ),
+        MigrationStep::replacement(
+            "26.48.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_map_types",
+        ),
+        MigrationStep::replacement(
+            "26.48.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_pseudo_types",
+        ),
+        MigrationStep::replacement(
+            "26.48.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_type_pg_metadata",
         ),
     ]
 });

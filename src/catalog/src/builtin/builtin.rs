@@ -9,26 +9,31 @@
 
 //! Constant builtin views exposing information about builtin objects.
 
+use std::collections::BTreeMap;
+
 use itertools::Itertools;
 use mz_catalog_protos::objects::CatalogItemType;
 use mz_ore::collections::CollectionExt;
 use mz_ore::iter::IteratorExt;
 use mz_pgrepr::oid;
+use mz_repr::adt::char::CharLength;
 use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_repr::{RelationDesc, SqlScalarType};
 use mz_sql::ast::Statement;
 use mz_sql::ast::display::{AstDisplay, escaped_string_literal};
-use mz_sql::catalog::{NameReference, ObjectType};
+use mz_sql::catalog::{CatalogType, NameReference, ObjectType, TypeCategory};
 use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 
-use crate::builtin::{Builtin, BuiltinView, PUBLIC_SELECT, assert_safe_builtin_name};
+use crate::builtin::{Builtin, BuiltinType, BuiltinView, PUBLIC_SELECT, assert_safe_builtin_name};
 
 /// Generate builtin views reporting the given builtins.
 ///
-/// Used in the [`super::BUILTINS_STATIC`] initializer.
+/// Used in the [`super::BUILTINS_STATIC`] initializer, which keeps the
+/// `Builtin::Type`s in `builtin_types` apart from the other `builtin_items`.
 pub(super) fn builtins(
+    builtin_types: &[Builtin<NameReference>],
     builtin_items: &[Builtin<NameReference>],
 ) -> impl Iterator<Item = Builtin<NameReference>> {
     let sources: &'static BuiltinView = Box::leak(Box::new(make_builtin_sources(builtin_items)));
@@ -38,13 +43,21 @@ pub(super) fn builtins(
     let indexes: &'static BuiltinView = Box::leak(Box::new(make_builtin_indexes(builtin_items)));
     let log_indexes: &'static BuiltinView =
         Box::leak(Box::new(make_builtin_log_indexes(builtin_items)));
+    let types: &'static BuiltinView = Box::leak(Box::new(make_builtin_types(builtin_types)));
 
     // The generated views above, and `mz_builtin_views` itself, are listed in
     // `mz_builtin_views` with placeholder SQL rather than their real
     // definitions. See `make_builtin_views`.
     let views: &'static BuiltinView = Box::leak(Box::new(make_builtin_views(
         builtin_items,
-        [log_indexes, sources, materialized_views, tables, indexes],
+        [
+            log_indexes,
+            sources,
+            materialized_views,
+            tables,
+            indexes,
+            types,
+        ],
     )));
 
     // Creation order: `mz_builtin_sources` reads `mz_builtin_log_indexes`, so
@@ -55,6 +68,7 @@ pub(super) fn builtins(
         materialized_views,
         tables,
         indexes,
+        types,
         views,
     ]
     .into_iter()
@@ -405,6 +419,231 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, col_list, privileges)"
     }
 }
 
+/// Generates `mz_internal.mz_builtin_types`, which `mz_catalog.mz_types`, the
+/// per-kind `mz_catalog.mz_*_types` views and `mz_internal.mz_type_pg_metadata`
+/// read to report builtin types. [`builtin_types_ctes`] is how they join it to
+/// catalog ids.
+///
+/// `type_kind` names the per-kind view a type belongs to: `array`, `pseudo`,
+/// or `base` for everything else, range types included. `element_schema_name`
+/// and `element_name` name an array type's element type. `typlen` is NULL for
+/// a type with no scalar type, see [`builtin_scalar_type`].
+fn make_builtin_types(builtin_types: &[Builtin<NameReference>]) -> BuiltinView {
+    let types: Vec<&BuiltinType<NameReference>> = builtin_types
+        .iter()
+        .filter_map(|b| match b {
+            Builtin::Type(t) => Some(*t),
+            _ => None,
+        })
+        .collect();
+    let by_name: BTreeMap<&str, &BuiltinType<NameReference>> =
+        types.iter().map(|t| (t.name, *t)).collect();
+    // The privileges `apply_system_object_mapping_update` grants every builtin
+    // type.
+    let privileges = make_privileges_sql(
+        &[rbac::default_builtin_object_privilege(ObjectType::Type)],
+        &rbac::owner_privilege(ObjectType::Type, MZ_SYSTEM_ROLE_ID),
+    );
+    let values = types
+        .iter()
+        .map(|t| {
+            assert_safe_builtin_name(t.name, "type");
+            let (type_kind, element) = match &t.details.typ {
+                CatalogType::Array { element_reference } => ("array", Some(*element_reference)),
+                CatalogType::Pseudo => ("pseudo", None),
+                // `mz_list_types` and `mz_map_types` read only user-defined
+                // types, so a builtin list or map would go unreported.
+                CatalogType::List { .. } | CatalogType::Map { .. } => panic!(
+                    "builtin type {} is a list or map, which mz_builtin_types cannot report",
+                    t.name
+                ),
+                _ => ("base", None),
+            };
+            let (element_schema_name, element_name) = match element {
+                Some(name) => {
+                    let element = by_name.get(name).unwrap_or_else(|| {
+                        panic!(
+                            "builtin type {} references unknown builtin type {name}",
+                            t.name
+                        )
+                    });
+                    (
+                        escaped_string_literal(element.schema).to_string(),
+                        escaped_string_literal(name).to_string(),
+                    )
+                }
+                None => ("NULL::text".to_string(), "NULL::text".to_string()),
+            };
+            let category = TypeCategory::from_catalog_type(&t.details.typ).to_string();
+            let (typinput, typreceive, typsend) = match &t.details.pg_metadata {
+                Some(pg) => (
+                    format!("{}::oid", pg.typinput_oid),
+                    format!("{}::oid", pg.typreceive_oid),
+                    format!("{}::oid", pg.typsend_oid),
+                ),
+                None => (
+                    "NULL::oid".to_string(),
+                    "NULL::oid".to_string(),
+                    "NULL::oid".to_string(),
+                ),
+            };
+            let typlen = match builtin_scalar_type(&t.details.typ, &by_name) {
+                Some(scalar_type) => {
+                    format!("{}::int2", mz_pgrepr::Type::from(&scalar_type).typlen())
+                }
+                None => "NULL::int2".to_string(),
+            };
+            format!(
+                "({}::oid, {}, {}, {}, '{type_kind}', {privileges}, {element_schema_name}, {element_name}, {typinput}, {typreceive}, {typsend}, {typlen})",
+                t.oid,
+                escaped_string_literal(t.schema),
+                escaped_string_literal(t.name),
+                escaped_string_literal(&category),
+            )
+        })
+        .join(",");
+    let sql = format!(
+        "
+SELECT oid, schema_name, name, category, type_kind, privileges, element_schema_name, element_name, typinput, typreceive, typsend, typlen
+FROM (VALUES {values}) AS v(oid, schema_name, name, category, type_kind, privileges, element_schema_name, element_name, typinput, typreceive, typsend, typlen)"
+    );
+
+    BuiltinView {
+        name: "mz_builtin_types",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_BUILTIN_TYPES_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("category", SqlScalarType::String.nullable(false))
+            .with_column("type_kind", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_column("element_schema_name", SqlScalarType::String.nullable(true))
+            .with_column("element_name", SqlScalarType::String.nullable(true))
+            .with_column("typinput", SqlScalarType::Oid.nullable(true))
+            .with_column("typreceive", SqlScalarType::Oid.nullable(true))
+            .with_column("typsend", SqlScalarType::Oid.nullable(true))
+            .with_column("typlen", SqlScalarType::Int16.nullable(true))
+            // NOTE: The declared keys must exactly match the keys the
+            // optimizer derives from the generated VALUES list
+            // (`verify_builtin_descs` enforces this). Builtin type names are
+            // unique across schemas, which `test_builtins_static_dependency_order`
+            // asserts, so `name` is a key.
+            .with_key(vec![0])
+            .with_key(vec![2])
+            .finish(),
+        column_comments: Default::default(),
+        sql: Box::leak(sql.into_boxed_str()),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+}
+
+/// The CTEs through which the type views reach builtin types: `builtin_mappings`
+/// maps a builtin type's schema and name to its catalog id via its `GidMapping`
+/// record, and `builtin_types` is `mz_builtin_types` extended with that id.
+pub(super) fn builtin_types_ctes() -> String {
+    let object_type = gid_mapping_object_type(CatalogItemType::Type);
+    format!(
+        "builtin_mappings AS (
+        SELECT
+            data->'key'->>'schema_name' AS schema_name,
+            data->'key'->>'object_name' AS name,
+            's' || (data->'value'->>'catalog_id') AS id
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'GidMapping' AND
+            data->'key'->>'object_type' = {object_type}
+    ),
+    builtin_types AS (
+        SELECT
+            m.id,
+            t.oid,
+            t.schema_name,
+            t.name,
+            t.category,
+            t.type_kind,
+            t.privileges,
+            t.element_schema_name,
+            t.element_name,
+            t.typinput,
+            t.typreceive,
+            t.typsend,
+            t.typlen
+        FROM mz_internal.mz_builtin_types t
+        JOIN builtin_mappings m USING (schema_name, name)
+    )"
+    )
+}
+
+/// The `SqlScalarType` of a column of the builtin type `typ`, with element
+/// references resolved through `by_name`. Mirrors `scalar_type_from_catalog`
+/// for the modifier-free builtin types, so that `mz_pgrepr::Type::from` on the
+/// result yields the `typlen` pgwire sends for the type. `None` for
+/// pseudo-types and containers of them, which have no scalar type.
+fn builtin_scalar_type(
+    typ: &CatalogType<NameReference>,
+    by_name: &BTreeMap<&str, &BuiltinType<NameReference>>,
+) -> Option<SqlScalarType> {
+    let resolve = |name: &str| {
+        let element = by_name
+            .get(name)
+            .unwrap_or_else(|| panic!("builtin type references unknown builtin type {name}"));
+        builtin_scalar_type(&element.details.typ, by_name)
+    };
+    Some(match typ {
+        CatalogType::Pseudo => return None,
+        CatalogType::Array { element_reference } => {
+            SqlScalarType::Array(Box::new(resolve(element_reference)?))
+        }
+        CatalogType::Range { element_reference } => SqlScalarType::Range {
+            element_type: Box::new(resolve(element_reference)?),
+        },
+        // These scalar types carry the catalog id of their defining type, which
+        // a builtin type does not have statically.
+        CatalogType::List { .. } | CatalogType::Map { .. } | CatalogType::Record { .. } => {
+            panic!("builtin types cannot be lists, maps or records")
+        }
+        CatalogType::AclItem => SqlScalarType::AclItem,
+        CatalogType::Bool => SqlScalarType::Bool,
+        CatalogType::Bytes => SqlScalarType::Bytes,
+        CatalogType::Char => SqlScalarType::Char {
+            length: Some(CharLength::ONE),
+        },
+        CatalogType::Date => SqlScalarType::Date,
+        CatalogType::Float32 => SqlScalarType::Float32,
+        CatalogType::Float64 => SqlScalarType::Float64,
+        CatalogType::Int16 => SqlScalarType::Int16,
+        CatalogType::Int32 => SqlScalarType::Int32,
+        CatalogType::Int64 => SqlScalarType::Int64,
+        CatalogType::UInt16 => SqlScalarType::UInt16,
+        CatalogType::UInt32 => SqlScalarType::UInt32,
+        CatalogType::UInt64 => SqlScalarType::UInt64,
+        CatalogType::MzTimestamp => SqlScalarType::MzTimestamp,
+        CatalogType::Interval => SqlScalarType::Interval,
+        CatalogType::Jsonb => SqlScalarType::Jsonb,
+        CatalogType::Numeric => SqlScalarType::Numeric { max_scale: None },
+        CatalogType::Oid => SqlScalarType::Oid,
+        CatalogType::PgLegacyChar => SqlScalarType::PgLegacyChar,
+        CatalogType::PgLegacyName => SqlScalarType::PgLegacyName,
+        CatalogType::RegClass => SqlScalarType::RegClass,
+        CatalogType::RegProc => SqlScalarType::RegProc,
+        CatalogType::RegType => SqlScalarType::RegType,
+        CatalogType::String => SqlScalarType::String,
+        CatalogType::Time => SqlScalarType::Time,
+        CatalogType::Timestamp => SqlScalarType::Timestamp { precision: None },
+        CatalogType::TimestampTz => SqlScalarType::TimestampTz { precision: None },
+        CatalogType::Uuid => SqlScalarType::Uuid,
+        CatalogType::VarChar => SqlScalarType::VarChar { max_length: None },
+        CatalogType::Int2Vector => SqlScalarType::Int2Vector,
+        CatalogType::MzAclItem => SqlScalarType::MzAclItem,
+    })
+}
+
 /// Generates `mz_internal.mz_builtin_views`, listing every builtin view,
 /// including itself and the `generated` views.
 ///
@@ -425,7 +664,7 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, col_list, privileges)"
 /// declared keys rely on.
 fn make_builtin_views(
     builtin_items: &[Builtin<NameReference>],
-    generated: [&BuiltinView; 5],
+    generated: [&BuiltinView; 6],
 ) -> BuiltinView {
     let iter = builtin_items.iter().filter_map(|b| match b {
         Builtin::View(x) => Some(*x),

@@ -510,19 +510,13 @@ mz_cluster_replica_frontiers                 source  <null>   ""
 > SHOW TABLES FROM mz_catalog
 name                           comment
 --------------------------------------
-mz_array_types                 ""
-mz_base_types                  ""
 mz_cluster_replica_sizes       ""
 mz_columns                     ""
 mz_egress_ips                  ""
 mz_functions                   ""
 mz_index_columns               ""
-mz_list_types                  ""
-mz_map_types                   ""
 mz_operators                   ""
-mz_pseudo_types                ""
 mz_role_auth                   ""
-mz_types                       ""
 
 > SHOW VIEWS FROM mz_catalog
 name                       comment
@@ -561,6 +555,12 @@ mz_system_privileges  mz_catalog_server   ""
 mz_materialized_views mz_catalog_server   ""
 mz_tables             mz_catalog_server   ""
 mz_views              mz_catalog_server   ""
+mz_types              mz_catalog_server   ""
+mz_array_types        mz_catalog_server   ""
+mz_base_types         mz_catalog_server   ""
+mz_list_types         mz_catalog_server   ""
+mz_map_types          mz_catalog_server   ""
+mz_pseudo_types       mz_catalog_server   ""
 
 # Check default sources, tables, and views in mz_catalog_unstable.
 
@@ -612,7 +612,6 @@ mz_replica_hydration_history             ""
 mz_sessions                              ""
 mz_storage_usage_by_shard                ""
 mz_subscriptions                         ""
-mz_type_pg_metadata                      ""
 mz_webhook_sources                       ""
 
 > SHOW VIEWS FROM mz_internal
@@ -624,6 +623,7 @@ mz_builtin_log_indexes                   ""
 mz_builtin_materialized_views            ""
 mz_builtin_sources                       ""
 mz_builtin_tables                        ""
+mz_builtin_types                         ""
 mz_builtin_views                         ""
 mz_cluster_deployment_lineage            ""
 mz_cluster_replica_history               ""
@@ -743,6 +743,7 @@ mz_replacements                mz_catalog_server   ""
 mz_replica_system_parameters   mz_catalog_server   ""
 mz_source_references           mz_catalog_server   ""
 mz_sql_server_source_tables    mz_catalog_server   ""
+mz_type_pg_metadata            mz_catalog_server   ""
 
 # Check default sources, tables, and views in mz_introspection.
 
@@ -840,7 +841,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-25
+18
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
