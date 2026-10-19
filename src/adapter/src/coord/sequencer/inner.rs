@@ -60,8 +60,8 @@ use mz_storage_types::sinks::StorageSinkDesc;
 use mz_timestamp_oracle::TimestampOracle;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::{
-    AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan,
-    Explainee, ExplaineeStatement, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable,
+    AlterConnectionAction, AlterConnectionPlan, ExplainSinkSchemaPlan, Explainee,
+    ExplaineeStatement, Params, Plan, PlannedAlterRoleOption, PlannedRoleVariable,
     SideEffectingFunc, UpdatePrivilege, VariableValue,
 };
 use mz_sql::session::metadata::SessionMetadata;
