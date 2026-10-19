@@ -90,6 +90,9 @@ pub struct ValidateConfig {
 
 /// Validates a dataflow, and returns the output type of every built object.
 ///
+/// An object whose output is empty and that has no export has no type of its own and is
+/// left out of the result.
+///
 /// Returns every violation found if the dataflow breaks a rule. Never panics.
 pub fn validate_dataflow(
     df: &LirDataflowDescription,
@@ -204,6 +207,8 @@ struct Validator {
     bound_locals: BTreeSet<LocalId>,
     /// `LirId`s seen so far in the dataflow.
     lir_ids: BTreeSet<LirId>,
+    /// Global ids read by `Get`s that resolved.
+    read_globals: BTreeSet<GlobalId>,
 }
 
 impl CheckedRecursion for Validator {
@@ -222,6 +227,7 @@ impl Validator {
             locals: Vec::new(),
             bound_locals: BTreeSet::new(),
             lir_ids: BTreeSet::new(),
+            read_globals: BTreeSet::new(),
         }
     }
 
@@ -261,11 +267,20 @@ impl Validator {
 
         self.objects = df.objects_to_build.iter().map(|o| o.id).collect();
         let mut types = BTreeMap::new();
+        let mut empty_objects = Vec::new();
         for object in &df.objects_to_build {
             self.bound_locals.clear();
             let mut output = self.visit(&object.plan, true)?;
             if let Output::Empty = output {
-                output = self.fix_empty_object(df, object.id, &object.plan);
+                match Self::declared_type(df, object.id) {
+                    Some(typ) => {
+                        let mut info = NodeInfo::with_arity(typ.arity());
+                        info.types = typ.column_types;
+                        output = Output::Rows(info);
+                    }
+                    // Consumers of the object may still fix its arity.
+                    None => empty_objects.push(object.id),
+                }
             }
             if let Output::Rows(info) = &output {
                 types.insert(object.id, ReprRelationType::new(info.types.clone()));
@@ -282,6 +297,17 @@ impl Validator {
                 );
             } else {
                 self.globals.insert(object.id, output);
+            }
+        }
+
+        // An empty object without export and without a reader has nothing to fix its arity.
+        for object in &df.objects_to_build {
+            if empty_objects.contains(&object.id) && !self.read_globals.contains(&object.id) {
+                self.node_error(
+                    &object.plan,
+                    Rule::Arity,
+                    "cannot infer the arity of an empty constant".to_string(),
+                );
             }
         }
 
@@ -338,16 +364,9 @@ impl Validator {
         }
     }
 
-    /// Determines the arity of an object whose output is empty from the exports of the
-    /// object, which state the types they expect.
-    fn fix_empty_object(
-        &mut self,
-        df: &LirDataflowDescription,
-        id: GlobalId,
-        plan: &LirRelationExpr,
-    ) -> Output {
-        let declared = df
-            .index_exports
+    /// The type the exports of object `id` declare for it, if it has an export.
+    fn declared_type(df: &LirDataflowDescription, id: GlobalId) -> Option<ReprRelationType> {
+        df.index_exports
             .get(&id)
             .map(|(_, typ)| typ.clone())
             .or_else(|| {
@@ -355,22 +374,7 @@ impl Validator {
                     .values()
                     .find(|sink| sink.from == id)
                     .map(|sink| ReprRelationType::from(sink.from_desc.typ()))
-            });
-        match declared {
-            Some(typ) => {
-                let mut info = NodeInfo::with_arity(typ.arity());
-                info.types = typ.column_types;
-                Output::Rows(info)
-            }
-            None => {
-                self.node_error(
-                    plan,
-                    Rule::Arity,
-                    "cannot infer the arity of an empty constant".to_string(),
-                );
-                Output::Failed
-            }
-        }
+            })
     }
 
     /// Checks that exports refer to collections that exist and have the expected arity.
@@ -508,7 +512,7 @@ impl Validator {
                     Err(()) => None,
                     Ok(arity) => {
                         let out = arity::get(&mut issues, keys, plan, arity);
-                        Some(Self::unary(arity, out))
+                        Some(Self::unary(out))
                     }
                 }
             }
@@ -554,7 +558,7 @@ impl Validator {
                 let input = self.visit(input, false)?;
                 input.arity().ok().map(|arity| {
                     let key = input_key_val.as_ref().map(|(key, _)| key.as_slice());
-                    Self::unary(arity, arity::mfp(&mut issues, mfp, key, arity))
+                    Self::unary(arity::mfp(&mut issues, mfp, key, arity))
                 })
             }
             LirRelationNode::FlatMap {
@@ -574,7 +578,7 @@ impl Validator {
                         mfp_after,
                         arity,
                     );
-                    Self::unary(arity, out)
+                    Self::unary(out)
                 })
             }
             LirRelationNode::Join { inputs, plan } => {
@@ -615,7 +619,7 @@ impl Validator {
                         mfp_after,
                         arity,
                     );
-                    Self::unary(arity, out)
+                    Self::unary(out)
                 })
             }
             LirRelationNode::TopK {
@@ -627,20 +631,21 @@ impl Validator {
                 input
                     .arity()
                     .ok()
-                    .map(|arity| Self::unary(arity, arity::top_k(&mut issues, top_k_plan, arity)))
+                    .map(|arity| Self::unary(arity::top_k(&mut issues, top_k_plan, arity)))
             }
             LirRelationNode::Negate { input } => {
                 let input = self.visit(input, false)?;
-                input.arity().ok().map(|arity| Self::unary(arity, arity))
+                input.arity().ok().map(Self::unary)
             }
             LirRelationNode::Threshold {
                 input,
                 threshold_plan,
             } => {
                 let input = self.visit(input, false)?;
-                input.arity().ok().map(|arity| {
-                    Self::unary(arity, arity::threshold(&mut issues, threshold_plan, arity))
-                })
+                input
+                    .arity()
+                    .ok()
+                    .map(|arity| Self::unary(arity::threshold(&mut issues, threshold_plan, arity)))
             }
             LirRelationNode::Union {
                 inputs,
@@ -701,7 +706,7 @@ impl Validator {
                         forms,
                         arity,
                     );
-                    Self::unary(arity, out)
+                    Self::unary(out)
                 })
             }
         };
@@ -712,14 +717,15 @@ impl Validator {
         })
     }
 
-    /// The output of a unary operator, given its input's arity and the output arity the
-    /// arity rules computed.
+    /// The output of a unary operator, given the output arity the arity rules computed.
     ///
-    /// An operator over an empty input produces no rows.
-    fn unary(input: Option<usize>, output: Option<usize>) -> Output {
-        match (input, output) {
-            (Some(_), Some(arity)) => Output::Rows(NodeInfo::with_arity(arity)),
-            _ => Output::Empty,
+    /// An operator that states its output arity has that arity even over an empty input,
+    /// which subjects its consumers to the full checks. One that passes its input's arity
+    /// through is empty over an empty input.
+    fn unary(output: Option<usize>) -> Output {
+        match output {
+            Some(arity) => Output::Rows(NodeInfo::with_arity(arity)),
+            None => Output::Empty,
         }
     }
 
@@ -737,7 +743,13 @@ impl Validator {
                 .rev()
                 .find(|(l, _)| l == local)
                 .map(|(_, output)| output.clone()),
-            Id::Global(global) => self.globals.get(global).cloned(),
+            Id::Global(global) => {
+                let found = self.globals.get(global).cloned();
+                if found.is_some() {
+                    self.read_globals.insert(*global);
+                }
+                found
+            }
         };
         if let Some(output) = found {
             return output;

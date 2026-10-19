@@ -17,8 +17,13 @@
 //! An operator that reads an input through an arrangement sees the arranged layout, the key
 //! columns followed by the thinned value columns. Its width comes from
 //! [`arranged_width`], which assumes the canonical thinning of
-//! `permutation_for_arrangement`. The arrangement rules check that every arrangement in
-//! the plan has that thinning.
+//! `permutation_for_arrangement`. That covers the arranged inputs of `Get`, `Mfp`,
+//! `FlatMap`, `Reduce`, `ArrangeBy`, and join sources, and the lookup value layout of each
+//! join stage, whose width is the lookup key plus the canonical thinning of the lookup input.
+//! A join stage's stream layout instead comes from its stated `stream_thinning`. The
+//! arrangement rules check that every `(key, permutation, thinning)` triple in `Get` keys,
+//! `ArrangeBy` forms, and threshold plans, every join `stream_thinning`, and every
+//! arrangement a join looks up has the canonical thinning.
 
 use std::collections::BTreeSet;
 
@@ -628,7 +633,9 @@ pub(super) fn top_k(issues: &mut Issues, plan: &TopKPlan, arity: Option<usize>) 
         TopKPlan::MonotonicTopK(p) => (&p.group_key, &p.order_key, p.limit.as_ref(), p.arity),
         TopKPlan::Basic(p) => (&p.group_key, &p.order_key, p.limit.as_ref(), p.arity),
     };
-    let arity = arity?;
+    let Some(arity) = arity else {
+        return Some(plan_arity);
+    };
     if plan_arity != arity {
         issues.push((
             Rule::Arity,

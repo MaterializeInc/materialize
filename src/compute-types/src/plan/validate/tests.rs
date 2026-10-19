@@ -496,6 +496,67 @@ fn accepts_empty_constant_with_arity_from_context() {
     validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
 }
 
+/// Objects `v` and `i = ArrangeBy(Get v)`, with an index export at `i` on `v`, as
+/// `DataflowDescription::export_index` builds them.
+fn indexed_view(v_plan: LirRelationExpr) -> LirDataflowDescription {
+    let v = GlobalId::Transient(20);
+    let i = GlobalId::Transient(21);
+    let arrange = plan(LirRelationNode::ArrangeBy {
+        input_key: None,
+        input: Box::new(get_global(v, AvailableCollections::new_raw())),
+        input_mfp: MfpPlan::from_parts(
+            SafeMfpPlan::from_mfp(MapFilterProject::new(1)),
+            vec![],
+            vec![],
+        ),
+        forms: AvailableCollections::new_arranged(vec![triple(&[0], 1)]),
+        strategy: ArrangementStrategy::Direct,
+    });
+    let mut df = dataflow(&[], vec![(v, v_plan), (i, arrange)]);
+    df.index_exports.insert(
+        i,
+        (
+            IndexDesc {
+                on_id: v,
+                key: vec![MirScalarExpr::column(0)],
+            },
+            ReprRelationType::from(&int8_type(1)),
+        ),
+    );
+    df
+}
+
+#[mz_ore::test]
+fn accepts_index_on_empty_view() {
+    let df = indexed_view(constant(vec![]));
+    let types = validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+    assert_eq!(types[&GlobalId::Transient(21)].arity(), 1);
+}
+
+#[mz_ore::test]
+fn accepts_index_on_error_constant_view() {
+    let error = plan(LirRelationNode::Constant {
+        rows: Err(mz_expr::EvalError::DivisionByZero),
+    });
+    let df = indexed_view(error);
+    validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+}
+
+#[mz_ore::test]
+fn checks_stated_arity_over_empty_input() {
+    // The Mfp states arity 2 over an empty input, which the Union compares with arity 3.
+    let plan = union(vec![
+        mfp(constant(vec![]), 7, vec![], vec![], vec![0, 1]),
+        get_global(T1, AvailableCollections::new_raw()),
+    ]);
+    let errs = errors(&dataflow(&[(T1, 3)], vec![(OUT, plan)]));
+    assert_error(
+        &errs,
+        Rule::Arity,
+        "Union input 1 has arity 3, but input 0 has arity 2",
+    );
+}
+
 #[mz_ore::test]
 fn rejects_constant_rows_of_different_arity() {
     let plan = constant(vec![
