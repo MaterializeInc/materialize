@@ -446,7 +446,58 @@ fn round_trip_reports_lost_index_import() {
     // A name that does not resolve back to the import it came from is a mismatch.
     let df = extract_dataflow();
     let mut envelope = extract_envelope(&df, GlobalId::User(11), &name_of).expect("extracts");
+    envelope.imports[1].indexes = vec![ImportSource::Name("u4".into())];
+    let err = restore_and_compare(&df, GlobalId::User(11), &envelope).unwrap_err();
+    assert!(err.contains("index imports"), "{err}");
+}
+
+#[mz_ore::test]
+fn round_trip_rejects_import_without_access() {
+    let df = extract_dataflow();
+    let mut envelope = extract_envelope(&df, GlobalId::User(11), &name_of).expect("extracts");
     envelope.imports[1].indexes.clear();
     let err = restore_and_compare(&df, GlobalId::User(11), &envelope).unwrap_err();
-    assert!(err.contains("index"), "{err}");
+    assert!(err.contains("neither persist nor an index"), "{err}");
+}
+
+#[mz_ore::test]
+fn round_trip_reports_skipped_pushdown_redirect() {
+    // Reading the raw import instead of the pushdown object drops the pushed-down filter, yet
+    // both placeholders map back to `u1`.
+    let df = extract_dataflow();
+    let mut envelope = extract_envelope(&df, GlobalId::User(11), &name_of).expect("extracts");
+    let (raw, pushdown) = (GlobalId::Transient(1), GlobalId::Transient(3));
+    substitute_global_ids(
+        &mut envelope.objects[1].plan,
+        &BTreeMap::from([(pushdown, raw)]),
+    );
+    let err = restore_and_compare(&df, GlobalId::User(11), &envelope).unwrap_err();
+    assert!(err.contains("raw import"), "{err}");
+}
+
+#[mz_ore::test]
+fn extract_temporal_pushdown_has_bounds() {
+    use mz_expr::{MirScalarExpr, UnmaterializableFunc, func};
+
+    let mz_now = || MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
+    let mut df = extract_dataflow();
+    let import = df
+        .source_imports
+        .get_mut(&GlobalId::User(1))
+        .expect("source");
+    import.desc.arguments.operators = Some(MapFilterProject::new(2).filter([
+        mz_now().call_binary(MirScalarExpr::column(0), func::Gte),
+        mz_now().call_binary(MirScalarExpr::column(1), func::Lt),
+    ]));
+    let envelope = extract_envelope(&df, GlobalId::User(11), &name_of).expect("extracts");
+
+    let LirRelationNode::Mfp { mfp, .. } = &envelope.objects[0].plan.node else {
+        panic!("expected a pushdown Mfp, got {:?}", envelope.objects[0]);
+    };
+    let (safe, lower, upper) = mfp.clone().into_parts();
+    // `mz_now() >= #0` bounds from below by `#0`, `mz_now() < #1` from above by `#1`.
+    assert_eq!(lower, vec![LirScalarExpr::column(0)]);
+    assert_eq!(upper, vec![LirScalarExpr::column(1)]);
+    assert!(safe.into_mfp().predicates.is_empty());
+    assert_eq!(check_extract_round_trip(&df), Ok(()));
 }

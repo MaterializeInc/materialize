@@ -265,7 +265,9 @@ impl Coordinator {
             let catalog = self.catalog();
             let name_of = |id: GlobalId| {
                 let entry = catalog.get_entry_by_global_id(&id);
-                catalog.resolve_full_name(entry.name(), None).to_string()
+                // Quoted where SQL needs it, so that the name reads back as the same item.
+                let name = catalog.resolve_full_name(entry.name(), None);
+                ast::UnresolvedItemName::from(name).to_ast_string_simple()
             };
             let envelope =
                 extract_envelope(plan, sink.from, &name_of).map_err(AdapterError::Internal)?;

@@ -333,3 +333,82 @@ EXPLAIN PHYSICAL PLAN AS LIR JSON FOR SELECT * FROM t
 
 query error AS LIR JSON is only supported for EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW
 EXPLAIN PHYSICAL PLAN AS LIR JSON FOR INDEX u_a
+
+query error AS LIR JSON does not support WITH options
+EXPLAIN PHYSICAL PLAN WITH (humanized expressions) AS LIR JSON FOR MATERIALIZED VIEW mv
+
+# Names are quoted where SQL needs it, so they read back as the same items.
+statement ok
+CREATE TABLE "Mixed.Case" (a int8 NOT NULL)
+
+statement ok
+CREATE INDEX "Idx""Q" ON "Mixed.Case" (a)
+
+statement ok
+CREATE MATERIALIZED VIEW mv_quoted AS SELECT a FROM "Mixed.Case"
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS LIR JSON FOR MATERIALIZED VIEW mv_quoted
+----
+{
+  "lir_version": 1,
+  "imports": [
+    {
+      "id": {
+        "Transient": 1
+      },
+      "source": {
+        "Name": "materialize.public.\"Mixed.Case\""
+      },
+      "persist": false,
+      "indexes": [
+        {
+          "Name": "materialize.public.\"Idx\"\"Q\""
+        }
+      ]
+    }
+  ],
+  "objects": [
+    {
+      "id": {
+        "Transient": 2
+      },
+      "plan": {
+        "lir_id": 1,
+        "node": {
+          "Get": {
+            "id": {
+              "Global": {
+                "Transient": 1
+              }
+            },
+            "keys": {
+              "raw": false,
+              "arranged": [
+                [
+                  [
+                    {
+                      "Column": [
+                        0,
+                        "a"
+                      ]
+                    }
+                  ],
+                  [
+                    0
+                  ],
+                  []
+                ]
+              ]
+            },
+            "plan": "PassArrangements"
+          }
+        }
+      }
+    }
+  ],
+  "output": {
+    "Transient": 2
+  }
+}
+EOF

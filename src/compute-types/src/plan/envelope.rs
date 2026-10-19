@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use itertools::Itertools;
 use mz_expr::{Id, MapFilterProject, MfpPlan, MirScalarExpr, SafeMfpPlan};
 use mz_ore::str::separated;
 use mz_repr::{
@@ -58,7 +59,8 @@ pub struct EnvelopeImport {
 /// Names a catalog item to import.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub enum ImportSource {
-    /// A name as written by users, resolved during purification.
+    /// A SQL item name, resolved during purification. It is parsed with SQL identifier rules,
+    /// so unquoted parts fold to lowercase and quoted parts are taken verbatim.
     Name(String),
     /// The resolved item.
     Item {
@@ -432,9 +434,48 @@ pub(crate) fn check_extract_round_trip(df: &LirDataflowDescription) -> Result<()
         )
     })?;
     if parsed != envelope {
-        return Err("parsing the printed envelope does not restore it".to_string());
+        return Err(format!(
+            "parsing the printed envelope does not restore it: {}",
+            first_difference(&envelope, &parsed)
+        ));
     }
     restore_and_compare(df, output.id, &parsed)
+}
+
+/// Names the first part where `parsed` differs from `printed`.
+fn first_difference(printed: &LirPlanEnvelope, parsed: &LirPlanEnvelope) -> String {
+    // `zip_eq` panics on different lengths.
+    if printed.imports.len() != parsed.imports.len()
+        || printed.objects.len() != parsed.objects.len()
+    {
+        return format!(
+            "{} imports and {} objects became {} and {}",
+            printed.imports.len(),
+            printed.objects.len(),
+            parsed.imports.len(),
+            parsed.objects.len()
+        );
+    }
+    if let Some((a, b)) = printed
+        .imports
+        .iter()
+        .zip_eq(&parsed.imports)
+        .find(|(a, b)| a != b)
+    {
+        return format!("import {}: {a:?} != {b:?}", a.id);
+    }
+    if let Some((a, b)) = printed
+        .objects
+        .iter()
+        .zip_eq(&parsed.objects)
+        .find(|(a, b)| a != b)
+    {
+        return format!("object {}:\n{:?}\n!=\n{:?}", a.id, a.plan, b.plan);
+    }
+    format!(
+        "version {} or output {} became version {} or output {}",
+        printed.lir_version, printed.output, parsed.lir_version, parsed.output
+    )
 }
 
 /// Maps the placeholders of `envelope`, extracted from `df` with `output` and display-string
@@ -467,6 +508,12 @@ fn restore_and_compare(
     let mut indexes = BTreeMap::new();
     for import in &envelope.imports {
         let relation = resolve(&import.source)?;
+        if !import.persist && import.indexes.is_empty() {
+            return Err(format!(
+                "import {} of {relation} reads neither persist nor an index",
+                import.id
+            ));
+        }
         bind(&mut originals, import.id, relation)?;
         if import.persist {
             persist.insert(relation);
@@ -499,6 +546,8 @@ fn restore_and_compare(
         .ok_or_else(|| "the envelope has fewer objects than the dataflow".to_string())?;
     let (pushdown_objects, objects) = envelope.objects.split_at(pushdowns);
     let mut pushed = BTreeSet::new();
+    // Placeholders of the raw imports that pushdown objects read.
+    let mut raw_imports = BTreeSet::new();
     for object in pushdown_objects {
         let LirRelationNode::Mfp {
             input,
@@ -533,6 +582,7 @@ fn restore_and_compare(
             ));
         }
         pushed.insert(relation);
+        raw_imports.insert(*placeholder);
         bind(&mut originals, object.id, relation)?;
     }
     let expected: BTreeSet<_> = df
@@ -554,6 +604,25 @@ fn restore_and_compare(
         ));
     }
 
+    // The raw import and the pushdown object both map back to the relation, so comparing
+    // plans cannot tell a `Get` that skips the pushdown from one that reads it.
+    for object in objects {
+        let mut stack = vec![&object.plan];
+        while let Some(expr) = stack.pop() {
+            if let LirRelationNode::Get {
+                id: Id::Global(id), ..
+            } = &expr.node
+            {
+                if raw_imports.contains(id) {
+                    return Err(format!(
+                        "object {} reads the raw import {id} of a pushed-down source",
+                        object.id
+                    ));
+                }
+            }
+            stack.extend(expr.node.children());
+        }
+    }
     for (index, object) in objects.iter().enumerate() {
         bind(&mut originals, object.id, df.objects_to_build[index].id)?;
     }

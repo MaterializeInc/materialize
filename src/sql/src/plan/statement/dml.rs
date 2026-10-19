@@ -792,6 +792,11 @@ pub fn plan_explain_plan(
     };
     let stage = explain.stage();
 
+    // The envelope is the stored plan as is, so no option applies to it.
+    if format == ExplainFormat::LirJson && !explain.with_options.is_empty() {
+        sql_bail!("AS LIR JSON does not support WITH options");
+    }
+
     // Plan ExplainConfig.
     let mut config = {
         let mut with_options = ExplainPlanOptionExtracted::try_from(explain.with_options)?;
