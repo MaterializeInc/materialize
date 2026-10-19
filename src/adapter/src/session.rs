@@ -1557,9 +1557,11 @@ pub enum TransactionOps {
     /// uses this must return false in `must_serialize_ddl()` because this is serialized instead in
     /// `sequence_plan()` during `COMMIT`.
     DDL {
+        /// Commands in statement order, retaining outcomes already exposed to the client.
         commands: Vec<crate::catalog::command::CatalogCommand>,
-        /// Matching speculative baselines after the last accepted command.
+        /// Speculative state after the last accepted command.
         state: CatalogState,
+        /// Durable baseline corresponding to `state`.
         snapshot: Snapshot,
     },
 }
