@@ -43,10 +43,9 @@
 //! and the SDK sends it again after a second, which skips the requests
 //! turbopuffer already acknowledged. So a batch of any size makes progress, as
 //! long as [`materialize_sdk::DurableOptions::write_timeout`] stays above 20
-//! seconds and one request. A commit sends up to three requests, so
-//! keep [`materialize_sdk::DurableOptions::store_timeout`] above three times
-//! [`Connection::with_request_timeout`], or a slow commit counts as unknown
-//! and is settled by reading the checkpoint back.
+//! seconds and one request. A commit sends up to three requests within
+//! [`materialize_sdk::DurableOptions::store_timeout`], and one that runs
+//! longer counts as unknown and is settled by reading the checkpoint back.
 //!
 //! To tear a sink down, stop its workers, wait until no delayed write of
 //! theirs can still land, and delete every namespace named after it. Setup

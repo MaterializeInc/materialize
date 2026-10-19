@@ -175,6 +175,9 @@ pub(crate) struct Faults {
     pub(crate) plan: std::collections::VecDeque<Fault>,
     /// How many writes were sent to turbopuffer.
     pub(crate) sent: usize,
+    /// Ids whose rows turbopuffer refuses with a 400, as it would a row
+    /// that breaks a limit the sink does not check.
+    pub(crate) refused_ids: std::collections::BTreeSet<String>,
 }
 
 #[cfg(test)]
@@ -215,6 +218,13 @@ impl Client {
         namespace: &str,
         body: String,
     ) -> Result<WriteResponse, Failure> {
+        #[cfg(test)]
+        if let Some(id) = self.refused_id(&body) {
+            return Err(Failure::Refused {
+                status: 400,
+                message: format!("the test refuses the row {id}"),
+            });
+        }
         #[cfg(test)]
         let fault = self.next_fault();
         #[cfg(test)]
@@ -438,6 +448,16 @@ impl Client {
                 message: format!("turbopuffer failed ({status}): {message}"),
             }),
         }
+    }
+
+    #[cfg(test)]
+    fn refused_id(&self, body: &str) -> Option<String> {
+        let faults = self.faults.lock().unwrap();
+        faults
+            .refused_ids
+            .iter()
+            .find(|id| body.contains(&format!("\"id\":\"{id}\"")))
+            .cloned()
     }
 
     #[cfg(test)]

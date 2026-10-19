@@ -88,9 +88,8 @@ impl Reader {
 
     /// Reuses the incarnation looked up for up to `max_age`, which saves a
     /// request per query. After a switch, queries keep going to the old
-    /// incarnation for up to `max_age`, so it must stay below the sink's grace
-    /// period: the sink deletes a retired incarnation twice that period after
-    /// the switch, and a lookup itself can lag by up to it.
+    /// incarnation for up to `max_age`. The sink keeps retired incarnations,
+    /// so such a query reads stale documents but does not fail.
     pub fn with_cache(mut self, max_age: Duration) -> Reader {
         self.max_age = max_age;
         self

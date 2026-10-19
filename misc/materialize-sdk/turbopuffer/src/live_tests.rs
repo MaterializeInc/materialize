@@ -963,6 +963,145 @@ async fn a_long_write_yields_and_continues_where_it_stopped() {
     );
 }
 
+#[tokio::test]
+#[ignore = "needs TURBOPUFFER_API_KEY"]
+async fn writes_skip_acknowledged_documents_and_isolate_refused_rows() {
+    let name = unique("robust");
+    let _cleanup = Cleanup(name.clone());
+    let mut sink = TurbopufferSink::new(&connection(), "s", &name).unwrap();
+    let namespace = data_namespace(&name, 2);
+    let batch = SinkBatch::new(
+        (1..=4)
+            .map(|i| upsert(5, &i.to_string(), "t", "1"))
+            .collect(),
+        columns(),
+        2,
+        false,
+    );
+
+    // The first request lands and the second is dropped, then the requests
+    // split differently: the resend still skips the acknowledged document.
+    sink.request_rows = 1;
+    sink.client
+        .faults
+        .lock()
+        .unwrap()
+        .plan
+        .extend([Fault::Pass, Fault::Drop]);
+    assert!(matches!(
+        sink.write(&batch, None).await,
+        WriteResult::Failed(_)
+    ));
+    let sent = sink.client.faults.lock().unwrap().sent;
+    // Three rows a request: the three unacknowledged documents take one, and
+    // all four would take two.
+    sink.request_rows = 3;
+    match sink.write(&batch, None).await {
+        WriteResult::Applied { rejected } => assert!(rejected.is_empty()),
+        other => panic!("expected applied, got {other:?}"),
+    }
+    assert_eq!(sink.client.faults.lock().unwrap().sent - sent, 1);
+    assert_eq!(live_documents(&sink.client, &namespace).await.len(), 4);
+
+    // A row turbopuffer refuses is found by splitting its request, and only
+    // it is rejected.
+    sink.client
+        .faults
+        .lock()
+        .unwrap()
+        .refused_ids
+        .insert("7".into());
+    let refused = SinkBatch::new(
+        (5..=8)
+            .map(|i| upsert(6, &i.to_string(), "t", "1"))
+            .collect(),
+        columns(),
+        2,
+        false,
+    );
+    match sink.write(&refused, None).await {
+        WriteResult::Applied { rejected } => {
+            let found: Vec<_> = rejected
+                .iter()
+                .map(|r| (r.index, r.category.as_str()))
+                .collect();
+            assert_eq!(found, [(2, "refused")]);
+        }
+        other => panic!("expected applied, got {other:?}"),
+    }
+    let stored = live_documents(&sink.client, &namespace).await;
+    assert_eq!(stored.len(), 7);
+    assert!(!stored.contains_key("7"));
+}
+
+#[tokio::test]
+#[ignore = "needs TURBOPUFFER_API_KEY"]
+async fn a_worker_whose_incarnation_was_retired_stops() {
+    let name = unique("fence");
+    let _cleanup = Cleanup(name.clone());
+    let mut owner = TurbopufferSink::new(&connection(), "s", &name).unwrap();
+    let created = Checkpoint::new(BTreeMap::new());
+    assert!(matches!(
+        owner.create(&created.encode().unwrap()).await,
+        WriteResult::Applied { .. }
+    ));
+    let (take_over, taken) = CheckpointWrite::take_over(&created).unwrap();
+    commit_until_applied(&mut owner, &take_over).await;
+    let (start, started) = CheckpointWrite::start_snapshot(&taken, BTreeMap::new(), 5).unwrap();
+    commit_until_applied(&mut owner, &start).await;
+
+    // A stale worker of that snapshot writes, then a newer worker restarts
+    // the snapshot, which retires the stale worker's incarnation.
+    let mut stale = TurbopufferSink::new(&connection(), "s", &name).unwrap();
+    stale.fence_interval = Duration::ZERO;
+    let chunk = |id: &str| {
+        SinkBatch::new(
+            vec![upsert(5, id, "t", "1")],
+            columns(),
+            started.generation,
+            true,
+        )
+    };
+    assert!(matches!(
+        stale.write(&chunk("1"), None).await,
+        WriteResult::Applied { .. }
+    ));
+    let (restart, _) = CheckpointWrite::start_snapshot(&started, BTreeMap::new(), 6).unwrap();
+    commit_until_applied(&mut owner, &restart).await;
+    match stale.write(&chunk("2"), None).await {
+        WriteResult::Failed(SinkError::Target { permanent, .. }) => assert!(permanent),
+        other => panic!("expected the stale worker to stop, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs TURBOPUFFER_API_KEY"]
+async fn many_tombstones_fit_one_request_in_a_namespace_that_embeds() {
+    let name = unique("tombs");
+    let _cleanup = Cleanup(name.clone());
+    let mut sink = TurbopufferSink::new(&connection(), "s", &name)
+        .unwrap()
+        .embed("title", MODEL, 1024);
+    let first = SinkBatch::new(vec![titled(5, "0", Some("hello"), "1")], columns(), 2, true);
+    assert!(matches!(
+        sink.write(&first, None).await,
+        WriteResult::Applied { .. }
+    ));
+    let sent = sink.client.faults.lock().unwrap().sent;
+    // Rows that carry a vector do not count against the 256 rows to embed.
+    let deletes = SinkBatch::new(
+        (1..=300).map(|i| delete(6, &i.to_string())).collect(),
+        columns(),
+        2,
+        false,
+    );
+    match sink.write(&deletes, None).await {
+        WriteResult::Applied { rejected } => assert!(rejected.is_empty()),
+        other => panic!("expected applied, got {other:?}"),
+    }
+    assert_eq!(sink.client.faults.lock().unwrap().sent - sent, 1);
+}
+
 /// Materialize at `MATERIALIZE_URL`.
 fn materialize() -> tokio_postgres::Config {
     std::env::var("MATERIALIZE_URL")
