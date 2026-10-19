@@ -1905,13 +1905,6 @@ impl CatalogState {
 
                 let initial_as_of = materialized_view.as_of.map(Antichain::from_elem);
 
-                // Resolve all item dependencies from the HIR expression.
-                let dependencies = raw_expr
-                    .depends_on()
-                    .into_iter()
-                    .map(|gid| self.get_entry_by_global_id(&gid).id())
-                    .collect();
-
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
                     collections,
@@ -1920,7 +1913,9 @@ impl CatalogState {
                     desc,
                     resolved_ids,
                     query_ids: materialized_view.query_ids,
-                    dependencies,
+                    // The replacement target is a lifecycle dependency even
+                    // when the query does not read it.
+                    dependencies: materialized_view.dependencies,
                     replacement_target: materialized_view.replacement_target,
                     cluster_id: materialized_view.cluster_id,
                     target_replica: materialized_view.target_replica,

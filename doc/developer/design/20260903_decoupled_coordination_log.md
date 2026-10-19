@@ -258,8 +258,14 @@ to 85.354ms. Both arms observe finite committed-bound advancement, not proof of
 physical since advancement. All 15 fixture containers use the budget, with the
 same effective S3/Postgres backends. Preserve this as preparation-cost evidence,
 not resolution of CI starvation. See `scratch/prepared-admission-report.md` and
-the archived comparison. Candidate services remain available on the worker.
-Original-workload verification on actual original-budget hosts remains open.
+the archived comparison. Both fixture arms are stopped after inspection, with
+containers, volumes and off-worker evidence retained.
+Reproduce the statement-logging and HTTP-session cleanup observations separately
+from the replacement-MV replay correction. Evidence is under
+`scratch/replacement-mv/` and `scratch/ci139617/`, with detailed outcomes in the PR.
+Original-budget SQL completion and sustained advancement remain unresolved.
+Use the fixed-seed workload with existing scoped tracing before reassessing
+shared-write arbitration. Preserve its in-flight verification when publishing fixes.
 Committed bounds advance elsewhere, without proving physical reclamation or
 fleet-wide progress. Snapshot waits and append conflicts remain open. A legacy CREATE
 CLUSTER retry turn occupies the coordinator for 8.87s. Keep the refresh-to-commit

@@ -6310,6 +6310,12 @@ mod tests {
                         Antichain::from_elem(visibility),
                     );
                     if name == "mv_replacement" {
+                        assert_eq!(
+                            created.get_entry(&id).materialized_view()
+                                .expect("replacement materialized view").dependencies.0,
+                            BTreeSet::from([ids["mv_hidden"].0, mv_id]),
+                            "replacement replay must retain its target dependency",
+                        );
                         let apply = vec![
                             Op::SetReadProtection {
                                 requirements: vec![
