@@ -39,6 +39,7 @@ use mz_sql::session::vars::{self, DEFAULT_TIMESTAMP_INTERVAL, SystemVars, Var};
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::read_policy::ReadPolicy;
+use mz_storage_types::sources::SourceConnection;
 use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};

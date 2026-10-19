@@ -177,7 +177,7 @@ impl SourceStatement {
         let owner_id = self.session.role_metadata().current_role;
         let mut ops = Vec::new();
         let mut if_not_exists = BTreeMap::new();
-        match plan.clone() {
+        match &plan {
             Plan::CreateSources(plans) => {
                 for bundle in plans {
                     let mz_sql::plan::CreateSourcePlanBundle {
@@ -194,15 +194,15 @@ impl SourceStatement {
                         return Err(AdapterError::Unsupported("webhook source command"));
                     }
                     if plan.if_not_exists {
-                        if_not_exists.insert(item_id, plan.name.clone());
+                        if_not_exists.insert(*item_id, plan.name.clone());
                     }
                     ops.push(Op::CreateItem {
-                        id: item_id,
+                        id: *item_id,
                         name: plan.name.clone(),
                         item: CatalogItem::Source(Source::new(
-                            plan,
-                            global_id,
-                            resolved_ids,
+                            plan.clone(),
+                            *global_id,
+                            resolved_ids.clone(),
                             None,
                             false,
                         )),
@@ -210,8 +210,8 @@ impl SourceStatement {
                     });
                     if let Some(references) = available_source_references {
                         ops.push(Op::UpdateSourceReferences {
-                            source_id: item_id,
-                            references: references.into(),
+                            source_id: *item_id,
+                            references: references.clone().into(),
                         });
                     }
                 }
@@ -228,9 +228,9 @@ impl SourceStatement {
                 }
                 ops.push(Op::CreateItem {
                     id,
-                    name: plan.name,
+                    name: plan.name.clone(),
                     item: CatalogItem::Table(Table::from_plan(
-                        plan.table,
+                        plan.table.clone(),
                         global_id,
                         self.session.conn_id().clone(),
                         resolved_ids,
