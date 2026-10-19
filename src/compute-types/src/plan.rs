@@ -829,6 +829,34 @@ impl LirRelationExpr {
 
         soft_assert_eq_no_log!(dataflow.check_invariants(), Ok(()));
 
+        // Optimizer plans must pass the validator that user plans face, minus the
+        // function allowlist, so that its rules do not reject what the optimizer produces.
+        if mz_ore::assert::soft_assertions_enabled() {
+            let config = validate::ValidateConfig {
+                enforce_function_allowlist: false,
+            };
+            if let Err(errors) = validate::validate_dataflow(&dataflow, &config) {
+                let errors = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>();
+                let explain_config = ExplainConfig {
+                    node_ids: true,
+                    ..Default::default()
+                };
+                let plans = dataflow
+                    .objects_to_build
+                    .iter()
+                    .map(|build| {
+                        let plan = build.plan.debug_explain(&explain_config, None);
+                        format!("{}:\n{plan}", build.id)
+                    })
+                    .collect::<Vec<_>>();
+                mz_ore::soft_panic_or_log!(
+                    "LIR validation failed for dataflow {}: {errors:#?}\n{}",
+                    dataflow.debug_name,
+                    plans.join("\n")
+                );
+            }
+        }
+
         mz_repr::explain::trace_plan(&dataflow);
 
         Ok(dataflow)
