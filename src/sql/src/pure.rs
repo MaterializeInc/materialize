@@ -1889,124 +1889,50 @@ async fn purify_alter_source_refresh_references(
     })
 }
 
-async fn purify_create_table_from_source(
-    catalog: impl SessionCatalog,
-    mut stmt: CreateTableFromSourceStatement<Aug>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TableFromSourcePreparation {
+    connection: GenericSourceConnection,
+    requested_references: Option<ExternalReferences>,
+    qualified_text_columns: Vec<UnresolvedItemName>,
+    qualified_exclude_columns: Vec<UnresolvedItemName>,
+    filter_constraints: FilterConstraints,
+    exclude_all_not_null_constraints: bool,
+    unresolved_source_name: UnresolvedItemName,
+}
+
+async fn execute_table_from_source_preparation(
+    request: TableFromSourcePreparation,
     storage_configuration: &StorageConfiguration,
-) -> Result<PurifiedStatement, PlanError> {
-    let scx = StatementContext::new(None, &catalog);
-    let CreateTableFromSourceStatement {
-        name: _,
-        columns,
-        constraints,
-        source: source_name,
-        if_not_exists: _,
-        external_reference,
-        format,
-        envelope,
-        include_metadata: _,
-        with_options,
-    } = &mut stmt;
-
-    // Columns and constraints cannot be specified by the user but will be populated below.
-    if matches!(columns, TableFromSourceColumns::Defined(_)) {
-        sql_bail!("CREATE TABLE .. FROM SOURCE column definitions cannot be specified directly");
-    }
-    if !constraints.is_empty() {
-        sql_bail!(
-            "CREATE TABLE .. FROM SOURCE constraint definitions cannot be specified directly"
-        );
-    }
-
-    // Get the source item
-    let item = match scx.get_item_by_resolved_name(source_name) {
-        Ok(item) => item,
-        Err(e) => return Err(e),
-    };
-
-    // Ensure it's an ingestion-based and alterable source.
-    let desc = match item.source_desc()? {
-        Some(desc) => desc.clone().into_inline_connection(scx.catalog),
-        None => {
-            sql_bail!("cannot ALTER this type of source")
-        }
-    };
-    let unresolved_source_name: UnresolvedItemName = source_name.full_item_name().clone().into();
-
-    let crate::plan::statement::ddl::TableFromSourceOptionExtracted {
-        text_columns,
-        exclude_columns,
-        exclude_constraints,
-        exclude_all_constraints,
+) -> Result<(PurifiedSourceExport, SourceFormatOptions), PlanError> {
+    let TableFromSourcePreparation {
+        connection,
+        requested_references,
+        qualified_text_columns,
+        qualified_exclude_columns,
+        filter_constraints,
         exclude_all_not_null_constraints,
-        retain_history: _,
-        details,
-        partition_by: _,
-        seen: _,
-    } = with_options.clone().try_into()?;
-    if details.is_some() {
-        sql_bail!("DETAILS option cannot be explicitly set");
-    }
-
-    let filter_constraints =
-        FilterConstraints::from_options(exclude_constraints, exclude_all_constraints)?;
-    if filter_constraints.excludes_any() || exclude_all_not_null_constraints {
-        scx.require_feature_flag(&crate::session::vars::ENABLE_EXCLUDE_CONSTRAINTS_OPTION)?;
-    }
-
-    // Our text column values are unqualified (just column names), but the purification methods below
-    // expect to match the fully-qualified names against the full set of tables in upstream, so we
-    // need to qualify them using the external reference first.
-    let qualified_text_columns = text_columns
-        .iter()
-        .map(|col| {
-            UnresolvedItemName(
-                external_reference
-                    .as_ref()
-                    .map(|er| er.0.iter().chain_one(col).map(|i| i.clone()).collect())
-                    .unwrap_or_else(|| vec![col.clone()]),
-            )
-        })
-        .collect_vec();
-    let qualified_exclude_columns = exclude_columns
-        .iter()
-        .map(|col| {
-            UnresolvedItemName(
-                external_reference
-                    .as_ref()
-                    .map(|er| er.0.iter().chain_one(col).map(|i| i.clone()).collect())
-                    .unwrap_or_else(|| vec![col.clone()]),
-            )
-        })
-        .collect_vec();
-
+        unresolved_source_name,
+    } = request;
     // Should be overriden below if a source-specific format is required.
     let mut format_options = SourceFormatOptions::Default;
 
     let retrieved_source_references: RetrievedSourceReferences;
 
-    let requested_references = external_reference.as_ref().map(|ref_name| {
-        ExternalReferences::SubsetTables(vec![ExternalReferenceExport {
-            reference: ref_name.clone(),
-            alias: None,
-        }])
-    });
-
     if (filter_constraints.excludes_any() || exclude_all_not_null_constraints)
         && !matches!(
-            desc.connection,
+            connection,
             GenericSourceConnection::Postgres(_) | GenericSourceConnection::MySql(_)
         )
     {
         sql_bail!(
             "EXCLUDE CONSTRAINTS is not supported for {} sources",
-            desc.connection.name()
+            connection.name()
         );
     }
 
     // Run purification work specific to each source type: resolve the external reference to
     // a fully qualified name and obtain the appropriate details for the source-export statement
-    let purified_export = match desc.connection {
+    let purified_export = match connection {
         GenericSourceConnection::Postgres(pg_source_connection) => {
             // Get PostgresConnection for generating subsources.
             let pg_connection = &pg_source_connection.connection;
@@ -2196,6 +2122,119 @@ async fn purify_create_table_from_source(
             }
         }
     };
+
+    Ok((purified_export, format_options))
+}
+
+async fn purify_create_table_from_source(
+    catalog: impl SessionCatalog,
+    mut stmt: CreateTableFromSourceStatement<Aug>,
+    storage_configuration: &StorageConfiguration,
+) -> Result<PurifiedStatement, PlanError> {
+    let scx = StatementContext::new(None, &catalog);
+    let CreateTableFromSourceStatement {
+        name: _,
+        columns,
+        constraints,
+        source: source_name,
+        if_not_exists: _,
+        external_reference,
+        format,
+        envelope,
+        include_metadata: _,
+        with_options,
+    } = &mut stmt;
+
+    // Columns and constraints cannot be specified by the user but will be populated below.
+    if matches!(columns, TableFromSourceColumns::Defined(_)) {
+        sql_bail!("CREATE TABLE .. FROM SOURCE column definitions cannot be specified directly");
+    }
+    if !constraints.is_empty() {
+        sql_bail!(
+            "CREATE TABLE .. FROM SOURCE constraint definitions cannot be specified directly"
+        );
+    }
+
+    // Get the source item
+    let item = match scx.get_item_by_resolved_name(source_name) {
+        Ok(item) => item,
+        Err(e) => return Err(e),
+    };
+
+    // Ensure it's an ingestion-based and alterable source.
+    let desc = match item.source_desc()? {
+        Some(desc) => desc.clone().into_inline_connection(scx.catalog),
+        None => {
+            sql_bail!("cannot ALTER this type of source")
+        }
+    };
+    let unresolved_source_name: UnresolvedItemName = source_name.full_item_name().clone().into();
+
+    let crate::plan::statement::ddl::TableFromSourceOptionExtracted {
+        text_columns,
+        exclude_columns,
+        exclude_constraints,
+        exclude_all_constraints,
+        exclude_all_not_null_constraints,
+        retain_history: _,
+        details,
+        partition_by: _,
+        seen: _,
+    } = with_options.clone().try_into()?;
+    if details.is_some() {
+        sql_bail!("DETAILS option cannot be explicitly set");
+    }
+
+    let filter_constraints =
+        FilterConstraints::from_options(exclude_constraints, exclude_all_constraints)?;
+    if filter_constraints.excludes_any() || exclude_all_not_null_constraints {
+        scx.require_feature_flag(&crate::session::vars::ENABLE_EXCLUDE_CONSTRAINTS_OPTION)?;
+    }
+
+    // Our text column values are unqualified (just column names), but the purification methods below
+    // expect to match the fully-qualified names against the full set of tables in upstream, so we
+    // need to qualify them using the external reference first.
+    let qualified_text_columns = text_columns
+        .iter()
+        .map(|col| {
+            UnresolvedItemName(
+                external_reference
+                    .as_ref()
+                    .map(|er| er.0.iter().chain_one(col).map(|i| i.clone()).collect())
+                    .unwrap_or_else(|| vec![col.clone()]),
+            )
+        })
+        .collect_vec();
+    let qualified_exclude_columns = exclude_columns
+        .iter()
+        .map(|col| {
+            UnresolvedItemName(
+                external_reference
+                    .as_ref()
+                    .map(|er| er.0.iter().chain_one(col).map(|i| i.clone()).collect())
+                    .unwrap_or_else(|| vec![col.clone()]),
+            )
+        })
+        .collect_vec();
+
+    let requested_references = external_reference.as_ref().map(|ref_name| {
+        ExternalReferences::SubsetTables(vec![ExternalReferenceExport {
+            reference: ref_name.clone(),
+            alias: None,
+        }])
+    });
+
+    let request = TableFromSourcePreparation {
+        connection: desc.connection,
+        requested_references,
+        qualified_text_columns,
+        qualified_exclude_columns,
+        filter_constraints,
+        exclude_all_not_null_constraints,
+        unresolved_source_name,
+    };
+    let (purified_export, format_options) =
+        execute_table_from_source_preparation(request, storage_configuration).await?;
 
     purify_source_format(
         &catalog,
