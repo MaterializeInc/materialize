@@ -807,7 +807,7 @@ itself, so the spread between `t_i` values does not arise.
 
 | Error | Detected by | Default |
 | --- | --- | --- |
-| `Transient` | no SQLSTATE, `08000`, `08001`, `08003`, `08004`, `08006`, `25P03` | reconnect through the connection factory and resume, within the retry budget, then stall |
+| `Transient` | no SQLSTATE (a lost connection, or a TLS or name-resolution failure), `08000`, `08001`, `08003`, `08004`, `08006`, `25P03` | reconnect through the connection factory and resume, within the retry budget, then stall |
 | `CredentialsExpired` | `28000` | one reconnect through the connection factory, then `Fatal` |
 | `Canceled` | `57014` (a cancel or a timeout) | stop |
 | `FellBehind` | `53200` | resume from the last commit with backoff, report a metric |
@@ -823,7 +823,7 @@ itself, so the spread between `t_i` values does not arise.
 | `TimestampTooLarge` | the client limit on one open timestamp | stop with remedy |
 | `DeliveryFailed` | a sink error after the retry policy gives up, or one marked permanent | the delivery policy, `stall` by default |
 | `IndexedTarget` | startup check, and the re-check before `HistoryLost` | stop with remedy |
-| `Fatal` | anything else (auth, TLS, SQL) | stop |
+| `Fatal` | anything else (auth, SQL) | stop |
 
 A session that sits idle inside its transaction for longer than
 `idle_in_transaction_session_timeout` (two minutes by default,
@@ -1336,6 +1336,25 @@ A Python or Node package, if it lands in the same period, also tests that the
 protocol core binds into another language without packaging or performance
 problems.
 
+The prototype leaves these parts of the design for after it.
+
+In the SDK:
+
+- a connection factory, to renew expired credentials,
+- the skip and dead-letter delivery policies, and the history-loss policies,
+- merging the batches of one `commit_interval`, and `max_commit_bytes`,
+- the idempotency and correlation keys for event targets,
+- the `NOT ENFORCED` acknowledgement of an upsert key,
+- the startup index and retention checks, and the margin metric. A history-loss
+  error is already resolved into `IndexedTarget` or `HistoryLost`.
+
+In the turbopuffer sink:
+
+- continuing a crashed snapshot in its incarnation,
+- writing changes during a snapshot,
+- deleting retired incarnations, and the tombstone sweep,
+- embedding through a transform.
+
 ## Delivery plan
 
 October: the prototype above, with the end-to-end suite in the nightlies, and
@@ -1753,7 +1772,9 @@ with the same fingerprints, while that `AS OF` is readable. The retry writes
 every change a stale worker of that attempt could write, so the timestamp
 conditions skip the stale worker's older writes. A retry at another `AS OF`, or
 after the fingerprints changed, starts a new snapshot. The first snapshot
-follows the same rule.
+follows the same rule. The prototype does not continue a crashed attempt yet:
+every retry starts a new snapshot under a new generation, and so embeds every
+text again.
 
 When the snapshot completes, the sink waits until turbopuffer has indexed the
 new namespaces, because readers that use eventually consistent queries can miss
@@ -1796,15 +1817,19 @@ that finds each of the incarnation's namespaces gone is final, and the next
 commit's patch drops the entry. Each entry is one number, and the document limit
 above applies.
 
-While a snapshot is being written, the sink writes changes after its `AS OF` as
-they arrive instead of buffering them, since the timestamp conditions make the
-order of writes irrelevant, and it commits the frontier only once the snapshot
-is complete. A snapshot can take hours at turbopuffer's embedding limits (see
-below), and buffering those changes would overflow the client buffer and
-restart the snapshot. turbopuffer's `branch_from_namespace` makes an instant
-copy of a namespace, which could let a re-snapshot reuse unchanged vectors
-instead of embedding everything again. That needs its own correctness review and
-is left for after the first version.
+While a snapshot is being written, changes after its `AS OF` wait in the client
+buffer, appended into larger batches (see "Live streams"), and the sink writes
+them once the snapshot's chunks are written. It commits the frontier only once
+the snapshot is complete. A snapshot can take hours at turbopuffer's embedding
+limits (see below), and one that takes longer than the buffer can hold changes
+for fails and starts again. The timestamp conditions would allow writing those
+changes as they arrive, in any order with the snapshot, which is left for after
+the prototype.
+
+turbopuffer's `branch_from_namespace` makes an instant copy of a namespace,
+which could let a re-snapshot reuse unchanged vectors instead of embedding
+everything again. That needs its own correctness review and is left for after
+the first version.
 
 turbopuffer can compute embeddings itself. Its native embedding takes an `embed`
 option on a string attribute, names one of the models turbopuffer hosts, bills
@@ -1812,16 +1837,22 @@ per token, and recomputes the vector on every write of that attribute. The sink
 will use native embedding by default, so neither the sink nor Materialize runs
 embedding code or holds model credentials. A sink that needs a model turbopuffer
 does not host can use a transform instead: Rust code that calls the embedding
-provider and supplies the vector.
+provider and supplies the vector. The prototype has native embedding only.
 
-Native embedding has limits the sink is built around. A write with embedded
-attributes takes at most 256 rows, a namespace can have at most 4 embedded
-attributes (turbopuffer's limits page), and a new organization gets 1,024
-requests and 2 million tokens per minute for each model (turbopuffer's embedding
-page). turbopuffer also answers HTTP 429 to upserts while a namespace's indexing
-backlog is over its limit (turbopuffer's limits page). A rate-limit response
-counts as throttling, not as a failure: the sink paces its writes by tokens, and
-throttling does not use the retry budget, so a long snapshot does not stall.
+Native embedding has limits the sink is built around:
+
+- A write takes at most 256 rows with text to embed. Rows that carry a vector
+  do not count (tested).
+- A namespace can have at most 4 embedded attributes (turbopuffer's limits
+  page).
+- A new organization gets 1,024 requests and 2 million tokens per minute for
+  each model (turbopuffer's embedding page).
+- turbopuffer answers HTTP 429 to upserts while a namespace's indexing backlog
+  is over its limit (turbopuffer's limits page).
+
+A rate-limit response counts as throttling, not as a failure: the sink paces its
+writes by tokens, and throttling does not use the retry budget, so a long
+snapshot does not stall.
 
 The sink relies on two behaviors that turbopuffer's docs leave out, both tested
 against the API. A patch that leaves the text out keeps the stored vector and
