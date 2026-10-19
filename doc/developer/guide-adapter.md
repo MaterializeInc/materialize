@@ -91,14 +91,14 @@ the same physical quota that catalog accounting correctly considered available.
 Slow message handling stalls the coordinator: nothing else runs while a handler
 awaits. Do network round trips, such as timestamp-oracle and persist calls, off
 the loop and hand the handler only the result, and keep per-message work from
-growing with catalog size. It is worse on `internal_cmd_rx`, the first branch of
-the `biased` `select!`: back-to-back messages there starve every other branch,
-so a task that sends periodic messages must sleep after each reply.
-`tokio::time::interval` does not: it returns an overdue tick immediately,
-whatever its `MissedTickBehavior`.
+growing with catalog size. The loop is biased: it polls its sources in a fixed
+order, internal commands first, so a steady stream on an early source starves
+the later ones. A task that sends periodic internal commands must therefore
+pause after each reply. A `tokio::time::interval` does not: it fires an overdue
+tick immediately, whatever its missed-tick behavior.
 
 A read-only (0dt) coordinator needs the same liveness as the leader: it serves
-no queries, but a stall there blocks promotion (SQL-806).
+no queries, but a stall there blocks promotion.
 
 ## Correctness Invariants
 
