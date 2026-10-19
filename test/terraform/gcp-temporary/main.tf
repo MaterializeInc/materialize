@@ -268,6 +268,12 @@ module "materialize_instance" {
 
   environmentd_version = var.environmentd_version
 
+  # Testdrive runs `ALTER SYSTEM RESET ALL` before each file, which would undo
+  # an `ALTER SYSTEM SET persist_blob_http_pool`.
+  environmentd_extra_args = [
+    "--system-parameter-default=persist_blob_http_pool=gcs",
+  ]
+
   # Rollout configuration
   force_rollout   = var.force_rollout
   request_rollout = var.request_rollout
