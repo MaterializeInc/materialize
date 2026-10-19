@@ -39,6 +39,16 @@ from materialize.mzcompose.services.sql_server import (
 )
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.parallel_workload.catalog_transactions import (
+    hammer,
+    independent_ddl,
+    late_binding,
+    rename_noop,
+    schema_swap,
+    source_ddl,
+    source_drop_conflicts,
+    source_noop_conflict,
+)
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
 from materialize.parallel_workload.settings import (
     ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
@@ -173,6 +183,77 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         #     # Don't fail the entire run. We ran into a crash,
         #     # ci-annotate-errors will handle this if it's an unknown failure.
         #     return
+
+
+def workflow_catalog_transactions(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Opt-in catalog command execution contracts and a no-retry DDL hammer."""
+    rename_cases = [
+        "independent",
+        "replacement",
+        "rename_away",
+        "destination",
+        "authorization",
+        "rename-noop",
+        "swap",
+        "hammer",
+    ]
+    cases = [*rename_cases, "source", "source-noop", "source-drop"]
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--rounds", type=int, default=25)
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--materialized-image", help="Use a prebuilt baseline or candidate image"
+    )
+    parser.add_argument(
+        "--case",
+        choices=["all", "rename", *cases],
+        default="all",
+    )
+    args = parser.parse_args()
+    if args.workers < 2 or args.rounds < 1:
+        parser.error("at least two workers and one round are required")
+
+    # Restart with the selected image before restoring the composition. The outer
+    # override suppresses the framework's post-workflow restart with its default image.
+    with (
+        c.override(Materialized(image=args.materialized_image, sanity_restart=False)),
+        c.override(Materialized(image=args.materialized_image)),
+    ):
+        c.up("materialized")
+
+        def process(case: str) -> None:
+            with c.test_case(f"catalog-transactions-{case}"):
+                print(f"catalog-transactions case={case} seed={args.seed}", flush=True)
+                if case == "independent":
+                    for before_commit in (False, True):
+                        for same_schema in (False, True):
+                            independent_ddl(c, before_commit, same_schema)
+                elif case == "hammer":
+                    hammer(c, args.workers, args.rounds)
+                elif case == "source":
+                    source_ddl(c)
+                elif case == "source-noop":
+                    source_noop_conflict(c)
+                elif case == "rename-noop":
+                    rename_noop(c)
+                elif case == "swap":
+                    schema_swap(c)
+                elif case == "source-drop":
+                    source_drop_conflicts(c)
+                else:
+                    for steps in (0, 8):
+                        late_binding(c, case, args.seed, steps)
+
+        selected = (
+            cases
+            if args.case == "all"
+            else rename_cases if args.case == "rename" else [args.case]
+        )
+        c.test_parts(selected, process)
+        if c.is_sanity_restart_mz:
+            c.sanity_restart_mz()
 
 
 def toxiproxy_start(c: Composition, external: bool) -> None:
