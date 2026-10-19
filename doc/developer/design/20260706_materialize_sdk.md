@@ -1165,11 +1165,23 @@ exists. If native packaging proves too costly, the fallback is B plus A.
 
 ### Generated and hand-written parts
 
-The binding glue and each package's type definitions will be generated from the
-protocol core. wasm-bindgen emits TypeScript declarations, and the Python
-package will ship type stubs generated from the PyO3 module. Each package will
-hand-write only the transport over its driver, the idiomatic API surface
-(iterators in Python, async iterators in Node), and the sink modules.
+Every binding wraps one facade in the protocol core. Its calls take and return
+the conformance vectors' JSON forms, so a binding only passes strings, and each
+package runs the stateful vectors through its own binding. The glue is then a
+few lines per call, and the prototype's Python and Node glue have the same
+shape.
+
+The type definitions are generated or checked against the built binding:
+
+- Node: wasm-bindgen generates the TypeScript declarations, and the build
+  type-checks the package against them.
+- Python: the stubs are written by hand, and `mypy.stubtest` fails when they
+  no longer match the built module. The PyO3 stub generator required an older
+  PyO3 and brought in dependencies that `deny.toml` refuses.
+
+Each package will hand-write only the transport over its driver, the idiomatic
+API surface (iterators in Python, async iterators in Node), the conversion of
+the JSON form to native types, and the sink modules.
 
 Type mapping lives in the protocol core: it decodes each Materialize type into
 one documented value model, and each binding converts that model to the
