@@ -315,7 +315,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: parallel-workload
           run: catalog-transactions
-          args: [--case=rename]
+          args: [--case=all]
     agents:
       queue: hetzner-aarch64-16cpu-32gb
 

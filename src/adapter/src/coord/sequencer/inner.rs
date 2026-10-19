@@ -557,7 +557,7 @@ impl Coordinator {
         } = self.create_source_inner(ctx.session(), plans).await?;
 
         let transact_result = self
-            .catalog_transact_with_ddl_transaction(ctx, ops, |_, _| Box::pin(async {}))
+            .catalog_transact_with_context(None, Some(ctx), ops)
             .await;
 
         // Check if any sources are webhook sources and report them as created.
@@ -985,7 +985,7 @@ impl Coordinator {
         }];
 
         let catalog_result = self
-            .catalog_transact_with_ddl_transaction(ctx, ops, |_, _| Box::pin(async {}))
+            .catalog_transact_with_context(None, Some(ctx), ops)
             .await;
 
         if is_webhook {
@@ -2012,6 +2012,18 @@ impl Coordinator {
         let result = self.sequence_end_transaction_inner(&mut ctx, action).await;
 
         let (response, action) = match result {
+            Ok(Some(TransactionOps::DDL { commands, .. })) => {
+                self.sequence_ddl_commit(crate::coord::ddl::PendingDdlCommit::transaction(
+                    PendingTxn {
+                        ctx,
+                        response,
+                        action,
+                    },
+                    commands,
+                ))
+                .await;
+                return;
+            }
             Ok(Some(TransactionOps::Writes(writes))) if writes.is_empty() => (response, action),
             Ok(Some(TransactionOps::Writes(writes))) => {
                 let mut collected_writes: BTreeMap<CatalogItemId, SmallVec<_>> = BTreeMap::new();
@@ -2117,37 +2129,6 @@ impl Coordinator {
 
                         // `rows` can be empty if, say, a DELETE's WHERE clause had 0 results.
                         writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
-                    }
-                    TransactionOps::DDL {
-                        ops,
-                        state: _,
-                        side_effects,
-                        revision,
-                        snapshot: _,
-                    } => {
-                        // Precomputed writes require their original catalog revision.
-                        if *revision != self.catalog().transient_revision()
-                            && !ops
-                                .iter()
-                                .all(|op| matches!(op, catalog::Op::RenameCommand(_)))
-                        {
-                            return Err(AdapterError::DDLTransactionRace);
-                        }
-                        // Commit all of our queued ops.
-                        let ops = std::mem::take(ops);
-                        let side_effects = std::mem::take(side_effects);
-                        self.catalog_transact_with_side_effects(
-                            Some(ctx),
-                            ops,
-                            move |a, mut ctx| {
-                                Box::pin(async move {
-                                    for side_effect in side_effects {
-                                        side_effect(a, ctx.as_mut().map(|ctx| &mut **ctx)).await;
-                                    }
-                                })
-                            },
-                        )
-                        .await?;
                     }
                     _ => (),
                 }

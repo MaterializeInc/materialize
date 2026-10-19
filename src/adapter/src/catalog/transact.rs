@@ -436,6 +436,46 @@ pub struct TransactionResult {
     pub audit_events: Vec<VersionedEvent>,
 }
 
+#[derive(Debug)]
+pub(crate) enum CommandWork {
+    Prepare(mz_sql::pure::SourcePreparationRequest),
+    Allocate(Vec<super::command::source::SourceObject>),
+}
+
+#[derive(Debug)]
+pub(crate) enum CommandExecutionError {
+    Error(AdapterError),
+    Pending { index: usize, work: CommandWork },
+}
+
+impl From<AdapterError> for CommandExecutionError {
+    fn from(error: AdapterError) -> Self {
+        Self::Error(error)
+    }
+}
+
+impl CommandExecutionError {
+    fn into_adapter_error(self) -> AdapterError {
+        match self {
+            Self::Error(error) => error,
+            Self::Pending { .. } => unreachable!("raw operations do not request preparation"),
+        }
+    }
+}
+
+enum TransactionOperations<'a> {
+    Raw(Vec<Op>),
+    Commands {
+        commands: &'a mut [super::command::CatalogCommand],
+        responses: &'a mut BTreeMap<usize, mz_sql::pure::SourcePreparationResponse>,
+    },
+}
+
+enum OperationGroup<'a> {
+    Raw(Vec<Op>),
+    Command(usize, &'a mut super::command::CatalogCommand),
+}
+
 #[derive(Debug, Clone, Copy)]
 enum TransactInnerMode {
     /// Prepare storage state and return a commit-ready transaction state.
@@ -749,7 +789,7 @@ impl Catalog {
             storage_collections,
             commit_ts,
             session,
-            ops,
+            TransactionOperations::Raw(ops),
             temporary_ids,
             &mut builtin_table_updates,
             &mut catalog_updates,
@@ -757,7 +797,8 @@ impl Catalog {
             &mut tx,
             &self.state,
         )
-        .await?;
+        .await
+        .map_err(CommandExecutionError::into_adapter_error)?;
 
         // The user closure was successful, apply the updates. Terminate the
         // process if this fails, because we have to restart envd due to
@@ -770,6 +811,65 @@ impl Catalog {
         // Dropping here keeps the mutable borrow on self, preventing us accidentally
         // mutating anything until after f is executed.
         drop(storage);
+        self.publish_transaction_state(new_state);
+
+        Ok(TransactionResult {
+            builtin_table_updates,
+            catalog_updates,
+            audit_events,
+        })
+    }
+
+    pub(crate) async fn transact_commands(
+        &mut self,
+        storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
+        oracle_write_ts: mz_repr::Timestamp,
+        session: Option<&ConnMeta>,
+        commands: &mut [super::command::CatalogCommand],
+        responses: &mut BTreeMap<usize, mz_sql::pure::SourcePreparationResponse>,
+    ) -> Result<TransactionResult, CommandExecutionError> {
+        fail::fail_point!("catalog_transact", |arg| {
+            Err(AdapterError::Unstructured(anyhow::anyhow!("failpoint: {arg:?}")).into())
+        });
+        let mut builtin_table_updates = Vec::new();
+        let mut catalog_updates = Vec::new();
+        let mut audit_events = Vec::new();
+        let mut storage = self.storage().await;
+        let mut tx = storage
+            .transaction()
+            .await
+            .unwrap_or_terminate("starting catalog command transaction");
+        let commit_ts = std::cmp::max(oracle_write_ts, tx.upper());
+        let new_state = Self::transact_inner(
+            TransactInnerMode::Commit,
+            storage_collections,
+            commit_ts,
+            session,
+            TransactionOperations::Commands {
+                commands,
+                responses,
+            },
+            BTreeSet::new(),
+            &mut builtin_table_updates,
+            &mut catalog_updates,
+            &mut audit_events,
+            &mut tx,
+            &self.state,
+        )
+        .await?;
+        tx.commit(commit_ts)
+            .await
+            .unwrap_or_terminate("catalog command transaction commit must succeed");
+        drop(storage);
+        self.publish_transaction_state(new_state);
+        Ok(TransactionResult {
+            builtin_table_updates,
+            catalog_updates,
+            audit_events,
+        })
+    }
+
+    fn publish_transaction_state(&mut self, new_state: Option<CatalogState>) {
         if let Some(new_state) = new_state {
             self.transient_revision += 1;
             // Publish the new revision before returning. Everything that can
@@ -781,12 +881,64 @@ impl Catalog {
                 .store(self.transient_revision, atomic::Ordering::SeqCst);
             self.state = new_state;
         }
+    }
 
-        Ok(TransactionResult {
-            builtin_table_updates,
-            catalog_updates,
-            audit_events,
-        })
+    pub(crate) async fn prepare_source_statement(
+        &self,
+        statement: &mut super::command::source_statement::SourceStatement,
+        base: (&CatalogState, &Snapshot),
+        session: Option<&ConnMeta>,
+        oracle_write_ts: mz_repr::Timestamp,
+        response: Option<mz_sql::pure::SourcePreparationResponse>,
+    ) -> Result<super::command::source_statement::SourceStatementPreparation, AdapterError> {
+        use super::command::source_statement::{
+            PreparedSourceStatement, SourceCommand, SourceResolution, SourceStatementPreparation,
+        };
+
+        let (state, snapshot) = base;
+        let resolution = match response {
+            Some(response) => statement.finish(state, response)?,
+            None => statement.resolve(state)?,
+        };
+        let mut compiled = match resolution {
+            SourceResolution::Prepare(request) => {
+                return Ok(SourceStatementPreparation::Prepare(request));
+            }
+            SourceResolution::Allocate(keys) => {
+                return Ok(SourceStatementPreparation::Allocate(keys));
+            }
+            SourceResolution::Ready(compiled) => compiled,
+        };
+        state.validate_resource_limits(&compiled.ops, statement.connection_id())?;
+        let ops = std::mem::take(&mut compiled.ops);
+        let result = self
+            .transact_incremental_dry_run(
+                state,
+                ops,
+                session,
+                Some(snapshot.clone()),
+                oracle_write_ts,
+            )
+            .await;
+        let (state, snapshot, outcome) = match result {
+            Ok((state, snapshot)) => (state, snapshot, compiled.created()),
+            Err(error) => match compiled.skipped(&error) {
+                Some(outcome) => (state.clone(), snapshot.clone(), outcome),
+                None => return Err(error),
+            },
+        };
+        Ok(SourceStatementPreparation::Ready(Box::new(
+            PreparedSourceStatement {
+                command: SourceCommand {
+                    statement: statement.clone(),
+                    outcome,
+                    observed: true,
+                },
+                state,
+                snapshot,
+                plan: compiled.plan,
+            },
+        )))
     }
 
     /// Captures matching in-memory and durable baselines before DDL preparation yields.
@@ -851,7 +1003,7 @@ impl Catalog {
             None,
             oracle_write_ts,
             session,
-            ops,
+            TransactionOperations::Raw(ops),
             temporary_ids,
             &mut builtin_table_updates,
             &mut catalog_updates,
@@ -859,7 +1011,8 @@ impl Catalog {
             tx.transaction_mut(),
             base_state,
         )
-        .await?;
+        .await
+        .map_err(CommandExecutionError::into_adapter_error)?;
 
         // Save the transaction's current state as a snapshot for the next
         // incremental dry run.
@@ -935,14 +1088,14 @@ impl Catalog {
         storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
-        ops: Vec<Op>,
+        operations: TransactionOperations<'_>,
         temporary_ids: BTreeSet<CatalogItemId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
         parsed_catalog_updates: &mut Vec<ParsedStateUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &CatalogState,
-    ) -> Result<Option<CatalogState>, AdapterError> {
+    ) -> Result<Option<CatalogState>, CommandExecutionError> {
         // We come up with new catalog state, builtin state updates, and parsed
         // catalog updates (for deriving catalog implications) in two phases:
         //
@@ -974,14 +1127,21 @@ impl Catalog {
         // The final state that we will return, if modified.
         let mut state = Cow::Borrowed(state);
 
-        if ops.is_empty() {
+        let empty = match &operations {
+            TransactionOperations::Raw(ops) => ops.is_empty(),
+            TransactionOperations::Commands { commands, .. } => commands.is_empty(),
+        };
+        if empty {
             return Ok(None);
         }
 
-        // Extract optimized expressions from CreateItem ops to avoid re-optimization
-        // during apply_updates. We extract before the loop since `ops` is moved there.
         let optimizer_features = OptimizerFeatures::from(state.system_config());
-        let cached_exprs = Self::extract_expressions_from_ops(&ops, &optimizer_features);
+        let cached_exprs = match &operations {
+            TransactionOperations::Raw(ops) => {
+                Self::extract_expressions_from_ops(ops, &optimizer_features)
+            }
+            TransactionOperations::Commands { .. } => BTreeMap::new(),
+        };
 
         let mut storage_collections_to_create = BTreeSet::new();
         let mut storage_collections_to_drop = BTreeSet::new();
@@ -989,40 +1149,142 @@ impl Catalog {
 
         let mut updates = Vec::new();
 
-        let mut pending_ops: std::collections::VecDeque<_> = ops.into();
-        while let Some(op) = pending_ops.pop_front() {
-            if let Op::RenameCommand(command) = op {
-                let compiled = command.execute(&preliminary_state)?;
-                for op in compiled.into_iter().rev() {
-                    pending_ops.push_front(op);
-                }
-                continue;
+        let (groups, mut responses): (std::collections::VecDeque<_>, _) = match operations {
+            TransactionOperations::Raw(ops) => {
+                ([OperationGroup::Raw(ops)].into_iter().collect(), None)
             }
-            Self::transact_op(
-                oracle_write_ts,
-                session,
-                op,
-                &temporary_ids,
-                audit_events,
-                tx,
-                &*preliminary_state,
-                &mut storage_collections_to_create,
-                &mut storage_collections_to_drop,
-                &mut storage_collections_to_register,
-            )
-            .await?;
+            TransactionOperations::Commands {
+                commands,
+                responses,
+            } => (
+                commands
+                    .iter_mut()
+                    .enumerate()
+                    .map(|(index, command)| OperationGroup::Command(index, command))
+                    .collect(),
+                Some(responses),
+            ),
+        };
+        for group in groups {
+            use super::command::CatalogCommand;
+            use super::command::source_statement::SourceResolution;
 
-            let mut op_updates: Vec<_> = tx.get_and_commit_op_updates();
-            if !op_updates.is_empty() {
-                // Clone the cache so each apply_updates call has access to cached expressions.
-                // The cache uses `remove` semantics, so we need a fresh clone for each call.
-                let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
-                let (_op_builtin_table_updates, _op_catalog_updates) = preliminary_state
-                    .to_mut()
-                    .apply_updates(op_updates.clone(), &mut local_expr_cache)
-                    .await;
+            let (ops, mut source_check) = match group {
+                OperationGroup::Raw(ops) => (ops, None),
+                OperationGroup::Command(_, CatalogCommand::Rename(command)) => {
+                    (command.execute(&preliminary_state)?, None)
+                }
+                OperationGroup::Command(index, CatalogCommand::Source(command)) => {
+                    let command = Arc::make_mut(command);
+                    let response = responses
+                        .as_mut()
+                        .and_then(|responses| responses.remove(&index));
+                    let resolution = match response {
+                        Some(response) => command.statement.finish(&preliminary_state, response)?,
+                        None => command.statement.resolve(&preliminary_state)?,
+                    };
+                    let mut compiled = match resolution {
+                        SourceResolution::Prepare(request) => {
+                            return Err(CommandExecutionError::Pending {
+                                index,
+                                work: CommandWork::Prepare(request),
+                            });
+                        }
+                        SourceResolution::Allocate(keys) => {
+                            return Err(CommandExecutionError::Pending {
+                                index,
+                                work: CommandWork::Allocate(keys),
+                            });
+                        }
+                        SourceResolution::Ready(compiled) => compiled,
+                    };
+                    preliminary_state.validate_resource_limits(
+                        &compiled.ops,
+                        command.statement.connection_id(),
+                    )?;
+                    if command.skipped_name().is_some()
+                        || (!command.observed && !compiled.if_not_exists.is_empty())
+                    {
+                        let result = {
+                            let mut fork = tx.fork_dry_run().map_err(AdapterError::from)?;
+                            Box::pin(Self::transact_inner(
+                                TransactInnerMode::DryRun,
+                                None,
+                                oracle_write_ts,
+                                session,
+                                TransactionOperations::Raw(compiled.ops.clone()),
+                                BTreeSet::new(),
+                                &mut Vec::new(),
+                                &mut Vec::new(),
+                                &mut Vec::new(),
+                                fork.transaction_mut(),
+                                &preliminary_state,
+                            ))
+                            .await
+                            .map_err(CommandExecutionError::into_adapter_error)
+                        };
+                        let outcome = match result {
+                            Ok(_) => compiled.created(),
+                            Err(error) => match compiled.skipped(&error) {
+                                Some(outcome) => outcome,
+                                None => return Err(error.into()),
+                            },
+                        };
+                        command.check_outcome(outcome)?;
+                        if command.skipped_name().is_some() {
+                            continue;
+                        }
+                    }
+                    let ops = std::mem::take(&mut compiled.ops);
+                    (ops, Some((command, compiled)))
+                }
+            };
+            let mut pending_ops: std::collections::VecDeque<_> = ops.into();
+            while let Some(op) = pending_ops.pop_front() {
+                if let Op::RenameCommand(command) = op {
+                    let compiled = command.execute(&preliminary_state)?;
+                    for op in compiled.into_iter().rev() {
+                        pending_ops.push_front(op);
+                    }
+                    continue;
+                }
+                let result = Self::transact_op(
+                    oracle_write_ts,
+                    session,
+                    op,
+                    &temporary_ids,
+                    audit_events,
+                    tx,
+                    &*preliminary_state,
+                    &mut storage_collections_to_create,
+                    &mut storage_collections_to_drop,
+                    &mut storage_collections_to_register,
+                )
+                .await;
+                if let Err(error) = result {
+                    if let Some((command, compiled)) = &mut source_check {
+                        if let Some(outcome) = compiled.skipped(&error) {
+                            command.check_outcome(outcome)?;
+                        }
+                    }
+                    return Err(error.into());
+                }
+
+                let mut op_updates: Vec<_> = tx.get_and_commit_op_updates();
+                if !op_updates.is_empty() {
+                    // Clone the cache so each apply_updates call has access to cached expressions.
+                    // The cache uses `remove` semantics, so we need a fresh clone for each call.
+                    let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+                    let (_op_builtin_table_updates, _op_catalog_updates) = preliminary_state
+                        .to_mut()
+                        .apply_updates(op_updates.clone(), &mut local_expr_cache)
+                        .await;
+                }
+                updates.append(&mut op_updates);
             }
-            updates.append(&mut op_updates);
+            if let Some((command, compiled)) = source_check {
+                command.check_outcome(compiled.created())?;
+            }
         }
 
         if !updates.is_empty() {
@@ -1048,7 +1310,8 @@ impl Catalog {
                         storage_collections_to_drop,
                         storage_collections_to_register,
                     )
-                    .await?;
+                    .await
+                    .map_err(AdapterError::from)?;
                 }
             }
             TransactInnerMode::DryRun => {

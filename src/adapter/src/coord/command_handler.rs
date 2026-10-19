@@ -1424,17 +1424,14 @@ impl Coordinator {
                             // Preparation can yield before the first dry run. Capture both
                             // baselines now so unrelated commits cannot mix their contents.
                             let (state, snapshot) = self.catalog().ddl_transaction_snapshot().await;
-                            let revision = self.catalog().transient_revision();
 
                             // Initialize our transaction with a set of empty ops, or return an error
                             // if we can't run a DDL transaction
                             let txn_status = ctx.session_mut().transaction_mut();
                             if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
-                                ops: vec![],
+                                commands: vec![],
                                 state,
-                                revision,
-                                side_effects: vec![],
-                                snapshot: Some(snapshot),
+                                snapshot,
                             }) {
                                 return ctx.retire(Err(err));
                             }
@@ -1583,6 +1580,14 @@ impl Coordinator {
             Statement::AlterObjectRename(_) | Statement::AlterObjectSwap(_)
         ) {
             self.sequence_rename_command(ctx, stmt, params).await;
+            return;
+        }
+
+        if matches!(
+            &*stmt,
+            Statement::CreateSource(_) | Statement::CreateTableFromSource(_)
+        ) {
+            self.sequence_source_statement(ctx, stmt, params).await;
             return;
         }
 
