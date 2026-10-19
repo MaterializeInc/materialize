@@ -2243,7 +2243,7 @@ feature_flags!(
     {
         name: enable_kafka_sink_headers,
         desc: "Enable the HEADERS option for Kafka sinks",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {
