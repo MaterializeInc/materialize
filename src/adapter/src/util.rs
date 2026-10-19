@@ -235,7 +235,7 @@ pub fn describe(
     param_types: &[Option<SqlScalarType>],
     session: &Session,
 ) -> Result<StatementDesc, AdapterError> {
-    let catalog = &catalog.for_session(session);
+    let catalog = &catalog.for_session_without_preparation(session);
     let (stmt, _) = mz_sql::names::resolve(catalog, stmt)?;
     Ok(mz_sql::plan::describe(
         session.pcx(),

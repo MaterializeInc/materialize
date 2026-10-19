@@ -98,6 +98,9 @@ pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::ddl_transaction::DdlTransaction;
 pub use crate::catalog::observations::{CatalogReadRecorder, CatalogReadSet};
 pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
+pub(crate) use crate::catalog::preparation::{
+    CatalogPreparation, PreparedCatalogBatch, UntrackedCatalogWrite,
+};
 pub use crate::catalog::state::CatalogState;
 pub use crate::catalog::transact::{
     DropObjectInfo, InjectedAuditEvent, Op, ReplicaCreateDropReason, TransactionResult,
@@ -124,6 +127,7 @@ mod observations;
 mod observed_item;
 mod observed_objects;
 mod open;
+mod preparation;
 mod state;
 mod timeline;
 mod transact;
@@ -807,7 +811,21 @@ impl Catalog {
         Ok(catalog)
     }
 
-    pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
+    pub(crate) fn for_preparation<'a>(
+        &'a self,
+        session: &'a Session,
+        preparation: &CatalogPreparation,
+    ) -> ConnCatalog<'a> {
+        let view = self.state.for_session(session);
+        match preparation.recorder() {
+            Some(reads) => view.with_read_recorder(reads),
+            None => view,
+        }
+    }
+
+    /// A session view outside statement preparation. Explicit DDL prefix reads
+    /// still belong to the transaction, but no preparation-attempt reads attach.
+    pub fn for_session_without_preparation<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
         self.state.for_session(session)
     }
 
@@ -2907,7 +2925,7 @@ mod tests {
                 );
                 assert_eq!(
                     catalog
-                        .for_session(&Session::dummy())
+                        .for_session_without_preparation(&Session::dummy())
                         .minimal_qualification(&tc.input),
                     tc.normal_output
                 );
@@ -2984,7 +3002,7 @@ mod tests {
 
             // Behavior with the default search_schema (public)
             let session = Session::dummy();
-            let conn_catalog = catalog.for_session(&session);
+            let conn_catalog = catalog.for_session_without_preparation(&session);
             assert_ne!(
                 conn_catalog.effective_search_path(false),
                 conn_catalog.search_path
@@ -3022,7 +3040,7 @@ mod tests {
                     false,
                 )
                 .expect("failed to set search_path");
-            let conn_catalog = catalog.for_session(&session);
+            let conn_catalog = catalog.for_session_without_preparation(&session);
             assert_ne!(
                 conn_catalog.effective_search_path(false),
                 conn_catalog.search_path
@@ -3054,7 +3072,7 @@ mod tests {
                     false,
                 )
                 .expect("failed to set search_path");
-            let conn_catalog = catalog.for_session(&session);
+            let conn_catalog = catalog.for_session_without_preparation(&session);
             assert_ne!(
                 conn_catalog.effective_search_path(false),
                 conn_catalog.search_path
@@ -3086,7 +3104,7 @@ mod tests {
                     false,
                 )
                 .expect("failed to set search_path");
-            let conn_catalog = catalog.for_session(&session);
+            let conn_catalog = catalog.for_session_without_preparation(&session);
             assert_ne!(
                 conn_catalog.effective_search_path(false),
                 conn_catalog.search_path

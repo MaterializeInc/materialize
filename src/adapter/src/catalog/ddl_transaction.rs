@@ -11,7 +11,7 @@ use mz_catalog::durable::Snapshot;
 use mz_repr::Timestamp;
 
 use crate::AdapterError;
-use crate::catalog::{Catalog, CatalogReadRecorder, CatalogState, Op};
+use crate::catalog::{Catalog, CatalogReadRecorder, CatalogState, Op, PreparedCatalogBatch};
 use crate::coord::ConnMeta;
 use crate::util::ResultExt;
 
@@ -53,13 +53,15 @@ impl DdlTransaction {
     }
 
     /// Finalizes ordered reads and writes after operation-producing preparation has completed.
-    pub fn take_ops(&mut self) -> Vec<Op> {
-        std::mem::take(&mut self.batches)
-            .into_iter()
-            .flat_map(|batch| {
-                std::iter::once(Op::ValidateReads(batch.reads.snapshot())).chain(batch.ops)
-            })
-            .collect()
+    pub(crate) fn take_prepared_batch(&mut self) -> PreparedCatalogBatch {
+        PreparedCatalogBatch::ordered(
+            std::mem::take(&mut self.batches)
+                .into_iter()
+                .flat_map(|batch| {
+                    std::iter::once(Op::ValidateReads(batch.reads.snapshot())).chain(batch.ops)
+                })
+                .collect(),
+        )
     }
 }
 

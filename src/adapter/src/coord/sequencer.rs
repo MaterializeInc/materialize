@@ -146,7 +146,7 @@ impl Coordinator {
                 Some(cluster_id) => TargetCluster::Transaction(cluster_id),
                 // If there isn't a current cluster set for a transaction, then try to auto route.
                 None => {
-                    let session_catalog = self.catalog.for_session(ctx.session());
+                    let session_catalog = ctx.catalog(&self.catalog);
                     catalog_serving::auto_run_on_catalog_server(
                         &session_catalog,
                         ctx.session(),
@@ -154,9 +154,8 @@ impl Coordinator {
                     )
                 }
             };
-            let (target_cluster_id, target_cluster_name) = match self
-                .catalog()
-                .for_session(ctx.session())
+            let (target_cluster_id, target_cluster_name) = match ctx
+                .catalog(self.catalog())
                 .resolve_target_cluster(target_cluster, ctx.session())
             {
                 Ok(cluster) => (Some(cluster.id()), Some(cluster.name().to_owned())),
@@ -171,7 +170,7 @@ impl Coordinator {
                 self.set_statement_execution_cluster(statement_id, cluster_id, cluster_name);
             }
 
-            let session_catalog = self.catalog.for_session(ctx.session());
+            let session_catalog = ctx.catalog(&self.catalog);
 
             if let Some(cluster_name) = &target_cluster_name {
                 if let Err(e) = catalog_serving::check_cluster_restrictions(
@@ -236,7 +235,11 @@ impl Coordinator {
                 }
                 Plan::CreateRole(plan) => {
                     let result = self
-                        .sequence_create_role(Some(ctx.session().conn_id()), plan)
+                        .sequence_create_role(
+                            Some(ctx.session().conn_id()),
+                            plan,
+                            crate::catalog::UntrackedCatalogWrite::ExistingStatementSynchronization,
+                        )
                         .await;
                     if let Some(notice) = self.should_emit_rbac_notice(ctx.session()) {
                         ctx.session().add_notice(notice);
@@ -803,7 +806,8 @@ impl Coordinator {
         // user field. This seems fine because it is indeed the system that is creating this role,
         // not a user request, and the user name is still recorded in the plan, so we aren't losing
         // information.
-        self.sequence_create_role(None, plan).await
+        self.sequence_create_role(None, plan, crate::catalog::UntrackedCatalogWrite::Internal)
+            .await
     }
 
     pub(crate) fn allocate_transient_id(&self) -> (CatalogItemId, GlobalId) {
@@ -1022,7 +1026,7 @@ pub(crate) fn emit_optimizer_notices(
     if notices.is_empty() {
         return;
     }
-    let humanizer = catalog.for_session(session);
+    let humanizer = catalog.for_session_without_preparation(session);
     let system_vars = catalog.system_config();
     for notice in notices {
         let kind = OptimizerNoticeKind::from(notice);
@@ -1107,7 +1111,7 @@ pub(crate) async fn explain_pushdown_future_inner<
     for (id, mfp) in imports {
         let catalog_entry = catalog.get_entry_by_global_id(&id);
         let full_name = catalog
-            .for_session(session)
+            .for_session_without_preparation(session)
             .resolve_full_name(&catalog_entry.name);
         let name = format!("{}", full_name);
         let relation_desc = catalog_entry
@@ -1209,7 +1213,7 @@ pub(crate) async fn explain_plan_inner(
 
     let desc = desc.expect("RelationDesc for SelectPlan in EXPLAIN mode");
 
-    let session_catalog = catalog.for_session(session);
+    let session_catalog = catalog.for_session_without_preparation(session);
     let expr_humanizer = {
         let transient_items = btreemap! {
             optimizer.select_id() => TransientItem::new(

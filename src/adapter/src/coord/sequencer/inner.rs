@@ -99,6 +99,7 @@ use timely::progress::Antichain;
 use tokio::sync::watch;
 use tracing::{Instrument, Span, info, warn};
 
+use crate::catalog::UntrackedCatalogWrite::ExistingStatementSynchronization;
 use crate::catalog::{
     self, Catalog, CatalogState, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant,
 };
@@ -677,11 +678,7 @@ impl Coordinator {
                 }),
             ) if if_not_exists_ids.contains_key(&id) => {
                 let name = &if_not_exists_ids[&id];
-                if !self
-                    .catalog()
-                    .for_session(ctx.session())
-                    .item_or_type_exists(name)
-                {
+                if !ctx.catalog(self.catalog()).item_or_type_exists(name) {
                     return Err(err);
                 }
                 ctx.session()
@@ -875,10 +872,7 @@ impl Coordinator {
 
         // VPC endpoint creation for AWS PrivateLink connections is now handled
         // in apply_catalog_implications.
-        let conn_id = ctx.session().conn_id().clone();
-        let transact_result = self
-            .catalog_transact_with_context(Some(&conn_id), Some(ctx), ops)
-            .await;
+        let transact_result = self.catalog_transact_with_context(ctx, ops).await;
 
         match transact_result {
             Ok(_) => Ok(ExecuteResponse::CreatedConnection),
@@ -932,7 +926,10 @@ impl Coordinator {
             name: plan.name.clone(),
             owner_id: *session.current_role_id(),
         }];
-        match self.catalog_transact(Some(session), ops).await {
+        match self
+            .catalog_transact_untracked(Some(session), ops, ExistingStatementSynchronization)
+            .await
+        {
             Ok(_) => Ok(ExecuteResponse::CreatedDatabase),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind: ErrorKind::Sql(CatalogError::DatabaseAlreadyExists(_)),
@@ -955,7 +952,10 @@ impl Coordinator {
             schema_name: plan.schema_name.clone(),
             owner_id: *session.current_role_id(),
         };
-        match self.catalog_transact(Some(session), vec![op]).await {
+        match self
+            .catalog_transact_untracked(Some(session), vec![op], ExistingStatementSynchronization)
+            .await
+        {
             Ok(_) => Ok(ExecuteResponse::CreatedSchema),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind: ErrorKind::Sql(CatalogError::SchemaAlreadyExists(_)),
@@ -987,12 +987,17 @@ impl Coordinator {
         &mut self,
         conn_id: Option<&ConnectionId>,
         plan::CreateRolePlan { name, attributes }: plan::CreateRolePlan,
+        synchronization: crate::catalog::UntrackedCatalogWrite,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.validate_role_attributes(&attributes.clone())?;
         let op = catalog::Op::CreateRole { name, attributes };
-        self.catalog_transact_with_context(conn_id, None, vec![op])
-            .await
-            .map(|_| ExecuteResponse::CreatedRole)
+        self.catalog_commit_with_context(
+            conn_id,
+            None,
+            crate::catalog::PreparedCatalogBatch::untracked(vec![op], synchronization),
+        )
+        .await
+        .map(|_| ExecuteResponse::CreatedRole)
     }
 
     #[instrument]
@@ -1006,7 +1011,7 @@ impl Coordinator {
             name,
             owner_id: *session.current_role_id(),
         };
-        self.catalog_transact_with_context(Some(session.conn_id()), None, vec![op])
+        self.catalog_transact_untracked(Some(session), vec![op], ExistingStatementSynchronization)
             .await
             .map(|_| ExecuteResponse::CreatedNetworkPolicy)
     }
@@ -1031,7 +1036,7 @@ impl Coordinator {
             name,
             owner_id: *session.current_role_id(),
         };
-        self.catalog_transact_with_context(Some(session.conn_id()), None, vec![op])
+        self.catalog_transact_untracked(Some(session), vec![op], ExistingStatementSynchronization)
             .await
             .map(|_| ExecuteResponse::AlteredObject(ObjectType::NetworkPolicy))
     }
@@ -1201,9 +1206,7 @@ impl Coordinator {
             owner_id: *ctx.session().current_role_id(),
         }];
 
-        let result = self
-            .catalog_transact_with_context(None, Some(&mut ctx), ops)
-            .await;
+        let result = self.catalog_transact_with_context(&mut ctx, ops).await;
 
         match result {
             Ok(()) => {}
@@ -1283,7 +1286,7 @@ impl Coordinator {
         // Validate the type definition (e.g., composite columns) before storing.
         plan.typ
             .inner
-            .desc(&self.catalog().for_session(session))
+            .desc(&self.catalog().for_session_without_preparation(session))
             .map_err(AdapterError::from)?;
         let typ = Type {
             create_sql: Some(plan.typ.create_sql),
@@ -1301,7 +1304,10 @@ impl Coordinator {
             item: CatalogItem::Type(typ),
             owner_id: *session.current_role_id(),
         };
-        match self.catalog_transact(Some(session), vec![op]).await {
+        match self
+            .catalog_transact_untracked(Some(session), vec![op], ExistingStatementSynchronization)
+            .await
+        {
             Ok(()) => Ok(ExecuteResponse::CreatedType),
             Err(err) => Err(err),
         }
@@ -1318,7 +1324,8 @@ impl Coordinator {
             sub_component: plan.sub_component,
             comment: plan.comment,
         };
-        self.catalog_transact(Some(session), vec![op]).await?;
+        self.catalog_transact_untracked(Some(session), vec![op], ExistingStatementSynchronization)
+            .await?;
         Ok(ExecuteResponse::Comment)
     }
 
@@ -1365,8 +1372,7 @@ impl Coordinator {
             dropped_in_use_indexes,
         } = self.sequence_drop_common(ctx.session(), drop_ids)?;
 
-        self.catalog_transact_with_context(None, Some(ctx), ops)
-            .await?;
+        self.catalog_transact_with_context(ctx, ops).await?;
 
         // Invalidate expression cache entries for dropped objects.
         if !expr_cache_invalidate_ids.is_empty() {
@@ -1442,7 +1448,7 @@ impl Coordinator {
             }
         }
 
-        let catalog = self.catalog().for_session(session);
+        let catalog = self.catalog().for_session_without_preparation(session);
         let mut dependent_objects: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for entry in self.catalog.entries() {
             let id = SystemObjectId::Object(entry.id().into());
@@ -1581,7 +1587,7 @@ impl Coordinator {
         let mut privilege_revokes = plan.privilege_revokes;
 
         // Make sure this stays in sync with the beginning of `rbac::check_plan`.
-        let session_catalog = self.catalog().for_session(session);
+        let session_catalog = self.catalog().for_session_without_preparation(session);
         if rbac::is_rbac_enabled_for_session(session_catalog.system_vars(), session)
             && !session.is_superuser()
         {
@@ -1637,7 +1643,8 @@ impl Coordinator {
             .chain(drop_ops.into_iter())
             .collect();
 
-        self.catalog_transact(Some(session), ops).await?;
+        self.catalog_transact_untracked(Some(session), ops, ExistingStatementSynchronization)
+            .await?;
 
         if dropped_active_db {
             session.add_notice(AdapterNotice::DroppedActiveDatabase {
@@ -1716,7 +1723,7 @@ impl Coordinator {
                 }
                 ObjectId::Item(id) => {
                     if let Some(index) = self.catalog().get_entry(id).index() {
-                        let humanizer = self.catalog().for_session(session);
+                        let humanizer = self.catalog().for_session_without_preparation(session);
                         let dependants = self
                             .controller
                             .compute
@@ -2275,19 +2282,15 @@ impl Coordinator {
                         side_effects,
                     } => {
                         transaction.check_configuration(self.catalog())?;
-                        let ops = transaction.take_ops();
+                        let batch = transaction.take_prepared_batch();
                         let side_effects = std::mem::take(side_effects);
-                        self.catalog_transact_with_side_effects(
-                            Some(ctx),
-                            ops,
-                            move |a, mut ctx| {
-                                Box::pin(async move {
-                                    for side_effect in side_effects {
-                                        side_effect(a, ctx.as_mut().map(|ctx| &mut **ctx)).await;
-                                    }
-                                })
-                            },
-                        )
+                        self.catalog_commit_with_side_effects(ctx, batch, move |a, mut ctx| {
+                            Box::pin(async move {
+                                for side_effect in side_effects {
+                                    side_effect(a, ctx.as_mut().map(|ctx| &mut **ctx)).await;
+                                }
+                            })
+                        })
                         .await?;
                     }
                     _ => (),
@@ -2590,8 +2593,7 @@ impl Coordinator {
             value: plan.value,
             window: plan.window,
         }];
-        self.catalog_transact_with_context(None, Some(ctx), ops)
-            .await?;
+        self.catalog_transact_with_context(ctx, ops).await?;
         Ok(ExecuteResponse::AlteredObject(plan.object_type))
     }
 
@@ -2606,8 +2608,7 @@ impl Coordinator {
             value: plan.value,
             interval: plan.interval,
         }];
-        self.catalog_transact_with_context(None, Some(ctx), ops)
-            .await?;
+        self.catalog_transact_with_context(ctx, ops).await?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
     }
 
@@ -2683,7 +2684,7 @@ impl Coordinator {
         session: &Session,
         plan::AlterRolePlan { id, name, option }: plan::AlterRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let catalog = self.catalog().for_session(session);
+        let catalog = self.catalog().for_session_without_preparation(session);
         let role = catalog.get_role(&id);
 
         // We'll send these notices to the user, if the operation is successful.
@@ -2792,7 +2793,7 @@ impl Coordinator {
             vars: RoleVars { map: vars },
         };
         let response = self
-            .catalog_transact(Some(session), vec![op])
+            .catalog_transact_untracked(Some(session), vec![op], ExistingStatementSynchronization)
             .await
             .map(|_| ExecuteResponse::AlteredRole)?;
 
@@ -2995,10 +2996,7 @@ impl Coordinator {
             to_item: CatalogItem::Sink(new_sink),
         }];
 
-        match self
-            .catalog_transact(Some(ctx.ctx().session_mut()), ops)
-            .await
-        {
+        match self.catalog_transact_with_context(ctx.ctx(), ops).await {
             Ok(()) => {}
             Err(err) => {
                 ctx.retire(Err(err));
@@ -3294,8 +3292,7 @@ impl Coordinator {
             to_item: CatalogItem::Connection(connection.clone()),
         }];
 
-        self.catalog_transact_with_context(None, Some(ctx), ops)
-            .await?;
+        self.catalog_transact_with_context(ctx, ops).await?;
 
         // NOTE: The rest of the alter connection logic (updating VPC endpoints
         // and propagating connection changes to dependent sources, sinks, and
@@ -3625,13 +3622,11 @@ impl Coordinator {
                     "IF NOT EXISTS not supported for ALTER SOURCE...ADD SUBSOURCES"
                 );
 
-                self.catalog_transact_with_context(None, Some(ctx), ops)
-                    .await?;
+                self.catalog_transact_with_context(ctx, ops).await?;
             }
             plan::AlterSourceAction::RefreshReferences { references } => {
                 self.catalog_transact_with_context(
-                    None,
-                    Some(ctx),
+                    ctx,
                     vec![catalog::Op::UpdateSourceReferences {
                         source_id: item_id,
                         references: references.into(),
@@ -3665,7 +3660,8 @@ impl Coordinator {
                 catalog::Op::ResetSystemConfiguration { name: name.clone() }
             }
         };
-        self.catalog_transact(Some(session), vec![op]).await?;
+        self.catalog_transact_untracked(Some(session), vec![op], ExistingStatementSynchronization)
+            .await?;
 
         Self::notice_if_startup_only(session, &name);
         session.add_notice(AdapterNotice::VarDefaultUpdated {
@@ -3683,7 +3679,8 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
         let op = catalog::Op::ResetSystemConfiguration { name: name.clone() };
-        self.catalog_transact(Some(session), vec![op]).await?;
+        self.catalog_transact_untracked(Some(session), vec![op], ExistingStatementSynchronization)
+            .await?;
         Self::notice_if_startup_only(session, &name);
         session.add_notice(AdapterNotice::VarDefaultUpdated {
             role: None,
@@ -3703,7 +3700,8 @@ impl Coordinator {
         // transaction applies it, afterwards they all read as their default.
         let startup_only_changed = self.startup_only_vars_changed_by_reset_all();
         let op = catalog::Op::ResetAllSystemConfiguration;
-        self.catalog_transact(Some(session), vec![op]).await?;
+        self.catalog_transact_untracked(Some(session), vec![op], ExistingStatementSynchronization)
+            .await?;
         for name in startup_only_changed {
             session.add_notice(AdapterNotice::StartupOnlyVarUpdated {
                 var_name: name.to_string(),
@@ -3932,7 +3930,7 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         let mut ops = Vec::with_capacity(update_privileges.len());
         let mut warnings = Vec::new();
-        let catalog = self.catalog().for_session(session);
+        let catalog = self.catalog().for_session_without_preparation(session);
 
         for UpdatePrivilege {
             acl_mode,
@@ -4018,7 +4016,7 @@ impl Coordinator {
         }
 
         let res = self
-            .catalog_transact(Some(session), ops)
+            .catalog_transact_untracked(Some(session), ops, ExistingStatementSynchronization)
             .await
             .map(|_| match variant {
                 UpdatePrivilegeVariant::Grant => ExecuteResponse::GrantedPrivilege,
@@ -4077,7 +4075,8 @@ impl Coordinator {
             }
         }
 
-        self.catalog_transact(Some(session), ops).await?;
+        self.catalog_transact_untracked(Some(session), ops, ExistingStatementSynchronization)
+            .await?;
         Ok(ExecuteResponse::AlteredDefaultPrivileges)
     }
 
@@ -4121,7 +4120,7 @@ impl Coordinator {
             return Ok(ExecuteResponse::GrantedRole);
         }
 
-        self.catalog_transact(Some(session), ops)
+        self.catalog_transact_untracked(Some(session), ops, ExistingStatementSynchronization)
             .await
             .map(|_| ExecuteResponse::GrantedRole)
     }
@@ -4166,7 +4165,7 @@ impl Coordinator {
             return Ok(ExecuteResponse::RevokedRole);
         }
 
-        self.catalog_transact(Some(session), ops)
+        self.catalog_transact_untracked(Some(session), ops, ExistingStatementSynchronization)
             .await
             .map(|_| ExecuteResponse::RevokedRole)
     }
@@ -4235,7 +4234,7 @@ impl Coordinator {
             _ => {}
         }
 
-        self.catalog_transact(Some(session), ops)
+        self.catalog_transact_untracked(Some(session), ops, ExistingStatementSynchronization)
             .await
             .map(|_| ExecuteResponse::AlteredObject(object_type))
     }
@@ -4262,7 +4261,7 @@ impl Coordinator {
             })
             .collect();
 
-        self.catalog_transact(Some(session), ops)
+        self.catalog_transact_untracked(Some(session), ops, ExistingStatementSynchronization)
             .await
             .map(|_| ExecuteResponse::ReassignOwned)
     }
@@ -4315,8 +4314,7 @@ impl Coordinator {
             sql: raw_sql_type,
         }];
 
-        self.catalog_transact_with_context(None, Some(ctx), ops)
-            .await?;
+        self.catalog_transact_with_context(ctx, ops).await?;
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Table))
     }
@@ -4443,10 +4441,7 @@ impl Coordinator {
             .await;
 
         let ops = vec![catalog::Op::AlterMaterializedViewApplyReplacement { id, replacement_id }];
-        match self
-            .catalog_transact(Some(ctx.ctx().session_mut()), ops)
-            .await
-        {
+        match self.catalog_transact_with_context(ctx.ctx(), ops).await {
             Ok(()) => ctx.retire(Ok(ExecuteResponse::AlteredObject(
                 ObjectType::MaterializedView,
             ))),

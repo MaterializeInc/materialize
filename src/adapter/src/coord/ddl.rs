@@ -51,7 +51,9 @@ use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
-use crate::catalog::{DropObjectInfo, Op, TransactionResult};
+use crate::catalog::{
+    DropObjectInfo, Op, PreparedCatalogBatch, TransactionResult, UntrackedCatalogWrite,
+};
 use crate::coord::Coordinator;
 use crate::coord::appends::{BuiltinTableAppendCompletion, BuiltinTableAppendNotify};
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
@@ -61,16 +63,21 @@ use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContext, catalog, flags};
 
 impl Coordinator {
-    /// Same as [`Self::catalog_transact_with_context`] but takes a [`Session`].
+    /// Commits writes governed by an explicitly untracked synchronization contract.
     #[instrument(name = "coord::catalog_transact")]
-    pub(crate) async fn catalog_transact(
+    pub(crate) async fn catalog_transact_untracked(
         &mut self,
         session: Option<&Session>,
         ops: Vec<catalog::Op>,
+        reason: UntrackedCatalogWrite,
     ) -> Result<(), AdapterError> {
         let start = Instant::now();
         let result = self
-            .catalog_transact_with_context(session.map(|session| session.conn_id()), None, ops)
+            .catalog_commit_with_context(
+                session.map(|session| session.conn_id()),
+                None,
+                PreparedCatalogBatch::untracked(ops, reason),
+            )
             .await;
         self.metrics
             .catalog_transact_seconds
@@ -79,9 +86,7 @@ impl Coordinator {
         result
     }
 
-    /// Same as [`Self::catalog_transact_with_context`] but takes a [`Session`]
-    /// and runs builtin table updates concurrently with any side effects (e.g.
-    /// creating collections).
+    /// Finalizes statement preparation and runs builtin updates concurrently with its side effects.
     // TODO(aljoscha): Remove this method once all call-sites have been migrated
     // to the newer catalog_transact_with_context. The latter is what allows us
     // to apply catalog implications that we derive from catalog chanages either
@@ -90,8 +95,26 @@ impl Coordinator {
     #[instrument(name = "coord::catalog_transact_with_side_effects")]
     pub(crate) async fn catalog_transact_with_side_effects<F>(
         &mut self,
-        mut ctx: Option<&mut ExecuteContext>,
-        mut ops: Vec<catalog::Op>,
+        ctx: &mut ExecuteContext,
+        ops: Vec<catalog::Op>,
+        side_effect: F,
+    ) -> Result<(), AdapterError>
+    where
+        F: for<'a> FnOnce(
+                &'a mut Coordinator,
+                Option<&'a mut ExecuteContext>,
+            ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
+            + 'static,
+    {
+        let batch = ctx.prepare_catalog_writes(ops)?;
+        self.catalog_commit_with_side_effects(ctx, batch, side_effect)
+            .await
+    }
+
+    pub(crate) async fn catalog_commit_with_side_effects<F>(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        batch: PreparedCatalogBatch,
         side_effect: F,
     ) -> Result<(), AdapterError>
     where
@@ -102,12 +125,10 @@ impl Coordinator {
             + 'static,
     {
         let start = Instant::now();
-        if let Some(ctx) = ctx.as_ref() {
-            ctx.add_catalog_preconditions(&mut ops);
-        }
+        let mut ctx = Some(ctx);
 
         let (table_updates, catalog_updates) = self
-            .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops)
+            .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), batch)
             .await?;
 
         // We can't run this concurrently with the explicit side effects,
@@ -181,28 +202,29 @@ impl Coordinator {
         Ok(())
     }
 
-    /// Same as [`Self::catalog_transact_inner`] but takes an execution context
-    /// or connection ID and runs builtin table updates concurrently with any
-    /// catalog implications that are generated as part of applying the given
-    /// `ops` (e.g. creating collections).
-    ///
-    /// This will use a connection ID if provided and otherwise fall back to
-    /// getting a connection ID from the execution context.
+    /// Finalizes statement preparation and commits its writes with their observations.
     #[instrument(name = "coord::catalog_transact_with_context")]
     pub(crate) async fn catalog_transact_with_context(
         &mut self,
+        ctx: &mut ExecuteContext,
+        ops: Vec<catalog::Op>,
+    ) -> Result<(), AdapterError> {
+        let batch = ctx.prepare_catalog_writes(ops)?;
+        self.catalog_commit_with_context(None, Some(ctx), batch)
+            .await
+    }
+
+    /// Commits a prepared batch and applies its catalog implications.
+    pub(crate) async fn catalog_commit_with_context(
+        &mut self,
         conn_id: Option<&ConnectionId>,
         ctx: Option<&mut ExecuteContext>,
-        mut ops: Vec<catalog::Op>,
+        batch: PreparedCatalogBatch,
     ) -> Result<(), AdapterError> {
         let start = Instant::now();
-        if let Some(ctx) = ctx.as_ref() {
-            ctx.add_catalog_preconditions(&mut ops);
-        }
-
         let conn_id = conn_id.or_else(|| ctx.as_ref().map(|ctx| ctx.session().conn_id()));
 
-        let (table_updates, catalog_updates) = self.catalog_transact_inner(conn_id, ops).await?;
+        let (table_updates, catalog_updates) = self.catalog_transact_inner(conn_id, batch).await?;
 
         let table_updates_wait = self
             .metrics
@@ -276,7 +298,7 @@ impl Coordinator {
 
         let Some(transaction) = ctx.session().transaction().ddl_transaction() else {
             let result = self
-                .catalog_transact_with_side_effects(Some(ctx), ops, side_effect)
+                .catalog_transact_with_side_effects(ctx, ops, side_effect)
                 .await;
             self.metrics
                 .catalog_transact_seconds
@@ -380,11 +402,12 @@ impl Coordinator {
     /// called after this function successfully returns on any built
     /// [`MirDataflowDescription`](mz_compute_types::dataflows::MirDataflowDescription).
     #[instrument(name = "coord::catalog_transact_inner")]
-    pub(crate) async fn catalog_transact_inner(
+    async fn catalog_transact_inner(
         &mut self,
         conn_id: Option<&ConnectionId>,
-        mut ops: Vec<catalog::Op>,
+        batch: PreparedCatalogBatch,
     ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>), AdapterError> {
+        let mut ops = batch.into_ops();
         if self.controller.read_only() {
             return Err(AdapterError::ReadOnly);
         }
@@ -956,9 +979,16 @@ impl Coordinator {
                 .collect(),
         );
 
-        self.catalog_transact_with_context(Some(conn_id), None, vec![op])
-            .await
-            .expect("unable to drop temporary items for conn_id");
+        self.catalog_commit_with_context(
+            Some(conn_id),
+            None,
+            crate::catalog::PreparedCatalogBatch::untracked(
+                vec![op],
+                crate::catalog::UntrackedCatalogWrite::Internal,
+            ),
+        )
+        .await
+        .expect("unable to drop temporary items for conn_id");
     }
 
     fn update_cluster_scheduling_config(&self) {

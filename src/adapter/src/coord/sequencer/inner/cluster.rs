@@ -51,6 +51,7 @@ use mz_adapter_types::dyncfgs::{
 };
 
 use super::return_if_err;
+use crate::catalog::UntrackedCatalogWrite::ExistingStatementSynchronization;
 use crate::catalog::{self, Op, ReplicaCreateDropReason};
 use crate::coord::{
     AlterCluster, AlterClusterAwaitReconfiguration, ClusterStage, Coordinator, Message,
@@ -674,7 +675,7 @@ impl Coordinator {
         realized_managed.apply_reconfiguration_target(realized_target);
         realized_managed.reconfiguration = Some(record);
 
-        self.catalog_transact(
+        self.catalog_transact_untracked(
             Some(session),
             vec![Op::UpdateClusterConfig {
                 id: cluster_id,
@@ -683,6 +684,7 @@ impl Coordinator {
                 reconfiguration_audit: Some(audit),
                 burst_audit: None,
             }],
+            ExistingStatementSynchronization,
         )
         .await?;
 
@@ -945,7 +947,8 @@ impl Coordinator {
             )?;
         }
 
-        self.catalog_transact(Some(session), ops).await?;
+        self.catalog_transact_untracked(Some(session), ops, ExistingStatementSynchronization)
+            .await?;
 
         Ok(ExecuteResponse::CreatedCluster)
     }
@@ -1156,7 +1159,8 @@ impl Coordinator {
             });
         }
 
-        self.catalog_transact(Some(session), ops).await?;
+        self.catalog_transact_untracked(Some(session), ops, ExistingStatementSynchronization)
+            .await?;
 
         Ok(ExecuteResponse::CreatedCluster)
     }
@@ -1402,7 +1406,10 @@ impl Coordinator {
             reason: ReplicaCreateDropReason::Manual,
         }];
 
-        match self.catalog_transact(Some(session), ops).await {
+        match self
+            .catalog_transact_untracked(Some(session), ops, ExistingStatementSynchronization)
+            .await
+        {
             Ok(()) => {
                 // The commit made the new replica visible in the catalog, so
                 // the check sees the updated replica count.
@@ -1580,7 +1587,8 @@ impl Coordinator {
             burst_audit: None,
         }];
 
-        self.catalog_transact(Some(session), ops).await?;
+        self.catalog_transact_untracked(Some(session), ops, ExistingStatementSynchronization)
+            .await?;
         Ok(())
     }
 
@@ -1717,7 +1725,8 @@ impl Coordinator {
             burst_audit: None,
         }];
 
-        self.catalog_transact(Some(session), ops).await?;
+        self.catalog_transact_untracked(Some(session), ops, ExistingStatementSynchronization)
+            .await?;
         Ok(())
     }
 
@@ -1761,7 +1770,8 @@ impl Coordinator {
             burst_audit: None,
         }];
 
-        self.catalog_transact(Some(session), ops).await?;
+        self.catalog_transact_untracked(Some(session), ops, ExistingStatementSynchronization)
+            .await?;
         Ok(())
     }
 
@@ -1786,7 +1796,8 @@ impl Coordinator {
             burst_audit: None,
         }];
 
-        self.catalog_transact(Some(session), ops).await?;
+        self.catalog_transact_untracked(Some(session), ops, ExistingStatementSynchronization)
+            .await?;
         Ok(())
     }
 

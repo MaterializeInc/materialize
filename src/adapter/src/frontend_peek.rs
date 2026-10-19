@@ -328,7 +328,7 @@ impl PeekClient {
 
         // # From handle_execute_inner
 
-        let conn_catalog = catalog.for_session(session);
+        let conn_catalog = catalog.for_session_without_preparation(session);
         // (`resolved_ids` should be derivable from `stmt`. If `stmt` is later transformed to
         // remove/add IDs, then `resolved_ids` should be updated to also remove/add those IDs.)
         let (stmt, resolved_ids) = mz_sql::names::resolve(&conn_catalog, (*stmt).clone())?;
@@ -1312,7 +1312,7 @@ impl PeekClient {
                     let insights = trace
                         .into_plan_insights(
                             &features,
-                            &catalog.for_session(session),
+                            &catalog.for_session_without_preparation(session),
                             Some(finishing.clone()),
                             Some(target_cluster),
                             df_meta.clone(),

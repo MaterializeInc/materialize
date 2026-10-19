@@ -497,7 +497,7 @@ impl State {
                 Some(aws_context),
             )
             .await?;
-            let res = f(catalog.for_session(&Session::dummy()));
+            let res = f(catalog.for_session_without_preparation(&Session::dummy()));
             catalog.expire().await;
             Ok(Some(res))
         } else {

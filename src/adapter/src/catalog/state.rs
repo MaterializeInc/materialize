@@ -491,7 +491,7 @@ impl CatalogState {
         }
     }
 
-    pub fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
+    pub(super) fn for_session<'a>(&'a self, session: &'a Session) -> ConnCatalog<'a> {
         let read_recorder = session
             .transaction()
             .ddl_transaction()

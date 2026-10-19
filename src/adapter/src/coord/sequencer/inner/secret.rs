@@ -59,9 +59,7 @@ impl Staged for SecretStage {
                 coord.create_secret_finish(ctx.session(), stage).await
             }
             SecretStage::RotateKeysEnsure(stage) => coord.rotate_keys_ensure(stage),
-            SecretStage::RotateKeysFinish(stage) => {
-                coord.rotate_keys_finish(ctx.session(), stage).await
-            }
+            SecretStage::RotateKeysFinish(stage) => coord.rotate_keys_finish(ctx, stage).await,
             SecretStage::Alter(stage) => coord.alter_secret(ctx.session(), stage.plan),
         }
     }
@@ -227,7 +225,14 @@ impl Coordinator {
             owner_id: *session.current_role_id(),
         }];
 
-        let res = match self.catalog_transact(Some(session), ops).await {
+        let res = match self
+            .catalog_transact_untracked(
+                Some(session),
+                ops,
+                crate::catalog::UntrackedCatalogWrite::ExistingStatementSynchronization,
+            )
+            .await
+        {
             Ok(()) => Ok(ExecuteResponse::CreatedSecret),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
@@ -409,11 +414,11 @@ impl Coordinator {
     #[instrument]
     async fn rotate_keys_finish(
         &mut self,
-        session: &Session,
+        ctx: &mut ExecuteContext,
         RotateKeysSecretFinish { mut ops, validity }: RotateKeysSecretFinish,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
         ops.splice(0..0, validity.catalog_preconditions());
-        self.catalog_transact(Some(session), ops).await?;
+        self.catalog_transact_with_context(ctx, ops).await?;
         Ok(StageResult::Response(ExecuteResponse::AlteredObject(
             ObjectType::Connection,
         )))

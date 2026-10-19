@@ -237,15 +237,19 @@ mod tests {
             };
             assert!(
                 catalog
-                    .for_session(&session)
-                    .with_read_recorder(positive.clone())
+                    .for_preparation(
+                        &session,
+                        &crate::catalog::CatalogPreparation::Observed(positive.clone())
+                    )
                     .resolve_item(&name("target"))
                     .is_ok()
             );
             assert!(
                 catalog
-                    .for_session(&session)
-                    .with_read_recorder(negative.clone())
+                    .for_preparation(
+                        &session,
+                        &crate::catalog::CatalogPreparation::Observed(negative.clone())
+                    )
                     .resolve_item(&name("missing"))
                     .is_err()
             );
@@ -256,24 +260,31 @@ mod tests {
             let effective_path_reads = CatalogReadRecorder::default();
             let schema_reads = CatalogReadRecorder::default();
             let _ = catalog
-                .for_session(&session)
-                .with_read_recorder(path_reads.clone())
+                .for_preparation(
+                    &session,
+                    &crate::catalog::CatalogPreparation::Observed(path_reads.clone()),
+                )
                 .search_path();
             let _ = catalog
-                .for_session(&session)
-                .with_read_recorder(effective_path_reads.clone())
+                .for_preparation(
+                    &session,
+                    &crate::catalog::CatalogPreparation::Observed(effective_path_reads.clone()),
+                )
                 .effective_search_path(true);
             let _ = catalog
-                .for_session(&session)
-                .with_read_recorder(schema_reads.clone())
+                .for_preparation(
+                    &session,
+                    &crate::catalog::CatalogPreparation::Observed(schema_reads.clone()),
+                )
                 .get_schemas();
             let absent_schemas: Vec<_> = [false, true]
                 .into_iter()
                 .map(|qualified| {
                     let reads = CatalogReadRecorder::default();
-                    let catalog = catalog
-                        .for_session(&session)
-                        .with_read_recorder(reads.clone());
+                    let catalog = catalog.for_preparation(
+                        &session,
+                        &crate::catalog::CatalogPreparation::Observed(reads.clone()),
+                    );
                     let result = if qualified {
                         catalog.resolve_schema_in_database(&database_id, "earlier")
                     } else {

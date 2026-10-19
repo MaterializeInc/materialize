@@ -857,7 +857,10 @@ impl Coordinator {
             .collect();
         ops.extend(mutations);
 
-        match self.catalog_transact(None, ops).await {
+        match self
+            .catalog_transact_untracked(None, ops, crate::catalog::UntrackedCatalogWrite::Internal)
+            .await
+        {
             Ok(()) => ApplyOutcome::Applied,
             Err(AdapterError::ClusterStateChanged { .. }) => {
                 // A concurrent `ALTER` moved a cluster's durable state out from

@@ -683,7 +683,7 @@ impl Coordinator {
             ..
         }: SubscribeExplain,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
-        let session_catalog = self.catalog().for_session(session);
+        let session_catalog = self.catalog().for_session_without_preparation(session);
 
         let expr_humanizer = {
             let transient_items = btreemap! {

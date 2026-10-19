@@ -74,6 +74,19 @@ them with a preparation attempt. Retrying preparation starts a fresh recorder.
 Validate captured decisions before their writes, within the catalog transaction,
 even when a stage also checks validity before resuming.
 
+Statement preparation obtains catalog views through `ExecuteContext::catalog`.
+A plain session view outside preparation must use the explicitly named
+`for_session_without_preparation` entrypoint. System-role and nested views retain
+the originating recorder.
+
+Coordinator catalog commits accept a `PreparedCatalogBatch`, which binds writes to their
+preconditions. Finishing an execution context's preparation consumes that scope.
+A second write needs a new preparation scope. DDL transaction commit instead
+finalizes its ordered batches, including reads from trailing no-op statements.
+An unclassified or already-finished statement cannot prepare a write. Internal
+and unmigrated statement writes require an explicit untracked synchronization
+contract. That contract does not establish observation-based validity.
+
 Mutable catalog answers include failed name lookups, comments copied into generated
 schemas, and dependency closures captured in plans. This differs from rename
 replay, which discovers and rewrites dependents from the current catalog state.
@@ -89,8 +102,8 @@ conservative fence documented on `Catalog::new_read_recorder`.
 Observation recording does not replace all DDL serialization or read-only plan
 validity. Read-only plans retain stable-ID semantics. Key rotation retains narrow
 definition validation because its secret-store write precedes its catalog write.
-Callers using plain session views outside these preparation paths remain
-untracked and must retain their existing synchronization contracts.
+Session views outside statement preparation still record explicit DDL transaction
+reads. Otherwise their callers must retain their existing synchronization contracts.
 
 ### Background reconcilers own convergence resource failures
 

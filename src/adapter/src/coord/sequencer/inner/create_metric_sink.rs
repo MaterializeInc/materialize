@@ -257,7 +257,7 @@ impl Coordinator {
             .await;
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
+            .catalog_transact_with_side_effects(ctx, ops, move |coord, _ctx| {
                 Box::pin(async move {
                     // Save plan structures.
                     coord

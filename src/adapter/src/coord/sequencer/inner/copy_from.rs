@@ -335,7 +335,7 @@ impl Coordinator {
         let pcx = session.pcx().clone();
         let session_meta = session.meta();
         let catalog = self.catalog().clone();
-        let conn_catalog = catalog.for_session(session);
+        let conn_catalog = catalog.for_session_without_preparation(session);
         let catalog_state = conn_catalog.state();
         let optimizer_config = optimize::OptimizerConfig::from(conn_catalog.system_vars());
 

@@ -219,7 +219,7 @@ impl Coordinator {
                 format,
                 &config,
                 &features,
-                &self.catalog().for_session(ctx.session()),
+                &ctx.catalog(self.catalog()),
                 cardinality_stats,
                 target_cluster,
             )?,
@@ -228,7 +228,7 @@ impl Coordinator {
                 format,
                 &config,
                 &features,
-                &self.catalog().for_session(ctx.session()),
+                &ctx.catalog(self.catalog()),
                 cardinality_stats,
                 target_cluster,
             )?,
@@ -430,7 +430,14 @@ impl Coordinator {
             },
         ];
 
-        match self.catalog_transact(Some(session), ops).await {
+        match self
+            .catalog_transact_untracked(
+                Some(session),
+                ops,
+                crate::catalog::UntrackedCatalogWrite::ExistingStatementSynchronization,
+            )
+            .await
+        {
             Ok(()) => Ok(StageResult::Response(ExecuteResponse::CreatedView)),
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
@@ -468,7 +475,7 @@ impl Coordinator {
             ..
         }: CreateViewExplain,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
-        let session_catalog = self.catalog().for_session(session);
+        let session_catalog = self.catalog().for_session_without_preparation(session);
         let expr_humanizer = {
             let full_name = self.catalog().resolve_full_name(&name, None);
             let transient_items = btreemap! {
