@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
+use std::ops::ControlFlow;
 use std::rc::Rc;
 use std::str::{self};
 use std::sync::Arc;
@@ -64,7 +64,7 @@ use timely::dataflow::operators::vec::Broadcast;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, OnceCell, mpsc};
 use tracing::{error, info, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
@@ -127,7 +127,7 @@ pub struct KafkaSourceReader {
     /// has been read for the given partition.
     last_offsets: BTreeMap<usize, BTreeMap<PartitionId, i64>>,
     /// The offset to start reading from for each partition.
-    start_offsets: BTreeMap<PartitionId, i64>,
+    start_offsets: BTreeMap<PartitionId, u64>,
     /// Channel to receive Kafka statistics JSON blobs from the stats callback.
     stats_rx: crossbeam_channel::Receiver<Jsonb>,
     /// A handle to the partition specific metrics
@@ -339,13 +339,19 @@ fn render_reader<'scope>(
             let (stats_tx, stats_rx) = crossbeam_channel::unbounded();
             let notificator = Arc::new(Notify::new());
 
-            let consumer_factory = ReaderConsumerFactory {
+            let consumer_setup = ReaderConsumerSetup {
+                config: config.clone(),
                 connection,
+                topic: topic.clone(),
                 topic_metadata_refresh_interval,
                 group_id,
                 client_id,
                 notificator: Arc::clone(&notificator),
                 stats_tx,
+                outputs: outputs.iter().map(|o| (o.id, o.output_index)).collect(),
+                data_output: data_output.clone(),
+                health_output: health_output.clone(),
+                health_cap: health_cap.clone(),
             };
             let consumer: Rc<OnceCell<Arc<ReaderConsumer>>> = Rc::default();
 
@@ -407,168 +413,13 @@ fn render_reader<'scope>(
             // Each consumer owns librdkafka threads, one per broker plus internal ones, so only
             // workers responsible for a partition create one. A worker that knows of no such
             // partition yet creates its consumer when a metadata update assigns it one.
-            if !start_offsets.is_empty() {
-                consumer_factory
-                    .create_into(&consumer, &config, &outputs, &health_output, &health_cap)
-                    .await;
-            }
-
-            if mz_storage_types::dyncfgs::KAFKA_LOW_WATERMARK_CHECK
-                .get(config.config.config_set())
-                && let Some(consumer) = consumer.get()
+            if !start_offsets.is_empty()
+                && consumer_setup
+                    .get_or_create(&consumer, &mut start_offsets, &data_cap)
+                    .await
+                    .is_break()
             {
-                let low_watermarks = fetch_partition_info(
-                    consumer,
-                    topic.as_str(),
-                    config
-                        .config
-                        .parameters
-                        .kafka_timeout_config
-                        .fetch_metadata_timeout,
-                    Offset::Beginning, // fetch the low watermark
-                )
-                .unwrap_or_else(|e| {
-                    tracing::warn!(
-                        source_id = config.id.to_string(),
-                        worker_id = config.worker_id,
-                        num_workers = config.worker_count,
-                        "Failed to fetch watermarks for topic {topic}: {e}"
-                    );
-                    let update = HealthStatusUpdate::stalled(
-                        format!("Failed to fetch watermarks for topic {topic}: {e}"),
-                        None,
-                    );
-                    health_output.give(
-                        &health_cap,
-                        HealthStatusMessage {
-                            id: None,
-                            namespace: StatusNamespace::Kafka,
-                            update: update.clone(),
-                        },
-                    );
-                    for (output, update) in outputs.iter().repeat_clone(update) {
-                        health_output.give(
-                            &health_cap,
-                            HealthStatusMessage {
-                                id: Some(output.id),
-                                namespace: StatusNamespace::Kafka,
-                                update,
-                            },
-                        );
-                    }
-                    let ssh_update = match consumer.client().context().tunnel_status() {
-                        SshTunnelStatus::Running => HealthStatusUpdate::running(),
-                        SshTunnelStatus::Errored(e) => HealthStatusUpdate::stalled(e, None),
-                    };
-                    health_output.give(
-                        &health_cap,
-                        HealthStatusMessage {
-                            id: None,
-                            namespace: StatusNamespace::Ssh,
-                            update: ssh_update.clone(),
-                        },
-                    );
-                    for (output, ssh_update) in outputs.iter().repeat_clone(ssh_update) {
-                        health_output.give(
-                            &health_cap,
-                            HealthStatusMessage {
-                                id: Some(output.id),
-                                namespace: StatusNamespace::Ssh,
-                                update: ssh_update,
-                            },
-                        );
-                    }
-                    if let GetPartitionsError::TopicDoesNotExist = e {
-                        // If the topic doesn't exist, that is a definite error
-                        let error = Err(SourceError {
-                            error: SourceErrorDetails::Initialization(e.to_string().into()),
-                            hint: None,
-                        }
-                        .into());
-                        let time = data_cap.time().clone();
-                        for (output, error) in
-                            outputs.iter().map(|o| o.output_index).repeat_clone(error)
-                        {
-                            let update = ((output, error), time.clone(), Diff::ONE);
-                            data_output.give(&data_cap, update);
-                        }
-                    }
-                    BTreeMap::new()
-                });
-                for (pid, lwm) in &low_watermarks {
-                    if responsible_for_pid(&config, *pid) {
-                        // If a start offset exists for this partition, then either the user specified it
-                        // or we restored it from the resume upper. In either case, if the low watermark is
-                        // greater than the start offset, we know for certain that the offset we need to
-                        // start at has been compacted away or dropped from retention by Kafka. If there
-                        // is no start offset, then we set it to the low watermark and start consuming from
-                        // there, assuming the user doesn't care about the messages that have been compacted away.
-                        if let Some(start_offset) = start_offsets.get_mut(pid) {
-                            tracing::info!(
-                                source_id = config.id.to_string(),
-                                worker_id = config.worker_id,
-                                num_workers = config.worker_count,
-                                "restored offset {start_offset} for topic {topic} partition {pid} with low watermark {lwm}"
-                            );
-                            if lwm > start_offset {
-                                tracing::error!(
-                                    source_id = config.id.to_string(),
-                                    worker_id = config.worker_id,
-                                    num_workers = config.worker_count,
-                                    "start offset and resume upper {start_offset} for topic {topic} \
-                                    partition {pid} is behind the low watermark {lwm}. This likely \
-                                    means that the offsets have been compacted away by Kafka."
-                                );
-                                let err_str = format!(
-                                    "Low watermark {lwm} of kafka topic {topic} partition {pid} \
-                                    is past the start offset/resume upper: {start_offset} \
-                                    This likely means that the offsets have been compacted away \
-                                    by Kafka. Please consider setting a higher start offset or \
-                                    adjusting your retention policies to prevent this.",
-                                );
-
-                                let update = HealthStatusUpdate::stalled(
-                                    err_str.clone(),
-                                    None,
-                                );
-                                health_output.give(
-                                    &health_cap,
-                                    HealthStatusMessage {
-                                        id: None,
-                                        namespace: StatusNamespace::Kafka,
-                                        update: update.clone(),
-                                    },
-                                );
-                                let error = Err(
-                                    SourceError{
-                                        error:SourceErrorDetails::Initialization(err_str.into()),
-                                        hint: None,
-                                    }.into()
-                                );
-                                let time = data_cap.time().clone();
-                                for (output, error) in
-                                    outputs.iter().map(|o| o.output_index).repeat_clone(error)
-                                {
-                                    let update = ((output, error), time.clone(), Diff::ONE);
-                                    let size = update.fuel_size();
-                                    data_output
-                                        .give_fueled(&data_cap, update, size)
-                                        .await;
-                                }
-                                return;
-                            }
-                        } else {
-                            tracing::warn!(
-                                source_id = config.id.to_string(),
-                                worker_id = config.worker_id,
-                                num_workers = config.worker_count,
-                                "partition {pid} has a non-zero low watermark {lwm}, but no start offset or \
-                                resume upper was found for this partition. Setting start offset to low watermark"
-                            );
-                            start_offsets.insert(*pid, *lwm);
-                        }
-                    }
-                }
+                return;
             }
 
             // Note that we wait for this AFTER we downgrade to the source `resume_upper`. This
@@ -584,7 +435,6 @@ fn render_reader<'scope>(
 
             let partition_ids = start_offsets.keys().copied().collect();
             let offset_commit_metrics = config.metrics.get_offset_commit_metrics(config.id);
-            let start_offsets = start_offsets.iter().map(|(pid, offset)| (*pid, i64::try_from(*offset).expect("start offsets must fit into i64"))).collect();
 
             let mut reader = KafkaSourceReader {
                 topic_name: topic.clone(),
@@ -732,32 +582,25 @@ fn render_reader<'scope>(
                             MzOffset::from(0),
                         );
 
-                        if consumer.get().is_none()
-                            && partitions.keys().any(|pid| responsible_for_pid(&config, *pid))
-                        {
-                            consumer_factory
-                                .create_into(
-                                    &consumer,
-                                    &config,
-                                    &outputs,
-                                    &health_output,
-                                    &health_cap,
-                                )
-                                .await;
-                        }
-
                         let mut offset_known = 0;
                         for (&pid, &high_watermark) in &partitions {
                             if responsible_for_pid(&config, pid) {
                                 offset_known += high_watermark;
-                                reader.ensure_partition(pid);
+                                let kafka_consumer = match consumer_setup
+                                    .get_or_create(&consumer, &mut reader.start_offsets, &data_cap)
+                                    .await
+                                {
+                                    ControlFlow::Continue(kafka_consumer) => {
+                                        Arc::clone(kafka_consumer)
+                                    }
+                                    ControlFlow::Break(()) => return,
+                                };
+                                reader.ensure_partition(&kafka_consumer, pid);
                                 if let Entry::Vacant(entry) =
                                     reader.partition_capabilities.entry(pid)
                                 {
-                                    let start_offset = match reader.start_offsets.get(&pid) {
-                                        Some(&offset) => offset.try_into().unwrap(),
-                                        None => 0u64,
-                                    };
+                                    let start_offset =
+                                        reader.start_offsets.get(&pid).copied().unwrap_or(0);
                                     let part_since_ts = Partitioned::new_singleton(
                                         RangeBound::exact(pid),
                                         MzOffset::from(start_offset),
@@ -1150,12 +993,11 @@ impl KafkaResumeUpperProcessor {
         if offsets.is_empty() || offsets == self.committed_offsets {
             return Ok(());
         }
-        // The source upper can name a partition before this worker's metadata update assigns it
-        // and creates the consumer. The commit happens on a later upper.
-        if self.consumer.get().is_none() {
+        // Without a consumer the offsets stay uncommitted, and a later upper retries them.
+        let Some(consumer) = self.consumer.get() else {
             return Ok(());
-        }
-        self.commit(&offsets).await?;
+        };
+        self.commit(consumer, &offsets).await?;
         self.committed_offsets = offsets;
         Ok(())
     }
@@ -1164,13 +1006,21 @@ impl KafkaResumeUpperProcessor {
     /// the broker treats its group as standalone and expires a partition's offset
     /// `offsets.retention.minutes` after that partition's last commit, current or not.
     async fn refresh(&self) -> Result<(), anyhow::Error> {
+        // Offsets are only ever committed through a consumer.
+        let Some(consumer) = self.consumer.get() else {
+            return Ok(());
+        };
         if self.committed_offsets.is_empty() {
             return Ok(());
         }
-        self.commit(&self.committed_offsets).await
+        self.commit(consumer, &self.committed_offsets).await
     }
 
-    async fn commit(&self, offsets: &[(PartitionId, MzOffset)]) -> Result<(), anyhow::Error> {
+    async fn commit(
+        &self,
+        consumer: &Arc<ReaderConsumer>,
+        offsets: &[(PartitionId, MzOffset)],
+    ) -> Result<(), anyhow::Error> {
         use rdkafka::consumer::CommitMode;
 
         let mut tpl = TopicPartitionList::new();
@@ -1180,11 +1030,7 @@ impl KafkaResumeUpperProcessor {
             tpl.add_partition_offset(&self.topic_name, *pid, offset_to_commit)
                 .expect("offset known to be valid");
         }
-        let consumer = Arc::clone(
-            self.consumer
-                .get()
-                .expect("consumer exists once the worker has offsets to commit"),
-        );
+        let consumer = Arc::clone(consumer);
         mz_ore::task::spawn_blocking(
             || format!("source({}) kafka offset commit", self.config.id),
             move || consumer.commit(&tpl, CommitMode::Sync),
@@ -1207,7 +1053,7 @@ impl KafkaResumeUpperProcessor {
 
 impl KafkaSourceReader {
     /// Ensures that a partition queue for `pid` exists.
-    fn ensure_partition(&mut self, pid: PartitionId) {
+    fn ensure_partition(&mut self, consumer: &Arc<ReaderConsumer>, pid: PartitionId) {
         if self.last_offsets.is_empty() {
             tracing::info!(
                 source_id = %self.id,
@@ -1224,7 +1070,8 @@ impl KafkaSourceReader {
         }
 
         let start_offset = self.start_offsets.get(&pid).copied().unwrap_or(0);
-        self.create_partition_queue(pid, Offset::Offset(start_offset));
+        let start_offset = i64::try_from(start_offset).expect("start offsets must fit into i64");
+        self.create_partition_queue(consumer, pid, Offset::Offset(start_offset));
 
         for last_offsets in self.last_offsets.values_mut() {
             let prev = last_offsets.insert(pid, start_offset - 1);
@@ -1233,7 +1080,12 @@ impl KafkaSourceReader {
     }
 
     /// Creates a new partition queue for `partition_id`.
-    fn create_partition_queue(&mut self, partition_id: PartitionId, initial_offset: Offset) {
+    fn create_partition_queue(
+        &mut self,
+        consumer: &Arc<ReaderConsumer>,
+        partition_id: PartitionId,
+        initial_offset: Offset,
+    ) {
         info!(
             source_id = self.id.to_string(),
             worker_id = self.worker_id,
@@ -1241,12 +1093,6 @@ impl KafkaSourceReader {
             "activating Kafka queue for topic {}, partition {}",
             self.topic_name,
             partition_id,
-        );
-
-        let consumer = Arc::clone(
-            self.consumer
-                .get()
-                .expect("consumer is created before partitions are assigned"),
         );
 
         // Collect old partition assignments
@@ -1572,35 +1418,80 @@ impl GlueConsumerContext {
 
 impl ConsumerContext for GlueConsumerContext {}
 
-/// Everything a reader worker needs to create its consumer, possibly long after the operator
-/// started.
-struct ReaderConsumerFactory {
+type DataOutput = AsyncOutputHandle<
+    KafkaTimestamp,
+    FueledBuilder<
+        CapacityContainerBuilder<
+            Vec<(
+                (usize, Result<SourceMessage, DataflowError>),
+                KafkaTimestamp,
+                Diff,
+            )>,
+        >,
+    >,
+>;
+type HealthOutput =
+    AsyncOutputHandle<KafkaTimestamp, CapacityContainerBuilder<Vec<HealthStatusMessage>>>;
+
+/// Creates a reader worker's consumer, possibly long after the operator started, and reports
+/// failures to the operator's outputs.
+struct ReaderConsumerSetup {
+    config: RawSourceCreationConfig,
     connection: KafkaConnection,
+    topic: String,
     topic_metadata_refresh_interval: Duration,
     group_id: String,
     client_id: String,
     notificator: Arc<Notify>,
     stats_tx: crossbeam_channel::Sender<Jsonb>,
+    /// `(id, output_index)` of each source export.
+    outputs: Vec<(GlobalId, usize)>,
+    data_output: DataOutput,
+    health_output: HealthOutput,
+    health_cap: Capability<KafkaTimestamp>,
 }
 
-impl ReaderConsumerFactory {
-    /// Creates the reader consumer and stores it in `slot`. On failure, reports a halting status
-    /// and never returns.
-    async fn create_into(
+impl ReaderConsumerSetup {
+    /// Returns the consumer in `slot`, creating it first if needed.
+    ///
+    /// On creation, checks `start_offsets`, the start offsets of the partitions this worker is
+    /// responsible for, against the topic's low watermarks, and adds the low watermark for
+    /// responsible partitions without a start offset. Returns `Break` after emitting a definite
+    /// error when a start offset has been compacted away, after which the reader must stop. Never
+    /// returns if the consumer cannot be created.
+    async fn get_or_create<'a>(
         &self,
-        slot: &OnceCell<Arc<ReaderConsumer>>,
-        config: &RawSourceCreationConfig,
-        outputs: &[SourceOutputInfo],
-        health_output: &AsyncOutputHandle<
-            KafkaTimestamp,
-            CapacityContainerBuilder<Vec<HealthStatusMessage>>,
-        >,
-        health_cap: &Capability<KafkaTimestamp>,
-    ) {
-        let consumer: Result<ReaderConsumer, _> = self
+        slot: &'a OnceCell<Arc<ReaderConsumer>>,
+        start_offsets: &mut BTreeMap<PartitionId, u64>,
+        data_cap: &Capability<KafkaTimestamp>,
+    ) -> ControlFlow<(), &'a Arc<ReaderConsumer>> {
+        if let Some(consumer) = slot.get() {
+            return ControlFlow::Continue(consumer);
+        }
+        let consumer = match slot.get_or_try_init(|| self.create()).await {
+            Ok(consumer) => consumer,
+            Err(e) => {
+                self.report_creation_failure(&e);
+                // IMPORTANT: wedge forever until the `SuspendAndRestart` is processed.
+                // Returning would incorrectly present to the remap operator as progress to the
+                // empty frontier which would be incorrectly recorded to the remap shard.
+                std::future::pending::<()>().await;
+                unreachable!("pending future never returns");
+            }
+        };
+        if mz_storage_types::dyncfgs::KAFKA_LOW_WATERMARK_CHECK.get(self.config.config.config_set())
+        {
+            self.check_low_watermarks(consumer, start_offsets, data_cap)
+                .await?;
+        }
+        ControlFlow::Continue(consumer)
+    }
+
+    async fn create(&self) -> Result<Arc<ReaderConsumer>, ContextCreationError> {
+        let consumer: ReaderConsumer = self
             .connection
             .create_with_context(
-                &config.config,
+                &self.config.config,
                 GlueConsumerContext {
                     notificator: Arc::clone(&self.notificator),
                     stats_tx: self.stats_tx.clone(),
@@ -1635,52 +1526,171 @@ impl ReaderConsumerFactory {
                 },
                 InTask::Yes,
             )
-            .await;
+            .await?;
+        Ok(Arc::new(consumer))
+    }
 
-        match consumer {
-            Ok(consumer) => {
-                if slot.set(Arc::new(consumer)).is_err() {
-                    panic!("reader consumer created twice");
-                }
-            }
+    fn report_creation_failure(&self, e: &ContextCreationError) {
+        let update = HealthStatusUpdate::halting(
+            format!(
+                "failed creating kafka reader consumer: {}",
+                e.display_with_causes()
+            ),
+            None,
+        );
+        let namespace = if matches!(e, ContextCreationError::Ssh(_)) {
+            StatusNamespace::Ssh
+        } else {
+            StatusNamespace::Kafka
+        };
+        self.report_health(namespace, update);
+    }
+
+    /// Gives `update` for the source and each of its exports.
+    fn report_health(&self, namespace: StatusNamespace, update: HealthStatusUpdate) {
+        let ids = std::iter::once(None).chain(self.outputs.iter().map(|(id, _)| Some(*id)));
+        for (id, update) in ids.repeat_clone(update) {
+            self.health_output.give(
+                &self.health_cap,
+                HealthStatusMessage {
+                    id,
+                    namespace,
+                    update,
+                },
+            );
+        }
+    }
+
+    /// Gives `error` to each export at the time of `data_cap`.
+    async fn emit_definite_error(
+        &self,
+        data_cap: &Capability<KafkaTimestamp>,
+        error: SourceErrorDetails,
+    ) {
+        let error: Result<SourceMessage, DataflowError> =
+            Err(SourceError { error, hint: None }.into());
+        let time = data_cap.time().clone();
+        for (output, error) in self
+            .outputs
+            .iter()
+            .map(|(_, output_index)| *output_index)
+            .repeat_clone(error)
+        {
+            let update = ((output, error), time.clone(), Diff::ONE);
+            let size = update.fuel_size();
+            self.data_output.give_fueled(data_cap, update, size).await;
+        }
+    }
+
+    async fn check_low_watermarks(
+        &self,
+        consumer: &ReaderConsumer,
+        start_offsets: &mut BTreeMap<PartitionId, u64>,
+        data_cap: &Capability<KafkaTimestamp>,
+    ) -> ControlFlow<()> {
+        let config = &self.config;
+        let topic = &self.topic;
+        let low_watermarks = match fetch_partition_info(
+            consumer,
+            topic,
+            config
+                .config
+                .parameters
+                .kafka_timeout_config
+                .fetch_metadata_timeout,
+            Offset::Beginning, // fetch the low watermark
+        ) {
+            Ok(low_watermarks) => low_watermarks,
             Err(e) => {
-                let update = HealthStatusUpdate::halting(
-                    format!(
-                        "failed creating kafka reader consumer: {}",
-                        e.display_with_causes()
+                tracing::warn!(
+                    source_id = config.id.to_string(),
+                    worker_id = config.worker_id,
+                    num_workers = config.worker_count,
+                    "Failed to fetch watermarks for topic {topic}: {e}"
+                );
+                self.report_health(
+                    StatusNamespace::Kafka,
+                    HealthStatusUpdate::stalled(
+                        format!("Failed to fetch watermarks for topic {topic}: {e}"),
+                        None,
                     ),
-                    None,
                 );
-                let namespace = if matches!(e, ContextCreationError::Ssh(_)) {
-                    StatusNamespace::Ssh
-                } else {
-                    StatusNamespace::Kafka
+                let ssh_update = match consumer.client().context().tunnel_status() {
+                    SshTunnelStatus::Running => HealthStatusUpdate::running(),
+                    SshTunnelStatus::Errored(e) => HealthStatusUpdate::stalled(e, None),
                 };
-                health_output.give(
-                    health_cap,
-                    HealthStatusMessage {
-                        id: None,
-                        namespace: namespace.clone(),
-                        update: update.clone(),
-                    },
+                self.report_health(StatusNamespace::Ssh, ssh_update);
+                if let GetPartitionsError::TopicDoesNotExist = e {
+                    // If the topic doesn't exist, that is a definite error
+                    self.emit_definite_error(
+                        data_cap,
+                        SourceErrorDetails::Initialization(e.to_string().into()),
+                    )
+                    .await;
+                }
+                return ControlFlow::Continue(());
+            }
+        };
+        for (pid, lwm) in &low_watermarks {
+            if !responsible_for_pid(config, *pid) {
+                continue;
+            }
+            // If a start offset exists for this partition, then either the user specified it
+            // or we restored it from the resume upper. In either case, if the low watermark is
+            // greater than the start offset, we know for certain that the offset we need to
+            // start at has been compacted away or dropped from retention by Kafka. If there
+            // is no start offset, then we set it to the low watermark and start consuming from
+            // there, assuming the user doesn't care about the messages that have been compacted away.
+            if let Some(start_offset) = start_offsets.get_mut(pid) {
+                tracing::info!(
+                    source_id = config.id.to_string(),
+                    worker_id = config.worker_id,
+                    num_workers = config.worker_count,
+                    "restored offset {start_offset} for topic {topic} partition {pid} with low watermark {lwm}"
                 );
-                for (output, update) in outputs.iter().repeat_clone(update) {
-                    health_output.give(
-                        health_cap,
+                if lwm > start_offset {
+                    tracing::error!(
+                        source_id = config.id.to_string(),
+                        worker_id = config.worker_id,
+                        num_workers = config.worker_count,
+                        "start offset and resume upper {start_offset} for topic {topic} \
+                        partition {pid} is behind the low watermark {lwm}. This likely \
+                        means that the offsets have been compacted away by Kafka."
+                    );
+                    let err_str = format!(
+                        "Low watermark {lwm} of kafka topic {topic} partition {pid} \
+                        is past the start offset/resume upper: {start_offset} \
+                        This likely means that the offsets have been compacted away \
+                        by Kafka. Please consider setting a higher start offset or \
+                        adjusting your retention policies to prevent this.",
+                    );
+                    self.health_output.give(
+                        &self.health_cap,
                         HealthStatusMessage {
-                            id: Some(output.id),
-                            namespace: namespace.clone(),
-                            update,
+                            id: None,
+                            namespace: StatusNamespace::Kafka,
+                            update: HealthStatusUpdate::stalled(err_str.clone(), None),
                         },
                     );
+                    self.emit_definite_error(
+                        data_cap,
+                        SourceErrorDetails::Initialization(err_str.into()),
+                    )
+                    .await;
+                    return ControlFlow::Break(());
                 }
-                // IMPORTANT: wedge forever until the `SuspendAndRestart` is processed.
-                // Returning would incorrectly present to the remap operator as progress to the
-                // empty frontier which would be incorrectly recorded to the remap shard.
-                std::future::pending::<()>().await;
-                unreachable!("pending future never returns");
+            } else {
+                tracing::warn!(
+                    source_id = config.id.to_string(),
+                    worker_id = config.worker_id,
+                    num_workers = config.worker_count,
+                    "partition {pid} has a non-zero low watermark {lwm}, but no start offset or \
+                    resume upper was found for this partition. Setting start offset to low watermark"
+                );
+                start_offsets.insert(*pid, *lwm);
             }
         }
+        ControlFlow::Continue(())
     }
 }
 
