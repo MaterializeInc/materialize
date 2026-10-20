@@ -19,12 +19,14 @@ use mz_catalog::config::{Config, StateConfig};
 use mz_catalog::durable::{BootstrapArgs, DurableCatalogState, Snapshot};
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::error::Error;
-use mz_catalog::memory::objects::{CatalogCollectionEntry, CatalogEntry, Cluster, Index};
+use mz_catalog::memory::objects::{
+    CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, Index,
+};
 use mz_controller_types::ClusterId;
 use mz_ore::now::NowFn;
 use mz_persist_client::PersistClient;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, Timestamp};
+use mz_repr::{CatalogItemId, Diff, GlobalId, Timestamp};
 use mz_sql::catalog::{CatalogDatabase, EnvironmentId};
 use mz_sql::names::{FullItemName, QualifiedItemName};
 use mz_sql::session::metadata::SessionMetadata;
@@ -94,6 +96,79 @@ fn transaction_context(
 }
 
 impl Catalog {
+    /// Restore metadata from committed selections and return the notice-row changes.
+    ///
+    /// Complete this before publishing the projection or applying another catalog
+    /// batch. DROP derives notice retractions from this projection's metadata,
+    /// independently of whether the selected dataflow has been installed.
+    pub(crate) async fn refresh_written_plan_metadata(
+        &mut self,
+        mut ids: BTreeSet<GlobalId>,
+    ) -> Result<Vec<BuiltinTableUpdate>, AdapterError> {
+        if !self.state().catalog_read_protection_enabled() || ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        ids.retain(|id| {
+            self.try_get_entry_by_global_id(id)
+                .is_some_and(|entry| match entry.item() {
+                    CatalogItem::Index(index) => index.global_id() == *id,
+                    CatalogItem::MaterializedView(mv) => mv.global_id_writes() == *id,
+                    CatalogItem::MetricSink(sink) => sink.global_id == *id,
+                    _ => false,
+                })
+        });
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let build = Self::expression_build_version(self.config().build_info).to_string();
+        let revisions: Vec<_> = ids
+            .iter()
+            .filter_map(|id| {
+                self.state()
+                    .written_plan(*id, &build)
+                    .map(|revision| (*id, revision))
+            })
+            .collect();
+        let mut selected = self.read_written_plans(revisions.clone()).await?;
+        if selected.len() != revisions.len() {
+            return Err(AdapterError::internal(
+                "publish written plan notices",
+                "selected plan is missing",
+            ));
+        }
+        let mut updates = Vec::new();
+        for id in ids {
+            let previous: BTreeSet<_> = self
+                .try_get_dataflow_metainfo(&id)
+                .into_iter()
+                .flat_map(|meta| meta.optimizer_notices.iter().cloned())
+                .collect();
+            let metainfo = match selected.remove(&id) {
+                Some(plan) => {
+                    self.set_optimized_plan(id, plan.global_mir);
+                    self.set_physical_plan(id, plan.physical_plan);
+                    plan.dataflow_metainfos
+                }
+                None => Default::default(),
+            };
+            let current: BTreeSet<_> = metainfo.optimizer_notices.iter().cloned().collect();
+            if self.system_config().enable_mz_notices() {
+                self.state().pack_optimizer_notices(
+                    &mut updates,
+                    previous.difference(&current),
+                    Diff::MINUS_ONE,
+                );
+                self.state().pack_optimizer_notices(
+                    &mut updates,
+                    current.difference(&previous),
+                    Diff::ONE,
+                );
+            }
+            self.set_dataflow_metainfo(id, metainfo);
+        }
+        Ok(updates)
+    }
+
     pub fn open(config: Config<'_>) -> BoxFuture<'static, Result<OpenCatalogResult, AdapterError>> {
         let open = CoreCatalog::open(config);
         async move {

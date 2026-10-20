@@ -55,7 +55,7 @@ use mz_ore::instrument;
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_repr::optimize::OverrideFrom;
-use mz_repr::{CatalogItemId, Diff, GlobalId, RelationVersion, RelationVersionSelector, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion, RelationVersionSelector, Timestamp};
 use mz_sql::plan::ConnectionDetails;
 use mz_sql::session::vars::{DISABLED_METRIC_SINKS, Var};
 use mz_storage_client::controller::{CollectionDescription, DataSource};
@@ -71,9 +71,9 @@ use timely::progress::Antichain;
 use tracing::{Instrument, info_span, warn};
 
 use crate::active_compute_sink::ActiveComputeSinkRetireReason;
+use crate::coord::Coordinator;
 use crate::coord::peek::DroppedDependency;
 use crate::coord::timestamp_selection::TimestampProvider;
-use crate::coord::{BuiltinTableAppendNotify, Coordinator};
 use crate::optimize::OptimizerConfig;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, dataflow_import_id_bundle};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementLoggingId};
@@ -125,7 +125,17 @@ impl Coordinator {
         {
             self.pending_compute_installation_retry = None;
         }
-        let notice_updates = self.refresh_written_plan_metadata(written_plans).await?;
+        let notice_updates = if written_plans.is_empty()
+            || !self.catalog().state().catalog_read_protection_enabled()
+        {
+            Vec::new()
+        } else {
+            self.catalog_mut()
+                .refresh_written_plan_metadata(written_plans)
+                .await?
+        };
+        let notice_updates = (!notice_updates.is_empty())
+            .then(|| self.builtin_table_update().execute(notice_updates));
         self.apply_catalog_implications_inner(
             ctx,
             catalog_implications.into_iter().collect_vec(),
@@ -181,81 +191,6 @@ impl Coordinator {
             .observe(start.elapsed().as_secs_f64());
 
         Ok(())
-    }
-
-    /// Restore plan metadata and notices from committed selections, independently
-    /// of installation. Catalog drop application retracts affected notices.
-    async fn refresh_written_plan_metadata(
-        &mut self,
-        mut ids: BTreeSet<GlobalId>,
-    ) -> Result<Option<BuiltinTableAppendNotify>, AdapterError> {
-        if !self.catalog().state().catalog_read_protection_enabled() || ids.is_empty() {
-            return Ok(None);
-        }
-        ids.retain(|id| {
-            self.catalog()
-                .try_get_entry_by_global_id(id)
-                .is_some_and(|entry| match entry.item() {
-                    CatalogItem::Index(index) => index.global_id() == *id,
-                    CatalogItem::MaterializedView(mv) => mv.global_id_writes() == *id,
-                    CatalogItem::MetricSink(sink) => sink.global_id == *id,
-                    _ => false,
-                })
-        });
-        if ids.is_empty() {
-            return Ok(None);
-        }
-        let build =
-            crate::catalog::Catalog::expression_build_version(self.catalog().config().build_info)
-                .to_string();
-        let revisions: Vec<_> = ids
-            .iter()
-            .filter_map(|id| {
-                self.catalog()
-                    .state()
-                    .written_plan(*id, &build)
-                    .map(|revision| (*id, revision))
-            })
-            .collect();
-        let mut selected = self.catalog().read_written_plans(revisions.clone()).await?;
-        if selected.len() != revisions.len() {
-            return Err(AdapterError::internal(
-                "publish written plan notices",
-                "selected plan is missing",
-            ));
-        }
-        let mut updates = Vec::new();
-        for id in ids {
-            let previous: BTreeSet<_> = self
-                .catalog()
-                .try_get_dataflow_metainfo(&id)
-                .into_iter()
-                .flat_map(|meta| meta.optimizer_notices.iter().cloned())
-                .collect();
-            let metainfo = match selected.remove(&id) {
-                Some(plan) => {
-                    self.catalog_mut().set_optimized_plan(id, plan.global_mir);
-                    self.catalog_mut().set_physical_plan(id, plan.physical_plan);
-                    plan.dataflow_metainfos
-                }
-                None => Default::default(),
-            };
-            let current: BTreeSet<_> = metainfo.optimizer_notices.iter().cloned().collect();
-            if self.catalog().system_config().enable_mz_notices() {
-                self.catalog().state().pack_optimizer_notices(
-                    &mut updates,
-                    previous.difference(&current),
-                    Diff::MINUS_ONE,
-                );
-                self.catalog().state().pack_optimizer_notices(
-                    &mut updates,
-                    current.difference(&previous),
-                    Diff::ONE,
-                );
-            }
-            self.catalog_mut().set_dataflow_metainfo(id, metainfo);
-        }
-        Ok((!updates.is_empty()).then(|| self.builtin_table_update().execute(updates)))
     }
 
     /// Refreshes runtime consumers from the committed global configuration.
