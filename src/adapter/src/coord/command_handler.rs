@@ -1416,20 +1416,22 @@ impl Coordinator {
                     | Statement::AlterObjectSwap(_)
                     | Statement::CreateTableFromSource(_)
                     | Statement::CreateSource(_) => {
-                        let state = self.catalog().for_session(ctx.session()).state().clone();
-                        let revision = self.catalog().transient_revision();
+                        if !ctx.session().transaction().is_ddl() {
+                            let state = self.catalog().for_session(ctx.session()).state().clone();
+                            let revision = self.catalog().transient_revision();
 
-                        // Initialize our transaction with a set of empty ops, or return an error
-                        // if we can't run a DDL transaction
-                        let txn_status = ctx.session_mut().transaction_mut();
-                        if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
-                            ops: vec![],
-                            state,
-                            revision,
-                            side_effects: vec![],
-                            snapshot: None,
-                        }) {
-                            return ctx.retire(Err(err));
+                            // Initialize our transaction with a set of empty ops, or return an error
+                            // if we can't run a DDL transaction
+                            let txn_status = ctx.session_mut().transaction_mut();
+                            if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
+                                ops: vec![],
+                                state,
+                                revision,
+                                side_effects: vec![],
+                                snapshot: None,
+                            }) {
+                                return ctx.retire(Err(err));
+                            }
                         }
                     }
 
@@ -1568,6 +1570,20 @@ impl Coordinator {
                 });
                 return;
             }
+        }
+
+        if ctx.session().transaction().is_ddl()
+            && catalog::command::CatalogResultCommand::supports_statement(&stmt)
+        {
+            self.sequence_catalog_result_command(ctx, stmt, params);
+            return;
+        }
+        if matches!(
+            &*stmt,
+            Statement::AlterObjectRename(_) | Statement::AlterObjectSwap(_)
+        ) {
+            self.sequence_rename_command(ctx, stmt, params).await;
+            return;
         }
 
         let catalog = self.catalog();
