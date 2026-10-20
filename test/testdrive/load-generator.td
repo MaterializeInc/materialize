@@ -32,6 +32,28 @@ ALTER SYSTEM SET enable_load_generator_datums = true;
 > SELECT count(*) FROM counter_single_tbl
 1
 
+> ALTER SOURCE counter_single REFRESH REFERENCES;
+
+> SELECT u.name
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_references u ON s.id = u.source_id
+  WHERE s.name = 'counter_single';
+counter
+
+> ALTER SOURCE counter_single RENAME TO counter_renamed;
+
+> ALTER SOURCE IF EXISTS counter_single REFRESH REFERENCES;
+
+> ALTER SOURCE counter_renamed REFRESH REFERENCES;
+
+> SELECT u.name
+  FROM mz_sources s
+  JOIN mz_internal.mz_source_references u ON s.id = u.source_id
+  WHERE s.name = 'counter_renamed';
+counter
+
+> ALTER SOURCE counter_renamed RENAME TO counter_single;
+
 > CREATE SOURCE counter_five
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (AS OF 4, UP TO 5)

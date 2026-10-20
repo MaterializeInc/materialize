@@ -1426,46 +1426,16 @@ impl Coordinator {
                             // Preparation can yield before the first dry run. Capture both
                             // baselines now so unrelated commits cannot mix their contents.
                             let (state, snapshot) = self.catalog().ddl_transaction_snapshot().await;
-                            let revision = self.catalog().transient_revision();
 
                             // Initialize our transaction with a set of empty ops, or return an error
                             // if we can't run a DDL transaction
                             let txn_status = ctx.session_mut().transaction_mut();
                             if let Err(err) = txn_status.add_ops(TransactionOps::DDL {
-                                ops: vec![],
+                                commands: vec![],
                                 state,
-                                revision,
-                                revision_fenced: false,
-                                side_effects: vec![],
-                                snapshot: Some(snapshot),
+                                snapshot,
                             }) {
                                 return ctx.retire(Err(err));
-                            }
-                        }
-                        if matches!(
-                            &*stmt,
-                            Statement::CreateTableFromSource(_) | Statement::CreateSource(_)
-                        ) {
-                            let revision = self.catalog().transient_revision();
-                            let TransactionOps::DDL {
-                                revision: txn_revision,
-                                revision_fenced,
-                                ops: _,
-                                state: _,
-                                side_effects: _,
-                                snapshot: _,
-                            } = &mut ctx
-                                .session_mut()
-                                .transaction_mut()
-                                .inner_mut()
-                                .expect("active transaction")
-                                .ops
-                            else {
-                                unreachable!("DDL mode initialized above");
-                            };
-                            *revision_fenced = true;
-                            if *txn_revision != revision {
-                                return ctx.retire(Err(AdapterError::DDLTransactionRace));
                             }
                         }
                     }
@@ -1616,6 +1586,18 @@ impl Coordinator {
             Statement::AlterObjectRename(_) | Statement::AlterObjectSwap(_)
         ) {
             self.sequence_rename_command(ctx, stmt, params).await;
+            return;
+        }
+
+        if matches!(
+            &*stmt,
+            Statement::CreateSource(_) | Statement::CreateTableFromSource(_)
+        ) || matches!(&*stmt, Statement::AlterSource(stmt)
+            if matches!(stmt.action,
+                mz_sql::ast::AlterSourceAction::AddSubsources { .. }
+                | mz_sql::ast::AlterSourceAction::RefreshReferences))
+        {
+            self.sequence_source_statement(ctx, stmt, params).await;
             return;
         }
 
