@@ -50,6 +50,11 @@ pub mod top_k;
 pub mod transform;
 pub mod validate;
 
+/// Whether `finalize_dataflow` checks that every optimizer plan survives extraction to an
+/// envelope and back, which `MZ_LIR_ROUND_TRIP_CHECK=1` enables when soft assertions are on.
+static ROUND_TRIP_CHECK: std::sync::LazyLock<bool> =
+    std::sync::LazyLock::new(|| std::env::var("MZ_LIR_ROUND_TRIP_CHECK").is_ok_and(|v| v == "1"));
+
 /// Metrics collected during MIR to LIR lowering.
 #[derive(Debug, Clone)]
 pub struct LoweringMetrics {
@@ -878,8 +883,9 @@ impl LirRelationExpr {
                     plans.join("\n")
                 );
             }
-            // Every optimizer plan must survive extraction to an envelope and back.
-            if let Err(error) = envelope::check_extract_round_trip(&dataflow) {
+            // Every optimizer plan must survive extraction to an envelope and back. Opt-in,
+            // because printing and parsing every dataflow costs more than validating it.
+            if *ROUND_TRIP_CHECK && let Err(error) = envelope::check_extract_round_trip(&dataflow) {
                 mz_ore::soft_panic_or_log!(
                     "LIR envelope round trip failed for dataflow {}: {error}",
                     dataflow.debug_name
