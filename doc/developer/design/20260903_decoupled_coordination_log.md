@@ -43,54 +43,36 @@ identifies unnecessary protection-index reconstruction during empty storage
 cleanup. The correction is in `0286e789`. Formatting, catalog Clippy and all
 35 catalog transaction tests pass on scratch.
 
-Next, implement [asynchronous adapter catalog ownership](20260903_decoupled_coordination.md#adapter-catalog-ownership).
-Refactor the existing live catalog owner, not a separate maintenance follower or
-detached Persist appender. This includes foreground scheduling changes needed to
-keep dispatch available, rather than only moving periodic callbacks. Establish
-ownership of locally mutable catalog state and cover durable callers such as
-refresh, allocation and catalog-upper advancement. Bootstrap and prewarming
-semantics remain intact.
+Further [asynchronous adapter catalog ownership](20260903_decoupled_coordination.md#adapter-catalog-ownership)
+work is on hold at Aljoscha's request. The owner is not implemented. The bounded
+table-lifecycle corrections are implemented and reviewed, with verification below.
+Do not resume owner work. These correctness fixes are not demonstrated
+repairs for the original contention. The Persist-traffic investigation is separately
+owned and retains its worker.
 
 The caller inventory and reviews are under `scratch/async-catalog-ownership/`.
-Prerequisites move selected-plan metadata restoration into the catalog and separate
-FIFO table-command submission from acknowledgement. Formatting and scratch adapter
-Clippy pass through `c984bee8`, as do five group-committer and two DDL-completion
-unit tests. The asynchronous owner is not implemented yet.
-Before deferring table acknowledgements, resolve the lifecycle edges in
-`table-lifecycle.md`: physical shard closure must follow successful Forget, not just
-delayed controller cleanup. Protected prewarm runtime table following also reaches
-writable oracle/registration paths, unlike guarded bootstrap. These are static
-findings, not reproduced failures or an explanation of the workload timeouts.
+Prerequisites through `c984bee8` pass formatting, scratch adapter Clippy, five
+group-committer tests and two DDL-completion tests. Lifecycle revision `68a45ac0`
+and its compile cleanups through `45a37509` pass affected-crate Clippy, including
+test targets, and 44 distinct boundary tests. The reviewed correction makes finalization
+obtain definitive, shard-addressed Forget through the existing committer after
+bootstrap. SQL DROP only detaches local routes. Read-only adoption shares bootstrap
+schema descriptions and leased-read installation without writable oracle or
+user-table registration. Tests cover peer/alias detachment, lost retirement
+completion, physical closure ordering, independent finalization eligibility and
+read-only schema adoption.
 
-Reuse transaction and request-completion machinery. Keep pending protection,
-definitive write completion and ordered committed effects consistent across the
-boundary. Do not transfer blocking to a shared mutex or an inline reply wait.
-General retry frameworks, shared arbitration, SQL behavior changes and the M3
-process split remain outside this correction. Surface disproportionate scope
-rather than expanding silently.
+Three existing environmentd bootstrap/builtin-migration regressions pass on an
+unchanged rerun. The initial run timed out in independent-oracle bootstrap and
+migrated-MV readiness, while the flag-off migration test passed. Those two initial
+timeouts remain unexplained. No deadlines, correctness assertions or production
+settings were changed. This is not a contention comparison or full M2 verification.
 
-After focused ownership/concurrency review, run the existing fixed-seed comparison.
-Measure SQL completion, dispatch occupancy, committed-bound advancement and
-memory/I/O cost separately. Preserve deadlines, the 1s cadence and workload
-resources. Removing dispatch blockage does not establish shared-write progress.
-
-Evidence: `scratch/maintenance-append-repeat/report.md`, `cpu-analysis/report.md`
-and `minio-sizing.md` within that directory. No further experiment or resource
-tuning is underway.
-
-This comparison is the decision point:
-
-- If the contention failure is resolved, continue combined verification, remaining
-  integration repairs and history cleanup. Do not expand M2 acceptance.
-- If foreground stalls remain, bring Aljoscha the evidence, remaining uncertainty
-  and a recommended correction before expanding beyond this ownership refactor.
-  Distinguish dispatch responsiveness from shared-write arbitration. State the
-  tradeoff in SQL progress, compaction delay/retained history and added coordination.
-- An inconclusive run permits a bounded diagnostic follow-up, not an assumed
-  fix or an open-ended instrumentation campaign. Escalate if obtaining a useful
-  comparison itself requires substantial work.
-
-Shared content-priority signals and arbitration changes are not approved.
+If owner work resumes, use the approved ownership contract and existing fixed-seed
+comparison. Dispatch responsiveness alone does not establish successful foreground
+commits, SQL completion or compaction-bound advancement. No owner contention
+comparison or traffic experiment is currently running here. Shared content-priority
+signals and arbitration changes remain unapproved.
 
 ## Other work and scope
 
@@ -112,10 +94,16 @@ building a larger synchronization harness for M2.
 
 ## Worker and evidence
 
-Scratch worker: `i-01023ce0e1db179f9`, last recorded expiry
-2026-10-22 01:22:35 UTC. Verify its state and renew within the prompt's approved
-budget. Use `bin/ci-builder run stable <command>` for pinned tooling.
+The traffic investigation retains `i-01023ce0e1db179f9`. Leave it untouched.
+Aljoscha authorized a second worker for bounded lifecycle verification:
+`i-069b0283acccc3174` (`table-lifecycle`), m8i.4xlarge, 16 vCPUs, 64 GiB RAM,
+500 GiB disk, expiry 2026-10-22 07:40:25 UTC. Verification covers adapter,
+storage-client, storage-controller and compute-client libraries and tests.
+Clippy and boundary tests pass on `45a37509`. Runtime results and the initial
+failures are preserved off-worker. No build or test process remains running.
+Use `bin/ci-builder run stable <command>` for pinned tooling.
 Saved evidence: `~/.local/share/aj/m2-evidence/scratch/`.
+Lifecycle verification evidence: `scratch/table-lifecycle-verification/`.
 
 Scratch's 16-GiB cap is not a faithful CI reproduction: swap, host-derived buffer
 budgets and CPU topology differ. Both upstream and the branch OOM there.

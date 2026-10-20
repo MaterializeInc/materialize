@@ -689,6 +689,10 @@ struct EmptyStorage;
 
 #[async_trait]
 impl StorageCollections for EmptyStorage {
+    fn shard_finalization(&self) -> mz_storage_client::shard_finalization::ShardFinalization {
+        unimplemented!("this mock does not finalize shards")
+    }
+
     async fn initialize_state(
         &self,
         _txn: &mut (dyn StorageTxn + Send),

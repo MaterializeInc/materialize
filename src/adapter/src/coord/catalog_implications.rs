@@ -1249,10 +1249,11 @@ impl Coordinator {
             // logging around to indicate when an actual dependency error might
             // occur.
             if !tables_to_drop.is_empty() {
-                // Forgetting follows every staged append in the adapter's FIFO.
+                // Detachment follows staged appends in this actor's FIFO. Shared
+                // Forget is a prerequisite of physical finalization, not of local
+                // handle cleanup.
                 if !txn_tables_to_drop.is_empty() {
-                    self.forget_tables_via_committer(txn_tables_to_drop.into_iter().collect())
-                        .await;
+                    self.detach_tables_via_committer(txn_tables_to_drop.into_iter().collect());
                 }
                 self.drop_tables(tables_to_drop.into_iter().collect_vec());
             }
@@ -1882,7 +1883,7 @@ impl Coordinator {
         let registrations = table_collections_to_create
             .iter()
             .filter_map(|(id, collection)| {
-                matches!(collection.data_source, DataSource::Table)
+                (!self.read_only_controllers && matches!(collection.data_source, DataSource::Table))
                     .then(|| self.table_registration(*id, collection.desc.clone()))
             })
             .collect::<Vec<_>>();
@@ -1890,13 +1891,20 @@ impl Coordinator {
         self.register_adapter_storage_collections(&collections, &BTreeSet::new())
             .await;
 
-        // Confirm leadership after allocating the collections' initial timestamp.
-        let write_ts = self.get_local_write_ts().await;
-        let register_ts = write_ts.timestamp;
-        self.catalog
-            .advance_upper(write_ts.advance_to)
-            .await
-            .unwrap_or_terminate("unable to advance catalog upper");
+        let register_ts = if self.read_only_controllers {
+            // Following a committed table adopts its readability, not authority
+            // to register it or submit user writes. Migrated builtin writers are
+            // installed separately during bootstrap.
+            self.get_local_read_ts().await
+        } else {
+            // Confirm leadership before initializing writable collections.
+            let write_ts = self.get_local_write_ts().await;
+            self.catalog
+                .advance_upper(write_ts.advance_to)
+                .await
+                .unwrap_or_terminate("unable to advance catalog upper");
+            write_ts.timestamp
+        };
 
         {
             let storage_metadata = self.catalog.state().storage_metadata();
@@ -1909,7 +1917,9 @@ impl Coordinator {
 
         // Registration can choose a later timestamp than the collections' initial since. Reads
         // remain above the applied registration timestamp.
-        let table_ts = if registrations.is_empty() {
+        let table_ts = if self.read_only_controllers {
+            register_ts
+        } else if registrations.is_empty() {
             // Without txn-wal registration, this timestamp still makes the collections readable.
             self.apply_local_write(register_ts).await;
             register_ts
@@ -2037,6 +2047,28 @@ impl Coordinator {
         Ok(())
     }
 
+    /// Storage descriptions for the versions of a txn-managed table.
+    ///
+    /// Older schema versions share the newer version's physical shard. Both
+    /// bootstrap and committed-diff adoption must install the same alias chain.
+    pub(super) fn table_collection_descriptions(
+        table: &Table,
+    ) -> Vec<(GlobalId, CollectionDescription)> {
+        let versions: BTreeMap<_, _> = table
+            .collection_descs()
+            .map(|(gid, version, desc)| (version, (gid, desc)))
+            .collect();
+        versions
+            .iter()
+            .map(|(version, (gid, desc))| {
+                let mut collection_desc = CollectionDescription::for_table(desc.clone());
+                collection_desc.primary =
+                    versions.get(&version.bump()).map(|(next_gid, _)| *next_gid);
+                (*gid, collection_desc)
+            })
+            .collect()
+    }
+
     #[instrument(level = "debug")]
     async fn handle_create_table(
         &self,
@@ -2052,15 +2084,7 @@ impl Coordinator {
         // (e.g. a source-fed table).
         match &table.data_source {
             TableDataSource::TableWrites { defaults: _ } => {
-                let versions: BTreeMap<_, _> = table
-                    .collection_descs()
-                    .map(|(gid, version, desc)| (version, (gid, desc)))
-                    .collect();
-                let collection_descs = versions.iter().map(|(_version, (gid, desc))| {
-                    let collection_desc = CollectionDescription::for_table(desc.clone());
-
-                    (*gid, collection_desc)
-                });
+                let collection_descs = Self::table_collection_descriptions(&table);
 
                 let compaction_window = table
                     .custom_logical_compaction_window
@@ -2220,15 +2244,18 @@ impl Coordinator {
         let new_desc = new_table
             .desc
             .at_version(RelationVersionSelector::Specific(new_version));
-        let registration = matches!(new_table.data_source, TableDataSource::TableWrites { .. })
-            .then(|| self.table_registration(new_gid, new_desc.clone()));
+        let registration = (!self.read_only_controllers
+            && matches!(new_table.data_source, TableDataSource::TableWrites { .. }))
+        .then(|| self.table_registration(new_gid, new_desc.clone()));
 
-        // Confirm leadership before mutating controller state.
-        let write_ts = self.get_local_write_ts().await;
-        self.catalog
-            .advance_upper(write_ts.advance_to)
-            .await
-            .unwrap_or_terminate("unable to advance catalog upper");
+        if !self.read_only_controllers {
+            // Confirm leadership before shared schema evolution.
+            let write_ts = self.get_local_write_ts().await;
+            self.catalog
+                .advance_upper(write_ts.advance_to)
+                .await
+                .unwrap_or_terminate("unable to advance catalog upper");
+        }
 
         self.controller
             .storage

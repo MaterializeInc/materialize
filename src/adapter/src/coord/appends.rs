@@ -9,11 +9,11 @@
 
 //! Logic and types for all appends executed by the [`Coordinator`].
 //!
-//! Runtime table appends, registrations, and forgets are serialized by the
+//! Runtime table appends, registrations, detachments, and forgets are serialized by the
 //! [`GroupCommitter`]. FIFO order is required so appends cannot overtake registration or
 //! forgetting.
 //!
-//! For commands without a supplied timestamp, the committer:
+//! For txn-WAL mutations without a supplied timestamp, the committer:
 //!
 //! 1. allocates a write timestamp from the shared oracle,
 //! 2. advances the catalog upper to [`WriteTimestamp::advance_to`],
@@ -220,8 +220,11 @@ pub(crate) enum TableWriteCmd {
         tables: Vec<TableRegistration>,
         result: oneshot::Sender<Timestamp>,
     },
-    Forget {
+    Detach {
         ids: Vec<GlobalId>,
+    },
+    Forget {
+        shards: BTreeSet<mz_persist_client::ShardId>,
         result: oneshot::Sender<Timestamp>,
     },
 }
@@ -231,8 +234,8 @@ pub(crate) enum TableWriteCmd {
 /// The `GlobalId`s reach the table write worker unvalidated, so a submitter
 /// must resolve them against the current catalog on the coordinator loop and
 /// send with no await in between. Channel order then keeps the append ahead of
-/// any `Forget` for the same table. A non-empty append for a table whose write
-/// handle is already gone trips an assert in the storage controller and takes
+/// local detachment for the same table. A non-empty append for a table whose write
+/// handle is already gone trips an assert in the table worker and takes
 /// the process down.
 pub(crate) struct TimestampedWriteRequest {
     pub(crate) appends: Vec<(GlobalId, Vec<TableData>)>,
@@ -280,7 +283,8 @@ impl GroupCommitRequest {
 /// Serializes runtime txns-shard writes off the coordinator loop.
 ///
 /// Dropped group-commit requests retire their clients through [`ExecuteContext`]. Dropped
-/// registration or forget replies cause their coordinator waiters to halt.
+/// registration replies cause their waiters to halt. A lost retirement reply
+/// leaves physical finalization restricted.
 pub(crate) struct GroupCommitter {
     rx: mpsc::UnboundedReceiver<TableWriteCmd>,
     oracle: Arc<dyn TimestampOracle<Timestamp> + Send + Sync>,
@@ -303,6 +307,34 @@ enum TxnsWriteAttempt {
     UpperConflict { next_eligible_timestamp: Timestamp },
     /// The table write worker is gone, so the outcome is unknown.
     WorkerGone,
+}
+
+#[derive(Debug)]
+struct ShardRetirement {
+    commands: mpsc::UnboundedSender<TableWriteCmd>,
+}
+
+impl mz_storage_client::shard_finalization::ShardRetirement for ShardRetirement {
+    fn forget(
+        &self,
+        shards: BTreeSet<mz_persist_client::ShardId>,
+    ) -> BoxFuture<'static, anyhow::Result<()>> {
+        let (result, completion) = oneshot::channel();
+        let submitted = self.commands.send(TableWriteCmd::Forget { shards, result });
+        Box::pin(async move {
+            submitted.map_err(|_| anyhow::anyhow!("group committer unavailable for retirement"))?;
+            completion
+                .await
+                .map_err(|_| anyhow::anyhow!("retirement acknowledgement lost"))?;
+            Ok(())
+        })
+    }
+}
+
+pub(crate) fn shard_retirement(
+    commands: mpsc::UnboundedSender<TableWriteCmd>,
+) -> Arc<dyn mz_storage_client::shard_finalization::ShardRetirement> {
+    Arc::new(ShardRetirement { commands })
 }
 
 impl GroupCommitter {
@@ -342,10 +374,16 @@ impl GroupCommitter {
                         };
                         let _ = result.send(write_ts.timestamp);
                     }
-                    TableWriteCmd::Forget { ids, result } => {
+                    TableWriteCmd::Detach { ids } => {
+                        let Ok(result) = self.table_write_handle.detach(ids).await else {
+                            return;
+                        };
+                        result.unwrap_or_terminate("cannot fail to detach local table handles");
+                    }
+                    TableWriteCmd::Forget { shards, result } => {
                         let Some(write_ts) = self
                             .write_to_txns(None, |ts, _advance_to| {
-                                self.table_write_handle.forget(ts, ids.clone())
+                                self.table_write_handle.forget(ts, shards.clone())
                             })
                             .await
                         else {
@@ -957,26 +995,14 @@ impl Coordinator {
         }
     }
 
-    /// Submits forgetting in FIFO order and returns its completion.
-    ///
-    /// The command remains submitted even if the caller drops the returned future.
-    pub(crate) fn forget_tables_via_committer(
-        &self,
-        ids: Vec<GlobalId>,
-    ) -> impl Future<Output = Timestamp> + Send + 'static + use<> {
-        let (tx, rx) = oneshot::channel();
+    /// Detaches local routes after earlier writes, without retiring shared shards.
+    pub(crate) fn detach_tables_via_committer(&self, ids: Vec<GlobalId>) {
         if self
             .group_committer_tx
-            .send(TableWriteCmd::Forget { ids, result: tx })
+            .send(TableWriteCmd::Detach { ids })
             .is_err()
         {
-            halt!("group committer terminated before a table forget could be submitted");
-        }
-        async move {
-            match rx.await {
-                Ok(ts) => ts,
-                Err(_) => halt!("group committer terminated with a table forget outstanding"),
-            }
+            halt!("group committer terminated before local table detachment");
         }
     }
 
@@ -1496,10 +1522,16 @@ mod tests {
             self.respond(register_ts)
         }
 
+        fn detach(&self, _ids: Vec<GlobalId>) -> oneshot::Receiver<Result<(), StorageError>> {
+            let (tx, rx) = oneshot::channel();
+            let _ = tx.send(Ok(()));
+            rx
+        }
+
         fn forget(
             &self,
             forget_ts: Timestamp,
-            _ids: Vec<GlobalId>,
+            _shards: BTreeSet<mz_persist_client::ShardId>,
         ) -> oneshot::Receiver<Result<(), StorageError>> {
             self.respond(forget_ts)
         }

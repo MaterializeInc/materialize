@@ -1919,7 +1919,7 @@ impl Coordinator {
     }
 
     /// A convenience method for dropping tables.
-    /// Txn-wal membership must already be forgotten through the group committer.
+    /// Physical finalization independently waits for shared txn-WAL retirement.
     pub(crate) fn drop_tables(&mut self, tables: Vec<(CatalogItemId, GlobalId)>) {
         for (item_id, gid) in &tables {
             self.active_webhooks.remove(item_id);

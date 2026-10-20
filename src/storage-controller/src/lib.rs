@@ -1892,7 +1892,7 @@ impl StorageController for Controller {
             }
         }
 
-        // The adapter completes table writer forgetting before calling us. Read
+        // Physical finalization separately requires shared txn-WAL retirement. Read
         // accounting may already be retired, but execution cleanup is ours.
         if !identifiers.is_empty() {
             self.drop_sources_unvalidated(storage_metadata, identifiers)?;

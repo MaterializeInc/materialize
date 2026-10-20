@@ -3856,21 +3856,7 @@ impl Coordinator {
                 CatalogItem::Table(table) => {
                     match &table.data_source {
                         TableDataSource::TableWrites { defaults: _ } => {
-                            let versions: BTreeMap<_, _> = table
-                                .collection_descs()
-                                .map(|(gid, version, desc)| (version, (gid, desc)))
-                                .collect();
-                            let collection_descs = versions.iter().map(|(version, (gid, desc))| {
-                                let next_version = version.bump();
-                                let primary_collection =
-                                    versions.get(&next_version).map(|(gid, _desc)| gid).copied();
-                                let mut collection_desc =
-                                    CollectionDescription::for_table(desc.clone());
-                                collection_desc.primary = primary_collection;
-
-                                (*gid, collection_desc)
-                            });
-                            collections.extend(collection_descs);
+                            collections.extend(Self::table_collection_descriptions(table));
                         }
                         TableDataSource::DataSource {
                             desc: data_source_desc,
@@ -6756,6 +6742,11 @@ pub fn serve(
                     .send(bootstrap)
                     .expect("bootstrap_rx is not dropped until it receives this message");
                 if ok {
+                    if !read_only_controllers {
+                        coord.controller.storage_collections.shard_finalization().install(
+                            appends::shard_retirement(coord.group_committer_tx.clone()),
+                        );
+                    }
                     handle.block_on(coord.serve(
                         internal_cmd_rx,
                         strict_serializable_reads_rx,

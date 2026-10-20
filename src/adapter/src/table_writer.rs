@@ -45,8 +45,8 @@ pub(crate) struct TableRegistration {
 
 /// Queues txns-shard operations on the table worker.
 ///
-/// The adapter's group committer is the sole runtime caller, preserving FIFO order across appends,
-/// registrations, and forgets. On [`StorageError::InvalidUppers`], the writable implementation
+/// Each adapter queues runtime operations through its group committer, preserving
+/// local FIFO order. Other actors may use the same tables and txn-WAL. On [`StorageError::InvalidUppers`], the writable implementation
 /// restores its bookkeeping and the caller must retry at a fresh timestamp.
 pub(crate) trait TableWriteHandle: Debug + Send + Sync {
     /// Appends `commands` at `write_ts` and advances all registered tables to `advance_to`.
@@ -64,11 +64,14 @@ pub(crate) trait TableWriteHandle: Debug + Send + Sync {
         tables: Vec<TableRegistration>,
     ) -> oneshot::Receiver<Result<(), StorageError>>;
 
-    /// Forgets registered `ids` at `forget_ts`, ignoring unknown IDs.
+    /// Detaches local ID routes without changing shared txn-WAL membership.
+    fn detach(&self, ids: Vec<GlobalId>) -> oneshot::Receiver<Result<(), StorageError>>;
+
+    /// Retires catalog-certified unreferenced physical shards from the shared WAL.
     fn forget(
         &self,
         forget_ts: Timestamp,
-        ids: Vec<GlobalId>,
+        shards: BTreeSet<ShardId>,
     ) -> oneshot::Receiver<Result<(), StorageError>>;
 }
 
@@ -125,11 +128,13 @@ enum PersistTableWriteCmd {
         Vec<TableRegistration>,
         tokio::sync::oneshot::Sender<Result<(), StorageError>>,
     ),
-    DropHandles {
-        forget_ts: Timestamp,
-        /// Tables that we want to drop our handle for.
+    Detach {
         ids: Vec<GlobalId>,
-        /// Notifies us when all resources have been cleaned up.
+        tx: oneshot::Sender<Result<(), StorageError>>,
+    },
+    Forget {
+        forget_ts: Timestamp,
+        shards: BTreeSet<ShardId>,
         tx: oneshot::Sender<Result<(), StorageError>>,
     },
     Append {
@@ -145,7 +150,8 @@ impl PersistTableWriteCmd {
     fn name(&self) -> &'static str {
         match self {
             PersistTableWriteCmd::Register(_, _, _) => "PersistTableWriteCmd::Register",
-            PersistTableWriteCmd::DropHandles { .. } => "PersistTableWriteCmd::DropHandle",
+            PersistTableWriteCmd::Detach { .. } => "PersistTableWriteCmd::Detach",
+            PersistTableWriteCmd::Forget { .. } => "PersistTableWriteCmd::Forget",
             PersistTableWriteCmd::Append { .. } => "PersistTableWriteCmd::Append",
             PersistTableWriteCmd::Shutdown => "PersistTableWriteCmd::Shutdown",
         }
@@ -327,13 +333,23 @@ impl TableWriteHandle for PersistTableWriteWorker {
         rx
     }
 
+    fn detach(&self, ids: Vec<GlobalId>) -> oneshot::Receiver<Result<(), StorageError>> {
+        let (tx, rx) = oneshot::channel();
+        self.send(PersistTableWriteCmd::Detach { ids, tx });
+        rx
+    }
+
     fn forget(
         &self,
         forget_ts: Timestamp,
-        ids: Vec<GlobalId>,
+        shards: BTreeSet<ShardId>,
     ) -> oneshot::Receiver<Result<(), StorageError>> {
         let (tx, rx) = oneshot::channel();
-        self.send(PersistTableWriteCmd::DropHandles { forget_ts, ids, tx });
+        self.send(PersistTableWriteCmd::Forget {
+            forget_ts,
+            shards,
+            tx,
+        });
         rx
     }
 }
@@ -357,8 +373,18 @@ impl TxnsTableWorker {
                     // We don't care if our waiter has gone away.
                     let _ = tx.send(res);
                 }
-                PersistTableWriteCmd::DropHandles { forget_ts, ids, tx } => {
-                    let res = self.drop_handles(ids, forget_ts).instrument(span).await;
+                PersistTableWriteCmd::Detach { ids, tx } => {
+                    for id in ids {
+                        self.write_handles.remove(&id);
+                    }
+                    let _ = tx.send(Ok(()));
+                }
+                PersistTableWriteCmd::Forget {
+                    forget_ts,
+                    shards,
+                    tx,
+                } => {
+                    let res = self.forget(shards, forget_ts).instrument(span).await;
                     // We don't care if our waiter has gone away.
                     let _ = tx.send(res);
                 }
@@ -437,51 +463,33 @@ impl TxnsTableWorker {
         }
     }
 
-    async fn drop_handles(
+    async fn forget(
         &mut self,
-        ids: Vec<GlobalId>,
+        shards: BTreeSet<ShardId>,
         forget_ts: Timestamp,
     ) -> Result<(), StorageError> {
-        tracing::info!(?ids, "drop tables");
-        let removed = ids
-            .iter()
-            // n.b. this should only remove the handle from the persist
-            // worker and not take any additional action such as closing
-            // the shard it's connected to because dataflows might still
-            // be using it.
-            .filter_map(|id| self.write_handles.remove(id).map(|shard| (*id, shard)))
-            .collect::<Vec<_>>();
-        let data_ids = removed
-            .iter()
-            .map(|(_, shard)| *shard)
-            .collect::<BTreeSet<_>>();
-        if !data_ids.is_empty() {
-            match self.txns.forget(forget_ts, data_ids.clone()).await {
-                Ok(tidy) => {
-                    self.tidy.merge(tidy);
-                    Ok(())
-                }
-                Err(current) => {
-                    // Restore local bookkeeping before the caller retries.
-                    debug!(
-                        "forget at {:?} conflicted with txns upper {:?}, restoring {:?}",
-                        forget_ts, current, ids
-                    );
-                    for (id, shard) in removed {
-                        self.write_handles.insert(id, shard);
-                    }
-                    Err(StorageError::InvalidUppers(
-                        ids.into_iter()
-                            .map(|id| InvalidUpper {
-                                id,
-                                current_upper: Antichain::from_elem(current),
-                            })
-                            .collect(),
-                    ))
-                }
+        // Shared retirement is independent of which routes this actor installed.
+        // In particular, detaching one schema alias must not retire its shard.
+        match self.txns.forget(forget_ts, shards.iter().copied()).await {
+            Ok(tidy) => {
+                self.tidy.merge(tidy);
+                // A finalizer can request retirement before the coordinator sends
+                // local detachment. Retire every alias here as well: shared
+                // retirement applies to the physical shard, not an actor's routes.
+                self.write_handles
+                    .retain(|_, shard| !shards.contains(shard));
+                Ok(())
             }
-        } else {
-            Ok(())
+            Err(current) => Err(StorageError::InvalidUppers(
+                self.write_handles
+                    .iter()
+                    .filter(|(_, shard)| shards.contains(shard))
+                    .map(|(id, _)| InvalidUpper {
+                        id: *id,
+                        current_upper: Antichain::from_elem(current),
+                    })
+                    .collect(),
+            )),
         }
     }
 
@@ -655,6 +663,91 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    async fn local_detachment_preserves_shared_membership() {
+        let persist = persist_client().await;
+        let txns = ShardId::new();
+        let shard = ShardId::new();
+        let metrics = Arc::new(mz_txn_wal::metrics::Metrics::new(&MetricsRegistry::new()));
+        let first = open(persist.clone(), txns, Arc::clone(&metrics), false).await;
+        let peer = open(persist.clone(), txns, metrics, false).await;
+        let original = GlobalId::User(1);
+        let alias = GlobalId::User(2);
+        let peer_id = GlobalId::User(3);
+        for (writer, id, ts) in [
+            (&first, original, 10u64),
+            (&first, alias, 11),
+            (&peer, peer_id, 12),
+        ] {
+            writer
+                .register(
+                    ts.into(),
+                    vec![TableRegistration {
+                        id,
+                        data_shard: shard,
+                        relation_desc: RelationDesc::empty(),
+                    }],
+                )
+                .await
+                .expect("worker responds")
+                .expect("shared registration succeeds");
+        }
+        first
+            .detach(vec![original])
+            .await
+            .expect("worker responds")
+            .expect("original route detaches");
+        for (writer, id, ts) in [(&first, alias, 13u64), (&peer, peer_id, 14)] {
+            writer
+                .append(
+                    ts.into(),
+                    (ts + 1).into(),
+                    vec![(id, vec![TableData::Rows(vec![(Row::default(), Diff::ONE)])])],
+                )
+                .await
+                .expect("worker responds")
+                .expect("remaining alias and peer can append");
+        }
+        first
+            .detach(vec![alias])
+            .await
+            .expect("worker responds")
+            .expect("last local route detaches");
+        peer.append(
+            15.into(),
+            16.into(),
+            vec![(
+                peer_id,
+                vec![TableData::Rows(vec![(Row::default(), Diff::ONE)])],
+            )],
+        )
+        .await
+        .expect("worker responds")
+        .expect("peer can append after all local routes detach");
+        // Shared retirement is explicit and does not require any local routes.
+        first
+            .forget(16.into(), BTreeSet::from([shard]))
+            .await
+            .expect("worker responds")
+            .expect("shared retirement succeeds without local routes");
+        let mut reader = persist
+            .open_leased_reader::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(RelationDesc::empty()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+                true,
+            )
+            .await
+            .expect("can open shared shard reader");
+        let rows = reader
+            .snapshot_and_fetch(Antichain::from_elem(15.into()))
+            .await
+            .expect("can read writes from both actors");
+        assert_eq!(rows.iter().map(|(_, _, diff)| diff).sum::<i64>(), 3);
+        reader.expire().await;
+    }
+
+    #[mz_ore::test(tokio::test)]
     async fn standalone_writer_orders_membership_and_appends() {
         let persist = persist_client().await;
         let txns = ShardId::new();
@@ -693,7 +786,7 @@ mod tests {
             12.into(),
             vec![(id, vec![TableData::Rows(vec![(Row::default(), Diff::ONE)])])],
         );
-        let forgotten = writer.forget(12.into(), vec![id, GlobalId::User(2)]);
+        let forgotten = writer.forget(12.into(), BTreeSet::from([shard, ShardId::new()]));
         for result in [registered, appended, forgotten] {
             result
                 .await

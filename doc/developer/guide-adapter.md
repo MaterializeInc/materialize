@@ -405,13 +405,19 @@ rules, or sessions can reuse stale name resolution and plans.
 At runtime, one group committer per `environmentd` serializes txns-shard operations:
 
 ```text
-append / register / forget -> FIFO group committer -> table-write worker -> txns shard
+append / register / detach / forget -> FIFO group committer -> table-write worker
 ```
 
 FIFO ordering prevents an append from overtaking table registration or forgetting. Bootstrap is
 the only local exception because it runs before the process serves.
 
-Runtime commands use this protocol. Ordinary writes allocate T from the shared
+Detaching local handles does not retire shared txn-WAL membership. Physical
+finalization requires definitive shard-addressed Forget, including applying prior
+transactions, through the writer's fenced path. Install that path only after
+bootstrap registration completes. Missing or lost completion keeps finalization
+restricted. Other actors may use the same tables and WAL.
+
+Txn-WAL mutations use this protocol. Ordinary writes allocate T from the shared
 oracle, while OCC writes supply a target chosen by the session task:
 
 ```text

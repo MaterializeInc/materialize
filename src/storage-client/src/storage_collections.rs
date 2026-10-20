@@ -85,6 +85,9 @@ mod metrics;
 ///   read holds directly prevent compaction beyond their frontier.
 #[async_trait]
 pub trait StorageCollections: Debug + Sync {
+    /// Runtime eligibility shared by table retirement and physical finalization.
+    fn shard_finalization(&self) -> crate::shard_finalization::ShardFinalization;
+
     /// On boot, reconcile this [StorageCollections] with outside state. We get
     /// a [StorageTxn] where we can record any durable state that we need.
     ///
@@ -410,6 +413,7 @@ pub struct StorageCollectionsImpl {
     /// The set of [ShardIds](ShardId) that we have to finalize. These will have
     /// been persisted by the caller of [prepare_collection_state].
     finalizable_shards: Arc<ShardIdSet>,
+    shard_finalization: crate::shard_finalization::ShardFinalization,
 
     /// The set of [ShardIds](ShardId) that we have finalized. We keep track of
     /// shards here until we are given a chance to let our callers know that
@@ -539,6 +543,7 @@ impl StorageCollectionsImpl {
             Arc::new(ShardIdSet::new(metrics.finalization_outstanding.clone()));
         let finalized_shards =
             Arc::new(ShardIdSet::new(metrics.finalization_pending_commit.clone()));
+        let shard_finalization = crate::shard_finalization::ShardFinalization::default();
         let config = Arc::new(Mutex::new(StorageConfiguration::new(
             connection_context,
             mz_dyncfgs::all_dyncfgs(),
@@ -550,7 +555,6 @@ impl StorageCollectionsImpl {
         let (holds_tx, holds_rx) = mpsc::unbounded_channel();
         let mut background_task = BackgroundTask {
             catalog_read_protection_enabled,
-            config: Arc::clone(&config),
             finalizable_shards: Arc::clone(&finalizable_shards),
             cmds_tx: cmd_tx.clone(),
             cmds_rx: cmd_rx,
@@ -578,6 +582,7 @@ impl StorageCollectionsImpl {
                 metrics,
                 finalizable_shards: Arc::clone(&finalizable_shards),
                 finalized_shards: Arc::clone(&finalized_shards),
+                shard_finalization: shard_finalization.clone(),
                 persist_location: persist_location.clone(),
                 persist: Arc::clone(&persist_clients),
                 read_only,
@@ -587,6 +592,7 @@ impl StorageCollectionsImpl {
         Self {
             finalizable_shards,
             finalized_shards,
+            shard_finalization,
             collections,
             dirty_read_protection,
             txns_read,
@@ -1471,6 +1477,10 @@ fn partition_finalizable_shards(
 // See comments on the above impl for StorageCollectionsImpl.
 #[async_trait]
 impl StorageCollections for StorageCollectionsImpl {
+    fn shard_finalization(&self) -> crate::shard_finalization::ShardFinalization {
+        self.shard_finalization.clone()
+    }
+
     async fn initialize_state(
         &self,
         txn: &mut (dyn StorageTxn + Send),
@@ -2544,61 +2554,66 @@ impl StorageCollections for StorageCollectionsImpl {
             .await
             .unwrap();
 
-        // Evolve the schema of this shard.
-        let diagnostics = Diagnostics {
-            shard_name: existing_collection.to_string(),
-            handle_purpose: "alter_table_desc".to_string(),
-        };
-        // We map the Adapter's RelationVersion 1:1 with SchemaId.
-        let expected_schema = expected_version.into();
-        let schema_result = persist_client
-            .compare_and_evolve_schema::<SourceData, (), Timestamp, StorageDiff>(
-                data_shard,
-                expected_schema,
-                &new_desc,
-                &UnitSchema,
-                diagnostics,
-            )
-            .await
-            .map_err(|e| StorageError::InvalidUsage(e.to_string()))?;
-        tracing::info!(
-            ?existing_collection,
-            ?new_collection,
-            ?new_desc,
-            "evolved schema"
-        );
+        // Read-only adoption uses the committed description with leased readers.
+        // Persist can open those handles before the schema is registered, without
+        // publishing schema evolution on behalf of a writable actor.
+        if !self.read_only {
+            // Evolve the schema of this shard.
+            let diagnostics = Diagnostics {
+                shard_name: existing_collection.to_string(),
+                handle_purpose: "alter_table_desc".to_string(),
+            };
+            // We map the Adapter's RelationVersion 1:1 with SchemaId.
+            let expected_schema = expected_version.into();
+            let schema_result = persist_client
+                .compare_and_evolve_schema::<SourceData, (), Timestamp, StorageDiff>(
+                    data_shard,
+                    expected_schema,
+                    &new_desc,
+                    &UnitSchema,
+                    diagnostics,
+                )
+                .await
+                .map_err(|e| StorageError::InvalidUsage(e.to_string()))?;
+            tracing::info!(
+                ?existing_collection,
+                ?new_collection,
+                ?new_desc,
+                "evolved schema"
+            );
 
-        match schema_result {
-            // id unused: the desc is re-derived below.
-            CaESchema::Ok(_id) => {}
-            // Not retried by design. compare_and_evolve_schema now absorbs a
-            // committed-but-lost CaS, so an ExpectedMismatch here is a genuine
-            // divergence (current matches neither the request nor `expected`)
-            // that must surface rather than retry.
-            CaESchema::ExpectedMismatch {
-                schema_id,
-                key,
-                val,
-            } => {
-                mz_ore::soft_panic_or_log!(
-                    "schema expectation mismatch, expected {expected_schema:?} \
-                     but found {schema_id:?}, {key:?}, {val:?}"
-                );
-                return Err(StorageError::Generic(anyhow::anyhow!(
-                    "schema expected mismatch, {existing_collection:?}",
-                )));
-            }
-            CaESchema::Incompatible => {
-                mz_ore::soft_panic_or_log!(
-                    "incompatible schema! {existing_collection} {new_desc:?}"
-                );
-                return Err(StorageError::Generic(anyhow::anyhow!(
-                    "schema incompatible, {existing_collection:?}"
-                )));
-            }
-        };
+            match schema_result {
+                // id unused: the desc is re-derived below.
+                CaESchema::Ok(_id) => {}
+                // Not retried by design. compare_and_evolve_schema now absorbs a
+                // committed-but-lost CaS, so an ExpectedMismatch here is a genuine
+                // divergence (current matches neither the request nor `expected`)
+                // that must surface rather than retry.
+                CaESchema::ExpectedMismatch {
+                    schema_id,
+                    key,
+                    val,
+                } => {
+                    mz_ore::soft_panic_or_log!(
+                        "schema expectation mismatch, expected {expected_schema:?} \
+                         but found {schema_id:?}, {key:?}, {val:?}"
+                    );
+                    return Err(StorageError::Generic(anyhow::anyhow!(
+                        "schema expected mismatch, {existing_collection:?}",
+                    )));
+                }
+                CaESchema::Incompatible => {
+                    mz_ore::soft_panic_or_log!(
+                        "incompatible schema! {existing_collection} {new_desc:?}"
+                    );
+                    return Err(StorageError::Generic(anyhow::anyhow!(
+                        "schema incompatible, {existing_collection:?}"
+                    )));
+                }
+            };
+        }
 
-        // Once the new schema is registered we can open new data handles.
+        // Both modes use the same local handle and alias installation path.
         let (write_handle, since_handle) = self
             .open_data_handles(
                 &new_collection,
@@ -2612,8 +2627,7 @@ impl StorageCollections for StorageCollectionsImpl {
         // TODO(alter_table): Do we need to advance the since of the table to match the time this
         // new version was registered with txn-wal?
 
-        // Great! Our new schema is registered with Persist, now we need to update our internal
-        // data structures.
+        // Install the local alias and its dependency holds.
         {
             let mut self_collections = self.collections.lock().expect("lock poisoned");
 
@@ -2979,6 +2993,7 @@ impl StorageCollections for StorageCollectionsImpl {
             finalized_shards,
             collections,
             dirty_read_protection: _,
+            shard_finalization: _,
             txns_read: _,
             config,
             initial_txn_upper,
@@ -3244,7 +3259,6 @@ impl CollectionState {
 #[derive(Debug)]
 struct BackgroundTask {
     catalog_read_protection_enabled: bool,
-    config: Arc<Mutex<StorageConfiguration>>,
     finalizable_shards: Arc<ShardIdSet>,
     cmds_tx: mpsc::UnboundedSender<BackgroundCmd>,
     cmds_rx: mpsc::UnboundedReceiver<BackgroundCmd>,
@@ -3701,25 +3715,9 @@ impl BackgroundTask {
                 // Protected retirement is authorized by the committed finalization WAL,
                 // not by empty critical permission alone.
                 if !self.catalog_read_protection_enabled {
-                    if self
-                        .config
-                        .lock()
-                        .expect("lock poisoned")
-                        .parameters
-                        .finalize_shards
-                    {
-                        info!(
-                            %id, %dropped_shard_id,
-                            "enqueuing shard finalization due to dropped collection and dropped \
-                             persist handle",
-                        );
-                        self.finalizable_shards.lock().insert(dropped_shard_id);
-                    } else {
-                        info!(
-                            "not triggering shard finalization due to dropped storage object \
-                             because enable_storage_shard_finalization parameter is false"
-                        );
-                    }
+                    // Shared WAL retirement still runs when physical finalization
+                    // is disabled. The finalizer owns that separate configuration.
+                    self.finalizable_shards.lock().insert(dropped_shard_id);
                 }
             }
         }
@@ -3732,6 +3730,7 @@ struct FinalizeShardsTaskConfig {
     config: Arc<Mutex<StorageConfiguration>>,
     metrics: StorageCollectionsMetrics,
     finalizable_shards: Arc<ShardIdSet>,
+    shard_finalization: crate::shard_finalization::ShardFinalization,
     finalized_shards: Arc<ShardIdSet>,
     persist_location: PersistLocation,
     persist: Arc<PersistClientCache>,
@@ -3745,6 +3744,7 @@ async fn finalize_shards_task(
         config,
         metrics,
         finalizable_shards,
+        shard_finalization,
         finalized_shards,
         persist_location,
         persist,
@@ -3756,10 +3756,49 @@ async fn finalize_shards_task(
         return;
     }
 
+    let mut forgotten = BTreeSet::new();
     let mut interval = tokio::time::interval(Duration::from_secs(5));
     interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
     loop {
         interval.tick().await;
+
+        let current_finalizable_shards = {
+            // We hold the lock for as short as possible and pull our cloned set
+            // of shards.
+            finalizable_shards
+                .lock()
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        };
+
+        forgotten.retain(|shard| current_finalizable_shards.contains(shard));
+        if current_finalizable_shards.is_empty() {
+            debug!("no shards to finalize");
+            continue;
+        }
+
+        debug!(?current_finalizable_shards, "attempting to finalize shards");
+
+        // Catalog eligibility does not establish txn-WAL retirement. Obtain its
+        // definitive completion even for work selected by independent scans or
+        // recovered from the finalization WAL. Unknown WAL shards are harmless:
+        // Forget is idempotent and filters out shards that are not registered.
+        let pending = current_finalizable_shards
+            .iter()
+            .filter(|shard| !forgotten.contains(shard))
+            .copied()
+            .collect::<BTreeSet<_>>();
+        if !pending.is_empty() {
+            let Some(retirement) = shard_finalization.retirement() else {
+                continue;
+            };
+            if let Err(error) = retirement.forget(pending.clone()).await {
+                warn!(%error, "shard retirement did not complete; retaining finalization restriction");
+                continue;
+            }
+            forgotten.extend(pending);
+        }
 
         if !config
             .lock()
@@ -3772,19 +3811,6 @@ async fn finalize_shards_task(
             );
             continue;
         }
-
-        let current_finalizable_shards = {
-            // We hold the lock for as short as possible and pull our cloned set
-            // of shards.
-            finalizable_shards.lock().iter().cloned().collect_vec()
-        };
-
-        if current_finalizable_shards.is_empty() {
-            debug!("no shards to finalize");
-            continue;
-        }
-
-        debug!(?current_finalizable_shards, "attempting to finalize shards");
 
         // Open a persist client to delete unused shards.
         let persist_client = persist.open(persist_location.clone()).await.unwrap();
@@ -3949,7 +3975,6 @@ mod tests {
     use std::sync::Arc;
 
     use mz_build_info::DUMMY_BUILD_INFO;
-    use mz_dyncfg::ConfigSet;
     use mz_ore::assert_err;
     use mz_ore::metrics::{MetricsRegistry, UIntGauge};
     use mz_ore::now::SYSTEM_TIME;
@@ -5363,6 +5388,82 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    async fn test_read_only_schema_adoption_does_not_publish_evolution() {
+        let (leader, persist) = bound_test_controller().await;
+        let follower = bound_test_read_only_controller(&leader).await;
+        let old = GlobalId::User(1);
+        let new = GlobalId::User(2);
+        let shard = ShardId::new();
+        persist
+            .register_schema::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                &RelationDesc::empty(),
+                &UnitSchema,
+                Diagnostics::for_tests(),
+            )
+            .await
+            .unwrap();
+        write_retained_history(&persist, shard).await;
+        let mut metadata = StorageMetadata {
+            collection_metadata: [(old, shard)].into_iter().collect(),
+            compaction_bounds: [(old, frontier(10))].into_iter().collect(),
+            ..Default::default()
+        };
+        follower
+            .create_collections_for_bootstrap(
+                &metadata,
+                Some(10.into()),
+                vec![(old, CollectionDescription::for_table(RelationDesc::empty()))],
+                &BTreeSet::new(),
+            )
+            .await
+            .unwrap();
+        metadata.collection_metadata.insert(new, shard);
+        metadata.compaction_bounds.insert(new, frontier(10));
+        let desc = RelationDesc::builder()
+            .with_column("added", mz_repr::SqlScalarType::Int64.nullable(true))
+            .finish();
+        follower
+            .alter_table_desc(&metadata, old, new, desc.clone(), RelationVersion::root())
+            .await
+            .unwrap();
+        let (version, registered, _) = persist
+            .latest_schema::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Diagnostics::for_tests(),
+            )
+            .await
+            .unwrap()
+            .expect("original schema remains registered");
+        assert_eq!(version, RelationVersion::root().into());
+        assert_eq!(registered, RelationDesc::empty());
+        assert_eq!(
+            follower.collection_metadata(new).unwrap().relation_desc,
+            desc
+        );
+        assert_eq!(follower.collection_metadata(old).unwrap().data_shard, shard);
+        assert_eq!(follower.collection_metadata(new).unwrap().data_shard, shard);
+        let _holds = follower.acquire_read_holds(vec![old, new]).unwrap();
+        let mut reader = persist
+            .open_leased_reader::<SourceData, (), Timestamp, StorageDiff>(
+                shard,
+                Arc::new(desc),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+                true,
+            )
+            .await
+            .unwrap();
+        let rows = reader.snapshot_and_fetch(frontier(10)).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].0.0,
+            SourceData(Ok(Row::pack([mz_repr::Datum::Null])))
+        );
+        reader.expire().await;
+    }
+
+    #[mz_ore::test(tokio::test)]
     async fn test_retained_schema_chain_drop() {
         let (mut controller, persist) = bound_test_controller().await;
         // Observe eligibility without racing the finalizer.
@@ -5463,8 +5564,27 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn test_retained_retirement_waits_for_execution() {
+        #[derive(Debug)]
+        struct Retirement {
+            requests: mpsc::UnboundedSender<(BTreeSet<ShardId>, tokio::sync::oneshot::Sender<()>)>,
+        }
+        impl crate::shard_finalization::ShardRetirement for Retirement {
+            fn forget(
+                &self,
+                shards: BTreeSet<ShardId>,
+            ) -> futures::future::BoxFuture<'static, anyhow::Result<()>> {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                self.requests.send((shards, tx)).unwrap();
+                Box::pin(async move { rx.await.map_err(anyhow::Error::from) })
+            }
+        }
         let (controller, persist) = bound_test_controller().await;
-        controller.config.lock().unwrap().parameters.finalize_shards = true;
+        let (requests, mut retirement_requests) = mpsc::unbounded_channel();
+        controller
+            .shard_finalization()
+            .install(Arc::new(Retirement { requests }));
+        // Shared retirement is independent of enabling physical reclamation.
+        controller.config.lock().unwrap().parameters.finalize_shards = false;
         let id = GlobalId::User(1);
         let shard = ShardId::new();
         write_retained_history(&persist, shard).await;
@@ -5494,6 +5614,33 @@ mod tests {
             lease.snapshot_and_fetch(frontier(10)).await.unwrap().len(),
             1
         );
+        let (requested, completion) =
+            tokio::time::timeout(Duration::from_secs(20), retirement_requests.recv())
+                .await
+                .unwrap()
+                .expect("finalizer requests retirement");
+        assert_eq!(requested, BTreeSet::from([shard]));
+        // Selection is not permission to close the upper. A lost acknowledgement
+        // must leave the same restriction in force on the next attempt.
+        drop(completion);
+        let (retried, completion) =
+            tokio::time::timeout(Duration::from_secs(20), retirement_requests.recv())
+                .await
+                .unwrap()
+                .expect("lost acknowledgement is retried");
+        assert_eq!(retried, requested);
+        assert!(
+            !persist
+                .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
+                    shard,
+                    Diagnostics::for_tests(),
+                )
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        controller.config.lock().unwrap().parameters.finalize_shards = true;
+        completion.send(()).unwrap();
         lease.expire().await;
         drop(holds);
         tokio::time::timeout(Duration::from_secs(20), async {
@@ -6495,10 +6642,6 @@ mod tests {
             let (_holds_tx, holds_rx) = mpsc::unbounded_channel();
             let task = Self {
                 catalog_read_protection_enabled: false,
-                config: Arc::new(Mutex::new(StorageConfiguration::new(
-                    ConnectionContext::for_tests(Arc::new(InMemorySecretsController::new())),
-                    ConfigSet::default(),
-                ))),
                 finalizable_shards: Arc::new(ShardIdSet::new(
                     UIntGauge::new("finalizable_shards", "dummy gauge for tests").unwrap(),
                 )),

@@ -138,11 +138,7 @@ async fn handle_commands(
                 // We don't care if our waiter has gone away.
                 let _ = tx.send(Ok(()));
             }
-            PersistTableWriteCmd::DropHandles {
-                forget_ts: _,
-                ids,
-                tx,
-            } => {
+            PersistTableWriteCmd::Detach { ids, tx } => {
                 // n.b. this should only remove the
                 // handle from the persist worker and
                 // not take any additional action such
@@ -154,6 +150,11 @@ async fn handle_commands(
                 }
                 // We don't care if our waiter has gone away.
                 let _ = tx.send(Ok(()));
+            }
+            PersistTableWriteCmd::Forget { tx, .. } => {
+                let _ = tx.send(Err(StorageError::InvalidUsage(
+                    "read-only migration worker cannot retire shared shards".into(),
+                )));
             }
             PersistTableWriteCmd::Append {
                 write_ts,
