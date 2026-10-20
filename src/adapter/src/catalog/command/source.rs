@@ -7,19 +7,21 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+pub(crate) mod alter;
+
 use std::collections::BTreeMap;
 
 use mz_ore::assert_none;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersionSelector};
 use mz_sql::catalog::SessionCatalog;
-use mz_sql::names::ResolvedItemName;
+use mz_sql::names::{Aug, ResolvedItemName};
 use mz_sql::plan::{self, CreateSourcePlanBundle, Params, Plan, PlanContext, StatementContext};
 use mz_sql::pure::{
     PurifiedStatement, generate_progress_subsource_statement, generate_subsource_statements,
 };
 use mz_sql_parser::ast::{
-    CreateSourceOptionName, CreateSubsourceOption, CreateSubsourceOptionName, DeferredItemName,
-    Statement, UnresolvedItemName,
+    CreateSourceOptionName, CreateSubsourceOption, CreateSubsourceOptionName,
+    CreateSubsourceStatement, DeferredItemName, Statement, UnresolvedItemName,
 };
 
 use crate::AdapterError;
@@ -34,9 +36,9 @@ pub(crate) enum SourceObject {
 }
 
 #[derive(Debug)]
-pub(crate) enum SourcePlanning {
+pub(crate) enum SourcePlanning<T = Vec<CreateSourcePlanBundle>> {
     NeedsIds(Vec<SourceObject>),
-    Ready(Vec<CreateSourcePlanBundle>),
+    Ready(T),
 }
 
 pub(crate) fn plan_create_source(
@@ -143,7 +145,86 @@ pub(crate) fn plan_create_source(
         available_source_references: Some(available_source_references),
     });
 
-    let missing: Vec<_> = subsource_stmts
+    match plan_source_exports(catalog, pcx, params, subsource_stmts, ids)? {
+        SourcePlanning::NeedsIds(keys) => return Ok(SourcePlanning::NeedsIds(keys)),
+        SourcePlanning::Ready(exports) => create_source_plans.extend(exports),
+    }
+    Ok(SourcePlanning::Ready(create_source_plans))
+}
+
+pub(crate) fn plan_alter_source_add_subsources(
+    catalog: &ConnCatalog<'_>,
+    pcx: &PlanContext,
+    params: &Params,
+    purified: PurifiedStatement,
+    ids: &BTreeMap<SourceObject, (CatalogItemId, GlobalId)>,
+) -> Result<SourcePlanning<Plan>, AdapterError> {
+    let PurifiedStatement::PurifiedAlterSourceAddSubsources {
+        source_name,
+        options,
+        subsources,
+    } = purified
+    else {
+        return Err(AdapterError::Unsupported(
+            "non-ADD SUBSOURCES source planning",
+        ));
+    };
+    let entry = catalog.state().get_entry(source_name.item_id());
+    let source = entry.source().ok_or_else(|| {
+        AdapterError::internal(
+            "plan alter source",
+            format!("expected Source found {entry:?}"),
+        )
+    })?;
+    let item_id = entry.id();
+    let ingestion_id = source.global_id();
+    let system_catalog = catalog.for_system_session();
+    let generated_pcx = PlanContext::zero();
+    let scx = StatementContext::new(Some(&generated_pcx), &system_catalog);
+    let statements = generate_subsource_statements(&scx, source_name, subsources)?;
+    let subsources = match plan_source_exports(catalog, pcx, params, statements, ids)? {
+        SourcePlanning::NeedsIds(keys) => return Ok(SourcePlanning::NeedsIds(keys)),
+        SourcePlanning::Ready(plans) => plans,
+    };
+    Ok(SourcePlanning::Ready(Plan::AlterSource(
+        plan::AlterSourcePlan {
+            item_id,
+            ingestion_id,
+            action: plan::AlterSourceAction::AddSubsourceExports {
+                subsources,
+                options,
+            },
+        },
+    )))
+}
+
+pub(crate) fn plan_alter_source_refresh_references(
+    catalog: &ConnCatalog<'_>,
+    source_name: ResolvedItemName,
+    references: plan::SourceReferences,
+) -> Result<Plan, AdapterError> {
+    let entry = catalog.state().get_entry(source_name.item_id());
+    let source = entry.source().ok_or_else(|| {
+        AdapterError::internal(
+            "plan alter source",
+            format!("expected Source found {entry:?}"),
+        )
+    })?;
+    Ok(Plan::AlterSource(plan::AlterSourcePlan {
+        item_id: entry.id(),
+        ingestion_id: source.global_id(),
+        action: plan::AlterSourceAction::RefreshReferences { references },
+    }))
+}
+
+fn plan_source_exports(
+    catalog: &ConnCatalog<'_>,
+    pcx: &PlanContext,
+    params: &Params,
+    statements: Vec<CreateSubsourceStatement<Aug>>,
+    ids: &BTreeMap<SourceObject, (CatalogItemId, GlobalId)>,
+) -> Result<SourcePlanning, AdapterError> {
+    let missing: Vec<_> = statements
         .iter()
         .map(|stmt| SourceObject::Export(stmt.name.clone()))
         .filter(|key| !ids.contains_key(key))
@@ -151,11 +232,12 @@ pub(crate) fn plan_create_source(
     if !missing.is_empty() {
         return Ok(SourcePlanning::NeedsIds(missing));
     }
-    for stmt in subsource_stmts {
-        let (item_id, global_id) = ids[&SourceObject::Export(stmt.name.clone())];
-        let plan = super::plan_subsource(catalog, pcx, params, stmt, item_id, global_id)?;
-        create_source_plans.push(plan);
-    }
-
-    Ok(SourcePlanning::Ready(create_source_plans))
+    let plans = statements
+        .into_iter()
+        .map(|stmt| {
+            let (item_id, global_id) = ids[&SourceObject::Export(stmt.name.clone())];
+            super::plan_subsource(catalog, pcx, params, stmt, item_id, global_id)
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(SourcePlanning::Ready(plans))
 }

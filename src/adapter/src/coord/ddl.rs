@@ -24,11 +24,13 @@ use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::memory::objects::Sink;
 use mz_cluster_client::ReplicaId;
 use mz_controller_types::ClusterId;
+use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsFutureExt;
 use mz_ore::now::to_datetime;
 use mz_ore::retry::Retry;
 use mz_ore::task;
+use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::catalog::CatalogClusterReplica;
@@ -37,19 +39,89 @@ use mz_sql::session::vars::{self, DEFAULT_TIMESTAMP_INTERVAL, SystemVars, Var};
 use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::read_policy::ReadPolicy;
+use mz_storage_types::sources::SourceConnection;
 use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
 use crate::catalog::{DropObjectInfo, Op, TransactionResult};
-use crate::coord::Coordinator;
 use crate::coord::appends::{BuiltinTableAppendCompletion, BuiltinTableAppendNotify};
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
-use crate::session::{Session, Transaction, TransactionOps};
+use crate::coord::{Coordinator, Message, PendingTxn};
+use crate::session::{Session, TransactionOps};
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContext, catalog, flags};
+
+#[derive(Debug)]
+pub struct PendingSourceStatement {
+    ctx: ExecuteContext,
+    statement: catalog::command::source_statement::SourceStatement,
+}
+
+#[derive(Debug)]
+pub struct PendingDdlCommit {
+    context: DdlCommitContext,
+    commands: Vec<catalog::command::CatalogCommand>,
+    responses: BTreeMap<usize, mz_sql::pure::SourcePreparationResponse>,
+}
+
+#[derive(Debug)]
+enum DdlCommitContext {
+    Transaction(PendingTxn),
+    Statement {
+        ctx: ExecuteContext,
+        response: crate::ExecuteResponse,
+    },
+}
+
+impl PendingDdlCommit {
+    pub(super) fn transaction(
+        txn: PendingTxn,
+        commands: Vec<catalog::command::CatalogCommand>,
+    ) -> Self {
+        Self {
+            context: DdlCommitContext::Transaction(txn),
+            commands,
+            responses: BTreeMap::new(),
+        }
+    }
+
+    pub(super) fn statement(
+        ctx: ExecuteContext,
+        response: crate::ExecuteResponse,
+        commands: Vec<catalog::command::CatalogCommand>,
+    ) -> Self {
+        Self {
+            context: DdlCommitContext::Statement { ctx, response },
+            commands,
+            responses: BTreeMap::new(),
+        }
+    }
+}
+
+impl DdlCommitContext {
+    fn context_mut(&mut self) -> &mut ExecuteContext {
+        match self {
+            Self::Transaction(txn) => &mut txn.ctx,
+            Self::Statement { ctx, .. } => ctx,
+        }
+    }
+
+    fn finish(self, result: Result<(), AdapterError>) {
+        match self {
+            Self::Transaction(mut txn) => {
+                if let Err(error) = result {
+                    txn.response = Err(error);
+                    txn.action = crate::session::EndTransactionAction::Rollback;
+                }
+                txn.finish();
+            }
+            Self::Statement { ctx, response } => ctx.retire(result.map(|()| response)),
+        }
+    }
+}
 
 impl Coordinator {
     pub(super) fn sequence_catalog_result_command(
@@ -83,10 +155,163 @@ impl Coordinator {
             Err(error) => return ctx.retire(Err(error)),
         };
         let command = Arc::new(command);
-        ctx.session()
-            .add_notices(command.notices().iter().cloned().map(Into::into));
+        self.emit_command_notices(
+            ctx.session(),
+            &catalog::command::CatalogCommand::CatalogResult(Arc::clone(&command)),
+        );
         ctx.session_mut().retain_catalog_result(command);
         ctx.retire(Ok(Self::send_immediate_rows(row)));
+    }
+
+    pub(super) async fn sequence_source_statement(
+        &mut self,
+        ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        let statement = catalog::command::source_statement::SourceStatement::new(
+            statement,
+            params,
+            ctx.session().meta(),
+            (self.catalog().config().now)(),
+        );
+        self.sequence_source_statement_ready(PendingSourceStatement { ctx, statement }, None)
+            .await;
+    }
+
+    pub(super) async fn sequence_source_statement_ready(
+        &mut self,
+        mut pending: PendingSourceStatement,
+        mut response: Option<mz_sql::pure::SourcePreparationResponse>,
+    ) {
+        use catalog::command::source_statement::SourceStatementPreparation;
+        if self.controller.read_only() {
+            return pending.ctx.retire(Err(AdapterError::ReadOnly));
+        }
+        let prepared = loop {
+            let (state, snapshot) = match pending.ctx.session().transaction().inner() {
+                Some(crate::session::Transaction {
+                    ops:
+                        TransactionOps::DDL {
+                            state, snapshot, ..
+                        },
+                    ..
+                }) => (state.clone(), snapshot.clone()),
+                _ => self.catalog().ddl_transaction_snapshot().await,
+            };
+            let ts = self.get_local_write_ts().await.timestamp;
+            let result = self
+                .catalog()
+                .prepare_source_statement(
+                    &mut pending.statement,
+                    (&state, &snapshot),
+                    self.active_conns.get(pending.ctx.session().conn_id()),
+                    ts,
+                    response.take(),
+                )
+                .await;
+            match result {
+                Err(error) => return pending.ctx.retire(Err(error)),
+                Ok(SourceStatementPreparation::Ready(prepared)) => break prepared,
+                Ok(SourceStatementPreparation::Allocate(keys)) => {
+                    let ids = match self.allocate_user_ids(u64::cast_from(keys.len())).await {
+                        Ok(ids) => ids,
+                        Err(error) => return pending.ctx.retire(Err(error)),
+                    };
+                    pending.statement.record_ids(keys, ids);
+                }
+                Ok(SourceStatementPreparation::Prepare(request)) => {
+                    let config = self.controller.storage.config().clone();
+                    let tx = self.internal_cmd_tx.clone();
+                    let otel_ctx = OpenTelemetryContext::obtain();
+                    task::spawn(|| "ddl_statement_preparation", async move {
+                        let response = request.execute(&config).await;
+                        if let Err(error) = tx.send(Message::SourceStatementReady {
+                            pending, response, otel_ctx,
+                        }) {
+                            warn!("internal_cmd_rx dropped before source preparation completed: {error:?}");
+                        }
+                    }.instrument(tracing::Span::current()));
+                    return;
+                }
+            }
+        };
+        let mut ctx = pending.ctx;
+        ctx.tx_mut()
+            .set_allowed(crate::ExecuteResponse::generated_from(
+                &mz_sql::plan::PlanKind::from(&prepared.plan),
+            ));
+        if let Err(error) = self.prepare_plan_execution(&ctx, &prepared.plan) {
+            return ctx.retire(Err(error));
+        }
+        let response = match &prepared.plan {
+            mz_sql::plan::Plan::CreateSources(_) => crate::ExecuteResponse::CreatedSource,
+            mz_sql::plan::Plan::CreateTable(_) => crate::ExecuteResponse::CreatedTable,
+            mz_sql::plan::Plan::AlterSource(_) => {
+                crate::ExecuteResponse::AlteredObject(mz_sql::catalog::ObjectType::Source)
+            }
+            mz_sql::plan::Plan::AlterNoop(plan) => {
+                crate::ExecuteResponse::AlteredObject(plan.object_type)
+            }
+            _ => unreachable!("source command plan"),
+        };
+        if ctx.session().transaction().is_ddl() {
+            let command = catalog::command::CatalogCommand::Source(Arc::new(prepared.command));
+            if let Err(error) = ctx
+                .session_mut()
+                .transaction_mut()
+                .add_ops(TransactionOps::DDL {
+                    commands: vec![command.clone()],
+                    state: prepared.state,
+                    snapshot: prepared.snapshot,
+                })
+            {
+                return ctx.retire(Err(error));
+            }
+            self.emit_command_notices(ctx.session(), &command);
+            ctx.retire(Ok(response));
+        } else {
+            let command =
+                catalog::command::CatalogCommand::Source(Arc::new(prepared.command.unobserved()));
+            self.sequence_ddl_commit(PendingDdlCommit::statement(ctx, response, vec![command]))
+                .await;
+        }
+    }
+
+    fn emit_command_notices(&self, session: &Session, command: &catalog::command::CatalogCommand) {
+        session.add_notices(command.notices().iter().cloned().map(Into::into));
+        let catalog::command::CatalogCommand::Source(command) = command else {
+            return;
+        };
+        if let Some(notice) = command.skipped_notice() {
+            session.add_notice(notice);
+            return;
+        }
+        let state = session
+            .transaction()
+            .catalog_state()
+            .unwrap_or_else(|| self.catalog().state());
+        for id in command.item_ids() {
+            let Some(entry) = state.try_get_entry(&id) else {
+                continue;
+            };
+            let Some(source) = entry.source() else {
+                continue;
+            };
+            use mz_catalog::memory::objects::DataSourceDesc;
+            let cluster_id = match &source.data_source {
+                DataSourceDesc::Ingestion { desc, cluster_id }
+                | DataSourceDesc::OldSyntaxIngestion {
+                    desc, cluster_id, ..
+                } if desc.connection.prefers_single_replica() => cluster_id,
+                _ => continue,
+            };
+            let Some(cluster) = self.catalog().try_get_cluster(*cluster_id) else {
+                continue;
+            };
+            let name = state.resolve_full_name(entry.name(), None);
+            self.notify_single_replica_sources(session, cluster, Some(&name));
+        }
     }
 
     pub(super) async fn sequence_rename_command(
@@ -119,13 +344,49 @@ impl Coordinator {
             return ctx.retire(Err(error));
         }
         let command = Arc::new(command);
-        let result = self
-            .catalog_transact_with_ddl_transaction(
-                &mut ctx,
-                vec![Op::RenameCommand(Arc::clone(&command))],
-                |_, _| Box::pin(async {}),
-            )
+        if !ctx.session().transaction().is_ddl() {
+            let response = crate::ExecuteResponse::AlteredObject(command.object_type());
+            self.sequence_ddl_commit(PendingDdlCommit::statement(
+                ctx,
+                response,
+                vec![catalog::command::CatalogCommand::Rename(command)],
+            ))
             .await;
+            return;
+        }
+        let TransactionOps::DDL {
+            state, snapshot, ..
+        } = &ctx
+            .session()
+            .transaction()
+            .inner()
+            .expect("DDL transaction")
+            .ops
+        else {
+            unreachable!("standalone command handled above")
+        };
+        let state = state.clone();
+        let snapshot = snapshot.clone();
+        let ts = self.get_local_write_ts().await.timestamp;
+        let result = Box::pin(self.catalog().transact_incremental_dry_run(
+            &state,
+            vec![Op::RenameCommand(Arc::clone(&command))],
+            self.active_conns.get(ctx.session().conn_id()),
+            Some(snapshot),
+            ts,
+        ))
+        .await
+        .and_then(|(state, snapshot)| {
+            ctx.session_mut()
+                .transaction_mut()
+                .add_ops(TransactionOps::DDL {
+                    commands: vec![catalog::command::CatalogCommand::Rename(Arc::clone(
+                        &command,
+                    ))],
+                    state,
+                    snapshot,
+                })
+        });
         match result {
             Ok(()) => {
                 ctx.session()
@@ -145,6 +406,11 @@ impl Coordinator {
         session: Option<&Session>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
+        if session.is_some_and(|session| session.transaction().is_ddl()) {
+            return Err(AdapterError::Unsupported(
+                "raw operations in a DDL command transaction",
+            ));
+        }
         let start = Instant::now();
         let result = self
             .catalog_transact_with_context(session.map(|session| session.conn_id()), None, ops)
@@ -178,6 +444,14 @@ impl Coordinator {
             ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
             + 'static,
     {
+        if ctx
+            .as_ref()
+            .is_some_and(|ctx| ctx.session().transaction().is_ddl())
+        {
+            return Err(AdapterError::Unsupported(
+                "raw operations in a DDL command transaction",
+            ));
+        }
         let start = Instant::now();
 
         // Keep catalog work out of the inline state of callers such as ordinary
@@ -271,6 +545,14 @@ impl Coordinator {
         ctx: Option<&mut ExecuteContext>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
+        if ctx
+            .as_ref()
+            .is_some_and(|ctx| ctx.session().transaction().is_ddl())
+        {
+            return Err(AdapterError::Unsupported(
+                "raw operations in a DDL command transaction",
+            ));
+        }
         let start = Instant::now();
 
         let conn_id = conn_id.or_else(|| ctx.as_ref().map(|ctx| ctx.session().conn_id()));
@@ -278,6 +560,134 @@ impl Coordinator {
         let (table_updates, catalog_updates) =
             Box::pin(self.catalog_transact_inner(conn_id, ops)).await?;
 
+        self.finish_catalog_transaction(ctx, table_updates, catalog_updates)
+            .await;
+
+        self.metrics
+            .catalog_transact_seconds
+            .with_label_values(&["catalog_transact_with_context"])
+            .observe(start.elapsed().as_secs_f64());
+
+        Ok(())
+    }
+
+    pub(super) async fn sequence_ddl_commit(&mut self, mut pending: PendingDdlCommit) {
+        let result = loop {
+            match self
+                .catalog_transact_commands(
+                    pending.context.context_mut(),
+                    &mut pending.commands,
+                    &mut pending.responses,
+                )
+                .await
+            {
+                Ok(()) => break Ok(()),
+                Err(catalog::CommandExecutionError::Error(error)) => break Err(error),
+                Err(catalog::CommandExecutionError::Pending { index, work }) => match work {
+                    catalog::CommandWork::Allocate(keys) => {
+                        let ids = match self.allocate_user_ids(u64::cast_from(keys.len())).await {
+                            Ok(ids) => ids,
+                            Err(error) => break Err(error),
+                        };
+                        match &mut pending.commands[index] {
+                            catalog::command::CatalogCommand::Source(command) => {
+                                Arc::make_mut(command).record_ids(keys, ids);
+                            }
+                            catalog::command::CatalogCommand::Rename(_)
+                            | catalog::command::CatalogCommand::CatalogResult(_)
+                            | catalog::command::CatalogCommand::Description(_) => {
+                                unreachable!("renames do not allocate IDs");
+                            }
+                        }
+                    }
+                    catalog::CommandWork::Prepare(request) => {
+                        let config = self.controller.storage.config().clone();
+                        let tx = self.internal_cmd_tx.clone();
+                        let otel_ctx = OpenTelemetryContext::obtain();
+                        task::spawn(|| "ddl_command_preparation", async move {
+                            let response = request.execute(&config).await;
+                            pending.responses.insert(index, response);
+                            if let Err(error) =
+                                tx.send(Message::DdlCommandsReady { pending, otel_ctx })
+                            {
+                                warn!(
+                                    "internal_cmd_rx dropped before DDL preparation completed: {error:?}"
+                                );
+                            }
+                        }.instrument(tracing::Span::current()));
+                        return;
+                    }
+                },
+            }
+        };
+        if result.is_ok() && matches!(pending.context, DdlCommitContext::Statement { .. }) {
+            for command in &pending.commands {
+                self.emit_command_notices(pending.context.context_mut().session(), command);
+            }
+        }
+        pending.context.finish(result);
+    }
+
+    pub(crate) async fn catalog_transact_commands(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        commands: &mut [catalog::command::CatalogCommand],
+        responses: &mut BTreeMap<usize, mz_sql::pure::SourcePreparationResponse>,
+    ) -> Result<(), catalog::CommandExecutionError> {
+        if self.controller.read_only() {
+            return Err(AdapterError::ReadOnly.into());
+        }
+        let start = Instant::now();
+        let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
+        let oracle_write_ts = self
+            .get_catalog_write_ts()
+            .wall_time()
+            .observe(phase_seconds.with_label_values(&["write_ts"]))
+            .await;
+        let conn_id = ctx.session().conn_id();
+        let Coordinator {
+            catalog,
+            active_conns,
+            controller,
+            ..
+        } = self;
+        let conn = active_conns.get(conn_id).expect("connection must exist");
+        let TransactionResult {
+            builtin_table_updates,
+            catalog_updates,
+            audit_events,
+        } = Box::pin(Arc::make_mut(catalog).transact_commands(
+            Some(&mut controller.storage_collections),
+            oracle_write_ts,
+            Some(conn),
+            commands,
+            responses,
+        ))
+        .wall_time()
+        .observe(phase_seconds.with_label_values(&["transact"]))
+        .await?;
+
+        self.track_catalog_audit_events(Some(conn_id), audit_events);
+        let stage_start = Instant::now();
+        let table_updates = self.builtin_table_update().execute(builtin_table_updates);
+        phase_seconds
+            .with_label_values(&["stage_builtin"])
+            .observe(stage_start.elapsed().as_secs_f64());
+        self.finish_catalog_transaction(Some(ctx), table_updates, catalog_updates)
+            .await;
+        self.metrics
+            .catalog_transact_seconds
+            .with_label_values(&["catalog_transact_with_context"])
+            .observe(start.elapsed().as_secs_f64());
+        Ok(())
+    }
+
+    async fn finish_catalog_transaction(
+        &mut self,
+        ctx: Option<&mut ExecuteContext>,
+        table_updates: BuiltinTableAppendNotify,
+        catalog_updates: Vec<ParsedStateUpdate>,
+    ) {
         let table_updates_wait = self
             .metrics
             .catalog_transact_phase_seconds
@@ -320,172 +730,6 @@ impl Coordinator {
             .catalog_transact_phase_seconds
             .with_label_values(&["consistency_check"])
             .observe(consistency_start.elapsed().as_secs_f64());
-
-        self.metrics
-            .catalog_transact_seconds
-            .with_label_values(&["catalog_transact_with_context"])
-            .observe(start.elapsed().as_secs_f64());
-
-        Ok(())
-    }
-
-    /// Executes a Catalog transaction with handling if the provided [`Session`]
-    /// is in a SQL transaction that is executing DDL.
-    #[instrument(name = "coord::catalog_transact_with_ddl_transaction")]
-    pub(crate) async fn catalog_transact_with_ddl_transaction<F>(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        mut ops: Vec<catalog::Op>,
-        side_effect: F,
-    ) -> Result<(), AdapterError>
-    where
-        F: for<'a> FnOnce(
-                &'a mut Coordinator,
-                Option<&'a mut ExecuteContext>,
-            ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
-            + Send
-            + Sync
-            + 'static,
-    {
-        let start = Instant::now();
-
-        let Some(Transaction {
-            ops:
-                TransactionOps::DDL {
-                    ops: txn_ops,
-                    revision: txn_revision,
-                    revision_fenced,
-                    state: txn_state,
-                    snapshot: txn_snapshot,
-                    side_effects: _,
-                },
-            ..
-        }) = ctx.session().transaction().inner()
-        else {
-            let result = self
-                .catalog_transact_with_side_effects(Some(ctx), ops, side_effect)
-                .await;
-            self.metrics
-                .catalog_transact_seconds
-                .with_label_values(&["catalog_transact_with_ddl_transaction"])
-                .observe(start.elapsed().as_secs_f64());
-            return result;
-        };
-
-        // Statements without replay require their original catalog revision.
-        if self.catalog().transient_revision() != *txn_revision
-            && (*revision_fenced
-                || !txn_ops.iter().chain(&ops).all(|op| {
-                    matches!(
-                        op,
-                        catalog::Op::RenameCommand(_)
-                            | catalog::Op::CatalogResult(_)
-                            | catalog::Op::Description(_)
-                    )
-                }))
-        {
-            self.metrics
-                .catalog_transact_seconds
-                .with_label_values(&["catalog_transact_with_ddl_transaction"])
-                .observe(start.elapsed().as_secs_f64());
-            return Err(AdapterError::DDLTransactionRace);
-        }
-
-        // The per-statement phases of a DDL transaction carry their own labels.
-        // The work differs from a real transaction's phases, and it is billed
-        // once per statement rather than once per transaction, so pooling the two
-        // populations under one label would blur both.
-        let phase_seconds = self.metrics.catalog_transact_phase_seconds.clone();
-
-        // Clone what we need from the session before taking &mut below.
-        let clone_start = Instant::now();
-        let txn_ops_clone = txn_ops.clone();
-        let txn_revision = *txn_revision;
-        let revision_fenced = *revision_fenced;
-        let txn_state_clone = txn_state.clone();
-        // NOTE: `txn_snapshot` is a deep clone of the durable `Snapshot`, which is
-        // O(catalog size) in allocations, once per statement. `txn_state` next to
-        // it is cheap, `CatalogState` holds its large collections in `imbl` maps.
-        let prev_snapshot = txn_snapshot.clone();
-        phase_seconds
-            .with_label_values(&["ddl_txn_snapshot_clone"])
-            .observe(clone_start.elapsed().as_secs_f64());
-
-        // Validate resource limits with all accumulated + new ops (cheap O(N) counting).
-        let prep_start = Instant::now();
-        let mut combined_ops = txn_ops_clone;
-        combined_ops.extend(ops.iter().cloned());
-        let creates_scoped_object = ops.iter().any(|op| {
-            matches!(
-                op,
-                catalog::Op::CreateCluster { .. } | catalog::Op::CreateClusterReplica { .. }
-            )
-        });
-        if creates_scoped_object {
-            // Include accumulated creates when deriving contexts. A replica can
-            // be created in a later DDL statement than its still-uncommitted
-            // cluster, which is absent from the coordinator's live catalog.
-            if let Some(scoped_op) = self.scoped_overrides_create_op(&combined_ops) {
-                ops.push(scoped_op.clone());
-                combined_ops.push(scoped_op);
-            }
-        }
-        let conn_id = ctx.session().conn_id().clone();
-        let validate_res = self
-            .catalog()
-            .state()
-            .validate_resource_limits(&combined_ops, &conn_id);
-        phase_seconds
-            .with_label_values(&["ddl_txn_prep"])
-            .observe(prep_start.elapsed().as_secs_f64());
-        validate_res?;
-
-        // Get oracle timestamp for audit log entries.
-        let oracle_write_ts = self
-            .get_local_write_ts()
-            .wall_time()
-            .observe(phase_seconds.with_label_values(&["ddl_txn_write_ts"]))
-            .await
-            .timestamp;
-
-        // Get ConnMeta for the session.
-        let conn = self.active_conns.get(ctx.session().conn_id());
-
-        // Incremental dry run: process only NEW ops against accumulated state.
-        // If we have a saved snapshot from a previous dry run, use it to
-        // initialize the transaction so it starts in sync with the accumulated
-        // state. Otherwise (first statement), the fresh durable transaction is
-        // already in sync with the real catalog state.
-        let (new_state, new_snapshot) = Box::pin(self.catalog().transact_incremental_dry_run(
-            &txn_state_clone,
-            ops.clone(),
-            conn,
-            prev_snapshot,
-            oracle_write_ts,
-        ))
-        .wall_time()
-        .observe(phase_seconds.with_label_values(&["ddl_txn_dry_run"]))
-        .await?;
-
-        // Accumulate ops for eventual COMMIT.
-        let result = ctx
-            .session_mut()
-            .transaction_mut()
-            .add_ops(TransactionOps::DDL {
-                ops: combined_ops,
-                state: new_state,
-                side_effects: vec![Box::new(side_effect)],
-                revision: txn_revision,
-                revision_fenced,
-                snapshot: Some(new_snapshot),
-            });
-
-        self.metrics
-            .catalog_transact_seconds
-            .with_label_values(&["catalog_transact_with_ddl_transaction"])
-            .observe(start.elapsed().as_secs_f64());
-
-        result
     }
 
     /// Perform a catalog transaction. [`Coordinator::ship_dataflow`] must be
@@ -778,6 +1022,20 @@ impl Coordinator {
         .instrument(info_span!("coord::catalog_transact_with::finalize"))
         .await;
 
+        self.track_catalog_audit_events(conn_id, audit_events);
+
+        phase_seconds
+            .with_label_values(&["finalize"])
+            .observe(finalize_start.elapsed().as_secs_f64());
+
+        Ok((builtin_update_notify, catalog_updates))
+    }
+
+    fn track_catalog_audit_events(
+        &self,
+        conn_id: Option<&ConnectionId>,
+        audit_events: Vec<VersionedEvent>,
+    ) {
         let conn = conn_id.and_then(|id| self.active_conns.get(id));
         if let Some(segment_client) = &self.segment_client {
             for VersionedEvent::V1(event) in audit_events {
@@ -800,12 +1058,6 @@ impl Coordinator {
                 );
             }
         }
-
-        phase_seconds
-            .with_label_values(&["finalize"])
-            .observe(finalize_start.elapsed().as_secs_f64());
-
-        Ok((builtin_update_notify, catalog_updates))
     }
 
     pub(crate) fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {

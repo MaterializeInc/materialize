@@ -13,6 +13,7 @@
 //! by its predecessors.
 
 pub(crate) mod source;
+pub(crate) mod source_statement;
 
 use std::sync::Arc;
 
@@ -25,6 +26,25 @@ use tokio::sync::mpsc;
 use crate::catalog::{CatalogState, Op};
 use crate::session::SessionMeta;
 use crate::{AdapterError, AdapterNotice};
+
+#[derive(Clone, Debug)]
+pub enum CatalogCommand {
+    Rename(Arc<RenameCommand>),
+    CatalogResult(Arc<CatalogResultCommand>),
+    Description(Arc<DescriptionCommand>),
+    Source(Arc<source_statement::SourceCommand>),
+}
+
+impl CatalogCommand {
+    pub(crate) fn notices(&self) -> &[PlanNotice] {
+        match self {
+            Self::Rename(command) => command.notices(),
+            Self::CatalogResult(command) => &command.notices,
+            Self::Description(_) => &[],
+            Self::Source(command) => command.notices(),
+        }
+    }
+}
 
 /// A rename or swap whose client-visible outcome must survive final execution.
 #[derive(Debug)]
@@ -100,10 +120,6 @@ pub struct CatalogResultCommand {
 }
 
 impl CatalogResultCommand {
-    pub(crate) fn notices(&self) -> &[PlanNotice] {
-        &self.notices
-    }
-
     pub(crate) fn supports_statement(statement: &Statement<Raw>) -> bool {
         use mz_sql::ast::ShowStatement;
         let Statement::Show(show) = statement else {
