@@ -13,11 +13,8 @@ use std::sync::Arc;
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, Secret};
 use mz_expr::{Eval, MirScalarExpr};
-use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::{CatalogItemId, Datum, RowArena};
-use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{ConnectionOption, ConnectionOptionName, Statement, Value, WithOptionValue};
 use mz_sql::catalog::{CatalogError, ObjectType};
 use mz_sql::plan::{self, CreateSecretPlan};
 use mz_sql::session::metadata::SessionMetadata;
@@ -317,13 +314,8 @@ impl Coordinator {
         // the secret is persisted to the secret store but not the catalog), the
         // secret will be cleaned up during next envd boot.
         //
-        // ROTATE KEYS is a read-modify-write of the connection's `create_sql`
-        // (see `rotate_keys_ensure` below: it re-reads the entry, rewrites the
-        // PUBLIC KEY options, and writes the result back via `Op::UpdateItem`).
-        // Arm the `create_sql`-hash check so a concurrent `ALTER CONNECTION SET`
-        // committing inside the off-thread window fails ROTATE with
-        // `ConcurrentDependencyMutation` instead of being silently clobbered by
-        // the blind write at the end.
+        // Check before resuming the stage as well as during atomic publication.
+        // The secret write has already happened, so a conflict must not restart rotation.
         let validity = PlanValidity::new(
             self.catalog(),
             BTreeSet::from_iter(std::iter::once(id)),
@@ -356,47 +348,16 @@ impl Coordinator {
                     .await?;
                 caching_secrets_reader.invalidate(id);
 
-                let mut to_item = entry.item;
-                match &mut to_item {
-                    CatalogItem::Connection(c) => {
-                        let mut stmt = match mz_sql::parse::parse(&c.create_sql)
-                            .expect("invalid create sql persisted to catalog")
-                            .into_element()
-                            .ast
-                        {
-                            Statement::CreateConnection(stmt) => stmt,
-                            _ => coord_bail!("internal error: persisted SQL for {id} is invalid"),
-                        };
-
-                        stmt.values.retain(|v| {
-                            v.name != ConnectionOptionName::PublicKey1
-                                && v.name != ConnectionOptionName::PublicKey2
-                        });
-                        stmt.values.push(ConnectionOption {
-                            name: ConnectionOptionName::PublicKey1,
-                            value: Some(WithOptionValue::Value(Value::String(
-                                new_key_set.primary().ssh_public_key(),
-                            ))),
-                        });
-                        stmt.values.push(ConnectionOption {
-                            name: ConnectionOptionName::PublicKey2,
-                            value: Some(WithOptionValue::Value(Value::String(
-                                new_key_set.secondary().ssh_public_key(),
-                            ))),
-                        });
-
-                        c.create_sql = stmt.to_ast_string_stable();
-                    }
-                    _ => coord_bail!(
-                        "internal error: rotate keys called on non-connection object {id}"
-                    ),
-                }
-
-                let ops = vec![catalog::Op::UpdateItem {
+                let connection = entry.connection().expect("rotation target is a connection");
+                let publication = catalog::command::connection::RotatedKeys::new(
                     id,
-                    name: entry.name,
-                    to_item,
-                }];
+                    connection.create_sql.clone(),
+                    [
+                        new_key_set.primary().ssh_public_key(),
+                        new_key_set.secondary().ssh_public_key(),
+                    ],
+                );
+                let ops = vec![catalog::Op::RotatedKeys(Arc::new(publication))];
 
                 // Pause between the secret-store write and the catalog write so a concurrent ALTER
                 // CONNECTION SET can commit. Runs in the off-thread ensure task, not the
