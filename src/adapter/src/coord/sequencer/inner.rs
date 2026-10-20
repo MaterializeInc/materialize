@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{future, iter};
 
-use anyhow::anyhow;
 use futures::Future;
 use futures::future::BoxFuture;
 use itertools::Itertools;
@@ -23,13 +22,12 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{ENABLE_EXPRESSION_CACHE, ENABLE_PASSWORD_AUTH};
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
-    CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
+    CatalogItem, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::LirDataflowDescription;
 use mz_expr::{MapFilterProject, ResultSpec};
 use mz_ore::collections::{CollectionExt, HashSet};
-use mz_ore::future::OreFutureExt;
 use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_panic_or_log};
@@ -38,7 +36,6 @@ use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::{ExprHumanizer, ExprHumanizerExt, TransientItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
-use mz_secrets::SecretsReader;
 use mz_sql::ast::{CreateSinkOption, CreateSinkOptionName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError,
@@ -49,9 +46,7 @@ use mz_sql::names::{
     ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
-use mz_sql::plan::{
-    AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule,
-};
+use mz_sql::plan::{AlterMaterializedViewApplyReplacementPlan, NetworkPolicyRule};
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_timestamp_oracle::TimestampOracle;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
@@ -68,10 +63,8 @@ use mz_sql::session::vars::{
 };
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_sql_parser::ast::{ConnectionOptionName, Statement, TransactionMode, WithOptionValue};
-use mz_ssh_util::keys::SshKeyPairSet;
+use mz_sql_parser::ast::{Statement, TransactionMode, WithOptionValue};
 use mz_storage_client::controller::ExportDescription;
-use mz_storage_types::AlterCompatible;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::sources::SourceConnection;
@@ -89,10 +82,10 @@ use crate::command::ExecuteResponse;
 use crate::coord::appends::{BuiltinTableAppendNotify, PendingWriteTxn, UserWriteResponder};
 use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
-    AlterConnectionValidationReady, AlterMaterializedViewReadyContext, AlterSinkReadyContext,
-    Coordinator, CreateConnectionValidationReady, DeferredPlanStatement, ExecuteContext, Message,
-    NetworkPolicyError, PendingReadTxn, PendingTxn, PendingTxnResponse, PlanValidity, StageResult,
-    Staged, StagedContext, TargetCluster, WatchSetResponse, validate_ip_with_policy_rules,
+    AlterMaterializedViewReadyContext, AlterSinkReadyContext, Coordinator, DeferredPlanStatement,
+    ExecuteContext, Message, NetworkPolicyError, PendingReadTxn, PendingTxn, PendingTxnResponse,
+    PlanValidity, StageResult, Staged, StagedContext, TargetCluster, WatchSetResponse,
+    validate_ip_with_policy_rules,
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
@@ -423,20 +416,6 @@ impl Coordinator {
         }
     }
 
-    /// Applies `details.secret_content_guards()` by reading each guarded
-    /// secret's current contents. Must be called whenever a connection is
-    /// created or its options altered, before the change takes effect.
-    async fn check_connection_secret_content_guards(
-        &self,
-        details: &ConnectionDetails,
-    ) -> Result<(), AdapterError> {
-        for (secret_id, guard) in details.secret_content_guards() {
-            let contents = self.caching_secrets_reader.read_string(secret_id).await?;
-            guard(&contents)?;
-        }
-        Ok(())
-    }
-
     /// Applies the secret-content guards of every connection that uses
     /// `secret_id` against proposed new `contents` for that secret. Must be
     /// called whenever a secret's contents change, before the new value is
@@ -456,200 +435,6 @@ impl Coordinator {
             }
         }
         Ok(())
-    }
-
-    #[instrument]
-    pub(super) async fn sequence_create_connection(
-        &mut self,
-        mut ctx: ExecuteContext,
-        plan: plan::CreateConnectionPlan,
-        resolved_ids: ResolvedIds,
-    ) {
-        if let Err(err) =
-            catalog::command::connection::check_connection_details(&plan.connection.details)
-        {
-            return ctx.retire(Err(AdapterError::PlanError(err)));
-        }
-
-        let (connection_id, connection_gid) = match self.allocate_user_id().await {
-            Ok(item_id) => item_id,
-            Err(err) => return ctx.retire(Err(err)),
-        };
-
-        match &plan.connection.details {
-            ConnectionDetails::Ssh { key_1, key_2, .. } => {
-                let key_1 = match key_1.as_key_pair() {
-                    Some(key_1) => key_1.clone(),
-                    None => {
-                        return ctx.retire(Err(AdapterError::Unstructured(anyhow!(
-                            "the PUBLIC KEY 1 option cannot be explicitly specified"
-                        ))));
-                    }
-                };
-
-                let key_2 = match key_2.as_key_pair() {
-                    Some(key_2) => key_2.clone(),
-                    None => {
-                        return ctx.retire(Err(AdapterError::Unstructured(anyhow!(
-                            "the PUBLIC KEY 2 option cannot be explicitly specified"
-                        ))));
-                    }
-                };
-
-                let key_set = SshKeyPairSet::from_parts(key_1, key_2);
-                let secret = key_set.to_bytes();
-                if let Err(err) = self.secrets_controller.ensure(connection_id, &secret).await {
-                    return ctx.retire(Err(err.into()));
-                }
-                self.caching_secrets_reader.invalidate(connection_id);
-            }
-            _ => (),
-        };
-
-        // Inspect guarded secrets as early as we can, before the connection is
-        // installed in the catalog.
-        if let Err(err) = self
-            .check_connection_secret_content_guards(&plan.connection.details)
-            .await
-        {
-            return ctx.retire(Err(err));
-        }
-
-        if plan.validate {
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let catalog = self.owned_catalog();
-            let conn_id = ctx.session().conn_id().clone();
-            let otel_ctx = OpenTelemetryContext::obtain();
-            let role_metadata = ctx.session().role_metadata().clone();
-
-            let connection = plan
-                .connection
-                .details
-                .to_connection()
-                .into_inline_connection(self.catalog().state());
-
-            let current_storage_parameters = self.controller.storage.config().clone();
-            task::spawn(|| format!("validate_connection:{conn_id}"), async move {
-                let result = match std::panic::AssertUnwindSafe(
-                    connection.validate(connection_id, &current_storage_parameters),
-                )
-                .ore_catch_unwind()
-                .await
-                {
-                    Ok(Ok(())) => Ok(plan),
-                    Ok(Err(err)) => Err(err.into()),
-                    Err(_panic) => {
-                        tracing::error!("connection validation panicked");
-                        Err(AdapterError::Internal(
-                            "connection validation panicked".into(),
-                        ))
-                    }
-                };
-
-                // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
-                let result = internal_cmd_tx.send(Message::CreateConnectionValidationReady(
-                    CreateConnectionValidationReady {
-                        ctx,
-                        result,
-                        connection_id,
-                        connection_gid,
-                        plan_validity: PlanValidity::new(
-                            &catalog,
-                            resolved_ids.items().copied().collect(),
-                            None,
-                            None,
-                            role_metadata,
-                        ),
-                        otel_ctx,
-                        resolved_ids: resolved_ids.clone(),
-                    },
-                ));
-                if let Err(e) = result {
-                    tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                }
-            });
-        } else {
-            let result = self
-                .sequence_create_connection_stage_finish(
-                    &mut ctx,
-                    connection_id,
-                    connection_gid,
-                    plan,
-                    resolved_ids,
-                )
-                .await;
-            ctx.retire(result);
-        }
-    }
-
-    #[instrument]
-    pub(crate) async fn sequence_create_connection_stage_finish(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        connection_id: CatalogItemId,
-        connection_gid: GlobalId,
-        plan: plan::CreateConnectionPlan,
-        resolved_ids: ResolvedIds,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let ops = vec![catalog::Op::CreateItem {
-            id: connection_id,
-            name: plan.name.clone(),
-            item: CatalogItem::Connection(Connection {
-                create_sql: plan.connection.create_sql,
-                global_id: connection_gid,
-                details: plan.connection.details.clone(),
-                resolved_ids,
-            }),
-            owner_id: *ctx.session().current_role_id(),
-        }];
-
-        // VPC endpoint creation for AWS PrivateLink connections is now handled
-        // in apply_catalog_implications.
-        let conn_id = ctx.session().conn_id().clone();
-        let transact_result = self
-            .catalog_transact_with_context(Some(&conn_id), Some(ctx), ops)
-            .await;
-
-        match transact_result {
-            Ok(_) => Ok(ExecuteResponse::CreatedConnection),
-            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
-            })) if plan.if_not_exists => {
-                // Clean up SSH key material if it was persisted, since the
-                // catalog item was not created.
-                if matches!(plan.connection.details, ConnectionDetails::Ssh { .. }) {
-                    if let Err(e) = self.secrets_controller.delete(connection_id).await {
-                        tracing::warn!(
-                            "Dropping SSH secret for existing connection has encountered an error: {}",
-                            e
-                        );
-                    } else {
-                        self.caching_secrets_reader.invalidate(connection_id);
-                    }
-                }
-                ctx.session()
-                    .add_notice(AdapterNotice::ObjectAlreadyExists {
-                        name: plan.name.item,
-                        ty: "connection",
-                    });
-                Ok(ExecuteResponse::CreatedConnection)
-            }
-            Err(err) => {
-                // Clean up SSH key material if it was persisted, since the
-                // catalog item was not created.
-                if matches!(plan.connection.details, ConnectionDetails::Ssh { .. }) {
-                    if let Err(e) = self.secrets_controller.delete(connection_id).await {
-                        tracing::warn!(
-                            "Dropping SSH secret for failed connection has encountered an error: {}",
-                            e
-                        );
-                    } else {
-                        self.caching_secrets_reader.invalidate(connection_id);
-                    }
-                }
-                Err(err)
-            }
-        }
     }
 
     #[instrument]
@@ -2614,147 +2399,12 @@ impl Coordinator {
             AlterConnectionAction::RotateKeys => {
                 self.sequence_rotate_keys(ctx, id).await;
             }
-            AlterConnectionAction::AlterOptions {
-                set_options,
-                drop_options,
-                validate,
-            } => {
-                self.sequence_alter_connection_options(ctx, id, set_options, drop_options, validate)
-                    .await
+            AlterConnectionAction::AlterOptions { .. } => {
+                ctx.retire(Err(AdapterError::Unsupported(
+                    "ALTER CONNECTION options require submitted intent",
+                )));
             }
         }
-    }
-
-    #[instrument]
-    async fn sequence_alter_connection_options(
-        &mut self,
-        mut ctx: ExecuteContext,
-        id: CatalogItemId,
-        set_options: BTreeMap<ConnectionOptionName, Option<WithOptionValue<mz_sql::names::Aug>>>,
-        drop_options: BTreeSet<ConnectionOptionName>,
-        validate: bool,
-    ) {
-        let rebuilt = catalog::command::connection::rebuild_connection(
-            &self.catalog().for_session(ctx.session()),
-            ctx.session(),
-            id,
-            set_options,
-            drop_options,
-        );
-        let conn = match rebuilt {
-            Ok(conn) => conn,
-            Err(e) => {
-                return ctx.retire(Err(e));
-            }
-        };
-
-        let connection_gid = conn.global_id();
-
-        if let Err(err) = self
-            .check_connection_secret_content_guards(&conn.details)
-            .await
-        {
-            return ctx.retire(Err(err));
-        }
-
-        if validate {
-            let connection = conn
-                .details
-                .to_connection()
-                .into_inline_connection(self.catalog().state());
-
-            let internal_cmd_tx = self.internal_cmd_tx.clone();
-            let catalog = self.owned_catalog();
-            let conn_id = ctx.session().conn_id().clone();
-            let otel_ctx = OpenTelemetryContext::obtain();
-            let role_metadata = ctx.session().role_metadata().clone();
-            let current_storage_parameters = self.controller.storage.config().clone();
-
-            task::spawn(
-                || format!("validate_alter_connection:{conn_id}"),
-                async move {
-                    let resolved_ids = conn.resolved_ids.clone();
-                    let dependency_ids: BTreeSet<_> = resolved_ids.items().copied().collect();
-                    let result = match std::panic::AssertUnwindSafe(
-                        connection.validate(id, &current_storage_parameters),
-                    )
-                    .ore_catch_unwind()
-                    .await
-                    {
-                        Ok(Ok(())) => Ok(conn),
-                        Ok(Err(err)) => Err(err.into()),
-                        Err(_panic) => {
-                            tracing::error!("alter connection validation panicked");
-                            Err(AdapterError::Internal(
-                                "connection validation panicked".into(),
-                            ))
-                        }
-                    };
-
-                    // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
-                    let result = internal_cmd_tx.send(Message::AlterConnectionValidationReady(
-                        AlterConnectionValidationReady {
-                            ctx,
-                            result,
-                            connection_id: id,
-                            connection_gid,
-                            plan_validity: PlanValidity::new(
-                                &catalog,
-                                dependency_ids.clone(),
-                                None,
-                                None,
-                                role_metadata,
-                            ),
-                            otel_ctx,
-                            resolved_ids,
-                        },
-                    ));
-                    if let Err(e) = result {
-                        tracing::warn!("internal_cmd_rx dropped before we could send: {:?}", e);
-                    }
-                },
-            );
-        } else {
-            let result = self
-                .sequence_alter_connection_stage_finish(ctx.session_mut(), id, conn)
-                .await;
-            ctx.retire(result);
-        }
-    }
-
-    #[instrument]
-    pub(crate) async fn sequence_alter_connection_stage_finish(
-        &mut self,
-        session: &Session,
-        id: CatalogItemId,
-        connection: Connection,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        match self.catalog.get_entry(&id).item() {
-            CatalogItem::Connection(curr_conn) => {
-                curr_conn
-                    .details
-                    .to_connection()
-                    .alter_compatible(curr_conn.global_id, &connection.details.to_connection())
-                    .map_err(StorageError::from)?;
-            }
-            _ => unreachable!("known to be a connection"),
-        };
-
-        let ops = vec![catalog::Op::UpdateItem {
-            id,
-            name: self.catalog.get_entry(&id).name().clone(),
-            to_item: CatalogItem::Connection(connection.clone()),
-        }];
-
-        self.catalog_transact(Some(session), ops).await?;
-
-        // NOTE: The rest of the alter connection logic (updating VPC endpoints
-        // and propagating connection changes to dependent sources, sinks, and
-        // tables) is handled in `apply_catalog_implications` via
-        // `handle_alter_connection`. The catalog transact above triggers that
-        // code path.
-
-        Ok(ExecuteResponse::AlteredObject(ObjectType::Connection))
     }
 
     #[instrument]
