@@ -8,6 +8,16 @@
 // by the Apache License, Version 2.0.
 
 //! Catalog commands retain intent, not the writes derived from a speculative catalog.
+//!
+//! Final execution resolves and authorizes each command against the candidate produced
+//! by its predecessors. Pending external work abandons that candidate. A continuation
+//! rebuilds the prefix before consuming its indexed response, so successful preparation
+//! and preparation errors are accepted only when their inputs still match.
+//!
+//! External mutations are not catalog operations. CREATE CONNECTION retains its allocated
+//! ID, generated keys, and successful secret-write completion across retries. ROTATE KEYS
+//! uses a pinned publication command instead of retrying its external mutation. Catalog
+//! rollback cannot undo either secret writes or changes in external services.
 
 pub(crate) mod connection;
 pub(crate) mod source;
@@ -28,6 +38,8 @@ use crate::{AdapterError, AdapterNotice};
 #[derive(Clone, Debug)]
 pub enum CatalogCommand {
     Rename(Arc<RenameCommand>),
+    AlterConnection(Arc<connection::ConnectionStatement>),
+    CreateConnection(Arc<connection::ConnectionStatement>),
     Source(Arc<source_statement::SourceCommand>),
 }
 
@@ -35,6 +47,7 @@ impl CatalogCommand {
     pub(crate) fn notices(&self) -> &[PlanNotice] {
         match self {
             Self::Rename(command) => command.notices(),
+            Self::AlterConnection(command) | Self::CreateConnection(command) => command.notices(),
             Self::Source(command) => command.notices(),
         }
     }

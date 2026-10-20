@@ -85,12 +85,12 @@ use crate::util::ClientTransmitter;
 //
 // The exceptions are:
 //
-// - Rename/swap commands enter through `sequence_rename_command` and execute in the catalog.
+// - Retained DDL commands enter through command admission and execute in the catalog.
 // - Creating a role during connection startup. In this scenario, the session has not been properly
 // initialized and we need to skip directly to creating role. We have a specific method,
 // `sequence_create_role_for_startup` for this purpose.
 // - Methods that continue the execution of some plan that was being run asynchronously, such as
-// `sequence_staged` and `sequence_create_connection_stage_finish`.
+// `sequence_staged`.
 // - The frontend peek sequencing reaches into this module for some shared helpers.
 //   TODO(peek-seq): Move these out of the coordinator.
 
@@ -229,9 +229,10 @@ impl Coordinator {
                     let result = self.sequence_create_source(&mut ctx, plans).await;
                     ctx.retire(result);
                 }
-                Plan::CreateConnection(plan) => {
-                    self.sequence_create_connection(ctx, plan, resolved_ids)
-                        .await;
+                Plan::CreateConnection(_) => {
+                    ctx.retire(Err(AdapterError::Unsupported(
+                        "CREATE CONNECTION requires submitted intent",
+                    )));
                 }
                 Plan::CreateDatabase(plan) => {
                     let result = self.sequence_create_database(ctx.session_mut(), plan).await;
