@@ -1171,6 +1171,16 @@ impl<'a> Transaction<'a> {
             .map(|oids| oids.into_element())
     }
 
+    /// Creates a noncommittable fork of the current table contents, including pending writes.
+    ///
+    /// Changes to the fork are discarded. Pending audit events stay with the parent.
+    /// This copies the full catalog snapshot and borrows the parent's durable handle.
+    pub fn fork_dry_run(&mut self) -> Result<DryRunTransaction<'_>, CatalogError> {
+        let snapshot = self.current_snapshot();
+        let upper = self.upper;
+        Transaction::new(&mut *self.durable_catalog, snapshot, upper).map(DryRunTransaction::new)
+    }
+
     /// Exports the current state of this transaction as a [`Snapshot`].
     ///
     /// This merges each `TableTransaction`'s initial data with its pending
