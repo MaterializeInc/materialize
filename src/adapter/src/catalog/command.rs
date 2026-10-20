@@ -9,6 +9,7 @@
 
 //! Catalog commands retain intent, not the writes derived from a speculative catalog.
 
+pub(crate) mod connection;
 pub(crate) mod source;
 pub(crate) mod source_statement;
 
