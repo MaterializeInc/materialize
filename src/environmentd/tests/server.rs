@@ -7971,6 +7971,101 @@ fn test_lir_plan_materialized_view_survives_restart() {
     }
 }
 
+/// Materialized views whose plans use the same placeholder object ids build their objects
+/// under distinct ids, at creation and at boot, so dropping one leaves the introspection of the
+/// other intact.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_lir_plan_object_ids_are_fresh() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default()
+        .data_directory(data_dir.path())
+        .with_system_parameter_default("enable_lir_plans".into(), "true".into());
+    let plan = r#"{"lir_version":1,"imports":[{"id":{"Transient":2},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":1},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":2}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":1}}"#;
+
+    // The transient ids the dataflow of materialized view `name` builds, each with its number
+    // of `mz_lir_mapping` rows, once the replica has reported both.
+    let objects = |client: &mut postgres::Client, name: &str| -> Vec<(String, i64)> {
+        Retry::default()
+            .max_duration(Duration::from_secs(60))
+            .retry(|_| {
+                let rows = client
+                    .query(
+                        "SELECT dg.global_id, \
+                            (SELECT count(*) FROM mz_introspection.mz_lir_mapping lm \
+                             WHERE lm.global_id = dg.global_id) \
+                         FROM mz_catalog.mz_materialized_views mv \
+                         JOIN mz_introspection.mz_compute_exports ce ON ce.export_id = mv.id \
+                         JOIN mz_introspection.mz_dataflow_global_ids dg \
+                           ON dg.id = ce.dataflow_id \
+                         WHERE mv.name = $1 AND dg.global_id LIKE 't%' \
+                         ORDER BY dg.global_id",
+                        &[&name],
+                    )
+                    .map_err(|e| e.to_string())?;
+                let objects: Vec<(String, i64)> = rows
+                    .into_iter()
+                    .map(|row| (row.get(0), row.get(1)))
+                    .collect();
+                if objects.is_empty() || objects.iter().any(|(_, mapped)| *mapped == 0) {
+                    return Err(format!("introspection of {name} incomplete: {objects:?}"));
+                }
+                Ok(objects)
+            })
+            .unwrap()
+    };
+    let assert_distinct = |client: &mut postgres::Client| {
+        let p1 = objects(client, "p1");
+        let p2 = objects(client, "p2");
+        assert_eq!(p1.len(), 1, "{p1:?}");
+        assert_eq!(p2.len(), 1, "{p2:?}");
+        assert_ne!(p1[0].0, p2[0].0, "both plans build the same object id");
+        assert_ne!(p1[0].0, "t1");
+    };
+
+    {
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client
+            .batch_execute("CREATE TABLE t (a int8 NOT NULL)")
+            .unwrap();
+        for name in ["p1", "p2"] {
+            client
+                .batch_execute(&format!(
+                    "CREATE MATERIALIZED VIEW {name} (a int8 NOT NULL) FROM PLAN '{plan}'"
+                ))
+                .unwrap();
+        }
+        assert_distinct(&mut client);
+    }
+
+    let server = harness.start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    assert_distinct(&mut client);
+    let p2 = objects(&mut client, "p2");
+    client.batch_execute("DROP MATERIALIZED VIEW p1").unwrap();
+    Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .retry(|_| {
+            let dataflows: i64 = client
+                .query_one(
+                    "SELECT count(*) FROM mz_introspection.mz_compute_exports \
+                     WHERE export_id NOT LIKE 't%' AND export_id NOT LIKE 's%'",
+                    &[],
+                )
+                .map_err(|e| e.to_string())?
+                .get(0);
+            if dataflows == 1 {
+                Ok(())
+            } else {
+                Err(format!("{dataflows} user exports remain"))
+            }
+        })
+        .unwrap();
+    assert_eq!(objects(&mut client, "p2"), p2);
+}
+
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]

@@ -3658,6 +3658,10 @@ impl Coordinator {
                                     "materialized view without raw expression has no plan".into(),
                                 )
                             })?;
+                            let object_ids =
+                                std::iter::repeat_with(|| self.allocate_transient_id().1)
+                                    .take(envelope.objects.len())
+                                    .collect();
                             optimize::from_plan::build_dataflow_from_plan(
                                 self.catalog().state(),
                                 mv.cluster_id,
@@ -3667,6 +3671,7 @@ impl Coordinator {
                                 mv.non_null_assertions.clone(),
                                 mv.refresh_schedule.clone(),
                                 name.clone(),
+                                object_ids,
                             )
                         })
                         .unwrap_or_else(|e| {

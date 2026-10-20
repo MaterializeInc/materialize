@@ -51,6 +51,10 @@ use crate::optimize::materialized_view::{GlobalLirPlan, materialized_view_sink};
 /// The plan's output must have the arity of `desc`, and each of its columns the
 /// [`ReprScalarType`] of the declared column.
 ///
+/// The dataflow builds the plan's objects under the ids `object_ids`, in order, which must be
+/// fresh transient ids, one per object of `envelope`. Compute introspection keys its state by
+/// object id, so the placeholders of two plans must not both reach a replica.
+///
 /// Returns every validation error, one per line, as a [`PlanError::InvalidLirPlan`] if the
 /// plan is invalid.
 pub fn build_dataflow_from_plan(
@@ -62,7 +66,15 @@ pub fn build_dataflow_from_plan(
     non_null_assertions: Vec<usize>,
     refresh_schedule: Option<RefreshSchedule>,
     debug_name: String,
+    object_ids: Vec<GlobalId>,
 ) -> Result<GlobalLirPlan, AdapterError> {
+    if object_ids.len() != envelope.objects.len() {
+        return Err(AdapterError::Internal(format!(
+            "LIR plan has {} objects, but {} object ids were allocated",
+            envelope.objects.len(),
+            object_ids.len()
+        )));
+    }
     let features = OptimizerFeatures::from(catalog.system_config())
         .override_from(&catalog.get_cluster(cluster_id).config.features())
         .override_from(&catalog.cluster_scoped_optimizer_overrides(cluster_id));
@@ -164,6 +176,25 @@ pub fn build_dataflow_from_plan(
     if !errors.is_empty() {
         let lines: Vec<_> = errors.iter().map(ToString::to_string).collect();
         return Err(invalid(lines.join("\n")));
+    }
+
+    // Renumbered only after validation, so that errors name the plan's own placeholders. The
+    // validator rejects duplicate object ids and reads of unknown ids, so the renumbering maps
+    // every object and every read of one.
+    let renumbering: BTreeMap<_, _> = df
+        .objects_to_build
+        .iter()
+        .map(|object| object.id)
+        .zip_eq(object_ids)
+        .collect();
+    for object in &mut df.objects_to_build {
+        object.id = renumbering[&object.id];
+        substitute_global_ids(&mut object.plan, &renumbering);
+    }
+    for sink in df.sink_exports.values_mut() {
+        if let Some(id) = renumbering.get(&sink.from) {
+            sink.from = *id;
+        }
     }
 
     // Traced where the optimizer traces its physical plans, which `EXPLAIN` reads.

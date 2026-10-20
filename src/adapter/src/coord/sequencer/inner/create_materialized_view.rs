@@ -511,6 +511,14 @@ impl Coordinator {
         }
 
         let (_, view_id) = self.allocate_transient_id();
+        let plan_object_ids: Vec<_> = match &plan.materialized_view.definition {
+            plan::MaterializedViewDefinition::Plan { envelope, .. } => {
+                std::iter::repeat_with(|| self.allocate_transient_id().1)
+                    .take(envelope.objects.len())
+                    .collect()
+            }
+            plan::MaterializedViewDefinition::Query(_) => Vec::new(),
+        };
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
         // A plan is traced only as a physical plan, the other stages do not exist.
         if let (plan::MaterializedViewDefinition::Plan { .. }, ExplainContext::Plan(explain_ctx)) =
@@ -571,6 +579,7 @@ impl Coordinator {
                                         plan.materialized_view.non_null_assertions.clone(),
                                         plan.materialized_view.refresh_schedule.clone(),
                                         plan_debug_name,
+                                        plan_object_ids,
                                     )
                                 };
                                 let global_lir_plan =
