@@ -172,7 +172,7 @@ fn resolve_source<'a>(
 ///
 /// Only tables have versions a plan can name. Other relations are read at their latest
 /// collection, as SQL references to them are, and must name the root version.
-fn version_selector(
+pub fn version_selector(
     item: &dyn CatalogItem,
     version: RelationVersion,
 ) -> Result<RelationVersionSelector, PlanError> {

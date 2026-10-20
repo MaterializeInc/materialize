@@ -16,6 +16,7 @@ use std::str::FromStr;
 use std::sync::LazyLock;
 
 use anyhow::anyhow;
+use mz_compute_types::plan::envelope::ImportSource;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::LocalId;
 use mz_ore::str::StrExt;
@@ -2646,6 +2647,28 @@ impl<'ast> Visit<'ast, Raw> for IdDependencVisitor {
             },
         }
     }
+
+    fn visit_materialized_view_body(&mut self, node: &'ast MaterializedViewBody<Raw>) {
+        match node {
+            MaterializedViewBody::Query(query) => self.visit_query(query),
+            // A purified plan names its imports by id, which the SQL AST does not see. A plan
+            // that does not parse has no dependencies, and planning reports it.
+            MaterializedViewBody::Plan(json) => {
+                let Ok(envelope) = mz_compute_types::plan::envelope::parse_envelope(json) else {
+                    return;
+                };
+                let sources = envelope
+                    .imports
+                    .iter()
+                    .flat_map(|import| std::iter::once(&import.source).chain(&import.indexes));
+                for source in sources {
+                    if let ImportSource::Item { item_id, .. } = source {
+                        self.ids.insert(*item_id);
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2678,6 +2701,21 @@ mod tests {
         proptest!(|(id in any::<DatabaseId>())| {
             testcase(id);
         })
+    }
+
+    #[mz_ore::test]
+    fn dependencies_include_plan_imports() {
+        let sql = r#"CREATE MATERIALIZED VIEW m (a int8) IN CLUSTER [u1] FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Item":{"item_id":{"User":7},"version":0}},"persist":false,"indexes":[{"Item":{"item_id":{"User":9},"version":0}}]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'"#;
+        let statement = crate::parse::parse(sql)
+            .expect("parses")
+            .into_iter()
+            .next()
+            .expect("one statement")
+            .ast;
+        assert_eq!(
+            dependencies(&statement).expect("dependencies"),
+            BTreeSet::from([CatalogItemId::User(7), CatalogItemId::User(9)])
+        );
     }
 
     #[mz_ore::test]

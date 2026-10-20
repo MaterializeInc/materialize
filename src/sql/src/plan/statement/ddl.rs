@@ -2934,6 +2934,7 @@ pub fn plan_create_materialized_view(
                 MaterializedViewDefinition::Plan {
                     envelope: Box::new(envelope),
                     desc: desc.clone(),
+                    depends_on: depends_on.clone(),
                 },
                 desc,
                 depends_on,

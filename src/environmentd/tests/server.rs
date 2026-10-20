@@ -7889,3 +7889,84 @@ fn test_cluster_labeled_metrics_are_removed_at_zero_replicas() {
         );
     }
 }
+
+/// A materialized view installed from an LIR plan is rebuilt from the plan stored in its
+/// `create_sql` when `environmentd` restarts, after its imports were renamed.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_lir_plan_materialized_view_survives_restart() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default()
+        .data_directory(data_dir.path())
+        .with_system_parameter_default("enable_lir_plans".into(), "true".into());
+
+    let rows = |client: &mut postgres::Client| -> Vec<(i64, Option<i64>, Option<String>)> {
+        client
+            .query("SELECT a, b, c FROM p ORDER BY a, b", &[])
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.get(0), row.get(1), row.get(2)))
+            .collect()
+    };
+    let row = |a: i64, b: i64, c: &str| (a, Some(b), Some(c.to_string()));
+
+    {
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        for statement in [
+            "CREATE TABLE t (a int8 NOT NULL, b int8)",
+            "CREATE TABLE u (a int8 NOT NULL, c text)",
+            "CREATE INDEX u_a ON u (a)",
+            "INSERT INTO t VALUES (1, 10), (2, 20)",
+            "INSERT INTO u VALUES (1, 'one'), (2, 'two')",
+            "CREATE MATERIALIZED VIEW mv AS SELECT t.a, t.b, u.c FROM t JOIN u ON t.a = u.a",
+        ] {
+            client.batch_execute(statement).unwrap();
+        }
+        let plan: String = client
+            .query_one(
+                "EXPLAIN PHYSICAL PLAN AS LIR JSON FOR MATERIALIZED VIEW mv",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        assert!(!plan.contains('\''), "plan needs quoting: {plan}");
+        client
+            .batch_execute(&format!(
+                "CREATE MATERIALIZED VIEW p (a int8 NOT NULL, b int8, c text) FROM PLAN '{plan}'"
+            ))
+            .unwrap();
+        client.batch_execute("ALTER TABLE t RENAME TO t2").unwrap();
+        client
+            .batch_execute("ALTER INDEX u_a RENAME TO u_a2")
+            .unwrap();
+        assert_eq!(
+            rows(&mut client),
+            vec![row(1, 10, "one"), row(2, 20, "two")]
+        );
+    }
+
+    {
+        let server = harness.start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        assert_eq!(
+            rows(&mut client),
+            vec![row(1, 10, "one"), row(2, 20, "two")]
+        );
+        // The dataflow runs again.
+        client
+            .batch_execute("INSERT INTO t2 VALUES (2, 21)")
+            .unwrap();
+        assert_eq!(
+            rows(&mut client),
+            vec![row(1, 10, "one"), row(2, 20, "two"), row(2, 21, "two")]
+        );
+        let err = client.batch_execute("DROP INDEX u_a2").unwrap_err();
+        let message = err.as_db_error().expect("db error").message();
+        assert!(
+            message.contains("still depended upon by materialized view"),
+            "{message}"
+        );
+    }
+}

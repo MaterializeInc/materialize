@@ -1733,6 +1733,14 @@ impl Coordinator {
                 explainee: Explainee::CreateMaterializedView(box_cmvs, broken),
             }) => {
                 let mut cmvs = *box_cmvs;
+                if let Err(e) = purify_create_materialized_view_plan(
+                    &self.catalog().for_session(ctx.session()),
+                    &mut cmvs,
+                    &mut resolved_ids,
+                ) {
+                    return ctx.retire(Err(e.into()));
+                }
+
                 let mz_now = match self
                     .resolve_mz_now_for_create_materialized_view(
                         &cmvs,

@@ -905,8 +905,9 @@ pub struct CreateMaterializedViewFinish {
     validity: PlanValidity,
     plan: plan::CreateMaterializedViewPlan,
     resolved_ids: ResolvedIds,
-    local_mir_plan: optimize::materialized_view::LocalMirPlan,
-    global_mir_plan: optimize::materialized_view::GlobalMirPlan,
+    /// `None` for a materialized view defined by an LIR plan, as is `global_mir_plan`.
+    local_mir_plan: Option<optimize::materialized_view::LocalMirPlan>,
+    global_mir_plan: Option<optimize::materialized_view::GlobalMirPlan>,
     global_lir_plan: optimize::materialized_view::GlobalLirPlan,
     optimizer_features: OptimizerFeatures,
 }
@@ -3632,6 +3633,56 @@ impl Coordinator {
                     catalog.set_dataflow_metainfo(idx.global_id(), metainfo);
 
                     compute_instance.insert_collection(idx.global_id());
+                }
+                // A materialized view defined by an LIR plan. Its plan is validated again on
+                // every boot, so it bypasses the expression cache.
+                CatalogItem::MaterializedView(mv) if mv.raw_expr.is_none() => {
+                    let compute_instance =
+                        instance_snapshots.entry(mv.cluster_id).or_insert_with(|| {
+                            self.instance_snapshot(mv.cluster_id)
+                                .expect("compute instance exists")
+                        });
+                    let global_id = mv.global_id_writes();
+                    cached_global_exprs.remove(&global_id);
+                    let name = self
+                        .catalog()
+                        .resolve_full_name(entry.name(), None)
+                        .to_string();
+
+                    // The plan was validated when the view was created, so it fails to load only
+                    // if what the validator accepts changed since.
+                    let global_lir_plan = optimize::from_plan::stored_envelope(&mv.create_sql)
+                        .and_then(|envelope| {
+                            let envelope = envelope.ok_or_else(|| {
+                                AdapterError::Internal(
+                                    "materialized view without raw expression has no plan".into(),
+                                )
+                            })?;
+                            optimize::from_plan::build_dataflow_from_plan(
+                                self.catalog().state(),
+                                mv.cluster_id,
+                                &envelope,
+                                global_id,
+                                &mv.desc.latest(),
+                                mv.non_null_assertions.clone(),
+                                mv.refresh_schedule.clone(),
+                                name.clone(),
+                            )
+                        })
+                        .unwrap_or_else(|e| {
+                            panic!("cannot load the LIR plan of materialized view {name}:\n{e}")
+                        });
+                    let (physical_plan, metainfo) = global_lir_plan.unapply();
+                    // Plans carry no optimizer notices.
+                    let metainfo =
+                        self.catalog()
+                            .render_notices(metainfo, Vec::new(), Some(global_id));
+
+                    let catalog = self.catalog_mut();
+                    catalog.set_physical_plan(global_id, physical_plan);
+                    catalog.set_dataflow_metainfo(global_id, metainfo);
+
+                    compute_instance.insert_collection(global_id);
                 }
                 CatalogItem::MaterializedView(mv) => {
                     // Collect optimizer parameters.

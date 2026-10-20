@@ -89,7 +89,7 @@ use crate::names::{
 pub(crate) mod error;
 pub(crate) mod explain;
 pub(crate) mod hir;
-pub(crate) mod lir_plan;
+pub mod lir_plan;
 pub(crate) mod literal;
 pub(crate) mod lowering;
 pub(crate) mod notice;
@@ -1138,9 +1138,7 @@ impl ExplaineeStatement {
             Self::CreateView { plan, .. } => plan.view.expr.depends_on(),
             Self::CreateMaterializedView { plan, .. } => match &plan.materialized_view.definition {
                 MaterializedViewDefinition::Query(expr) => expr.depends_on(),
-                // NOTE: Planning rejects `EXPLAIN` of a `FROM PLAN` statement, so this arm is
-                // not reached.
-                MaterializedViewDefinition::Plan { .. } => BTreeSet::new(),
+                MaterializedViewDefinition::Plan { depends_on, .. } => depends_on.clone(),
             },
             Self::CreateIndex { plan, .. } => btreeset! {plan.index.on},
             Self::Subscribe { plan, .. } => plan.from.depends_on(),
@@ -2005,6 +2003,8 @@ pub enum MaterializedViewDefinition {
         envelope: Box<LirPlanEnvelope>,
         /// The declared schema, without keys.
         desc: RelationDesc,
+        /// The collections the plan imports, relations and indexes.
+        depends_on: BTreeSet<GlobalId>,
     },
 }
 

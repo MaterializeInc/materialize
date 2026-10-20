@@ -54,6 +54,7 @@
 
 pub mod copy_to;
 pub mod dataflows;
+pub mod from_plan;
 pub mod index;
 pub mod materialized_view;
 pub mod metric_sink;

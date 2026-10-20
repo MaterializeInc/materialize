@@ -299,24 +299,36 @@ pub(crate) fn validate_read_then_write_dependencies(
             });
         };
 
-        // Materialized views without a SQL definition have no local expression to inspect.
-        let optimized_expr = match entry.item() {
+        let temporal = match entry.item() {
             CatalogItem::View(objects::View {
                 locally_optimized_expr,
                 ..
-            }) => Some(locally_optimized_expr),
-            CatalogItem::MaterializedView(objects::MaterializedView {
-                locally_optimized_expr,
-                ..
-            }) => locally_optimized_expr.as_ref(),
-            _ => None,
+            }) => locally_optimized_expr.contains_temporal(),
+            CatalogItem::MaterializedView(mv) => match &mv.locally_optimized_expr {
+                Some(optimized_expr) => optimized_expr.contains_temporal(),
+                // A materialized view defined by an LIR plan has no local expression. Its
+                // temporal filters are the temporal bounds in its plan, and a view whose plan
+                // is not installed is assumed to have some.
+                None => catalog
+                    .try_get_physical_plan(&mv.global_id_writes())
+                    .map_or(true, |plan| {
+                        plan.objects_to_build
+                            .iter()
+                            .any(|build| build.plan.has_temporal_bounds())
+                    }),
+            },
+            _ => false,
         };
-        if let Some(optimized_expr) = optimized_expr {
-            if optimized_expr.contains_temporal() {
-                return Err(AdapterError::Unsupported(
-                    "calls to mz_now in write statements",
-                ));
-            }
+        if temporal {
+            return Err(AdapterError::Unsupported(
+                "calls to mz_now in write statements",
+            ));
+        }
+
+        // A materialized view defined by an LIR plan depends on the indexes it reads, and on
+        // the collections they index, which are checked on their own.
+        if let CatalogItem::Index(_) = entry.item() {
+            continue;
         }
 
         let item_type = entry.item().typ();

@@ -24,7 +24,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mz_expr::{Id, LocalId, OptimizableExpr, RECURSION_LIMIT};
+use mz_expr::{
+    Id, LocalId, MapFilterProject, OptimizableExpr, RECURSION_LIMIT, permutation_for_arrangement,
+};
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::vec::PartialOrdVecExt;
 use mz_repr::{GlobalId, ReprColumnType, ReprRelationType, ReprScalarType};
@@ -123,36 +125,28 @@ pub fn validate_dataflow(
     df: &LirDataflowDescription,
     config: &ValidateConfig,
 ) -> Result<BTreeMap<GlobalId, ReprRelationType>, Vec<ValidationError>> {
-    let ValidateConfig {
-        enforce_function_allowlist,
-    } = config;
-    let mut validator = Validator::new(Typer {
-        enforce: *enforce_function_allowlist,
+    let mut validator = Validator::for_config(config);
+    let outcome = validator.dataflow(df);
+    validator.finish(outcome)
+}
+
+/// Like [`validate_dataflow`], but first sets the `from_arrangement` of every sink export.
+///
+/// A sink reads the raw collection of its `from` if the collection is available raw, and an
+/// arbitrary arrangement of it otherwise, as lowering chooses for optimizer plans. The
+/// arrangement is read with the layout `permutation_for_arrangement` produces. A sink whose
+/// `from` broke a rule keeps its `from_arrangement`.
+pub fn validate_dataflow_choosing_sink_forms(
+    df: &mut LirDataflowDescription,
+    config: &ValidateConfig,
+) -> Result<BTreeMap<GlobalId, ReprRelationType>, Vec<ValidationError>> {
+    let mut validator = Validator::for_config(config);
+    let outcome = validator.objects(df).map(|types| {
+        validator.choose_sink_forms(df);
+        validator.exports(df);
+        types
     });
-    let types = match validator.dataflow(df) {
-        Ok(types) => types,
-        Err(abort) => {
-            let message = match abort {
-                Abort::Recursion => format!("plan nests deeper than {RECURSION_LIMIT} operators"),
-                Abort::Budget => format!(
-                    "validating the plan takes more than {} units of work",
-                    validator.budget
-                ),
-            };
-            validator.errors.push(ValidationError {
-                lir_id: None,
-                operator: "dataflow",
-                rule: Rule::Shape,
-                message,
-            });
-            BTreeMap::new()
-        }
-    };
-    if validator.errors.is_empty() {
-        Ok(types)
-    } else {
-        Err(validator.errors)
-    }
+    validator.finish(outcome)
 }
 
 /// What the walk knows about the output of a node.
@@ -495,6 +489,48 @@ impl Validator {
         }
     }
 
+    fn for_config(config: &ValidateConfig) -> Self {
+        let ValidateConfig {
+            enforce_function_allowlist,
+        } = config;
+        Validator::new(Typer {
+            enforce: *enforce_function_allowlist,
+        })
+    }
+
+    /// Turns the outcome of a walk into the result of a validation.
+    fn finish(
+        mut self,
+        outcome: Result<BTreeMap<GlobalId, ReprRelationType>, Abort>,
+    ) -> Result<BTreeMap<GlobalId, ReprRelationType>, Vec<ValidationError>> {
+        let types = match outcome {
+            Ok(types) => types,
+            Err(abort) => {
+                let message = match abort {
+                    Abort::Recursion => {
+                        format!("plan nests deeper than {RECURSION_LIMIT} operators")
+                    }
+                    Abort::Budget => format!(
+                        "validating the plan takes more than {} units of work",
+                        self.budget
+                    ),
+                };
+                self.errors.push(ValidationError {
+                    lir_id: None,
+                    operator: "dataflow",
+                    rule: Rule::Shape,
+                    message,
+                });
+                BTreeMap::new()
+            }
+        };
+        if self.errors.is_empty() {
+            Ok(types)
+        } else {
+            Err(self.errors)
+        }
+    }
+
     fn dataflow_error(&mut self, rule: Rule, message: String) {
         self.errors.push(ValidationError {
             lir_id: None,
@@ -524,6 +560,17 @@ impl Validator {
 
     /// Validates the dataflow and returns the output types of the built objects.
     fn dataflow(
+        &mut self,
+        df: &LirDataflowDescription,
+    ) -> Result<BTreeMap<GlobalId, ReprRelationType>, Abort> {
+        let types = self.objects(df)?;
+        self.exports(df);
+        Ok(types)
+    }
+
+    /// Validates the imports and built objects of the dataflow, and returns the output types
+    /// of the built objects.
+    fn objects(
         &mut self,
         df: &LirDataflowDescription,
     ) -> Result<BTreeMap<GlobalId, ReprRelationType>, Abort> {
@@ -612,8 +659,33 @@ impl Validator {
             }
         }
 
-        self.exports(df);
         Ok(types)
+    }
+
+    /// Sets the `from_arrangement` of every sink export, see
+    /// [`validate_dataflow_choosing_sink_forms`].
+    fn choose_sink_forms(&self, df: &mut LirDataflowDescription) {
+        for sink in df.sink_exports.values_mut() {
+            let Some(output) = self.globals.get(&sink.from) else {
+                continue;
+            };
+            let (Some(forms), Ok(Some(arity))) = (output.available(), output.arity()) else {
+                continue;
+            };
+            if forms.raw {
+                sink.from_arrangement = None;
+                continue;
+            }
+            let Some(key) = forms.keys.first() else {
+                continue;
+            };
+            let (permutation, thinning) = permutation_for_arrangement(key, arity);
+            let mut mfp = MapFilterProject::<LirScalarExpr>::new(arity);
+            mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
+            if let Ok(mfp) = mfp.into_plan() {
+                sink.from_arrangement = Some((key.clone(), mfp));
+            }
+        }
     }
 
     /// Registers the imported collections in `globals`.

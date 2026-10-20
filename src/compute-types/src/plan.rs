@@ -641,6 +641,31 @@ impl LirRelationExpr {
             ambiguous_ids: BTreeSet::default(),
         })
     }
+
+    /// Whether some operator in this plan filters by `mz_now()`.
+    ///
+    /// LIR scalar expressions cannot call `mz_now()`, so temporal filters appear only as the
+    /// bounds of an `MfpPlan`.
+    pub fn has_temporal_bounds(&self) -> bool {
+        let mut stack = vec![self];
+        while let Some(expr) = stack.pop() {
+            let mfp = match &expr.node {
+                LirRelationNode::Mfp { mfp, .. } => Some(mfp),
+                LirRelationNode::FlatMap { mfp_after, .. } => Some(mfp_after),
+                LirRelationNode::ArrangeBy { input_mfp, .. } => Some(input_mfp),
+                LirRelationNode::Get {
+                    plan: GetPlan::Arrangement(_, _, mfp) | GetPlan::Collection(mfp),
+                    ..
+                } => Some(mfp),
+                _ => None,
+            };
+            if mfp.is_some_and(MfpPlan::has_temporal_bounds) {
+                return true;
+            }
+            stack.extend(expr.node.children());
+        }
+        false
+    }
 }
 
 /// How a `Get` stage will be rendered.

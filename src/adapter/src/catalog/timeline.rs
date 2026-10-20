@@ -207,6 +207,7 @@ impl Catalog {
                     }
                     CatalogItem::MaterializedView(MaterializedView {
                         locally_optimized_expr: optimized_expr,
+                        dependencies,
                         ..
                     }) => {
                         // In some cases the timestamp selected may not affect the answer to a
@@ -216,13 +217,18 @@ impl Catalog {
                         // which represents the current progress of the view, then the query will
                         // need to block and wait for the materialized view to advance.
                         timelines.insert(TimelineContext::TimestampDependent);
-                        let item_ids = optimized_expr
-                            .as_ref()
-                            .expect("SQL materialized view has a raw expression")
-                            .depends_on()
-                            .into_iter()
-                            .map(|gid| self.resolve_item_id(&gid));
-                        ids.extend(item_ids);
+                        match optimized_expr {
+                            Some(optimized_expr) => {
+                                let item_ids = optimized_expr
+                                    .depends_on()
+                                    .into_iter()
+                                    .map(|gid| self.resolve_item_id(&gid));
+                                ids.extend(item_ids);
+                            }
+                            // A view defined by an LIR plan depends on what it imports. Index
+                            // imports lead to the collections they index.
+                            None => ids.extend(dependencies.0.iter().copied()),
+                        }
                     }
                     CatalogItem::Table(table) => {
                         timelines.insert(TimelineContext::TimelineDependent(table.timeline()));

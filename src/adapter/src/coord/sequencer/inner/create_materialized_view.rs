@@ -49,6 +49,7 @@ use crate::explain::explain_dataflow;
 use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
+use crate::optimize::from_plan::build_dataflow_from_plan;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::util::ResultExt;
@@ -316,6 +317,13 @@ impl Coordinator {
                 )?
             }
             ExplainStage::GlobalPlan => {
+                if view.raw_expr.is_none() {
+                    coord_bail!(
+                        "materialized view {} has no SQL definition",
+                        self.catalog()
+                            .resolve_full_name(self.catalog().get_entry(&id).name(), None)
+                    );
+                }
                 let Some(plan) = self.catalog().try_get_optimized_plan(&gid).cloned() else {
                     tracing::error!("cannot find {stage} for materialized view {id} in catalog");
                     coord_bail!("cannot find {stage} for materialized view in catalog");
@@ -379,20 +387,14 @@ impl Coordinator {
             ambiguous_columns,
             ..
         } = &plan;
-        let expr = match definition {
-            plan::MaterializedViewDefinition::Query(expr) => expr,
-            plan::MaterializedViewDefinition::Plan { .. } => {
-                return Err(AdapterError::Unsupported(
-                    "CREATE MATERIALIZED VIEW ... FROM PLAN",
-                ));
-            }
-        };
-
         // Validate any references in the materialized view's expression. We do
         // this on the unoptimized plan to better reflect what the user typed.
         // We want to reject queries that depend on log sources, for example,
         // even if we can *technically* optimize that reference away.
-        let expr_depends_on = expr.depends_on();
+        let expr_depends_on = match definition {
+            plan::MaterializedViewDefinition::Query(expr) => expr.depends_on(),
+            plan::MaterializedViewDefinition::Plan { depends_on, .. } => depends_on.clone(),
+        };
         self.catalog()
             .validate_timeline_context(expr_depends_on.iter().copied())?;
         self.validate_system_column_references(*ambiguous_columns, &expr_depends_on)?;
@@ -494,11 +496,20 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(*cluster_id)
             .expect("compute instance does not exist");
-        let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
+        let (item_id, mut global_id) = if let ExplainContext::None = explain_ctx {
             self.allocate_user_id().await?
         } else {
             self.allocate_transient_id()
         };
+        // A plan names its objects with transient ids of its own choosing, which a transient
+        // sink id could collide with.
+        if matches!(
+            plan.materialized_view.definition,
+            plan::MaterializedViewDefinition::Plan { .. }
+        ) && !matches!(explain_ctx, ExplainContext::None)
+        {
+            global_id = GlobalId::Explain;
+        }
 
         let (_, view_id) = self.allocate_transient_id();
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
@@ -507,6 +518,8 @@ impl Coordinator {
             .override_from(&self.cluster_scoped_optimizer_overrides(*cluster_id))
             .override_from(&explain_ctx);
         let optimizer_features = optimizer_config.features.clone();
+        let catalog = self.owned_catalog();
+        let plan_debug_name = debug_name.clone();
 
         // Build an optimizer for this MATERIALIZED VIEW.
         let mut optimizer = optimize::materialized_view::Optimizer::new(
@@ -527,21 +540,30 @@ impl Coordinator {
             || "optimize create materialized view",
             move || {
                 span.in_scope(|| {
-                    let mut pipeline = || -> Result<(
-                        optimize::materialized_view::LocalMirPlan,
-                        optimize::materialized_view::GlobalMirPlan,
+                    // The MIR plans are `None` for a materialized view defined by an LIR plan.
+                    let pipeline = || -> Result<(
+                        Option<optimize::materialized_view::LocalMirPlan>,
+                        Option<optimize::materialized_view::GlobalMirPlan>,
                         optimize::materialized_view::GlobalLirPlan,
                     ), AdapterError> {
                         let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                        let plan::MaterializedViewDefinition::Query(raw_expr) =
-                            &plan.materialized_view.definition
-                        else {
-                            return Err(AdapterError::Internal(
-                                "FROM PLAN materialized views are not optimized".into(),
-                            ));
+                        let raw_expr = match &plan.materialized_view.definition {
+                            plan::MaterializedViewDefinition::Query(raw_expr) => raw_expr.clone(),
+                            plan::MaterializedViewDefinition::Plan { envelope, desc, .. } => {
+                                let global_lir_plan = build_dataflow_from_plan(
+                                    catalog.state(),
+                                    plan.materialized_view.cluster_id,
+                                    envelope,
+                                    global_id,
+                                    desc,
+                                    plan.materialized_view.non_null_assertions.clone(),
+                                    plan.materialized_view.refresh_schedule.clone(),
+                                    plan_debug_name,
+                                )?;
+                                return Ok((None, None, global_lir_plan));
+                            }
                         };
-                        let raw_expr = raw_expr.clone();
 
                         // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
                         let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
@@ -551,7 +573,7 @@ impl Coordinator {
                         let global_lir_plan =
                             optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
 
-                        Ok((local_mir_plan, global_mir_plan, global_lir_plan))
+                        Ok((Some(local_mir_plan), Some(global_mir_plan), global_lir_plan))
                     };
 
                     let stage = match pipeline() {
@@ -653,14 +675,13 @@ impl Coordinator {
             optimizer_features,
             ..
         } = stage;
-        let plan::MaterializedViewDefinition::Query(raw_expr) = definition else {
-            return Err(AdapterError::internal(
-                "create materialized view",
-                "FROM PLAN materialized views are not optimized",
-            ));
+        let raw_expr = match definition {
+            plan::MaterializedViewDefinition::Query(raw_expr) => Some(raw_expr),
+            plan::MaterializedViewDefinition::Plan { .. } => None,
         };
 
-        // Validate the replacement target, if one is given.
+        // Validate the replacement target, if one is given. The description of a view defined
+        // by an LIR plan is its declared schema, which has no keys.
         if let Some(target_id) = replacement_target {
             let Some(target) = self.catalog().get_entry(&target_id).materialized_view() else {
                 return Err(AdapterError::internal(
@@ -728,8 +749,6 @@ impl Coordinator {
         let desc = VersionedRelationDesc::new(global_lir_plan.desc().clone());
         let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
 
-        let local_mir_for_cache = local_mir_plan.expr();
-
         let ops = vec![
             catalog::Op::DropObjects(
                 drop_ids
@@ -742,8 +761,8 @@ impl Coordinator {
                 name: name.clone(),
                 item: CatalogItem::MaterializedView(MaterializedView {
                     create_sql,
-                    raw_expr: Some(raw_expr.into()),
-                    locally_optimized_expr: Some(local_mir_plan.expr().into()),
+                    raw_expr: raw_expr.map(Into::into),
+                    locally_optimized_expr: local_mir_plan.as_ref().map(|p| p.expr().into()),
                     desc,
                     collections,
                     resolved_ids,
@@ -805,25 +824,31 @@ impl Coordinator {
         // Populate the durable expression cache before the catalog
         // transaction and await the write. This way any other envd (or a
         // subsequent bootstrap here) will observe the cached plans +
-        // rendered notices as soon as the item becomes visible.
-        self.catalog()
-            .cache_expressions(
-                global_id,
-                Some(local_mir_for_cache),
-                global_mir_plan.df_desc().clone(),
-                df_desc.clone(),
-                df_meta.clone(),
-                optimizer_features,
-            )
-            .await;
+        // rendered notices as soon as the item becomes visible. A view defined
+        // by an LIR plan has nothing to cache, its plan is validated again on
+        // every boot.
+        if let (Some(local_mir_plan), Some(global_mir_plan)) = (&local_mir_plan, &global_mir_plan) {
+            self.catalog()
+                .cache_expressions(
+                    global_id,
+                    Some(local_mir_plan.expr()),
+                    global_mir_plan.df_desc().clone(),
+                    df_desc.clone(),
+                    df_meta.clone(),
+                    optimizer_features,
+                )
+                .await;
+        }
 
         let transact_result = self
             .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
                 Box::pin(async move {
                     // Save plan structures.
-                    coord
-                        .catalog_mut()
-                        .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
+                    if let Some(global_mir_plan) = global_mir_plan {
+                        coord
+                            .catalog_mut()
+                            .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
+                    }
                     coord
                         .catalog_mut()
                         .set_physical_plan(global_id, df_desc.clone());

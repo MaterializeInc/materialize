@@ -38,6 +38,7 @@ use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, ReprRelationType, Row};
 use mz_sql::catalog::CatalogRole;
+use mz_sql::plan::PlanError;
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::analysis::DerivedBuilder;
@@ -325,50 +326,39 @@ impl<'a> DataflowBuilder<'a> {
             // pipeline, and removes unneeded index imports based on the optimized plan.
             let mut valid_indexes = self.indexes_on(*id).peekable();
             if valid_indexes.peek().is_some() {
-                for (index_id, idx) in valid_indexes {
-                    let index_desc = IndexDesc {
-                        on_id: *id,
-                        key: idx.keys.to_vec(),
-                    };
-                    let entry = self.catalog.get_entry(id);
-                    let desc = entry
-                        .relation_desc()
-                        .expect("indexes can only be built on items with descs");
-                    dataflow.import_index(
-                        index_id,
-                        index_desc,
-                        ReprRelationType::from(desc.typ()),
-                        monotonic,
-                    );
+                let indexes: Vec<_> = valid_indexes
+                    .map(|(index_id, idx)| (index_id, idx.keys.to_vec()))
+                    .collect();
+                for (index_id, keys) in indexes {
+                    self.import_index_into_dataflow(index_id, *id, keys, dataflow, monotonic);
                 }
             } else {
                 drop(valid_indexes);
                 let entry = self.catalog.get_entry(id);
                 // Note that the following match should be kept in sync with `sufficient_collections`.
                 match entry.item() {
-                    CatalogItem::Table(table) => {
-                        dataflow.import_source(*id, table.desc_for(id).into_typ(), monotonic);
-                    }
-                    CatalogItem::Source(source) => {
-                        dataflow.import_source(*id, source.desc.typ().clone(), monotonic);
-                    }
                     CatalogItem::View(view) => {
                         let expr = view.locally_optimized_expr.as_ref();
                         self.import_view_into_dataflow(id, expr, dataflow, features)?;
                     }
                     CatalogItem::MaterializedView(mview) if mview.replacement_target.is_some() => {
                         // Can't read from replacements, use the view definition directly.
-                        let expr = mview
-                            .locally_optimized_expr
-                            .as_ref()
-                            .expect("SQL materialized view has a raw expression");
+                        let Some(expr) = mview.locally_optimized_expr.as_ref() else {
+                            let name = self.catalog.resolve_full_name(entry.name(), None);
+                            return Err(OptimizerError::PlanError(PlanError::Unstructured(
+                                format!(
+                                    "cannot read replacement materialized view {name}, \
+                                     which is defined by an LIR plan"
+                                ),
+                            )));
+                        };
                         self.import_view_into_dataflow(id, expr, dataflow, features)?;
                     }
-                    CatalogItem::MaterializedView(mview) => {
-                        dataflow.import_source(*id, mview.desc_for(id).into_typ(), monotonic);
-                    }
-                    CatalogItem::Log(log) => {
-                        dataflow.import_source(*id, log.variant.desc().typ().clone(), monotonic);
+                    CatalogItem::Table(_)
+                    | CatalogItem::Source(_)
+                    | CatalogItem::MaterializedView(_)
+                    | CatalogItem::Log(_) => {
+                        self.import_persist_collection(id, dataflow, monotonic);
                     }
                     CatalogItem::Sink(_)
                     | CatalogItem::MetricSink(_)
@@ -384,6 +374,59 @@ impl<'a> DataflowBuilder<'a> {
             }
             Ok(())
         })
+    }
+
+    /// Imports the index `index_id` on the collection `on`, arranged by `keys`.
+    pub fn import_index_into_dataflow<P>(
+        &self,
+        index_id: GlobalId,
+        on: GlobalId,
+        keys: Vec<MirScalarExpr>,
+        dataflow: &mut DataflowDescription<P, ()>,
+        monotonic: bool,
+    ) {
+        let index_desc = IndexDesc {
+            on_id: on,
+            key: keys,
+        };
+        let entry = self.catalog.get_entry(&on);
+        let desc = entry
+            .relation_desc()
+            .expect("indexes can only be built on items with descs");
+        dataflow.import_index(
+            index_id,
+            index_desc,
+            ReprRelationType::from(desc.typ()),
+            monotonic,
+        );
+    }
+
+    /// Imports the persist collection `id` of a table, source, materialized view, or log.
+    ///
+    /// Returns `false` and imports nothing for any other item.
+    pub fn import_persist_collection<P>(
+        &self,
+        id: &GlobalId,
+        dataflow: &mut DataflowDescription<P, ()>,
+        monotonic: bool,
+    ) -> bool {
+        let entry = self.catalog.get_entry(id);
+        let typ = match entry.item() {
+            CatalogItem::Table(table) => table.desc_for(id).into_typ(),
+            CatalogItem::Source(source) => source.desc.typ().clone(),
+            CatalogItem::MaterializedView(mview) => mview.desc_for(id).into_typ(),
+            CatalogItem::Log(log) => log.variant.desc().typ().clone(),
+            CatalogItem::View(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::MetricSink(_)
+            | CatalogItem::Index(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Connection(_) => return false,
+        };
+        dataflow.import_source(*id, typ, monotonic);
+        true
     }
 
     /// Imports the view with the specified ID and expression into the provided
@@ -481,7 +524,7 @@ impl<'a> DataflowBuilder<'a> {
     /// Note that materialized views are never monotonic, no matter their definition, because the
     /// self-correcting persist_sink may insert retractions to correct the contents of its output
     /// collection.
-    fn monotonic_object(&self, id: GlobalId, features: &OptimizerFeatures) -> bool {
+    pub fn monotonic_object(&self, id: GlobalId, features: &OptimizerFeatures) -> bool {
         self.monotonic_object_inner(id, &mut BTreeMap::new(), features)
             .unwrap_or_else(|e| {
                 warn!(%id, "error inspecting object for monotonicity: {e}");

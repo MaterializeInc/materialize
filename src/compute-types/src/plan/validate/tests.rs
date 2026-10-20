@@ -1101,6 +1101,44 @@ fn subscribe(
 }
 
 #[mz_ore::test]
+fn chooses_sink_forms() {
+    // The threshold output is only arranged, so the sink must read the arrangement.
+    let mut df = dataflow(
+        &[(T1, 1)],
+        vec![(
+            OUT,
+            threshold(
+                arrange_by(
+                    get_global(T1, AvailableCollections::new_raw()),
+                    arranged(&[0], 1),
+                    1,
+                ),
+                &[0],
+                1,
+            ),
+        )],
+    );
+    subscribe(&mut df, OUT, None);
+    let config = ValidateConfig {
+        enforce_function_allowlist: true,
+    };
+    validate_dataflow_choosing_sink_forms(&mut df, &config).expect("valid");
+    let sink = df.sink_exports.values().next().expect("sink");
+    let (key, _) = sink.from_arrangement.as_ref().expect("arrangement chosen");
+    assert_eq!(key, &vec![col(0)]);
+
+    // A raw collection is preferred.
+    let mut df = dataflow(
+        &[(T1, 1)],
+        vec![(OUT, get_global(T1, AvailableCollections::new_raw()))],
+    );
+    subscribe(&mut df, OUT, Some((vec![col(0)], identity_mfp_plan(1))));
+    validate_dataflow_choosing_sink_forms(&mut df, &config).expect("valid");
+    let sink = df.sink_exports.values().next().expect("sink");
+    assert_eq!(sink.from_arrangement, None);
+}
+
+#[mz_ore::test]
 fn snapshotless_index_serves_sinks_only() {
     // Without its snapshot, the index import provides its arrangement or the raw collection,
     // depending on the replica's configuration. A sink reads either, an object neither.

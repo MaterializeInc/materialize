@@ -127,7 +127,7 @@ impl LirDataflowDescription {
     }
 }
 
-impl DataflowDescription<OptimizedMirRelationExpr, ()> {
+impl<P> DataflowDescription<P, ()> {
     /// Imports a previously exported index.
     ///
     /// This method makes available an index previously exported as `id`, identified
@@ -171,6 +171,13 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
         );
     }
 
+    /// Exports as `id` a sink described by `description`.
+    pub fn export_sink(&mut self, id: GlobalId, description: ComputeSinkDesc<()>) {
+        self.sink_exports.insert(id, description);
+    }
+}
+
+impl DataflowDescription<OptimizedMirRelationExpr, ()> {
     /// Binds to `id` the relation expression `plan`.
     pub fn insert_plan(&mut self, id: GlobalId, plan: OptimizedMirRelationExpr) {
         self.objects_to_build.push(BuildDesc { id, plan });
@@ -199,11 +206,6 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
             }),
         );
         self.index_exports.insert(id, (description, on_type));
-    }
-
-    /// Exports as `id` a sink described by `description`.
-    pub fn export_sink(&mut self, id: GlobalId, description: ComputeSinkDesc<()>) {
-        self.sink_exports.insert(id, description);
     }
 
     /// Returns true iff `id` is already imported.
