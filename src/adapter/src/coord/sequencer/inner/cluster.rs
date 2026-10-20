@@ -1853,7 +1853,7 @@ impl Coordinator {
 
     pub(crate) async fn sequence_alter_cluster_replica_rename(
         &mut self,
-        session: &Session,
+        ctx: &mut ExecuteContext,
         AlterClusterReplicaRenamePlan {
             cluster_id,
             replica_id,
@@ -1867,7 +1867,10 @@ impl Coordinator {
             name,
             to_name,
         };
-        match self.catalog_transact(Some(session), vec![op]).await {
+        match self
+            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
+            .await
+        {
             Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::ClusterReplica)),
             Err(err) => Err(err),
         }
