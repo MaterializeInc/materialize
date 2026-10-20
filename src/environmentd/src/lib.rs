@@ -27,6 +27,7 @@ use std::{env, io};
 use anyhow::{Context, anyhow};
 use derivative::Derivative;
 use futures::FutureExt;
+use futures::future::Shared;
 use ipnet::IpNet;
 use mz_adapter::config::{
     SystemParameterSyncClientConfig, SystemParameterSyncConfig, system_parameter_sync,
@@ -278,8 +279,7 @@ impl Listener<SqlListenerConfig> {
         active_connection_counter: ConnectionCounter,
         tls_reloading_context: Option<ReloadingSslContext>,
         frontegg: Option<FronteggAuthenticator>,
-        adapter_client: AdapterClient,
-        oidc: GenericOidcAuthenticator,
+        booted: Shared<oneshot::Receiver<mz_pgwire::Booted>>,
         metrics: MetricsConfig,
         helm_chart_version: Option<String>,
     ) -> ListenerHandle {
@@ -297,10 +297,9 @@ impl Listener<SqlListenerConfig> {
             let sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
                 label,
                 tls,
-                adapter_client,
+                booted,
                 authenticator_kind: self.config.authenticator_kind,
                 frontegg,
-                oidc,
                 metrics,
                 active_connection_counter,
                 helm_chart_version,
@@ -454,6 +453,32 @@ impl Listeners {
                 replica_http_locator: Arc::clone(&config.controller.replica_http_locator),
             };
             http_listener_handles.insert(name.clone(), listener.serve_http(http_config).await);
+        }
+
+        // Launch SQL servers.
+        //
+        // These also start before initialization, so that clients connecting
+        // while we boot are told so immediately rather than waiting in the
+        // kernel's accept queue, which can fill and then drop new connections.
+        let (pgwire_booted_tx, pgwire_booted_rx) = oneshot::channel();
+        let pgwire_booted_rx = pgwire_booted_rx.shared();
+        let pgwire_metrics = mz_pgwire::MetricsConfig::register_into(&config.metrics_registry);
+        let mut sql_listener_handles = BTreeMap::new();
+        for (name, listener) in self.sql {
+            sql_listener_handles.insert(
+                name.clone(),
+                listener
+                    .serve_sql(
+                        name,
+                        active_connection_counter.clone(),
+                        tls_reloading_context.clone(),
+                        config.frontegg.clone(),
+                        pgwire_booted_rx.clone(),
+                        pgwire_metrics.clone(),
+                        config.helm_chart_version.clone(),
+                    )
+                    .await,
+            );
         }
 
         info!(
@@ -854,28 +879,12 @@ impl Listeners {
         adapter_client_tx
             .send(adapter_client.clone())
             .expect("internal HTTP server should not drop first");
-
-        let metrics = mz_pgwire::MetricsConfig::register_into(&config.metrics_registry);
-
-        // Launch SQL server.
-        let mut sql_listener_handles = BTreeMap::new();
-        for (name, listener) in self.sql {
-            sql_listener_handles.insert(
-                name.clone(),
-                listener
-                    .serve_sql(
-                        name,
-                        active_connection_counter.clone(),
-                        tls_reloading_context.clone(),
-                        config.frontegg.clone(),
-                        adapter_client.clone(),
-                        oidc.clone(),
-                        metrics.clone(),
-                        config.helm_chart_version.clone(),
-                    )
-                    .await,
-            );
-        }
+        pgwire_booted_tx
+            .send(mz_pgwire::Booted {
+                adapter_client: adapter_client.clone(),
+                oidc: oidc.clone(),
+            })
+            .expect("pgwire_booted_rx is held until serve returns");
 
         // Start telemetry reporting loop.
         if let Some(segment_client) = segment_client {
