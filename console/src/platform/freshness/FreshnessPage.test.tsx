@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { describe, expect, it } from "vitest";
@@ -132,6 +132,22 @@ describe("FreshnessPage schema scope", () => {
 
     expect(await screen.findByText("analytics.public")).toBeVisible();
     expect(screen.queryByText("quickstart")).not.toBeInTheDocument();
+  });
+
+  it("groups schemas under their database, as the Shell's picker does", async () => {
+    await renderAt("/?scope=schema");
+
+    await userEvent.click(
+      await screen.findByRole("combobox", { name: "Schema" }),
+    );
+
+    expect(
+      within(screen.getByRole("listbox"))
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["public", "public"]);
+    expect(screen.getByText("analytics")).toBeVisible();
+    expect(screen.getByText("materialize")).toBeVisible();
   });
 
   it("says so rather than showing a different schema", async () => {

@@ -29,6 +29,7 @@ import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import ErrorBox from "~/components/ErrorBox";
 import { DataPoint } from "~/components/FreshnessGraph/types";
 import { LoadingContainer } from "~/components/LoadingContainer";
+import SchemaSelect, { SchemaOption } from "~/components/SchemaSelect";
 import SearchableSelect, {
   SelectOption,
 } from "~/components/SearchableSelect/SearchableSelect";
@@ -310,18 +311,24 @@ const FreshnessPage = () => {
   const thresholdControl = useThresholdControl(threshold, setThreshold);
 
   const scopeLabels = SCOPE_LABELS[scope];
-  const options: SelectOption[] = (
+  // The shape `SchemaSelect` takes, which groups schemas under their
+  // database. A cluster has none.
+  const options: SchemaOption[] = (
     scope === "cluster"
       ? clusters
           .filter((c) => !isSystemCluster(c.id))
-          .map((c) => ({ id: c.id, name: c.name }))
+          .map((c) => ({ id: c.id, name: c.name, databaseName: null }))
       : schemas.map((s) => ({
           id: s.id,
-          name: qualifiedSchemaName(s.databaseName, s.name),
+          name: s.name,
+          databaseName: s.databaseName,
         }))
-  ).sort((a, b) => a.name.localeCompare(b.name));
+  ).sort((a, b) =>
+    qualifiedSchemaName(a.databaseName, a.name).localeCompare(
+      qualifiedSchemaName(b.databaseName, b.name),
+    ),
+  );
   const selectedId = scope === "cluster" ? clusterId : schemaId;
-  const setSelectedId = scope === "cluster" ? setClusterId : setSchemaId;
   // An absent param falls back to the first option. A param naming one that
   // is not there does not: an old link, or one to a dropped or system cluster
   // or schema, would otherwise show a different one under the name the URL
@@ -330,6 +337,27 @@ const FreshnessPage = () => {
     ? options.find((option) => option.id === selectedId)
     : options[0];
   const notFound = Boolean(selectedId) && selected === undefined;
+  const pickerProps = {
+    ariaLabel: scopeLabels.menu,
+    placeholder: `Select a ${scopeLabels.noun}`,
+    // Cluster and schema names run long and are often distinguished only by
+    // their last few characters, so a truncated one is unusable.
+    // `max-content` rather than the base `fit-content`, which resolves
+    // against the select's own container and so cannot grow past the closed
+    // control.
+    containerWidth: "max-content",
+    menuWidth: "240px",
+    leftIcon:
+      scope === "cluster" ? (
+        <ClustersIcon
+          height="4"
+          width="4"
+          color={colors.foreground.secondary}
+        />
+      ) : (
+        <SchemaIcon height="4" width="4" color={colors.foreground.secondary} />
+      ),
+  };
   const scopeError = scope === "cluster" ? clustersError : schemasError;
   const scopeReady = scope === "cluster" ? clustersReady : schemasReady;
 
@@ -423,37 +451,21 @@ const FreshnessPage = () => {
               ))}
             </Select>
             <Box minWidth="52">
-              <SearchableSelect<SelectOption, false>
-                ariaLabel={scopeLabels.menu}
-                // Cluster and schema names run long and are often distinguished
-                // only by their last few characters, so a truncated one is
-                // unusable.
-                // `max-content` rather than the base `fit-content`, which
-                // resolves against the select's own container and so cannot
-                // grow past the closed control.
-                containerWidth="max-content"
-                menuWidth="240px"
-                options={options}
-                value={
-                  selected ? { id: selected.id, name: selected.name } : null
-                }
-                onChange={(option) => option && setSelectedId(option.id)}
-                leftIcon={
-                  scope === "cluster" ? (
-                    <ClustersIcon
-                      height="4"
-                      width="4"
-                      color={colors.foreground.secondary}
-                    />
-                  ) : (
-                    <SchemaIcon
-                      height="4"
-                      width="4"
-                      color={colors.foreground.secondary}
-                    />
-                  )
-                }
-              />
+              {scope === "cluster" ? (
+                <SearchableSelect<SchemaOption, false>
+                  {...pickerProps}
+                  options={options}
+                  value={selected ?? null}
+                  onChange={(option) => option && setClusterId(option.id)}
+                />
+              ) : (
+                <SchemaSelect
+                  {...pickerProps}
+                  schemas={options}
+                  value={selected ?? null}
+                  onChange={(option) => option && setSchemaId(option.id)}
+                />
+              )}
             </Box>
             <Box minWidth="60">
               <SearchableSelect<SelectOption, true>
