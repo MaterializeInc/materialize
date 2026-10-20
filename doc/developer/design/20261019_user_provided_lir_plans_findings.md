@@ -41,7 +41,10 @@ Ids appear only in the stored `create_sql`, which `lir_plans.slt` checks through
 
 Placeholders inside an envelope are `GlobalId::Transient`, and `parse_user_envelope` (`src/sql/src/plan/lir_plan.rs:45`) rejects a non-transient import id, object id, or `Get` of a global id.
 The check cannot live in `validate_dataflow`, because optimizer dataflows use user and system ids, so it belongs to envelope resolution.
-Since a plan's object ids are transient ids the user chose, a transient sink id could collide with them, so `EXPLAIN ... FOR CREATE ... FROM PLAN` exports its sink as `GlobalId::Explain` (`src/adapter/src/coord/sequencer/inner/create_materialized_view.rs:510`).
+Since a plan's object ids are transient ids the user chose, a transient sink id could collide with them, so `EXPLAIN ... FOR CREATE ... FROM PLAN` exports its sink as `GlobalId::Explain` (`src/adapter/src/coord/sequencer/inner/create_materialized_view.rs:514`).
+Installing the user's placeholders unchanged let two dataflows share an object id, since the optimizer allocates transient ids from the same space, and compute logging keys `mz_lir_mapping` by object id, so dropping one view removed the other's mapping.
+After validation, `build_dataflow_from_plan` therefore renumbers every object to an id from the coordinator's transient id allocator, at creation and at boot (`src/adapter/src/optimize/from_plan.rs:184`, test `test_lir_plan_object_ids_are_fresh` in `src/environmentd/tests/server.rs`, which fails without the renumbering).
+Validation errors still name the plan's own placeholders, while `EXPLAIN` of an installed view shows the fresh ids.
 Only tables have relation versions in the SQL catalog interface (`CatalogItem::latest_version`), so purification records the root version for every other import and planning reads it at its latest collection, as SQL references do (`version_selector`, `src/sql/src/plan/lir_plan.rs:190`).
 After `APPLY REPLACEMENT` on an imported materialized view, a plan view therefore reads the new collection.
 
@@ -61,8 +64,14 @@ The envelope is also parsed up to three times per statement, by name resolution,
 
 `EXPLAIN PHYSICAL PLAN AS LIR JSON FOR MATERIALIZED VIEW` prints the envelope of an installed view (`extract_envelope`, `src/compute-types/src/plan/envelope.rs:255`), and other explainees and stages are rejected.
 Extraction replaces each source import's pushed-down operators with a leading `Mfp` object over the raw import, planned with `MapFilterProject::into_plan` as rendering does, because translating to LIR first fails on the `mz_now()` of temporal predicates.
-Under soft assertions, `check_extract_round_trip` (`envelope.rs:424`) extracts, prints, parses, and maps back every optimizer dataflow, and `bin/sqllogictest --optimized -- test/sqllogictest/lir_plans_explain.slt` plus `test/sqllogictest/explain/*.slt`, `materialized_views.slt`, `joins.slt`, `topk.slt`, `with_mutually_recursive.slt`, `temporal.slt`, `aggregates.slt`, `ldbc_bi.slt`, `ldbc_bi_eager.slt`, `tpch_create_index.slt`, `tpch_create_materialized_view.slt`, `tpch_select.slt`, `transform/*.slt`, `transform/fold_vs_dataflow/*.slt`, `session-window-wmr.slt`, `recursive_type_unioning.slt`, `window_funcs.slt`, `outer_join.slt`, `subquery.slt`, `temporal_bucketing.slt`, `reduce_mfp.slt`, `group_size_hints.slt`, `jsonb.slt`, `list.slt`, `record.slt`, `arrays.slt` and `map.slt` passed with no mismatch, 5746 records including every builtin index at startup, in local runs on 2026-10-20 at commit `28edf0d50d`.
+With `MZ_LIR_ROUND_TRIP_CHECK=1` and soft assertions, `check_extract_round_trip` (`envelope.rs:424`, gated at `src/compute-types/src/plan.rs:55`) extracts, prints, parses, and maps back every optimizer dataflow, and `bin/sqllogictest --optimized -- test/sqllogictest/lir_plans_explain.slt` plus `test/sqllogictest/explain/*.slt`, `materialized_views.slt`, `joins.slt`, `topk.slt`, `with_mutually_recursive.slt`, `temporal.slt`, `aggregates.slt`, `ldbc_bi.slt`, `ldbc_bi_eager.slt`, `tpch_create_index.slt`, `tpch_create_materialized_view.slt`, `tpch_select.slt`, `transform/*.slt`, `transform/fold_vs_dataflow/*.slt`, `session-window-wmr.slt`, `recursive_type_unioning.slt`, `window_funcs.slt`, `outer_join.slt`, `subquery.slt`, `temporal_bucketing.slt`, `reduce_mfp.slt`, `group_size_hints.slt`, `jsonb.slt`, `list.slt`, `record.slt`, `arrays.slt` and `map.slt` passed with no mismatch, 5746 records including every builtin index at startup, in local runs on 2026-10-20 at commit `28edf0d50d`.
 The pushdown object costs performance that was not measured: rendering passes source operators to `persist_source`, which reads only the demanded columns and filters while decoding, while an `Mfp` object sees full-width rows.
+The validator still runs on every optimizer dataflow under soft assertions, which every SLT run enables, while the round trip is opt-in.
+A temporary probe in `finalize_dataflow` summed the time of both checks over `memcap 40G bin/sqllogictest --optimized -- test/sqllogictest/window_funcs.slt test/sqllogictest/list.slt test/sqllogictest/numeric.slt test/sqllogictest/jsonb.slt`, 2068 records and 703 dataflows, in local runs on 2026-10-20 at commit `be82b8213a`.
+The validator took 0.30 s in total, about 0.43 ms per dataflow, in each of four runs, and the round trip took 0.66 and 0.67 s in two runs with it enabled.
+Runs with the validator skipped took 61.9, 61.0 and 64.6 s of user CPU and 24.5, 24.2 and 25.9 s of wall time, against 61.0 and 63.0 s of user CPU and 24.2 and 25.4 s of wall time with it, so the difference is within the noise of the machine, which another run at high load inflated to 216 s of user CPU.
+On this workload, the validator costs about 0.5% of the CPU time of the run, and the round trip about twice the validator.
+
 A relation that has both a persist import with non-identity operators and index imports cannot be extracted, because the pushdown object would hide the indexes, and the sweep produced no such dataflow (test `extract_rejects_pushdown_on_indexed_relation`).
 
 In one local run before commit `fa03b94f0c`, with a temporary probe printing the JSON depth in `check_extract_round_trip`, the deepest optimizer envelope of the sweep nested 128 JSON levels for SLT queries and 107 for builtin indexes (`mz_internal.pg_type_all_databases_ind`).
@@ -170,10 +179,11 @@ Across the 11 seeds, about 17,500 mutants were generated and about 4,700 rendere
 The coverage of accepted mutants is weak: in those runs, about 60% of them came from benign operators (`generic_int`, `lir_id`, `generic_array`), and some operators apply rarely, so the result shows soundness against single local mutations of these shapes, not in general.
 
 The one failure was in the harness and is a finding about consumers of user-defined collections.
-The validator accepts constant rows with any diff, including `i64::MAX`, and the replica rendered and persisted such a mutant without trouble, since collections carry multiplicities.
+The validator accepted constant rows with any diff, including `i64::MAX`, and the replica rendered and persisted such a mutant without trouble, since collections carry multiplicities.
 The harness's read-back expanded the sink output into one row per copy and exhausted the test's memory, until it counted multiplicities instead (`Driver::peek_count`, `src/clusterd-test-driver/src/driver.rs:206`, commit `481e769051`).
-Crafted diffs can also overflow the `count` and `sum` accumulators of a reduction, as reading `src/compute/src/render/reduce.rs` shows, which panics under `ore_overflowing_behavior=panic`, as CI runs, and soft-panics in production, and the type rules do not bound diffs.
-Readers of collections that user plans define must not assume small diffs.
+Crafted diffs can also overflow the `count` and `sum` accumulators of a reduction, as reading `src/compute/src/render/reduce.rs` shows, which panics under `ore_overflowing_behavior=panic`, as CI runs, and soft-panics in production.
+Constants are now bounded: in user plan mode, the validator requires every constant row diff to be between -1 and 1 (test `rejects_large_constant_diffs_in_user_plans`).
+The residual risk is joins over large legitimate inputs, which multiply diffs as the joins of SQL queries do, so readers of collections that user plans define face the same diffs as readers of SQL views.
 
 The panic sites the validator rejects were found by reading rendering and evaluation code, and each has a unit test in `src/compute-types/src/plan/validate/tests.rs`.
 
