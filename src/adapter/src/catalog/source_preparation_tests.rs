@@ -397,8 +397,16 @@ async fn source_command_preserves_only_observed_outcomes() {
                 }
                 Err(CommandExecutionError::Error(error)) => return Err(error),
                 Err(CommandExecutionError::Pending { index, work }) => match work {
+                    CommandWork::Connection(_) | CommandWork::ConnectionSecret(_) => {
+                        unreachable!("source command")
+                    }
                     CommandWork::Prepare(request) => {
-                        responses.insert(index, request.execute(&storage(catalog)).await);
+                        responses.insert(
+                            index,
+                            crate::catalog::CommandResponse::Source(
+                                request.execute(&storage(catalog)).await,
+                            ),
+                        );
                     }
                     CommandWork::Allocate(keys) => {
                         let ids = catalog
