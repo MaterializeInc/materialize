@@ -40,7 +40,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from datalog2lir import permutation_for_arrangement  # noqa: E402
+from datalog2lir import permutation_for_arrangement
 
 
 class RewriteError(Exception):
@@ -102,9 +102,12 @@ class Rewriter:
         self.envelope = envelope
         all_nodes = [n for o in envelope["objects"] for n in nodes(o["plan"])]
         self.next_lir_id = max(n["lir_id"] for n in all_nodes) + 1
-        locals_ = [
-            n["node"]["Let"]["id"] for n in all_nodes if "Let" in n["node"]
-        ] + [i for n in all_nodes if "LetRec" in n["node"] for i in n["node"]["LetRec"]["ids"]]
+        locals_ = [n["node"]["Let"]["id"] for n in all_nodes if "Let" in n["node"]] + [
+            i
+            for n in all_nodes
+            if "LetRec" in n["node"]
+            for i in n["node"]["LetRec"]["ids"]
+        ]
         self.next_local = max(locals_, default=0) + 1
 
     def expr(self, node: dict) -> dict:
@@ -159,7 +162,9 @@ class Rewriter:
         left_arity = len(stage["stream_thinning"])
         right_arity = len(right["node"]["ArrangeBy"]["forms"]["arranged"][0][1])
         if stage["stream_thinning"] != list(range(left_arity)):
-            raise RewriteError("expected the cross join to keep the left input's columns")
+            raise RewriteError(
+                "expected the cross join to keep the left input's columns"
+            )
 
         # The closure reads the left columns, then the right columns, because both
         # inputs are arranged by the empty key.
@@ -171,7 +176,9 @@ class Rewriter:
             call = eq.get("CallBinary", {})
             if call.get("func") != {"Eq": None}:
                 raise RewriteError(f"expected an equality, found {eq}")
-            (a, a_name), (b, b_name) = sorted([column(call["expr1"]), column(call["expr2"])])
+            (a, a_name), (b, b_name) = sorted(
+                [column(call["expr1"]), column(call["expr2"])]
+            )
             if not (a < left_arity <= b):
                 raise RewriteError(
                     f"{a_name} = {b_name} does not relate the left and the right input"

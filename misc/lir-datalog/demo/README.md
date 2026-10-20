@@ -47,17 +47,19 @@ asciinema play misc/lir-datalog/demo/demo.cast
 ## The improvement
 
 The optimizer cannot produce the improved plan from the view's SQL, because it does not split a disjunction of join conditions into a union of joins.
-The SQL can be rewritten by hand into `t.src IN (SELECT account FROM flagged) OR t.dst IN (SELECT account FROM flagged)`, which the optimizer plans with equi-joins, but its plan computes each membership test separately, with a negation and two more joins to tell matches from non-matches, and is larger than the edited plan.
+The SQL can be rewritten by hand into `t.src IN (SELECT account FROM flagged) OR t.dst IN (SELECT account FROM flagged)`, which the optimizer plans with equi-joins, but its plan computes each membership test separately, with negations and further joins to tell matches from non-matches, and is larger than the edited plan.
 
 With 50000 transfers and 1000 flagged accounts, on a local `bin/environmentd --optimized` with the default `quickstart` cluster:
 
 | Dataflow | Hydration | CPU time | Arranged records | Arranged size |
 |---|---|---|---|---|
-| SQL view | 8.8 s | 64.9 s | 204964 | 1826 kB |
-| Edited plan | under 0.1 s | 1.1 s | 254964 | 2637 kB |
+| SQL view | 10.0 s | 10.9 s | 204964 | 1826 kB |
+| Edited plan | 0.1 s | 0.4 s | 254964 | 2637 kB |
+
+Hydration is how long the first `SELECT count(*)` after `CREATE` waits, and CPU time is the scheduling time of the dataflow's root operator after hydration, from `mz_introspection.mz_scheduling_elapsed`.
 
 The cross join compares every pair with every flagged account, 50 million comparisons, while the equi-joins only visit matches.
-The edited plan keeps one more arrangement of the pairs, because each equi-join reads them by a different key, which costs about 30% more memory.
+The edited plan keeps one more arrangement of the pairs, because each equi-join reads them by a different key, which costs about 25% more arranged records and 45% more arranged bytes.
 
 ## Files
 
