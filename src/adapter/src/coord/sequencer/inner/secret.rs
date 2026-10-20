@@ -317,13 +317,8 @@ impl Coordinator {
         // the secret is persisted to the secret store but not the catalog), the
         // secret will be cleaned up during next envd boot.
         //
-        // ROTATE KEYS is a read-modify-write of the connection's `create_sql`
-        // (see `rotate_keys_ensure` below: it re-reads the entry, rewrites the
-        // PUBLIC KEY options, and writes the result back via `Op::UpdateItem`).
-        // Arm the `create_sql`-hash check so a concurrent `ALTER CONNECTION SET`
-        // committing inside the off-thread window fails ROTATE with
-        // `ConcurrentDependencyMutation` instead of being silently clobbered by
-        // the blind write at the end.
+        // Observing the definition prevents the rotated-key write from
+        // overwriting a concurrent ALTER CONNECTION SET.
         let validity = PlanValidity::new(
             self.catalog(),
             BTreeSet::from_iter(std::iter::once(id)),
@@ -331,7 +326,7 @@ impl Coordinator {
             None,
             ctx.session().role_metadata().clone(),
         )
-        .with_dependency_hash_check(self.catalog());
+        .with_dependency_definition_check(self.catalog());
         let stage = SecretStage::RotateKeysEnsure(RotateKeysSecretEnsure { validity, id });
         self.sequence_staged(ctx, Span::current(), stage).await;
     }
@@ -415,8 +410,9 @@ impl Coordinator {
     async fn rotate_keys_finish(
         &mut self,
         session: &Session,
-        RotateKeysSecretFinish { ops, validity: _ }: RotateKeysSecretFinish,
+        RotateKeysSecretFinish { mut ops, validity }: RotateKeysSecretFinish,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
+        ops.splice(0..0, validity.catalog_preconditions());
         self.catalog_transact(Some(session), ops).await?;
         Ok(StageResult::Response(ExecuteResponse::AlteredObject(
             ObjectType::Connection,

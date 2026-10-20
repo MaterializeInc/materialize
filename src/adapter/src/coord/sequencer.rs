@@ -496,7 +496,7 @@ impl Coordinator {
                     self.sequence_alter_sink_prepare(ctx, plan).await;
                 }
                 Plan::AlterSource(plan) => {
-                    let result = self.sequence_alter_source(ctx.session_mut(), plan).await;
+                    let result = self.sequence_alter_source(&mut ctx, plan).await;
                     ctx.retire(result);
                 }
                 Plan::AlterSystemSet(plan) => {

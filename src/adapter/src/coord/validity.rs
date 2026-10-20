@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::hash::{Hash, Hasher};
 
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
@@ -18,7 +17,7 @@ use mz_sql::rbac::UnauthorizedError;
 use mz_sql::session::user::RoleMetadata;
 
 use crate::AdapterError;
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, CatalogReadRecorder, CatalogReadSet};
 
 // The inner fields of PlanValidity are not pub to prevent callers from using them in SQL logic.
 // Callers are responsible for tracking their own needed IDs explicitly and not using
@@ -33,28 +32,17 @@ use crate::catalog::Catalog;
 /// roles surface as a user-facing error instead of panicking later when the persisted SQL is
 /// re-parsed during catalog application.
 ///
-/// Opt-in: callers that perform a read-modify-write of a dependency's `create_sql` (e.g.
-/// `ALTER CONNECTION ... ROTATE KEYS`, see SQL-272) can additionally arm a `create_sql`-hash
-/// check via [`Self::with_dependency_hash_check`]. When armed, `check` re-hashes each
-/// dependency's `create_sql` and fails with [`AdapterError::ConcurrentDependencyMutation`] on a
-/// mismatch. The check must stay opt-in: a benign concurrent `RENAME` rewrites the dependency's
-/// `create_sql` and would otherwise spuriously fail read-only plans like peeks and SUBSCRIBE,
-/// whose optimized dataflows are unaffected by a rename (dependencies are referenced by stable
-/// id).
+/// Read-modify-write plans can opt into definition observations with
+/// [`Self::with_dependency_definition_check`]. Read-only plans retain identity
+/// checks because renames do not invalidate their stable-ID references.
 #[derive(Debug, Clone)]
 pub struct PlanValidity {
     /// The most recent revision at which this plan was verified as valid.
     transient_revision: u64,
     /// Objects on which the plan depends.
     dependency_ids: BTreeSet<CatalogItemId>,
-    /// Hash of each dependency's `create_sql` at the time this plan was built. Empty unless
-    /// `check_dependency_hashes` is set. When set, `check` compares the live hash against the
-    /// captured one; a mismatch means the dependency was concurrently modified.
-    dependency_hashes: BTreeMap<CatalogItemId, u64>,
-    /// Whether `check` should compare `dependency_hashes` against the catalog. Off by default;
-    /// armed by [`Self::with_dependency_hash_check`] for the narrow set of plans that
-    /// read-modify-write a dependency's `create_sql`.
-    check_dependency_hashes: bool,
+    dependency_reads: Option<BTreeMap<CatalogItemId, CatalogReadSet>>,
+    catalog_reads: Option<CatalogReadRecorder>,
     cluster_id: Option<ComputeInstanceId>,
     replica_id: Option<ReplicaId>,
     role_metadata: RoleMetadata,
@@ -71,26 +59,44 @@ impl PlanValidity {
         PlanValidity {
             transient_revision: catalog.transient_revision(),
             dependency_ids,
-            dependency_hashes: BTreeMap::new(),
-            check_dependency_hashes: false,
+            dependency_reads: None,
+            catalog_reads: None,
             cluster_id,
             replica_id,
             role_metadata,
         }
     }
 
-    /// Arm the `create_sql`-hash check on this validity. Use only for plans that
-    /// read-modify-write a dependency's `create_sql` (e.g. `ALTER CONNECTION ... ROTATE KEYS`).
-    /// Snapshots the current `create_sql` of every id already in `dependency_ids`; subsequent
-    /// calls to [`Self::extend_dependencies`] will also capture hashes.
-    pub fn with_dependency_hash_check(mut self, catalog: &Catalog) -> Self {
-        self.check_dependency_hashes = true;
-        self.dependency_hashes = self
-            .dependency_ids
-            .iter()
-            .filter_map(|id| hash_item_create_sql(catalog, *id).map(|h| (*id, h)))
-            .collect();
+    /// Observe dependency definitions for plans that read-modify-write stored SQL.
+    pub fn with_dependency_definition_check(mut self, catalog: &Catalog) -> Self {
+        self.dependency_reads = Some(
+            self.dependency_ids
+                .iter()
+                .map(|id| (*id, observe_definition(catalog, *id)))
+                .collect(),
+        );
         self
+    }
+
+    /// Checks the recorder's current observations, including reads added after construction.
+    pub fn with_catalog_reads(mut self, reads: Option<CatalogReadRecorder>) -> Self {
+        self.catalog_reads = reads;
+        self
+    }
+
+    /// Captures catalog predicates to validate before the prepared writes.
+    pub fn catalog_preconditions(&self) -> Vec<crate::catalog::Op> {
+        let mut ops: Vec<_> = self
+            .dependency_reads
+            .iter()
+            .flat_map(|reads| reads.values())
+            .cloned()
+            .map(crate::catalog::Op::ValidateReads)
+            .collect();
+        if let Some(reads) = &self.catalog_reads {
+            ops.push(crate::catalog::Op::ValidateReads(reads.snapshot()));
+        }
+        ops
     }
 
     pub fn extend_dependencies(
@@ -99,20 +105,18 @@ impl PlanValidity {
         ids: impl IntoIterator<Item = CatalogItemId>,
     ) {
         for id in ids {
-            if self.dependency_ids.insert(id) && self.check_dependency_hashes {
-                if let Some(hash) = hash_item_create_sql(catalog, id) {
-                    self.dependency_hashes.insert(id, hash);
+            if self.dependency_ids.insert(id) {
+                if let Some(reads) = &mut self.dependency_reads {
+                    reads.insert(id, observe_definition(catalog, id));
                 }
             }
         }
     }
 
-    /// Returns an error if the current catalog no longer has all dependencies, or — when the
-    /// hash check is armed via [`Self::with_dependency_hash_check`] — if any dependency's
-    /// `create_sql` has changed since this `PlanValidity` was built.
+    /// Reject missing dependencies or changes to explicitly observed definitions.
     pub fn check(&mut self, catalog: &Catalog) -> Result<(), AdapterError> {
         if self.transient_revision == catalog.transient_revision() {
-            return Ok(());
+            return self.check_catalog_reads(catalog);
         }
         // If the transient revision changed, we have to recheck. If successful, bump the revision
         // so next check uses the above fast path.
@@ -133,20 +137,16 @@ impl PlanValidity {
                 }
             }
         }
-        // Ids don't mutate and aren't reused, so a missing entry means the dependency was
-        // dropped. When the hash check is armed, a `create_sql` mismatch additionally means the
-        // dependency was concurrently modified between plan time and now.
         for id in self.dependency_ids.iter() {
-            let Some(entry) = catalog.try_get_entry(id) else {
+            if catalog.try_get_entry(id).is_none() {
                 return Err(AdapterError::ConcurrentDependencyDrop {
                     dependency_kind: "catalog item",
                     dependency_id: id.to_string(),
                 });
-            };
-            if self.check_dependency_hashes {
-                if let Some(expected) = self.dependency_hashes.get(id) {
-                    let current = hash_create_sql(entry.create_sql());
-                    if current != *expected {
+            }
+            if let Some(reads) = &self.dependency_reads {
+                if let Some(reads) = reads.get(id) {
+                    if reads.check(catalog.state()).is_err() {
                         return Err(AdapterError::ConcurrentDependencyMutation {
                             dependency_id: id.to_string(),
                         });
@@ -181,22 +181,28 @@ impl PlanValidity {
                 ),
             ));
         }
+        self.check_catalog_reads(catalog)?;
         self.transient_revision = catalog.transient_revision();
+        Ok(())
+    }
+
+    fn check_catalog_reads(&self, catalog: &Catalog) -> Result<(), AdapterError> {
+        // Preparation can add observations without changing the catalog revision.
+        if let Some(reads) = &self.catalog_reads {
+            reads.snapshot().check(catalog.state())?;
+        }
         Ok(())
     }
 }
 
-/// Returns the hash of `id`'s `create_sql`, or `None` if the catalog has no such entry.
-fn hash_item_create_sql(catalog: &Catalog, id: CatalogItemId) -> Option<u64> {
-    catalog
-        .try_get_entry(&id)
-        .map(|entry| hash_create_sql(entry.create_sql()))
-}
-
-fn hash_create_sql(sql: &str) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    sql.hash(&mut h);
-    h.finish()
+fn observe_definition(catalog: &Catalog, id: CatalogItemId) -> CatalogReadSet {
+    let mut reads = CatalogReadSet::default();
+    let _ = reads.observe(catalog.state(), "dependency definition", move |state| {
+        state
+            .try_get_entry(&id)
+            .map(|entry| entry.create_sql().to_owned())
+    });
+    reads
 }
 
 #[cfg(test)]
@@ -211,7 +217,7 @@ mod tests {
     use mz_ore::{assert_contains, assert_ok};
     use mz_repr::CatalogItemId;
     use mz_repr::role_id::RoleId;
-    use mz_sql::catalog::RoleAttributesRaw;
+    use mz_sql::catalog::{CatalogDatabase, CatalogSchema, RoleAttributesRaw, SessionCatalog};
     use mz_sql::session::metadata::SessionMetadata;
     use uuid::Uuid;
 
@@ -277,7 +283,8 @@ mod tests {
             let some_system_cluster = catalog
                 .clusters()
                 .find(|c| matches!(c.id, ClusterId::System(_)))
-                .expect("must exist");
+                .expect("must exist")
+                .id;
 
             // Plan generation and result assertion closures.
             let tests: &[(
@@ -301,7 +308,7 @@ mod tests {
                 ),
                 (
                     Box::new(|validity, _catalog| {
-                        validity.cluster_id = Some(some_system_cluster.id);
+                        validity.cluster_id = Some(some_system_cluster);
                         validity.replica_id = Some(ReplicaId::User(4));
                     }),
                     Box::new(|res| {
@@ -309,7 +316,7 @@ mod tests {
                             res.expect_err("must err").to_string(),
                             format!(
                                 "cluster replica 'u4 of cluster {}' was dropped",
-                                some_system_cluster.id
+                                some_system_cluster
                             ),
                         )
                     }),
@@ -366,52 +373,103 @@ mod tests {
                 check_res(res);
             }
 
-            // Pick any existing catalog entry to stand in as a "live" dependency. A real id is
-            // required so `check`'s drop probe (`try_get_entry`) succeeds and we exercise the
-            // hash branch.
-            let live_id = catalog
-                .entries()
-                .next()
-                .expect("debug catalog must have at least one entry")
+            let database_spec = mz_sql::names::ResolvedDatabaseSpecifier::Id(
+                catalog
+                    .resolve_database(crate::session::DEFAULT_DATABASE_NAME)
+                    .expect("default database")
+                    .id(),
+            );
+            let schema_spec = *catalog
+                .resolve_schema_in_database(
+                    &database_spec,
+                    mz_sql::DEFAULT_SCHEMA,
+                    &mz_catalog::SYSTEM_CONN_ID,
+                )
+                .expect("default schema")
                 .id();
-
-            // Armed + hash mismatch → ConcurrentDependencyMutation.
-            let mut armed = PlanValidity::new(
+            let name = mz_sql::names::QualifiedItemName {
+                qualifiers: mz_sql::names::ItemQualifiers {
+                    database_spec,
+                    schema_spec,
+                },
+                item: "validity_secret".to_owned(),
+            };
+            let full_name = catalog.resolve_full_name(&name, None);
+            let (live_id, global_id) = catalog
+                .allocate_user_id_for_test()
+                .await
+                .expect("allocate secret identity");
+            let timestamp = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    timestamp,
+                    None,
+                    vec![Op::CreateItem {
+                        id: live_id,
+                        name,
+                        item: mz_catalog::memory::objects::CatalogItem::Secret(
+                            mz_catalog::memory::objects::Secret {
+                                create_sql: format!("CREATE SECRET {full_name} AS 'fixture'"),
+                                global_id,
+                            },
+                        ),
+                        owner_id: *session.current_role_id(),
+                    }],
+                )
+                .await
+                .expect("create dependency");
+            let mut unarmed = PlanValidity::new(
                 &catalog,
-                BTreeSet::from_iter(std::iter::once(live_id)),
+                BTreeSet::from([live_id]),
+                None,
+                None,
+                session.role_metadata().clone(),
+            );
+            let mut armed = unarmed.clone().with_dependency_definition_check(&catalog);
+            let reads = crate::catalog::CatalogReadRecorder::default();
+            let snapshot = catalog.state().clone();
+            let prepared_catalog = snapshot
+                .for_system_session()
+                .with_read_recorder(reads.clone());
+            let mut observed = unarmed.clone().with_catalog_reads(Some(reads));
+            let mut extended = PlanValidity::new(
+                &catalog,
+                BTreeSet::new(),
                 None,
                 None,
                 session.role_metadata().clone(),
             )
-            .with_dependency_hash_check(&catalog);
-            armed.transient_revision = armed
-                .transient_revision
-                .checked_sub(1)
-                .expect("must subtract");
-            // Corrupt the captured hash to simulate a concurrent mutation of the dependency's
-            // `create_sql`.
-            armed.dependency_hashes.insert(live_id, u64::MAX);
-            assert_contains!(
-                armed.check(&catalog).expect_err("must err").to_string(),
-                "was concurrently modified"
-            );
-
-            // Unarmed (default) + same hash mismatch → ignored, returns Ok. Proves the opt-in
-            // gate keeps the check off the shared read-only paths.
-            let mut unarmed = PlanValidity::new(
-                &catalog,
-                BTreeSet::from_iter(std::iter::once(live_id)),
-                None,
-                None,
-                session.role_metadata().clone(),
-            );
-            unarmed.transient_revision = unarmed
-                .transient_revision
-                .checked_sub(1)
-                .expect("must subtract");
-            // Stuff a bogus hash in. The flag is off, so `check` must not look at it.
-            unarmed.dependency_hashes.insert(live_id, u64::MAX);
+            .with_dependency_definition_check(&catalog);
+            extended.extend_dependencies(&catalog, [live_id]);
+            let timestamp = catalog.current_upper().await;
+            catalog
+                .transact(
+                    None,
+                    timestamp,
+                    None,
+                    vec![Op::RenameItem {
+                        id: live_id,
+                        current_full_name: full_name,
+                        to_name: "renamed_validity_secret".to_owned(),
+                    }],
+                )
+                .await
+                .expect("rename dependency");
+            for validity in [&mut armed, &mut extended] {
+                assert!(matches!(
+                    validity.check(&catalog),
+                    Err(AdapterError::ConcurrentDependencyMutation { .. })
+                ));
+            }
             assert_ok!(unarmed.check(&catalog));
+            assert_ok!(observed.check(&catalog));
+            let _ = prepared_catalog.get_item(&live_id).create_sql();
+            assert!(matches!(
+                observed.check(&catalog),
+                Err(AdapterError::DDLTransactionRace)
+            ));
+            catalog.expire().await;
         })
         .await
     }

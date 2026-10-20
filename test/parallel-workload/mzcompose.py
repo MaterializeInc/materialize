@@ -55,6 +55,10 @@ from materialize.parallel_workload.settings import (
     Complexity,
     Scenario,
 )
+from materialize.parallel_workload.staged_catalog import (
+    PREPARATION_LOG_FILTER,
+    purification_connection_change,
+)
 
 SERVICES = [
     Cockroach(setup_materialize=True, in_memory=True),
@@ -182,6 +186,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         #     # Don't fail the entire run. We ran into a crash,
         #     # ci-annotate-errors will handle this if it's an unknown failure.
         #     return
+
+
+def workflow_staged_catalog(c: Composition) -> None:
+    """Re-purify a source after its PostgreSQL connection changes."""
+    c.down(destroy_volumes=True)
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={"log_filter": PREPARATION_LOG_FILTER}
+        )
+    ):
+        c.up("materialized", "postgres")
+        purification_connection_change(c)
 
 
 def workflow_catalog_transactions(
