@@ -10,6 +10,7 @@
 """Check catalog transaction isolation without retrying SQL statements."""
 
 import random
+import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
@@ -360,6 +361,109 @@ def source_ddl(c: Composition) -> None:
             (1,)
         ]
         assert execute(other, f"SELECT * FROM {schema}.unrelated").fetchall() == [(7,)]
+
+
+def source_late_binding(c: Composition, interference: str, before_commit: bool) -> None:
+    results = []
+    for concurrent in (False, True):
+        schema = (
+            f"ddl_source_binding_{interference}_{int(before_commit)}_{int(concurrent)}"
+        )
+        with c.sql_connection() as txn, c.sql_connection() as other:
+            execute(other, f"CREATE SCHEMA {schema}")
+            execute(other, f"CREATE VIEW {schema}.sentinel AS SELECT 7")
+            execute(
+                other,
+                f"CREATE SOURCE {schema}.source FROM LOAD GENERATOR COUNTER "
+                "(AS OF 0, UP TO 1)",
+            )
+            batch = [
+                f"ALTER VIEW {schema}.sentinel RENAME TO pending",
+                f"CREATE TABLE {schema}.export FROM SOURCE {schema}.source",
+                f"ALTER TABLE {schema}.export RENAME TO final",
+            ]
+            split = len(batch) if before_commit else 2
+            if concurrent:
+                execute(txn, "BEGIN")
+                for statement in batch[:split]:
+                    execute(txn, statement)
+            if interference == "replacement":
+                execute(other, f"DROP SOURCE {schema}.source")
+                execute(
+                    other,
+                    f"CREATE SOURCE {schema}.source FROM LOAD GENERATOR COUNTER "
+                    "(AS OF 0, UP TO 3)",
+                )
+            elif interference == "rename_away":
+                execute(other, f"ALTER SOURCE {schema}.source RENAME TO away")
+            else:
+                raise AssertionError(interference)
+            objects = (
+                "SELECT id, name FROM mz_objects WHERE schema_id = "
+                f"(SELECT id FROM mz_schemas WHERE name = '{schema}')"
+            )
+            before = set(execute(other, objects).fetchall())
+            statements = (
+                [*batch[split:], "COMMIT"]
+                if concurrent
+                else ["BEGIN", *batch, "COMMIT"]
+            )
+            state = outcome(txn, statements)
+            after = set(execute(other, objects).fetchall())
+            print(
+                f"schedule={schema} outcome={state} before={before} after={after}",
+                flush=True,
+            )
+            if interference == "replacement":
+                assert state is None, (schema, state)
+                expected = {
+                    (id, "pending" if name == "sentinel" else name)
+                    for id, name in before
+                }
+                assert {(id, name) for id, name in after if name != "final"} == expected
+                assert len(after) == len(before) + 1, (schema, before, after)
+                assert execute(other, f"SELECT * FROM {schema}.pending").fetchall() == [
+                    (7,)
+                ]
+                final_id = next(id for id, name in after if name == "final")
+                deadline = time.monotonic() + 120
+                # DDL completion does not imply that the bounded generator has finished.
+                while True:
+                    frontier = execute(
+                        other,
+                        "SELECT write_frontier IS NULL FROM mz_internal.mz_frontiers "
+                        f"WHERE object_id = '{final_id}'",
+                    ).fetchall()
+                    if frontier == [(True,)]:
+                        break
+                    assert time.monotonic() < deadline, (schema, final_id, frontier)
+                    time.sleep(0.1)
+                # A sealed frontier can be visible before the read oracle reaches the
+                # final record's timestamp. Timestamp::MAX reads the completed trace.
+                rows = execute(
+                    other,
+                    f"SELECT * FROM {schema}.final ORDER BY 1 AS OF 18446744073709551615",
+                ).fetchall()
+                if rows != [(1,), (2,), (3,)]:
+                    for statement in [
+                        f"SHOW CREATE SOURCE {schema}.source",
+                        f"SHOW CREATE TABLE {schema}.final",
+                        f"SELECT * FROM mz_internal.mz_frontiers WHERE object_id = '{final_id}'",
+                    ]:
+                        print(execute(other, statement).fetchall(), flush=True)
+                assert rows == [(1,), (2,), (3,)], (schema, rows)
+            else:
+                assert state is not None, f"{schema}: unexpectedly committed"
+                assert after == before, (schema, before, after)
+                assert execute(
+                    other, f"SELECT * FROM {schema}.sentinel"
+                ).fetchall() == [(7,)]
+            results.append(
+                (state[0], state[1].replace(schema, "<schema>"))
+                if state is not None
+                else None
+            )
+    assert results[0] == results[1], (interference, before_commit, results)
 
 
 def source_noop_conflict(c: Composition) -> None:
