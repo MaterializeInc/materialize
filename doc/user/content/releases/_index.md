@@ -26,7 +26,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 ### Bug Fixes {#v26.46.1-bug-fixes}
 - Fixed Iceberg sinks over a relation with a nested column, such as an array, stalling with `Iceberg table '...' schema does not match expected schema` when resuming against a table the catalog created, which happens after a Materialize restart; Materialize no longer requires the catalog's field IDs to match its own, and assigns field IDs to nested types in the breadth-first order most catalogs use.
-- Fixed reduced persist read throughput in Self-Managed deployments that use Google Cloud Storage, which since v26.45.0 have sent all concurrent persist reads over a single HTTP/2 connection. To spread these reads across multiple connections, run `ALTER SYSTEM SET persist_blob_http_pool = 'gcs';` as the `mz_system` user, or add the setting to your [system parameters ConfigMap](/self-managed-deployments/configuration-system-parameters/); it takes effect without a restart.
+- Fixed reduced persist read throughput in Self-Managed deployments that use Google Cloud Storage, which since v26.45.0 have sent all concurrent persist reads over a single HTTP/2 connection. To spread these reads across multiple connections, run `ALTER SYSTEM SET persist_blob_http_pool = 'gcs';` as the `mz_system` user, or add the setting to your [system parameters ConfigMap](https://materialize.com/docs/self-managed-deployments/configuration-system-parameters/); it takes effect without a restart.
 
 ## v26.46.0
 *Released to Materialize Cloud: 2026-10-15* <br>
