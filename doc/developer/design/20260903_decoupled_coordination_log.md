@@ -28,18 +28,38 @@ Keep commit conflicts, queueing and coordinator occupancy distinct.
 
 Replica advancement/release and compaction-bound publications now reschedule
 definitive conflicts at the normal staggered cadence. Grant acquisition is
-unchanged. Focused checks pass, but workload impact is unverified.
+unchanged. Focused checks pass. The matched fixed-seed comparison on actual
+8-CPU/16-GiB hosts shows fewer publication attempts and better foreground
+progress, but one shard still times out on SQL. Committed bounds advance.
 The ALTER SINK trace identifies transaction-open rejection of committed updates
 not yet applied to the owner's projection, followed by candidate conflicts.
 Its inline retry blocks dispatch even without holding DDL admission.
 
-Verify the scheduling correction in the existing fixed-seed failing workload on
-actual 8-CPU/16-GiB hosts. Record publication attempts, successful foreground
-commits, end-to-end SQL completion, committed-bound advancement and coordinator
-occupancy together. Preserve fresh resampling, committed protection, definitive
-write outcomes, statement deadlines and the 1s publication default. A faster
-candidate, one successful statement or catalog-upper movement does not close
-the workload failure.
+The completed comparison is under `scratch/ci139787/parallel{1,2}/report.md`.
+The bounded repeat reproduced a 321-second append with nested blob-upload retries
+under shared memory pressure. MinIO sizing does not see the parent cgroup limit.
+This is scratch evidence, not an explanation of CI timeouts. Its CPU capture
+identifies unnecessary protection-index reconstruction during empty storage
+cleanup. The correction is in `0286e789`. Formatting, catalog Clippy and all
+35 catalog transaction tests pass on scratch.
+
+Next, implement the approved periodic-only ownership correction: bounded,
+coalesced advancement/release and bound publication, retaining definitive
+completion, committed effects and exact protection acknowledgement. Do not move
+the wait to a shared mutex. Catalog clones share that mutex, so the lock-independent
+boundary needs resolution first. Reusing the independent-writer machinery requires
+another full catalog follower for fresh-start serving. Client publication also
+requires barrier-busy deferral for foreground grants without blocking dispatch.
+Those concrete costs have been surfaced for a decision before implementation.
+A detached raw Persist appender would introduce new transaction-protocol obligations
+rather than reuse the existing commit path. Acquisition and creator ownership,
+legacy DDL retries, cadence, deadlines and shared arbitration stay unchanged.
+Then run the existing fixed-seed comparison, measuring SQL completion, dispatch
+occupancy and committed-bound advancement separately.
+
+Evidence: `scratch/maintenance-append-repeat/report.md`, `cpu-analysis/report.md`
+and `minio-sizing.md` within that directory. No further experiment or resource
+tuning is underway.
 
 This comparison is the decision point:
 
