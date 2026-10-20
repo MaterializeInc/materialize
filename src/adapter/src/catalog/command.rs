@@ -38,6 +38,8 @@ use crate::{AdapterError, AdapterNotice};
 #[derive(Clone, Debug)]
 pub enum CatalogCommand {
     Rename(Arc<RenameCommand>),
+    CatalogResult(Arc<CatalogResultCommand>),
+    Description(Arc<DescriptionCommand>),
     AlterConnection(Arc<connection::ConnectionStatement>),
     CreateConnection(Arc<connection::ConnectionStatement>),
     Source(Arc<source_statement::SourceCommand>),
@@ -47,6 +49,8 @@ impl CatalogCommand {
     pub(crate) fn notices(&self) -> &[PlanNotice] {
         match self {
             Self::Rename(command) => command.notices(),
+            Self::CatalogResult(command) => &command.notices,
+            Self::Description(_) => &[],
             Self::AlterConnection(command) | Self::CreateConnection(command) => command.notices(),
             Self::Source(command) => command.notices(),
         }
@@ -76,7 +80,7 @@ impl RenameCommand {
         params: Params,
         session: SessionMeta,
     ) -> Result<(Self, Plan), AdapterError> {
-        let (plan, notices) = Self::plan(state, &statement, &params, &session)?;
+        let (plan, notices) = plan_command(state, &statement, &params, &session)?;
         let (ops, object_type) = rename_ops(&plan);
         Ok((
             Self {
@@ -102,7 +106,7 @@ impl RenameCommand {
     }
 
     pub(super) fn execute(&self, state: &CatalogState) -> Result<Vec<Op>, AdapterError> {
-        let (plan, notices) = Self::plan(state, &self.statement, &self.params, &self.session)?;
+        let (plan, notices) = plan_command(state, &self.statement, &self.params, &self.session)?;
         let (ops, object_type) = rename_ops(&plan);
         let outcome = RenameOutcome {
             object_type,
@@ -114,45 +118,161 @@ impl RenameCommand {
         }
         Ok(ops)
     }
+}
 
-    fn plan(
+/// A deterministic catalog result already returned at this transaction prefix.
+#[derive(Debug)]
+pub struct CatalogResultCommand {
+    statement: Arc<Statement<Raw>>,
+    params: Params,
+    session: SessionMeta,
+    row: mz_repr::Row,
+    notices: Vec<PlanNotice>,
+}
+
+impl CatalogResultCommand {
+    pub(crate) fn supports_statement(statement: &Statement<Raw>) -> bool {
+        use mz_sql::ast::ShowStatement;
+        if matches!(statement, Statement::ExplainSinkSchema(_)) {
+            return true;
+        }
+        let Statement::Show(show) = statement else {
+            return false;
+        };
+        match show {
+            ShowStatement::ShowCreateView(_)
+            | ShowStatement::ShowCreateMaterializedView(_)
+            | ShowStatement::ShowCreateSource(_)
+            | ShowStatement::ShowCreateTable(_)
+            | ShowStatement::ShowCreateSink(_)
+            | ShowStatement::ShowCreateMetricSink(_)
+            | ShowStatement::ShowCreateIndex(_)
+            | ShowStatement::ShowCreateConnection(_)
+            | ShowStatement::ShowCreateCluster(_)
+            | ShowStatement::ShowCreateType(_) => true,
+            ShowStatement::ShowObjects(_)
+            | ShowStatement::ShowColumns(_)
+            | ShowStatement::ShowVariable(_)
+            | ShowStatement::InspectShard(_) => false,
+        }
+    }
+
+    pub(crate) fn prepare(
         state: &CatalogState,
-        statement: &Statement<Raw>,
-        params: &Params,
-        session: &SessionMeta,
-    ) -> Result<(Plan, Vec<PlanNotice>), AdapterError> {
-        assert!(matches!(
-            statement,
-            Statement::AlterObjectRename(_) | Statement::AlterObjectSwap(_)
-        ));
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let catalog = state.for_session_metadata(session, tx);
-        let (statement, resolved_ids) = mz_sql::names::resolve(&catalog, statement.clone())?;
-        let (plan, sql_impl_ids) = mz_sql::plan::plan(
-            Some(session.pcx()),
-            &catalog,
+        statement: Arc<Statement<Raw>>,
+        params: Params,
+        session: SessionMeta,
+    ) -> Result<(Self, Plan), AdapterError> {
+        let (plan, notices) = plan_command(state, &statement, &params, &session)?;
+        let row = Self::result(&plan)?;
+        let command = Self {
             statement,
             params,
-            &resolved_ids,
-        )?;
-        mz_sql::rbac::check_plan(
-            &catalog,
-            None,
             session,
-            &plan,
-            None,
-            &resolved_ids,
-            &sql_impl_ids,
-        )?;
-        let mut notices = Vec::new();
-        while let Ok(notice) = rx.try_recv() {
-            match notice {
-                AdapterNotice::PlanNotice(notice) => notices.push(notice),
-                _ => unreachable!("planning only emits plan notices"),
-            }
-        }
-        Ok((plan, notices))
+            row,
+            notices,
+        };
+        Ok((command, plan))
     }
+
+    pub(in crate::catalog) fn execute(&self, state: &CatalogState) -> Result<(), AdapterError> {
+        let (plan, notices) = plan_command(state, &self.statement, &self.params, &self.session)?;
+        if Self::result(&plan)? == self.row && notices == self.notices {
+            Ok(())
+        } else {
+            Err(AdapterError::DDLTransactionOutcomeChanged)
+        }
+    }
+
+    pub(crate) fn result(plan: &Plan) -> Result<mz_repr::Row, AdapterError> {
+        match plan {
+            Plan::ShowCreate(show) => Ok(show.row.clone()),
+            Plan::ExplainSinkSchema(schema) => {
+                let value: serde_json::Value =
+                    serde_json::from_str(&schema.json_schema).map_err(|error| {
+                        AdapterError::Explain(mz_repr::explain::ExplainError::SerdeJsonError(error))
+                    })?;
+                let json = mz_repr::explain::json::json_string(&value);
+                Ok(mz_repr::Row::pack_slice(&[mz_repr::Datum::String(&json)]))
+            }
+            _ => Err(AdapterError::Unsupported(
+                "non-deterministic catalog result",
+            )),
+        }
+    }
+}
+
+/// A statement schema exposed or stored for the client at this transaction prefix.
+#[derive(Debug)]
+pub struct DescriptionCommand {
+    statement: Statement<Raw>,
+    param_types: Vec<Option<mz_repr::SqlScalarType>>,
+    session: SessionMeta,
+    expected: mz_sql::plan::StatementDesc,
+}
+
+impl DescriptionCommand {
+    pub(crate) fn new(
+        statement: Statement<Raw>,
+        param_types: Vec<Option<mz_repr::SqlScalarType>>,
+        session: SessionMeta,
+        expected: mz_sql::plan::StatementDesc,
+    ) -> Self {
+        Self {
+            statement,
+            param_types,
+            session,
+            expected,
+        }
+    }
+
+    pub(in crate::catalog) fn execute(&self, state: &CatalogState) -> Result<(), AdapterError> {
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let catalog = state.for_session_metadata(&self.session, tx);
+        let (statement, _) = mz_sql::names::resolve(&catalog, self.statement.clone())?;
+        let current =
+            mz_sql::plan::describe(self.session.pcx(), &catalog, statement, &self.param_types)?;
+        if current == self.expected {
+            Ok(())
+        } else {
+            Err(AdapterError::DDLTransactionOutcomeChanged)
+        }
+    }
+}
+
+fn plan_command(
+    state: &CatalogState,
+    statement: &Statement<Raw>,
+    params: &Params,
+    session: &SessionMeta,
+) -> Result<(Plan, Vec<PlanNotice>), AdapterError> {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let catalog = state.for_session_metadata(session, tx);
+    let (statement, resolved_ids) = mz_sql::names::resolve(&catalog, statement.clone())?;
+    let (plan, sql_impl_ids) = mz_sql::plan::plan(
+        Some(session.pcx()),
+        &catalog,
+        statement,
+        params,
+        &resolved_ids,
+    )?;
+    mz_sql::rbac::check_plan(
+        &catalog,
+        None,
+        session,
+        &plan,
+        None,
+        &resolved_ids,
+        &sql_impl_ids,
+    )?;
+    let mut notices = Vec::new();
+    while let Ok(notice) = rx.try_recv() {
+        match notice {
+            AdapterNotice::PlanNotice(notice) => notices.push(notice),
+            _ => unreachable!("planning only emits plan notices"),
+        }
+    }
+    Ok((plan, notices))
 }
 
 fn rename_ops(plan: &Plan) -> (Vec<Op>, ObjectType) {

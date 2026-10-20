@@ -582,6 +582,11 @@ impl Coordinator {
                             catalog_revision: self.catalog().transient_revision(),
                             session_state_revision: ctx.session().state_revision(),
                         };
+                        ctx.session_mut().retain_description(
+                            plan.stmt.clone(),
+                            plan.desc.param_types.iter().cloned().map(Some).collect(),
+                            plan.desc.clone(),
+                        );
                         ctx.session_mut().set_prepared_statement(
                             plan.name,
                             Some(plan.stmt),
