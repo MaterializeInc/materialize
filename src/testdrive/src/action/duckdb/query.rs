@@ -131,6 +131,8 @@ fn format_value(val: &ValueRef) -> String {
         ValueRef::USmallInt(i) => i.to_string(),
         ValueRef::UInt(i) => i.to_string(),
         ValueRef::UBigInt(i) => i.to_string(),
+        ValueRef::UHugeInt(i) => i.to_string(),
+        ValueRef::Decimal(d) => d.to_string(),
         ValueRef::Float(f) => f.to_string(),
         ValueRef::Double(f) => f.to_string(),
         ValueRef::Text(bytes) => String::from_utf8_lossy(bytes).to_string(),
