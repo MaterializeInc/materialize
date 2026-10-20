@@ -66,7 +66,10 @@ def test_connection_routing_and_escaping():
     assert len(config["libpq_envs"]) == 3
     for i, env in enumerate(config["libpq_envs"]):
         cluster = "c" if i == 0 else f"qps_{i}"
-        assert env["PGOPTIONS"] == f"-c cluster={cluster} -c statement_timeout=30000"
+        assert env["PGOPTIONS"] == (
+            f"-c cluster={cluster} -c statement_timeout=30000"
+            " -c statement_logging_sample_rate=0.5"
+        )
         assert config["cluster_names"][i] == cluster
         assert env["PGSSLMODE"] == "require"
         assert env["PGPASSWORD"] == "quote'and\\slash"
@@ -175,16 +178,16 @@ def test_each_cpu_runs_full_concurrency_sweep(monkeypatch, tmp_path):
     for point in sweep.scale_points(target, 32):
         runner.envd_cpus = point.envd_cpus
         sweep.measure(runner, point)
-    assert len(measured) == 6 * 3 * 2
-    assert measured[0] == (1, 1, "prepared", "scale=1,workers=1")
+    assert len(measured) == 3 * 2
+    assert measured[0] == (32, 1, "prepared", "scale=1,workers=1")
     assert measured[-1] == (32, 16, "simple", "scale=1,workers=1")
-    assert sum("CREATE CLUSTER qps_" in q for q in runner.sql) == 6
+    assert sum("CREATE CLUSTER qps_" in q for q in runner.sql) == 1
     assert [q for q in runner.sql if q.startswith("CREATE CLUSTER qps_")] == [
         f"CREATE CLUSTER qps_{i} SIZE 'scale=1,workers=1', REPLICATION FACTOR 1"
-        for _ in range(6)
+        for _ in range(1)
         for i in range(1, 2)
     ]
-    assert sum("DROP CLUSTER IF EXISTS qps_" in q for q in runner.sql) == 6
+    assert sum("DROP CLUSTER IF EXISTS qps_" in q for q in runner.sql) == 1
 
 
 def test_ten_query_clusters_fit_ten_cluster_account(monkeypatch, tmp_path):
@@ -223,7 +226,7 @@ def test_ten_query_clusters_fit_ten_cluster_account(monkeypatch, tmp_path):
     assert runner.clusters == {"c"}
 
 
-@pytest.mark.parametrize("logging_rate", [0, 0.99])
+@pytest.mark.parametrize("logging_rate", [0.5, 0, 0.99])
 def test_pgbench_measurement_records_max_latency(monkeypatch, tmp_path, logging_rate):
     monkeypatch.chdir(tmp_path)
     from materialize.mzcompose import loader
@@ -296,6 +299,10 @@ def test_pgbench_measurement_records_max_latency(monkeypatch, tmp_path, logging_
     workload = module.QpsEnvdStrongScalingScenario(
         QpsSweep([1], ["prepared"], clusters=1)
     )
+    if logging_rate != 0.5:
+        with pytest.raises(module.UIError, match="statement_logging_sample_rate=0.5"):
+            workload.measure(runner, "50cc", 1, "prepared")
+        return
     workload.measure(runner, "50cc", 1, "prepared")
     config, composition = calls[0]
     assert composition is runner.target.composition

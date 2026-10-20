@@ -1977,6 +1977,8 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         )
         result = pgbench.run(config, runner.target.composition)
         validate_qps_result(result, concurrency, protocol)
+        if any(rate != 0.5 for rate in result["statement_logging_sample_rates"]):
+            raise UIError("QPS benchmark requires statement_logging_sample_rate=0.5")
         warnings = list(result["driver"]["warnings"])
         replica_cpu = None
         replica_samples = 0
@@ -3324,10 +3326,8 @@ class EnvdCpuSweep(Scenario):
     ``teardown`` regardless of outcome to avoid accidentally burning
     credits."""
 
-    # (So far, I haven't seen a difference between 16 and 32 in manual
-    # testing in cloud. When we start seeing a difference, consider
-    # extending to 64.)
-    ENVD_CPU_SCALES: list[int] = [1, 2, 4, 8, 16, 32]
+    # Focus this logging-rate experiment on the high-headroom adapter size.
+    ENVD_CPU_SCALES: list[int] = [32]
 
     def __init__(self, name: str, workload: ClusterScalingScenario) -> None:
         self._name = name
