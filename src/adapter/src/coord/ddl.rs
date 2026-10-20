@@ -136,6 +136,51 @@ async fn catalog_preparation_test_pause(name: &'static str) {
 }
 
 impl Coordinator {
+    pub(super) fn sequence_catalog_result_command(
+        &mut self,
+        mut ctx: ExecuteContext,
+        statement: Arc<mz_sql::ast::Statement<mz_sql::ast::Raw>>,
+        params: mz_sql::plan::Params,
+    ) {
+        let prepared = {
+            let catalog = self.catalog().for_session(ctx.session());
+            catalog::command::CatalogResultCommand::prepare(
+                catalog.state(),
+                statement,
+                params,
+                ctx.session().meta(),
+            )
+        };
+        let (command, plan) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        ctx.tx_mut()
+            .set_allowed(crate::ExecuteResponse::generated_from(
+                &mz_sql::plan::PlanKind::from(&plan),
+            ));
+        if let Err(error) = self.prepare_plan_execution(&ctx, &plan) {
+            return ctx.retire(Err(error));
+        }
+        let row = match catalog::command::CatalogResultCommand::result(&plan) {
+            Ok(row) => row,
+            Err(error) => return ctx.retire(Err(error)),
+        };
+        let command = catalog::command::CatalogCommand::CatalogResult(Arc::new(command));
+        self.emit_command_notices(ctx.session(), &command);
+        let TransactionOps::DDL { commands, .. } = &mut ctx
+            .session_mut()
+            .transaction_mut()
+            .inner_mut()
+            .expect("DDL transaction")
+            .ops
+        else {
+            unreachable!("catalog result retention requires a DDL transaction");
+        };
+        commands.push(command);
+        ctx.retire(Ok(Self::send_immediate_rows(row)));
+    }
+
     pub(super) async fn sequence_create_connection_command(
         &mut self,
         mut ctx: ExecuteContext,
@@ -653,6 +698,8 @@ impl Coordinator {
                                 Arc::make_mut(command).record_ids(keys, ids);
                             }
                             catalog::command::CatalogCommand::Rename(_)
+                            | catalog::command::CatalogCommand::CatalogResult(_)
+                            | catalog::command::CatalogCommand::Description(_)
                             | catalog::command::CatalogCommand::AlterConnection(_)
                             | catalog::command::CatalogCommand::CreateConnection(_) => {
                                 unreachable!("this command does not allocate IDs");

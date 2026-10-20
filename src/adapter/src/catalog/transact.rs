@@ -1179,6 +1179,14 @@ impl Catalog {
                 OperationGroup::Command(_, CatalogCommand::Rename(command)) => {
                     (command.execute(&preliminary_state)?, None)
                 }
+                OperationGroup::Command(_, CatalogCommand::Description(command)) => {
+                    command.execute(&preliminary_state)?;
+                    (Vec::new(), None)
+                }
+                OperationGroup::Command(_, CatalogCommand::CatalogResult(command)) => {
+                    command.execute(&preliminary_state)?;
+                    (Vec::new(), None)
+                }
                 OperationGroup::Command(index, CatalogCommand::CreateConnection(command)) => {
                     use super::command::connection::CreateConnectionResolution;
                     let command = Arc::make_mut(command);

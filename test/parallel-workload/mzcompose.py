@@ -40,6 +40,8 @@ from materialize.mzcompose.services.sql_server import (
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.parallel_workload.catalog_transactions import (
+    catalog_result_outcome,
+    description_outcome,
     hammer,
     independent_ddl,
     late_binding,
@@ -201,6 +203,9 @@ def workflow_catalog_transactions(
         "destination",
         "authorization",
         "rename-noop",
+        "show-create",
+        "explain-schema",
+        "description",
         "swap",
         "hammer",
     ]
@@ -235,7 +240,8 @@ def workflow_catalog_transactions(
             Materialized(
                 image=args.materialized_image,
                 additional_system_parameter_defaults={
-                    "log_filter": PREPARATION_LOG_FILTER
+                    "log_filter": PREPARATION_LOG_FILTER,
+                    "enable_alter_table_add_column": "true",
                 },
             )
         ),
@@ -261,6 +267,10 @@ def workflow_catalog_transactions(
                     source_noop_conflict(c)
                 elif case == "rename-noop":
                     rename_noop(c)
+                elif case == "description":
+                    description_outcome(c)
+                elif case in ("show-create", "explain-schema"):
+                    catalog_result_outcome(c, schema_result=case == "explain-schema")
                 elif case == "swap":
                     schema_swap(c)
                 elif case == "source-drop":

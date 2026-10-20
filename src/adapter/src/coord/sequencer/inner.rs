@@ -34,7 +34,6 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::json::json_string;
 use mz_repr::explain::{ExprHumanizer, ExprHumanizerExt, TransientItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, RelationDesc, Row, Timestamp};
@@ -1418,14 +1417,9 @@ impl Coordinator {
 
     pub(super) fn sequence_explain_schema(
         &self,
-        ExplainSinkSchemaPlan { json_schema, .. }: ExplainSinkSchemaPlan,
+        plan: ExplainSinkSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        let json_value: serde_json::Value = serde_json::from_str(&json_schema).map_err(|e| {
-            AdapterError::Explain(mz_repr::explain::ExplainError::SerdeJsonError(e))
-        })?;
-
-        let json_string = json_string(&json_value);
-        let row = Row::pack_slice(&[Datum::String(&json_string)]);
+        let row = catalog::command::CatalogResultCommand::result(&Plan::ExplainSinkSchema(plan))?;
         Ok(Self::send_immediate_rows(row))
     }
 

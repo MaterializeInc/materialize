@@ -16,6 +16,7 @@ from threading import Barrier
 
 from psycopg import Connection, Cursor, Error
 from psycopg.errors import SerializationFailure
+from psycopg.pq import ExecStatus
 
 from materialize.mzcompose.composition import Composition
 
@@ -24,6 +25,165 @@ def execute(conn: Connection, statement: str) -> Cursor:
     """Execute SQL containing only harness-controlled values."""
     print(f"{conn.info.backend_pid}: {statement}", flush=True)
     return conn.execute(statement.encode())
+
+
+def catalog_result_outcome(c: Composition, schema_result: bool) -> None:
+    for interference in ("definition", "unrelated", "equivalent_replacement"):
+        schema = f"ddl_catalog_result_{int(schema_result)}_{interference}"
+        with c.sql_connection() as txn, c.sql_connection() as other:
+            execute(other, f"CREATE SCHEMA {schema}")
+            execute(other, f"CREATE TABLE {schema}.original (value INT)")
+            execute(other, f"CREATE TABLE {schema}.unrelated (value INT)")
+            if schema_result:
+                execute(
+                    other,
+                    f"CREATE CONNECTION {schema}.kafka TO KAFKA "
+                    "(BROKER 'localhost:1', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
+                )
+                execute(
+                    other,
+                    f"CREATE CONNECTION {schema}.registry TO CONFLUENT SCHEMA REGISTRY "
+                    "(URL 'http://localhost:1') WITH (VALIDATE = false)",
+                )
+            execute(txn, "BEGIN")
+            execute(txn, f"ALTER TABLE {schema}.original RENAME TO observed")
+            statement = (
+                f"EXPLAIN VALUE SCHEMA FOR CREATE SINK {schema}.sink FROM {schema}.observed "
+                f"INTO KAFKA CONNECTION {schema}.kafka (TOPIC 'catalog-result') "
+                f"FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION {schema}.registry "
+                "ENVELOPE DEBEZIUM"
+                if schema_result
+                else f"SHOW CREATE TABLE {schema}.observed"
+            )
+            observed = execute(txn, statement).fetchone()
+            assert observed is not None
+            assert "value" in observed[0 if schema_result else 1]
+            execute(txn, f"ALTER TABLE {schema}.observed RENAME TO final")
+            if interference == "equivalent_replacement":
+                execute(other, f"DROP TABLE {schema}.original")
+                execute(other, f"CREATE TABLE {schema}.original (value INT)")
+            else:
+                target = "original" if interference == "definition" else "unrelated"
+                execute(other, f"ALTER TABLE {schema}.{target} ADD COLUMN added TEXT")
+            try:
+                execute(txn, "COMMIT")
+            except SerializationFailure:
+                assert interference == "definition"
+            else:
+                assert (
+                    interference != "definition"
+                ), "changed catalog result must conflict"
+            names = execute(
+                other,
+                "SELECT t.name FROM mz_tables t JOIN mz_schemas s ON s.id = t.schema_id "
+                f"WHERE s.name = '{schema}' ORDER BY t.name",
+            ).fetchall()
+            expected = "original" if interference == "definition" else "final"
+            assert names == [(expected,), ("unrelated",)], (interference, names)
+
+    if not schema_result:
+        with c.sql_connection() as txn, c.sql_connection() as other:
+            execute(other, "CREATE SCHEMA ddl_inspection_before_ddl")
+            execute(
+                other, "CREATE TABLE ddl_inspection_before_ddl.original (value INT)"
+            )
+            execute(txn, "BEGIN")
+            before = execute(
+                txn, "SHOW CREATE TABLE ddl_inspection_before_ddl.original"
+            ).fetchone()
+            assert before is not None and "added" not in before[1]
+            execute(
+                txn, "ALTER TABLE ddl_inspection_before_ddl.original RENAME TO final"
+            )
+            execute(
+                other,
+                "ALTER TABLE ddl_inspection_before_ddl.original ADD COLUMN added TEXT",
+            )
+            execute(txn, "COMMIT")
+            after = execute(
+                other, "SHOW CREATE TABLE ddl_inspection_before_ddl.final"
+            ).fetchone()
+            assert after is not None and "added" in after[1]
+
+
+def description_outcome(c: Composition) -> None:
+    for api in ("prepare", "declare", "protocol"):
+        for wildcard in (False, True):
+            schema = f"ddl_description_{api}_{int(wildcard)}"
+            with c.sql_connection() as txn, c.sql_connection() as other:
+                execute(other, f"CREATE SCHEMA {schema}")
+                execute(other, f"CREATE TABLE {schema}.original (value INT)")
+                execute(txn, "BEGIN")
+                execute(txn, f"ALTER TABLE {schema}.original RENAME TO observed")
+                projection = "*" if wildcard else "value"
+                query = f"SELECT {projection} FROM {schema}.observed"
+                if api == "prepare":
+                    execute(txn, f"PREPARE described AS {query}")
+                elif api == "declare":
+                    execute(txn, f"DECLARE described CURSOR FOR {query}")
+                else:
+                    prepared = txn.pgconn.prepare(b"described", query.encode())
+                    assert (
+                        prepared.status == ExecStatus.COMMAND_OK
+                    ), prepared.error_message
+                    described = txn.pgconn.describe_prepared(b"described")
+                    assert (
+                        described.status == ExecStatus.COMMAND_OK
+                    ), described.error_message
+                    assert described.nfields == 1
+                    assert described.fname(0) == b"value"
+                if api in ("prepare", "declare"):
+                    wrapper = (
+                        "EXECUTE described" if api == "prepare" else "FETCH described"
+                    )
+                    prepared = txn.pgconn.prepare(b"wrapper", wrapper.encode())
+                    assert (
+                        prepared.status == ExecStatus.COMMAND_OK
+                    ), prepared.error_message
+                    described = txn.pgconn.describe_prepared(b"wrapper")
+                    assert (
+                        described.status == ExecStatus.COMMAND_OK
+                    ), described.error_message
+                    assert described.nfields == 1
+                    nested = f"DECLARE nested CURSOR FOR {wrapper}"
+                    prepared = txn.pgconn.prepare(b"nested_wrapper", nested.encode())
+                    assert (
+                        prepared.status == ExecStatus.COMMAND_OK
+                    ), prepared.error_message
+                execute(txn, f"ALTER TABLE {schema}.observed RENAME TO final")
+                execute(other, f"ALTER TABLE {schema}.original ADD COLUMN added TEXT")
+                try:
+                    execute(txn, "COMMIT")
+                except SerializationFailure:
+                    assert wildcard, "explicit projection's schema is unchanged"
+                else:
+                    assert (
+                        not wildcard
+                    ), "expanded wildcard changed the described schema"
+                expected = "original" if wildcard else "final"
+                names = execute(
+                    other,
+                    "SELECT t.name FROM mz_tables t JOIN mz_schemas s ON s.id = t.schema_id "
+                    f"WHERE s.name = '{schema}'",
+                ).fetchall()
+                assert names == [(expected,)], (api, wildcard, names)
+
+    with c.sql_connection() as txn, c.sql_connection() as other:
+        execute(other, "CREATE SCHEMA ddl_empty_description")
+        execute(other, "CREATE TABLE ddl_empty_description.original (value INT)")
+        execute(other, "CREATE TABLE ddl_empty_description.unexecuted (value INT)")
+        execute(txn, "BEGIN")
+        execute(txn, "ALTER TABLE ddl_empty_description.original RENAME TO final")
+        prepared = txn.pgconn.prepare(
+            b"unexecuted",
+            b"ALTER TABLE ddl_empty_description.unexecuted RENAME TO unused",
+        )
+        assert prepared.status == ExecStatus.COMMAND_OK, prepared.error_message
+        execute(other, "DROP TABLE ddl_empty_description.unexecuted")
+        execute(txn, "COMMIT")
+        assert execute(
+            other, "SELECT count(*) FROM ddl_empty_description.final"
+        ).fetchone() == (0,)
 
 
 def independent_ddl(c: Composition, before_commit: bool, same_schema: bool) -> None:
