@@ -8,7 +8,65 @@
 // by the Apache License, Version 2.0.
 
 /**
- * Validates that a redirect URL is safe (internal only, no external redirects).
+ * Origins outside the Console that sign-in may send the visitor back to. The
+ * marketing site links to the login page with `?redirectUrl=<page>` so visitors
+ * return to the page they signed in from.
+ */
+const MARKETING_SITE_ORIGINS = [
+  "https://materialize.com",
+  "https://www.materialize.com",
+];
+
+// The marketing site's dev server, which points its sign-in links at staging.
+const MARKETING_SITE_DEV_ORIGINS = ["http://localhost:5173"];
+
+/**
+ * Returns the external origins `redirectUrl` may point at for the given stack.
+ * Production only allows the marketing site itself.
+ */
+export function getAllowedRedirectOrigins(currentStack: string): string[] {
+  if (currentStack === "production") {
+    return [...MARKETING_SITE_ORIGINS];
+  }
+  return [...MARKETING_SITE_ORIGINS, ...MARKETING_SITE_DEV_ORIGINS];
+}
+
+/**
+ * True when `url` is an absolute URL whose origin exactly matches one of
+ * `allowedOrigins`. Origins are compared after parsing, so look-alikes such as
+ * `https://materialize.com.evil.com` or `https://materialize.com@evil.com` fail.
+ */
+export function isAllowedExternalRedirectUrl(
+  url: string,
+  allowedOrigins: readonly string[],
+): boolean {
+  if (!url || allowedOrigins.length === 0) {
+    return false;
+  }
+  const trimmedUrl = url.trim();
+  // The browser strips these while parsing, so the raw string could disagree
+  // with what we validated.
+  if (/[\t\n\r\\]/.test(trimmedUrl)) {
+    return false;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmedUrl);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    return false;
+  }
+  if (parsed.username || parsed.password) {
+    return false;
+  }
+  return allowedOrigins.includes(parsed.origin);
+}
+
+/**
+ * Validates that a redirect URL is safe: an internal path, or an absolute URL on
+ * one of `allowedOrigins` (empty by default, so only internal paths pass).
  *
  * This prevents open redirect vulnerabilities where attackers craft URLs like:
  * - //example.com (protocol-relative URL)
@@ -18,15 +76,23 @@
  * - /\t/evil.com (WHATWG URL parsers strip tabs/newlines, becoming //evil.com)
  *
  * @param url - The URL to validate
- * @returns true if the URL is a safe internal path, false otherwise
+ * @param allowedOrigins - External origins that are also allowed
+ * @returns true if the URL is a safe internal path or an allowed external URL
  */
-export function isSafeRedirectUrl(url: string): boolean {
+export function isSafeRedirectUrl(
+  url: string,
+  allowedOrigins: readonly string[] = [],
+): boolean {
   // Empty or whitespace-only URLs are not safe (force default redirect)
   if (!url || !url.trim()) {
     return false;
   }
 
   const trimmedUrl = url.trim();
+
+  if (isAllowedExternalRedirectUrl(trimmedUrl, allowedOrigins)) {
+    return true;
+  }
 
   // Protocol-relative URLs (//example.com) - NOT safe
   if (trimmedUrl.startsWith("//")) {

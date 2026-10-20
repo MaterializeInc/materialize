@@ -20,6 +20,7 @@ import {
 } from "~/external-library-wrappers/frontegg";
 import { AUTH_ROUTES } from "~/fronteggRoutes";
 import { fronteggAuthPageBackground, getFronteggTheme } from "~/theme";
+import { getAllowedRedirectOrigins } from "~/utils/redirectUrl";
 
 const buildFronteggProviderProps = (
   appConfig: Readonly<CloudAppConfig>,
@@ -51,6 +52,8 @@ const buildFronteggProviderProps = (
       },
       keepSessionAlive: true,
       enforceRedirectToSameSite: true,
+      // Lets sign-in from the marketing site return to the page it started on.
+      allowedRedirectOrigins: getAllowedRedirectOrigins(appConfig.currentStack),
     },
     customLoader: () => <LoadingScreen />,
   };
@@ -65,7 +68,9 @@ export const FronteggProviderWrapper = ({
   }
   const fronteggProviderProps = buildFronteggProviderProps(appConfig);
   return (
-    <RedirectUrlSanitizer>
+    <RedirectUrlSanitizer
+      allowedOrigins={getAllowedRedirectOrigins(appConfig.currentStack)}
+    >
       <FronteggProvider {...fronteggProviderProps}>{children}</FronteggProvider>
     </RedirectUrlSanitizer>
   );

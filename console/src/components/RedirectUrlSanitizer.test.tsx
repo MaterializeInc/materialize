@@ -17,10 +17,10 @@ import { RedirectUrlSanitizer } from "./RedirectUrlSanitizer";
 const TestContent = () => <div data-testid="test-content">Test Content</div>;
 const LoginPage = () => <div data-testid="login-page">Login Page</div>;
 
-const renderWithRouter = () => {
+const renderWithRouter = (allowedOrigins?: string[]) => {
   return render(
     <BrowserRouter>
-      <RedirectUrlSanitizer>
+      <RedirectUrlSanitizer allowedOrigins={allowedOrigins}>
         <Routes>
           <Route path="/account/login" element={<LoginPage />} />
           <Route path="*" element={<TestContent />} />
@@ -33,6 +33,7 @@ const renderWithRouter = () => {
 describe("RedirectUrlSanitizer", () => {
   beforeEach(() => {
     history.pushState(undefined, "", "/");
+    localStorage.removeItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL");
   });
 
   describe("non-login routes", () => {
@@ -145,6 +146,69 @@ describe("RedirectUrlSanitizer", () => {
       expect(screen.getByTestId("login-page")).toBeInTheDocument();
       expect(window.location.search).toBe("");
       expect(window.location.pathname).toBe("/account/login");
+    });
+  });
+
+  describe("login route with an allowed external redirectUrl", () => {
+    const allowedOrigins = ["https://materialize.com"];
+    const search = "?redirectUrl=https%3A%2F%2Fmaterialize.com%2Fpricing%2F";
+
+    it("keeps the redirectUrl and remembers it for social sign-in", () => {
+      history.pushState(undefined, "", `/account/login${search}`);
+      renderWithRouter(allowedOrigins);
+
+      expect(screen.getByTestId("login-page")).toBeInTheDocument();
+      expect(window.location.search).toBe(search);
+      expect(localStorage.getItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL")).toBe(
+        "https://materialize.com/pricing/",
+      );
+    });
+
+    it("strips it when the origin is not allowed", () => {
+      history.pushState(undefined, "", `/account/login${search}`);
+      renderWithRouter();
+
+      expect(window.location.search).toBe("");
+      expect(
+        localStorage.getItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL"),
+      ).toBeNull();
+    });
+
+    it("strips look-alike origins", () => {
+      history.pushState(
+        undefined,
+        "",
+        "/account/login?redirectUrl=https%3A%2F%2Fmaterialize.com.evil.com%2F",
+      );
+      renderWithRouter(allowedOrigins);
+
+      expect(window.location.search).toBe("");
+      expect(
+        localStorage.getItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL"),
+      ).toBeNull();
+    });
+
+    it("clears a remembered redirect when sign-in starts without one", () => {
+      localStorage.setItem(
+        "FRONTEGG_AFTER_AUTH_REDIRECT_URL",
+        "https://materialize.com/pricing/",
+      );
+      history.pushState(undefined, "", "/account/login");
+      renderWithRouter(allowedOrigins);
+
+      expect(
+        localStorage.getItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL"),
+      ).toBeNull();
+    });
+
+    it("keeps Frontegg's own internal redirects", () => {
+      localStorage.setItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL", "/regions");
+      history.pushState(undefined, "", "/account/login");
+      renderWithRouter(allowedOrigins);
+
+      expect(localStorage.getItem("FRONTEGG_AFTER_AUTH_REDIRECT_URL")).toBe(
+        "/regions",
+      );
     });
   });
 });
