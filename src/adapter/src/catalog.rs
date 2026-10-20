@@ -2504,6 +2504,9 @@ impl SessionCatalog for ConnCatalog<'_> {
 }
 
 #[cfg(test)]
+mod source_preparation_tests;
+
+#[cfg(test)]
 mod try_cast_tests;
 
 #[cfg(test)]
