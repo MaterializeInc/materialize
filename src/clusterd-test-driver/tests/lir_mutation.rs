@@ -28,11 +28,16 @@
 //! * `LIR_MUTANTS_PER_BASE`: mutants per base plan, by default [`DEFAULT_MUTANTS_PER_BASE`].
 //! * `LIR_MUTATION_SEED`: the seed, by default [`DEFAULT_SEED`].
 //! * `LIR_MUTATION_OUT`: a directory for `results.jsonl`, one line per mutant, and the JSON
-//!   of every accepted mutant that crashed or stalled the replica.
+//!   of every accepted mutant that crashed or stalled the replica. `pending.json` holds the
+//!   mutant being rendered, which identifies the culprit if the test itself dies.
+//! * `LIR_MUTATION_CLUSTERD_WRAPPER`: a command, split at whitespace, that `clusterd` runs
+//!   under, for example `memcap 4G` to bound its memory. A replica the wrapper kills counts
+//!   as crashed.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::TcpListener;
+use std::os::unix::process::CommandExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -1266,7 +1271,20 @@ impl Replica {
         for sub in ["scratch", "secrets"] {
             std::fs::create_dir_all(dir.join(sub)).expect("dir");
         }
-        Command::new(binary)
+        let wrapper = std::env::var("LIR_MUTATION_CLUSTERD_WRAPPER").unwrap_or_default();
+        let mut wrapper = wrapper.split_whitespace();
+        let mut command = match wrapper.next() {
+            Some(program) => {
+                let mut command = Command::new(program);
+                command.args(wrapper).arg(binary);
+                command
+            }
+            None => Command::new(binary),
+        };
+        // The wrapper and `clusterd` share a process group of their own, which `kill` ends as
+        // a whole. Killing only the wrapper would leave `clusterd` holding its ports.
+        command
+            .process_group(0)
             .args([
                 "--compute-controller-listen-addr",
                 compute_addr,
@@ -1370,8 +1388,7 @@ impl Replica {
             mz_storage_types::controller::CollectionMetadata,
         >,
     ) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        kill(&mut self.child);
         self.child = Self::spawn_clusterd(
             &self.binary,
             &self.dir,
@@ -1506,6 +1523,15 @@ impl Replica {
             Outcome::Stalled
         }
     }
+}
+
+/// Kills the process group of `child`, which `Replica::spawn_clusterd` creates, and reaps
+/// `child`.
+fn kill(child: &mut Child) {
+    let _ = Command::new("kill")
+        .args(["-KILL", &format!("-{}", child.id())])
+        .status();
+    let _ = child.wait();
 }
 
 fn exit_status(child: &mut Child) -> Option<String> {
@@ -1769,6 +1795,10 @@ async fn lir_validator_mutations() {
                     }
                 };
                 if let (Some(replica), Some(dataflow)) = (replica.as_mut(), dataflow) {
+                    if let Some(dir) = &out_dir {
+                        std::fs::write(dir.join("pending.json"), &mutant.json)
+                            .expect("write pending mutant");
+                    }
                     let result = replica.run(dataflow, sink_id, &pu_desc).await;
                     let problems = replica.new_problems();
                     if !problems.is_empty() {
@@ -1841,8 +1871,7 @@ async fn lir_validator_mutations() {
         println!("FAILURE: {failure}");
     }
     if let Some(mut replica) = replica {
-        let _ = replica.child.kill();
-        let _ = replica.child.wait();
+        kill(&mut replica.child);
     }
     assert!(failures.is_empty(), "{} failures", failures.len());
     if per_base >= DEFAULT_MUTANTS_PER_BASE {
