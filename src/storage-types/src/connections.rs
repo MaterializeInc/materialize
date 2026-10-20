@@ -630,6 +630,9 @@ impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
             (Self::Kafka(s), Self::Kafka(o)) => s.alter_compatible(id, o),
             (Self::Postgres(s), Self::Postgres(o)) => s.alter_compatible(id, o),
             (Self::MySql(s), Self::MySql(o)) => s.alter_compatible(id, o),
+            (Self::SqlServer(s), Self::SqlServer(o)) => s.alter_compatible(id, o),
+            (Self::GlueSchemaRegistry(s), Self::GlueSchemaRegistry(o)) => s.alter_compatible(id, o),
+            (Self::IcebergCatalog(s), Self::IcebergCatalog(o)) => s.alter_compatible(id, o),
             _ => {
                 tracing::warn!(
                     "Connection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
@@ -814,7 +817,7 @@ pub struct IcebergCatalogConnection<C: ConnectionAccess = InlinedConnection> {
     pub uri: reqwest_0_12::Url,
 }
 
-impl AlterCompatible for IcebergCatalogConnection {
+impl<C: ConnectionAccess> AlterCompatible for IcebergCatalogConnection<C> {
     fn alter_compatible(&self, id: GlobalId, _other: &Self) -> Result<(), AlterError> {
         Err(AlterError { id })
     }
