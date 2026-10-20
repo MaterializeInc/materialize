@@ -253,6 +253,7 @@ impl CatalogState {
                 | Op::UpdateScopedSystemParameters { .. }
                 | Op::Comment { .. }
                 | Op::RenameCommand(_)
+                | Op::RotatedKeys(_)
                 | Op::CheckClusterState { .. }
                 | Op::InjectAuditEvents { .. } => {}
             }
