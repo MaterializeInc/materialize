@@ -284,7 +284,7 @@ impl ListenerHandle {
 /// Kubernetes TCP probes, waits in this queue. Once it is full, Linux drops new
 /// connection attempts, which fails TCP probes and can get the pod killed
 /// mid-boot. Linux silently caps this at `net.core.somaxconn`.
-const LISTEN_BACKLOG: u32 = 256;
+const LISTEN_BACKLOG: u32 = 1024;
 
 /// Listens for incoming TCP connections on the specified address.
 ///
@@ -666,14 +666,14 @@ mod tests {
     async fn listen_queues_backlog_connections_before_accepting() {
         let (handle, _conns) = listen(&SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
         let addr = handle.local_addr();
-        // Nothing accepts these, so each one stays in the accept queue.
-        let mut streams = Vec::new();
+        // Nothing accepts these, so each one stays in the accept queue even
+        // after the client closes it, as a TCP probe does.
         for i in 0..LISTEN_BACKLOG {
             let stream = tokio::time::timeout(Duration::from_secs(1), TcpStream::connect(addr))
                 .await
                 .unwrap_or_else(|_| panic!("connection {i} timed out, accept queue is full"))
                 .unwrap();
-            streams.push(stream);
+            drop(stream);
         }
     }
 }
