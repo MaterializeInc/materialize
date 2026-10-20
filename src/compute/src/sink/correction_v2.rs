@@ -659,17 +659,22 @@ fn sort_advanced<D: Data>(chains: Vec<Chain<D>>, since_ts: Timestamp, run_len: u
     let mut runs = Vec::new();
     let mut run = Vec::with_capacity(run_len);
     for chain in chains {
-        for (data, time, diff) in chain.into_updates() {
-            run.push((data, std::cmp::max(time, since_ts), diff));
-            if run.len() >= run_len {
-                consolidate(&mut run);
-                // A run that consolidation left at most half full keeps accumulating, so updates
-                // that cancel within the heap cost no chunks, and each consolidation either halves
-                // the run or mints it.
-                if run.len() * 2 > run_len {
-                    push_run(&mut runs, mint_run(&mut run));
+        for chunk in chain.chunks {
+            chunk.with_view(|view| {
+                for i in 0..chunk.len() {
+                    let (data, time, diff) = view.get(i);
+                    run.push((D::into_owned(data), std::cmp::max(time, since_ts), diff));
+                    if run.len() >= run_len {
+                        consolidate(&mut run);
+                        // A run that consolidation left at most half full keeps accumulating, so
+                        // updates that cancel within the heap cost no chunks, and each
+                        // consolidation either halves the run or mints it.
+                        if run.len() * 2 > run_len {
+                            push_run(&mut runs, mint_run(&mut run));
+                        }
+                    }
                 }
-            }
+            });
         }
     }
     consolidate(&mut run);
@@ -1222,24 +1227,6 @@ impl<D: Data> Chain<D> {
         self.chunks.iter().flat_map(|c| {
             c.with_view(|view| {
                 (0..c.len())
-                    .map(|i| {
-                        let (d, t, r) = view.get(i);
-                        (D::into_owned(d), t, r)
-                    })
-                    .collect::<Vec<_>>()
-            })
-        })
-    }
-
-    /// Return an iterator over the contained updates that drops each chunk once it is read.
-    ///
-    /// A spilled chunk is copied out of the pool to be read, so dropping it right after releases
-    /// its pool slot instead of keeping the whole chain alive until its last update is read. The
-    /// iterator holds at most one chunk's worth of owned updates.
-    fn into_updates(self) -> impl Iterator<Item = (D, Timestamp, Diff)> {
-        self.chunks.into_iter().flat_map(|chunk| {
-            chunk.with_view(|view| {
-                (0..chunk.len())
                     .map(|i| {
                         let (d, t, r) = view.get(i);
                         (D::into_owned(d), t, r)
@@ -2797,18 +2784,6 @@ mod tests {
             // The read is scoped: every body is still in the pool and none was materialized.
             assert_all_spilled(&chain);
             assert!(chain.chunks.iter().all(|c| c.resident.get().is_none()));
-
-            let mut expected = 0_u64;
-            for (d, t, r) in chain.into_updates() {
-                assert_eq!(d, i64::try_from(expected).expect("fits"));
-                assert_eq!(t, Timestamp::new(expected));
-                assert_eq!(r, Diff::ONE);
-                expected += 1;
-            }
-            assert_eq!(
-                expected, count,
-                "`into_updates` yields every update in order"
-            );
         });
     }
 
