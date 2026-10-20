@@ -2254,8 +2254,12 @@ impl Coordinator {
                         revision,
                         snapshot: _,
                     } => {
-                        // Make sure our catalog hasn't changed.
-                        if *revision != self.catalog().transient_revision() {
+                        // Precomputed writes require their original catalog revision.
+                        if *revision != self.catalog().transient_revision()
+                            && !ops
+                                .iter()
+                                .all(|op| matches!(op, catalog::Op::RenameCommand(_)))
+                        {
                             return Err(AdapterError::DDLTransactionRace);
                         }
                         // Commit all of our queued ops.
@@ -2544,26 +2548,6 @@ impl Coordinator {
     }
 
     #[instrument]
-    pub(super) async fn sequence_alter_item_rename(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        plan: plan::AlterItemRenamePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let op = catalog::Op::RenameItem {
-            id: plan.id,
-            current_full_name: plan.current_full_name,
-            to_name: plan.to_name,
-        };
-        match self
-            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
-            .await
-        {
-            Ok(()) => Ok(ExecuteResponse::AlteredObject(plan.object_type)),
-            Err(err) => Err(err),
-        }
-    }
-
-    #[instrument]
     pub(super) async fn sequence_alter_retain_history(
         &mut self,
         ctx: &mut ExecuteContext,
@@ -2593,72 +2577,6 @@ impl Coordinator {
         self.catalog_transact_with_context(None, Some(ctx), ops)
             .await?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
-    }
-
-    #[instrument]
-    pub(super) async fn sequence_alter_schema_rename(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        plan: plan::AlterSchemaRenamePlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let (database_spec, schema_spec) = plan.cur_schema_spec;
-        let op = catalog::Op::RenameSchema {
-            database_spec,
-            schema_spec,
-            new_name: plan.new_schema_name,
-            check_reserved_names: true,
-        };
-        match self
-            .catalog_transact_with_ddl_transaction(ctx, vec![op], |_, _| Box::pin(async {}))
-            .await
-        {
-            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
-            Err(err) => Err(err),
-        }
-    }
-
-    #[instrument]
-    pub(super) async fn sequence_alter_schema_swap(
-        &mut self,
-        ctx: &mut ExecuteContext,
-        plan: plan::AlterSchemaSwapPlan,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        let plan::AlterSchemaSwapPlan {
-            schema_a_spec: (schema_a_db, schema_a),
-            schema_a_name,
-            schema_b_spec: (schema_b_db, schema_b),
-            schema_b_name,
-            name_temp,
-        } = plan;
-
-        let op_a = catalog::Op::RenameSchema {
-            database_spec: schema_a_db,
-            schema_spec: schema_a,
-            new_name: name_temp,
-            check_reserved_names: false,
-        };
-        let op_b = catalog::Op::RenameSchema {
-            database_spec: schema_b_db,
-            schema_spec: schema_b,
-            new_name: schema_a_name,
-            check_reserved_names: false,
-        };
-        let op_c = catalog::Op::RenameSchema {
-            database_spec: schema_a_db,
-            schema_spec: schema_a,
-            new_name: schema_b_name,
-            check_reserved_names: false,
-        };
-
-        match self
-            .catalog_transact_with_ddl_transaction(ctx, vec![op_a, op_b, op_c], |_, _| {
-                Box::pin(async {})
-            })
-            .await
-        {
-            Ok(()) => Ok(ExecuteResponse::AlteredObject(ObjectType::Schema)),
-            Err(err) => Err(err),
-        }
     }
 
     #[instrument]
