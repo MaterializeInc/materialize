@@ -263,8 +263,12 @@ impl Coordinator {
                 tracing::error!("cannot find {stage} for materialized view {id} in catalog");
                 coord_bail!("cannot find {stage} for materialized view in catalog");
             };
-            let Some(sink) = plan.sink_exports.values().next() else {
-                coord_bail!("the dataflow of materialized view {id} exports no sink");
+            let mut sinks = plan.sink_exports.values();
+            let (Some(sink), None) = (sinks.next(), sinks.next()) else {
+                return Err(AdapterError::Internal(format!(
+                    "the dataflow of materialized view {id} exports {} sinks, expected one",
+                    plan.sink_exports.len()
+                )));
             };
             let catalog = self.catalog();
             let name_of = |id: GlobalId| {

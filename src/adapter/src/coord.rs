@@ -3741,10 +3741,9 @@ impl Coordinator {
                                         .raw_expr
                                         .as_ref()
                                         .expect("SQL materialized view has a raw expression");
-                                    let local_expr = mv
-                                        .locally_optimized_expr
-                                        .as_ref()
-                                        .expect("SQL materialized view has a raw expression");
+                                    let local_expr = mv.locally_optimized_expr.as_ref().expect(
+                                        "SQL materialized view has a locally optimized expression",
+                                    );
                                     let typ = infer_sql_type_for_catalog(
                                         raw_expr,
                                         &local_expr.as_ref().clone(),
