@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 futures.workspace = true
+itertools.workspace = true
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
 mz-dyncfg = { path = "../dyncfg" }
@@ -57,4 +58,6 @@ uuid.workspace = true
 # when building tests, not the production binary, so keep it out of the bin's
 # feature set (see the [dependencies] mz-ore comment).
 mz-ore = { path = "../ore", features = ["test"] }
+rand.workspace = true
+serde_json.workspace = true
 tempfile.workspace = true

@@ -39,7 +39,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::Context;
+use itertools::Itertools;
 use mz_compute_client::protocol::command::{ComputeCommand, PeekTarget};
+use mz_compute_types::plan::envelope::parse_envelope;
+use mz_compute_types::plan::validate::ValidationError;
 use mz_dyncfg::{ConfigType, ConfigUpdates, ConfigVal};
 use mz_expr::visit::Visit;
 use mz_expr::{Id, MirRelationExpr};
@@ -61,6 +64,7 @@ use crate::dataflow::{
     DataflowBuilder, PersistSink, PersistSource, count_over_index, index_dataflow,
 };
 use crate::driver::Driver;
+use crate::lir_plan::{LirCatalog, LirIndex, LirPlanDataflow, LirRelation, declared_desc};
 
 /// The default payload padding (bytes) for synthetic rows when a command omits it.
 const DEFAULT_ROW_BYTES: usize = 64;
@@ -170,6 +174,34 @@ pub enum ExportSpec {
         /// Exclusive upper at which the subscribe completes; unbounded if absent.
         up_to: Option<u64>,
     },
+}
+
+/// A relation a `create-lir-dataflow` plan imports, bound by the name the plan uses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LirRelationSpec {
+    /// The name the plan's envelope gives the import.
+    pub name: String,
+    /// The collection's global id.
+    pub id: GlobalId,
+    /// Shard alias backing the collection, required if the plan reads it from persist.
+    #[serde(default)]
+    pub shard: Option<String>,
+    /// Schema name of the shard; defaults to the built-in sample schema.
+    #[serde(default)]
+    pub schema: Option<String>,
+    /// The shard's exclusive write upper (see `PersistSource::upper`).
+    #[serde(default)]
+    pub upper: Option<u64>,
+}
+
+/// An index a `create-lir-dataflow` plan imports, bound by the name the plan uses. The index
+/// must have been exported by a prior command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LirIndexSpec {
+    /// The name the plan's envelope gives the index.
+    pub name: String,
+    /// The index's global id.
+    pub index_id: GlobalId,
 }
 
 /// What an `explain` command renders: a dataflow given inline, or a reference to one
@@ -528,6 +560,36 @@ pub enum Command {
         /// default, so the caller's MIR is lowered faithfully.
         #[serde(default)]
         optimize: bool,
+    },
+    /// Submit (without scheduling) the dataflow of a user-provided LIR plan, as
+    /// `CREATE MATERIALIZED VIEW ... FROM PLAN` builds it.
+    ///
+    /// The plan is an LIR envelope in JSON. Its imports are bound by name to persist shards
+    /// and registered indexes, its output is exported to a materialized-view sink writing
+    /// `shard`, and the dataflow is validated in user plan mode before it is submitted. The
+    /// sink's schema defaults to the type of the plan's output. A plan that fails validation
+    /// reports every violation and submits nothing.
+    CreateLirDataflow {
+        /// Debug name for the dataflow; defaults to `headless-lir-dataflow`.
+        #[serde(default)]
+        name: Option<String>,
+        /// Bindings of the plan's relation imports.
+        #[serde(default)]
+        relations: Vec<LirRelationSpec>,
+        /// Bindings of the plan's index imports.
+        #[serde(default)]
+        indexes: Vec<LirIndexSpec>,
+        /// The LIR envelope JSON.
+        plan: String,
+        /// The materialized-view sink's global id.
+        sink_id: GlobalId,
+        /// Target shard alias of the sink; allocated on first use.
+        shard: String,
+        /// Declared schema of the sink; defaults to the type of the plan's output.
+        #[serde(default)]
+        schema: Option<String>,
+        /// The dataflow's `as_of`.
+        as_of: u64,
     },
     /// Render a dataflow's lowered LIR plan as text, the output assertion being the
     /// plan shape itself. It submits nothing and records no index, subscribe, or
@@ -1118,6 +1180,107 @@ impl ScriptState {
                 }
                 Ok("ok".to_string())
             }
+            Command::CreateLirDataflow {
+                name,
+                relations,
+                indexes,
+                plan,
+                sink_id,
+                shard,
+                schema,
+                as_of,
+            } => {
+                let envelope = parse_envelope(&plan)?;
+                let mut catalog = LirCatalog::default();
+                for index in indexes {
+                    let entry = self.indexes.get(&index.index_id).ok_or_else(|| {
+                        anyhow::anyhow!("unknown index {}; define it first", index.index_id)
+                    })?;
+                    catalog.indexes.insert(
+                        index.name,
+                        LirIndex {
+                            index_id: index.index_id,
+                            on_id: entry.on_id,
+                            key: entry.key.clone(),
+                        },
+                    );
+                }
+                for relation in relations {
+                    let persist = match &relation.shard {
+                        Some(alias) => {
+                            let desc = self.resolve_schema(&relation.schema)?;
+                            let upper = relation.upper.ok_or_else(|| {
+                                anyhow::anyhow!("relation {} needs an upper", relation.name)
+                            })?;
+                            Some(PersistSource {
+                                shard: self.shard_id(alias),
+                                location: self.loc.clone(),
+                                desc,
+                                upper: Timestamp::from(upper),
+                            })
+                        }
+                        None => None,
+                    };
+                    // A relation read only through an index takes the index's type.
+                    let typ = match &persist {
+                        Some(source) => ReprRelationType::from(source.desc.typ()),
+                        None => self
+                            .indexes
+                            .values()
+                            .find(|entry| entry.on_id == relation.id)
+                            .map(|entry| entry.on_type.clone())
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "relation {} has neither a shard nor an index",
+                                    relation.name
+                                )
+                            })?,
+                    };
+                    catalog.relations.insert(
+                        relation.name,
+                        LirRelation {
+                            id: relation.id,
+                            typ,
+                            persist,
+                            monotonic: false,
+                        },
+                    );
+                }
+                let mut dataflow = LirPlanDataflow::new(
+                    name.unwrap_or_else(|| "headless-lir-dataflow".to_string()),
+                    &envelope,
+                    &catalog,
+                )?;
+                let desc = match &schema {
+                    Some(_) => self.resolve_schema(&schema)?,
+                    None => declared_desc(
+                        &dataflow
+                            .output_type()
+                            .map_err(|errors| validation_failure(&errors))?,
+                    ),
+                };
+                let target = PersistSink {
+                    shard: self.shard_id(&shard),
+                    location: self.loc.clone(),
+                };
+                dataflow
+                    .as_of(Timestamp::from(as_of))
+                    .export_materialized_view(sink_id, desc.clone(), target.clone());
+                dataflow
+                    .validate()
+                    .map_err(|errors| validation_failure(&errors))?;
+                self.driver.submit_dataflow(dataflow.finish()?)?;
+                self.mv_outputs.insert(
+                    sink_id,
+                    CollectionMetadata {
+                        persist_location: target.location,
+                        data_shard: target.shard,
+                        relation_desc: desc,
+                        txns_shard: None,
+                    },
+                );
+                Ok("ok".to_string())
+            }
             Command::Explain { target } => {
                 // Resolve the target to a dataflow body: either given inline, or the
                 // spec a prior `create-dataflow name=<name>` recorded.
@@ -1291,6 +1454,14 @@ pub async fn run(
         anyhow::bail!("{mismatches} stanza(s) did not match their expected output");
     }
     Ok(())
+}
+
+/// An error listing validation errors, one per line.
+fn validation_failure(errors: &[ValidationError]) -> anyhow::Error {
+    anyhow::anyhow!(
+        "invalid LIR plan:\n{}",
+        errors.iter().map(ToString::to_string).join("\n")
+    )
 }
 
 /// Render peeked rows as deterministic golden text: each row's datums joined by

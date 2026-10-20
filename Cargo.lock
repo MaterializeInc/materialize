@@ -6863,6 +6863,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "futures",
+ "itertools 0.15.0",
  "mz-compute-client",
  "mz-compute-types",
  "mz-dyncfg",
@@ -6876,7 +6877,9 @@ dependencies = [
  "mz-service",
  "mz-storage-types",
  "mz-transform",
+ "rand 0.10.3",
  "serde",
+ "serde_json",
  "tempfile",
  "timely",
  "tokio",

@@ -43,6 +43,7 @@ use mz_repr::GlobalId;
 
 use crate::script::{
     BuildSpec, ColumnSpec, Command, ConfigSetting, ExplainTarget, ExportSpec, ImportSpec,
+    LirIndexSpec, LirRelationSpec,
 };
 
 /// One element of a parsed script file, retained so a `REWRITE` reproduces the
@@ -577,6 +578,42 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
                 exports,
                 as_of,
                 optimize,
+            }
+        }
+        "create-lir-dataflow" => {
+            let mut relations = Vec::new();
+            let mut indexes = Vec::new();
+            let mut plan = None;
+            for (sub_header, sub_body) in group(body)? {
+                let (verb, args, _flags) = parse_header(&sub_header.text)?;
+                match verb.as_str() {
+                    "relation" => relations.push(LirRelationSpec {
+                        name: req(&args, "name")?.to_string(),
+                        id: req_id(&args, "id")?,
+                        shard: opt_string(&args, "shard"),
+                        schema: opt_string(&args, "schema"),
+                        upper: opt_u64(&args, "upper")?,
+                    }),
+                    "index" => indexes.push(LirIndexSpec {
+                        name: req(&args, "name")?.to_string(),
+                        index_id: req_id(&args, "index")?,
+                    }),
+                    "plan" => {
+                        ensure!(!sub_body.is_empty(), "`plan` needs an envelope body");
+                        plan = Some(body_text(sub_body));
+                    }
+                    other => bail!("unknown create-lir-dataflow sub-command `{other}`"),
+                }
+            }
+            Command::CreateLirDataflow {
+                name: opt_string(&args, "name"),
+                relations,
+                indexes,
+                plan: plan.context("create-lir-dataflow needs a `plan`")?,
+                sink_id: req_id(&args, "sink")?,
+                shard: req(&args, "shard")?.to_string(),
+                schema: opt_string(&args, "schema"),
+                as_of: req_u64(&args, "as-of")?,
             }
         }
         "explain" => {
