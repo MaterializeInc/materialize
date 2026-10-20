@@ -1,5 +1,7 @@
 # User-provided LIR plans
 
+Status: prototyped on branch `user-lir-plans`. The findings are in [User-provided LIR plans: findings](./20261019_user_provided_lir_plans_findings.md).
+
 Associated:
 * [Pinning LIR plans](./20260826_pinned_lir.md)
 * [Declared schemas for materialized views](https://github.com/MaterializeInc/materialize/pull/39596) (open)
