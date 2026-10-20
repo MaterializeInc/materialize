@@ -66,10 +66,7 @@ def test_connection_routing_and_escaping():
     assert len(config["libpq_envs"]) == 3
     for i, env in enumerate(config["libpq_envs"]):
         cluster = "c" if i == 0 else f"qps_{i}"
-        assert env["PGOPTIONS"] == (
-            f"-c cluster={cluster} -c statement_timeout=30000"
-            " -c statement_logging_sample_rate=0"
-        )
+        assert env["PGOPTIONS"] == f"-c cluster={cluster} -c statement_timeout=30000"
         assert config["cluster_names"][i] == cluster
         assert env["PGSSLMODE"] == "require"
         assert env["PGPASSWORD"] == "quote'and\\slash"
@@ -299,10 +296,6 @@ def test_pgbench_measurement_records_max_latency(monkeypatch, tmp_path, logging_
     workload = module.QpsEnvdStrongScalingScenario(
         QpsSweep([1], ["prepared"], clusters=1)
     )
-    if logging_rate:
-        with pytest.raises(module.UIError, match="statement_logging_sample_rate=0"):
-            workload.measure(runner, "50cc", 1, "prepared")
-        return
     workload.measure(runner, "50cc", 1, "prepared")
     config, composition = calls[0]
     assert composition is runner.target.composition
@@ -312,6 +305,9 @@ def test_pgbench_measurement_records_max_latency(monkeypatch, tmp_path, logging_
     assert "max_latency_ms" in module.ENVD_FIELDNAMES
     artifact = next((tmp_path / "test/cluster-spec-sheet/qps-logs").glob("*.json"))
     assert json.loads(artifact.read_text())["max_latency_ms"] == 30
+    assert json.loads(artifact.read_text())["statement_logging_sample_rates"] == [
+        logging_rate
+    ]
     assert ci_calls == []
 
 

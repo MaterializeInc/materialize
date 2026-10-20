@@ -1977,8 +1977,6 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         )
         result = pgbench.run(config, runner.target.composition)
         validate_qps_result(result, concurrency, protocol)
-        if any(rate != 0 for rate in result["statement_logging_sample_rates"]):
-            raise UIError("QPS benchmark requires statement_logging_sample_rate=0")
         warnings = list(result["driver"]["warnings"])
         replica_cpu = None
         replica_samples = 0
