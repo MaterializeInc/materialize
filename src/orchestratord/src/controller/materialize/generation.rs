@@ -1064,10 +1064,21 @@ fn create_environmentd_statefulset_object(
         mz.spec.environmentd_readiness_probe.as_ref(),
     );
     let liveness_probe = environmentd_probe(
-        base_probe,
+        base_probe.clone(),
         config.environmentd_default_liveness_probe.as_ref(),
         mz.spec.environmentd_liveness_probe.as_ref(),
     );
+    // Unlike readiness and liveness, environmentd has no startup probe unless
+    // one is configured.
+    let startup_probe = (config.environmentd_default_startup_probe.is_some()
+        || mz.spec.environmentd_startup_probe.is_some())
+    .then(|| {
+        environmentd_probe(
+            base_probe,
+            config.environmentd_default_startup_probe.as_ref(),
+            mz.spec.environmentd_startup_probe.as_ref(),
+        )
+    });
 
     let security_context = if config.enable_security_context {
         // Since we want to adhere to the most restrictive security context, all
@@ -1184,6 +1195,7 @@ fn create_environmentd_statefulset_object(
         args: Some(args),
         env: Some(env),
         volume_mounts: Some(volume_mounts),
+        startup_probe,
         liveness_probe: Some(liveness_probe),
         readiness_probe: Some(readiness_probe),
         resources: mz
@@ -1363,6 +1375,30 @@ fn create_environmentd_statefulset_object(
         spec: Some(statefulset_spec),
         status: None,
     }
+}
+
+/// Rejects a probe that sets more than one handler (`exec`, `grpc`, `httpGet`,
+/// `tcpSocket`), which Kubernetes would reject when the pod is created.
+///
+/// [`environmentd_probe`] only produces a valid probe if every layer passes
+/// this check.
+pub fn validate_probe_handlers(probe: &Probe) -> Result<(), anyhow::Error> {
+    let handlers: Vec<_> = [
+        ("exec", probe.exec.is_some()),
+        ("grpc", probe.grpc.is_some()),
+        ("httpGet", probe.http_get.is_some()),
+        ("tcpSocket", probe.tcp_socket.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(name, set)| set.then_some(name))
+    .collect();
+    if handlers.len() > 1 {
+        anyhow::bail!(
+            "probe sets more than one handler ({}), but at most one is allowed",
+            handlers.join(", ")
+        );
+    }
+    Ok(())
 }
 
 /// Layers the operator-wide default and then the per-environment override onto
@@ -1657,7 +1693,7 @@ mod tests {
     use k8s_openapi::api::core::v1::{HTTPGetAction, Probe, TCPSocketAction};
     use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
-    use super::environmentd_probe;
+    use super::{environmentd_probe, validate_probe_handlers};
 
     fn base() -> Probe {
         Probe {
@@ -1715,6 +1751,24 @@ mod tests {
                 http_get: Some(http_get),
                 ..base()
             }
+        );
+    }
+
+    #[mz_ore::test]
+    fn validate_probe_handlers_rejects_multiple_handlers() {
+        assert!(validate_probe_handlers(&Probe::default()).is_ok());
+        assert!(validate_probe_handlers(&base()).is_ok());
+        let both = Probe {
+            http_get: Some(HTTPGetAction {
+                port: IntOrString::Int(6878),
+                ..Default::default()
+            }),
+            ..base()
+        };
+        let err = validate_probe_handlers(&both).unwrap_err();
+        assert!(
+            err.to_string().contains("httpGet, tcpSocket"),
+            "unexpected error: {err}"
         );
     }
 }

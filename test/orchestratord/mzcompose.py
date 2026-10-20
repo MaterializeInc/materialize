@@ -1764,6 +1764,7 @@ class EnvironmentdProbes(Modification):
                 {
                     "readiness": {"periodSeconds": 5},
                     "liveness": {"failureThreshold": 60, "timeoutSeconds": 3},
+                    "startup": {"failureThreshold": 360},
                 },
             ]
         return [None]
@@ -1777,6 +1778,7 @@ class EnvironmentdProbes(Modification):
             spec = definition["materialize"]["spec"]
             spec["environmentdReadinessProbe"] = self.value["readiness"]
             spec["environmentdLivenessProbe"] = self.value["liveness"]
+            spec["environmentdStartupProbe"] = self.value["startup"]
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
         if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
@@ -1791,6 +1793,10 @@ class EnvironmentdProbes(Modification):
             "readinessProbe": {**base, **overrides["readiness"]},
             "livenessProbe": {**base, **overrides["liveness"]},
         }
+        # There is no startup probe unless one is configured.
+        expected_startup = (
+            {**base, **self.value["startup"]} if self.value is not None else None
+        )
 
         def check_pods() -> None:
             container = get_environmentd_data()["items"][0]["spec"]["containers"][0]
@@ -1803,6 +1809,18 @@ class EnvironmentdProbes(Modification):
                 assert (
                     actual == expected_fields
                 ), f"Expected environmentd {probe_name} {expected_fields}, but got {probe}"
+            startup = container.get("startupProbe")
+            if expected_startup is None:
+                assert startup is None, f"Expected no startupProbe, but got {startup}"
+            else:
+                assert startup is not None, "Expected a startupProbe"
+                assert (
+                    "tcpSocket" in startup
+                ), f"Expected tcpSocket in startupProbe: {startup}"
+                actual = {k: startup.get(k) for k in expected_startup}
+                assert (
+                    actual == expected_startup
+                ), f"Expected environmentd startupProbe {expected_startup}, but got {startup}"
 
         retry(check_pods, 120)
 

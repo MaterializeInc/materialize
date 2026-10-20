@@ -344,6 +344,14 @@ environmentd:
   # @notationType -- k8s/probe
   # @default -- ``{}``
   defaultLivenessProbe: {}
+  # -- Default startup probe for environmentd. Liveness and readiness checks
+  # are held off until it succeeds. No startup probe runs unless this or the
+  # Materialize CR's `environmentdStartupProbe` sets one. It is overlaid onto
+  # the built-in TCP check against the SQL port in the same way as
+  # `defaultReadinessProbe`.
+  # @notationType -- k8s/probe
+  # @default -- ``{}``
+  defaultStartupProbe: {}
 
 clusterd:
   # -- Node selector to use for all clusterd pods spawned by the operator

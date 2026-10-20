@@ -163,6 +163,14 @@
         "deprecated": false
       },
       {
+        "name": "environmentdStartupProbe",
+        "type": "io.k8s.api.core.v1.Probe",
+        "description": "Startup probe for the environmentd container. Liveness and readiness checks are held\noff until it succeeds, so it can allow a long startup without loosening the liveness\nprobe.\n\nNo startup probe runs unless this field or the operator's default sets one. Fields set\nhere are overlaid onto the operator's default probe, so only the fields being changed\nneed to be set. If no handler (`exec`, `grpc`, `httpGet`, `tcpSocket`) is set, the\ndefault TCP check against the SQL port is used.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
         "name": "forcePromote",
         "type": "String",
         "description": "If `forcePromote` is set to the same value as the `status.requestedRolloutHash`,\ncurrent rollout will skip waiting for clusters in the new\ngeneration to rehydrate before promoting the new environmentd to\nleader.\n\nThis field is excluded from the rollout hash and changes will not trigger a rollout.",
