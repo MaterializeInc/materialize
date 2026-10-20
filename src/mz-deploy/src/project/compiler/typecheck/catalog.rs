@@ -40,9 +40,10 @@ use mz_repr::{
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
-    CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase, CatalogError,
-    CatalogItem, CatalogItemRef, CatalogItemType, CatalogNetworkPolicy, CatalogRef, CatalogRole,
-    CatalogSchema, CatalogType, CatalogTypeDetails, DefaultPrivilegeAclItem,
+    CatalogCluster, CatalogClusterRef, CatalogClusterReplicaRef, CatalogConfig, CatalogDatabase,
+    CatalogDatabaseRef, CatalogError, CatalogItem, CatalogItemRef, CatalogItemType,
+    CatalogNetworkPolicyRef, CatalogRef, CatalogRole, CatalogRoleRef, CatalogSchema,
+    CatalogSchemaRef, CatalogType, CatalogTypeDetails, DefaultPrivilegeAclItem,
     DefaultPrivilegeObject, EnvironmentId, IdReference, NameReference, ObjectType as SqlObjectType,
     RoleAttributes, SessionCatalog, SystemObjectType,
 };
@@ -51,7 +52,7 @@ use mz_sql::names::{
     QualifiedSchemaName, RawDatabaseSpecifier, ResolvedDatabaseSpecifier, ResolvedIds, SchemaId,
     SchemaSpecifier,
 };
-use mz_sql::plan::{ClusterSchedule, Params, Plan, PlanContext, PlanError, StatementDesc};
+use mz_sql::plan::{ClusterSchedule, Params, Plan, PlanContext, StatementDesc};
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 use mz_sql::session::vars::{OwnedVarInput, SystemVars};
 use mz_storage_types::connections::Connection;
@@ -148,7 +149,7 @@ impl CatalogDatabase for LocalDatabase {
         &self.schema_ids
     }
 
-    fn schemas(&self) -> Vec<&dyn CatalogSchema> {
+    fn schemas(&self) -> Vec<CatalogSchemaRef<'_>> {
         Vec::new()
     }
 
@@ -258,15 +259,15 @@ impl<'a> CatalogCluster<'a> for StubCluster {
         &self.bound_objects
     }
 
-    fn replica_ids(&self) -> &BTreeMap<String, ReplicaId> {
-        &self.replica_ids
+    fn replica_id(&self, name: &str) -> Option<ReplicaId> {
+        self.replica_ids.get(name).copied()
     }
 
-    fn replicas(&self) -> Vec<&dyn CatalogClusterReplica<'_>> {
+    fn replicas(&self) -> Vec<CatalogClusterReplicaRef<'_>> {
         Vec::new()
     }
 
-    fn replica(&self, _id: ReplicaId) -> &dyn CatalogClusterReplica<'_> {
+    fn replica(&self, _id: ReplicaId) -> CatalogClusterReplicaRef<'_> {
         // Cluster replicas aren't part of project SQL — never reached during typecheck.
         unreachable!("catalog backend has no cluster replicas")
     }
@@ -298,10 +299,11 @@ impl<'a> CatalogCluster<'a> for StubCluster {
     fn auto_scaling_strategy(&self) -> Option<&mz_sql::plan::AutoScalingStrategy> {
         None
     }
-    fn try_to_plan(&self) -> Result<mz_sql::plan::CreateClusterPlan, PlanError> {
-        Err(PlanError::Unsupported {
-            feature: "clusters are not supported by the catalog typecheck backend".into(),
-            discussion_no: None,
+    fn try_to_plan(
+        &self,
+    ) -> Result<mz_sql::plan::CreateClusterPlan, mz_sql::catalog::ClusterPlanError> {
+        Err(mz_sql::catalog::ClusterPlanError {
+            feature: "clusters are not supported by the catalog typecheck backend".to_owned(),
         })
     }
 }
@@ -1323,6 +1325,16 @@ impl SessionCatalog for CatalogRuntime {
         &self.active_role.id
     }
 
+    fn active_database_name(&self) -> Option<&str> {
+        self.active_database.as_ref().map(|id| {
+            self.databases_by_id
+                .get(id)
+                .expect("database exists")
+                .name
+                .as_str()
+        })
+    }
+
     fn active_database(&self) -> Option<&mz_sql::names::DatabaseId> {
         self.active_database.as_ref()
     }
@@ -1343,22 +1355,27 @@ impl SessionCatalog for CatalogRuntime {
         None
     }
 
-    fn resolve_database(&self, database_name: &str) -> Result<&dyn CatalogDatabase, CatalogError> {
+    fn resolve_database(
+        &self,
+        database_name: &str,
+    ) -> Result<CatalogDatabaseRef<'_>, CatalogError> {
         let id = self
             .databases_by_name
             .get(database_name)
             .ok_or_else(|| CatalogError::UnknownDatabase(database_name.into()))?;
-        Ok(self.databases_by_id.get(id).expect("database exists"))
+        Ok(CatalogRef::Borrowed(
+            self.databases_by_id.get(id).expect("database exists"),
+        ))
     }
 
-    fn get_database(&self, id: &mz_sql::names::DatabaseId) -> &dyn CatalogDatabase {
-        self.databases_by_id.get(id).expect("database exists")
+    fn get_database(&self, id: &mz_sql::names::DatabaseId) -> CatalogDatabaseRef<'_> {
+        CatalogRef::Borrowed(self.databases_by_id.get(id).expect("database exists"))
     }
 
-    fn get_databases(&self) -> Vec<&dyn CatalogDatabase> {
+    fn get_databases(&self) -> Vec<CatalogDatabaseRef<'_>> {
         self.databases_by_id
             .values()
-            .map(|database| database as &dyn CatalogDatabase)
+            .map(|database| -> CatalogDatabaseRef<'_> { CatalogRef::Borrowed(database) })
             .collect()
     }
 
@@ -1366,7 +1383,7 @@ impl SessionCatalog for CatalogRuntime {
         &self,
         database_name: Option<&str>,
         schema_name: &str,
-    ) -> Result<&dyn CatalogSchema, CatalogError> {
+    ) -> Result<CatalogSchemaRef<'_>, CatalogError> {
         let database_spec = if self.ambient_schemas_by_name.contains_key(schema_name) {
             ResolvedDatabaseSpecifier::Ambient
         } else if let Some(database_name) = database_name {
@@ -1388,10 +1405,10 @@ impl SessionCatalog for CatalogRuntime {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_name: &str,
-    ) -> Result<&dyn CatalogSchema, CatalogError> {
+    ) -> Result<CatalogSchemaRef<'_>, CatalogError> {
         self.schemas_by_key
             .get(&(*database_spec, schema_name.into()))
-            .map(|schema| schema as &dyn CatalogSchema)
+            .map(|schema| -> CatalogSchemaRef<'_> { CatalogRef::Borrowed(schema) })
             .ok_or_else(|| CatalogError::UnknownSchema(schema_name.into()))
     }
 
@@ -1399,16 +1416,18 @@ impl SessionCatalog for CatalogRuntime {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
-    ) -> &dyn CatalogSchema {
-        self.schemas_by_id
-            .get(&(*database_spec, schema_spec.clone()))
-            .expect("schema exists")
+    ) -> CatalogSchemaRef<'_> {
+        CatalogRef::Borrowed(
+            self.schemas_by_id
+                .get(&(*database_spec, schema_spec.clone()))
+                .expect("schema exists"),
+        )
     }
 
-    fn get_schemas(&self) -> Vec<&dyn CatalogSchema> {
+    fn get_schemas(&self) -> Vec<CatalogSchemaRef<'_>> {
         self.schemas_by_id
             .values()
-            .map(|schema| schema as &dyn CatalogSchema)
+            .map(|schema| -> CatalogSchemaRef<'_> { CatalogRef::Borrowed(schema) })
             .collect()
     }
 
@@ -1424,9 +1443,9 @@ impl SessionCatalog for CatalogRuntime {
         matches!(schema, SchemaSpecifier::Id(SchemaId::System(_)))
     }
 
-    fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError> {
+    fn resolve_role(&self, role_name: &str) -> Result<CatalogRoleRef<'_>, CatalogError> {
         if role_name == self.active_role.name {
-            Ok(&self.active_role)
+            Ok(CatalogRef::Borrowed(&self.active_role))
         } else {
             Err(CatalogError::UnknownRole(role_name.into()))
         }
@@ -1435,26 +1454,26 @@ impl SessionCatalog for CatalogRuntime {
     fn resolve_network_policy(
         &self,
         network_policy_name: &str,
-    ) -> Result<&dyn CatalogNetworkPolicy, CatalogError> {
+    ) -> Result<CatalogNetworkPolicyRef<'_>, CatalogError> {
         Err(CatalogError::UnknownNetworkPolicy(
             network_policy_name.into(),
         ))
     }
 
-    fn try_get_role(&self, id: &RoleId) -> Option<&dyn CatalogRole> {
+    fn try_get_role(&self, id: &RoleId) -> Option<CatalogRoleRef<'_>> {
         if *id == self.active_role.id {
-            Some(&self.active_role)
+            Some(CatalogRef::Borrowed(&self.active_role))
         } else {
             None
         }
     }
 
-    fn get_role(&self, id: &RoleId) -> &dyn CatalogRole {
+    fn get_role(&self, id: &RoleId) -> CatalogRoleRef<'_> {
         self.try_get_role(id).expect("role exists")
     }
 
-    fn get_roles(&self) -> Vec<&dyn CatalogRole> {
-        vec![&self.active_role]
+    fn get_roles(&self) -> Vec<CatalogRoleRef<'_>> {
+        vec![CatalogRef::Borrowed(&self.active_role)]
     }
 
     fn mz_system_role_id(&self) -> RoleId {
@@ -1465,22 +1484,22 @@ impl SessionCatalog for CatalogRuntime {
         BTreeSet::new()
     }
 
-    fn get_network_policy(&self, _id: &NetworkPolicyId) -> &dyn CatalogNetworkPolicy {
+    fn get_network_policy(&self, _id: &NetworkPolicyId) -> CatalogNetworkPolicyRef<'_> {
         // Network policies aren't part of project SQL — never reached during typecheck.
         unreachable!("catalog backend has no network policies")
     }
 
-    fn get_network_policies(&self) -> Vec<&dyn CatalogNetworkPolicy> {
+    fn get_network_policies(&self) -> Vec<CatalogNetworkPolicyRef<'_>> {
         Vec::new()
     }
 
     fn resolve_cluster<'a, 'b>(
         &'a self,
         cluster_name: Option<&'b str>,
-    ) -> Result<&'a dyn CatalogCluster<'a>, CatalogError> {
+    ) -> Result<CatalogClusterRef<'a>, CatalogError> {
         match cluster_name {
-            None => Ok(&self.cluster),
-            Some(name) if name == self.cluster.name => Ok(&self.cluster),
+            None => Ok(CatalogRef::Borrowed(&self.cluster)),
+            Some(name) if name == self.cluster.name => Ok(CatalogRef::Borrowed(&self.cluster)),
             Some(name) => Err(CatalogError::UnknownCluster(name.into())),
         }
     }
@@ -1488,7 +1507,7 @@ impl SessionCatalog for CatalogRuntime {
     fn resolve_cluster_replica<'a, 'b>(
         &'a self,
         cluster_replica_name: &'b mz_sql_parser::ast::QualifiedReplica,
-    ) -> Result<&'a dyn CatalogClusterReplica<'a>, CatalogError> {
+    ) -> Result<CatalogClusterReplicaRef<'a>, CatalogError> {
         Err(CatalogError::UnknownClusterReplica(
             cluster_replica_name.to_string(),
         ))
@@ -1505,7 +1524,7 @@ impl SessionCatalog for CatalogRuntime {
             },
             CatalogError::UnknownItem,
         )
-        .map(|item| CatalogRef::Borrowed(item as &dyn CatalogItem))
+        .map(|item| -> CatalogItemRef<'_> { CatalogRef::Borrowed(item) })
     }
 
     fn resolve_function(
@@ -1520,7 +1539,7 @@ impl SessionCatalog for CatalogRuntime {
                 alternative: None,
             },
         )
-        .map(|item| CatalogRef::Borrowed(item as &dyn CatalogItem))
+        .map(|item| -> CatalogItemRef<'_> { CatalogRef::Borrowed(item) })
     }
 
     fn resolve_type(
@@ -1532,7 +1551,7 @@ impl SessionCatalog for CatalogRuntime {
             |item| item.item_type == CatalogItemType::Type,
             |name| CatalogError::UnknownType { name },
         )
-        .map(|item| CatalogRef::Borrowed(item as &dyn CatalogItem))
+        .map(|item| -> CatalogItemRef<'_> { CatalogRef::Borrowed(item) })
     }
 
     fn get_system_type(&self, name: &str) -> CatalogItemRef<'_> {
@@ -1561,7 +1580,7 @@ impl SessionCatalog for CatalogRuntime {
     fn try_get_item(&self, id: &CatalogItemId) -> Option<CatalogItemRef<'_>> {
         self.items_by_id
             .get(id)
-            .map(|item| CatalogRef::Borrowed(item.as_ref() as &dyn CatalogItem))
+            .map(|item| -> CatalogItemRef<'_> { CatalogRef::Borrowed(item.as_ref()) })
     }
 
     fn try_get_item_by_global_id<'a>(
@@ -1571,8 +1590,8 @@ impl SessionCatalog for CatalogRuntime {
         self.items_by_global_id
             .get(id)
             .and_then(|item_id| self.items_by_id.get(item_id))
-            .map(|item| {
-                Box::new(LocalItem::clone(item)) as Box<dyn mz_sql::catalog::CatalogCollectionItem>
+            .map(|item| -> Box<dyn mz_sql::catalog::CatalogCollectionItem> {
+                Box::new(LocalItem::clone(item))
             })
     }
 
@@ -1590,7 +1609,7 @@ impl SessionCatalog for CatalogRuntime {
     fn get_items(&self) -> Vec<CatalogItemRef<'_>> {
         self.items_by_id
             .values()
-            .map(|item| CatalogRef::Borrowed(item.as_ref() as &dyn CatalogItem))
+            .map(|item| -> CatalogItemRef<'_> { CatalogRef::Borrowed(item.as_ref()) })
             .collect()
     }
 
@@ -1599,40 +1618,42 @@ impl SessionCatalog for CatalogRuntime {
             .get(name)
             .and_then(|item_ids| item_ids.first())
             .and_then(|item_id| self.items_by_id.get(item_id))
-            .map(|item| CatalogRef::Borrowed(item.as_ref() as &dyn CatalogItem))
+            .map(|item| -> CatalogItemRef<'_> { CatalogRef::Borrowed(item.as_ref()) })
     }
 
     fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>> {
         self.items_by_name.get(name).and_then(|item_ids| {
-            item_ids.iter().find_map(|item_id| {
-                let item = self.items_by_id.get(item_id)?;
-                if item.item_type == CatalogItemType::Type {
-                    Some(CatalogRef::Borrowed(item.as_ref() as &dyn CatalogItem))
-                } else {
-                    None
-                }
-            })
+            item_ids
+                .iter()
+                .find_map(|item_id| -> Option<CatalogItemRef<'_>> {
+                    let item = self.items_by_id.get(item_id)?;
+                    if item.item_type == CatalogItemType::Type {
+                        Some(CatalogRef::Borrowed(item.as_ref()))
+                    } else {
+                        None
+                    }
+                })
         })
     }
 
-    fn get_cluster(&self, _id: ClusterId) -> &dyn CatalogCluster<'_> {
-        &self.cluster
+    fn get_cluster(&self, _id: ClusterId) -> CatalogClusterRef<'_> {
+        CatalogRef::Borrowed(&self.cluster)
     }
 
-    fn get_clusters(&self) -> Vec<&dyn CatalogCluster<'_>> {
-        vec![&self.cluster]
+    fn get_clusters(&self) -> Vec<CatalogClusterRef<'_>> {
+        vec![CatalogRef::Borrowed(&self.cluster)]
     }
 
     fn get_cluster_replica(
         &self,
         _cluster_id: ClusterId,
         _replica_id: ReplicaId,
-    ) -> &dyn CatalogClusterReplica<'_> {
+    ) -> CatalogClusterReplicaRef<'_> {
         // Cluster replicas aren't part of project SQL — never reached during typecheck.
         unreachable!("catalog backend has no replicas")
     }
 
-    fn get_cluster_replicas(&self) -> Vec<&dyn CatalogClusterReplica<'_>> {
+    fn get_cluster_replicas(&self) -> Vec<CatalogClusterReplicaRef<'_>> {
         Vec::new()
     }
 
@@ -2035,6 +2056,10 @@ impl SessionCatalog for TaskCatalog {
         self.base.active_role_id()
     }
 
+    fn active_database_name(&self) -> Option<&str> {
+        self.base.active_database_name()
+    }
+
     fn active_database(&self) -> Option<&mz_sql::names::DatabaseId> {
         self.base.active_database()
     }
@@ -2055,15 +2080,18 @@ impl SessionCatalog for TaskCatalog {
         self.base.get_portal_desc_unverified(portal_name)
     }
 
-    fn resolve_database(&self, database_name: &str) -> Result<&dyn CatalogDatabase, CatalogError> {
+    fn resolve_database(
+        &self,
+        database_name: &str,
+    ) -> Result<CatalogDatabaseRef<'_>, CatalogError> {
         self.base.resolve_database(database_name)
     }
 
-    fn get_database(&self, id: &mz_sql::names::DatabaseId) -> &dyn CatalogDatabase {
+    fn get_database(&self, id: &mz_sql::names::DatabaseId) -> CatalogDatabaseRef<'_> {
         self.base.get_database(id)
     }
 
-    fn get_databases(&self) -> Vec<&dyn CatalogDatabase> {
+    fn get_databases(&self) -> Vec<CatalogDatabaseRef<'_>> {
         self.base.get_databases()
     }
 
@@ -2071,7 +2099,7 @@ impl SessionCatalog for TaskCatalog {
         &self,
         database_name: Option<&str>,
         schema_name: &str,
-    ) -> Result<&dyn CatalogSchema, CatalogError> {
+    ) -> Result<CatalogSchemaRef<'_>, CatalogError> {
         self.base.resolve_schema(database_name, schema_name)
     }
 
@@ -2079,12 +2107,12 @@ impl SessionCatalog for TaskCatalog {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_name: &str,
-    ) -> Result<&dyn CatalogSchema, CatalogError> {
+    ) -> Result<CatalogSchemaRef<'_>, CatalogError> {
         if let Some(schema) = self
             .schemas_by_key
             .get(&(*database_spec, schema_name.into()))
         {
-            return Ok(schema as &dyn CatalogSchema);
+            return Ok(CatalogRef::Borrowed(schema));
         }
         self.base
             .resolve_schema_in_database(database_spec, schema_name)
@@ -2094,23 +2122,23 @@ impl SessionCatalog for TaskCatalog {
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
-    ) -> &dyn CatalogSchema {
+    ) -> CatalogSchemaRef<'_> {
         if let Some(schema) = self
             .schemas_by_id
             .get(&(*database_spec, schema_spec.clone()))
         {
-            return schema as &dyn CatalogSchema;
+            return CatalogRef::Borrowed(schema);
         }
         self.base.get_schema(database_spec, schema_spec)
     }
 
-    fn get_schemas(&self) -> Vec<&dyn CatalogSchema> {
-        let mut schemas: Vec<&dyn CatalogSchema> = Vec::new();
+    fn get_schemas(&self) -> Vec<CatalogSchemaRef<'_>> {
+        let mut schemas: Vec<CatalogSchemaRef<'_>> = Vec::new();
         for ((db, schema_spec), base_schema) in &self.base.schemas_by_id {
             if let Some(overlay) = self.schemas_by_id.get(&(*db, schema_spec.clone())) {
-                schemas.push(overlay as &dyn CatalogSchema);
+                schemas.push(CatalogRef::Borrowed(overlay));
             } else {
-                schemas.push(base_schema as &dyn CatalogSchema);
+                schemas.push(CatalogRef::Borrowed(base_schema));
             }
         }
         schemas
@@ -2128,26 +2156,26 @@ impl SessionCatalog for TaskCatalog {
         self.base.is_system_schema_specifier(schema)
     }
 
-    fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError> {
+    fn resolve_role(&self, role_name: &str) -> Result<CatalogRoleRef<'_>, CatalogError> {
         self.base.resolve_role(role_name)
     }
 
     fn resolve_network_policy(
         &self,
         network_policy_name: &str,
-    ) -> Result<&dyn CatalogNetworkPolicy, CatalogError> {
+    ) -> Result<CatalogNetworkPolicyRef<'_>, CatalogError> {
         self.base.resolve_network_policy(network_policy_name)
     }
 
-    fn try_get_role(&self, id: &RoleId) -> Option<&dyn CatalogRole> {
+    fn try_get_role(&self, id: &RoleId) -> Option<CatalogRoleRef<'_>> {
         self.base.try_get_role(id)
     }
 
-    fn get_role(&self, id: &RoleId) -> &dyn CatalogRole {
+    fn get_role(&self, id: &RoleId) -> CatalogRoleRef<'_> {
         self.base.get_role(id)
     }
 
-    fn get_roles(&self) -> Vec<&dyn CatalogRole> {
+    fn get_roles(&self) -> Vec<CatalogRoleRef<'_>> {
         self.base.get_roles()
     }
 
@@ -2159,25 +2187,25 @@ impl SessionCatalog for TaskCatalog {
         self.base.collect_role_membership(id)
     }
 
-    fn get_network_policy(&self, id: &NetworkPolicyId) -> &dyn CatalogNetworkPolicy {
+    fn get_network_policy(&self, id: &NetworkPolicyId) -> CatalogNetworkPolicyRef<'_> {
         self.base.get_network_policy(id)
     }
 
-    fn get_network_policies(&self) -> Vec<&dyn CatalogNetworkPolicy> {
+    fn get_network_policies(&self) -> Vec<CatalogNetworkPolicyRef<'_>> {
         self.base.get_network_policies()
     }
 
     fn resolve_cluster<'a, 'b>(
         &'a self,
         cluster_name: Option<&'b str>,
-    ) -> Result<&'a dyn CatalogCluster<'a>, CatalogError> {
+    ) -> Result<CatalogClusterRef<'a>, CatalogError> {
         self.base.resolve_cluster(cluster_name)
     }
 
     fn resolve_cluster_replica<'a, 'b>(
         &'a self,
         cluster_replica_name: &'b mz_sql_parser::ast::QualifiedReplica,
-    ) -> Result<&'a dyn CatalogClusterReplica<'a>, CatalogError> {
+    ) -> Result<CatalogClusterReplicaRef<'a>, CatalogError> {
         self.base.resolve_cluster_replica(cluster_replica_name)
     }
 
@@ -2251,7 +2279,7 @@ impl SessionCatalog for TaskCatalog {
         items.extend(
             self.items_by_id
                 .values()
-                .map(|item| CatalogRef::Borrowed(item.as_ref() as &dyn CatalogItem)),
+                .map(|item| -> CatalogItemRef<'_> { CatalogRef::Borrowed(item.as_ref()) }),
         );
         items.extend(self.base.get_items());
         items
@@ -2272,11 +2300,11 @@ impl SessionCatalog for TaskCatalog {
         self.base.get_type_by_name(name)
     }
 
-    fn get_cluster(&self, id: ClusterId) -> &dyn CatalogCluster<'_> {
+    fn get_cluster(&self, id: ClusterId) -> CatalogClusterRef<'_> {
         self.base.get_cluster(id)
     }
 
-    fn get_clusters(&self) -> Vec<&dyn CatalogCluster<'_>> {
+    fn get_clusters(&self) -> Vec<CatalogClusterRef<'_>> {
         self.base.get_clusters()
     }
 
@@ -2284,11 +2312,11 @@ impl SessionCatalog for TaskCatalog {
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-    ) -> &dyn CatalogClusterReplica<'_> {
+    ) -> CatalogClusterReplicaRef<'_> {
         self.base.get_cluster_replica(cluster_id, replica_id)
     }
 
-    fn get_cluster_replicas(&self) -> Vec<&dyn CatalogClusterReplica<'_>> {
+    fn get_cluster_replicas(&self) -> Vec<CatalogClusterReplicaRef<'_>> {
         self.base.get_cluster_replicas()
     }
 

@@ -91,11 +91,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     fn active_role_id(&self) -> &RoleId;
 
     /// Returns the database to use if one is not explicitly specified.
-    fn active_database_name(&self) -> Option<&str> {
-        self.active_database()
-            .map(|id| self.get_database(id))
-            .map(|db| db.name())
-    }
+    fn active_database_name(&self) -> Option<&str>;
 
     /// Returns the database to use if one is not explicitly specified.
     fn active_database(&self) -> Option<&DatabaseId>;
@@ -119,15 +115,16 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     ///
     /// If `database_name` exists in the catalog, it returns a reference to the
     /// resolved database; otherwise it returns an error.
-    fn resolve_database(&self, database_name: &str) -> Result<&dyn CatalogDatabase, CatalogError>;
+    fn resolve_database(&self, database_name: &str)
+    -> Result<CatalogDatabaseRef<'_>, CatalogError>;
 
     /// Gets a database by its ID.
     ///
     /// Panics if `id` does not specify a valid database.
-    fn get_database(&self, id: &DatabaseId) -> &dyn CatalogDatabase;
+    fn get_database(&self, id: &DatabaseId) -> CatalogDatabaseRef<'_>;
 
     /// Gets all databases.
-    fn get_databases(&self) -> Vec<&dyn CatalogDatabase>;
+    fn get_databases(&self) -> Vec<CatalogDatabaseRef<'_>>;
 
     /// Resolves a partially-specified schema name.
     ///
@@ -137,7 +134,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
         &self,
         database_name: Option<&str>,
         schema_name: &str,
-    ) -> Result<&dyn CatalogSchema, CatalogError>;
+    ) -> Result<CatalogSchemaRef<'_>, CatalogError>;
 
     /// Resolves a schema name within a specified database.
     ///
@@ -147,7 +144,7 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_name: &str,
-    ) -> Result<&dyn CatalogSchema, CatalogError>;
+    ) -> Result<CatalogSchemaRef<'_>, CatalogError>;
 
     /// Gets a schema by its ID.
     ///
@@ -156,10 +153,10 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
-    ) -> &dyn CatalogSchema;
+    ) -> CatalogSchemaRef<'_>;
 
     /// Gets all schemas.
-    fn get_schemas(&self) -> Vec<&dyn CatalogSchema>;
+    fn get_schemas(&self) -> Vec<CatalogSchemaRef<'_>>;
 
     /// Gets the mz_internal schema id.
     fn get_mz_internal_schema_id(&self) -> SchemaId;
@@ -171,24 +168,24 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     fn is_system_schema_specifier(&self, schema: SchemaSpecifier) -> bool;
 
     /// Resolves the named role.
-    fn resolve_role(&self, role_name: &str) -> Result<&dyn CatalogRole, CatalogError>;
+    fn resolve_role(&self, role_name: &str) -> Result<CatalogRoleRef<'_>, CatalogError>;
 
     /// Resolves the named network policy.
     fn resolve_network_policy(
         &self,
         network_policy_name: &str,
-    ) -> Result<&dyn CatalogNetworkPolicy, CatalogError>;
+    ) -> Result<CatalogNetworkPolicyRef<'_>, CatalogError>;
 
     /// Gets a role by its ID.
-    fn try_get_role(&self, id: &RoleId) -> Option<&dyn CatalogRole>;
+    fn try_get_role(&self, id: &RoleId) -> Option<CatalogRoleRef<'_>>;
 
     /// Gets a role by its ID.
     ///
     /// Panics if `id` does not specify a valid role.
-    fn get_role(&self, id: &RoleId) -> &dyn CatalogRole;
+    fn get_role(&self, id: &RoleId) -> CatalogRoleRef<'_>;
 
     /// Gets all roles.
-    fn get_roles(&self) -> Vec<&dyn CatalogRole>;
+    fn get_roles(&self) -> Vec<CatalogRoleRef<'_>>;
 
     /// Gets the id of the `mz_system` role.
     fn mz_system_role_id(&self) -> RoleId;
@@ -200,23 +197,23 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Gets a network_policy by its ID.
     ///
     /// Panics if `id` does not specify a valid role.
-    fn get_network_policy(&self, id: &NetworkPolicyId) -> &dyn CatalogNetworkPolicy;
+    fn get_network_policy(&self, id: &NetworkPolicyId) -> CatalogNetworkPolicyRef<'_>;
 
     /// Gets all roles.
-    fn get_network_policies(&self) -> Vec<&dyn CatalogNetworkPolicy>;
+    fn get_network_policies(&self) -> Vec<CatalogNetworkPolicyRef<'_>>;
 
     ///
     /// If the provided name is `None`, resolves the currently active cluster.
     fn resolve_cluster<'a, 'b>(
         &'a self,
         cluster_name: Option<&'b str>,
-    ) -> Result<&'a dyn CatalogCluster<'a>, CatalogError>;
+    ) -> Result<CatalogClusterRef<'a>, CatalogError>;
 
     /// Resolves the named cluster replica.
     fn resolve_cluster_replica<'a, 'b>(
         &'a self,
         cluster_replica_name: &'b QualifiedReplica,
-    ) -> Result<&'a dyn CatalogClusterReplica<'a>, CatalogError>;
+    ) -> Result<CatalogClusterReplicaRef<'a>, CatalogError>;
 
     /// Resolves a partially-specified item name, that is NOT a function or
     /// type. (For resolving functions or types, please use
@@ -299,20 +296,20 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>>;
 
     /// Gets a cluster by ID.
-    fn get_cluster(&self, id: ClusterId) -> &dyn CatalogCluster<'_>;
+    fn get_cluster(&self, id: ClusterId) -> CatalogClusterRef<'_>;
 
     /// Gets all clusters.
-    fn get_clusters(&self) -> Vec<&dyn CatalogCluster<'_>>;
+    fn get_clusters(&self) -> Vec<CatalogClusterRef<'_>>;
 
     /// Gets a cluster replica by ID.
     fn get_cluster_replica(
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
-    ) -> &dyn CatalogClusterReplica<'_>;
+    ) -> CatalogClusterReplicaRef<'_>;
 
     /// Gets all cluster replicas.
-    fn get_cluster_replicas(&self) -> Vec<&dyn CatalogClusterReplica<'_>>;
+    fn get_cluster_replicas(&self) -> Vec<CatalogClusterReplicaRef<'_>>;
 
     /// Gets all system privileges.
     fn get_system_privileges(&self) -> &PrivilegeMap;
@@ -471,7 +468,7 @@ pub trait CatalogDatabase {
     fn schema_ids(&self) -> &BTreeMap<String, SchemaId>;
 
     /// Returns the schemas of the database.
-    fn schemas(&self) -> Vec<&dyn CatalogSchema>;
+    fn schemas(&self) -> Vec<CatalogSchemaRef<'_>>;
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
@@ -762,15 +759,14 @@ pub trait CatalogCluster<'a> {
     /// Returns the objects that are bound to this cluster.
     fn bound_objects(&self) -> &BTreeSet<CatalogItemId>;
 
-    /// Returns the replicas of the cluster as a map from replica name to
-    /// replica ID.
-    fn replica_ids(&self) -> &BTreeMap<String, ReplicaId>;
+    /// Looks up a replica ID by name within this cluster.
+    fn replica_id(&self, name: &str) -> Option<ReplicaId>;
 
     /// Returns the replicas of the cluster.
-    fn replicas(&self) -> Vec<&dyn CatalogClusterReplica<'_>>;
+    fn replicas(&self) -> Vec<CatalogClusterReplicaRef<'_>>;
 
     /// Returns the replica belonging to the cluster with replica ID `id`.
-    fn replica(&self, id: ReplicaId) -> &dyn CatalogClusterReplica<'_>;
+    fn replica(&self, id: ReplicaId) -> CatalogClusterReplicaRef<'_>;
 
     /// Returns the ID of the owning role.
     fn owner_id(&self) -> RoleId;
@@ -795,7 +791,23 @@ pub trait CatalogCluster<'a> {
     fn auto_scaling_strategy(&self) -> Option<&AutoScalingStrategy>;
     /// Try to convert this cluster into a [`CreateClusterPlan`].
     // TODO(jkosh44) Make this infallible and convert to `to_plan`.
-    fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError>;
+    fn try_to_plan(&self) -> Result<CreateClusterPlan, ClusterPlanError>;
+}
+
+/// Why a catalog cluster cannot be represented as a create plan.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClusterPlanError {
+    /// The unsupported reconstruction operation.
+    pub feature: String,
+}
+
+impl From<ClusterPlanError> for PlanError {
+    fn from(error: ClusterPlanError) -> Self {
+        PlanError::Unsupported {
+            feature: error.feature,
+            discussion_no: None,
+        }
+    }
 }
 
 /// A cluster replica in a [`SessionCatalog`]
@@ -835,6 +847,24 @@ impl<T: ?Sized> std::ops::Deref for CatalogRef<'_, T> {
         }
     }
 }
+
+/// A database accessed through a session's catalog view.
+pub type CatalogDatabaseRef<'a> = CatalogRef<'a, dyn CatalogDatabase + 'a>;
+
+/// A schema accessed through a session's catalog view.
+pub type CatalogSchemaRef<'a> = CatalogRef<'a, dyn CatalogSchema + 'a>;
+
+/// A role accessed through a session's catalog view.
+pub type CatalogRoleRef<'a> = CatalogRef<'a, dyn CatalogRole + 'a>;
+
+/// A network policy accessed through a session's catalog view.
+pub type CatalogNetworkPolicyRef<'a> = CatalogRef<'a, dyn CatalogNetworkPolicy + 'a>;
+
+/// A cluster accessed through a session's catalog view.
+pub type CatalogClusterRef<'a> = CatalogRef<'a, dyn CatalogCluster<'a> + 'a>;
+
+/// A cluster replica accessed through a session's catalog view.
+pub type CatalogClusterReplicaRef<'a> = CatalogRef<'a, dyn CatalogClusterReplica<'a> + 'a>;
 
 /// An item accessed through a session's catalog view.
 pub type CatalogItemRef<'a> = CatalogRef<'a, dyn CatalogItem + 'a>;
@@ -1784,8 +1814,8 @@ impl ErrorMessageObjectDescription {
                 .to_string(),
             ObjectId::Database(database_id) => catalog.get_database(database_id).name().to_string(),
             ObjectId::Schema((database_spec, schema_spec)) => {
-                let name = catalog.get_schema(database_spec, schema_spec).name();
-                catalog.resolve_full_schema_name(name).to_string()
+                let schema = catalog.get_schema(database_spec, schema_spec);
+                catalog.resolve_full_schema_name(schema.name()).to_string()
             }
             ObjectId::Role(role_id) => catalog.get_role(role_id).name().to_string(),
             ObjectId::Item(id) => {

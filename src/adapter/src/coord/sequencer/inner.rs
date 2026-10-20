@@ -1395,7 +1395,8 @@ impl Coordinator {
         ) {
             for privilege in privileges.all_values() {
                 if let Some(role_name) = dropped_roles.get(&privilege.grantee) {
-                    let grantor_name = catalog.get_role(&privilege.grantor).name();
+                    let grantor = catalog.get_role(&privilege.grantor);
+                    let grantor_name = grantor.name();
                     let object_description =
                         ErrorMessageObjectDescription::from_sys_id(object_id, catalog);
                     dependent_objects
@@ -1406,7 +1407,8 @@ impl Coordinator {
                         ));
                 }
                 if let Some(role_name) = dropped_roles.get(&privilege.grantor) {
-                    let grantee_name = catalog.get_role(&privilege.grantee).name();
+                    let grantee = catalog.get_role(&privilege.grantee);
+                    let grantee_name = grantee.name();
                     let object_description =
                         ErrorMessageObjectDescription::from_sys_id(object_id, catalog);
                     dependent_objects
@@ -2676,6 +2678,7 @@ impl Coordinator {
         // Get the attributes and variables from the role, as they currently are.
         let mut attributes: RoleAttributesRaw = role.attributes().clone().into();
         let mut vars = role.vars().clone();
+        drop(role);
 
         // Whether to set the password to NULL. This is a special case since the existing
         // password is not stored in the role attributes.
