@@ -499,9 +499,50 @@ impl Session {
         self.transaction().into()
     }
 
-    /// Adds operations to the current transaction. An error is produced if
-    /// they cannot be merged (i.e., a timestamp-dependent read cannot be
-    /// merged to an insert).
+    /// Retains a successful statement description for validation at DDL commit.
+    pub(crate) fn retain_description(
+        &mut self,
+        statement: mz_sql::ast::Statement<mz_sql::ast::Raw>,
+        param_types: Vec<Option<mz_repr::SqlScalarType>>,
+        expected: mz_sql::plan::StatementDesc,
+    ) {
+        if !self.transaction().is_ddl()
+            || (expected.relation_desc.is_none() && expected.param_types.is_empty())
+        {
+            return;
+        }
+        // DECLARE delegates description to its inner statement. EXECUTE and FETCH
+        // copy session-owned schemas without describing a catalog query.
+        let mut described = &statement;
+        while let mz_sql::ast::Statement::Declare(declare) = described {
+            described = &declare.stmt;
+        }
+        if matches!(
+            described,
+            mz_sql::ast::Statement::Execute(_) | mz_sql::ast::Statement::Fetch(_)
+        ) {
+            return;
+        }
+        let command = crate::catalog::command::DescriptionCommand::new(
+            statement,
+            param_types,
+            self.meta(),
+            expected,
+        );
+        let TransactionOps::DDL { ops, .. } = &mut self
+            .transaction_mut()
+            .inner_mut()
+            .expect("DDL transaction")
+            .ops
+        else {
+            unreachable!("checked DDL transaction")
+        };
+        ops.push(crate::catalog::Op::Description(std::sync::Arc::new(
+            command,
+        )));
+    }
+
+    /// Adds operations, rejecting incompatible combinations of reads and writes.
     pub fn add_transaction_ops(&mut self, add_ops: TransactionOps) -> Result<(), AdapterError> {
         self.transaction.add_ops(add_ops)
     }
