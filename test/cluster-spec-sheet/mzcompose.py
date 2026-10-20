@@ -145,6 +145,11 @@ SCENARIO_TPCH_QUERIES_WEAK = "tpch_queries_weak"
 SCENARIO_TPCH_STRONG = "tpch_strong"
 SCENARIO_SOURCE_INGESTION_STRONG = "source_ingestion_strong"
 SCENARIO_QPS_ENVD_STRONG_SCALING = "qps_envd_strong_scaling"
+QPS_FAST_PATH_PARAMETERS = (
+    "enable_prepared_query_reuse",
+    "enable_prepared_query_templates",
+    "enable_frontend_transaction_completion",
+)
 SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING = "copy_from_stdin_envd_strong_scaling"
 SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES = "envd_objects_scalability_tables"
 SCENARIO_ENVD_OBJECTS_SCALABILITY_MVS = "envd_objects_scalability_mvs"
@@ -1972,6 +1977,8 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         )
         result = pgbench.run(config, runner.target.composition)
         validate_qps_result(result, concurrency, protocol)
+        if any(rate != 0 for rate in result["statement_logging_sample_rates"]):
+            raise UIError("QPS benchmark requires statement_logging_sample_rate=0")
         warnings = list(result["driver"]["warnings"])
         replica_cpu = None
         replica_samples = 0
@@ -3517,6 +3524,10 @@ def enable_region(target: "CloudTarget", envd_cpus: int | None = None) -> None:
             # custom version.
             "--version",
             staging_version(),
+        ]
+        args += [
+            f"--environmentd-extra-arg=--system-parameter-default={name}=true"
+            for name in QPS_FAST_PATH_PARAMETERS
         ]
 
     target.composition.run("mz", "region", "enable", *args, rm=True)

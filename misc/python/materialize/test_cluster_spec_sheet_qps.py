@@ -66,7 +66,10 @@ def test_connection_routing_and_escaping():
     assert len(config["libpq_envs"]) == 3
     for i, env in enumerate(config["libpq_envs"]):
         cluster = "c" if i == 0 else f"qps_{i}"
-        assert env["PGOPTIONS"] == f"-c cluster={cluster} -c statement_timeout=30000"
+        assert env["PGOPTIONS"] == (
+            f"-c cluster={cluster} -c statement_timeout=30000"
+            " -c statement_logging_sample_rate=0"
+        )
         assert config["cluster_names"][i] == cluster
         assert env["PGSSLMODE"] == "require"
         assert env["PGPASSWORD"] == "quote'and\\slash"
@@ -118,6 +121,28 @@ def composition_module():
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_staging_recreation_enables_qps_fast_paths(monkeypatch):
+    module = composition_module()
+    calls = []
+    monkeypatch.setattr(module, "staging_version", lambda: "test-version")
+    target = SimpleNamespace(
+        is_staging=True,
+        composition=SimpleNamespace(run=lambda *args, **kwargs: calls.append(args)),
+    )
+    for cpus in (8, 32):
+        module.enable_region(target, cpus)
+    for call in calls:
+        for name in (
+            "enable_prepared_query_reuse",
+            "enable_prepared_query_templates",
+            "enable_frontend_transaction_completion",
+        ):
+            assert (
+                f"--environmentd-extra-arg=--system-parameter-default={name}=true"
+                in call
+            )
 
 
 def test_each_cpu_runs_full_concurrency_sweep(monkeypatch, tmp_path):
@@ -201,7 +226,8 @@ def test_ten_query_clusters_fit_ten_cluster_account(monkeypatch, tmp_path):
     assert runner.clusters == {"c"}
 
 
-def test_pgbench_measurement_records_max_latency(monkeypatch, tmp_path):
+@pytest.mark.parametrize("logging_rate", [0, 0.99])
+def test_pgbench_measurement_records_max_latency(monkeypatch, tmp_path, logging_rate):
     monkeypatch.chdir(tmp_path)
     from materialize.mzcompose import loader
 
@@ -225,6 +251,7 @@ def test_pgbench_measurement_records_max_latency(monkeypatch, tmp_path):
         protocol="prepared",
         clusters=1,
         errors=0,
+        statement_logging_sample_rates=[logging_rate],
         queries=200,
         qps=10,
         mean_latency_ms=5,
@@ -269,9 +296,14 @@ def test_pgbench_measurement_records_max_latency(monkeypatch, tmp_path):
         run_query=lambda *args, **kwargs: [(None, 0)],
         add_result=lambda *args, **kwargs: results.append(kwargs),
     )
-    module.QpsEnvdStrongScalingScenario(
+    workload = module.QpsEnvdStrongScalingScenario(
         QpsSweep([1], ["prepared"], clusters=1)
-    ).measure(runner, "50cc", 1, "prepared")
+    )
+    if logging_rate:
+        with pytest.raises(module.UIError, match="statement_logging_sample_rate=0"):
+            workload.measure(runner, "50cc", 1, "prepared")
+        return
+    workload.measure(runner, "50cc", 1, "prepared")
     config, composition = calls[0]
     assert composition is runner.target.composition
     assert config["libpq_envs"][0]["PGOPTIONS"].startswith("-c cluster=c ")

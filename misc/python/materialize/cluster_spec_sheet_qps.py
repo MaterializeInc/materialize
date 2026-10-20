@@ -62,7 +62,10 @@ class QpsSweep:
             "libpq_envs": [
                 common
                 | {
-                    "PGOPTIONS": f"-c cluster={cluster} -c statement_timeout={int(self.query_timeout * 1000)}"
+                    "PGOPTIONS": (
+                        f"-c cluster={cluster} -c statement_timeout={int(self.query_timeout * 1000)}"
+                        " -c statement_logging_sample_rate=0"
+                    )
                 }
                 for cluster in clusters
             ],
