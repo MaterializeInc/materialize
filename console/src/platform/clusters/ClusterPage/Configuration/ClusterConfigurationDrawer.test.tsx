@@ -86,11 +86,17 @@ const SYSTEM_CLUSTER = buildClusterServerResponse(
   [replica("s3")],
 );
 
+const AUTO_SCALING_COLUMNS = [
+  buildColumn({ name: "strategy", type_oid: MzDataType.jsonb }),
+  buildColumn({ name: "state", type_oid: MzDataType.jsonb }),
+];
+
 const configurationHandler = (
   cluster: Cluster,
   autoScaling: AutoScalingRow[] | null,
   resizeTargets: ResizeTargetRow[],
   fails: boolean,
+  isLoading: boolean,
 ) => {
   // Cluster and replica ids come from separate counters, so each id here is
   // also an object of the other type, created at another time.
@@ -125,44 +131,54 @@ const configurationHandler = (
       { name: "occurredAt", type_oid: MzDataType.timestamptz },
     ]),
   });
-  return buildSqlQueryHandlerV2({
-    queryKey: clusterQueryKeys.configuration({
-      clusterId: cluster.id,
-      replicaIds: cluster.replicas.map(({ id }) => id),
-      includeAutoScaling: autoScaling !== null,
-    }),
-    results: fails
-      ? {
-          error: {
-            message: "Something went wrong",
-            code: ErrorCode.INTERNAL_ERROR,
-          },
-          notices: [],
-        }
-      : autoScaling === null
-        ? [creationTimes]
-        : [
-            creationTimes,
-            mapKyselyToTabular({
-              rows: autoScaling,
-              columns: [
-                buildColumn({ name: "strategy", type_oid: MzDataType.jsonb }),
-                buildColumn({ name: "state", type_oid: MzDataType.jsonb }),
-              ],
-            }),
-            mapKyselyToTabular({
-              rows: resizeTargets,
-              columns: [
-                buildColumn({ name: "size" }),
-                buildColumn({
-                  name: "replicationFactor",
-                  type_oid: MzDataType.int4,
-                }),
-              ],
-            }),
-          ],
-  });
+  return buildSqlQueryHandlerV2(
+    {
+      queryKey: clusterQueryKeys.configuration({
+        clusterId: cluster.id,
+        replicaIds: cluster.replicas.map(({ id }) => id),
+        includeAutoScaling: autoScaling !== null,
+      }),
+      results: fails
+        ? {
+            error: {
+              message: "Something went wrong",
+              code: ErrorCode.INTERNAL_ERROR,
+            },
+            notices: [],
+          }
+        : autoScaling === null
+          ? [creationTimes]
+          : [
+              creationTimes,
+              mapKyselyToTabular({
+                rows: autoScaling,
+                columns: AUTO_SCALING_COLUMNS,
+              }),
+              mapKyselyToTabular({
+                rows: resizeTargets,
+                columns: [
+                  buildColumn({ name: "size" }),
+                  buildColumn({
+                    name: "replicationFactor",
+                    type_oid: MzDataType.int4,
+                  }),
+                ],
+              }),
+            ],
+    },
+    isLoading ? { waitTimeMs: MSW_HANDLER_LOADING_WAIT_TIME } : {},
+  );
 };
+
+// The Alter cluster modal's own read of the policy, with no resize in flight.
+const modalAutoScalingHandler = (cluster: Cluster, rows: AutoScalingRow[]) =>
+  buildSqlQueryHandlerV2({
+    queryKey: clusterQueryKeys.autoScaling({ clusterId: cluster.id }),
+    results: [
+      mapKyselyToTabular({ rows, columns: AUTO_SCALING_COLUMNS }),
+      mapKyselyToTabular({ rows: [], columns: buildColumns(["size"]) }),
+    ],
+  });
 
 const ownersHandler = (isOwner: boolean) =>
   buildSqlQueryHandlerV2({
@@ -229,7 +245,9 @@ const renderDrawer = async ({
   version = "26.45.0",
   autoScaling = [],
   resizeTargets = [],
+  currentAutoScaling = autoScaling ?? [],
   configurationFails = false,
+  configurationLoading = false,
   clusterSizesLoading = false,
 }: {
   section: ConfigurationSection;
@@ -239,7 +257,10 @@ const renderDrawer = async ({
   /** Null for an environment without autoscaling. */
   autoScaling?: AutoScalingRow[] | null;
   resizeTargets?: ResizeTargetRow[];
+  /** What the Alter cluster modal reads, the drawer's rows by default. */
+  currentAutoScaling?: AutoScalingRow[];
   configurationFails?: boolean;
+  configurationLoading?: boolean;
   clusterSizesLoading?: boolean;
 }) => {
   const environment = environmentAt(version);
@@ -250,7 +271,9 @@ const renderDrawer = async ({
       autoScaling,
       resizeTargets,
       configurationFails,
+      configurationLoading,
     ),
+    modalAutoScalingHandler(cluster, currentAutoScaling),
     ownersHandler(isOwner),
     maxReplicasHandler(),
     clusterSizesHandler(clusterSizesLoading),
@@ -401,7 +424,9 @@ describe("ClusterConfigurationDrawer", () => {
 
     await user.click(screen.getByRole("button", { name: /Auto-Scaling/ }));
     expect(await screen.findByText(/burst size/)).toBeVisible();
-    expect(screen.queryByText("To turn it on, run:")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Edit" }),
+    ).not.toBeInTheDocument();
   });
 
   it("switches to the replicas from their card, with each replica's own creation time", async () => {
@@ -504,7 +529,9 @@ describe("ClusterConfigurationDrawer", () => {
     ).toBeVisible();
   });
 
-  it("shows a configured auto-scaling policy and how to change or remove it", async () => {
+  it("shows a configured auto-scaling policy and edits it in the alter cluster modal", async () => {
+    const user = userEvent.setup();
+    const requests = countRequests();
     await renderDrawer({
       section: "auto-scaling",
       autoScaling: [
@@ -522,15 +549,52 @@ describe("ClusterConfigurationDrawer", () => {
 
     expect(await screen.findByText("800cc")).toBeVisible();
     expect(screen.getByText("2m")).toBeVisible();
+    const edit = screen.getByRole("button", { name: "Edit" });
+    await waitFor(() => expect(edit).toBeEnabled());
+    await user.click(edit);
+
+    const dialog = await screen.findByRole("dialog", { name: "Alter cluster" });
     expect(
-      screen.getByText(/HYDRATION SIZE = '800cc', LINGER DURATION = '120s'/),
-    ).toBeVisible();
+      within(dialog).getByRole("checkbox", { name: "Enable auto-scaling" }),
+    ).toBeChecked();
+    expect(within(dialog).getByLabelText("Burst size")).toHaveDisplayValue(
+      "800cc",
+    );
+    expect(within(dialog).getByLabelText("Linger duration")).toHaveDisplayValue(
+      "2m",
+    );
+    // The modal reads the policy itself once it opens.
     expect(
-      screen.getByText(`ALTER CLUSTER "prod" RESET (AUTO SCALING STRATEGY);`),
-    ).toBeVisible();
+      requests(clusterQueryKeys.autoScaling({ clusterId: MANAGED_CLUSTER.id })),
+    ).toBe(1);
+  });
+
+  it("opens the form on the policy as of Edit, not the drawer's earlier read", async () => {
+    const user = userEvent.setup();
+    // The drawer read a policy that was removed since.
+    await renderDrawer({
+      section: "auto-scaling",
+      autoScaling: [
+        {
+          strategy: { on_hydration: { hydration_size: "800cc" } },
+          state: null,
+        },
+      ],
+      currentAutoScaling: [],
+    });
+
+    expect(await screen.findByText("800cc")).toBeVisible();
+    const edit = screen.getByRole("button", { name: "Edit" });
+    await waitFor(() => expect(edit).toBeEnabled());
+    await user.click(edit);
+
+    expect(
+      await screen.findByRole("checkbox", { name: "Enable auto-scaling" }),
+    ).not.toBeChecked();
   });
 
   it("keeps a zero linger at zero", async () => {
+    const user = userEvent.setup();
     await renderDrawer({
       section: "auto-scaling",
       autoScaling: [
@@ -547,14 +611,25 @@ describe("ClusterConfigurationDrawer", () => {
     });
 
     expect(await screen.findByText("0s")).toBeVisible();
-    expect(screen.getByText(/LINGER DURATION = '0s'/)).toBeVisible();
+    const edit = screen.getByRole("button", { name: "Edit" });
+    await waitFor(() => expect(edit).toBeEnabled());
+    await user.click(edit);
+    expect(await screen.findByLabelText("Linger duration")).toHaveDisplayValue(
+      "0s",
+    );
   });
 
-  it("says auto-scaling is off and how to turn it on", async () => {
+  it("says auto-scaling is off, and edits it from off", async () => {
+    const user = userEvent.setup();
     await renderDrawer({ section: "auto-scaling" });
 
-    expect(await screen.findByText("To turn it on, run:")).toBeVisible();
-    expect(screen.getByText(/HYDRATION SIZE = '<size>'/)).toBeVisible();
+    const edit = await screen.findByRole("button", { name: "Edit" });
+    await waitFor(() => expect(edit).toBeEnabled());
+    await user.click(edit);
+
+    expect(
+      await screen.findByRole("checkbox", { name: "Enable auto-scaling" }),
+    ).not.toBeChecked();
   });
 
   it("notes a running burst replica after its policy is removed", async () => {
@@ -579,7 +654,6 @@ describe("ClusterConfigurationDrawer", () => {
         "A burst replica of size 800cc is running while objects hydrate.",
       ),
     ).toBeVisible();
-    expect(screen.getByText("To turn it on, run:")).toBeVisible();
   });
 
   it("says when the configuration can't be read, and keeps what the cluster list has", async () => {
