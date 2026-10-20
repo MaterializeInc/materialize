@@ -9,6 +9,8 @@
 
 //! Catalog commands retain intent, not the writes derived from a speculative catalog.
 
+pub(crate) mod source;
+
 use std::sync::Arc;
 
 use mz_sql::ast::{Raw, Statement};
@@ -209,4 +211,32 @@ fn rename_ops(plan: &Plan) -> (Vec<Op>, ObjectType) {
         ),
         _ => unreachable!("rename/swap planning must produce a rename or no-op plan"),
     }
+}
+
+pub(crate) fn plan_subsource(
+    catalog: &crate::catalog::ConnCatalog<'_>,
+    pcx: &mz_sql::plan::PlanContext,
+    params: &Params,
+    statement: mz_sql::ast::CreateSubsourceStatement<mz_sql::names::Aug>,
+    item_id: mz_repr::CatalogItemId,
+    global_id: mz_repr::GlobalId,
+) -> Result<mz_sql::plan::CreateSourcePlanBundle, AdapterError> {
+    let resolved_ids = mz_sql::names::visit_dependencies(catalog, &statement);
+    let (plan, _sql_impl_ids) = mz_sql::plan::plan(
+        Some(pcx),
+        catalog,
+        Statement::CreateSubsource(statement),
+        params,
+        &resolved_ids,
+    )?;
+    let Plan::CreateSource(plan) = plan else {
+        unreachable!("subsource planning produces a source plan");
+    };
+    Ok(mz_sql::plan::CreateSourcePlanBundle {
+        item_id,
+        global_id,
+        plan,
+        resolved_ids,
+        available_source_references: None,
+    })
 }
