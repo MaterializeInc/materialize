@@ -64,10 +64,11 @@ shell() {
     printf '%s$ %s%s\n' "$cyan" "$1" "$reset"
 }
 
-# Runs SQL statements, with timing, after printing them.
+# Runs SQL statements, with timing, after printing them. Exits the demo if one
+# fails.
 sql() {
     prompt "$1"
-    printf '\\timing on\n%s\n' "$1" | "${psql_user[@]}" -f - | grep -v '^$' || true
+    printf '\\timing on\n%s\n' "$1" | "${psql_user[@]}" -f - | grep -v '^$'
     pause 1
 }
 
@@ -78,12 +79,48 @@ sql_file() {
     pause 1
 }
 
-# Runs a statement whose `:'plan'` is the contents of the file `$2`.
+# Runs a SQL file after printing its statements, and exits the demo unless the
+# last two columns of its single result row, the rows that only one side
+# returns, are both 0.
+compare_file() {
+    local out
+    prompt "$(grep -v '^--' "$demo_dir/$1" | sed '/^$/d')"
+    out=$("${psql_user[@]}" -f "$demo_dir/$1")
+    printf '%s\n' "$out"
+    if ! printf '%s\n' "$out" \
+        | awk -F'|' 'NR == 3 && $(NF-1) + 0 == 0 && $NF + 0 == 0 { ok = 1 } END { exit !ok }'; then
+        echo "demo: $1 found rows that only one side returns" >&2
+        exit 1
+    fi
+    pause 1
+}
+
+# Runs a statement whose `:'plan'` is the contents of the file `$2`. Exits the
+# demo if it fails.
 sql_plan() {
     local shown="${1//:\'plan\'/\'<$(basename "$2"), $(wc -c <"$2") bytes>\'}"
     prompt "$shown"
     printf '\\timing on\n%s\n' "$1" | "${psql_user[@]}" -v plan="$(cat "$2")" -f - 2>&1 \
-        | grep -v '^$' | sed 's/^psql:<stdin>:[0-9]*: //' || true
+        | grep -v '^$' | sed 's/^psql:<stdin>:[0-9]*: //'
+    pause 1
+}
+
+# Runs a statement whose `:'plan'` is the contents of the file `$2`, and exits
+# the demo unless it fails with an error that contains `$3`.
+sql_plan_rejected() {
+    local shown="${1//:\'plan\'/\'<$(basename "$2"), $(wc -c <"$2") bytes>\'}"
+    local out
+    prompt "$shown"
+    if out=$(printf '%s\n' "$1" | "${psql_user[@]}" -v plan="$(cat "$2")" -f - 2>&1); then
+        printf '%s\n' "$out"
+        echo "demo: the statement succeeded, but it should have been rejected" >&2
+        exit 1
+    fi
+    printf '%s\n' "$out" | grep -v '^$' | sed 's/^psql:<stdin>:[0-9]*: //'
+    if ! grep -qF -- "$3" <<<"$out"; then
+        echo "demo: the error does not contain \"$3\"" >&2
+        exit 1
+    fi
     pause 1
 }
 
@@ -136,9 +173,9 @@ step 4 "a broken plan is rejected"
 say "With --broken, the script forgets to arrange the pairs by dst, which the second join reads."
 shell "python3 misc/lir-datalog/demo/improve_plan.py --broken < plan.json > broken.json"
 python3 "$demo_dir/improve_plan.py" --broken <"$work/plan.json" >"$work/broken.json"
-sql_plan "CREATE MATERIALIZED VIEW flagged_transfers_broken
+sql_plan_rejected "CREATE MATERIALIZED VIEW flagged_transfers_broken
     (id int8 NOT NULL, src int8 NOT NULL, dst int8 NOT NULL, amount int8 NOT NULL)
-    FROM PLAN :'plan';" "$work/broken.json"
+    FROM PLAN :'plan';" "$work/broken.json" "(Join): Arrangement"
 pause
 
 step 5 "install the improved plan and compare"
@@ -147,7 +184,7 @@ sql_plan "CREATE MATERIALIZED VIEW flagged_transfers_fast
     FROM PLAN :'plan';" "$work/improved.json"
 sql "SELECT count(*) FROM flagged_transfers_fast;"
 say "Both views return the same rows:"
-sql_file compare.sql
+compare_file compare.sql
 say "And the plan does a fraction of the work, at the price of arranging the pairs twice:"
 sql_file cost.sql
 pause
@@ -163,7 +200,8 @@ sql "SELECT name, create_sql LIKE '%FROM PLAN%' AS from_plan
 sql "SELECT count(*) FROM flagged_transfers;"
 say "New data flows through the swapped plan:"
 sql "INSERT INTO flagged VALUES (42); INSERT INTO transfers VALUES (100001, 42, 7, 500);"
-sql_file compare.sql
+say "The swapped view returns the rows of the SQL query, run directly over the tables:"
+compare_file compare_query.sql
 say "The cross join dataflow is gone. flagged_transfers now runs the dataflow built as flagged_transfers_v2:"
 sql_file cost.sql
 

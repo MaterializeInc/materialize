@@ -2,6 +2,7 @@
 
 `demo.sh` walks through the success criteria of [the design](../../../doc/developer/design/20261019_user_provided_lir_plans.md) against a running local Materialize.
 It prints each statement before running it, with a caption and a pause, and needs no input.
+It exits with an error if a statement fails, except for the rejection that step 4 expects, or if a comparison finds rows that only one side returns.
 It drops and recreates the tables `transfers`, `flagged` and `edges` in `materialize.public`, and everything that depends on them.
 
 ## Running
@@ -37,11 +38,12 @@ asciinema play misc/lir-datalog/demo/demo.cast
    A pair that matches both equalities comes out of both joins, and the distinct reduction above the cross join removes the duplicate, so the view's results do not change.
    The script refuses to rewrite a cross join that does not feed a distinct reduction.
    `EXPLAIN PHYSICAL PLAN FOR CREATE MATERIALIZED VIEW ... FROM PLAN` validates the result without installing it.
-4. `improve_plan.py --broken` leaves out the arrangement by `dst`, and the validator rejects the plan with an error that names the join and the missing arrangement.
+4. `improve_plan.py --broken` leaves out the arrangement by `dst`, and the validator rejects the plan with an error that names the join and the missing arrangement, which the demo checks.
 5. The improved plan is installed as `flagged_transfers_fast`.
    `compare.sql` checks that both views return the same rows, and `cost.sql` compares the CPU time and arrangement sizes of their dataflows.
 6. The SQL view has no keys, so `CREATE REPLACEMENT MATERIALIZED VIEW ... FROM PLAN` and `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT` swap the improved plan in under it.
-   New rows reach both views, which still agree.
+   After the swap, `flagged_transfers` and `flagged_transfers_fast` run the same plan, so comparing them proves nothing.
+   `compare_query.sql` instead checks that the swapped view, after new rows arrive, returns the rows of the view's SQL query run directly over the tables.
 7. `datalog2lir.py` compiles the transitive closure in `../examples/tc.dl` to a plan, which is installed and queried, and then updated by an insert that closes a cycle.
 
 ## The improvement
@@ -67,4 +69,4 @@ The edited plan keeps one more arrangement of the pairs, because each equi-join 
 * `improve_plan.py` rewrites the plan.
   It reuses `permutation_for_arrangement` from `../datalog2lir.py` for the arrangement layouts the validator requires.
 * `setup.sql` creates and fills the tables, and `flagged_transfers.sql` creates the SQL view.
-* `compare.sql` and `cost.sql` are the queries of steps 5 and 6.
+* `compare.sql` is the comparison of step 5, `compare_query.sql` that of step 6, and `cost.sql` the cost query of both.
