@@ -41,10 +41,10 @@ use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Expr;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogConfig, CatalogDatabase, CatalogError,
-    CatalogItem, CatalogItemType, CatalogNetworkPolicy, CatalogRole, CatalogSchema, CatalogType,
-    CatalogTypeDetails, DefaultPrivilegeAclItem, DefaultPrivilegeObject, EnvironmentId,
-    IdReference, NameReference, ObjectType as SqlObjectType, RoleAttributes, SessionCatalog,
-    SystemObjectType,
+    CatalogItem, CatalogItemRef, CatalogItemType, CatalogNetworkPolicy, CatalogRef, CatalogRole,
+    CatalogSchema, CatalogType, CatalogTypeDetails, DefaultPrivilegeAclItem,
+    DefaultPrivilegeObject, EnvironmentId, IdReference, NameReference, ObjectType as SqlObjectType,
+    RoleAttributes, SessionCatalog, SystemObjectType,
 };
 use mz_sql::names::{
     Aug, FullItemName, FullSchemaName, ItemQualifiers, PartialItemName, QualifiedItemName,
@@ -1494,7 +1494,10 @@ impl SessionCatalog for CatalogRuntime {
         ))
     }
 
-    fn resolve_item(&self, item_name: &PartialItemName) -> Result<&dyn CatalogItem, CatalogError> {
+    fn resolve_item(
+        &self,
+        item_name: &PartialItemName,
+    ) -> Result<CatalogItemRef<'_>, CatalogError> {
         self.lookup_item_by_partial_name(
             item_name,
             |item| {
@@ -1502,13 +1505,13 @@ impl SessionCatalog for CatalogRuntime {
             },
             CatalogError::UnknownItem,
         )
-        .map(|item| item as &dyn CatalogItem)
+        .map(|item| CatalogRef::Borrowed(item as &dyn CatalogItem))
     }
 
     fn resolve_function(
         &self,
         item_name: &PartialItemName,
-    ) -> Result<&dyn CatalogItem, CatalogError> {
+    ) -> Result<CatalogItemRef<'_>, CatalogError> {
         self.lookup_item_by_partial_name(
             item_name,
             |item| item.item_type == CatalogItemType::Func,
@@ -1517,19 +1520,22 @@ impl SessionCatalog for CatalogRuntime {
                 alternative: None,
             },
         )
-        .map(|item| item as &dyn CatalogItem)
+        .map(|item| CatalogRef::Borrowed(item as &dyn CatalogItem))
     }
 
-    fn resolve_type(&self, item_name: &PartialItemName) -> Result<&dyn CatalogItem, CatalogError> {
+    fn resolve_type(
+        &self,
+        item_name: &PartialItemName,
+    ) -> Result<CatalogItemRef<'_>, CatalogError> {
         self.lookup_item_by_partial_name(
             item_name,
             |item| item.item_type == CatalogItemType::Type,
             |name| CatalogError::UnknownType { name },
         )
-        .map(|item| item as &dyn CatalogItem)
+        .map(|item| CatalogRef::Borrowed(item as &dyn CatalogItem))
     }
 
-    fn get_system_type(&self, name: &str) -> &dyn CatalogItem {
+    fn get_system_type(&self, name: &str) -> CatalogItemRef<'_> {
         for schema_name in ["pg_catalog", "mz_catalog"] {
             if let Some(schema_spec) = self.ambient_schemas_by_name.get(schema_name) {
                 let qualified = QualifiedItemName {
@@ -1543,7 +1549,7 @@ impl SessionCatalog for CatalogRuntime {
                     for item_id in item_ids {
                         let item = self.items_by_id.get(item_id).expect("system type exists");
                         if item.item_type == CatalogItemType::Type {
-                            return item.as_ref();
+                            return CatalogRef::Borrowed(item.as_ref());
                         }
                     }
                 }
@@ -1552,10 +1558,10 @@ impl SessionCatalog for CatalogRuntime {
         panic!("system type does not exist: {name}")
     }
 
-    fn try_get_item(&self, id: &CatalogItemId) -> Option<&dyn CatalogItem> {
+    fn try_get_item(&self, id: &CatalogItemId) -> Option<CatalogItemRef<'_>> {
         self.items_by_id
             .get(id)
-            .map(|item| item.as_ref() as &dyn CatalogItem)
+            .map(|item| CatalogRef::Borrowed(item.as_ref() as &dyn CatalogItem))
     }
 
     fn try_get_item_by_global_id<'a>(
@@ -1570,8 +1576,8 @@ impl SessionCatalog for CatalogRuntime {
             })
     }
 
-    fn get_item(&self, id: &CatalogItemId) -> &dyn CatalogItem {
-        self.items_by_id.get(id).expect("item exists").as_ref()
+    fn get_item(&self, id: &CatalogItemId) -> CatalogItemRef<'_> {
+        CatalogRef::Borrowed(self.items_by_id.get(id).expect("item exists").as_ref())
     }
 
     fn get_item_by_global_id<'a>(
@@ -1581,27 +1587,27 @@ impl SessionCatalog for CatalogRuntime {
         self.try_get_item_by_global_id(id).expect("item exists")
     }
 
-    fn get_items(&self) -> Vec<&dyn CatalogItem> {
+    fn get_items(&self) -> Vec<CatalogItemRef<'_>> {
         self.items_by_id
             .values()
-            .map(|item| item.as_ref() as &dyn CatalogItem)
+            .map(|item| CatalogRef::Borrowed(item.as_ref() as &dyn CatalogItem))
             .collect()
     }
 
-    fn get_item_by_name(&self, name: &QualifiedItemName) -> Option<&dyn CatalogItem> {
+    fn get_item_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>> {
         self.items_by_name
             .get(name)
             .and_then(|item_ids| item_ids.first())
             .and_then(|item_id| self.items_by_id.get(item_id))
-            .map(|item| item.as_ref() as &dyn CatalogItem)
+            .map(|item| CatalogRef::Borrowed(item.as_ref() as &dyn CatalogItem))
     }
 
-    fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<&dyn CatalogItem> {
+    fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>> {
         self.items_by_name.get(name).and_then(|item_ids| {
             item_ids.iter().find_map(|item_id| {
                 let item = self.items_by_id.get(item_id)?;
                 if item.item_type == CatalogItemType::Type {
-                    Some(item.as_ref() as &dyn CatalogItem)
+                    Some(CatalogRef::Borrowed(item.as_ref() as &dyn CatalogItem))
                 } else {
                     None
                 }
@@ -2175,7 +2181,10 @@ impl SessionCatalog for TaskCatalog {
         self.base.resolve_cluster_replica(cluster_replica_name)
     }
 
-    fn resolve_item(&self, item_name: &PartialItemName) -> Result<&dyn CatalogItem, CatalogError> {
+    fn resolve_item(
+        &self,
+        item_name: &PartialItemName,
+    ) -> Result<CatalogItemRef<'_>, CatalogError> {
         self.lookup_item_by_partial_name(
             item_name,
             |item| {
@@ -2183,26 +2192,30 @@ impl SessionCatalog for TaskCatalog {
             },
             CatalogError::UnknownItem,
         )
+        .map(CatalogRef::Borrowed)
     }
 
     fn resolve_function(
         &self,
         item_name: &PartialItemName,
-    ) -> Result<&dyn CatalogItem, CatalogError> {
+    ) -> Result<CatalogItemRef<'_>, CatalogError> {
         self.base.resolve_function(item_name)
     }
 
-    fn resolve_type(&self, item_name: &PartialItemName) -> Result<&dyn CatalogItem, CatalogError> {
+    fn resolve_type(
+        &self,
+        item_name: &PartialItemName,
+    ) -> Result<CatalogItemRef<'_>, CatalogError> {
         self.base.resolve_type(item_name)
     }
 
-    fn get_system_type(&self, name: &str) -> &dyn CatalogItem {
+    fn get_system_type(&self, name: &str) -> CatalogItemRef<'_> {
         self.base.get_system_type(name)
     }
 
-    fn try_get_item(&self, id: &CatalogItemId) -> Option<&dyn CatalogItem> {
+    fn try_get_item(&self, id: &CatalogItemId) -> Option<CatalogItemRef<'_>> {
         if let Some(item) = self.items_by_id.get(id) {
-            return Some(item.as_ref() as &dyn CatalogItem);
+            return Some(CatalogRef::Borrowed(item.as_ref()));
         }
         self.base.try_get_item(id)
     }
@@ -2219,9 +2232,9 @@ impl SessionCatalog for TaskCatalog {
         self.base.try_get_item_by_global_id(id)
     }
 
-    fn get_item(&self, id: &CatalogItemId) -> &dyn CatalogItem {
+    fn get_item(&self, id: &CatalogItemId) -> CatalogItemRef<'_> {
         if let Some(item) = self.items_by_id.get(id) {
-            return item.as_ref() as &dyn CatalogItem;
+            return CatalogRef::Borrowed(item.as_ref());
         }
         self.base.get_item(id)
     }
@@ -2233,29 +2246,29 @@ impl SessionCatalog for TaskCatalog {
         self.try_get_item_by_global_id(id).expect("item exists")
     }
 
-    fn get_items(&self) -> Vec<&dyn CatalogItem> {
-        let mut items: Vec<&dyn CatalogItem> = Vec::new();
+    fn get_items(&self) -> Vec<CatalogItemRef<'_>> {
+        let mut items: Vec<CatalogItemRef<'_>> = Vec::new();
         items.extend(
             self.items_by_id
                 .values()
-                .map(|item| item.as_ref() as &dyn CatalogItem),
+                .map(|item| CatalogRef::Borrowed(item.as_ref() as &dyn CatalogItem)),
         );
         items.extend(self.base.get_items());
         items
     }
 
-    fn get_item_by_name(&self, name: &QualifiedItemName) -> Option<&dyn CatalogItem> {
+    fn get_item_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>> {
         if let Some(item_ids) = self.items_by_name.get(name) {
             if let Some(item_id) = item_ids.first() {
                 if let Some(item) = self.items_by_id.get(item_id) {
-                    return Some(item.as_ref() as &dyn CatalogItem);
+                    return Some(CatalogRef::Borrowed(item.as_ref()));
                 }
             }
         }
         self.base.get_item_by_name(name)
     }
 
-    fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<&dyn CatalogItem> {
+    fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>> {
         self.base.get_type_by_name(name)
     }
 

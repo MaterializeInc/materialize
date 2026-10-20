@@ -68,9 +68,9 @@ use mz_repr::{
 use mz_secrets::InMemorySecretsController;
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
-    CatalogItem as SqlCatalogItem, CatalogItemType as SqlCatalogItemType, CatalogNetworkPolicy,
-    CatalogRole, CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, EnvironmentId,
-    SessionCatalog, SystemObjectType,
+    CatalogItem as SqlCatalogItem, CatalogItemRef, CatalogItemType as SqlCatalogItemType,
+    CatalogNetworkPolicy, CatalogRef, CatalogRole, CatalogSchema, DefaultPrivilegeAclItem,
+    DefaultPrivilegeObject, EnvironmentId, SessionCatalog, SystemObjectType,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, FullSchemaName, ItemQualifiers, ObjectId,
@@ -1779,29 +1779,6 @@ impl From<UpdatePrivilegeVariant> for EventType {
     }
 }
 
-impl ConnCatalog<'_> {
-    fn resolve_item_name(
-        &self,
-        name: &PartialItemName,
-    ) -> Result<&QualifiedItemName, SqlCatalogError> {
-        self.resolve_item(name).map(|entry| entry.name())
-    }
-
-    fn resolve_function_name(
-        &self,
-        name: &PartialItemName,
-    ) -> Result<&QualifiedItemName, SqlCatalogError> {
-        self.resolve_function(name).map(|entry| entry.name())
-    }
-
-    fn resolve_type_name(
-        &self,
-        name: &PartialItemName,
-    ) -> Result<&QualifiedItemName, SqlCatalogError> {
-        self.resolve_type(name).map(|entry| entry.name())
-    }
-}
-
 impl ExprHumanizer for ConnCatalog<'_> {
     fn humanize_id(&self, id: GlobalId) -> Option<String> {
         let entry = self.state.try_get_entry_by_global_id(&id)?;
@@ -2148,10 +2125,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         Ok(self.state.resolve_cluster_replica(cluster_replica_name)?)
     }
 
-    fn resolve_item(
-        &self,
-        name: &PartialItemName,
-    ) -> Result<&dyn mz_sql::catalog::CatalogItem, SqlCatalogError> {
+    fn resolve_item(&self, name: &PartialItemName) -> Result<CatalogItemRef<'_>, SqlCatalogError> {
         let r = self.state.resolve_entry(
             self.database.as_ref(),
             &self.effective_search_path(true),
@@ -2161,14 +2135,14 @@ impl SessionCatalog for ConnCatalog<'_> {
         if self.unresolvable_ids.contains(&r.id()) {
             Err(SqlCatalogError::UnknownItem(name.to_string()))
         } else {
-            Ok(r)
+            Ok(CatalogRef::Borrowed(r))
         }
     }
 
     fn resolve_function(
         &self,
         name: &PartialItemName,
-    ) -> Result<&dyn mz_sql::catalog::CatalogItem, SqlCatalogError> {
+    ) -> Result<CatalogItemRef<'_>, SqlCatalogError> {
         let r = self.state.resolve_function(
             self.database.as_ref(),
             &self.effective_search_path(false),
@@ -2182,14 +2156,11 @@ impl SessionCatalog for ConnCatalog<'_> {
                 alternative: None,
             })
         } else {
-            Ok(r)
+            Ok(CatalogRef::Borrowed(r))
         }
     }
 
-    fn resolve_type(
-        &self,
-        name: &PartialItemName,
-    ) -> Result<&dyn mz_sql::catalog::CatalogItem, SqlCatalogError> {
+    fn resolve_type(&self, name: &PartialItemName) -> Result<CatalogItemRef<'_>, SqlCatalogError> {
         let r = self.state.resolve_type(
             self.database.as_ref(),
             &self.effective_search_path(false),
@@ -2202,16 +2173,16 @@ impl SessionCatalog for ConnCatalog<'_> {
                 name: name.to_string(),
             })
         } else {
-            Ok(r)
+            Ok(CatalogRef::Borrowed(r))
         }
     }
 
-    fn get_system_type(&self, name: &str) -> &dyn mz_sql::catalog::CatalogItem {
-        self.state.get_system_type(name)
+    fn get_system_type(&self, name: &str) -> CatalogItemRef<'_> {
+        CatalogRef::Borrowed(self.state.get_system_type(name))
     }
 
-    fn try_get_item(&self, id: &CatalogItemId) -> Option<&dyn mz_sql::catalog::CatalogItem> {
-        Some(self.state.try_get_entry(id)?)
+    fn try_get_item(&self, id: &CatalogItemId) -> Option<CatalogItemRef<'_>> {
+        Some(CatalogRef::Borrowed(self.state.try_get_entry(id)?))
     }
 
     fn try_get_item_by_global_id(
@@ -2233,8 +2204,8 @@ impl SessionCatalog for ConnCatalog<'_> {
         Some(entry)
     }
 
-    fn get_item(&self, id: &CatalogItemId) -> &dyn mz_sql::catalog::CatalogItem {
-        self.state.get_entry(id)
+    fn get_item(&self, id: &CatalogItemId) -> CatalogItemRef<'_> {
+        CatalogRef::Borrowed(self.state.get_entry(id))
     }
 
     fn get_item_by_global_id(
@@ -2256,7 +2227,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         entry
     }
 
-    fn get_items(&self) -> Vec<&dyn mz_sql::catalog::CatalogItem> {
+    fn get_items(&self) -> Vec<CatalogItemRef<'_>> {
         self.get_schemas()
             .into_iter()
             .flat_map(|schema| schema.item_ids())
@@ -2264,16 +2235,16 @@ impl SessionCatalog for ConnCatalog<'_> {
             .collect()
     }
 
-    fn get_item_by_name(&self, name: &QualifiedItemName) -> Option<&dyn SqlCatalogItem> {
+    fn get_item_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>> {
         self.state
             .get_item_by_name(name, &self.conn_id)
-            .map(|item| convert::identity::<&dyn SqlCatalogItem>(item))
+            .map(|item| -> CatalogItemRef<'_> { CatalogRef::Borrowed(item) })
     }
 
-    fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<&dyn SqlCatalogItem> {
+    fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>> {
         self.state
             .get_type_by_name(name, &self.conn_id)
-            .map(|item| convert::identity::<&dyn SqlCatalogItem>(item))
+            .map(|item| -> CatalogItemRef<'_> { CatalogRef::Borrowed(item) })
     }
 
     fn get_cluster(&self, id: ClusterId) -> &dyn mz_sql::catalog::CatalogCluster<'_> {
@@ -2385,7 +2356,9 @@ impl SessionCatalog for ConnCatalog<'_> {
                     .try_get_schema(database_spec, schema_spec, &self.conn_id)
                     .map(|schema| schema.privileges())
             }
-            SystemObjectId::Object(ObjectId::Item(id)) => Some(self.get_item(id).privileges()),
+            SystemObjectId::Object(ObjectId::Item(id)) => {
+                Some(self.state.get_entry(id).privileges())
+            }
             SystemObjectId::Object(ObjectId::NetworkPolicy(id)) => {
                 Some(self.get_network_policy(id).privileges())
             }
@@ -2445,21 +2418,27 @@ impl SessionCatalog for ConnCatalog<'_> {
         };
 
         let schema_spec = if database_id.is_none()
-            && self.resolve_item_name(&PartialItemName {
-                database: None,
-                schema: None,
-                item: qualified_name.item.clone(),
-            }) == Ok(qualified_name)
-            || self.resolve_function_name(&PartialItemName {
-                database: None,
-                schema: None,
-                item: qualified_name.item.clone(),
-            }) == Ok(qualified_name)
-            || self.resolve_type_name(&PartialItemName {
-                database: None,
-                schema: None,
-                item: qualified_name.item.clone(),
-            }) == Ok(qualified_name)
+            && self
+                .resolve_item(&PartialItemName {
+                    database: None,
+                    schema: None,
+                    item: qualified_name.item.clone(),
+                })
+                .is_ok_and(|entry| entry.name() == qualified_name)
+            || self
+                .resolve_function(&PartialItemName {
+                    database: None,
+                    schema: None,
+                    item: qualified_name.item.clone(),
+                })
+                .is_ok_and(|entry| entry.name() == qualified_name)
+            || self
+                .resolve_type(&PartialItemName {
+                    database: None,
+                    schema: None,
+                    item: qualified_name.item.clone(),
+                })
+                .is_ok_and(|entry| entry.name() == qualified_name)
         {
             None
         } else {
@@ -2479,9 +2458,14 @@ impl SessionCatalog for ConnCatalog<'_> {
             item: qualified_name.item.clone(),
         };
         assert!(
-            self.resolve_item_name(&res) == Ok(qualified_name)
-                || self.resolve_function_name(&res) == Ok(qualified_name)
-                || self.resolve_type_name(&res) == Ok(qualified_name)
+            self.resolve_item(&res)
+                .is_ok_and(|entry| entry.name() == qualified_name)
+                || self
+                    .resolve_function(&res)
+                    .is_ok_and(|entry| entry.name() == qualified_name)
+                || self
+                    .resolve_type(&res)
+                    .is_ok_and(|entry| entry.name() == qualified_name)
         );
         res
     }
