@@ -530,7 +530,8 @@ impl Coordinator {
                 self.plan_subsource(ctx.session(), &params, progress_stmt, item_id, global_id)?;
             let progress_full_name = self
                 .catalog()
-                .resolve_full_name(&progress_plan.plan.name, None);
+                .for_session(ctx.session())
+                .resolve_full_name(&progress_plan.plan.name);
             let progress_subsource = ResolvedItemName::Item {
                 id: progress_plan.item_id,
                 qualifiers: progress_plan.plan.name.qualifiers.clone(),
@@ -572,7 +573,10 @@ impl Coordinator {
 
         let (item_id, global_id) = self.allocate_user_id().await?;
 
-        let source_full_name = self.catalog().resolve_full_name(&source_plan.name, None);
+        let source_full_name = self
+            .catalog()
+            .for_session(ctx.session())
+            .resolve_full_name(&source_plan.name);
         let of_source = ResolvedItemName::Item {
             id: item_id,
             qualifiers: source_plan.name.qualifiers.clone(),
@@ -582,7 +586,8 @@ impl Coordinator {
         };
 
         // Generate subsource statements
-        let conn_catalog = self.catalog().for_system_session();
+        let session_catalog = self.catalog().for_session(ctx.session());
+        let conn_catalog = session_catalog.for_system_session();
         let pcx = plan::PlanContext::zero();
         let scx = StatementContext::new(Some(&pcx), &conn_catalog);
 
