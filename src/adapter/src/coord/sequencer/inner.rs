@@ -655,11 +655,8 @@ impl Coordinator {
 
         match transact_result {
             Ok(()) => {
-                // Warn about any new source that runs on only one replica but
-                // landed on a cluster that has more than one. The source's
-                // name is passed along explicitly: in a DDL transaction the
-                // creation is only staged at this point, so the source is not
-                // yet visible in the catalog.
+                // Speculative names belong to the transaction's catalog. Their
+                // schema or cluster can disappear before commit validation.
                 for (_item_id, name, source) in &sources {
                     let cluster_id = match &source.data_source {
                         DataSourceDesc::Ingestion { desc, cluster_id }
@@ -668,8 +665,16 @@ impl Coordinator {
                         } if desc.connection.prefers_single_replica() => cluster_id,
                         _ => continue,
                     };
-                    let cluster = self.catalog().get_cluster(*cluster_id);
-                    self.notify_single_replica_sources(ctx.session(), cluster, Some(name));
+                    let Some(cluster) = self.catalog().try_get_cluster(*cluster_id) else {
+                        continue;
+                    };
+                    let state = ctx
+                        .session()
+                        .transaction()
+                        .catalog_state()
+                        .unwrap_or_else(|| self.catalog().state());
+                    let name = state.resolve_full_name(name, None);
+                    self.notify_single_replica_sources(ctx.session(), cluster, Some(&name));
                 }
                 Ok(ExecuteResponse::CreatedSource)
             }
