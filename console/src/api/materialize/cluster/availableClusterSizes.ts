@@ -18,6 +18,18 @@ export const buildAllowedClusterReplicaSizesQuery = () => {
   }>`SHOW allowed_cluster_replica_sizes`;
 };
 
+const LEGACY_SIZE_PATTERN = "^[0-9]+([a-zA-Z]*cc[xX]?|C)$";
+
+/**
+ * A size's family (legacy cc, t-shirt, M.1, D.1, ...), the key
+ * `buildAvailableClusterReplicaSizesQuery` groups sizes by. The two must agree.
+ */
+export function clusterSizeFamily(size: string) {
+  if (new RegExp(LEGACY_SIZE_PATTERN).test(size)) return "0_legacy";
+  if (size.includes("-")) return `1_${size.split("-")[0]}`;
+  return "2_tshirt";
+}
+
 export const buildAvailableClusterReplicaSizesQuery = () => {
   return (
     queryBuilder
@@ -25,11 +37,11 @@ export const buildAvailableClusterReplicaSizesQuery = () => {
       .select("size")
       // We don't want to show the mz_probe size in the UI
       .where("size", "not like", "mz_%")
-      // Group sizes by family (legacy cc, t-shirt, M.1, D.1, ...) so related
-      // sizes stay contiguous, then sort by cost within each family.
+      // Group sizes by family so related sizes stay contiguous, then sort by
+      // cost within each family.
       .orderBy(
         sql<string>`CASE
-          WHEN size ~ '^[0-9]+([a-zA-Z]*cc[xX]?|C)$' THEN '0_legacy'
+          WHEN size ~ ${sql.lit(LEGACY_SIZE_PATTERN)} THEN '0_legacy'
           WHEN size LIKE '%-%' THEN '1_' || split_part(size, '-', 1)
           ELSE '2_tshirt'
         END`,

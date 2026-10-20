@@ -7,11 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import {
-  escapedLiteral,
-  queryBuilder,
-  quoteIdentifier,
-} from "~/api/materialize";
 import { Cluster } from "~/api/materialize/cluster/clusterList";
 import { formatDurationExact } from "~/utils/format";
 
@@ -96,42 +91,9 @@ export function replicaStatus(
   return { kind: "unknown" };
 }
 
-// Rounded to microseconds, an interval's precision, so float noise from the
-// nanos can't reach the literal.
-const lingerLiteral = (lingerMs: number) => {
-  const micros = Math.round(lingerMs * 1000);
-  return micros % 1_000_000 === 0
-    ? `'${micros / 1_000_000}s'`
-    : `'${micros / 1000}ms'`;
-};
-
 /** A linger for display. Zero reads `0s`, as the docs write the default. */
 export const formatLinger = (lingerMs: number) =>
   lingerMs === 0 ? "0s" : formatDurationExact(lingerMs);
-
-/** Sets an `ON HYDRATION` autoscaling strategy. */
-export const setAutoScalingStatement = (
-  clusterName: string,
-  hydrationSize: string,
-  lingerMs: number | undefined,
-) =>
-  [
-    `ALTER CLUSTER ${quoteIdentifier(clusterName)} SET (`,
-    "  AUTO SCALING STRATEGY = (",
-    `    ON HYDRATION (HYDRATION SIZE = ${
-      escapedLiteral(hydrationSize).compile(queryBuilder).sql
-    }${
-      lingerMs === undefined
-        ? ""
-        : `, LINGER DURATION = ${lingerLiteral(lingerMs)}`
-    })`,
-    "  )",
-    ");",
-  ].join("\n");
-
-/** Removes a cluster's autoscaling strategy. */
-export const resetAutoScalingStatement = (clusterName: string) =>
-  `ALTER CLUSTER ${quoteIdentifier(clusterName)} RESET (AUTO SCALING STRATEGY);`;
 
 /**
  * Says what an in-progress resize changes about the size and replication

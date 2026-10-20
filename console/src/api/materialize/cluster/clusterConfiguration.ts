@@ -45,6 +45,35 @@ export function buildClusterResizeTargetQuery(clusterId: string) {
     .where("status", "=", "in-progress");
 }
 
+/**
+ * A cluster's autoscaling strategy row, null for a cluster without one, and
+ * the size its in-progress resize is heading to, undefined for none.
+ */
+export async function fetchClusterAutoScaling({
+  clusterId,
+  queryKey,
+  requestOptions,
+}: {
+  clusterId: string;
+  queryKey: QueryKey;
+  requestOptions?: RequestInit;
+}) {
+  // Strict serializable, as in `fetchClusterConfiguration`: the form reads
+  // this right after an ALTER.
+  const [autoScalingRes, resizeTargetRes] = await executeSqlV2({
+    queries: [
+      buildClusterAutoScalingQuery(clusterId).compile(),
+      buildClusterResizeTargetQuery(clusterId).compile(),
+    ] as const,
+    queryKey,
+    requestOptions,
+  });
+  return {
+    autoScaling: autoScalingRes.rows.at(0) ?? null,
+    resizeTargetSize: resizeTargetRes.rows.at(0)?.size ?? undefined,
+  };
+}
+
 /** The configuration the cluster list doesn't carry, read in one request. */
 export async function fetchClusterConfiguration({
   params: { clusterId, replicaIds, includeAutoScaling },
