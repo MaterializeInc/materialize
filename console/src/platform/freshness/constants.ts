@@ -24,7 +24,9 @@ export const TIME_PERIOD_OPTIONS = {
  * Search params carrying the page's controls, so a view is linkable. The time
  * period reuses the app-wide `timePeriod` key from `useTimePeriodSelect`.
  */
+export const SCOPE_SEARCH_PARAM = "scope";
 export const CLUSTER_SEARCH_PARAM = "cluster";
+export const SCHEMA_SEARCH_PARAM = "schema";
 export const THRESHOLD_SEARCH_PARAM = "threshold";
 export const PREDICATE_SEARCH_PARAM = "exceeded";
 export const OBJECT_TYPE_SEARCH_PARAM = "type";
@@ -40,23 +42,55 @@ export const DEFAULT_TIME_PERIOD_MINUTES = 60;
  */
 export const DEFAULT_THRESHOLD_MS = 2_000;
 
+/** What the page gathers objects by: where they run, or where they are named. */
+export type FreshnessScope = "cluster" | "schema";
+
+export const SCOPE_LABELS: Record<
+  FreshnessScope,
+  { menu: string; noun: string; plural: string; place: string }
+> = {
+  cluster: {
+    menu: "Cluster",
+    noun: "cluster",
+    plural: "clusters",
+    place: "on this cluster",
+  },
+  schema: {
+    menu: "Schema",
+    noun: "schema",
+    plural: "schemas",
+    place: "in this schema",
+  },
+};
+
 /**
- * The object types this page offers to filter by.
+ * The object types each scope offers to filter by, which are also the only
+ * types a schema scope gathers: views, secrets and connections report no lag.
  *
- * Tables are not among them. A table carries a NULL `cluster_id`, so the
- * cluster-scoped lookup this page does never reaches one, including a table
- * created `FROM SOURCE`, which is ingested on its source's cluster and does
- * report lag. Such a table is missing from this page today.
+ * Tables appear only by schema. A table carries a NULL `cluster_id`, so the
+ * cluster-scoped lookup never reaches one, including a table created
+ * `FROM SOURCE`, which is ingested on its source's cluster and does report lag.
  *
  * TODO: Reach those tables through their source rather than through
  * `cluster_id`. Cluster Overview has the same gap.
+ *
+ * Selecting nothing means every type, so there is no "All" option to pick.
  */
-export const OBJECT_TYPE_FILTERS: { label: string; value: string }[] = [
-  { label: "Sources", value: "source" },
-  { label: "Materialized views", value: "materialized-view" },
-  { label: "Indexes", value: "index" },
-  { label: "Sinks", value: "sink" },
-];
-
-/** Selecting nothing means every type, so there is no "All" option to pick. */
-export const OBJECT_TYPE_VALUES = OBJECT_TYPE_FILTERS.map((f) => f.value);
+export const OBJECT_TYPE_FILTERS: Record<
+  FreshnessScope,
+  { label: string; value: string }[]
+> = {
+  cluster: [
+    { label: "Sources", value: "source" },
+    { label: "Materialized views", value: "materialized-view" },
+    { label: "Indexes", value: "index" },
+    { label: "Sinks", value: "sink" },
+  ],
+  schema: [
+    { label: "Sources", value: "source" },
+    { label: "Tables", value: "table" },
+    { label: "Materialized views", value: "materialized-view" },
+    { label: "Indexes", value: "index" },
+    { label: "Sinks", value: "sink" },
+  ],
+};

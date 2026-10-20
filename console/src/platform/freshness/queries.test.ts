@@ -8,9 +8,11 @@
 // by the Apache License, Version 2.0.
 
 import { renderHook, waitFor } from "@testing-library/react";
+import { createStore } from "jotai";
 import { delay, http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { DatabaseObject } from "~/api/materialize/objects";
 import {
   buildColumns,
   mapKyselyToTabular,
@@ -19,10 +21,17 @@ import server from "~/api/mocks/server";
 import {
   FreshnessObject,
   useClusterFreshness,
+  useFreshnessObjectsWhere,
 } from "~/platform/clusters/queries";
+import { allObjects } from "~/store/allObjects";
 import { createProviderWrapper } from "~/test/utils";
 
-import { useFreshnessHydration, useLatestLag } from "./queries";
+import { FreshnessScope } from "./constants";
+import {
+  inFreshnessScope,
+  useFreshnessHydration,
+  useLatestLag,
+} from "./queries";
 
 const objects: FreshnessObject[] = [
   {
@@ -131,5 +140,73 @@ describe("freshness queries", () => {
       await openPage();
       expect(requests).toBe(1);
     });
+  });
+});
+
+const buildObject = (
+  overrides: Partial<DatabaseObject> & { id: string },
+): DatabaseObject =>
+  ({
+    name: overrides.id,
+    objectType: "materialized-view",
+    schemaId: "u3",
+    schemaName: "public",
+    databaseId: "u1",
+    databaseName: "materialize",
+    sourceType: null,
+    isWebhookTable: "false",
+    clusterId: "u1",
+    clusterName: "quickstart",
+    ...overrides,
+  }) as DatabaseObject;
+
+// Schema u3 holds objects on two clusters and none, of every type the page
+// either shows or must skip. Schema u9 and cluster u2 hold the decoys.
+const ENVIRONMENT = [
+  buildObject({ id: "u10", objectType: "table", clusterId: null }),
+  buildObject({ id: "u11", objectType: "materialized-view", clusterId: "u1" }),
+  buildObject({ id: "u12", objectType: "index", clusterId: "u2" }),
+  buildObject({ id: "u13", objectType: "source", clusterId: "u2" }),
+  buildObject({ id: "u14", objectType: "sink", clusterId: "u1" }),
+  buildObject({ id: "u15", objectType: "view", clusterId: null }),
+  buildObject({ id: "u16", objectType: "secret", clusterId: null }),
+  buildObject({ id: "u17", objectType: "connection", clusterId: null }),
+  buildObject({
+    id: "u18",
+    objectType: "source",
+    sourceType: "subsource",
+    clusterId: "u2",
+  }),
+  buildObject({ id: "u20", schemaId: "u9", clusterId: "u1" }),
+];
+
+async function objectIdsIn(scope: FreshnessScope, scopeId: string) {
+  const store = createStore();
+  store.set(allObjects, {
+    data: ENVIRONMENT,
+    error: undefined,
+    snapshotComplete: true,
+  });
+  const ProviderWrapper = await createProviderWrapper({ store });
+  const { result } = renderHook(
+    () => useFreshnessObjectsWhere(inFreshnessScope(scope, scopeId)),
+    { wrapper: ProviderWrapper },
+  );
+  return result.current.map((object) => object.objectId);
+}
+
+describe("inFreshnessScope", () => {
+  it("gathers a schema's objects that report lag, whichever cluster runs them", async () => {
+    expect(await objectIdsIn("schema", "u3")).toEqual([
+      "u10",
+      "u11",
+      "u12",
+      "u13",
+      "u14",
+    ]);
+  });
+
+  it("gathers a cluster's objects, which never include a table", async () => {
+    expect(await objectIdsIn("cluster", "u2")).toEqual(["u12", "u13"]);
   });
 });

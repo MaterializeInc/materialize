@@ -8,12 +8,15 @@
 // by the Apache License, Version 2.0.
 
 import { screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import React from "react";
 import { describe, expect, it } from "vitest";
 
 import { Cluster } from "~/api/materialize/cluster/clusterList";
+import { SchemaWithOptionalDatabase } from "~/api/materialize/schemaList";
 import { SubscribeError } from "~/api/materialize/SubscribeManager";
 import { allClusters } from "~/store/allClusters";
+import { allSchemas } from "~/store/allSchemas";
 import { renderComponent } from "~/test/utils";
 
 import FreshnessPage from "./FreshnessPage";
@@ -97,5 +100,56 @@ describe("FreshnessPage cluster selection", () => {
 
     expect(await screen.findByText("quickstart")).toBeVisible();
     expect(screen.queryByText(/was not found/)).not.toBeInTheDocument();
+  });
+});
+
+const SCHEMAS: SchemaWithOptionalDatabase[] = [
+  { id: "u3", name: "public", databaseId: "u1", databaseName: "materialize" },
+  { id: "u9", name: "public", databaseId: "u2", databaseName: "analytics" },
+];
+
+describe("FreshnessPage schema scope", () => {
+  const renderAt = async (search: string) =>
+    renderComponent(<FreshnessPage />, {
+      initializeState: (store) => {
+        store.set(allClusters, {
+          data: [CLUSTER],
+          error: undefined,
+          snapshotComplete: true,
+        });
+        store.set(allSchemas, {
+          data: SCHEMAS,
+          error: undefined,
+          snapshotComplete: true,
+        });
+      },
+      initialRouterEntries: [search],
+    });
+
+  it("names each schema with its database and falls back to the first", async () => {
+    // Both are `public`, so the bare names could not be told apart.
+    await renderAt("/?scope=schema");
+
+    expect(await screen.findByText("analytics.public")).toBeVisible();
+    expect(screen.queryByText("quickstart")).not.toBeInTheDocument();
+  });
+
+  it("says so rather than showing a different schema", async () => {
+    await renderAt("/?scope=schema&schema=u999");
+
+    expect(await screen.findByText(/That schema was not found/)).toBeVisible();
+  });
+
+  it("shows the first option of the new scope when the scope changes", async () => {
+    await renderAt("/?cluster=u1");
+    expect(await screen.findByText("quickstart")).toBeVisible();
+
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: "Show objects by" }),
+      "schema",
+    );
+
+    expect(await screen.findByText("analytics.public")).toBeVisible();
+    expect(screen.queryByText("quickstart")).not.toBeInTheDocument();
   });
 });

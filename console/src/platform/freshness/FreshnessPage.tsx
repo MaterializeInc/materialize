@@ -39,7 +39,7 @@ import {
   useThresholdControl,
 } from "~/components/ThresholdLineGraph/useThresholdControl";
 import TimePeriodSelect from "~/components/TimePeriodSelect";
-import { ClustersIcon } from "~/icons";
+import { ClustersIcon, SchemaIcon } from "~/icons";
 import {
   MainContentContainer,
   PageHeader,
@@ -48,15 +48,21 @@ import {
 import {
   FreshnessData,
   useClusterFreshness,
-  useFreshnessObjects,
+  useFreshnessObjectsWhere,
 } from "~/platform/clusters/queries";
 import { useAllClusters } from "~/store/allClusters";
 import { useAllObjects } from "~/store/allObjects";
+import { useAllSchemas } from "~/store/allSchemas";
 import { MaterializeTheme } from "~/theme";
 import { pluralize } from "~/util";
 import { formatDurationExact, formatDurationForAxis } from "~/utils/format";
 
-import { OBJECT_TYPE_FILTERS, TIME_PERIOD_OPTIONS } from "./constants";
+import {
+  FreshnessScope,
+  OBJECT_TYPE_FILTERS,
+  SCOPE_LABELS,
+  TIME_PERIOD_OPTIONS,
+} from "./constants";
 import {
   describeThreshold,
   Predicate,
@@ -65,10 +71,15 @@ import {
 import { FreshnessTable } from "./FreshnessTable";
 import {
   HydrationCounts,
+  inFreshnessScope,
   useFreshnessHydration,
   useLatestLag,
 } from "./queries";
-import { parsePredicate, useFreshnessParams } from "./useFreshnessParams";
+import {
+  parsePredicate,
+  parseScope,
+  useFreshnessParams,
+} from "./useFreshnessParams";
 import { useFreshnessRows } from "./useFreshnessRows";
 
 const SectionHeader = ({
@@ -103,6 +114,7 @@ const SectionHeader = ({
 const NO_HYDRATION = new Map<string, HydrationCounts>();
 
 interface FreshnessViewOptions {
+  scope: FreshnessScope;
   rangeLabel: string;
   predicate: Predicate;
   thresholdControl: ThresholdControl;
@@ -110,16 +122,17 @@ interface FreshnessViewOptions {
 }
 
 const FreshnessContent = ({
-  clusterId,
+  scope,
+  scopeId,
   lookbackMs,
   ...viewOptions
 }: FreshnessViewOptions & {
-  clusterId: string;
+  scopeId: string;
   lookbackMs: number;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const objects = useFreshnessObjects(clusterId);
-  // Distinguishes a cluster that has nothing on it from one whose objects have
+  const objects = useFreshnessObjectsWhere(inFreshnessScope(scope, scopeId));
+  // Distinguishes a scope that has nothing in it from one whose objects have
   // not arrived yet. Both are an empty list, and they are not the same state.
   const { snapshotComplete } = useAllObjects();
   const objectIds = objects.map((object) => object.objectId);
@@ -129,11 +142,11 @@ const FreshnessContent = ({
 
   // Before the headline, the graph and the tables, because each of them would
   // otherwise render its own "0" and the page would read as a passing health
-  // check for a cluster with nothing on it.
+  // check for a scope with nothing in it.
   if (objects.length === 0 && snapshotComplete) {
     return (
       <Box padding="4" color={colors.foreground.secondary}>
-        No objects on this cluster.
+        No objects {SCOPE_LABELS[scope].place}.
       </Box>
     );
   }
@@ -159,6 +172,7 @@ const FreshnessContent = ({
       data={freshness.data}
       latestByObjectId={latest.data}
       hydrationByObjectId={hydration.data ?? NO_HYDRATION}
+      scope={scope}
       {...viewOptions}
     />
   );
@@ -168,6 +182,7 @@ const FreshnessView = ({
   data: { historicalData, startTime, endTime, lines, objectsById },
   latestByObjectId,
   hydrationByObjectId,
+  scope,
   rangeLabel,
   predicate,
   thresholdControl,
@@ -247,7 +262,7 @@ const FreshnessView = ({
           <AccordionPanel px="0">
             {rows.length === 0 ? (
               <Box padding="4" color={colors.foreground.secondary}>
-                No objects with freshness data on this cluster.
+                No objects with freshness data {SCOPE_LABELS[scope].place}.
               </Box>
             ) : (
               <FreshnessTable rows={rows} itemLabel="objects" />
@@ -267,12 +282,21 @@ const FreshnessPage = () => {
     snapshotComplete: clustersReady,
   } = useAllClusters();
   const {
+    data: schemas,
+    error: schemasError,
+    snapshotComplete: schemasReady,
+  } = useAllSchemas({ includeSystemSchemas: false });
+  const {
+    scope,
     clusterId,
+    schemaId,
     threshold,
     timePeriodMinutes,
     predicate,
     objectTypes,
+    setScope,
     setClusterId,
+    setSchemaId,
     setThreshold,
     setTimePeriodMinutes,
     setPredicate,
@@ -280,21 +304,31 @@ const FreshnessPage = () => {
   } = useFreshnessParams();
   const thresholdControl = useThresholdControl(threshold, setThreshold);
 
-  const selectable = clusters
-    .filter((c) => !isSystemCluster(c.id))
-    .sort((a, b) => a.name.localeCompare(b.name));
-  // An absent param falls back to the first cluster. A param naming a cluster
-  // that is not there does not: an old link, or one to a dropped or system
-  // cluster, would otherwise show a different cluster under the name the URL
+  const scopeLabels = SCOPE_LABELS[scope];
+  // A schema is named with its database, because every database has its own
+  // `public` and the bare names would be indistinguishable in the menu.
+  const options: SelectOption[] = (
+    scope === "cluster"
+      ? clusters
+          .filter((c) => !isSystemCluster(c.id))
+          .map((c) => ({ id: c.id, name: c.name }))
+      : schemas.map((s) => ({
+          id: s.id,
+          name: s.databaseName ? `${s.databaseName}.${s.name}` : s.name,
+        }))
+  ).sort((a, b) => a.name.localeCompare(b.name));
+  const selectedId = scope === "cluster" ? clusterId : schemaId;
+  const setSelectedId = scope === "cluster" ? setClusterId : setSchemaId;
+  // An absent param falls back to the first option. A param naming one that
+  // is not there does not: an old link, or one to a dropped or system cluster
+  // or schema, would otherwise show a different one under the name the URL
   // still carries, and sharing that link would show a third thing again.
-  const selected = clusterId
-    ? selectable.find((c) => c.id === clusterId)
-    : selectable[0];
-  const notFound = Boolean(clusterId) && selected === undefined;
-  const options: SelectOption[] = selectable.map((c) => ({
-    id: c.id,
-    name: c.name,
-  }));
+  const selected = selectedId
+    ? options.find((option) => option.id === selectedId)
+    : options[0];
+  const notFound = Boolean(selectedId) && selected === undefined;
+  const scopeError = scope === "cluster" ? clustersError : schemasError;
+  const scopeReady = scope === "cluster" ? clustersReady : schemasReady;
 
   const rangeLabel =
     TIME_PERIOD_OPTIONS[
@@ -302,18 +336,18 @@ const FreshnessPage = () => {
     ] ?? `${timePeriodMinutes}m`;
 
   // The heading stays and the body swaps, so the page does not flash empty on
-  // every load. The control bar goes with the body: its cluster picker has
-  // nothing to offer until the subscribe lands.
-  if (clustersError || !clustersReady) {
+  // every load. The control bar goes with the body: its picker has nothing to
+  // offer until the subscribe lands.
+  if (scopeError || !scopeReady) {
     return (
       <MainContentContainer>
         <PageHeader variant="compact" sticky boxProps={{ pb: "4" }}>
           <PageHeading>Freshness</PageHeading>
         </PageHeader>
-        {clustersError ? (
+        {scopeError ? (
           <Alert
             variant="error"
-            message="An error occurred loading clusters."
+            message={`An error occurred loading ${scopeLabels.plural}.`}
           />
         ) : (
           <Spinner data-testid="loading-spinner" />
@@ -372,11 +406,25 @@ const FreshnessPage = () => {
             />
           </HStack>
           <HStack spacing="2" alignItems="center" flexWrap="wrap">
+            <Select
+              size="sm"
+              width="auto"
+              aria-label="Show objects by"
+              value={scope}
+              onChange={(e) => setScope(parseScope(e.target.value) ?? scope)}
+            >
+              {(Object.keys(SCOPE_LABELS) as FreshnessScope[]).map((key) => (
+                <option key={key} value={key}>
+                  {SCOPE_LABELS[key].menu}
+                </option>
+              ))}
+            </Select>
             <Box minWidth="52">
               <SearchableSelect<SelectOption, false>
-                ariaLabel="Cluster"
-                // Cluster names run long and are often distinguished only by
-                // their last few characters, so a truncated one is unusable.
+                ariaLabel={scopeLabels.menu}
+                // Cluster and schema names run long and are often distinguished
+                // only by their last few characters, so a truncated one is
+                // unusable.
                 // `max-content` rather than the base `fit-content`, which
                 // resolves against the select's own container and so cannot
                 // grow past the closed control.
@@ -386,13 +434,21 @@ const FreshnessPage = () => {
                 value={
                   selected ? { id: selected.id, name: selected.name } : null
                 }
-                onChange={(option) => option && setClusterId(option.id)}
+                onChange={(option) => option && setSelectedId(option.id)}
                 leftIcon={
-                  <ClustersIcon
-                    height="4"
-                    width="4"
-                    color={colors.foreground.secondary}
-                  />
+                  scope === "cluster" ? (
+                    <ClustersIcon
+                      height="4"
+                      width="4"
+                      color={colors.foreground.secondary}
+                    />
+                  ) : (
+                    <SchemaIcon
+                      height="4"
+                      width="4"
+                      color={colors.foreground.secondary}
+                    />
+                  )
                 }
               />
             </Box>
@@ -401,13 +457,13 @@ const FreshnessPage = () => {
                 isMulti
                 ariaLabel="Object types"
                 placeholder="All object types"
-                options={OBJECT_TYPE_FILTERS.map((filter) => ({
+                options={OBJECT_TYPE_FILTERS[scope].map((filter) => ({
                   id: filter.value,
                   name: filter.label,
                 }))}
-                value={OBJECT_TYPE_FILTERS.filter((filter) =>
-                  objectTypes.includes(filter.value),
-                ).map((filter) => ({ id: filter.value, name: filter.label }))}
+                value={OBJECT_TYPE_FILTERS[scope]
+                  .filter((filter) => objectTypes.includes(filter.value))
+                  .map((filter) => ({ id: filter.value, name: filter.label }))}
                 onChange={(chosen) =>
                   setObjectTypes(chosen.map((option) => option.id))
                 }
@@ -419,13 +475,14 @@ const FreshnessPage = () => {
       <VStack alignItems="stretch" width="100%" spacing="4">
         {notFound ? (
           <Text textStyle="text-small" color={colors.foreground.secondary}>
-            That cluster was not found. Select another cluster using the menu
-            above.
+            That {scopeLabels.noun} was not found. Select another{" "}
+            {scopeLabels.noun} using the menu above.
           </Text>
         ) : selected ? (
           <AppErrorBoundary message="An error occurred fetching freshness data.">
             <FreshnessContent
-              clusterId={selected.id}
+              scope={scope}
+              scopeId={selected.id}
               lookbackMs={timePeriodMinutes * 60_000}
               rangeLabel={rangeLabel}
               predicate={predicate}
@@ -435,7 +492,7 @@ const FreshnessPage = () => {
           </AppErrorBoundary>
         ) : (
           <Text textStyle="text-small" color={colors.foreground.secondary}>
-            No clusters to show freshness for.
+            No {scopeLabels.plural} to show freshness for.
           </Text>
         )}
 

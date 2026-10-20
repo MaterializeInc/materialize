@@ -16,9 +16,13 @@ import {
   CLUSTER_SEARCH_PARAM,
   DEFAULT_THRESHOLD_MS,
   DEFAULT_TIME_PERIOD_MINUTES,
+  FreshnessScope,
+  OBJECT_TYPE_FILTERS,
   OBJECT_TYPE_SEARCH_PARAM,
-  OBJECT_TYPE_VALUES,
   PREDICATE_SEARCH_PARAM,
+  SCHEMA_SEARCH_PARAM,
+  SCOPE_LABELS,
+  SCOPE_SEARCH_PARAM,
   THRESHOLD_SEARCH_PARAM,
   TIME_PERIOD_OPTIONS,
 } from "./constants";
@@ -65,27 +69,43 @@ export function parsePredicate(raw: string | null): Predicate | null {
     : null;
 }
 
+/** A scope the menu offers, or null. `Object.hasOwn` as in `parsePredicate`. */
+export function parseScope(raw: string | null): FreshnessScope | null {
+  return raw !== null && Object.hasOwn(SCOPE_LABELS, raw)
+    ? (raw as FreshnessScope)
+    : null;
+}
+
 /**
- * The object types named in the param, dropping any the menu does not offer.
+ * The object types named in the param, dropping any the scope's menu does not
+ * offer.
  *
  * An empty result means no filter rather than "nothing matches", so a stale or
  * hand-edited param degrades to showing everything instead of an empty page.
  */
-export function parseObjectTypes(raw: string | null): string[] {
+export function parseObjectTypes(
+  raw: string | null,
+  scope: FreshnessScope,
+): string[] {
   if (raw === null) return [];
+  const offered = OBJECT_TYPE_FILTERS[scope].map((filter) => filter.value);
   return raw
     .split(",")
     .map((value) => value.trim())
-    .filter((value) => OBJECT_TYPE_VALUES.includes(value));
+    .filter((value) => offered.includes(value));
 }
 
 export interface FreshnessParams {
+  scope: FreshnessScope;
   clusterId: string | null;
+  schemaId: string | null;
   threshold: number;
   timePeriodMinutes: number;
   predicate: Predicate;
   objectTypes: string[];
+  setScope: (scope: FreshnessScope) => void;
   setClusterId: (id: string) => void;
+  setSchemaId: (id: string) => void;
   setThreshold: (ms: number) => void;
   setTimePeriodMinutes: (minutes: number) => void;
   setPredicate: (predicate: Predicate) => void;
@@ -93,10 +113,10 @@ export interface FreshnessParams {
 }
 
 /**
- * The page's three controls, held in the URL.
+ * The page's controls, held in the URL.
  *
  * All of them go in the URL rather than in component state or local storage so
- * that a view is a link: the cluster, what counts as stale, and over what
+ * that a view is a link: the cluster or schema, what counts as stale, and over what
  * window are exactly the things someone wants to hand to a colleague along with
  * "look at this". Replacing rather than pushing keeps dragging the threshold
  * from filling the back button with history.
@@ -122,7 +142,30 @@ export function useFreshnessParams(): FreshnessParams {
       { replace: true },
     );
 
+  // Drops both selections so the page falls back to the new scope's first
+  // option, and the types the new scope's menu does not offer, so the param
+  // never carries a filter the menu cannot show.
+  const setScope = (scope: FreshnessScope) =>
+    setSearchParams(
+      (prev) => {
+        prev.set(SCOPE_SEARCH_PARAM, scope);
+        prev.delete(CLUSTER_SEARCH_PARAM);
+        prev.delete(SCHEMA_SEARCH_PARAM);
+        const types = parseObjectTypes(
+          prev.get(OBJECT_TYPE_SEARCH_PARAM),
+          scope,
+        );
+        if (types.length === 0) {
+          prev.delete(OBJECT_TYPE_SEARCH_PARAM);
+        } else {
+          prev.set(OBJECT_TYPE_SEARCH_PARAM, types.join(","));
+        }
+        return prev;
+      },
+      { replace: true },
+    );
   const setClusterId = (id: string) => set(CLUSTER_SEARCH_PARAM, id);
+  const setSchemaId = (id: string) => set(SCHEMA_SEARCH_PARAM, id);
   const setThreshold = (ms: number) => set(THRESHOLD_SEARCH_PARAM, String(ms));
   const setTimePeriodMinutes = (minutes: number) =>
     set(TIME_PERIOD_SEARCH_PARAM_KEY, String(minutes));
@@ -139,14 +182,17 @@ export function useFreshnessParams(): FreshnessParams {
   // Rebuilding it per render would hand every consuming `useMemo` a new array
   // identity, which silently disables their caches: the whole stats and rows
   // chain would then recompute on each pointer move of a threshold drag.
+  const scope = parseScope(searchParams.get(SCOPE_SEARCH_PARAM)) ?? "cluster";
   const rawObjectTypes = searchParams.get(OBJECT_TYPE_SEARCH_PARAM);
   const objectTypes = React.useMemo(
-    () => parseObjectTypes(rawObjectTypes),
-    [rawObjectTypes],
+    () => parseObjectTypes(rawObjectTypes, scope),
+    [rawObjectTypes, scope],
   );
 
   return {
+    scope,
     clusterId: searchParams.get(CLUSTER_SEARCH_PARAM),
+    schemaId: searchParams.get(SCHEMA_SEARCH_PARAM),
     threshold:
       parsePositiveNumber(searchParams.get(THRESHOLD_SEARCH_PARAM)) ??
       DEFAULT_THRESHOLD_MS,
@@ -156,7 +202,9 @@ export function useFreshnessParams(): FreshnessParams {
     predicate:
       parsePredicate(searchParams.get(PREDICATE_SEARCH_PARAM)) ?? "peak",
     objectTypes,
+    setScope,
     setClusterId,
+    setSchemaId,
     setThreshold,
     setTimePeriodMinutes,
     setPredicate,
