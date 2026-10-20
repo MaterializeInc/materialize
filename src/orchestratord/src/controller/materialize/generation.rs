@@ -1701,7 +1701,7 @@ mod tests {
             failure_threshold: Some(12),
             tcp_socket: Some(TCPSocketAction {
                 host: None,
-                port: IntOrString::Int(6875),
+                port: IntOrString::Int(6877),
             }),
             ..Default::default()
         }
