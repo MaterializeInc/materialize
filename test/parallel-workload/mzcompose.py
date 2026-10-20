@@ -47,6 +47,7 @@ from materialize.parallel_workload.catalog_transactions import (
     schema_swap,
     source_ddl,
     source_drop_conflicts,
+    source_late_binding,
     source_noop_conflict,
 )
 from materialize.parallel_workload.parallel_workload import parse_common_args, run
@@ -199,7 +200,7 @@ def workflow_catalog_transactions(
         "swap",
         "hammer",
     ]
-    cases = [*rename_cases, "source", "source-noop", "source-drop"]
+    cases = [*rename_cases, "source", "source-binding", "source-noop", "source-drop"]
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--rounds", type=int, default=25)
     parser.add_argument("--seed", type=int, default=0)
@@ -234,6 +235,10 @@ def workflow_catalog_transactions(
                     hammer(c, args.workers, args.rounds)
                 elif case == "source":
                     source_ddl(c)
+                elif case == "source-binding":
+                    for interference in ("replacement", "rename_away"):
+                        for before_commit in (False, True):
+                            source_late_binding(c, interference, before_commit)
                 elif case == "source-noop":
                     source_noop_conflict(c)
                 elif case == "rename-noop":

@@ -16,7 +16,6 @@ use std::collections::btree_map::Entry;
 use std::future::Future;
 use std::mem;
 use std::net::IpAddr;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -52,17 +51,17 @@ use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::watch;
 use uuid::Uuid;
 
+use crate::AdapterNotice;
 use crate::catalog::CatalogState;
 use crate::client::RecordFirstRowStream;
+use crate::coord::ExplainContext;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::in_memory_oracle::InMemoryTimestampOracle;
 use crate::coord::peek::PeekResponseUnary;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
-use crate::coord::{Coordinator, ExplainContext};
 use crate::error::AdapterError;
 use crate::metrics::{Metrics, SessionMetrics};
 use crate::statement_logging::PreparedStatementLoggingInfo;
-use crate::{AdapterNotice, ExecuteContext};
 use mz_catalog::durable::Snapshot;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
@@ -1388,29 +1387,20 @@ impl TransactionStatus {
                         return Err(AdapterError::SingleStatementTransaction);
                     }
                     TransactionOps::DDL {
-                        ops: og_ops,
-                        revision: og_revision,
-                        state: og_state,
-                        side_effects,
-                        snapshot: og_snapshot,
+                        commands,
+                        state,
+                        snapshot,
                     } => match add_ops {
                         TransactionOps::DDL {
-                            ops: new_ops,
-                            revision: new_revision,
-                            side_effects: mut net_new_side_effects,
+                            commands: new_commands,
                             state: new_state,
                             snapshot: new_snapshot,
                         } => {
-                            if *og_revision != new_revision {
-                                return Err(AdapterError::DDLTransactionRace);
+                            if !new_commands.is_empty() {
+                                commands.extend(new_commands);
+                                *state = new_state;
+                                *snapshot = new_snapshot;
                             }
-                            // The old og_ops are overwritten, not extended.
-                            if !new_ops.is_empty() {
-                                *og_ops = new_ops;
-                                *og_state = new_state;
-                                *og_snapshot = new_snapshot;
-                            }
-                            side_effects.append(&mut net_new_side_effects);
                         }
                         _ => return Err(AdapterError::DDLOnlyTransaction),
                     },
@@ -1567,29 +1557,12 @@ pub enum TransactionOps {
     /// uses this must return false in `must_serialize_ddl()` because this is serialized instead in
     /// `sequence_plan()` during `COMMIT`.
     DDL {
-        /// Catalog operations that have already run, and must run before each subsequent op.
-        ops: Vec<crate::catalog::Op>,
-        /// In-memory state that reflects the previously applied ops.
+        /// Commands in statement order, retaining outcomes already exposed to the client.
+        commands: Vec<crate::catalog::command::CatalogCommand>,
+        /// Speculative state after the last accepted command.
         state: CatalogState,
-        /// A list of side effects that should be executed if this DDL transaction commits.
-        #[derivative(Debug = "ignore")]
-        side_effects: Vec<
-            Box<
-                dyn for<'a> FnOnce(
-                        &'a mut Coordinator,
-                        Option<&'a mut ExecuteContext>,
-                    ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
-                    + Send
-                    + Sync,
-            >,
-        >,
-        /// Transient revision of the `Catalog` when this transaction started.
-        revision: u64,
-        /// Snapshot of the durable transaction state after the last dry run.
-        /// Used to initialize the next dry run's transaction so it starts
-        /// in sync with the accumulated `state`. `None` for the first
-        /// statement in the transaction (before any dry run).
-        snapshot: Option<Snapshot>,
+        /// Durable baseline corresponding to `state`.
+        snapshot: Snapshot,
     },
 }
 

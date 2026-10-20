@@ -332,3 +332,146 @@ async fn source_planning_retains_ids_when_exports_change() {
     })
     .await;
 }
+
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn source_command_preserves_only_observed_outcomes() {
+    use std::collections::BTreeMap;
+
+    use crate::AdapterError;
+    use crate::catalog::command::CatalogCommand;
+    use crate::catalog::command::source_statement::{
+        SourceCommand, SourceStatement, SourceStatementPreparation,
+    };
+    use crate::catalog::{CommandExecutionError, CommandWork};
+    use crate::session::Session;
+
+    fn storage(catalog: &Catalog) -> StorageConfiguration {
+        StorageConfiguration::new(
+            catalog.state().config.connection_context.clone(),
+            mz_storage_types::dyncfgs::all_dyncfgs(Default::default()),
+        )
+    }
+
+    async fn stage(catalog: &Catalog, session: &Session, sql: &str) -> SourceCommand {
+        let raw = mz_sql_parser::parser::parse_statements(sql)
+            .expect("parse source")
+            .remove(0)
+            .ast;
+        let mut statement = SourceStatement::new(
+            Arc::new(raw),
+            mz_sql::plan::Params::empty(),
+            session.meta(),
+            1000,
+        );
+        let (state, snapshot) = catalog.ddl_transaction_snapshot().await;
+        let mut response = None;
+        loop {
+            let ts = catalog.current_upper().await;
+            match catalog
+                .prepare_source_statement(
+                    &mut statement,
+                    (&state, &snapshot),
+                    None,
+                    ts,
+                    response.take(),
+                )
+                .await
+                .expect("stage source")
+            {
+                SourceStatementPreparation::Ready(prepared) => return prepared.command,
+                SourceStatementPreparation::Prepare(request) => {
+                    response = Some(request.execute(&storage(catalog)).await);
+                }
+                SourceStatementPreparation::Allocate(keys) => {
+                    let ids = catalog
+                        .allocate_user_ids(u64::try_from(keys.len()).expect("ID count"), ts)
+                        .await
+                        .expect("allocate source IDs");
+                    statement.record_ids(keys, ids);
+                }
+            }
+        }
+    }
+
+    async fn apply(
+        catalog: &mut Catalog,
+        command: SourceCommand,
+    ) -> Result<SourceCommand, AdapterError> {
+        let mut commands = [CatalogCommand::Source(Arc::new(command))];
+        let mut responses = BTreeMap::new();
+        loop {
+            let ts = catalog.current_upper().await;
+            match catalog
+                .transact_commands(None, ts, None, &mut commands, &mut responses)
+                .await
+            {
+                Ok(_) => {
+                    let [CatalogCommand::Source(command)] = commands else {
+                        unreachable!()
+                    };
+                    return Ok(Arc::unwrap_or_clone(command));
+                }
+                Err(CommandExecutionError::Error(error)) => return Err(error),
+                Err(CommandExecutionError::Pending { index, work }) => match work {
+                    CommandWork::Prepare(request) => {
+                        responses.insert(index, request.execute(&storage(catalog)).await);
+                    }
+                    CommandWork::Allocate(keys) => {
+                        let ids = catalog
+                            .allocate_user_ids(u64::try_from(keys.len()).expect("ID count"), ts)
+                            .await
+                            .expect("allocate source IDs");
+                        let CatalogCommand::Source(command) = &mut commands[index] else {
+                            unreachable!()
+                        };
+                        Arc::make_mut(command).record_ids(keys, ids);
+                    }
+                },
+            }
+        }
+    }
+
+    Catalog::with_debug(|mut catalog| async move {
+        catalog.state.system_config_mut()
+            .set("force_source_table_syntax", VarInput::Flat("false"))
+            .expect("allow source syntax");
+        catalog.state.system_config_mut()
+            .set("enable_load_generator_counter", VarInput::Flat("true"))
+            .expect("allow counter source fixture");
+        let ts = catalog.current_upper().await;
+        let cluster_id = catalog.allocate_user_cluster_id(ts).await.expect("allocate source cluster");
+        let ts = catalog.current_upper().await;
+        catalog.transact(None, ts, None, vec![crate::catalog::Op::CreateCluster {
+            id: cluster_id,
+            name: "source_cluster".into(),
+            introspection_sources: Vec::new(),
+            owner_id: mz_sql::session::user::MZ_SYSTEM_ROLE_ID,
+            config: mz_catalog::memory::objects::ClusterConfig {
+                variant: mz_catalog::memory::objects::ClusterVariant::Unmanaged,
+                workload_class: None,
+            },
+        }]).await.expect("create source cluster");
+        let mut session = Session::dummy();
+        session.initialize_role_metadata(mz_sql::session::user::MZ_SYSTEM_ROLE_ID);
+        session
+            .start_transaction(mz_ore::now::to_datetime(1000), None, None)
+            .expect("start invoking transaction");
+        let sql = "CREATE SOURCE IF NOT EXISTS materialize.public.ddl_outcome IN CLUSTER source_cluster FROM LOAD GENERATOR COUNTER";
+        let staged = stage(&catalog, &session, sql).await;
+        let competing = stage(&catalog, &session, sql).await;
+        apply(&mut catalog, competing).await.expect("commit competing source");
+        let (_, before) = catalog.ddl_transaction_snapshot().await;
+
+        let error = apply(&mut catalog, staged.clone()).await.expect_err("observed creation cannot become a skip");
+        assert!(matches!(error, AdapterError::DDLTransactionOutcomeChanged));
+        assert_eq!(catalog.ddl_transaction_snapshot().await.1, before);
+
+        let applied = apply(&mut catalog, staged.unobserved()).await.expect("unreported outcome may become a skip");
+        assert_eq!(applied.skipped_name(), Some("ddl_outcome"));
+        assert_eq!(catalog.ddl_transaction_snapshot().await.1, before);
+        assert!(applied.item_ids().all(|id| catalog.try_get_entry(&id).is_none()),
+            "a skipped compound source must not leak its progress source");
+        catalog.expire().await;
+    }).await;
+}

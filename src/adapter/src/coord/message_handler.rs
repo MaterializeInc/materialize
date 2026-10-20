@@ -87,6 +87,20 @@ impl Coordinator {
                     self.message_controller(m).boxed_local().await
                 }
             }
+            Message::SourceStatementReady {
+                pending,
+                response,
+                otel_ctx,
+            } => {
+                otel_ctx.attach_as_parent();
+                self.sequence_source_statement_ready(pending, Some(response))
+                    .boxed_local()
+                    .await;
+            }
+            Message::DdlCommandsReady { pending, otel_ctx } => {
+                otel_ctx.attach_as_parent();
+                self.sequence_ddl_commit(pending).boxed_local().await;
+            }
             Message::PurifiedStatementReady(ready) => {
                 self.message_purified_statement_ready(ready)
                     .boxed_local()
