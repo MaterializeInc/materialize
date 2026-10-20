@@ -933,11 +933,14 @@ impl Coordinator {
         })
     }
 
-    /// Registers `tables` in FIFO order and returns the applied timestamp.
-    pub(crate) async fn register_tables_via_committer(
+    /// Submits registration in FIFO order and returns its completion.
+    ///
+    /// Submission precedes returning the future, so a subsequent append cannot
+    /// overtake registration even when the caller defers waiting for completion.
+    pub(crate) fn register_tables_via_committer(
         &self,
         tables: Vec<TableRegistration>,
-    ) -> Timestamp {
+    ) -> impl Future<Output = Timestamp> + Send + 'static + use<> {
         let (tx, rx) = oneshot::channel();
         if self
             .group_committer_tx
@@ -946,14 +949,21 @@ impl Coordinator {
         {
             halt!("group committer terminated before a table registration could be submitted");
         }
-        match rx.await {
-            Ok(ts) => ts,
-            Err(_) => halt!("group committer terminated with a table registration outstanding"),
+        async move {
+            match rx.await {
+                Ok(ts) => ts,
+                Err(_) => halt!("group committer terminated with a table registration outstanding"),
+            }
         }
     }
 
-    /// Forgets `ids` in FIFO order and returns the applied timestamp.
-    pub(crate) async fn forget_tables_via_committer(&self, ids: Vec<GlobalId>) -> Timestamp {
+    /// Submits forgetting in FIFO order and returns its completion.
+    ///
+    /// The command remains submitted even if the caller drops the returned future.
+    pub(crate) fn forget_tables_via_committer(
+        &self,
+        ids: Vec<GlobalId>,
+    ) -> impl Future<Output = Timestamp> + Send + 'static + use<> {
         let (tx, rx) = oneshot::channel();
         if self
             .group_committer_tx
@@ -962,9 +972,11 @@ impl Coordinator {
         {
             halt!("group committer terminated before a table forget could be submitted");
         }
-        match rx.await {
-            Ok(ts) => ts,
-            Err(_) => halt!("group committer terminated with a table forget outstanding"),
+        async move {
+            match rx.await {
+                Ok(ts) => ts,
+                Err(_) => halt!("group committer terminated with a table forget outstanding"),
+            }
         }
     }
 
