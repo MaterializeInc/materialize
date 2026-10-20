@@ -18,7 +18,7 @@ Then run the demo, which turns on `enable_lir_plans` as `mz_system` on port 6877
 misc/lir-datalog/demo/demo.sh
 ```
 
-`MZ_HOST`, `MZ_PORT` and `MZ_SYSTEM_PORT` select another environment, and `DEMO_PAUSE` sets the pause after each caption in seconds (default 2).
+`MZ_HOST`, `MZ_PORT` and `MZ_SYSTEM_PORT` select another environment, and `DEMO_PAUSE` sets the pause after each caption in seconds (default 3).
 To record the demo:
 
 ```

@@ -16,7 +16,7 @@
 # how to record the demo.
 #
 # Environment: MZ_HOST (default localhost), MZ_PORT (default 6875), MZ_SYSTEM_PORT
-# (default 6877), DEMO_PAUSE (seconds after each caption, default 2).
+# (default 6877), DEMO_PAUSE (seconds after each caption, default 3).
 
 set -euo pipefail
 
@@ -28,7 +28,7 @@ trap 'rm -rf "$work"' EXIT
 host=${MZ_HOST:-localhost}
 port=${MZ_PORT:-6875}
 system_port=${MZ_SYSTEM_PORT:-6877}
-pause_secs=${DEMO_PAUSE:-2}
+pause_secs=${DEMO_PAUSE:-3}
 
 # The connection banner is a notice.
 export PGOPTIONS="-c client_min_messages=warning"
@@ -97,11 +97,11 @@ sql_file setup.sql
 
 step 1 "a SQL view whose plan the optimizer cannot fix"
 sql_file flagged_transfers.sql
-say "The OR in the correlation leaves no equality to join on, so the plan is a cross join"
-say "of 50000 account pairs with 1000 flagged accounts, filtered afterwards."
-sql "EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW flagged_transfers;"
-say "Waiting for the view to hydrate takes a while:"
+# The query waits until the view has hydrated.
 sql "SELECT count(*) FROM flagged_transfers;"
+say "That took a while. The OR in the correlation leaves no equality to join on, so the plan"
+say "is a cross join of 50000 account pairs with 1000 flagged accounts, filtered afterwards."
+sql "EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW flagged_transfers;"
 
 step 2 "extract the dataflow as JSON"
 shell "psql -c 'EXPLAIN PHYSICAL PLAN AS LIR JSON FOR MATERIALIZED VIEW flagged_transfers' > plan.json"
