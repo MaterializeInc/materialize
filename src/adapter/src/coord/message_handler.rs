@@ -835,7 +835,12 @@ impl Coordinator {
         // because we always look up/populate a connection's state after
         // committing to the catalog, so are guaranteed to see the connection's
         // most recent version.
-        if plan_validity.check(self.catalog()).is_err() {
+        // A DDL transaction can depend on its own uncommitted objects. Its
+        // catalog observations are validated in replay order at commit, not
+        // against the committed catalog used by this retry check.
+        if ctx.session().transaction().ddl_transaction().is_none()
+            && plan_validity.check(self.catalog()).is_err()
+        {
             self.handle_execute_inner(original_stmt, params, ctx).await;
             return;
         }

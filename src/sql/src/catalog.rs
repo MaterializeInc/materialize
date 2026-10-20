@@ -295,6 +295,11 @@ pub trait SessionCatalog: fmt::Debug + ExprHumanizer + Send + Sync + ConnectionR
     /// Looks up a type by its name.
     fn get_type_by_name(&self, name: &QualifiedItemName) -> Option<CatalogItemRef<'_>>;
 
+    /// Whether an item or type occupies the qualified name.
+    fn item_or_type_exists(&self, name: &QualifiedItemName) -> bool {
+        self.get_item_by_name(name).is_some() || self.get_type_by_name(name).is_some()
+    }
+
     /// Gets a cluster by ID.
     fn get_cluster(&self, id: ClusterId) -> CatalogClusterRef<'_>;
 

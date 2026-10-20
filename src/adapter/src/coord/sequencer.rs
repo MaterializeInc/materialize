@@ -156,9 +156,10 @@ impl Coordinator {
             };
             let (target_cluster_id, target_cluster_name) = match self
                 .catalog()
+                .for_session(ctx.session())
                 .resolve_target_cluster(target_cluster, ctx.session())
             {
-                Ok(cluster) => (Some(cluster.id), Some(cluster.name.clone())),
+                Ok(cluster) => (Some(cluster.id()), Some(cluster.name().to_owned())),
                 Err(_) => (None, None),
             };
 

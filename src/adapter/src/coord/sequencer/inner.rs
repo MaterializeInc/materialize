@@ -650,11 +650,8 @@ impl Coordinator {
 
         match transact_result {
             Ok(()) => {
-                // Warn about any new source that runs on only one replica but
-                // landed on a cluster that has more than one. The source's
-                // name is passed along explicitly: in a DDL transaction the
-                // creation is only staged at this point, so the source is not
-                // yet visible in the catalog.
+                // Notices must not resolve speculative names in the live catalog:
+                // their schema may be gone while commit validation is pending.
                 for (_item_id, name, source) in &sources {
                     let cluster_id = match &source.data_source {
                         DataSourceDesc::Ingestion { desc, cluster_id }
@@ -663,14 +660,32 @@ impl Coordinator {
                         } if desc.connection.prefers_single_replica() => cluster_id,
                         _ => continue,
                     };
-                    let cluster = self.catalog().get_cluster(*cluster_id);
-                    self.notify_single_replica_sources(ctx.session(), cluster, Some(name));
+                    let Some(cluster) = self.catalog().try_get_cluster(*cluster_id) else {
+                        continue;
+                    };
+                    let state = ctx
+                        .session()
+                        .transaction()
+                        .catalog_state()
+                        .unwrap_or_else(|| self.catalog().state());
+                    let name = state.resolve_full_name(name, None);
+                    self.notify_single_replica_sources(ctx.session(), cluster, Some(&name));
                 }
                 Ok(ExecuteResponse::CreatedSource)
             }
-            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
-            })) if if_not_exists_ids.contains_key(&id) => {
+            Err(
+                err @ AdapterError::Catalog(mz_catalog::memory::error::Error {
+                    kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
+                }),
+            ) if if_not_exists_ids.contains_key(&id) => {
+                let name = &if_not_exists_ids[&id];
+                if !self
+                    .catalog()
+                    .for_session(ctx.session())
+                    .item_or_type_exists(name)
+                {
+                    return Err(err);
+                }
                 ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
                         name: if_not_exists_ids[&id].item.clone(),
@@ -1128,9 +1143,17 @@ impl Coordinator {
 
         match catalog_result {
             Ok(()) => Ok(ExecuteResponse::CreatedTable),
-            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
-            })) if if_not_exists => {
+            Err(
+                err @ AdapterError::Catalog(mz_catalog::memory::error::Error {
+                    kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                }),
+            ) if if_not_exists => {
+                let catalog = self.catalog().for_session(ctx.session());
+                let exists = catalog.item_or_type_exists(&name);
+                if !exists {
+                    return Err(err);
+                }
+                drop(catalog);
                 ctx.session_mut()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
                         name: name.item,
@@ -2250,18 +2273,11 @@ impl Coordinator {
                         writes.retain(|WriteOp { rows, .. }| !rows.is_empty());
                     }
                     TransactionOps::DDL {
-                        ops,
-                        state: _,
+                        transaction,
                         side_effects,
-                        revision,
-                        snapshot: _,
                     } => {
-                        // Make sure our catalog hasn't changed.
-                        if *revision != self.catalog().transient_revision() {
-                            return Err(AdapterError::DDLTransactionRace);
-                        }
-                        // Commit all of our queued ops.
-                        let ops = std::mem::take(ops);
+                        transaction.check_configuration(self.catalog())?;
+                        let ops = transaction.take_ops();
                         let side_effects = std::mem::take(side_effects);
                         self.catalog_transact_with_side_effects(
                             Some(ctx),
