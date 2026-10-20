@@ -311,6 +311,7 @@ steps:
     inputs:
       - test/parallel-workload
       - misc/python/materialize/parallel_workload/catalog_transactions.py
+      - misc/python/materialize/parallel_workload/staged_catalog.py
     plugins:
       - ./ci/plugins/mzcompose:
           composition: parallel-workload
