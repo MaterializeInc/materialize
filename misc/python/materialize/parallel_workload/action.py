@@ -4400,11 +4400,8 @@ class AlterOwnerAction(Action):
         for cluster in clusters:
             candidates.append(("CLUSTER", str(cluster)))
         candidates.append(("SECRET", "materialize.public.pgpass"))
-        # NOTE: No CONNECTION target. Changing a connection's owner emits a
-        # Connection(Altered) implication, which re-alters every dependent
-        # sink's export connection. That re-alter can fail with InvalidAlter
-        # and panic the coordinator.
-        # See https://linear.app/materializeinc/issue/SQL-517
+        for conn in AlterConnectionAction.SET_CLAUSES:
+            candidates.append(("CONNECTION", f"materialize.public.{conn}"))
         kind, name = self.rng.choice(candidates)
         with role.lock:
             if role not in exe.db.roles:
@@ -4492,11 +4489,10 @@ class BroadPrivilegesAction(Action):
             targets: list[tuple[str, list[str]]] = [
                 ("SYSTEM", ["CREATEDB", "CREATECLUSTER", "CREATEROLE", "ALL"]),
                 ("SECRET materialize.public.pgpass", ["USAGE", "ALL"]),
-                # NOTE: No CONNECTION target. GRANT/REVOKE on a connection emits
-                # a Connection(Altered) implication, which re-alters every
-                # dependent sink's export connection. That re-alter can fail
-                # with InvalidAlter and panic the coordinator.
-                # See https://linear.app/materializeinc/issue/SQL-517
+                (
+                    f"CONNECTION materialize.public.{self.rng.choice(list(AlterConnectionAction.SET_CLAUSES))}",
+                    ["USAGE", "ALL"],
+                ),
             ]
             if exe.db.schemas:
                 targets.append(
@@ -4728,6 +4724,19 @@ class DiscardAction(Action):
         return True
 
 
+# A concurrent ALTER SECRET rotation (the workload only rotates a secret to its
+# own value) can transiently expose an empty secret, so validating a connection,
+# with VALIDATE CONNECTION or a validating ALTER CONNECTION, sends an empty
+# password and the upstream system rejects it (secret-rotation atomicity). The
+# same race surfaces with each upstream's own wording.
+# TODO: Remove when https://linear.app/materializeinc/issue/SS-347 is fixed.
+SECRET_ROTATION_VALIDATION_ERRORS = [
+    "empty password returned by client",  # Postgres
+    "Access denied for user",  # MySQL
+    "Login failed for user",  # SQL Server
+]
+
+
 class ValidateConnectionAction(Action):
     # aws_conn is excluded, MinIO's STS support for validation is unclear.
     CONNECTIONS = [
@@ -4740,19 +4749,11 @@ class ValidateConnectionAction(Action):
     ]
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
-            "timeout: error trying to connect",
-            # A concurrent ALTER SECRET rotation (the workload only rotates a
-            # secret to its own value) can transiently expose an empty secret,
-            # so VALIDATE CONNECTION sends an empty password and the upstream
-            # system rejects it (secret-rotation atomicity). The same race
-            # surfaces with each upstream's own wording.
-            # TODO: Remove when https://linear.app/materializeinc/issue/SS-347
-            # is fixed.
-            "empty password returned by client",  # Postgres
-            "Access denied for user",  # MySQL
-            "Login failed for user",  # SQL Server
-        ] + super().errors_to_ignore(exe)
+        return (
+            ["timeout: error trying to connect"]
+            + SECRET_ROTATION_VALIDATION_ERRORS
+            + super().errors_to_ignore(exe)
+        )
 
     def run(self, exe: Executor) -> bool:
         name = self.rng.choice(self.CONNECTIONS)
@@ -4762,8 +4763,8 @@ class ValidateConnectionAction(Action):
 
 class AlterConnectionAction(Action):
     # The SET clause per connection, setting the option to the value the
-    # connection already has. That still exercises the full reconfiguration
-    # path (restarting dependent sources and sinks) without breaking them.
+    # connection already has. That still restarts dependent sinks without
+    # breaking them. Sources skip an unchanged connection.
     # NOTE: BROKER takes no `=` (it is parsed specially), HOST/URL do.
     SET_CLAUSES = {
         "kafka_conn": "BROKER 'kafka:9092'",
@@ -4774,12 +4775,16 @@ class AlterConnectionAction(Action):
     }
 
     def errors_to_ignore(self, exe: Executor) -> list[str]:
-        return [
-            "timeout: error trying to connect",
-            # The storage controller can refuse an in-place connection change
-            # depending on the connection's current state or dependents.
-            "cannot be altered in the requested way",
-        ] + super().errors_to_ignore(exe)
+        return (
+            [
+                "timeout: error trying to connect",
+                # The storage controller can refuse an in-place connection change
+                # depending on the connection's current state or dependents.
+                "cannot be altered in the requested way",
+            ]
+            + SECRET_ROTATION_VALIDATION_ERRORS
+            + super().errors_to_ignore(exe)
+        )
 
     def run(self, exe: Executor) -> bool:
         name = self.rng.choice(list(self.SET_CLAUSES.keys()))
@@ -6585,12 +6590,7 @@ ddl_action_list = ActionList(
         (BroadPrivilegesAction, 2),
         (ShowAction, 4),
         (ValidateConnectionAction, 2),
-        # TODO: Reenable once altering a connection that sinks or sources depend
-        # on can no longer panic the coordinator. Re-altering a dependent sink's
-        # export connection after the txn fails with InvalidAlter, which
-        # unwrap_or_terminate turns into a panic.
-        # See https://linear.app/materializeinc/issue/SQL-517
-        # (AlterConnectionAction, 2),
+        (AlterConnectionAction, 2),
         (AlterSecretAction, 2),
         (ReconnectAction, 1),
         (CreateDatabaseAction, 1),
