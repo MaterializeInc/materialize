@@ -4324,6 +4324,9 @@ impl StorageTxn for Transaction<'_> {
     }
 
     fn delete_collection_metadata(&mut self, ids: BTreeSet<GlobalId>) -> Vec<(GlobalId, ShardId)> {
+        if ids.is_empty() {
+            return Vec::new();
+        }
         // Dropping a producer retires its maintenance even while client readers
         // keep its output metadata and permission alive.
         let owners: Vec<_> = ids
