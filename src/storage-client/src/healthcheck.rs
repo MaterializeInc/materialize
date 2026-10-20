@@ -21,7 +21,10 @@ pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
         .with_column("statement_type", SqlScalarType::String.nullable(true))
-        .with_column("throttled_count", SqlScalarType::UInt64.nullable(false))
+        // NOTE: Retired, always NULL. The count is recorded per execution in
+        // `mz_statement_execution_history` instead. The column stays because persist schema
+        // evolution cannot drop a column, and replacing the shard would lose the history.
+        .with_column("throttled_count", SqlScalarType::UInt64.nullable(true))
         .finish()
 });
 
@@ -52,9 +55,9 @@ pub static MZ_SESSION_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
         .finish()
 });
 
-// NOTE: Update the views `mz_statement_execution_history_redacted`
-// and `mz_activity_log`, and `mz_activity_log_redacted` whenever this
-// is updated, to include the new columns where appropriate.
+// NOTE: Update the views `mz_statement_execution_history_redacted`,
+// `mz_activity_log_thinned`, and `mz_recent_activity_log_redacted` whenever
+// this is updated, to include the new columns where appropriate.
 //
 // The `redacted` views should contain only those columns that should
 // be queryable by support.
@@ -102,6 +105,9 @@ pub static MZ_STATEMENT_EXECUTION_HISTORY_DESC: LazyLock<RelationDesc> = LazyLoc
         .with_column("result_size", SqlScalarType::Int64.nullable(true))
         .with_column("rows_returned", SqlScalarType::Int64.nullable(true))
         .with_column("execution_strategy", SqlScalarType::String.nullable(true))
+        // NOTE: Added through persist schema evolution, which requires it to be the last
+        // column. Nullable because rows written before the column existed read as NULL.
+        .with_column("throttled_count", SqlScalarType::UInt64.nullable(true))
         .finish()
 });
 

@@ -1838,6 +1838,14 @@ mz_internal.mz_recent_activity_log_thinned_ind:
 
 mz_internal.mz_recent_activity_log_thinned:
   →Delta Join [%0:mz_statement_execution_history[#1{prepared_statement_id}] » %1:mz_prepared_statement_history[#0{id}] » %2:mz_session_history[#0{session_id}]] [%1:mz_prepared_statement_history[#0{id}] » %0:mz_statement_execution_history[#1{prepared_statement_id}] » %2:mz_session_history[#0{session_id}]] [%2:mz_session_history[#0{session_id}] » %1:mz_prepared_statement_history[#1{session_id}] » %0:mz_statement_execution_history[#1{prepared_statement_id}]]
+    path %1:
+      after %0:
+        Project: #6, #0, #7..=#25, #1..=#5, #27
+        Map: coalesce(#26{throttled_count}, 0)
+    path %2:
+      after %0:
+        Project: #9..=#17, #19..=#28, #18, #0, #3, #2, #1, #4, #5, #30, #6..=#8
+        Map: coalesce(#29{throttled_count}, 0)
     →Arrange (#1{prepared_statement_id})
       →Read mz_internal.mz_statement_execution_history
     →Arrange (#0{id}) (#1{session_id})
@@ -1848,6 +1856,7 @@ mz_internal.mz_recent_activity_log_thinned:
 Source mz_internal.mz_statement_execution_history
   filter=((mz_now() < timestamp_tz_to_mz_timestamp((#14{began_at} + 1 day))))
 Source mz_internal.mz_prepared_statement_history
+  project=(#0..=#5)
   filter=((mz_now() < timestamp_tz_to_mz_timestamp((#4{prepared_at} + 1 day))))
 Source mz_internal.mz_session_history
   filter=((mz_now() < timestamp_tz_to_mz_timestamp((#1{connected_at} + 2 days))))
@@ -6014,7 +6023,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1064 rows)
+            →Constant (1065 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -8529,12 +8538,13 @@ Explained Query:
     →Unarranged Raw Stream
       →Stream mz_internal.mz_statement_execution_history
     →Arrange (#0{id}) (#1{session_id})
-      →Stream mz_internal.mz_prepared_statement_history
+      →Read mz_internal.mz_prepared_statement_history
     →Arrange (#0{session_id})
       →Stream mz_internal.mz_session_history
 
 Source mz_internal.mz_statement_execution_history
 Source mz_internal.mz_prepared_statement_history
+  project=(#0..=#5)
 Source mz_internal.mz_session_history
 
 Target cluster: mz_catalog_server
@@ -10558,7 +10568,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1064 rows)
+            →Constant (1065 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -13768,7 +13778,7 @@ Explained Query:
   →Read mz_internal.mz_statement_execution_history
 
 Source mz_internal.mz_statement_execution_history
-  project=(#0..=#11, #13..=#16, #18..=#20)
+  project=(#0..=#11, #13..=#16, #18..=#21)
 
 Target cluster: mz_catalog_server
 

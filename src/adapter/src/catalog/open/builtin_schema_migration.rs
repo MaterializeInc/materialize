@@ -552,6 +552,21 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_materialized_view_refresh_strategies",
         ),
+        // `throttled_count` is recorded per execution: appended to
+        // `mz_statement_execution_history` as a nullable column, and retired on
+        // `mz_prepared_statement_history` by making it nullable (evolution cannot drop it).
+        MigrationStep::evolution(
+            "26.48.0-dev.0",
+            CatalogItemType::Source,
+            MZ_INTERNAL_SCHEMA,
+            "mz_prepared_statement_history",
+        ),
+        MigrationStep::evolution(
+            "26.48.0-dev.0",
+            CatalogItemType::Source,
+            MZ_INTERNAL_SCHEMA,
+            "mz_statement_execution_history",
+        ),
     ]
 });
 
@@ -1112,7 +1127,11 @@ impl Migration {
             if let Some((_, source_desc, _)) = &source_schema {
                 let old = mz_persist_types::columnar::data_type::<SourceData>(source_desc)?;
                 let new = mz_persist_types::columnar::data_type::<SourceData>(target_desc)?;
-                if backward_compatible(&old, &new).is_none() {
+                // Mirrors `compare_and_evolve_schema`, which also refuses migrations that drop
+                // columns; without this, a drop passes read-only boot and fails at promotion.
+                let compatible = backward_compatible(&old, &new)
+                    .is_some_and(|migration| !migration.contains_drop());
+                if !compatible {
                     bail!(
                         "incompatible schema evolution for {object:?}: \
                          {source_desc:?} -> {target_desc:?}"
