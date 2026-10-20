@@ -33,8 +33,12 @@ def paused_preparation(
     statement: str,
     connection: Connection | None = None,
     action: str = "return",
+    expected_completions: int | None = None,
 ) -> Iterator[Future[None]]:
-    """Pause preparation, releasing and joining on exit without closing a caller's connection."""
+    """Pause preparation, releasing and joining on exit without closing a caller's connection.
+
+    Optionally require an exact number of preparation completions on successful exit.
+    """
     failpoint = f"catalog_{kind}_ready"
     with (
         c.sql_connection(user="mz_system", port=6877) as control,
@@ -65,6 +69,30 @@ def paused_preparation(
         )
         initial_stdout_lines = len(initial_logs.stdout.splitlines())
         initial_stderr_lines = len(initial_logs.stderr.splitlines())
+
+        def completion_events() -> list[str]:
+            output = c.invoke(
+                "logs",
+                "--no-color",
+                "materialized",
+                capture=True,
+                capture_stderr=True,
+                silent=True,
+            )
+            logs = "\n".join(
+                output.stdout.splitlines()[initial_stdout_lines:]
+                + output.stderr.splitlines()[initial_stderr_lines:]
+            )
+            logs = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", logs)
+            return [
+                line
+                for line in logs.splitlines()
+                if "catalog preparation complete" in line
+                and "mz_adapter::catalog_preparation" in line
+                and re.search(rf'\bkind="?{kind}"?(?:\s|$)', line)
+                and re.search(rf"\bconn_id={conn.info.backend_pid}\b", line)
+            ]
+
         execute(control, f"SET failpoints = '{failpoint}={action}'")
         started = False
         try:
@@ -72,34 +100,14 @@ def paused_preparation(
             started = True
             deadline = time.monotonic() + 30
             while True:
-                output = c.invoke(
-                    "logs",
-                    "--no-color",
-                    "materialized",
-                    capture=True,
-                    capture_stderr=True,
-                    silent=True,
-                )
-                logs = "\n".join(
-                    output.stdout.splitlines()[initial_stdout_lines:]
-                    + output.stderr.splitlines()[initial_stderr_lines:]
-                )
-                logs = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", logs)
-                if any(
-                    "catalog preparation complete" in line
-                    and "mz_adapter::catalog_preparation" in line
-                    and re.search(rf'\bkind="?{kind}"?(?:\s|$)', line)
-                    and re.search(rf"\bconn_id={conn.info.backend_pid}\b", line)
-                    for line in logs.splitlines()
-                ):
+                if completion_events():
                     break
                 if result.done():
                     result.result()
                     raise AssertionError("statement completed without pausing")
                 if time.monotonic() >= deadline:
                     raise AssertionError(
-                        f"no {kind} preparation event for PID {conn.info.backend_pid}: "
-                        f"{logs[-4000:]}"
+                        f"no {kind} preparation event for PID {conn.info.backend_pid}"
                     )
                 time.sleep(0.1)
             yield result
@@ -110,6 +118,19 @@ def paused_preparation(
                 if started:
                     worker.join(timeout=90)
                     assert not worker.is_alive(), "statement exceeded its timeout"
+
+        if expected_completions is not None:
+            result.result()
+            deadline = time.monotonic() + 30
+            while True:
+                events = completion_events()
+                if len(events) >= expected_completions or time.monotonic() >= deadline:
+                    assert len(events) == expected_completions, (
+                        f"expected {expected_completions} {kind} preparations for "
+                        f"PID {conn.info.backend_pid}, got {len(events)}: {events}"
+                    )
+                    break
+                time.sleep(0.1)
 
 
 def purification_connection_change(c: Composition) -> None:
