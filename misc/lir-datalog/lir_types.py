@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import dataclasses as _dc
 import json as _json
+import math as _math
 
 # Readable datum kinds of `{"$row": [...]}`, see `mz_repr::row_to_readable`.
 _DATUM_KINDS = {
@@ -63,11 +64,9 @@ class Datum:
     def _to_json(self) -> object:
         if self.kind is None:
             return "Null"
-        expected = _DATUM_KINDS.get(self.kind)
-        if expected is None:
+        if self.kind not in _DATUM_KINDS:
             raise ValueError(f"unsupported datum kind {self.kind!r}")
-        if not _is_instance(self.value, expected):
-            raise TypeError(f"{self.kind} datum needs a {expected.__name__}")
+        _check_datum(self.kind, self.value)
         return {self.kind: self.value}
 
     @staticmethod
@@ -76,8 +75,8 @@ class Datum:
             return Datum(None)
         if isinstance(value, dict) and len(value) == 1:
             ((kind, inner),) = value.items()
-            expected = _DATUM_KINDS.get(kind)
-            if expected is not None and _is_instance(inner, expected):
+            if kind in _DATUM_KINDS:
+                _check_datum(kind, inner)
                 return Datum(kind, inner)
         raise ValueError(f"invalid readable datum {value!r}")
 
@@ -111,23 +110,57 @@ def _is_instance(value: object, expected: type) -> bool:
     return isinstance(value, expected)
 
 
-_INTS = {"U8", "U16", "U32", "U64", "U128", "I8", "I16", "I32", "I64", "I128"}
+# The value range of each integer format, as (minimum, maximum).
+_INT_RANGES = {
+    **{f"U{bits}": (0, 2**bits - 1) for bits in (8, 16, 32, 64, 128)},
+    **{
+        f"I{bits}": (-(2 ** (bits - 1)), 2 ** (bits - 1) - 1)
+        for bits in (8, 16, 32, 64, 128)
+    },
+}
+_INTS = set(_INT_RANGES)
+_DATUM_INT_FORMATS = {"Int16": "I16", "Int32": "I32", "Int64": "I64", "UInt64": "U64"}
+
+
+def _check_int(fmt: str, value: object) -> int:
+    if not _is_instance(value, int):
+        raise TypeError(f"expected an integer for {fmt}, got {value!r}")
+    low, high = _INT_RANGES[fmt]
+    if not low <= value <= high:  # type: ignore[operator]
+        raise ValueError(f"{value} is out of range for {fmt}")
+    return value  # type: ignore[return-value]
+
+
+def _check_float(value: object) -> float:
+    # JSON has no NaN or infinities. Python's `json` writes them as `NaN` and
+    # `Infinity`, which serde_json rejects.
+    if not _is_instance(value, float):
+        raise TypeError(f"expected a float, got {value!r}")
+    if not _math.isfinite(value):  # type: ignore[arg-type]
+        raise ValueError(f"{value} is not a finite float")
+    return value  # type: ignore[return-value]
+
+
+def _check_datum(kind: str, value: object) -> None:
+    expected = _DATUM_KINDS[kind]
+    if not _is_instance(value, expected):
+        raise TypeError(f"{kind} datum needs a {expected.__name__}, got {value!r}")
+    if kind in _DATUM_INT_FORMATS:
+        _check_int(_DATUM_INT_FORMATS[kind], value)
+    elif kind == "Float64":
+        _check_float(value)
 
 
 def _encode(fmt: object, value: object) -> object:
     if isinstance(fmt, str):
         if fmt in _INTS:
-            if not _is_instance(value, int):
-                raise TypeError(f"expected an integer for {fmt}, got {value!r}")
-            return value
+            return _check_int(fmt, value)
         if fmt == "BOOL":
             if not isinstance(value, bool):
                 raise TypeError(f"expected a bool, got {value!r}")
             return value
         if fmt in ("F32", "F64"):
-            if not _is_instance(value, float):
-                raise TypeError(f"expected a float, got {value!r}")
-            return value
+            return _check_float(value)
         if fmt in ("STR", "CHAR"):
             if not isinstance(value, str):
                 raise TypeError(f"expected a string, got {value!r}")
@@ -170,17 +203,13 @@ def _encode(fmt: object, value: object) -> object:
 def _decode(fmt: object, value: object) -> object:
     if isinstance(fmt, str):
         if fmt in _INTS:
-            if not _is_instance(value, int):
-                raise TypeError(f"expected an integer for {fmt}, got {value!r}")
-            return value
+            return _check_int(fmt, value)
         if fmt == "BOOL":
             if not isinstance(value, bool):
                 raise TypeError(f"expected a bool, got {value!r}")
             return value
         if fmt in ("F32", "F64"):
-            if not _is_instance(value, float):
-                raise TypeError(f"expected a float, got {value!r}")
-            return value
+            return _check_float(value)
         if fmt in ("STR", "CHAR"):
             if not isinstance(value, str):
                 raise TypeError(f"expected a string, got {value!r}")

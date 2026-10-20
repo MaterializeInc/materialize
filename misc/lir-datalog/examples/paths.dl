@@ -13,3 +13,8 @@ three_hop(a, d) :- two_hop(a, c), edges(c, d).
 three_hop_direct(a, d) :- edges(a, b), edges(b, c), edges(c, d).
 self_loop(x) :- edges(x, x).
 loop_pairs(x, y) :- self_loop(x), self_loop(y).
+
+% An integer argument, and a zero-arity relation used as a condition.
+from_one(y) :- edges(1, y).
+has_loop() :- edges(x, x).
+guarded(x, y) :- has_loop(), edges(x, y).

@@ -15,9 +15,11 @@
         --import NAME=db.schema.item ...
 
 A program is a list of rules `head(x, y) :- atom(x, z), atom(z, y).`, with `%` comments.
-Atom arguments are variables. Relations named by `--import` are the facts, every other
-relation is defined by rules. All columns are `int8 NOT NULL`, and every defined relation
-is a set. Recursive relations are bound by a `LetRec` with an iteration limit.
+Atom arguments are variables or integers, and head arguments are variables. Relations
+named by `--import` are the facts, every other relation is defined by rules. All columns
+are `int8 NOT NULL`, and every defined relation is a set. Recursive relations are bound
+by a `LetRec` with an iteration limit, where the dataflow reports an error unless
+`--return-at-limit` is given.
 
 The envelope has one object, a chain of `Let` and `LetRec` bindings in dependency order
 whose body reads the output relation. Each binding is a `Union` of its rules, made
@@ -57,6 +59,7 @@ class Rule:
 
 
 _IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
+_INT = r"-?[0-9]+"
 _ATOM = re.compile(rf"\s*({_IDENT})\s*\(([^()]*)\)\s*")
 
 
@@ -68,9 +71,20 @@ def _parse_atom(text: str, where: str) -> Atom:
         )
     args = tuple(a.strip() for a in m.group(2).split(",")) if m.group(2).strip() else ()
     for a in args:
-        if not re.fullmatch(_IDENT, a):
-            raise DatalogError(f"{where}: atom arguments must be variables, got {a!r}")
+        if a == "_":
+            raise DatalogError(f"{where}: anonymous variables `_` are not supported")
+        if re.fullmatch(_INT, a):
+            if not -(2**63) <= int(a) < 2**63:
+                raise DatalogError(f"{where}: {a} is out of range for int8")
+        elif not re.fullmatch(_IDENT, a):
+            raise DatalogError(
+                f"{where}: atom arguments must be variables or integers, got {a!r}"
+            )
     return Atom(m.group(1), args)
+
+
+def _is_literal(arg: str) -> bool:
+    return re.fullmatch(_INT, arg) is not None
 
 
 def parse(source: str) -> list[Rule]:
@@ -88,9 +102,10 @@ def parse(source: str) -> list[Rule]:
         atoms = [a for a in atoms if a.strip()]
         if not atoms:
             raise DatalogError(f"{where}: every rule needs a body")
-        rules.append(
-            Rule(_parse_atom(head, where), tuple(_parse_atom(a, where) for a in atoms))
-        )
+        head_atom = _parse_atom(head, where)
+        if any(_is_literal(a) for a in head_atom.args):
+            raise DatalogError(f"{where}: head arguments must be variables")
+        rules.append(Rule(head_atom, tuple(_parse_atom(a, where) for a in atoms)))
     if text.split(".")[-1].strip():
         raise DatalogError("the last rule is not terminated by `.`")
     return rules
@@ -177,9 +192,16 @@ def permutation_for_arrangement(
 
 
 class _Compiler:
-    def __init__(self, rules: list[Rule], imports: dict[str, str], limit: int):
+    def __init__(
+        self,
+        rules: list[Rule],
+        imports: dict[str, str],
+        limit: int,
+        return_at_limit: bool,
+    ):
         self.rules = rules
         self.limit = limit
+        self.return_at_limit = return_at_limit
         self.arity: dict[str, int] = {}
         for rule in rules:
             for atom in (rule.head, *rule.body):
@@ -192,21 +214,15 @@ class _Compiler:
         for name in self.idb:
             if name in imports:
                 raise DatalogError(f"relation {name} is imported and defined by rules")
-        # Placeholder ids 1.. go to the imports in order of first use, the object takes the
-        # next one.
-        used = list(
-            dict.fromkeys(
-                a.relation for r in rules for a in r.body if a.relation not in self.idb
-            )
-        )
-        for name in used:
-            if name not in imports:
-                raise DatalogError(
-                    f"relation {name} is neither imported nor defined by rules"
-                )
-        self.imports = {
-            name: (n, imports[name]) for n, name in enumerate(used, start=1)
-        }
+        for rule in rules:
+            for atom in rule.body:
+                if atom.relation not in self.idb and atom.relation not in imports:
+                    raise DatalogError(
+                        f"relation {atom.relation} is neither imported nor defined by rules"
+                    )
+        self.import_names = imports
+        # Filled in by `compile` with the imports the output depends on.
+        self.imports: dict[str, tuple[int, str]] = {}
         self.local: dict[str, int] = {}
         self.next_lir_id = 1
 
@@ -231,12 +247,23 @@ class _Compiler:
     def read_atom(self, atom: Atom) -> tuple[lt.LirRelationExpr, list[str]]:
         """Reads an atom's relation, with one column per distinct variable.
 
-        A variable repeated in the atom becomes an equality filter.
+        A variable repeated in the atom, or an integer, becomes an equality filter.
         """
         first: dict[str, int] = {}
         predicates = []
         for i, v in enumerate(atom.args):
-            if v in first:
+            if _is_literal(v):
+                literal = lt.LirScalarExpr.Literal(
+                    lt.LiteralValue.Ok(lt.Row([lt.Datum.int64(int(v))])),
+                    lt.ReprColumnType(
+                        nullable=False, scalar_type=lt.ReprScalarType.Int64()
+                    ),
+                )
+                pred = lt.LirScalarExpr.CallBinary(
+                    func=lt.BinaryFunc.Eq(lt.Eq()), expr1=_col(i), expr2=literal
+                )
+                predicates.append((i + 1, pred))
+            elif v in first:
                 pred = lt.LirScalarExpr.CallBinary(
                     func=lt.BinaryFunc.Eq(lt.Eq()), expr1=_col(first[v]), expr2=_col(i)
                 )
@@ -389,6 +416,12 @@ class _Compiler:
     def compile(self, output: str) -> lt.LirPlanEnvelope:
         if output not in self.idb:
             raise DatalogError(f"output relation {output} is not defined by rules")
+        # Zero-arity relations compile, but `CREATE MATERIALIZED VIEW name ()` does not
+        # parse, so the output needs a column.
+        if self.arity[output] == 0:
+            raise DatalogError(
+                f"output relation {output} has no columns, FROM PLAN needs at least one"
+            )
         deps = {
             name: list(
                 dict.fromkeys(
@@ -409,6 +442,18 @@ class _Compiler:
                 needed.add(name)
                 todo.extend(deps[name])
         order = [n for n in self.idb if n in needed]
+        # Placeholder ids 1.. go to the imports the output depends on, in order of first
+        # use, and the object takes the next one.
+        used = dict.fromkeys(
+            a.relation
+            for r in self.rules
+            if r.head.relation in needed
+            for a in r.body
+            if a.relation not in self.idb
+        )
+        self.imports = {
+            name: (n, self.import_names[name]) for n, name in enumerate(used, start=1)
+        }
         components = _sccs(order, {n: deps[n] for n in order})
 
         # Bindings, outermost first, as (ids, values, recursive).
@@ -428,7 +473,10 @@ class _Compiler:
                         ids=[lt.LocalId(self.local[n]) for n in comp],
                         values=values,
                         limits=[
-                            lt.LetRecLimit(max_iters=self.limit, return_at_limit=True)
+                            lt.LetRecLimit(
+                                max_iters=self.limit,
+                                return_at_limit=self.return_at_limit,
+                            )
                             for _ in comp
                         ],
                         body=body,
@@ -460,15 +508,21 @@ class _Compiler:
 
 
 def compile_program(
-    rules: list[Rule], output: str, imports: dict[str, str], limit: int = DEFAULT_LIMIT
+    rules: list[Rule],
+    output: str,
+    imports: dict[str, str],
+    limit: int = DEFAULT_LIMIT,
+    return_at_limit: bool = False,
 ) -> lt.LirPlanEnvelope:
     """Compiles `rules` to an envelope whose result is the relation `output`.
 
-    `imports` maps the relation names of the program to SQL item names.
+    `imports` maps the relation names of the program to SQL item names. A recursive
+    relation that has not converged after `limit` iterations is an error in the
+    output, or, with `return_at_limit`, its contents at that point.
     """
     if limit < 1:
         raise DatalogError("the recursion limit must be positive")
-    return _Compiler(rules, imports, limit).compile(output)
+    return _Compiler(rules, imports, limit, return_at_limit).compile(output)
 
 
 def main(
@@ -492,6 +546,12 @@ def main(
         default=DEFAULT_LIMIT,
         help=f"iteration limit of recursive relations (default {DEFAULT_LIMIT})",
     )
+    parser.add_argument(
+        "--return-at-limit",
+        action="store_true",
+        help="at the iteration limit, return the current contents instead of an error,"
+        " which is not the fixpoint the program means",
+    )
     args = parser.parse_args(argv)
     imports = {}
     for spec in args.imports:
@@ -500,7 +560,11 @@ def main(
             raise DatalogError(f"--import expects NAME=SQL_NAME, got {spec!r}")
         imports[name] = sql_name
     envelope = compile_program(
-        parse(read(args.program)), args.output, imports, args.limit
+        parse(read(args.program)),
+        args.output,
+        imports,
+        args.limit,
+        args.return_at_limit,
     )
     return lt.dumps(envelope)
 

@@ -101,11 +101,29 @@ class ParseTest(unittest.TestCase):
                 datalog2lir.parse("p(x, z) :- e(x, y)."), "p", {"e": "e"}
             )
 
+    def test_parse_rejects_anonymous_variables(self):
+        with self.assertRaisesRegex(datalog2lir.DatalogError, "anonymous variables"):
+            datalog2lir.parse("p(x) :- e(x, _).")
+
+    def test_parse_integers(self):
+        (rule,) = datalog2lir.parse("p(y) :- e(-3, y).")
+        self.assertEqual(rule.body[0].args, ("-3", "y"))
+        with self.assertRaisesRegex(datalog2lir.DatalogError, "head arguments"):
+            datalog2lir.parse("p(1) :- e(x, y).")
+        with self.assertRaisesRegex(datalog2lir.DatalogError, "out of range"):
+            datalog2lir.parse("p(y) :- e(9223372036854775808, y).")
+
 
 class CompileTest(unittest.TestCase):
-    def compile(self, program, output, imports=EDGES, limit=10000):
+    def compile(
+        self, program, output, imports=EDGES, limit=10000, return_at_limit=False
+    ):
         envelope = datalog2lir.compile_program(
-            datalog2lir.parse(program), output, imports, limit=limit
+            datalog2lir.parse(program),
+            output,
+            imports,
+            limit=limit,
+            return_at_limit=return_at_limit,
         )
         self.assertIsInstance(envelope, lt.LirPlanEnvelope)
         return lt.to_json(envelope)
@@ -151,6 +169,78 @@ class CompileTest(unittest.TestCase):
         self.assertEqual(stages[1]["stream_key"], [{"Column": [1, None]}])
         self.assertEqual(stages[1]["stream_thinning"], [0])
 
+    def test_cross_join_chain(self):
+        env = self.compile(
+            "p(a, b, c) :- n(a), n(b), n(c).", "p", {"n": "materialize.public.n"}
+        )
+        (join,) = nodes(env, "Join")
+        linear = join["plan"]["Linear"]
+        self.assertEqual(linear["source_key"], [])
+        self.assertEqual([s["lookup_relation"] for s in linear["stage_plans"]], [1, 2])
+        for stage in linear["stage_plans"]:
+            self.assertEqual(stage["stream_key"], [])
+            self.assertEqual(stage["lookup_key"], [])
+        # The stream grows from (a) to (a, b), and the last stage outputs (a, b, c).
+        first, second = linear["stage_plans"]
+        self.assertEqual(first["stream_thinning"], [0])
+        self.assertEqual(first["closure"]["before"]["mfp"]["projection"], [0, 1])
+        self.assertEqual(second["stream_thinning"], [0, 1])
+        self.assertEqual(second["closure"]["before"]["mfp"]["input_arity"], 3)
+        self.assertEqual(second["closure"]["before"]["mfp"]["projection"], [0, 1, 2])
+        for inp in join["inputs"]:
+            self.assertEqual(
+                inp["node"]["ArrangeBy"]["forms"]["arranged"], [[[], [0], [0]]]
+            )
+
+    def test_zero_arity_relations(self):
+        env = self.compile(
+            "has_loop() :- edges(x, x).\nguarded(x, y) :- has_loop(), edges(x, y).",
+            "guarded",
+            EDGES,
+        )
+        reduces = list(nodes(env, "Reduce"))
+        self.assertEqual(
+            reduces[0]["key_val_plan"]["key_plan"]["mfp"],
+            {"expressions": [], "input_arity": 0, "predicates": [], "projection": []},
+        )
+        (join,) = nodes(env, "Join")
+        # `has_loop` is arranged by the empty key with no values, `edges` by the
+        # empty key with both columns as values.
+        self.assertEqual(
+            [i["node"]["ArrangeBy"]["forms"]["arranged"] for i in join["inputs"]],
+            [[[[], [], []]], [[[], [0, 1], [0, 1]]]],
+        )
+        with self.assertRaisesRegex(datalog2lir.DatalogError, "has no columns"):
+            self.compile("has_loop() :- edges(x, x).", "has_loop", EDGES)
+
+    def test_integer_arguments_filter(self):
+        env = self.compile("from_one(y) :- edges(1, y).", "from_one", EDGES)
+        (get,) = [g for g in nodes(env, "Get") if "Global" in g["id"]]
+        mfp = get["plan"]["Collection"]["mfp"]["mfp"]
+        ((position, pred),) = mfp["predicates"]
+        self.assertEqual(position, 1)
+        self.assertEqual(
+            pred["CallBinary"]["expr2"],
+            {
+                "Literal": [
+                    {"Ok": {"$row": [{"Int64": 1}]}},
+                    {"nullable": False, "scalar_type": "Int64"},
+                ]
+            },
+        )
+        self.assertEqual(mfp["projection"], [1])
+
+    def test_imports_only_what_the_output_reads(self):
+        env = self.compile(
+            "p(x) :- a(x).\nq(x) :- b(x).\nr(x) :- p(x).",
+            "r",
+            {"a": "materialize.public.a", "b": "materialize.public.b"},
+        )
+        self.assertEqual(
+            [i["source"] for i in env["imports"]], [{"Name": "materialize.public.a"}]
+        )
+        self.assertEqual(env["output"], {"Transient": 2})
+
     def test_repeated_variable_filters(self):
         env = self.compile("loop(x) :- edges(x, x).", "loop", EDGES)
         (get,) = [g for g in nodes(env, "Get") if "Global" in g["id"]]
@@ -163,6 +253,12 @@ class CompileTest(unittest.TestCase):
         env = self.compile(TC, "reachable", EDGES, limit=77)
         (letrec,) = nodes(env, "LetRec")
         self.assertEqual(letrec["ids"], [0])
+        # Datalog means the fixpoint, so reaching the limit is an error by default.
+        self.assertEqual(
+            letrec["limits"], [{"max_iters": 77, "return_at_limit": False}]
+        )
+        env = self.compile(TC, "reachable", EDGES, limit=77, return_at_limit=True)
+        (letrec,) = nodes(env, "LetRec")
         self.assertEqual(letrec["limits"], [{"max_iters": 77, "return_at_limit": True}])
         (value,) = letrec["values"]
         # Set semantics: the binding is a distinct reduction, made available as a
@@ -189,9 +285,17 @@ class CompileTest(unittest.TestCase):
         self.assertEqual(len(letrec["limits"]), 2)
 
     def test_output_is_valid_json_envelope(self):
+        program = TC + "from_one(y) :- reachable(1, y).\n"
         text = datalog2lir.main(
-            ["prog.dl", "--output", "reachable", "--import", 'edges=db.sch."Edges"'],
-            read=lambda _path: TC,
+            [
+                "prog.dl",
+                "--output",
+                "from_one",
+                "--import",
+                'edges=db.sch."Edges"',
+                "--return-at-limit",
+            ],
+            read=lambda _path: program,
         )
         env = json.loads(text)
         self.assertEqual(env["lir_version"], 1)
@@ -220,6 +324,9 @@ class CompileTest(unittest.TestCase):
         for v in walk(env):
             if isinstance(v, dict) and "$row" in v:
                 self.assertIn(id(v), literal_rows)
+        self.assertEqual(len(literal_rows), 1)
+        (letrec,) = nodes(env, "LetRec")
+        self.assertTrue(letrec["limits"][0]["return_at_limit"])
         # The output decodes into the generated types and re-encodes unchanged.
         self.assertEqual(lt.to_json(lt.from_json(lt.LirPlanEnvelope, env)), env)
 
@@ -264,6 +371,23 @@ class GeneratedTypesTest(unittest.TestCase):
             lt.to_json(lt.GlobalId.Transient(True))
         with self.assertRaises(TypeError):
             lt.to_json(lt.Id.Global(lt.LocalId(1)))
+        with self.assertRaisesRegex(ValueError, "out of range for U64"):
+            lt.to_json(lt.LirId(-1))
+        with self.assertRaisesRegex(ValueError, "out of range for U64"):
+            lt.to_json(lt.LirId(2**64))
+        with self.assertRaisesRegex(ValueError, "out of range for I64"):
+            lt.to_json(lt.Overflowing(2**63))
+        with self.assertRaisesRegex(ValueError, "out of range for I64"):
+            lt.to_json(lt.Row([lt.Datum.int64(-(2**63) - 1)]))
+        with self.assertRaisesRegex(ValueError, "out of range for I16"):
+            lt.to_json(lt.Row([lt.Datum("Int16", 2**15)]))
+        for x in [float("nan"), float("inf"), float("-inf")]:
+            with self.assertRaisesRegex(ValueError, "not a finite float"):
+                lt.to_json(lt.Row([lt.Datum("Float64", x)]))
+        with self.assertRaisesRegex(TypeError, "expected a byte array"):
+            lt.from_json(lt.LiteralValue, {"Ok": [256]})
+        with self.assertRaisesRegex(ValueError, "not a finite float"):
+            lt.from_json(lt.LiteralValue, {"Ok": {"$row": [{"Float64": float("nan")}]}})
 
     def test_serde_encodings(self):
         # Unit variants are strings, newtypes are transparent, unit structs are null.

@@ -25,12 +25,16 @@ FROM PLAN '<envelope>';
 ## Language
 
 * A program is a list of rules `head(x, y) :- atom(x, z), atom(z, y).`, with `%` comments.
-* Atom arguments are variables.
-  A variable shared between atoms is an equality join, and a variable repeated within an atom is an equality filter.
+* Atom arguments are variables or integers, and head arguments are variables.
+  A variable shared between atoms is an equality join, and a variable repeated within an atom, or an integer, is an equality filter.
+  The anonymous variable `_` is not supported.
 * Facts come only from imports, `--import NAME=SQL_NAME`, where `SQL_NAME` is a SQL item name with SQL quoting.
+  The envelope imports only the relations the output depends on.
 * Every column is `int8 NOT NULL`, and every defined relation is a set.
+  Relations without columns, such as `has_loop()`, can be used in rules, but the output needs a column.
 * Recursion, including mutual recursion, is allowed.
-  Each recursive binding stops after `--limit` iterations (default 10000) and returns its current contents.
+  A recursive binding that has not reached its fixpoint after `--limit` iterations (default 10000) makes the view report an error, as `ERROR AT RECURSION LIMIT` does in SQL.
+  `--return-at-limit` returns the contents at the limit instead, which is not the fixpoint the program means.
 
 ## Plan shape
 
