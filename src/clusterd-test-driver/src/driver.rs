@@ -18,6 +18,7 @@ use mz_compute_client::protocol::response::{FrontiersResponse, PeekResponse};
 use mz_compute_types::dataflows::RenderDataflowDescription;
 use mz_compute_types::dyncfgs::ENABLE_PEEK_RESPONSE_STASH;
 use mz_dyncfg::ConfigUpdates;
+use mz_expr::row::RowCollection;
 use mz_expr::{MapFilterProject, RowSetFinishing};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{GlobalId, IntoRowIterator, RelationDesc, Row, RowIterator, Timestamp};
@@ -188,6 +189,39 @@ impl Driver {
         result_desc: RelationDesc,
         ts: Timestamp,
     ) -> anyhow::Result<Vec<Row>> {
+        let mut rows = Vec::new();
+        for collection in self.peek_collections(target, result_desc, ts).await? {
+            let mut iter = collection.into_row_iter();
+            while let Some(row_ref) = iter.next() {
+                rows.push(row_ref.to_owned());
+            }
+        }
+        Ok(rows)
+    }
+
+    /// Total row count from a peek, saturating at `usize::MAX`.
+    ///
+    /// Counts multiplicities without materializing the rows, so a result with a large
+    /// multiplicity does not exhaust memory.
+    pub async fn peek_count(
+        &self,
+        target: PeekTarget,
+        result_desc: RelationDesc,
+        ts: Timestamp,
+    ) -> anyhow::Result<usize> {
+        let collections = self.peek_collections(target, result_desc, ts).await?;
+        Ok(collections
+            .iter()
+            .flat_map(|collection| (0..collection.entries()).filter_map(|i| collection.get(i)))
+            .fold(0usize, |count, (_, diff)| count.saturating_add(diff.get())))
+    }
+
+    async fn peek_collections(
+        &self,
+        target: PeekTarget,
+        result_desc: RelationDesc,
+        ts: Timestamp,
+    ) -> anyhow::Result<Vec<RowCollection>> {
         let uuid = uuid::Uuid::new_v4();
         let rx = self.responses.register_peek(uuid);
         let arity = result_desc.arity();
@@ -209,30 +243,11 @@ impl Driver {
         };
         self.send(ComputeCommand::Peek(Box::new(peek)))?;
         match rx.await? {
-            PeekResponse::Rows(collections) => {
-                let mut rows = Vec::new();
-                for collection in collections {
-                    let mut iter = collection.into_row_iter();
-                    while let Some(row_ref) = iter.next() {
-                        rows.push(row_ref.to_owned());
-                    }
-                }
-                Ok(rows)
-            }
+            PeekResponse::Rows(collections) => Ok(collections),
             PeekResponse::Error(e) => anyhow::bail!("peek error: {e}"),
             PeekResponse::Canceled => anyhow::bail!("peek canceled"),
             PeekResponse::Stashed(_) => anyhow::bail!("unexpected stashed peek result"),
         }
-    }
-
-    /// Convenience: total row count from a peek.
-    pub async fn peek_count(
-        &self,
-        target: PeekTarget,
-        result_desc: RelationDesc,
-        ts: Timestamp,
-    ) -> anyhow::Result<usize> {
-        Ok(self.peek(target, result_desc, ts).await?.len())
     }
 
     /// Registers a subscribe-sink buffer for `id`, so the response pump accumulates

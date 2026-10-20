@@ -1491,7 +1491,8 @@ impl Replica {
         // failures.
         let output = if hydrated {
             let desc = metadata.relation_desc.clone();
-            let peek = self.driver.peek(
+            // Counted rather than collected, since mutated constants can have huge diffs.
+            let peek = self.driver.peek_count(
                 PeekTarget::Persist {
                     id: sink_id,
                     metadata,
@@ -1500,7 +1501,7 @@ impl Replica {
                 Timestamp::from(INPUT_UPPER - 1),
             );
             match tokio::time::timeout(Duration::from_secs(30), peek).await {
-                Ok(Ok(rows)) => format!("{} rows", rows.len()),
+                Ok(Ok(count)) => format!("{count} rows"),
                 Ok(Err(e)) => format!("output peek failed: {e}"),
                 Err(_) => "output peek timed out".to_string(),
             }
