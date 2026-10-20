@@ -455,6 +455,30 @@ table  temp_table  2  b  text  false  NULL
 view  temp_view  1  a  integer  true  NULL
 view  temp_view  2  b  text  false  NULL
 
+# --- A column named like serde_json's number token ----------------------------
+
+# The jsonb packer reads a map whose first key is `$serde_json::private::Number`
+# as a number, so `parse_catalog_create_sql` must never key JSON by a column
+# name. A packing failure would stall every mz_catalog_server dataflow.
+
+statement ok
+CREATE TEMPORARY TABLE serde_number_key ("$serde_json::private::Number" int DEFAULT 5, b text DEFAULT 'x', c int)
+
+statement ok
+CREATE TEMPORARY TABLE serde_number_key_only ("$serde_json::private::Number" int DEFAULT 5)
+
+query TITTT
+SELECT tables.name, columns.position, columns.name, columns.type, columns.default
+FROM mz_catalog.mz_columns columns
+JOIN mz_catalog.mz_tables tables ON columns.id = tables.id
+WHERE tables.name IN ('serde_number_key', 'serde_number_key_only')
+ORDER BY tables.name, columns.position
+----
+serde_number_key  1  $serde_json::private::Number  integer  5
+serde_number_key  2  b  text  'x'
+serde_number_key  3  c  integer  NULL
+serde_number_key_only  1  $serde_json::private::Number  integer  5
+
 # --- A relation without columns has no rows -----------------------------------
 
 statement ok
