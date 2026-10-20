@@ -261,11 +261,11 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
                 stmt.with_options.iter().map(|o| (&o.name, &o.value)),
                 TableOptionName::RetainHistory,
             )?;
-            let column_defaults: serde_json::Map<_, _> = stmt
+            let column_defaults: Vec<serde_json::Value> = stmt
                 .columns
                 .iter()
                 .map(|column| {
-                    let default = column
+                    column
                         .options
                         .iter()
                         .find_map(|option| match &option.option {
@@ -274,8 +274,7 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
                             }
                             _ => None,
                         })
-                        .unwrap_or(serde_json::Value::Null);
-                    (column.name.as_str().to_string(), default)
+                        .unwrap_or(serde_json::Value::Null)
                 })
                 .collect();
             info.insert("column_defaults", json!(column_defaults));
@@ -2022,10 +2021,7 @@ mod tests {
 
         let plain = super::item_details("CREATE TABLE \"materialize\".\"public\".\"t\" (a int4)")
             .expect("ok");
-        assert_eq!(
-            plain,
-            json!({ "type": "table", "column_defaults": { "a": null } })
-        );
+        assert_eq!(plain, json!({ "type": "table", "column_defaults": [null] }));
 
         let webhook = super::item_details(
             "CREATE TABLE \"materialize\".\"public\".\"wht\" FROM WEBHOOK BODY FORMAT JSON",
@@ -2038,23 +2034,28 @@ mod tests {
     fn item_details_reports_column_defaults() {
         let sql = r#"CREATE TABLE "materialize"."public"."t" ("a" [s20 AS "pg_catalog"."int4"] DEFAULT 1 + 1, "b" [s46 AS "pg_catalog"."text"] NOT NULL, "c" [s46 AS "pg_catalog"."text"] VERSION ADDED 1)"#;
         let out = super::item_details(sql).expect("ok");
-        assert_eq!(
-            out["column_defaults"],
-            json!({"a": "1 + 1", "b": null, "c": null})
-        );
+        assert_eq!(out["column_defaults"], json!(["1 + 1", null, null]));
 
         // A bare NULL literal is no default, a cast of one is an expression.
         let sql = r#"CREATE TABLE "materialize"."public"."t" ("a" [s46 AS "pg_catalog"."text"] DEFAULT NULL, "b" [s46 AS "pg_catalog"."text"] DEFAULT (NULL), "c" [s46 AS "pg_catalog"."text"] DEFAULT NULL::[s46 AS "pg_catalog"."text"])"#;
         let out = super::item_details(sql).expect("ok");
         assert_eq!(
             out["column_defaults"],
-            json!({"a": null, "b": null, "c": "NULL::[s46 AS \"pg_catalog\".\"text\"]"})
+            json!([null, null, "NULL::[s46 AS \"pg_catalog\".\"text\"]"])
         );
 
         let sql =
             r#"CREATE TABLE "t" FROM SOURCE [u1 AS "materialize"."public"."s"] (REFERENCE = "t")"#;
         let out = super::item_details(sql).expect("ok");
         assert_eq!(out["column_defaults"], json!(null));
+    }
+
+    #[mz_ore::test]
+    fn item_details_packs_as_jsonb_for_any_column_name() {
+        let sql = r#"CREATE TABLE "materialize"."public"."t" ("$serde_json::private::Number" [s20 AS "pg_catalog"."int4"] DEFAULT 5, "b" [s46 AS "pg_catalog"."text"])"#;
+        let out = super::item_details(sql).expect("ok");
+        assert_eq!(out["column_defaults"], json!(["5", null]));
+        mz_repr::adt::jsonb::Jsonb::from_serde_json(out).expect("packs as jsonb");
     }
 
     /// Every error here is fatal to the whole of `mz_tables`/`mz_views`, not to

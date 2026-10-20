@@ -4861,8 +4861,8 @@ mz_catalog.mz_columns:
   →Return
     →Union
       →Map/Filter/Project
-        Project: #1, #6..=#12
-        Map: (#0{data} -> "value"), (#5 ->> "name"), (text_to_uint8(((#0{data} -> "key") ->> "position")) + 1), text_to_boolean((#5 ->> "nullable")), coalesce(#3{name}, mz_type_name(text_to_oid(((#0{data} -> "value") ->> "type_oid"))), "unknown"), (#2{column_defaults} ->> #6), coalesce(#4{oid}, text_to_oid(((#0{data} -> "value") ->> "type_oid"))), text_to_integer((#5 ->> "type_mod"))
+        Project: #1, #6, #8..=#13
+        Map: (#0{data} -> "value"), (#5 ->> "name"), ((#0{data} -> "key") ->> "position"), (text_to_uint8(#7) + 1), text_to_boolean((#5 ->> "nullable")), coalesce(#3{name}, mz_type_name(text_to_oid(((#0{data} -> "value") ->> "type_oid"))), "unknown"), (#2{column_defaults} ->> text_to_bigint(#7)), coalesce(#4{oid}, text_to_oid(((#0{data} -> "value") ->> "type_oid"))), text_to_integer((#5 ->> "type_mod"))
           →Union
             →Map/Filter/Project
               Project: #0..=#4
@@ -6094,7 +6094,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1076 rows)
+            →Constant (1077 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -10638,7 +10638,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1076 rows)
+            →Constant (1077 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3

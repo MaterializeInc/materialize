@@ -650,7 +650,7 @@ WITH
             mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
             data->'value'->>'name' AS name,
             (data->'value'->>'oid')::oid AS oid,
-            -- A table's column defaults
+            -- A table's column defaults as an array in column order
             mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->'column_defaults' AS column_defaults
         FROM mz_internal.mz_catalog_raw
         WHERE data->>'kind' = 'Item'
@@ -663,7 +663,7 @@ WITH
             (c.data->'key'->>'position')::uint8 + 1::uint8 AS position,
             (c.data->'value'->>'nullable')::bool AS nullable,
             coalesce(custom.name, mz_internal.mz_type_name((c.data->'value'->>'type_oid')::oid), 'unknown') AS type,
-            i.column_defaults->>(c.data->'value'->>'name') AS default,
+            i.column_defaults->>((c.data->'key'->>'position')::int8) AS default,
             coalesce(custom.oid, (c.data->'value'->>'type_oid')::oid) AS type_oid,
             (c.data->'value'->>'type_mod')::int4 AS type_mod
         FROM
