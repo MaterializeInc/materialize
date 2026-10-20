@@ -199,9 +199,9 @@ pub struct BalancerService {
 
 impl BalancerService {
     pub async fn new(cfg: BalancerConfig) -> Result<Self, anyhow::Error> {
-        let pgwire = listen(&cfg.pgwire_listen_addr).await?;
-        let https = listen(&cfg.https_listen_addr).await?;
-        let internal_http = listen(&cfg.internal_http_listen_addr).await?;
+        let pgwire = listen(&cfg.pgwire_listen_addr)?;
+        let https = listen(&cfg.https_listen_addr)?;
+        let internal_http = listen(&cfg.internal_http_listen_addr)?;
         let metrics = BalancerMetrics::new(&cfg);
         let mut configs = ConfigSet::default();
         configs = dyncfgs::all_dyncfgs(configs);

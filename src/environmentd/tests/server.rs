@@ -2661,7 +2661,7 @@ async fn test_leader_promotion_mixed_code_version() {
     client_this.simple_query("SELECT 1").await.unwrap();
 
     // Simulate a rolling upgrade and wait for the preflight checks.
-    let listeners_next = test_util::Listeners::new(&harness).await.unwrap();
+    let listeners_next = test_util::Listeners::new(&harness).unwrap();
     let internal_http_addr_next = listeners_next.inner.http["internal"].handle.local_addr;
     let config_next = harness
         .clone()

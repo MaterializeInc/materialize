@@ -260,8 +260,8 @@ where
     ///   * It allows the caller to communicate with the server via the internal
     ///     HTTP port while it is booting.
     ///
-    async fn bind(config: C) -> Result<Self, io::Error> {
-        let (handle, connection_stream) = mz_server_core::listen(&config.addr()).await?;
+    fn bind(config: C) -> Result<Self, io::Error> {
+        let (handle, connection_stream) = mz_server_core::listen(&config.addr())?;
         Ok(Self {
             handle,
             connection_stream,
@@ -365,15 +365,15 @@ pub struct Listeners {
 }
 
 impl Listeners {
-    pub async fn bind(config: ListenersConfig) -> Result<Self, io::Error> {
+    pub fn bind(config: ListenersConfig) -> Result<Self, io::Error> {
         let mut sql = BTreeMap::new();
         for (name, config) in config.sql {
-            sql.insert(name, Listener::bind(config).await?);
+            sql.insert(name, Listener::bind(config)?);
         }
 
         let mut http = BTreeMap::new();
         for (name, config) in config.http {
-            http.insert(name, Listener::bind(config).await?);
+            http.insert(name, Listener::bind(config)?);
         }
 
         Ok(Listeners { http, sql })
