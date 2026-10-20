@@ -85,7 +85,9 @@ ok
 # Keys 1 and 3 match, 3 twice.
 peek id=3000 schema=out ts=0
 ----
-x
+1 10 "one"
+3 30 "three"
+3 31 "three"
 
 # The same plan with a join closure that projects column 9 of a 3-column row. The
 # validator rejects it, and nothing is submitted.
@@ -96,4 +98,5 @@ create-lir-dataflow name=lir-join-bad sink=3001 shard=out-bad as-of=0
   plan
     {"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"materialize.public.pt"},"persist":true,"indexes":[]},{"id":{"Transient":2},"source":{"Name":"materialize.public.pu"},"persist":false,"indexes":[{"Name":"materialize.public.pu_a"}]}],"objects":[{"id":{"Transient":3},"plan":{"lir_id":4,"node":{"Join":{"inputs":[{"lir_id":2,"node":{"ArrangeBy":{"input_key":null,"input":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}},"input_mfp":{"mfp":{"mfp":{"expressions":[],"predicates":[],"projection":[0,1],"input_arity":2}},"lower_bounds":[],"upper_bounds":[]},"forms":{"raw":true,"arranged":[[[{"Column":[0,"a"]}],[0,1],[1]]]},"strategy":"Direct"}}},{"lir_id":3,"node":{"Get":{"id":{"Global":{"Transient":2}},"keys":{"raw":false,"arranged":[[[{"Column":[0,"a"]}],[0,1],[1]]]},"plan":"PassArrangements"}}}],"plan":{"Linear":{"source_relation":1,"source_key":[{"Column":[0,"a"]}],"initial_closure":null,"stage_plans":[{"lookup_relation":0,"stream_key":[{"Column":[0,"a"]}],"stream_thinning":[1],"lookup_key":[{"Column":[0,"a"]}],"closure":{"ready_equivalences":[],"before":{"mfp":{"expressions":[],"predicates":[],"projection":[0,9,1],"input_arity":3}}}}],"final_closure":null}}}}}}],"output":{"Transient":3}}
 ----
-x
+error: invalid LIR plan:
+LIR node 4 (Join): Arity: linear join stage 0 closure projection references column 9, which is out of range for arity 3
