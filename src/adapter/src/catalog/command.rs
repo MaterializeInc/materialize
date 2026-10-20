@@ -19,6 +19,7 @@
 //! prefix before consuming its indexed response, so successful preparation and
 //! preparation errors are accepted only when their inputs still match.
 
+pub(crate) mod connection;
 pub(crate) mod source;
 pub(crate) mod source_statement;
 
