@@ -21,8 +21,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.46.1
-*Released to Materialize Cloud: 2026-10-22* <br>
-*Released to Materialize Self-Managed: 2026-10-23* <br>
+*Released to Materialize Cloud: 2026-10-20* <br>
+*Released to Materialize Self-Managed: 2026-10-20* <br>
 
 ### Bug Fixes {#v26.46.1-bug-fixes}
 - Fixed Iceberg sinks over a relation with a nested column, such as an array, stalling with `Iceberg table '...' schema does not match expected schema` when resuming against a table the catalog created, which happens after a Materialize restart; Materialize no longer requires the catalog's field IDs to match its own, and assigns field IDs to nested types in the breadth-first order most catalogs use.

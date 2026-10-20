@@ -8,7 +8,7 @@ rows:
   - Materialize Operator: v26.46.1
     orchestratord version: v26.46.1
     environmentd version: v26.46.1
-    Release date: "2026-10-23"
+    Release date: "2026-10-20"
     Notes: "See [v26.46.1 release notes](/releases/#v26461)"
   - Materialize Operator: v26.46
     orchestratord version: v26.46
