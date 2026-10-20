@@ -642,12 +642,11 @@ impl<D: Data> CorrectionV2<D> {
 
 /// The number of updates [`sort_advanced`] sorts on the heap at a time.
 ///
-/// Each worker holds at most one run as owned updates, plus the chunks its merges are building, so
-/// this bounds the heap a since jump costs per worker. Rows of TPC-H lineitem's width take about
-/// 190 bytes owned, so a run takes about 12 MiB and spans about five chunks. Below this length the
-/// merges' chunks dominate the heap, which a benchmark of 8 Mi such updates put at about 10 MiB. Consolidation costs per update, so the bound is a count.
-/// Halving the run adds a merge level, which cost 7 to 10% of the sort's time per level in a
-/// benchmark of 8 Mi such updates.
+/// The heap a since jump costs per worker is one run of owned updates, the chunks the merges are
+/// building, and the input chunk being read. For rows of TPC-H lineitem's width, about 190 bytes
+/// owned, a run takes about 12 MiB, and a benchmark of 8 Mi such updates peaked at about 14 MiB.
+/// Shorter runs barely lower that peak, because the merges' chunks remain, while each halving adds
+/// a merge level. Consolidation costs per update, so the bound is a count rather than bytes.
 const STALE_SORT_RUN: usize = 1 << 16;
 
 /// Advance the times of the updates in `chains` to at least `since_ts` and return them as one
@@ -2469,6 +2468,36 @@ mod tests {
                 "run_len {run_len}"
             );
         }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // the pool's mapped regions are unsupported under miri
+    fn sort_advanced_matches_one_sort_through_pool() {
+        // Enough updates that input chains and runs mint chunks large enough to spill, so the sort
+        // reads spilled input and merges spilled runs.
+        let since_ts = Timestamp::from(5_000);
+        let mut updates = Vec::new();
+        for i in 0..400_000_i64 {
+            let t = u64::try_from(i % 9_973).expect("fits");
+            updates.push((i % 50_000, Timestamp::from(t), Diff::ONE));
+            if i % 3 == 0 {
+                updates.push((i % 50_000, Timestamp::from(t + 7), -Diff::ONE));
+            }
+        }
+        let mut expected: Vec<_> = updates
+            .iter()
+            .map(|(d, t, r)| (*d, std::cmp::max(*t, since_ts), *r))
+            .collect();
+        consolidate(&mut expected);
+
+        with_spill_pool(|| {
+            let chains = chains_of(&updates, 100_000);
+            for chain in &chains {
+                assert_all_spilled(chain);
+            }
+            let merged = sort_advanced(chains, since_ts, 1 << 12);
+            assert_eq!(merged.iter().collect::<Vec<_>>(), expected);
+        });
     }
 
     #[mz_ore::test]
