@@ -107,6 +107,7 @@ use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
+pub(crate) mod command;
 pub(crate) mod consistency;
 mod migrate;
 
