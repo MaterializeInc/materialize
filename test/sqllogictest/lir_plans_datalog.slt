@@ -1,0 +1,1468 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Plans compiled from Datalog by the toy compiler in misc/lir-datalog, compared with the
+# same queries in SQL.
+#
+# Regenerate each plan with the command in the comment above it, for example
+#
+#   python3 misc/lir-datalog/datalog2lir.py misc/lir-datalog/examples/tc.dl \
+#       --output reachable --import edges=materialize.public.edges
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_lir_plans = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE edges (src int8 NOT NULL, dst int8 NOT NULL)
+
+# A chain 1 -> 2 -> 3 -> 4 and a cycle 10 -> 11 -> 12 -> 10.
+statement ok
+INSERT INTO edges VALUES (1, 2), (2, 3), (3, 4), (10, 11), (11, 12), (12, 10)
+
+# datalog2lir.py examples/tc.dl --output reachable --import edges=materialize.public.edges
+statement ok
+CREATE MATERIALIZED VIEW reachable (src int8 NOT NULL, dst int8 NOT NULL) FROM PLAN '{"imports":[{"id":{"Transient":1},"indexes":[],"persist":true,"source":{"Name":"materialize.public.edges"}}],"lir_version":1,"objects":[{"id":{"Transient":2},"plan":{"lir_id":11,"node":{"LetRec":{"body":{"lir_id":10,"node":{"Get":{"id":{"Local":0},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"ids":[0],"limits":[{"max_iters":10000,"return_at_limit":true}],"values":[{"lir_id":9,"node":{"ArrangeBy":{"forms":{"arranged":[],"raw":true},"input":{"lir_id":8,"node":{"Reduce":{"input":{"lir_id":7,"node":{"Union":{"consolidate_output":false,"inputs":[{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},{"lir_id":6,"node":{"Join":{"inputs":[{"lir_id":4,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[1,null]}],[1,0],[0]]],"raw":true},"input":{"lir_id":2,"node":{"Get":{"id":{"Local":0},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}},{"lir_id":5,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[0,null]}],[0,1],[1]]],"raw":true},"input":{"lir_id":3,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}}],"plan":{"Linear":{"final_closure":null,"initial_closure":null,"source_key":[{"Column":[1,null]}],"source_relation":0,"stage_plans":[{"closure":{"before":{"mfp":{"expressions":[],"input_arity":3,"predicates":[],"projection":[1,2]}},"ready_equivalences":[]},"lookup_key":[{"Column":[0,null]}],"lookup_relation":1,"stream_key":[{"Column":[1,null]}],"stream_thinning":[0]}]}}}}}],"temporal_bucketing_strategies":["Direct","Direct"]}}},"input_key":null,"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"val_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[]}}},"mfp_after":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"plan":"Distinct","temporal_bucketing_strategy":"Direct"}}},"input_key":[{"Column":[0,null]},{"Column":[1,null]}],"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}}]}}}}],"output":{"Transient":2}}'
+
+statement ok
+CREATE MATERIALIZED VIEW reachable_sql AS
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 10000) r (src int8, dst int8) AS (
+  SELECT src, dst FROM edges
+  UNION
+  SELECT r.src, e.dst FROM r JOIN edges e ON r.dst = e.src
+)
+SELECT * FROM r
+
+query II rowsort
+SELECT * FROM reachable
+----
+1  2
+1  3
+1  4
+2  3
+2  4
+3  4
+10  10
+10  11
+10  12
+11  10
+11  11
+11  12
+12  10
+12  11
+12  12
+
+query II rowsort
+(SELECT * FROM reachable EXCEPT ALL SELECT * FROM reachable_sql)
+UNION ALL
+(SELECT * FROM reachable_sql EXCEPT ALL SELECT * FROM reachable)
+----
+
+# Connect the chain to the cycle, and add a duplicate edge, which set semantics absorbs.
+statement ok
+INSERT INTO edges VALUES (4, 10), (1, 2)
+
+query I rowsort
+SELECT count(*) FROM reachable
+----
+27
+
+query II rowsort
+(SELECT * FROM reachable EXCEPT ALL SELECT * FROM reachable_sql)
+UNION ALL
+(SELECT * FROM reachable_sql EXCEPT ALL SELECT * FROM reachable)
+----
+
+# Retractions flow through the recursion. Breaking the cycle removes the paths around it.
+statement ok
+DELETE FROM edges WHERE src = 12
+
+query I rowsort
+SELECT count(*) FROM reachable
+----
+21
+
+query II rowsort
+(SELECT * FROM reachable EXCEPT ALL SELECT * FROM reachable_sql)
+UNION ALL
+(SELECT * FROM reachable_sql EXCEPT ALL SELECT * FROM reachable)
+----
+
+# Non-recursive rules: a `Let` binding read by a join, a three-way join, and a repeated
+# variable.
+
+# datalog2lir.py examples/paths.dl --output three_hop --import edges=materialize.public.edges
+statement ok
+CREATE MATERIALIZED VIEW three_hop (src int8 NOT NULL, dst int8 NOT NULL) FROM PLAN '{"imports":[{"id":{"Transient":1},"indexes":[],"persist":true,"source":{"Name":"materialize.public.edges"}}],"lir_version":1,"objects":[{"id":{"Transient":2},"plan":{"lir_id":17,"node":{"Let":{"body":{"lir_id":16,"node":{"Let":{"body":{"lir_id":15,"node":{"Get":{"id":{"Local":1},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"id":1,"value":{"lir_id":14,"node":{"ArrangeBy":{"forms":{"arranged":[],"raw":true},"input":{"lir_id":13,"node":{"Reduce":{"input":{"lir_id":12,"node":{"Join":{"inputs":[{"lir_id":10,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[1,null]}],[1,0],[0]]],"raw":true},"input":{"lir_id":8,"node":{"Get":{"id":{"Local":0},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}},{"lir_id":11,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[0,null]}],[0,1],[1]]],"raw":true},"input":{"lir_id":9,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}}],"plan":{"Linear":{"final_closure":null,"initial_closure":null,"source_key":[{"Column":[1,null]}],"source_relation":0,"stage_plans":[{"closure":{"before":{"mfp":{"expressions":[],"input_arity":3,"predicates":[],"projection":[1,2]}},"ready_equivalences":[]},"lookup_key":[{"Column":[0,null]}],"lookup_relation":1,"stream_key":[{"Column":[1,null]}],"stream_thinning":[0]}]}}}}},"input_key":null,"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"val_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[]}}},"mfp_after":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"plan":"Distinct","temporal_bucketing_strategy":"Direct"}}},"input_key":[{"Column":[0,null]},{"Column":[1,null]}],"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}}}}},"id":0,"value":{"lir_id":7,"node":{"ArrangeBy":{"forms":{"arranged":[],"raw":true},"input":{"lir_id":6,"node":{"Reduce":{"input":{"lir_id":5,"node":{"Join":{"inputs":[{"lir_id":3,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[1,null]}],[1,0],[0]]],"raw":true},"input":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}},{"lir_id":4,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[0,null]}],[0,1],[1]]],"raw":true},"input":{"lir_id":2,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}}],"plan":{"Linear":{"final_closure":null,"initial_closure":null,"source_key":[{"Column":[1,null]}],"source_relation":0,"stage_plans":[{"closure":{"before":{"mfp":{"expressions":[],"input_arity":3,"predicates":[],"projection":[1,2]}},"ready_equivalences":[]},"lookup_key":[{"Column":[0,null]}],"lookup_relation":1,"stream_key":[{"Column":[1,null]}],"stream_thinning":[0]}]}}}}},"input_key":null,"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"val_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[]}}},"mfp_after":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"plan":"Distinct","temporal_bucketing_strategy":"Direct"}}},"input_key":[{"Column":[0,null]},{"Column":[1,null]}],"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}}}}}}],"output":{"Transient":2}}'
+
+# datalog2lir.py examples/paths.dl --output three_hop_direct --import edges=materialize.public.edges
+statement ok
+CREATE MATERIALIZED VIEW three_hop_direct (src int8 NOT NULL, dst int8 NOT NULL) FROM PLAN '{"imports":[{"id":{"Transient":1},"indexes":[],"persist":true,"source":{"Name":"materialize.public.edges"}}],"lir_version":1,"objects":[{"id":{"Transient":2},"plan":{"lir_id":11,"node":{"Let":{"body":{"lir_id":10,"node":{"Get":{"id":{"Local":0},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"id":0,"value":{"lir_id":9,"node":{"ArrangeBy":{"forms":{"arranged":[],"raw":true},"input":{"lir_id":8,"node":{"Reduce":{"input":{"lir_id":7,"node":{"Join":{"inputs":[{"lir_id":4,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[1,null]}],[1,0],[0]]],"raw":true},"input":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}},{"lir_id":5,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[0,null]}],[0,1],[1]]],"raw":true},"input":{"lir_id":2,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}},{"lir_id":6,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[0,null]}],[0,1],[1]]],"raw":true},"input":{"lir_id":3,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}}],"plan":{"Linear":{"final_closure":null,"initial_closure":null,"source_key":[{"Column":[1,null]}],"source_relation":0,"stage_plans":[{"closure":{"before":{"mfp":{"expressions":[],"input_arity":3,"predicates":[],"projection":[1,2]}},"ready_equivalences":[]},"lookup_key":[{"Column":[0,null]}],"lookup_relation":1,"stream_key":[{"Column":[1,null]}],"stream_thinning":[0]},{"closure":{"before":{"mfp":{"expressions":[],"input_arity":3,"predicates":[],"projection":[1,2]}},"ready_equivalences":[]},"lookup_key":[{"Column":[0,null]}],"lookup_relation":2,"stream_key":[{"Column":[1,null]}],"stream_thinning":[0]}]}}}}},"input_key":null,"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"val_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[]}}},"mfp_after":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"plan":"Distinct","temporal_bucketing_strategy":"Direct"}}},"input_key":[{"Column":[0,null]},{"Column":[1,null]}],"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}}}}}}],"output":{"Transient":2}}'
+
+# datalog2lir.py examples/paths.dl --output self_loop --import edges=materialize.public.edges
+statement ok
+CREATE MATERIALIZED VIEW self_loop (node int8 NOT NULL) FROM PLAN '{"imports":[{"id":{"Transient":1},"indexes":[],"persist":true,"source":{"Name":"materialize.public.edges"}}],"lir_version":1,"objects":[{"id":{"Transient":2},"plan":{"lir_id":5,"node":{"Let":{"body":{"lir_id":4,"node":{"Get":{"id":{"Local":0},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"id":0,"value":{"lir_id":3,"node":{"ArrangeBy":{"forms":{"arranged":[],"raw":true},"input":{"lir_id":2,"node":{"Reduce":{"input":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"arranged":[],"raw":true},"plan":{"Collection":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[[2,{"CallBinary":{"expr1":{"Column":[0,null]},"expr2":{"Column":[1,null]},"func":{"Eq":null}}}]],"projection":[0]}},"upper_bounds":[]}}}}},"input_key":null,"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"input_arity":1,"predicates":[],"projection":[0]}},"val_plan":{"mfp":{"expressions":[],"input_arity":1,"predicates":[],"projection":[]}}},"mfp_after":{"mfp":{"expressions":[],"input_arity":1,"predicates":[],"projection":[0]}},"plan":"Distinct","temporal_bucketing_strategy":"Direct"}}},"input_key":[{"Column":[0,null]}],"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":1,"predicates":[],"projection":[0]}},"upper_bounds":[]},"strategy":"Direct"}}}}}}}],"output":{"Transient":2}}'
+
+statement ok
+INSERT INTO edges VALUES (5, 5), (3, 5)
+
+query II rowsort
+SELECT * FROM three_hop
+----
+1  4
+1  5
+2  10
+2  5
+3  11
+3  5
+4  12
+5  5
+
+query II rowsort
+(SELECT * FROM three_hop EXCEPT ALL SELECT * FROM three_hop_direct)
+UNION ALL
+(SELECT * FROM three_hop_direct EXCEPT ALL SELECT * FROM three_hop)
+----
+
+query II rowsort
+(SELECT * FROM three_hop EXCEPT ALL
+ SELECT DISTINCT a.src, c.dst FROM edges a, edges b, edges c WHERE a.dst = b.src AND b.dst = c.src)
+UNION ALL
+(SELECT DISTINCT a.src, c.dst FROM edges a, edges b, edges c WHERE a.dst = b.src AND b.dst = c.src
+ EXCEPT ALL SELECT * FROM three_hop)
+----
+
+query I rowsort
+SELECT * FROM self_loop
+----
+5
+
+# A cross join, which arranges both inputs by the empty key.
+
+# datalog2lir.py examples/paths.dl --output loop_pairs --import edges=materialize.public.edges
+statement ok
+CREATE MATERIALIZED VIEW loop_pairs (a int8 NOT NULL, b int8 NOT NULL) FROM PLAN '{"imports":[{"id":{"Transient":1},"indexes":[],"persist":true,"source":{"Name":"materialize.public.edges"}}],"lir_version":1,"objects":[{"id":{"Transient":2},"plan":{"lir_id":13,"node":{"Let":{"body":{"lir_id":12,"node":{"Let":{"body":{"lir_id":11,"node":{"Get":{"id":{"Local":1},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"id":1,"value":{"lir_id":10,"node":{"ArrangeBy":{"forms":{"arranged":[],"raw":true},"input":{"lir_id":9,"node":{"Reduce":{"input":{"lir_id":8,"node":{"Join":{"inputs":[{"lir_id":6,"node":{"ArrangeBy":{"forms":{"arranged":[[[],[0],[0]]],"raw":true},"input":{"lir_id":4,"node":{"Get":{"id":{"Local":0},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":1,"predicates":[],"projection":[0]}},"upper_bounds":[]},"strategy":"Direct"}}},{"lir_id":7,"node":{"ArrangeBy":{"forms":{"arranged":[[[],[0],[0]]],"raw":true},"input":{"lir_id":5,"node":{"Get":{"id":{"Local":0},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":1,"predicates":[],"projection":[0]}},"upper_bounds":[]},"strategy":"Direct"}}}],"plan":{"Linear":{"final_closure":null,"initial_closure":null,"source_key":[],"source_relation":0,"stage_plans":[{"closure":{"before":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"ready_equivalences":[]},"lookup_key":[],"lookup_relation":1,"stream_key":[],"stream_thinning":[0]}]}}}}},"input_key":null,"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"val_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[]}}},"mfp_after":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"plan":"Distinct","temporal_bucketing_strategy":"Direct"}}},"input_key":[{"Column":[0,null]},{"Column":[1,null]}],"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}}}}},"id":0,"value":{"lir_id":3,"node":{"ArrangeBy":{"forms":{"arranged":[],"raw":true},"input":{"lir_id":2,"node":{"Reduce":{"input":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"arranged":[],"raw":true},"plan":{"Collection":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[[2,{"CallBinary":{"expr1":{"Column":[0,null]},"expr2":{"Column":[1,null]},"func":{"Eq":null}}}]],"projection":[0]}},"upper_bounds":[]}}}}},"input_key":null,"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"input_arity":1,"predicates":[],"projection":[0]}},"val_plan":{"mfp":{"expressions":[],"input_arity":1,"predicates":[],"projection":[]}}},"mfp_after":{"mfp":{"expressions":[],"input_arity":1,"predicates":[],"projection":[0]}},"plan":"Distinct","temporal_bucketing_strategy":"Direct"}}},"input_key":[{"Column":[0,null]}],"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":1,"predicates":[],"projection":[0]}},"upper_bounds":[]},"strategy":"Direct"}}}}}}}],"output":{"Transient":2}}'
+
+statement ok
+INSERT INTO edges VALUES (7, 7)
+
+query II rowsort
+SELECT * FROM loop_pairs
+----
+5  5
+5  7
+7  5
+7  7
+
+# Mutual recursion: two bindings in one `LetRec`.
+
+# datalog2lir.py examples/parity.dl --output odd --import edges=materialize.public.edges
+statement ok
+CREATE MATERIALIZED VIEW odd (src int8 NOT NULL, dst int8 NOT NULL) FROM PLAN '{"imports":[{"id":{"Transient":1},"indexes":[],"persist":true,"source":{"Name":"materialize.public.edges"}}],"lir_version":1,"objects":[{"id":{"Transient":2},"plan":{"lir_id":18,"node":{"LetRec":{"body":{"lir_id":17,"node":{"Get":{"id":{"Local":0},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"ids":[0,1],"limits":[{"max_iters":10000,"return_at_limit":true},{"max_iters":10000,"return_at_limit":true}],"values":[{"lir_id":9,"node":{"ArrangeBy":{"forms":{"arranged":[],"raw":true},"input":{"lir_id":8,"node":{"Reduce":{"input":{"lir_id":7,"node":{"Union":{"consolidate_output":false,"inputs":[{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},{"lir_id":6,"node":{"Join":{"inputs":[{"lir_id":4,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[1,null]}],[1,0],[0]]],"raw":true},"input":{"lir_id":2,"node":{"Get":{"id":{"Local":1},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}},{"lir_id":5,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[0,null]}],[0,1],[1]]],"raw":true},"input":{"lir_id":3,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}}],"plan":{"Linear":{"final_closure":null,"initial_closure":null,"source_key":[{"Column":[1,null]}],"source_relation":0,"stage_plans":[{"closure":{"before":{"mfp":{"expressions":[],"input_arity":3,"predicates":[],"projection":[1,2]}},"ready_equivalences":[]},"lookup_key":[{"Column":[0,null]}],"lookup_relation":1,"stream_key":[{"Column":[1,null]}],"stream_thinning":[0]}]}}}}}],"temporal_bucketing_strategies":["Direct","Direct"]}}},"input_key":null,"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"val_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[]}}},"mfp_after":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"plan":"Distinct","temporal_bucketing_strategy":"Direct"}}},"input_key":[{"Column":[0,null]},{"Column":[1,null]}],"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}},{"lir_id":16,"node":{"ArrangeBy":{"forms":{"arranged":[],"raw":true},"input":{"lir_id":15,"node":{"Reduce":{"input":{"lir_id":14,"node":{"Join":{"inputs":[{"lir_id":12,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[1,null]}],[1,0],[0]]],"raw":true},"input":{"lir_id":10,"node":{"Get":{"id":{"Local":0},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}},{"lir_id":13,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[0,null]}],[0,1],[1]]],"raw":true},"input":{"lir_id":11,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}}],"plan":{"Linear":{"final_closure":null,"initial_closure":null,"source_key":[{"Column":[1,null]}],"source_relation":0,"stage_plans":[{"closure":{"before":{"mfp":{"expressions":[],"input_arity":3,"predicates":[],"projection":[1,2]}},"ready_equivalences":[]},"lookup_key":[{"Column":[0,null]}],"lookup_relation":1,"stream_key":[{"Column":[1,null]}],"stream_thinning":[0]}]}}}}},"input_key":null,"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"val_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[]}}},"mfp_after":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"plan":"Distinct","temporal_bucketing_strategy":"Direct"}}},"input_key":[{"Column":[0,null]},{"Column":[1,null]}],"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}}]}}}}],"output":{"Transient":2}}'
+
+# datalog2lir.py examples/parity.dl --output even --import edges=materialize.public.edges
+statement ok
+CREATE MATERIALIZED VIEW even (src int8 NOT NULL, dst int8 NOT NULL) FROM PLAN '{"imports":[{"id":{"Transient":1},"indexes":[],"persist":true,"source":{"Name":"materialize.public.edges"}}],"lir_version":1,"objects":[{"id":{"Transient":2},"plan":{"lir_id":18,"node":{"LetRec":{"body":{"lir_id":17,"node":{"Get":{"id":{"Local":1},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"ids":[0,1],"limits":[{"max_iters":10000,"return_at_limit":true},{"max_iters":10000,"return_at_limit":true}],"values":[{"lir_id":9,"node":{"ArrangeBy":{"forms":{"arranged":[],"raw":true},"input":{"lir_id":8,"node":{"Reduce":{"input":{"lir_id":7,"node":{"Union":{"consolidate_output":false,"inputs":[{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},{"lir_id":6,"node":{"Join":{"inputs":[{"lir_id":4,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[1,null]}],[1,0],[0]]],"raw":true},"input":{"lir_id":2,"node":{"Get":{"id":{"Local":1},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}},{"lir_id":5,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[0,null]}],[0,1],[1]]],"raw":true},"input":{"lir_id":3,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}}],"plan":{"Linear":{"final_closure":null,"initial_closure":null,"source_key":[{"Column":[1,null]}],"source_relation":0,"stage_plans":[{"closure":{"before":{"mfp":{"expressions":[],"input_arity":3,"predicates":[],"projection":[1,2]}},"ready_equivalences":[]},"lookup_key":[{"Column":[0,null]}],"lookup_relation":1,"stream_key":[{"Column":[1,null]}],"stream_thinning":[0]}]}}}}}],"temporal_bucketing_strategies":["Direct","Direct"]}}},"input_key":null,"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"val_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[]}}},"mfp_after":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"plan":"Distinct","temporal_bucketing_strategy":"Direct"}}},"input_key":[{"Column":[0,null]},{"Column":[1,null]}],"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}},{"lir_id":16,"node":{"ArrangeBy":{"forms":{"arranged":[],"raw":true},"input":{"lir_id":15,"node":{"Reduce":{"input":{"lir_id":14,"node":{"Join":{"inputs":[{"lir_id":12,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[1,null]}],[1,0],[0]]],"raw":true},"input":{"lir_id":10,"node":{"Get":{"id":{"Local":0},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}},{"lir_id":13,"node":{"ArrangeBy":{"forms":{"arranged":[[[{"Column":[0,null]}],[0,1],[1]]],"raw":true},"input":{"lir_id":11,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"arranged":[],"raw":true},"plan":"PassArrangements"}}},"input_key":null,"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}}],"plan":{"Linear":{"final_closure":null,"initial_closure":null,"source_key":[{"Column":[1,null]}],"source_relation":0,"stage_plans":[{"closure":{"before":{"mfp":{"expressions":[],"input_arity":3,"predicates":[],"projection":[1,2]}},"ready_equivalences":[]},"lookup_key":[{"Column":[0,null]}],"lookup_relation":1,"stream_key":[{"Column":[1,null]}],"stream_thinning":[0]}]}}}}},"input_key":null,"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"val_plan":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[]}}},"mfp_after":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"plan":"Distinct","temporal_bucketing_strategy":"Direct"}}},"input_key":[{"Column":[0,null]},{"Column":[1,null]}],"input_mfp":{"lower_bounds":[],"mfp":{"mfp":{"expressions":[],"input_arity":2,"predicates":[],"projection":[0,1]}},"upper_bounds":[]},"strategy":"Direct"}}}]}}}}],"output":{"Transient":2}}'
+
+statement ok
+CREATE MATERIALIZED VIEW parity_sql AS
+WITH MUTUALLY RECURSIVE (RETURN AT RECURSION LIMIT 10000)
+  odd (src int8, dst int8) AS (
+    SELECT src, dst FROM edges
+    UNION
+    SELECT e.src, x.dst FROM even e JOIN edges x ON e.dst = x.src
+  ),
+  even (src int8, dst int8) AS (
+    SELECT DISTINCT o.src, x.dst FROM odd o JOIN edges x ON o.dst = x.src
+  )
+SELECT 'odd' AS parity, * FROM odd UNION ALL SELECT 'even', * FROM even
+
+query TI rowsort
+SELECT parity, count(*) FROM parity_sql GROUP BY parity
+----
+even  14
+odd  17
+
+query TII rowsort
+(SELECT 'odd', * FROM odd UNION ALL SELECT 'even', * FROM even)
+EXCEPT ALL SELECT * FROM parity_sql
+----
+
+query TII rowsort
+SELECT * FROM parity_sql
+EXCEPT ALL (SELECT 'odd', * FROM odd UNION ALL SELECT 'even', * FROM even)
+----
+
+# The optimizer's plan for the SQL definition, which the compiled plan for `reachable`
+# follows.
+query T multiline
+EXPLAIN PHYSICAL PLAN AS LIR JSON FOR MATERIALIZED VIEW reachable_sql
+----
+{
+  "lir_version": 1,
+  "imports": [
+    {
+      "id": {
+        "Transient": 1
+      },
+      "source": {
+        "Name": "materialize.public.edges"
+      },
+      "persist": true,
+      "indexes": []
+    }
+  ],
+  "objects": [
+    {
+      "id": {
+        "Transient": 2
+      },
+      "plan": {
+        "lir_id": 11,
+        "node": {
+          "LetRec": {
+            "ids": [
+              0
+            ],
+            "values": [
+              {
+                "lir_id": 9,
+                "node": {
+                  "ArrangeBy": {
+                    "input_key": [
+                      {
+                        "Column": [
+                          0,
+                          null
+                        ]
+                      },
+                      {
+                        "Column": [
+                          1,
+                          null
+                        ]
+                      }
+                    ],
+                    "input": {
+                      "lir_id": 8,
+                      "node": {
+                        "Reduce": {
+                          "input_key": null,
+                          "input": {
+                            "lir_id": 7,
+                            "node": {
+                              "Union": {
+                                "inputs": [
+                                  {
+                                    "lir_id": 1,
+                                    "node": {
+                                      "Get": {
+                                        "id": {
+                                          "Global": {
+                                            "Transient": 1
+                                          }
+                                        },
+                                        "keys": {
+                                          "raw": true,
+                                          "arranged": []
+                                        },
+                                        "plan": "PassArrangements"
+                                      }
+                                    }
+                                  },
+                                  {
+                                    "lir_id": 6,
+                                    "node": {
+                                      "Join": {
+                                        "inputs": [
+                                          {
+                                            "lir_id": 3,
+                                            "node": {
+                                              "ArrangeBy": {
+                                                "input_key": null,
+                                                "input": {
+                                                  "lir_id": 2,
+                                                  "node": {
+                                                    "Get": {
+                                                      "id": {
+                                                        "Local": 0
+                                                      },
+                                                      "keys": {
+                                                        "raw": true,
+                                                        "arranged": []
+                                                      },
+                                                      "plan": "PassArrangements"
+                                                    }
+                                                  }
+                                                },
+                                                "input_mfp": {
+                                                  "mfp": {
+                                                    "mfp": {
+                                                      "expressions": [],
+                                                      "predicates": [],
+                                                      "projection": [
+                                                        0,
+                                                        1
+                                                      ],
+                                                      "input_arity": 2
+                                                    }
+                                                  },
+                                                  "lower_bounds": [],
+                                                  "upper_bounds": []
+                                                },
+                                                "forms": {
+                                                  "raw": true,
+                                                  "arranged": [
+                                                    [
+                                                      [
+                                                        {
+                                                          "Column": [
+                                                            1,
+                                                            "dst"
+                                                          ]
+                                                        }
+                                                      ],
+                                                      [
+                                                        1,
+                                                        0
+                                                      ],
+                                                      [
+                                                        0
+                                                      ]
+                                                    ]
+                                                  ]
+                                                },
+                                                "strategy": "Direct"
+                                              }
+                                            }
+                                          },
+                                          {
+                                            "lir_id": 5,
+                                            "node": {
+                                              "ArrangeBy": {
+                                                "input_key": null,
+                                                "input": {
+                                                  "lir_id": 4,
+                                                  "node": {
+                                                    "Get": {
+                                                      "id": {
+                                                        "Global": {
+                                                          "Transient": 1
+                                                        }
+                                                      },
+                                                      "keys": {
+                                                        "raw": true,
+                                                        "arranged": []
+                                                      },
+                                                      "plan": "PassArrangements"
+                                                    }
+                                                  }
+                                                },
+                                                "input_mfp": {
+                                                  "mfp": {
+                                                    "mfp": {
+                                                      "expressions": [],
+                                                      "predicates": [],
+                                                      "projection": [
+                                                        0,
+                                                        1
+                                                      ],
+                                                      "input_arity": 2
+                                                    }
+                                                  },
+                                                  "lower_bounds": [],
+                                                  "upper_bounds": []
+                                                },
+                                                "forms": {
+                                                  "raw": true,
+                                                  "arranged": [
+                                                    [
+                                                      [
+                                                        {
+                                                          "Column": [
+                                                            0,
+                                                            "src"
+                                                          ]
+                                                        }
+                                                      ],
+                                                      [
+                                                        0,
+                                                        1
+                                                      ],
+                                                      [
+                                                        1
+                                                      ]
+                                                    ]
+                                                  ]
+                                                },
+                                                "strategy": "Direct"
+                                              }
+                                            }
+                                          }
+                                        ],
+                                        "plan": {
+                                          "Linear": {
+                                            "source_relation": 0,
+                                            "source_key": [
+                                              {
+                                                "Column": [
+                                                  1,
+                                                  "dst"
+                                                ]
+                                              }
+                                            ],
+                                            "initial_closure": null,
+                                            "stage_plans": [
+                                              {
+                                                "lookup_relation": 1,
+                                                "stream_key": [
+                                                  {
+                                                    "Column": [
+                                                      1,
+                                                      "dst"
+                                                    ]
+                                                  }
+                                                ],
+                                                "stream_thinning": [
+                                                  0
+                                                ],
+                                                "lookup_key": [
+                                                  {
+                                                    "Column": [
+                                                      0,
+                                                      "src"
+                                                    ]
+                                                  }
+                                                ],
+                                                "closure": {
+                                                  "ready_equivalences": [],
+                                                  "before": {
+                                                    "mfp": {
+                                                      "expressions": [],
+                                                      "predicates": [],
+                                                      "projection": [
+                                                        1,
+                                                        2
+                                                      ],
+                                                      "input_arity": 3
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            ],
+                                            "final_closure": null
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                ],
+                                "consolidate_output": false,
+                                "temporal_bucketing_strategies": [
+                                  "Direct",
+                                  "Direct"
+                                ]
+                              }
+                            }
+                          },
+                          "key_val_plan": {
+                            "key_plan": {
+                              "mfp": {
+                                "expressions": [],
+                                "predicates": [],
+                                "projection": [
+                                  0,
+                                  1
+                                ],
+                                "input_arity": 2
+                              }
+                            },
+                            "val_plan": {
+                              "mfp": {
+                                "expressions": [],
+                                "predicates": [],
+                                "projection": [],
+                                "input_arity": 2
+                              }
+                            }
+                          },
+                          "plan": "Distinct",
+                          "mfp_after": {
+                            "mfp": {
+                              "expressions": [],
+                              "predicates": [],
+                              "projection": [
+                                0,
+                                1
+                              ],
+                              "input_arity": 2
+                            }
+                          },
+                          "temporal_bucketing_strategy": "Direct"
+                        }
+                      }
+                    },
+                    "input_mfp": {
+                      "mfp": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1
+                          ],
+                          "input_arity": 2
+                        }
+                      },
+                      "lower_bounds": [],
+                      "upper_bounds": []
+                    },
+                    "forms": {
+                      "raw": true,
+                      "arranged": []
+                    },
+                    "strategy": "Direct"
+                  }
+                }
+              }
+            ],
+            "limits": [
+              {
+                "max_iters": 10000,
+                "return_at_limit": true
+              }
+            ],
+            "body": {
+              "lir_id": 10,
+              "node": {
+                "Get": {
+                  "id": {
+                    "Local": 0
+                  },
+                  "keys": {
+                    "raw": true,
+                    "arranged": []
+                  },
+                  "plan": "PassArrangements"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "output": {
+    "Transient": 2
+  }
+}
+EOF
+
+# A format reference for the encoder test in misc/lir-datalog, covering a delta join, a
+# literal, scalar functions, and an aggregation.
+statement ok
+CREATE MATERIALIZED VIEW format_reference AS
+SELECT a.src, count(*), max(c.dst)
+FROM edges a, edges b, edges c
+WHERE a.dst = b.src AND b.dst = c.src AND a.src > 1
+GROUP BY a.src
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS LIR JSON FOR MATERIALIZED VIEW format_reference
+----
+{
+  "lir_version": 1,
+  "imports": [
+    {
+      "id": {
+        "Transient": 1
+      },
+      "source": {
+        "Name": "materialize.public.edges"
+      },
+      "persist": true,
+      "indexes": []
+    }
+  ],
+  "objects": [
+    {
+      "id": {
+        "Transient": 2
+      },
+      "plan": {
+        "lir_id": 13,
+        "node": {
+          "Let": {
+            "id": 0,
+            "value": {
+              "lir_id": 7,
+              "node": {
+                "Join": {
+                  "inputs": [
+                    {
+                      "lir_id": 2,
+                      "node": {
+                        "ArrangeBy": {
+                          "input_key": null,
+                          "input": {
+                            "lir_id": 1,
+                            "node": {
+                              "Get": {
+                                "id": {
+                                  "Global": {
+                                    "Transient": 1
+                                  }
+                                },
+                                "keys": {
+                                  "raw": true,
+                                  "arranged": []
+                                },
+                                "plan": {
+                                  "Collection": {
+                                    "mfp": {
+                                      "mfp": {
+                                        "expressions": [],
+                                        "predicates": [
+                                          [
+                                            1,
+                                            {
+                                              "CallBinary": {
+                                                "func": {
+                                                  "Gt": null
+                                                },
+                                                "expr1": {
+                                                  "Column": [
+                                                    0,
+                                                    "src"
+                                                  ]
+                                                },
+                                                "expr2": {
+                                                  "Literal": [
+                                                    {
+                                                      "Ok": {
+                                                        "$row": [
+                                                          {
+                                                            "Int64": 1
+                                                          }
+                                                        ]
+                                                      }
+                                                    },
+                                                    {
+                                                      "scalar_type": "Int64",
+                                                      "nullable": false
+                                                    }
+                                                  ]
+                                                }
+                                              }
+                                            }
+                                          ]
+                                        ],
+                                        "projection": [
+                                          0,
+                                          1
+                                        ],
+                                        "input_arity": 2
+                                      }
+                                    },
+                                    "lower_bounds": [],
+                                    "upper_bounds": []
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "input_mfp": {
+                            "mfp": {
+                              "mfp": {
+                                "expressions": [],
+                                "predicates": [],
+                                "projection": [
+                                  0,
+                                  1
+                                ],
+                                "input_arity": 2
+                              }
+                            },
+                            "lower_bounds": [],
+                            "upper_bounds": []
+                          },
+                          "forms": {
+                            "raw": true,
+                            "arranged": [
+                              [
+                                [
+                                  {
+                                    "Column": [
+                                      1,
+                                      "dst"
+                                    ]
+                                  }
+                                ],
+                                [
+                                  1,
+                                  0
+                                ],
+                                [
+                                  0
+                                ]
+                              ]
+                            ]
+                          },
+                          "strategy": "Direct"
+                        }
+                      }
+                    },
+                    {
+                      "lir_id": 4,
+                      "node": {
+                        "ArrangeBy": {
+                          "input_key": null,
+                          "input": {
+                            "lir_id": 3,
+                            "node": {
+                              "Get": {
+                                "id": {
+                                  "Global": {
+                                    "Transient": 1
+                                  }
+                                },
+                                "keys": {
+                                  "raw": true,
+                                  "arranged": []
+                                },
+                                "plan": "PassArrangements"
+                              }
+                            }
+                          },
+                          "input_mfp": {
+                            "mfp": {
+                              "mfp": {
+                                "expressions": [],
+                                "predicates": [],
+                                "projection": [
+                                  0,
+                                  1
+                                ],
+                                "input_arity": 2
+                              }
+                            },
+                            "lower_bounds": [],
+                            "upper_bounds": []
+                          },
+                          "forms": {
+                            "raw": true,
+                            "arranged": [
+                              [
+                                [
+                                  {
+                                    "Column": [
+                                      0,
+                                      "src"
+                                    ]
+                                  }
+                                ],
+                                [
+                                  0,
+                                  1
+                                ],
+                                [
+                                  1
+                                ]
+                              ],
+                              [
+                                [
+                                  {
+                                    "Column": [
+                                      1,
+                                      "dst"
+                                    ]
+                                  }
+                                ],
+                                [
+                                  1,
+                                  0
+                                ],
+                                [
+                                  0
+                                ]
+                              ]
+                            ]
+                          },
+                          "strategy": "Direct"
+                        }
+                      }
+                    },
+                    {
+                      "lir_id": 6,
+                      "node": {
+                        "ArrangeBy": {
+                          "input_key": null,
+                          "input": {
+                            "lir_id": 5,
+                            "node": {
+                              "Get": {
+                                "id": {
+                                  "Global": {
+                                    "Transient": 1
+                                  }
+                                },
+                                "keys": {
+                                  "raw": true,
+                                  "arranged": []
+                                },
+                                "plan": "PassArrangements"
+                              }
+                            }
+                          },
+                          "input_mfp": {
+                            "mfp": {
+                              "mfp": {
+                                "expressions": [],
+                                "predicates": [],
+                                "projection": [
+                                  0,
+                                  1
+                                ],
+                                "input_arity": 2
+                              }
+                            },
+                            "lower_bounds": [],
+                            "upper_bounds": []
+                          },
+                          "forms": {
+                            "raw": true,
+                            "arranged": [
+                              [
+                                [
+                                  {
+                                    "Column": [
+                                      0,
+                                      "src"
+                                    ]
+                                  }
+                                ],
+                                [
+                                  0,
+                                  1
+                                ],
+                                [
+                                  1
+                                ]
+                              ]
+                            ]
+                          },
+                          "strategy": "Direct"
+                        }
+                      }
+                    }
+                  ],
+                  "plan": {
+                    "Delta": {
+                      "path_plans": [
+                        {
+                          "source_relation": 0,
+                          "source_key": [
+                            {
+                              "Column": [
+                                1,
+                                "dst"
+                              ]
+                            }
+                          ],
+                          "initial_closure": {
+                            "ready_equivalences": [],
+                            "before": {
+                              "mfp": {
+                                "expressions": [],
+                                "predicates": [],
+                                "projection": [
+                                  1,
+                                  0
+                                ],
+                                "input_arity": 2
+                              }
+                            }
+                          },
+                          "stage_plans": [
+                            {
+                              "lookup_relation": 1,
+                              "stream_key": [
+                                {
+                                  "Column": [
+                                    1,
+                                    "dst"
+                                  ]
+                                }
+                              ],
+                              "stream_thinning": [
+                                0
+                              ],
+                              "lookup_key": [
+                                {
+                                  "Column": [
+                                    0,
+                                    "src"
+                                  ]
+                                }
+                              ],
+                              "closure": {
+                                "ready_equivalences": [],
+                                "before": {
+                                  "mfp": {
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      1,
+                                      2
+                                    ],
+                                    "input_arity": 3
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "lookup_relation": 2,
+                              "stream_key": [
+                                {
+                                  "Column": [
+                                    1,
+                                    "dst"
+                                  ]
+                                }
+                              ],
+                              "stream_thinning": [
+                                0
+                              ],
+                              "lookup_key": [
+                                {
+                                  "Column": [
+                                    0,
+                                    "src"
+                                  ]
+                                }
+                              ],
+                              "closure": {
+                                "ready_equivalences": [],
+                                "before": {
+                                  "mfp": {
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      1,
+                                      2
+                                    ],
+                                    "input_arity": 3
+                                  }
+                                }
+                              }
+                            }
+                          ],
+                          "final_closure": null
+                        },
+                        {
+                          "source_relation": 1,
+                          "source_key": [
+                            {
+                              "Column": [
+                                0,
+                                "src"
+                              ]
+                            }
+                          ],
+                          "initial_closure": {
+                            "ready_equivalences": [],
+                            "before": {
+                              "mfp": {
+                                "expressions": [],
+                                "predicates": [],
+                                "projection": [
+                                  0,
+                                  1
+                                ],
+                                "input_arity": 2
+                              }
+                            }
+                          },
+                          "stage_plans": [
+                            {
+                              "lookup_relation": 0,
+                              "stream_key": [
+                                {
+                                  "Column": [
+                                    0,
+                                    "src"
+                                  ]
+                                }
+                              ],
+                              "stream_thinning": [
+                                1
+                              ],
+                              "lookup_key": [
+                                {
+                                  "Column": [
+                                    1,
+                                    "dst"
+                                  ]
+                                }
+                              ],
+                              "closure": {
+                                "ready_equivalences": [],
+                                "before": {
+                                  "mfp": {
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      2,
+                                      1
+                                    ],
+                                    "input_arity": 3
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "lookup_relation": 2,
+                              "stream_key": [
+                                {
+                                  "Column": [
+                                    1,
+                                    "dst"
+                                  ]
+                                }
+                              ],
+                              "stream_thinning": [
+                                0
+                              ],
+                              "lookup_key": [
+                                {
+                                  "Column": [
+                                    0,
+                                    "src"
+                                  ]
+                                }
+                              ],
+                              "closure": {
+                                "ready_equivalences": [],
+                                "before": {
+                                  "mfp": {
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      1,
+                                      2
+                                    ],
+                                    "input_arity": 3
+                                  }
+                                }
+                              }
+                            }
+                          ],
+                          "final_closure": null
+                        },
+                        {
+                          "source_relation": 2,
+                          "source_key": [
+                            {
+                              "Column": [
+                                0,
+                                "src"
+                              ]
+                            }
+                          ],
+                          "initial_closure": {
+                            "ready_equivalences": [],
+                            "before": {
+                              "mfp": {
+                                "expressions": [],
+                                "predicates": [],
+                                "projection": [
+                                  0,
+                                  1
+                                ],
+                                "input_arity": 2
+                              }
+                            }
+                          },
+                          "stage_plans": [
+                            {
+                              "lookup_relation": 1,
+                              "stream_key": [
+                                {
+                                  "Column": [
+                                    0,
+                                    "src"
+                                  ]
+                                }
+                              ],
+                              "stream_thinning": [
+                                1
+                              ],
+                              "lookup_key": [
+                                {
+                                  "Column": [
+                                    1,
+                                    "dst"
+                                  ]
+                                }
+                              ],
+                              "closure": {
+                                "ready_equivalences": [],
+                                "before": {
+                                  "mfp": {
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      2,
+                                      1
+                                    ],
+                                    "input_arity": 3
+                                  }
+                                }
+                              }
+                            },
+                            {
+                              "lookup_relation": 0,
+                              "stream_key": [
+                                {
+                                  "Column": [
+                                    0,
+                                    "src"
+                                  ]
+                                }
+                              ],
+                              "stream_thinning": [
+                                1
+                              ],
+                              "lookup_key": [
+                                {
+                                  "Column": [
+                                    1,
+                                    "dst"
+                                  ]
+                                }
+                              ],
+                              "closure": {
+                                "ready_equivalences": [],
+                                "before": {
+                                  "mfp": {
+                                    "expressions": [],
+                                    "predicates": [],
+                                    "projection": [
+                                      2,
+                                      1
+                                    ],
+                                    "input_arity": 3
+                                  }
+                                }
+                              }
+                            }
+                          ],
+                          "final_closure": null
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "body": {
+              "lir_id": 12,
+              "node": {
+                "Join": {
+                  "inputs": [
+                    {
+                      "lir_id": 9,
+                      "node": {
+                        "Reduce": {
+                          "input_key": null,
+                          "input": {
+                            "lir_id": 8,
+                            "node": {
+                              "Get": {
+                                "id": {
+                                  "Local": 0
+                                },
+                                "keys": {
+                                  "raw": true,
+                                  "arranged": []
+                                },
+                                "plan": "PassArrangements"
+                              }
+                            }
+                          },
+                          "key_val_plan": {
+                            "key_plan": {
+                              "mfp": {
+                                "expressions": [],
+                                "predicates": [],
+                                "projection": [
+                                  0
+                                ],
+                                "input_arity": 2
+                              }
+                            },
+                            "val_plan": {
+                              "mfp": {
+                                "expressions": [],
+                                "predicates": [],
+                                "projection": [
+                                  1
+                                ],
+                                "input_arity": 2
+                              }
+                            }
+                          },
+                          "plan": {
+                            "Hierarchical": {
+                              "Bucketed": {
+                                "aggr_funcs": [
+                                  "MaxInt64"
+                                ],
+                                "buckets": [
+                                  268435456,
+                                  16777216,
+                                  1048576,
+                                  65536,
+                                  4096,
+                                  256,
+                                  16
+                                ]
+                              }
+                            }
+                          },
+                          "mfp_after": {
+                            "mfp": {
+                              "expressions": [],
+                              "predicates": [],
+                              "projection": [
+                                0,
+                                1
+                              ],
+                              "input_arity": 2
+                            }
+                          },
+                          "temporal_bucketing_strategy": "Direct"
+                        }
+                      }
+                    },
+                    {
+                      "lir_id": 11,
+                      "node": {
+                        "Reduce": {
+                          "input_key": null,
+                          "input": {
+                            "lir_id": 10,
+                            "node": {
+                              "Get": {
+                                "id": {
+                                  "Local": 0
+                                },
+                                "keys": {
+                                  "raw": true,
+                                  "arranged": []
+                                },
+                                "plan": {
+                                  "Collection": {
+                                    "mfp": {
+                                      "mfp": {
+                                        "expressions": [],
+                                        "predicates": [],
+                                        "projection": [
+                                          0
+                                        ],
+                                        "input_arity": 2
+                                      }
+                                    },
+                                    "lower_bounds": [],
+                                    "upper_bounds": []
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "key_val_plan": {
+                            "key_plan": {
+                              "mfp": {
+                                "expressions": [],
+                                "predicates": [],
+                                "projection": [
+                                  0
+                                ],
+                                "input_arity": 1
+                              }
+                            },
+                            "val_plan": {
+                              "mfp": {
+                                "expressions": [
+                                  {
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "$row": [
+                                            {
+                                              "Bool": true
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "scalar_type": "Bool",
+                                        "nullable": false
+                                      }
+                                    ]
+                                  }
+                                ],
+                                "predicates": [],
+                                "projection": [
+                                  1
+                                ],
+                                "input_arity": 1
+                              }
+                            }
+                          },
+                          "plan": {
+                            "Accumulable": {
+                              "full_aggrs": [
+                                {
+                                  "func": "Count",
+                                  "expr": {
+                                    "Literal": [
+                                      {
+                                        "Ok": {
+                                          "$row": [
+                                            {
+                                              "Bool": true
+                                            }
+                                          ]
+                                        }
+                                      },
+                                      {
+                                        "scalar_type": "Bool",
+                                        "nullable": false
+                                      }
+                                    ]
+                                  },
+                                  "distinct": false
+                                }
+                              ],
+                              "simple_aggrs": [
+                                [
+                                  0,
+                                  {
+                                    "func": "Count",
+                                    "expr": {
+                                      "Literal": [
+                                        {
+                                          "Ok": {
+                                            "$row": [
+                                              {
+                                                "Bool": true
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        {
+                                          "scalar_type": "Bool",
+                                          "nullable": false
+                                        }
+                                      ]
+                                    },
+                                    "distinct": false
+                                  }
+                                ]
+                              ],
+                              "distinct_aggrs": []
+                            }
+                          },
+                          "mfp_after": {
+                            "mfp": {
+                              "expressions": [],
+                              "predicates": [],
+                              "projection": [
+                                0,
+                                1
+                              ],
+                              "input_arity": 2
+                            }
+                          },
+                          "temporal_bucketing_strategy": "Direct"
+                        }
+                      }
+                    }
+                  ],
+                  "plan": {
+                    "Linear": {
+                      "source_relation": 0,
+                      "source_key": [
+                        {
+                          "Column": [
+                            0,
+                            null
+                          ]
+                        }
+                      ],
+                      "initial_closure": null,
+                      "stage_plans": [
+                        {
+                          "lookup_relation": 1,
+                          "stream_key": [
+                            {
+                              "Column": [
+                                0,
+                                null
+                              ]
+                            }
+                          ],
+                          "stream_thinning": [
+                            1
+                          ],
+                          "lookup_key": [
+                            {
+                              "Column": [
+                                0,
+                                null
+                              ]
+                            }
+                          ],
+                          "closure": {
+                            "ready_equivalences": [],
+                            "before": {
+                              "mfp": {
+                                "expressions": [],
+                                "predicates": [],
+                                "projection": [
+                                  0,
+                                  2,
+                                  1
+                                ],
+                                "input_arity": 3
+                              }
+                            }
+                          }
+                        }
+                      ],
+                      "final_closure": null
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "output": {
+    "Transient": 2
+  }
+}
+EOF
