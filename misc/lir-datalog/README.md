@@ -52,5 +52,6 @@ This follows the plan the optimizer produces for the same query written with `WI
 * `lir_types.py` has a dataclass for every type of the registry and a codec for the JSON that serde_json writes.
   The compiler builds plans only from these types.
 * `datalog2lir.py` is the compiler.
+* `demo/` holds a scripted demo of extracting, editing and installing plans, see `demo/README.md`.
 * `test_datalog2lir.py` holds the tests, run with `python3 -m unittest misc/lir-datalog/test_datalog2lir.py`.
   They check that `lir_types.py` is fresh and that every envelope in the LIR plan sqllogictest files decodes and re-encodes unchanged.
