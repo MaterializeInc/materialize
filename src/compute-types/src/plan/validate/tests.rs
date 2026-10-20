@@ -514,9 +514,7 @@ fn rejects_predicate_before_support() {
 #[mz_ore::test]
 fn rejects_empty_constant() {
     let df = dataflow(&[], vec![(OUT, constant(vec![]))]);
-    let config = ValidateConfig {
-        enforce_function_allowlist: true,
-    };
+    let config = ValidateConfig { user_plan: true };
     let errs = errors_with(&df, &config);
     assert_error(
         &errs,
@@ -607,6 +605,42 @@ fn checks_stated_arity_over_empty_input() {
         Rule::Arity,
         "Union input 1 has arity 3, but input 0 has arity 2",
     );
+}
+
+#[mz_ore::test]
+fn rejects_large_constant_diffs_in_user_plans() {
+    let rows = |diff: Diff| {
+        plan(LirRelationNode::Constant {
+            rows: Ok(vec![
+                (
+                    StableRow(Row::pack_slice(&[Datum::Int64(1)])),
+                    Timestamp::MIN,
+                    Diff::MINUS_ONE,
+                ),
+                (
+                    StableRow(Row::pack_slice(&[Datum::Int64(2)])),
+                    Timestamp::MIN,
+                    diff,
+                ),
+            ]),
+        })
+    };
+    let user = ValidateConfig { user_plan: true };
+    for diff in [Diff::from(2i64), Diff::from(-2i64), Diff::MAX, Diff::MIN] {
+        let df = dataflow(&[], vec![(OUT, rows(diff))]);
+        let errs = errors_with(&df, &user);
+        assert_error(
+            &errs,
+            Rule::Shape,
+            &format!("constant row 1 has diff {diff}, but user plans admit only diffs"),
+        );
+        // Optimizer plans fold constants with any multiplicity.
+        validate_dataflow(&df, &ValidateConfig::default()).expect("valid");
+    }
+    for diff in [Diff::ZERO, Diff::ONE, Diff::MINUS_ONE] {
+        let df = dataflow(&[], vec![(OUT, rows(diff))]);
+        validate_dataflow(&df, &user).expect("valid");
+    }
 }
 
 #[mz_ore::test]
@@ -1119,9 +1153,7 @@ fn chooses_sink_forms() {
         )],
     );
     subscribe(&mut df, OUT, None);
-    let config = ValidateConfig {
-        enforce_function_allowlist: true,
-    };
+    let config = ValidateConfig { user_plan: true };
     validate_dataflow_choosing_sink_forms(&mut df, &config).expect("valid");
     let sink = df.sink_exports.values().next().expect("sink");
     let (key, _) = sink.from_arrangement.as_ref().expect("arrangement chosen");
@@ -1263,9 +1295,7 @@ fn rejects_get_keys_of_wrong_length() {
 }
 
 fn enforced() -> ValidateConfig {
-    ValidateConfig {
-        enforce_function_allowlist: true,
-    }
+    ValidateConfig { user_plan: true }
 }
 
 /// Validates `df` with `config` and returns its errors, which must exist.
@@ -2172,10 +2202,8 @@ fn rejects_accumulable_plan_with_hierarchical_aggregate() {
 fn accepts_bucketed_reduce_without_buckets() {
     let plan = reduce_by_first(raw_t1(), bucketed_reduce_plan(vec![]));
     let df = dataflow(&[(T1, 2)], vec![(OUT, plan)]);
-    for enforce_function_allowlist in [false, true] {
-        let config = ValidateConfig {
-            enforce_function_allowlist,
-        };
+    for user_plan in [false, true] {
+        let config = ValidateConfig { user_plan };
         validate_dataflow(&df, &config).expect("valid");
     }
 }

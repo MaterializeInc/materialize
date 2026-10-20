@@ -29,7 +29,7 @@ use mz_expr::{
 };
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::vec::PartialOrdVecExt;
-use mz_repr::{GlobalId, ReprColumnType, ReprRelationType, ReprScalarType};
+use mz_repr::{Diff, GlobalId, ReprColumnType, ReprRelationType, ReprScalarType};
 use timely::PartialOrder;
 
 use crate::dataflows::LirDataflowDescription;
@@ -102,17 +102,18 @@ impl std::error::Error for ValidationError {}
 /// Options for [`validate_dataflow`].
 #[derive(Clone, Debug, Default)]
 pub struct ValidateConfig {
-    /// User plan mode. Enables the function allowlist and the rules that hold for user plans
-    /// only.
+    /// Whether the dataflow comes from a user, which enables the rules that hold for user
+    /// plans only.
     ///
     /// In user plan mode, function applications must be admitted by [`allowlist`], every
-    /// column must have an inferable type, every object must have an inferable arity, and
-    /// every recursive binding must state an iteration limit. Otherwise functions are typed by
+    /// column must have an inferable type, every object must have an inferable arity, every
+    /// constant row must have a diff between -1 and 1, and every recursive binding must state
+    /// an iteration limit. Otherwise functions are typed by
     /// their output types only, columns whose type cannot be inferred, such as all-null
     /// constant columns, are accepted, an empty object that is neither exported nor read is
     /// accepted, and recursive bindings may lack a limit, as optimizer plans of recursive
     /// queries without one do.
-    pub enforce_function_allowlist: bool,
+    pub user_plan: bool,
 }
 
 /// Validates a dataflow, and returns the output type of every built object.
@@ -490,11 +491,9 @@ impl Validator {
     }
 
     fn for_config(config: &ValidateConfig) -> Self {
-        let ValidateConfig {
-            enforce_function_allowlist,
-        } = config;
+        let ValidateConfig { user_plan } = config;
         Validator::new(Typer {
-            enforce: *enforce_function_allowlist,
+            enforce: *user_plan,
         })
     }
 
@@ -1094,6 +1093,23 @@ impl Validator {
                                 row.iter().count()
                             ),
                         ));
+                    }
+                    // Consolidation and reductions add diffs and joins multiply them, which
+                    // panics a replica on overflow under `ore_overflowing_behavior=panic`.
+                    if typer.enforce {
+                        if let Some((i, (_, _, diff))) = rows
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (_, _, diff))| *diff > Diff::ONE || *diff < Diff::MINUS_ONE)
+                        {
+                            issues.push((
+                                Rule::Shape,
+                                format!(
+                                    "constant row {i} has diff {diff}, but user plans admit only \
+                                     diffs between -1 and 1"
+                                ),
+                            ));
+                        }
                     }
                     let types = typer.constant(&mut issues, rows);
                     Some(Output::Rows(NodeInfo::new(arity, Available::raw(), types)))

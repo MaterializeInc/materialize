@@ -264,9 +264,7 @@ pub fn declared_desc(typ: &ReprRelationType) -> RelationDesc {
 
 /// The validator configuration for user plans.
 fn user_config() -> ValidateConfig {
-    ValidateConfig {
-        enforce_function_allowlist: true,
-    }
+    ValidateConfig { user_plan: true }
 }
 
 fn output_error(message: impl Into<String>) -> ValidationError {

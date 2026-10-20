@@ -854,12 +854,10 @@ impl LirRelationExpr {
 
         soft_assert_eq_no_log!(dataflow.check_invariants(), Ok(()));
 
-        // Optimizer plans must pass the validator that user plans face, minus the
-        // function allowlist, so that its rules do not reject what the optimizer produces.
+        // Optimizer plans must pass the validator that user plans face, minus the rules for
+        // user plans only, so that its rules do not reject what the optimizer produces.
         if mz_ore::assert::soft_assertions_enabled() {
-            let config = validate::ValidateConfig {
-                enforce_function_allowlist: false,
-            };
+            let config = validate::ValidateConfig { user_plan: false };
             if let Err(errors) = validate::validate_dataflow(&dataflow, &config) {
                 let errors = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>();
                 let explain_config = ExplainConfig {

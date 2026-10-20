@@ -156,9 +156,7 @@ pub fn build_dataflow_from_plan(
         ),
     );
 
-    let config = ValidateConfig {
-        enforce_function_allowlist: true,
-    };
+    let config = ValidateConfig { user_plan: true };
     let errors = match validate_dataflow_choosing_sink_forms(&mut df, &config) {
         Ok(types) => output_errors(types.get(&envelope.output), desc),
         Err(errors) => errors,
