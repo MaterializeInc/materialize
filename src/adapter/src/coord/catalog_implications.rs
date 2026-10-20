@@ -88,6 +88,10 @@ impl Coordinator {
     ) -> Result<(), AdapterError> {
         let start = Instant::now();
 
+        for id in webhook_sources_to_restart(&catalog_updates) {
+            self.active_webhooks.remove(&id);
+        }
+
         let mut catalog_implications: BTreeMap<CatalogItemId, CatalogImplication> = BTreeMap::new();
         let mut cluster_commands: BTreeMap<ClusterId, CatalogImplication> = BTreeMap::new();
         let mut cluster_replica_commands: BTreeMap<(ClusterId, ReplicaId), CatalogImplication> =
@@ -1974,6 +1978,52 @@ impl CatalogImplication {
     impl_absorb_method!(absorb_cluster_replica, ClusterReplica, ClusterReplica);
 }
 
+/// Webhooks whose endpoint names changed in a consolidated committed diff.
+fn webhook_sources_to_restart(updates: &[ParsedStateUpdate]) -> BTreeSet<CatalogItemId> {
+    let mut names = BTreeMap::new();
+    for update in updates {
+        let ParsedStateUpdateKind::Item {
+            durable_item,
+            parsed_item,
+            parsed_full_name,
+            ..
+        } = &update.kind
+        else {
+            continue;
+        };
+        let is_webhook = matches!(
+            parsed_item,
+            CatalogItem::Source(Source {
+                data_source: DataSourceDesc::Webhook { .. },
+                ..
+            }) | CatalogItem::Table(Table {
+                data_source: TableDataSource::DataSource {
+                    desc: DataSourceDesc::Webhook { .. },
+                    ..
+                },
+                ..
+            })
+        );
+        if is_webhook {
+            names
+                .entry(durable_item.id)
+                .or_insert(CatalogImplicationKind::None)
+                .transition(parsed_full_name.as_str(), None, update.diff)
+                .expect("webhook updates must be consolidated");
+        }
+    }
+
+    // Schema renames rewrite their items too. Their parsed full names capture
+    // the schema name on each side of the committed change.
+    names
+        .into_iter()
+        .filter_map(|(id, change)| match change {
+            CatalogImplicationKind::Altered { prev, new } if prev != new => Some(id),
+            _ => None,
+        })
+        .collect()
+}
+
 fn partition_cluster_replica_drops(
     clusters_with_creates: &BTreeSet<ClusterId>,
     drops: Vec<(ClusterId, ReplicaId)>,
@@ -2005,6 +2055,116 @@ mod tests {
             is_retained_metrics_object: false,
             data_source: TableDataSource::TableWrites { defaults: vec![] },
         }
+    }
+
+    fn webhook_update(
+        id: u64,
+        full_name: &str,
+        diff: StateDiff,
+        as_table: bool,
+    ) -> ParsedStateUpdate {
+        let data_source = DataSourceDesc::Webhook {
+            validate_using: None,
+            body_format: mz_sql::plan::WebhookBodyFormat::Text,
+            headers: mz_sql::plan::WebhookHeaders::default(),
+            cluster_id: ClusterId::user(1).expect("valid id"),
+        };
+        let mut table = create_test_table("body");
+        let parsed_item = if as_table {
+            table.data_source = TableDataSource::DataSource {
+                desc: data_source,
+                timeline: mz_storage_types::sources::Timeline::EpochMilliseconds,
+            };
+            CatalogItem::Table(table)
+        } else {
+            CatalogItem::Source(Source {
+                create_sql: None,
+                global_id: GlobalId::User(id),
+                data_source,
+                desc: table.desc.latest(),
+                timeline: mz_storage_types::sources::Timeline::EpochMilliseconds,
+                resolved_ids: ResolvedIds::empty(),
+                custom_logical_compaction_window: None,
+                is_retained_metrics_object: false,
+            })
+        };
+        ParsedStateUpdate {
+            kind: ParsedStateUpdateKind::Item {
+                durable_item: mz_catalog::durable::objects::Item {
+                    id: CatalogItemId::User(id),
+                    oid: 1,
+                    global_id: GlobalId::User(id),
+                    schema_id: mz_sql::names::SchemaId::User(1),
+                    name: full_name.rsplit('.').next().expect("item name").to_string(),
+                    create_sql: format!("CREATE SOURCE {full_name} FROM WEBHOOK BODY FORMAT TEXT"),
+                    owner_id: mz_repr::role_id::RoleId::User(1),
+                    privileges: vec![],
+                    extra_versions: BTreeMap::new(),
+                    ephemeral_owner_session: None,
+                },
+                parsed_item,
+                connection: None,
+                parsed_full_name: full_name.to_string(),
+            },
+            ts: mz_repr::Timestamp::MIN,
+            diff,
+        }
+    }
+
+    #[mz_ore::test]
+    fn webhook_item_and_schema_renames_invalidate_both_representations() {
+        for as_table in [false, true] {
+            for new_name in ["db.schema.renamed", "db.renamed.hook"] {
+                let before = webhook_update(1, "db.schema.hook", StateDiff::Retraction, as_table);
+                let after = webhook_update(1, new_name, StateDiff::Addition, as_table);
+                for updates in [
+                    vec![before.clone(), after.clone()],
+                    vec![after.clone(), before.clone()],
+                ] {
+                    assert_eq!(
+                        webhook_sources_to_restart(&updates),
+                        BTreeSet::from([CatalogItemId::User(1)])
+                    );
+                }
+            }
+        }
+    }
+
+    #[mz_ore::test]
+    fn webhook_invalidation_uses_net_names_not_intermediate_operations() {
+        for as_table in [false, true] {
+            let before = webhook_update(1, "db.schema.hook", StateDiff::Retraction, as_table);
+            let after = webhook_update(1, "db.schema.hook", StateDiff::Addition, as_table);
+            // An unchanged endpoint, including a rename away and back, needs no restart.
+            assert!(webhook_sources_to_restart(&[before.clone(), after.clone()]).is_empty());
+            // Create-then-rename has only a final addition. Drops use drop cleanup.
+            assert!(webhook_sources_to_restart(&[after]).is_empty());
+            assert!(webhook_sources_to_restart(&[before]).is_empty());
+        }
+
+        let mut before = webhook_update(1, "db.schema.old", StateDiff::Retraction, true);
+        let mut after = webhook_update(1, "db.schema.new", StateDiff::Addition, true);
+        for update in [&mut before, &mut after] {
+            let ParsedStateUpdateKind::Item { parsed_item, .. } = &mut update.kind else {
+                unreachable!();
+            };
+            *parsed_item = CatalogItem::Table(create_test_table("body"));
+        }
+        assert!(webhook_sources_to_restart(&[before, after]).is_empty());
+    }
+
+    #[mz_ore::test]
+    fn webhook_atomic_name_swap_invalidates_each_item() {
+        let updates = [
+            webhook_update(1, "db.schema.a", StateDiff::Retraction, true),
+            webhook_update(2, "db.schema.b", StateDiff::Retraction, true),
+            webhook_update(2, "db.schema.a", StateDiff::Addition, true),
+            webhook_update(1, "db.schema.b", StateDiff::Addition, true),
+        ];
+        assert_eq!(
+            webhook_sources_to_restart(&updates),
+            BTreeSet::from([CatalogItemId::User(1), CatalogItemId::User(2)])
+        );
     }
 
     #[mz_ore::test]
