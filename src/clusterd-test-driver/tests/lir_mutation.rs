@@ -1290,6 +1290,8 @@ impl Replica {
                 compute_addr,
                 "--storage-controller-listen-addr",
                 &format!("127.0.0.1:{}", free_port()),
+                "--internal-http-listen-addr",
+                &format!("127.0.0.1:{}", free_port()),
                 "--compute-timely-config",
                 &timely(free_port()),
                 "--storage-timely-config",
