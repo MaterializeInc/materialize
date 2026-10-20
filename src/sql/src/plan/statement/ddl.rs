@@ -2884,7 +2884,9 @@ pub fn plan_create_materialized_view(
     let (definition, desc, depends_on, declared_not_null) = match stmt.body {
         MaterializedViewBody::Query(query) => {
             if !stmt.column_defs.is_empty() {
-                sql_bail!("column definitions are only supported with FROM PLAN");
+                return Err(PlanError::InvalidLirPlan(
+                    "column definitions are only supported with FROM PLAN".into(),
+                ));
             }
             let query::PlannedRootQuery {
                 expr,
@@ -2920,7 +2922,9 @@ pub fn plan_create_materialized_view(
         MaterializedViewBody::Plan(json) => {
             scx.require_feature_flag(&vars::ENABLE_LIR_PLANS)?;
             if !stmt.columns.is_empty() {
-                sql_bail!("FROM PLAN requires column definitions");
+                return Err(PlanError::InvalidLirPlan(
+                    "FROM PLAN requires column definitions".into(),
+                ));
             }
             let (desc, declared_not_null) = plan_lir_plan_columns(scx, &stmt.column_defs)?;
             let envelope = lir_plan::parse_user_envelope(&json)?;
@@ -3271,14 +3275,19 @@ fn plan_lir_plan_columns(
     for (position, column) in column_defs.iter().enumerate() {
         let name = normalize::column_name(column.name.clone());
         if !names.insert(name.clone()) {
-            sql_bail!("column {} specified more than once", name.quoted());
+            return Err(PlanError::InvalidLirPlan(format!(
+                "column {} specified more than once",
+                name.quoted()
+            )));
         }
         if column.collation.is_some() {
             bail_unsupported!("COLLATE in FROM PLAN column definitions");
         }
         let scalar_type = query::scalar_type_from_sql(scx, &column.data_type)?;
         if has_type_modifier(&scalar_type) {
-            sql_bail!("type modifiers are not supported in FROM PLAN column definitions");
+            return Err(PlanError::InvalidLirPlan(
+                "type modifiers are not supported in FROM PLAN column definitions".into(),
+            ));
         }
         let mut nullable = true;
         for option in &column.options {

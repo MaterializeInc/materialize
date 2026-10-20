@@ -332,6 +332,13 @@ pub enum PlanError {
         replacement_type: CatalogItemType,
         replacement_name: PartialItemName,
     },
+    /// A user-provided LIR plan, or the statement installing it, is invalid.
+    InvalidLirPlan(String),
+    /// A materialized view defined by an LIR plan has no SQL definition, so only its physical
+    /// plan can be explained.
+    NoSqlDefinition {
+        name: String,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -657,6 +664,10 @@ impl fmt::Display for PlanError {
             Self::Parser(e) => e.fmt(f),
             Self::ParserStatement(e) => e.fmt(f),
             Self::Unstructured(e) => write!(f, "{}", e),
+            Self::InvalidLirPlan(e) => write!(f, "{}", e),
+            Self::NoSqlDefinition { name } => {
+                write!(f, "materialized view {name} has no SQL definition")
+            }
             Self::InvalidId(id) => write!(f, "invalid id {}", id),
             Self::InvalidIdent(err) => write!(f, "invalid identifier, {err}"),
             Self::InvalidObject(i) => write!(f, "{} is not a database object", i.full_name_str()),

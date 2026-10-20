@@ -7970,3 +7970,53 @@ fn test_lir_plan_materialized_view_survives_restart() {
         );
     }
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_lir_plan_errors_are_user_errors() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_lir_plans".into(), "true".into())
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("CREATE TABLE t (a int8 NOT NULL)")
+        .unwrap();
+
+    let plan = r#"{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}"#;
+    let create = |columns: &str, plan: &str| {
+        format!("CREATE MATERIALIZED VIEW m ({columns}) FROM PLAN '{plan}'")
+    };
+    let mut assert_code = |statement: &str, code: &SqlState| {
+        let err = client.batch_execute(statement).unwrap_err();
+        let err = err.as_db_error().expect("db error");
+        assert_eq!(err.code(), code, "{statement}: {}", err.message());
+    };
+
+    let invalid = SqlState::INVALID_OBJECT_DEFINITION;
+    // Planning: envelope parsing, import resolution and column definitions.
+    assert_code(&create("a int8", "not json"), &invalid);
+    let unknown_import = plan.replace(r#""Name":"t""#, r#""Name":"nope""#);
+    assert_code(&create("a int8", &unknown_import), &invalid);
+    assert_code(&create("a int8, a int8", plan), &invalid);
+    // The parser rejects the column definitions, before planning would.
+    assert_code(
+        "CREATE MATERIALIZED VIEW m (a int8) AS SELECT 1",
+        &SqlState::SYNTAX_ERROR,
+    );
+    // Validation: the declared schema does not match the plan's output.
+    assert_code(&create("a text", plan), &invalid);
+    assert_code(&create("a int8, b int8", plan), &invalid);
+    // A plan has no stages before the physical plan to explain.
+    let unsupported = SqlState::FEATURE_NOT_SUPPORTED;
+    let explain_raw = format!("EXPLAIN RAW PLAN FOR {}", create("a int8", plan));
+    assert_code(&explain_raw, &unsupported);
+    let explain_optimized = format!("EXPLAIN OPTIMIZED PLAN FOR {}", create("a int8", plan));
+    assert_code(&explain_optimized, &unsupported);
+
+    client.batch_execute(&create("a int8", plan)).unwrap();
+    let err = client
+        .batch_execute("EXPLAIN RAW PLAN FOR MATERIALIZED VIEW m")
+        .unwrap_err();
+    assert_eq!(err.code(), Some(&unsupported), "{err}");
+}

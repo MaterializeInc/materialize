@@ -536,6 +536,20 @@ EOF
 statement error LIR node 4 \(Join\): Arity
 EXPLAIN PHYSICAL PLAN FOR CREATE MATERIALIZED VIEW e (a int8 NOT NULL, b int8, c text) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"materialize.public.pt"},"persist":true,"indexes":[]},{"id":{"Transient":2},"source":{"Name":"materialize.public.pu"},"persist":false,"indexes":[{"Name":"materialize.public.pu_a"}]}],"objects":[{"id":{"Transient":3},"plan":{"lir_id":4,"node":{"Join":{"inputs":[{"lir_id":2,"node":{"ArrangeBy":{"input_key":null,"input":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}},"input_mfp":{"mfp":{"mfp":{"expressions":[],"predicates":[],"projection":[0,1],"input_arity":2}},"lower_bounds":[],"upper_bounds":[]},"forms":{"raw":true,"arranged":[[[{"Column":[0,"a"]}],[0,1],[1]]]},"strategy":"Direct"}}},{"lir_id":3,"node":{"Get":{"id":{"Global":{"Transient":2}},"keys":{"raw":false,"arranged":[[[{"Column":[0,"a"]}],[0,1],[1]]]},"plan":"PassArrangements"}}}],"plan":{"Linear":{"source_relation":1,"source_key":[{"Column":[0,"a"]}],"initial_closure":null,"stage_plans":[{"lookup_relation":0,"stream_key":[{"Column":[0,"a"]}],"stream_thinning":[1],"lookup_key":[{"Column":[0,"a"]}],"closure":{"ready_equivalences":[],"before":{"mfp":{"expressions":[],"predicates":[],"projection":[0,5,1],"input_arity":3}}}}],"final_closure":null}}}}}}],"output":{"Transient":3}}'
 
+# Only the physical plan of a plan exists.
+
+statement error materialized view materialize\.public\.e has no SQL definition
+EXPLAIN RAW PLAN FOR CREATE MATERIALIZED VIEW e (a int8 NOT NULL, n int8 NOT NULL) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"materialize.public.pt"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":4,"node":{"Mfp":{"input":{"lir_id":3,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}},"mfp":{"mfp":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":2}},"lower_bounds":[],"upper_bounds":[]},"input_key_val":null}}}},{"id":{"Transient":3},"plan":{"lir_id":2,"node":{"Reduce":{"input_key":null,"input":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":2}},"keys":{"raw":true,"arranged":[]},"plan":{"Collection":{"mfp":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":1}},"lower_bounds":[],"upper_bounds":[]}}}}},"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":1}},"val_plan":{"mfp":{"expressions":[{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]}],"predicates":[],"projection":[1],"input_arity":1}}},"plan":{"Accumulable":{"full_aggrs":[{"func":"Count","expr":{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]},"distinct":false}],"simple_aggrs":[[0,{"func":"Count","expr":{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]},"distinct":false}]],"distinct_aggrs":[]}},"mfp_after":{"mfp":{"expressions":[],"predicates":[],"projection":[0,1],"input_arity":2}},"temporal_bucketing_strategy":"Direct"}}}}],"output":{"Transient":3}}'
+
+statement error materialized view materialize\.public\.e has no SQL definition
+EXPLAIN DECORRELATED PLAN FOR CREATE MATERIALIZED VIEW e (a int8 NOT NULL, n int8 NOT NULL) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"materialize.public.pt"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":4,"node":{"Mfp":{"input":{"lir_id":3,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}},"mfp":{"mfp":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":2}},"lower_bounds":[],"upper_bounds":[]},"input_key_val":null}}}},{"id":{"Transient":3},"plan":{"lir_id":2,"node":{"Reduce":{"input_key":null,"input":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":2}},"keys":{"raw":true,"arranged":[]},"plan":{"Collection":{"mfp":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":1}},"lower_bounds":[],"upper_bounds":[]}}}}},"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":1}},"val_plan":{"mfp":{"expressions":[{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]}],"predicates":[],"projection":[1],"input_arity":1}}},"plan":{"Accumulable":{"full_aggrs":[{"func":"Count","expr":{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]},"distinct":false}],"simple_aggrs":[[0,{"func":"Count","expr":{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]},"distinct":false}]],"distinct_aggrs":[]}},"mfp_after":{"mfp":{"expressions":[],"predicates":[],"projection":[0,1],"input_arity":2}},"temporal_bucketing_strategy":"Direct"}}}}],"output":{"Transient":3}}'
+
+statement error materialized view materialize\.public\.e has no SQL definition
+EXPLAIN LOCALLY OPTIMIZED PLAN FOR CREATE MATERIALIZED VIEW e (a int8 NOT NULL, n int8 NOT NULL) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"materialize.public.pt"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":4,"node":{"Mfp":{"input":{"lir_id":3,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}},"mfp":{"mfp":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":2}},"lower_bounds":[],"upper_bounds":[]},"input_key_val":null}}}},{"id":{"Transient":3},"plan":{"lir_id":2,"node":{"Reduce":{"input_key":null,"input":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":2}},"keys":{"raw":true,"arranged":[]},"plan":{"Collection":{"mfp":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":1}},"lower_bounds":[],"upper_bounds":[]}}}}},"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":1}},"val_plan":{"mfp":{"expressions":[{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]}],"predicates":[],"projection":[1],"input_arity":1}}},"plan":{"Accumulable":{"full_aggrs":[{"func":"Count","expr":{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]},"distinct":false}],"simple_aggrs":[[0,{"func":"Count","expr":{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]},"distinct":false}]],"distinct_aggrs":[]}},"mfp_after":{"mfp":{"expressions":[],"predicates":[],"projection":[0,1],"input_arity":2}},"temporal_bucketing_strategy":"Direct"}}}}],"output":{"Transient":3}}'
+
+statement error materialized view materialize\.public\.e has no SQL definition
+EXPLAIN OPTIMIZED PLAN FOR CREATE MATERIALIZED VIEW e (a int8 NOT NULL, n int8 NOT NULL) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"materialize.public.pt"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":4,"node":{"Mfp":{"input":{"lir_id":3,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}},"mfp":{"mfp":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":2}},"lower_bounds":[],"upper_bounds":[]},"input_key_val":null}}}},{"id":{"Transient":3},"plan":{"lir_id":2,"node":{"Reduce":{"input_key":null,"input":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":2}},"keys":{"raw":true,"arranged":[]},"plan":{"Collection":{"mfp":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":1}},"lower_bounds":[],"upper_bounds":[]}}}}},"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":1}},"val_plan":{"mfp":{"expressions":[{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]}],"predicates":[],"projection":[1],"input_arity":1}}},"plan":{"Accumulable":{"full_aggrs":[{"func":"Count","expr":{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]},"distinct":false}],"simple_aggrs":[[0,{"func":"Count","expr":{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]},"distinct":false}]],"distinct_aggrs":[]}},"mfp_after":{"mfp":{"expressions":[],"predicates":[],"projection":[0,1],"input_arity":2}},"temporal_bucketing_strategy":"Direct"}}}}],"output":{"Transient":3}}'
+
 query I
 SELECT count(*) FROM mz_materialized_views WHERE name = 'e'
 ----
@@ -594,7 +608,7 @@ CREATE MATERIALIZED VIEW mvr AS SELECT a, b FROM pt
 statement ok
 CREATE REPLACEMENT MATERIALIZED VIEW rp2 (a int8 NOT NULL, b int8) FOR mvr FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"materialize.public.pt"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}'
 
-statement error cannot read replacement materialized view materialize\.public\.rp2, which is defined by an LIR plan
+statement error reading the replacement materialized view materialize\.public\.rp2 defined by an LIR plan not yet supported
 SELECT * FROM rp2
 
 # Nor can plans.
@@ -609,3 +623,152 @@ DROP MATERIALIZED VIEW p1
 
 statement ok
 DROP INDEX pu_a
+
+# Replacements defined by plans.
+
+reset-server
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_lir_plans = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t1 (a int8)
+
+statement ok
+CREATE TABLE t2 (a int8)
+
+statement ok
+INSERT INTO t1 VALUES (1), (2)
+
+statement ok
+INSERT INTO t2 VALUES (10)
+
+statement ok
+CREATE MATERIALIZED VIEW u AS SELECT a FROM t1 UNION ALL SELECT a FROM t2
+
+# The plan of `SELECT a FROM t1 UNION ALL SELECT a + 1 AS a FROM t2`.
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW r (a int8) FOR u FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t1"},"persist":true,"indexes":[]},{"id":{"Transient":2},"source":{"Name":"t2"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":3},"plan":{"lir_id":5,"node":{"Mfp":{"input":{"lir_id":4,"node":{"Get":{"id":{"Global":{"Transient":2}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}},"mfp":{"mfp":{"mfp":{"expressions":[{"CallBinary":{"func":{"AddInt64":null},"expr1":{"Column":[0,"a"]},"expr2":{"Literal":[{"Ok":{"$row":[{"Int64":1}]}},{"scalar_type":"Int64","nullable":false}]}}}],"predicates":[],"projection":[1],"input_arity":1}},"lower_bounds":[],"upper_bounds":[]},"input_key_val":null}}}},{"id":{"Transient":4},"plan":{"lir_id":3,"node":{"Union":{"inputs":[{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}},{"lir_id":2,"node":{"Get":{"id":{"Global":{"Transient":3}},"keys":{"raw":true,"arranged":[]},"plan":{"Collection":{"mfp":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":1}},"lower_bounds":[],"upper_bounds":[]}}}}}],"consolidate_output":false,"temporal_bucketing_strategies":["Direct","Direct"]}}}}],"output":{"Transient":4}}'
+
+statement ok
+ALTER MATERIALIZED VIEW u APPLY REPLACEMENT r
+
+query I rowsort
+SELECT * FROM u
+----
+1
+11
+2
+
+statement ok
+INSERT INTO t2 VALUES (20)
+
+query I rowsort
+SELECT * FROM u
+----
+1
+11
+2
+21
+
+query T multiline
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW u
+----
+t4:
+  Union
+    Get::PassArrangements materialize.public.t1
+      raw=true
+    Get::Collection t3
+      raw=true
+
+t3:
+  Mfp
+    project=(#1)
+    map=((#0{a} + 1))
+    Get::PassArrangements materialize.public.t2
+      raw=true
+
+Source materialize.public.t1
+Source materialize.public.t2
+
+Target cluster: quickstart
+
+EOF
+
+statement error materialized view materialize\.public\.u has no SQL definition
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW u
+
+# A target with keys cannot be replaced, because the declared schema of a plan has none.
+statement ok
+CREATE TABLE pt (a int8 NOT NULL, b int8)
+
+statement ok
+CREATE MATERIALIZED VIEW k AS SELECT a, count(*) FROM pt GROUP BY a
+
+# The plan of `SELECT a, count(*) FROM pt GROUP BY a`.
+statement error replacement schema differs from target schema
+CREATE REPLACEMENT MATERIALIZED VIEW rk (a int8 NOT NULL, count int8 NOT NULL) FOR k FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"materialize.public.pt"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":4,"node":{"Mfp":{"input":{"lir_id":3,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}},"mfp":{"mfp":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":2}},"lower_bounds":[],"upper_bounds":[]},"input_key_val":null}}}},{"id":{"Transient":3},"plan":{"lir_id":2,"node":{"Reduce":{"input_key":null,"input":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":2}},"keys":{"raw":true,"arranged":[]},"plan":{"Collection":{"mfp":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":1}},"lower_bounds":[],"upper_bounds":[]}}}}},"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":1}},"val_plan":{"mfp":{"expressions":[{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]}],"predicates":[],"projection":[1],"input_arity":1}}},"plan":{"Accumulable":{"full_aggrs":[{"func":"Count","expr":{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]},"distinct":false}],"simple_aggrs":[[0,{"func":"Count","expr":{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]},"distinct":false}]],"distinct_aggrs":[]}},"mfp_after":{"mfp":{"expressions":[],"predicates":[],"projection":[0,1],"input_arity":2}},"temporal_bucketing_strategy":"Direct"}}}}],"output":{"Transient":3}}'
+
+# A plan view importing a materialized view that is replaced.
+statement ok
+CREATE MATERIALIZED VIEW m AS SELECT a FROM t1
+
+# The plan of `SELECT a FROM m WHERE a IS NOT NULL`.
+statement ok
+CREATE MATERIALIZED VIEW pm (a int8 NOT NULL) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"m"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":3,"node":{"Mfp":{"input":{"lir_id":2,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}},"mfp":{"mfp":{"mfp":{"expressions":[],"predicates":[[1,{"CallUnary":{"func":{"Not":null},"expr":{"CallUnary":{"func":{"IsNull":null},"expr":{"Column":[0,"a"]}}}}}]],"projection":[0],"input_arity":1}},"lower_bounds":[],"upper_bounds":[]},"input_key_val":null}}}},{"id":{"Transient":3},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":2}},"keys":{"raw":true,"arranged":[]},"plan":{"Collection":{"mfp":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":1}},"lower_bounds":[],"upper_bounds":[]}}}}}}],"output":{"Transient":3}}'
+
+query I rowsort
+SELECT * FROM pm
+----
+1
+2
+
+query T
+SELECT id FROM mz_materialized_views WHERE name = 'm'
+----
+u8
+
+query B
+SELECT create_sql ~ '"User": 8\s' FROM mz_materialized_views WHERE name = 'pm'
+----
+true
+
+statement ok
+CREATE REPLACEMENT MATERIALIZED VIEW m2 FOR m AS SELECT a + 100 AS a FROM t1
+
+query T
+SELECT id FROM mz_materialized_views WHERE name = 'm2'
+----
+u10
+
+statement ok
+ALTER MATERIALIZED VIEW m APPLY REPLACEMENT m2
+
+query T
+SELECT id FROM mz_materialized_views WHERE name = 'm'
+----
+u10
+
+query I rowsort
+SELECT * FROM pm
+----
+101
+102
+
+statement ok
+INSERT INTO t1 VALUES (3)
+
+query I rowsort
+SELECT * FROM pm
+----
+101
+102
+103
+
+# The stored plan names `m` by its item id after the replacement, `u10`.
+query B
+SELECT create_sql ~ '"User": 10\s' FROM mz_materialized_views WHERE name = 'pm'
+----
+true

@@ -33,6 +33,7 @@ use mz_repr::explain::trace_plan;
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{GlobalId, RelationDesc, ReprRelationType, ReprScalarType};
+use mz_sql::plan::PlanError;
 use mz_sql::plan::lir_plan::version_selector;
 use mz_sql_parser::ast::{MaterializedViewBody, Statement};
 use mz_transform::dataflow::DataflowMetainfo;
@@ -50,7 +51,8 @@ use crate::optimize::materialized_view::{GlobalLirPlan, materialized_view_sink};
 /// The plan's output must have the arity of `desc`, and each of its columns the
 /// [`ReprScalarType`] of the declared column.
 ///
-/// Returns every validation error, one per line, if the plan is invalid.
+/// Returns every validation error, one per line, as a [`PlanError::InvalidLirPlan`] if the
+/// plan is invalid.
 pub fn build_dataflow_from_plan(
     catalog: &CatalogState,
     cluster_id: ComputeInstanceId,
@@ -88,14 +90,14 @@ pub fn build_dataflow_from_plan(
         let id = entry
             .item()
             .global_id_for_version(selector)
-            .ok_or_else(|| anyhow!("{name} has no version {version}"))?;
+            .ok_or_else(|| invalid(format!("{name} has no version {version}")))?;
         let monotonic = builder.monotonic_object(id, &features);
 
         // NOTE: Planning rejects imports of replacements, whose collections queries do not read
         // either ("replacement materialized view ... cannot be depended upon").
         if import.persist {
             if !builder.import_persist_collection(&id, &mut df, monotonic) {
-                return Err(anyhow!("LIR plan cannot read {name} from persist").into());
+                return Err(invalid(format!("LIR plan cannot read {name} from persist")));
             }
         }
 
@@ -109,13 +111,12 @@ pub fn build_dataflow_from_plan(
             let index_entry = catalog.get_entry(item_id);
             let index_name = catalog.resolve_full_name(index_entry.name(), None);
             let CatalogItem::Index(index) = index_entry.item() else {
-                return Err(anyhow!("{index_name} is not an index").into());
+                return Err(invalid(format!("{index_name} is not an index")));
             };
             if index.on != id || index.cluster_id != cluster_id {
-                return Err(anyhow!(
+                return Err(invalid(format!(
                     "{index_name} is not an index on {name} on the cluster of the materialized view"
-                )
-                .into());
+                )));
             }
             builder.import_index_into_dataflow(
                 index.global_id(),
@@ -164,7 +165,7 @@ pub fn build_dataflow_from_plan(
     };
     if !errors.is_empty() {
         let lines: Vec<_> = errors.iter().map(ToString::to_string).collect();
-        return Err(AdapterError::Unstructured(anyhow!("{}", lines.join("\n"))));
+        return Err(invalid(lines.join("\n")));
     }
 
     // Traced where the optimizer traces its physical plans, which `EXPLAIN` reads.
@@ -174,6 +175,11 @@ pub fn build_dataflow_from_plan(
     });
 
     Ok(GlobalLirPlan::from_parts(df, DataflowMetainfo::default()))
+}
+
+/// A user error for an invalid plan.
+fn invalid(message: String) -> AdapterError {
+    PlanError::InvalidLirPlan(message).into()
 }
 
 /// Checks the type of a plan's output against the declared schema `desc`.

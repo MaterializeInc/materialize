@@ -17,6 +17,7 @@ use mz_compute_types::plan::envelope::{envelope_to_json, extract_envelope};
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
+use mz_ore::panic::catch_unwind_with_details;
 use mz_ore::soft_panic_or_log;
 use mz_repr::explain::{ExplainFormat, ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
@@ -27,11 +28,13 @@ use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
+use mz_sql::plan::PlanError;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::controller::CollectionDescription;
 use std::collections::BTreeMap;
+use std::panic::AssertUnwindSafe;
 use timely::progress::Antichain;
 use tracing::Span;
 
@@ -278,15 +281,19 @@ impl Coordinator {
         }
 
         let cardinality_stats = BTreeMap::new();
+        let no_sql_definition = || {
+            let name = self
+                .catalog()
+                .resolve_full_name(self.catalog().get_entry(&id).name(), None);
+            AdapterError::from(PlanError::NoSqlDefinition {
+                name: name.to_string(),
+            })
+        };
 
         let explain = match stage {
             ExplainStage::RawPlan => {
                 let Some(raw_expr) = &view.raw_expr else {
-                    coord_bail!(
-                        "materialized view {} has no SQL definition",
-                        self.catalog()
-                            .resolve_full_name(self.catalog().get_entry(&id).name(), None)
-                    );
+                    return Err(no_sql_definition());
                 };
                 explain_plan(
                     raw_expr.as_ref().clone(),
@@ -300,11 +307,7 @@ impl Coordinator {
             }
             ExplainStage::LocalPlan => {
                 let Some(locally_optimized_expr) = &view.locally_optimized_expr else {
-                    coord_bail!(
-                        "materialized view {} has no SQL definition",
-                        self.catalog()
-                            .resolve_full_name(self.catalog().get_entry(&id).name(), None)
-                    );
+                    return Err(no_sql_definition());
                 };
                 explain_plan(
                     locally_optimized_expr.as_inner().clone(),
@@ -318,11 +321,7 @@ impl Coordinator {
             }
             ExplainStage::GlobalPlan => {
                 if view.raw_expr.is_none() {
-                    coord_bail!(
-                        "materialized view {} has no SQL definition",
-                        self.catalog()
-                            .resolve_full_name(self.catalog().get_entry(&id).name(), None)
-                    );
+                    return Err(no_sql_definition());
                 }
                 let Some(plan) = self.catalog().try_get_optimized_plan(&gid).cloned() else {
                     tracing::error!("cannot find {stage} for materialized view {id} in catalog");
@@ -513,6 +512,14 @@ impl Coordinator {
 
         let (_, view_id) = self.allocate_transient_id();
         let debug_name = self.catalog().resolve_full_name(name, None).to_string();
+        // A plan is traced only as a physical plan, the other stages do not exist.
+        if let (plan::MaterializedViewDefinition::Plan { .. }, ExplainContext::Plan(explain_ctx)) =
+            (&plan.materialized_view.definition, &explain_ctx)
+        {
+            if explain_ctx.stage != ExplainStage::PhysicalPlan {
+                return Err(PlanError::NoSqlDefinition { name: debug_name }.into());
+            }
+        }
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
             .override_from(&self.cluster_scoped_optimizer_overrides(*cluster_id))
@@ -551,16 +558,43 @@ impl Coordinator {
                         let raw_expr = match &plan.materialized_view.definition {
                             plan::MaterializedViewDefinition::Query(raw_expr) => raw_expr.clone(),
                             plan::MaterializedViewDefinition::Plan { envelope, desc, .. } => {
-                                let global_lir_plan = build_dataflow_from_plan(
-                                    catalog.state(),
-                                    plan.materialized_view.cluster_id,
-                                    envelope,
-                                    global_id,
-                                    desc,
-                                    plan.materialized_view.non_null_assertions.clone(),
-                                    plan.materialized_view.refresh_schedule.clone(),
-                                    plan_debug_name,
-                                )?;
+                                // A panic while building or validating a user's plan is a bug,
+                                // reported as an internal error rather than crashing
+                                // `environmentd`.
+                                let build = || {
+                                    build_dataflow_from_plan(
+                                        catalog.state(),
+                                        plan.materialized_view.cluster_id,
+                                        envelope,
+                                        global_id,
+                                        desc,
+                                        plan.materialized_view.non_null_assertions.clone(),
+                                        plan.materialized_view.refresh_schedule.clone(),
+                                        plan_debug_name,
+                                    )
+                                };
+                                let global_lir_plan =
+                                    match catch_unwind_with_details(AssertUnwindSafe(build)) {
+                                        Ok(result) => result?,
+                                        Err(panic) => {
+                                            tracing::error!(
+                                                location = panic
+                                                    .location
+                                                    .as_deref()
+                                                    .unwrap_or("<unknown location>"),
+                                                backtrace = panic
+                                                    .backtrace
+                                                    .as_deref()
+                                                    .unwrap_or("<backtrace unavailable>"),
+                                                message = %panic.message,
+                                                "caught a panic while building an LIR plan dataflow",
+                                            );
+                                            return Err(AdapterError::Internal(format!(
+                                                "unexpected panic while building an LIR plan \
+                                                 dataflow: {panic}"
+                                            )));
+                                        }
+                                    };
                                 return Ok((None, None, global_lir_plan));
                             }
                         };

@@ -24,6 +24,19 @@ use crate::catalog::{CatalogItem, CatalogItemType, SessionCatalog};
 use crate::normalize;
 use crate::plan::PlanError;
 
+/// A [`PlanError::InvalidLirPlan`] with a formatted message.
+macro_rules! lir_err {
+    ($($e:expr),* $(,)?) => {
+        PlanError::InvalidLirPlan(format!($($e),*))
+    }
+}
+
+macro_rules! lir_bail {
+    ($($e:expr),* $(,)?) => {
+        return Err(lir_err!($($e),*))
+    }
+}
+
 /// Parses a user-provided envelope and checks that its placeholder ids are transient.
 ///
 /// Every import and object id must be a `GlobalId::Transient`, and every `Get` of a
@@ -31,15 +44,15 @@ use crate::plan::PlanError;
 /// only through imports.
 pub(crate) fn parse_user_envelope(json: &str) -> Result<LirPlanEnvelope, PlanError> {
     let envelope =
-        mz_compute_types::plan::envelope::parse_envelope(json).map_err(|e| sql_err!("{e}"))?;
+        mz_compute_types::plan::envelope::parse_envelope(json).map_err(|e| lir_err!("{e}"))?;
     for import in &envelope.imports {
         if !import.id.is_transient() {
-            sql_bail!("import id {} in LIR plan must be transient", import.id);
+            lir_bail!("import id {} in LIR plan must be transient", import.id);
         }
     }
     for object in &envelope.objects {
         if !object.id.is_transient() {
-            sql_bail!("object id {} in LIR plan must be transient", object.id);
+            lir_bail!("object id {} in LIR plan must be transient", object.id);
         }
         let mut stack = vec![&object.plan];
         while let Some(expr) = stack.pop() {
@@ -48,7 +61,7 @@ pub(crate) fn parse_user_envelope(json: &str) -> Result<LirPlanEnvelope, PlanErr
             } = &expr.node
             {
                 if !id.is_transient() {
-                    sql_bail!(
+                    lir_bail!(
                         "object {} in LIR plan reads non-transient id {id}, \
                          plans must read catalog relations through imports",
                         object.id
@@ -99,11 +112,11 @@ pub(crate) fn resolve_import<'a>(
         } else {
             "import"
         };
-        sql_bail!("LIR plan cannot {access} {} {name}", item.item_type());
+        lir_bail!("LIR plan cannot {access} {} {name}", item.item_type());
     }
     // A view has no collection of its own, so a plan reads it only through its indexes.
     if item.item_type() == CatalogItemType::View && import.indexes.is_empty() {
-        sql_bail!("LIR plan must import view {name} through at least one index");
+        lir_bail!("LIR plan must import view {name} through at least one index");
     }
     let global_id = item
         .at_version(version_selector(item, version)?)
@@ -114,13 +127,13 @@ pub(crate) fn resolve_import<'a>(
         let (index_item, index_version) = resolve_source(catalog, index, allow_names)?;
         let index_name = catalog.minimal_qualification(index_item.name());
         if !matches!(index_item.index_details(), Some((_, on)) if on == global_id) {
-            sql_bail!("{index_name} is not an index on {name}");
+            lir_bail!("{index_name} is not an index on {name}");
         }
         let index_cluster = index_item
             .cluster_id()
-            .ok_or_else(|| sql_err!("{index_name} is not installed on a cluster"))?;
+            .ok_or_else(|| lir_err!("{index_name} is not installed on a cluster"))?;
         if index_cluster != cluster_id {
-            sql_bail!(
+            lir_bail!(
                 "index {index_name} is on cluster {}, but the materialized view is on cluster {}",
                 catalog.get_cluster(index_cluster).name(),
                 catalog.get_cluster(cluster_id).name(),
@@ -151,18 +164,20 @@ fn resolve_source<'a>(
     match source {
         ImportSource::Name(name) => {
             if !allow_names {
-                sql_bail!("LIR plan import {name} was not resolved to a catalog item");
+                lir_bail!("LIR plan import {name} was not resolved to a catalog item");
             }
             let parsed = mz_sql_parser::parser::parse_item_name(name)
-                .map_err(|e| sql_err!("invalid import name {name} in LIR plan: {e}"))?;
-            let item = catalog.resolve_item(&normalize::unresolved_item_name(parsed)?)?;
+                .map_err(|e| lir_err!("invalid import name {name} in LIR plan: {e}"))?;
+            let item = normalize::unresolved_item_name(parsed)
+                .and_then(|name| Ok(catalog.resolve_item(&name)?))
+                .map_err(|e| lir_err!("{e}"))?;
             let version = item.latest_version().unwrap_or_else(RelationVersion::root);
             Ok((item, version))
         }
         ImportSource::Item { item_id, version } => {
             let item = catalog
                 .try_get_item(item_id)
-                .ok_or_else(|| sql_err!("unknown catalog item {item_id} in LIR plan"))?;
+                .ok_or_else(|| lir_err!("unknown catalog item {item_id} in LIR plan"))?;
             Ok((item, *version))
         }
     }
@@ -179,7 +194,7 @@ pub fn version_selector(
     match item.latest_version() {
         Some(latest) if version <= latest => Ok(RelationVersionSelector::Specific(version)),
         None if version == RelationVersion::root() => Ok(RelationVersionSelector::Latest),
-        _ => sql_bail!("{} has no version {version}", item.name().item),
+        _ => lir_bail!("{} has no version {version}", item.name().item),
     }
 }
 

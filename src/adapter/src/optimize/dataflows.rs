@@ -345,12 +345,13 @@ impl<'a> DataflowBuilder<'a> {
                         // Can't read from replacements, use the view definition directly.
                         let Some(expr) = mview.locally_optimized_expr.as_ref() else {
                             let name = self.catalog.resolve_full_name(entry.name(), None);
-                            return Err(OptimizerError::PlanError(PlanError::Unstructured(
-                                format!(
-                                    "cannot read replacement materialized view {name}, \
-                                     which is defined by an LIR plan"
+                            return Err(OptimizerError::PlanError(PlanError::Unsupported {
+                                feature: format!(
+                                    "reading the replacement materialized view {name} \
+                                     defined by an LIR plan"
                                 ),
-                            )));
+                                discussion_no: None,
+                            }));
                         };
                         self.import_view_into_dataflow(id, expr, dataflow, features)?;
                     }
