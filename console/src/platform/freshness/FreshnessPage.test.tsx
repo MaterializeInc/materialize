@@ -7,15 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { delay, http } from "msw";
 import React from "react";
 import { describe, expect, it } from "vitest";
 
 import { Cluster } from "~/api/materialize/cluster/clusterList";
+import { DatabaseObject } from "~/api/materialize/objects";
 import { SchemaWithOptionalDatabase } from "~/api/materialize/schemaList";
 import { SubscribeError } from "~/api/materialize/SubscribeManager";
+import server from "~/api/mocks/server";
 import { allClusters } from "~/store/allClusters";
+import { allObjects } from "~/store/allObjects";
 import { allSchemas } from "~/store/allSchemas";
 import { renderComponent } from "~/test/utils";
 
@@ -74,15 +78,51 @@ const CLUSTER: Cluster = {
   replicationFactor: 1,
 } as unknown as Cluster;
 
+const PROMPT =
+  "Select a cluster or schema to see the freshness of its objects.";
+
+// One object on CLUSTER, so a selected cluster has something to query.
+const OBJECT = {
+  id: "u10",
+  name: "orders_mv",
+  objectType: "materialized-view",
+  schemaId: "u3",
+  schemaName: "public",
+  databaseId: "u1",
+  databaseName: "materialize",
+  sourceType: null,
+  isWebhookTable: "false",
+  clusterId: "u1",
+  clusterName: "quickstart",
+} as unknown as DatabaseObject;
+
+// Records each SQL request and never answers.
+const recordRequests = () => {
+  const requests: string[] = [];
+  server.use(
+    http.post("*/api/sql", async ({ request }) => {
+      requests.push(new URL(request.url).searchParams.get("query_key") ?? "");
+      await delay("infinite");
+    }),
+  );
+  return requests;
+};
+
 describe("FreshnessPage cluster selection", () => {
   const renderAt = async (search: string) =>
     renderComponent(<FreshnessPage />, {
-      initializeState: (store) =>
+      initializeState: (store) => {
         store.set(allClusters, {
           data: [CLUSTER],
           error: undefined,
           snapshotComplete: true,
-        }),
+        });
+        store.set(allObjects, {
+          data: [OBJECT],
+          error: undefined,
+          snapshotComplete: true,
+        });
+      },
       initialRouterEntries: [search],
     });
 
@@ -95,11 +135,25 @@ describe("FreshnessPage cluster selection", () => {
     expect(screen.queryByText("quickstart")).not.toBeInTheDocument();
   });
 
-  it("still falls back when no cluster is named", async () => {
+  it("waits for a selection rather than loading the first cluster", async () => {
+    // The sidebar's link names no cluster. Loading the first one
+    // alphabetically would spend queries on a cluster nobody asked about.
+    const requests = recordRequests();
     await renderAt("/");
 
+    expect(await screen.findByText(PROMPT)).toBeVisible();
+    expect(screen.getByText("Select a cluster")).toBeVisible();
+    expect(screen.queryByText("quickstart")).not.toBeInTheDocument();
+    expect(requests).toEqual([]);
+  });
+
+  it("loads a cluster a link names", async () => {
+    const requests = recordRequests();
+    await renderAt("/?cluster=u1");
+
     expect(await screen.findByText("quickstart")).toBeVisible();
-    expect(screen.queryByText(/was not found/)).not.toBeInTheDocument();
+    await waitFor(() => expect(requests.length).toBeGreaterThan(0));
+    expect(screen.queryByText(PROMPT)).not.toBeInTheDocument();
   });
 });
 
@@ -126,9 +180,9 @@ describe("FreshnessPage schema scope", () => {
       initialRouterEntries: [search],
     });
 
-  it("names each schema with its database and falls back to the first", async () => {
+  it("names a linked schema with its database", async () => {
     // Both are `public`, so the bare names could not be told apart.
-    await renderAt("/?scope=schema");
+    await renderAt("/?scope=schema&schema=u9");
 
     expect(await screen.findByText("analytics.public")).toBeVisible();
     expect(screen.queryByText("quickstart")).not.toBeInTheDocument();
@@ -156,7 +210,7 @@ describe("FreshnessPage schema scope", () => {
     expect(await screen.findByText(/That schema was not found/)).toBeVisible();
   });
 
-  it("shows the first option of the new scope when the scope changes", async () => {
+  it("waits for a selection when the scope changes", async () => {
     await renderAt("/?cluster=u1");
     expect(await screen.findByText("quickstart")).toBeVisible();
 
@@ -165,7 +219,9 @@ describe("FreshnessPage schema scope", () => {
       "schema",
     );
 
-    expect(await screen.findByText("analytics.public")).toBeVisible();
+    expect(await screen.findByText(PROMPT)).toBeVisible();
+    expect(screen.getByText("Select a schema")).toBeVisible();
+    expect(screen.queryByText("analytics.public")).not.toBeInTheDocument();
     expect(screen.queryByText("quickstart")).not.toBeInTheDocument();
   });
 });

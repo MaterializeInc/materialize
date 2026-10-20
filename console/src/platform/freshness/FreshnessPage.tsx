@@ -329,13 +329,14 @@ const FreshnessPage = () => {
     ),
   );
   const selectedId = scope === "cluster" ? clusterId : schemaId;
-  // An absent param falls back to the first option. A param naming one that
-  // is not there does not: an old link, or one to a dropped or system cluster
-  // or schema, would otherwise show a different one under the name the URL
-  // still carries, and sharing that link would show a third thing again.
+  // Nothing loads until a cluster or schema is chosen, so opening the page
+  // never spends queries on one nobody asked about. A param naming one that
+  // is not there does not fall back either: an old link, or one to a dropped
+  // or system cluster or schema, would otherwise show a different one under
+  // the name the URL still carries.
   const selected = selectedId
     ? options.find((option) => option.id === selectedId)
-    : options[0];
+    : undefined;
   const notFound = Boolean(selectedId) && selected === undefined;
   const pickerProps = {
     ariaLabel: scopeLabels.menu,
@@ -505,9 +506,15 @@ const FreshnessPage = () => {
               typeFilters={objectTypes}
             />
           </AppErrorBoundary>
-        ) : (
+        ) : options.length === 0 ? (
           <Text textStyle="text-small" color={colors.foreground.secondary}>
             No {scopeLabels.plural} to show freshness for.
+          </Text>
+        ) : (
+          // Names both scopes whichever is active, so a reader who arrived by
+          // cluster learns that schemas are on offer too.
+          <Text textStyle="text-small" color={colors.foreground.secondary}>
+            Select a cluster or schema to see the freshness of its objects.
           </Text>
         )}
 
