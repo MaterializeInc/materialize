@@ -20,7 +20,7 @@ use k8s_controller::{
     events::{Event, EventType},
 };
 use k8s_openapi::{
-    api::core::v1::{Affinity, ResourceRequirements, Secret, Toleration},
+    api::core::v1::{Affinity, Probe, ResourceRequirements, Secret, Toleration},
     apimachinery::pkg::apis::meta::v1::{Condition, Time},
     jiff::{SignedDuration, Timestamp},
 };
@@ -97,6 +97,12 @@ pub struct Config {
     pub environmentd_affinity: Option<Affinity>,
     pub environmentd_tolerations: Option<Vec<Toleration>>,
     pub environmentd_default_resources: Option<ResourceRequirements>,
+    /// Overlaid onto the built-in environmentd readiness probe. See
+    /// `generation::environmentd_probe` for the overlay semantics.
+    pub environmentd_default_readiness_probe: Option<Probe>,
+    /// Overlaid onto the built-in environmentd liveness probe. See
+    /// `generation::environmentd_probe` for the overlay semantics.
+    pub environmentd_default_liveness_probe: Option<Probe>,
     /// The name of a `PriorityClass` to assign to environmentd pods, if any.
     pub environmentd_priority_class_name: Option<String>,
     pub clusterd_node_selector: Vec<KeyValueArg<String, String>>,

@@ -328,6 +328,22 @@ environmentd:
       # Setting the memory request to slightly less than limit
       # allows the pod to use swap if enabled at the kubelet.
       memory: "4095Mi"
+  # -- Default readiness probe overrides for environmentd, overlaid onto the
+  # built-in TCP check against the SQL port. Only the fields set here are
+  # changed, and setting a handler (`exec`, `grpc`, `httpGet`, `tcpSocket`)
+  # replaces the built-in one. The Materialize CR's
+  # `environmentdReadinessProbe` is overlaid on top of this.
+  # @notationType -- k8s/probe
+  # @default -- ``{}``
+  defaultReadinessProbe: {}
+  # -- Default liveness probe overrides for environmentd, overlaid onto the
+  # built-in TCP check against the SQL port. Only the fields set here are
+  # changed, and setting a handler (`exec`, `grpc`, `httpGet`, `tcpSocket`)
+  # replaces the built-in one. The Materialize CR's
+  # `environmentdLivenessProbe` is overlaid on top of this.
+  # @notationType -- k8s/probe
+  # @default -- ``{}``
+  defaultLivenessProbe: {}
 
 clusterd:
   # -- Node selector to use for all clusterd pods spawned by the operator

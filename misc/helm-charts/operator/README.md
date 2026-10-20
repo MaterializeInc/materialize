@@ -127,6 +127,8 @@ The following table lists the configurable parameters of the Materialize operato
 | `console.nodeSelector` | Node selector to use for console pods spawned by the operator | ``{}`` |
 | `console.tolerations` | Tolerations to use for console pods spawned by the operator | ``{}`` |
 | `environmentd.affinity` | Affinity to use for environmentd pods spawned by the operator | ``{}`` |
+| `environmentd.defaultLivenessProbe` | Default liveness probe overrides for environmentd, overlaid onto the built-in TCP check against the SQL port. Only the fields set here are changed, and setting a handler (`exec`, `grpc`, `httpGet`, `tcpSocket`) replaces the built-in one. The Materialize CR's `environmentdLivenessProbe` is overlaid on top of this. | ``{}`` |
+| `environmentd.defaultReadinessProbe` | Default readiness probe overrides for environmentd, overlaid onto the built-in TCP check against the SQL port. Only the fields set here are changed, and setting a handler (`exec`, `grpc`, `httpGet`, `tcpSocket`) replaces the built-in one. The Materialize CR's `environmentdReadinessProbe` is overlaid on top of this. | ``{}`` |
 | `environmentd.defaultResources.limits` | Default resource limits for environmentd's CPU and memory if not set in the Materialize CR | ``{"memory":"4Gi"}`` |
 | `environmentd.defaultResources.requests` | Default resources requested for environmentd's CPU and memory if not set in the Materialize CR | ``{"cpu":"1","memory":"4095Mi"}`` |
 | `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``{}`` |
