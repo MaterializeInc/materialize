@@ -1290,7 +1290,7 @@ impl<'a> RunnerInner<'a> {
                 },
             ],
         };
-        let listeners = mz_environmentd::Listeners::bind(listeners_config).await?;
+        let listeners = mz_environmentd::Listeners::bind(listeners_config)?;
         let host_name = format!(
             "localhost:{}",
             listeners.http["external"].handle.local_addr.port()
