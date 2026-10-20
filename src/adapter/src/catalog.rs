@@ -98,8 +98,8 @@ fn transaction_context(
 impl Catalog {
     /// Restore metadata from committed selections and return the notice-row changes.
     ///
-    /// Complete this before publishing the projection or applying another catalog
-    /// batch. DROP derives notice retractions from this projection's metadata,
+    /// Publish these rows with the corresponding catalog update. The metadata
+    /// belongs to this projection because DROP derives notice retractions from it,
     /// independently of whether the selected dataflow has been installed.
     pub(crate) async fn refresh_written_plan_metadata(
         &mut self,

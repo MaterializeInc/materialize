@@ -51,6 +51,17 @@ ownership of locally mutable catalog state and cover durable callers such as
 refresh, allocation and catalog-upper advancement. Bootstrap and prewarming
 semantics remain intact.
 
+The caller inventory and reviews are under `scratch/async-catalog-ownership/`.
+Prerequisites move selected-plan metadata restoration into the catalog and separate
+FIFO table-command submission from acknowledgement. Formatting and scratch adapter
+Clippy pass through `c984bee8`, as do five group-committer and two DDL-completion
+unit tests. The asynchronous owner is not implemented yet.
+Before deferring table acknowledgements, resolve the lifecycle edges in
+`table-lifecycle.md`: physical shard closure must follow successful Forget, not just
+delayed controller cleanup. Protected prewarm runtime table following also reaches
+writable oracle/registration paths, unlike guarded bootstrap. These are static
+findings, not reproduced failures or an explanation of the workload timeouts.
+
 Reuse transaction and request-completion machinery. Keep pending protection,
 definitive write completion and ordered committed effects consistent across the
 boundary. Do not transfer blocking to a shared mutex or an inline reply wait.
@@ -102,7 +113,7 @@ building a larger synchronization harness for M2.
 ## Worker and evidence
 
 Scratch worker: `i-01023ce0e1db179f9`, last recorded expiry
-2026-10-21 05:41:44 UTC. Verify its state and renew within the prompt's approved
+2026-10-22 01:22:35 UTC. Verify its state and renew within the prompt's approved
 budget. Use `bin/ci-builder run stable <command>` for pinned tooling.
 Saved evidence: `~/.local/share/aj/m2-evidence/scratch/`.
 
