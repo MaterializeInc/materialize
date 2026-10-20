@@ -43,19 +43,25 @@ identifies unnecessary protection-index reconstruction during empty storage
 cleanup. The correction is in `0286e789`. Formatting, catalog Clippy and all
 35 catalog transaction tests pass on scratch.
 
-Next, implement the approved periodic-only ownership correction: bounded,
-coalesced advancement/release and bound publication, retaining definitive
-completion, committed effects and exact protection acknowledgement. Do not move
-the wait to a shared mutex. Catalog clones share that mutex, so the lock-independent
-boundary needs resolution first. Reusing the independent-writer machinery requires
-another full catalog follower for fresh-start serving. Client publication also
-requires barrier-busy deferral for foreground grants without blocking dispatch.
-Those concrete costs have been surfaced for a decision before implementation.
-A detached raw Persist appender would introduce new transaction-protocol obligations
-rather than reuse the existing commit path. Acquisition and creator ownership,
-legacy DDL retries, cadence, deadlines and shared arbitration stay unchanged.
-Then run the existing fixed-seed comparison, measuring SQL completion, dispatch
-occupancy and committed-bound advancement separately.
+Next, implement [asynchronous adapter catalog ownership](20260903_decoupled_coordination.md#adapter-catalog-ownership).
+Refactor the existing live catalog owner, not a separate maintenance follower or
+detached Persist appender. This includes foreground scheduling changes needed to
+keep dispatch available, rather than only moving periodic callbacks. Establish
+ownership of locally mutable catalog state and cover durable callers such as
+refresh, allocation and catalog-upper advancement. Bootstrap and prewarming
+semantics remain intact.
+
+Reuse transaction and request-completion machinery. Keep pending protection,
+definitive write completion and ordered committed effects consistent across the
+boundary. Do not transfer blocking to a shared mutex or an inline reply wait.
+General retry frameworks, shared arbitration, SQL behavior changes and the M3
+process split remain outside this correction. Surface disproportionate scope
+rather than expanding silently.
+
+After focused ownership/concurrency review, run the existing fixed-seed comparison.
+Measure SQL completion, dispatch occupancy, committed-bound advancement and
+memory/I/O cost separately. Preserve deadlines, the 1s cadence and workload
+resources. Removing dispatch blockage does not establish shared-write progress.
 
 Evidence: `scratch/maintenance-append-repeat/report.md`, `cpu-analysis/report.md`
 and `minio-sizing.md` within that directory. No further experiment or resource
@@ -66,16 +72,14 @@ This comparison is the decision point:
 - If the contention failure is resolved, continue combined verification, remaining
   integration repairs and history cleanup. Do not expand M2 acceptance.
 - If foreground stalls remain, bring Aljoscha the evidence, remaining uncertainty
-  and a recommended correction at its owning boundary before another optimization
-  series or statement-by-statement continuation expansion. Distinguish inline
-  retry responsiveness from shared-write arbitration. State the tradeoff in SQL
-  progress, compaction delay/retained history and added coordination.
+  and a recommended correction before expanding beyond this ownership refactor.
+  Distinguish dispatch responsiveness from shared-write arbitration. State the
+  tradeoff in SQL progress, compaction delay/retained history and added coordination.
 - An inconclusive run permits a bounded diagnostic follow-up, not an assumed
   fix or an open-ended instrumentation campaign. Escalate if obtaining a useful
   comparison itself requires substantial work.
 
 Shared content-priority signals and arbitration changes are not approved.
-Independent integration fixes can continue while a design decision is pending.
 
 ## Other work and scope
 
