@@ -4,10 +4,10 @@ Findings from the prototype of [user-provided LIR plans](./20261019_user_provide
 
 ## Summary
 
-The prototype shows that an LIR plan from outside the optimizer can be extracted, edited, validated, installed as a materialized view, swapped under an existing view, and reloaded after a restart.
-`test_lir_plan_materialized_view_survives_restart` and `test_lir_plan_errors_are_user_errors` in `src/environmentd/tests/server.rs`, `test/sqllogictest/lir_plans.slt`, and the recorded demo in `misc/lir-datalog/demo/` cover these steps end to end.
-The validator in `src/compute-types/src/plan/validate.rs` and its submodules ran on every optimizer plan of the SLT sweeps under soft assertions without a failure after four validator bugs were fixed, and a mutation test of about 17,500 mutants found no accepted plan that crashed or stalled a replica.
-A toy Datalog compiler in `misc/lir-datalog` targets the format with Python types generated from the serde registry, and every plan it compiled validated on its first submission.
+The prototype shows that an LIR plan from outside the optimizer can be extracted, edited, validated, installed as a materialized view, swapped under an existing view, and reloaded after a restart, as `test_lir_plan_materialized_view_survives_restart` in `src/environmentd/tests/server.rs`, `test/sqllogictest/lir_plans.slt`, and the demo in `misc/lir-datalog/demo/` show end to end.
+The validator in `src/compute-types/src/plan/validate.rs` and its submodules runs on every optimizer plan under soft assertions, and `bin/sqllogictest --optimized` over the SLT files listed in [Extraction](#extraction) passes after four validator fixes (commits `737d0ddbcf`, `5c54785f21`, `80b7fe492d`, `8ffad63147`).
+The mutation test `src/clusterd-test-driver/tests/lir_mutation.rs`, run against a replica with its default seed in a local run on 2026-10-20, generated 1598 mutants, rendered the 429 it accepted, and passed, which requires zero crashes and stalls (see [Panics and the mutation test](#panics-and-the-mutation-test)).
+A toy Datalog compiler in `misc/lir-datalog` targets the format with Python types generated from the serde registry, and its plans validate and match SQL in `test/sqllogictest/lir_plans_datalog.slt`.
 The prototype does not show that the validator is sound in general, it says nothing about production readiness or format compatibility, and it accepts no key or monotonicity claims, which the sections below explain.
 
 ## Persist shards as first-class objects
@@ -15,20 +15,19 @@ The prototype does not show that the validator is sound in general, it says noth
 A `FROM PLAN` view is a materialized view with the SQL split off: a persist shard, a declared `RelationDesc`, and a dataflow that writes to the shard.
 The catalog item keeps the `CatalogItem::MaterializedView` shape with `raw_expr` and `locally_optimized_expr` made optional (`src/catalog/src/memory/objects.rs:1421`, commit `cf61aa6e12`), and its description comes from the declared column definitions without keys.
 Boot reads the plan back from `create_sql`, validates it again, and bypasses the expression cache (`src/adapter/src/coord.rs:3639`).
-Every place that assumed a SQL definition needed a plan-only branch, which the next paragraph lists.
+Every place that assumed a SQL definition needed a plan-only branch, listed below.
 These branches are the shape of the shard object the spec asks about, since each one separates the shard from the definition that writes it.
-
-The seams the prototype hit are the following.
 
 * `EXPLAIN RAW`, `LOCALLY OPTIMIZED` and `OPTIMIZED PLAN` of a plan view report `has no SQL definition` (`PlanError::NoSqlDefinition`, `src/sql/src/plan/error.rs:337`).
 * SQL queries cannot read a replacement defined by a plan, because there is no definition to inline (`src/adapter/src/optimize/dataflows.rs:351`, `src/adapter/src/coord/indexes.rs:59`).
 * Timeline checks walk the view's catalog dependencies instead of its MIR (`src/adapter/src/catalog/timeline.rs:228`).
 * Read-then-write statements take the view's temporal filters from the temporal bounds of its installed physical plan (`src/adapter/src/coord/read_then_write.rs:309`). A plan view's dependencies include the indexes it reads, which reached the `unreachable!()` for indexes at `read_then_write.rs:348` before the walk skipped them at `read_then_write.rs:328`. This was found by reading the code, not observed.
 * A sink's `from_arrangement` is chosen by lowering for optimizer plans. For a plan, `validate_dataflow_choosing_sink_forms` (`src/compute-types/src/plan/validate.rs:139`) chooses it the same way, the raw collection if available and otherwise the first available arrangement, which needs the validator's simulation of available forms (test `chooses_sink_forms`).
+* Most `PlanError`s report SQLSTATE `XX000`, so the `FROM PLAN` path uses `PlanError::InvalidLirPlan` (`42P17`) for invalid plans and `PlanError::NoSqlDefinition` (`0A000`) for EXPLAIN stages a plan does not have, while errors shared with all SQL, such as a disabled feature flag, still report `XX000` (`src/adapter/src/error.rs:1001`, test `test_lir_plan_errors_are_user_errors`).
 
 A first-class shard object would own the name, the `RelationDesc` and the shard, and would take its writer as a separate attachment, a SQL definition or a plan.
 Replacement already behaves this way: `CREATE REPLACEMENT MATERIALIZED VIEW ... FOR target FROM PLAN` installs a read-only second writer for the target's shard, and `APPLY REPLACEMENT` swaps it in (`lir_plans.slt`, and step 6 of the demo).
-Plan views that import a replaced SQL materialized view keep running and read its new definition (`lir_plans.slt`, Task 12).
+Plan views that import a replaced SQL materialized view keep running and read its new definition (`lir_plans.slt:734` and `:772` check the rewritten import id).
 The prototype did not build such an object, so this is the design the seams suggest, not a tested one.
 Reading a shard without a definition is exactly what the replacement read error above refuses today.
 
@@ -62,13 +61,13 @@ The envelope is also parsed up to three times per statement, by name resolution,
 
 `EXPLAIN PHYSICAL PLAN AS LIR JSON FOR MATERIALIZED VIEW` prints the envelope of an installed view (`extract_envelope`, `src/compute-types/src/plan/envelope.rs:255`), and other explainees and stages are rejected.
 Extraction replaces each source import's pushed-down operators with a leading `Mfp` object over the raw import, planned with `MapFilterProject::into_plan` as rendering does, because translating to LIR first fails on the `mz_now()` of temporal predicates.
-Under soft assertions, `check_extract_round_trip` (`envelope.rs:424`) extracts, prints, parses, and maps back every optimizer dataflow, and the sweep of 6146 SLT records, including TPC-H, LDBC BI, `WITH MUTUALLY RECURSIVE`, temporal filters, and every builtin index at startup, had no mismatch (Task 9).
+Under soft assertions, `check_extract_round_trip` (`envelope.rs:424`) extracts, prints, parses, and maps back every optimizer dataflow, and `bin/sqllogictest --optimized -- test/sqllogictest/lir_plans_explain.slt` plus `test/sqllogictest/explain/*.slt`, `materialized_views.slt`, `joins.slt`, `topk.slt`, `with_mutually_recursive.slt`, `temporal.slt`, `aggregates.slt`, `ldbc_bi.slt`, `ldbc_bi_eager.slt`, `tpch_create_index.slt`, `tpch_create_materialized_view.slt`, `tpch_select.slt`, `transform/*.slt`, `transform/fold_vs_dataflow/*.slt`, `session-window-wmr.slt`, `recursive_type_unioning.slt`, `window_funcs.slt`, `outer_join.slt`, `subquery.slt`, `temporal_bucketing.slt`, `reduce_mfp.slt`, `group_size_hints.slt`, `jsonb.slt`, `list.slt`, `record.slt`, `arrays.slt` and `map.slt` passed with no mismatch, 5746 records including every builtin index at startup, in local runs on 2026-10-20 at commit `28edf0d50d`.
 The pushdown object costs performance that was not measured: rendering passes source operators to `persist_source`, which reads only the demanded columns and filters while decoding, while an `Mfp` object sees full-width rows.
 A relation that has both a persist import with non-identity operators and index imports cannot be extracted, because the pushdown object would hide the indexes, and the sweep produced no such dataflow (test `extract_rejects_pushdown_on_indexed_relation`).
 
-The deepest optimizer envelope in the sweep nests 128 JSON levels for SLT queries and 107 for builtin indexes (`mz_internal.pg_type_all_databases_ind`).
+In one local run before commit `fa03b94f0c`, with a temporary probe printing the JSON depth in `check_extract_round_trip`, the deepest optimizer envelope of the sweep nested 128 JSON levels for SLT queries and 107 for builtin indexes (`mz_internal.pg_type_all_databases_ind`).
 A chain of 400 views of `SELECT DISTINCT a + 1 ... WHERE`, built into one materialized view, nests 816 levels, against `MAX_JSON_DEPTH` of 4096 (`envelope.rs:117`).
-The optimizer rejects a chain of 800 such views with "exceeded recursion limit of 2048" before lowering, so optimizer plans stay under the cap.
+A local probe of a chain of 800 such views failed in the optimizer with "exceeded recursion limit of 2048" before lowering, so optimizer plans stay under the cap.
 `envelope_to_json` writes rows without a readable form, for example intervals, as `StableRow`'s default byte-array serialization, which `parse_envelope` accepts, so such plans round trip but are not writable by hand (test `extract_then_parse_roundtrip`).
 
 ## Function allowlist exclusions
@@ -117,17 +116,17 @@ The registry describes the shape of the format faithfully, but four details of t
 
 The semantics of the format are not in the registry, and the compiler learned them from optimizer envelopes of the equivalent `WITH MUTUALLY RECURSIVE` views and from the validator's errors.
 Arrangement layouts must be recomputed with `permutation_for_arrangement`, a join closure reads the row `key ++ stream values ++ lookup values` after thinning, a `Reduce` produces only its arrangement so a binding needs an `ArrangeBy` with `input_key` to form the raw collection, `LetRec` values must provide raw collections, and an MFP predicate states the number of columns it needs.
-With those modeled on the optimizer's plan, every compiled plan validated on its first submission, including a transitive closure, mutual recursion in one `LetRec`, a `Let` chain, a three-way linear join, an equality filter, and a cross join on the empty key (`test/sqllogictest/lir_plans_datalog.slt`).
+With those modeled on the optimizer's plan, every compiled plan in `test/sqllogictest/lir_plans_datalog.slt` validates and matches its SQL counterpart, including a transitive closure, mutual recursion in one `LetRec`, a `Let` chain, a three-way linear join, an equality filter, and a cross join on the empty key.
 Two further obstacles concern the SQL surface: a `LetRec` limit with `return_at_limit: false` reports the SQL error text "Use RETURN AT RECURSION LIMIT to not error ...", which names syntax a plan author never wrote (`lir_plans_datalog.slt:77`), and `CREATE MATERIALIZED VIEW name () FROM PLAN` does not parse, so a plan cannot output a relation without columns, although zero-arity relations validate and render inside a plan (the `guarded` case in `lir_plans_datalog.slt`).
 A format meant for outside producers needs these semantics documented next to the registry, which the [JSON Schema section](#a-json-schema-for-the-format) returns to.
 
 ## Compatibility promise and pinned LIR
 
 A user plan needs a stronger promise than pinned LIR's best effort, because it has no SQL to fall back to.
-The pinned LIR design starts as best effort, where "at any point, we may simply throw up our hands and replan" (`20260826_pinned_lir.md:175`), while a plan view has no SQL definition to replan from (`PlanError::NoSqlDefinition`).
-The prototype stores the plan in `create_sql`, validates it again on every boot, and panics `environmentd` when it fails (`src/adapter/src/coord.rs:3639` to `:3673`), as the spec accepts for a prototype.
+The pinned LIR design starts as best effort, where "at any point, we may simply throw up our hands and replan" (`20260826_pinned_lir.md:176`), while a plan view has no SQL definition to replan from (`PlanError::NoSqlDefinition`).
+The prototype stores the plan in `create_sql`, validates it again on every boot, and panics `environmentd` when it fails (the boot arm at `src/adapter/src/coord.rs:3639` panics at `coord.rs:3673`), as the spec accepts for a prototype.
 A stored plan can fail for two reasons: an `LIR_VERSION` change, which `parse_envelope` rejects with `EnvelopeError::Version`, or a change to what the validator accepts.
-Validator rules changed several times during the prototype, for example when the optimizer sweep removed a rule on bucketed reductions without buckets and scaled the `LetRec` pass limit with the bindings (Task 8), and a rule added after a plan is stored fails that plan at boot, so validator rules are part of the format a promise would cover.
+Validator rules changed several times during the prototype, for example when the optimizer sweep removed a rule on bucketed reductions without buckets (`737d0ddbcf`) and scaled the `LetRec` pass limit with the bindings (`8ffad63147`), and a rule added after a plan is stored fails that plan at boot, so validator rules are part of the format a promise would cover.
 
 A promise for user plans would have to cover three things: the serde shape, which `LIR_VERSION` and the `lir_schema` snapshot already track (`LIR_VERSION_POLICY`, `src/compute-types/src/plan.rs:232`), the validator rules, which nothing versions today, and the semantics of each operator, which the registry does not describe.
 Once a version ships, a stored user plan at an old version needs a migration to the new one, not a replan, which conflicts with pinned LIR's plan to treat migrations as best effort.
@@ -138,7 +137,7 @@ What should happen at boot when a stored user plan no longer validates, an open 
 
 The validator accepts no claims, and the demo's improvement needed none.
 The optimizer plans the demo's semi-join on `a = x OR b = x` as a cross join on arrangements by the empty key, and a union of one equi-join per equality under the same distinct reduction computes the same result, which the validator checks structurally.
-The monotonic-aggregate candidate of the spec gave no demo, because user plans take import monotonicity from the same catalog analysis as the optimizer, and the MIR and LIR analyses agreed on every operator checked (Task 15).
+The monotonic-aggregate candidate of the spec gave no demo, because user plans take import monotonicity from the same catalog analysis as the optimizer (`DataflowBuilder::monotonic_object`, `src/adapter/src/optimize/dataflows.rs:528`, called from `src/adapter/src/optimize/from_plan.rs:94`), and no gap between the MIR and LIR monotonicity analyses was found.
 So the prototype found no demo-relevant optimization that needs a trusted claim.
 The candidates users would want are monotonicity beyond what the catalog marks and keys, which the following paragraphs take in turn.
 
@@ -162,14 +161,18 @@ The demo is evidence that at least one class of plan improvements, splitting a d
 
 The mutation test found no rendering or evaluation panic that the validator did not prevent.
 `src/clusterd-test-driver/tests/lir_mutation.rs` applies 28 mutation operators to 8 optimizer base plans (join with an index import, reduce, top-k, `LetRec` transitive closure, temporal filter, constant, and monotonic variants of reduce and top-k), validates each mutant in user plan mode under `catch_unwind`, and renders every accepted mutant on a replica that runs with `MZ_SOFT_ASSERTIONS=1` and `ore_overflowing_behavior=panic`.
-Over 11 seeds, about 17,500 mutants were generated and about 4,700 accepted and rendered, with zero validator panics, crashes, stalls, or panic lines in the replica log (Task 13), and a self-check confirms that the harness detects a crash (SIGABRT at `src/expr/src/linear.rs:1670`).
-The coverage of accepted mutants is weak: about 60% of them come from benign operators (`generic_int`, `lir_id`, `generic_array`), and some operators apply rarely, so the result shows soundness against single local mutations of these shapes, not in general.
+The test asserts zero failures and, with the default 200 mutants per base, at least 1000 mutants, and it runs with the command in its module doc (`LIR_MUTATION_CLUSTERD`, `COCKROACH_URL`, `LIR_MUTATION_CLUSTERD_WRAPPER='memcap 4G'`).
+Before the mutants, a self-check renders a plan that projects past the last column and asserts that the replica crashes, which the index `datums[*c]` at `src/expr/src/linear.rs:1670` causes.
 The replica phase is not wired into CI and runs only with `LIR_MUTATION_CLUSTERD` and `COCKROACH_URL` set.
+
+In local runs on 2026-10-20 at commit `0853e9906c`, the default seed `0x5eed0013` generated 1598 mutants, of which 77 did not parse, 1092 were rejected, and 429 were accepted and rendered, and `LIR_MUTATION_SEED` 1 to 10 each accepted 415 to 438, all without a validator panic, crash, stall, or panic line in the replica log.
+Across the 11 seeds, about 17,500 mutants were generated and about 4,700 rendered, and a rerun at the same seed and commit draws the same mutants, since each comes from the fixed seed.
+The coverage of accepted mutants is weak: in those runs, about 60% of them came from benign operators (`generic_int`, `lir_id`, `generic_array`), and some operators apply rarely, so the result shows soundness against single local mutations of these shapes, not in general.
 
 The one failure was in the harness and is a finding about consumers of user-defined collections.
 The validator accepts constant rows with any diff, including `i64::MAX`, and the replica rendered and persisted such a mutant without trouble, since collections carry multiplicities.
-The harness's read-back expanded the sink output into one row per copy and reached its 24 GiB cap, until it counted multiplicities instead (`Driver::peek_count`, `src/clusterd-test-driver/src/driver.rs:206`, commit `481e769051`).
-Crafted diffs can also overflow the `count` and `sum` accumulators of a reduction, which panics under `ore_overflowing_behavior=panic`, as CI runs, and soft-panics in production, and the type rules do not bound diffs.
+The harness's read-back expanded the sink output into one row per copy and exhausted the test's memory, until it counted multiplicities instead (`Driver::peek_count`, `src/clusterd-test-driver/src/driver.rs:206`, commit `481e769051`).
+Crafted diffs can also overflow the `count` and `sum` accumulators of a reduction, as reading `src/compute/src/render/reduce.rs` shows, which panics under `ore_overflowing_behavior=panic`, as CI runs, and soft-panics in production, and the type rules do not bound diffs.
 Readers of collections that user plans define must not assume small diffs.
 
 The panic sites the validator rejects were found by reading rendering and evaluation code, and each has a unit test in `src/compute-types/src/plan/validate/tests.rs`.
@@ -193,12 +196,12 @@ The allowlist, not the type rules alone, is what keeps validated plans away from
 
 The validator never recurses without a guard and bounds its total work, with four limits.
 
-* Depth: the walk runs under a `RecursionGuard` with `RECURSION_LIMIT` of 2048 operators (`src/compute-types/src/plan/validate.rs:478`, `src/expr/src/relation.rs:70`, test `deep_plan_does_not_overflow`). The JSON cap `MAX_JSON_DEPTH` of 4096 levels admits about 1360 nested single-input operators, since a nested `Negate` costs three levels, so the JSON depth, not the validator, bounds the depth of user plans. No SQL reached the 2048 limit in the probes, since the SQL parser rejects 200 nested subqueries and the optimizer rejects a chain of 800 views (Task 8).
-* Work budget: every operator visit is charged its own serialized content (`src/compute-types/src/plan/validate/cost.rs`), constants by the encoded length of their rows, plus the width of its output, and the budget is `WORK_BUDGET` (1,000,000) plus `PLAN_SIZE_FACTOR` (8) times the content of the plan and the width of its imports (`validate.rs:325`, `:332`, `:606`, `:1740`). The builtin `mz_catalog.mz_views`, which holds a constant of the builtin views' SQL, needs 686,385 units for one pass against a budget of 6,490,568, the tightest of 947 distinct optimizer dataflows. All others have 17.5 times headroom or more, and the largest non-builtin plan used 16,008 of 1,044,168.
+* Depth: the walk runs under a `RecursionGuard` with `RECURSION_LIMIT` of 2048 operators (`src/compute-types/src/plan/validate.rs:478`, `src/expr/src/relation.rs:70`, test `deep_plan_does_not_overflow`). The JSON cap `MAX_JSON_DEPTH` of 4096 levels admits about 1360 nested single-input operators, since a nested `Negate` costs three levels, so the JSON depth, not the validator, bounds the depth of user plans. No SQL reached the 2048 limit in local probes while developing commits `09def05de9` to `8ffad63147`, since the SQL parser rejected 200 nested subqueries and the optimizer rejected a chain of 800 views.
+* Work budget: every operator visit is charged its own serialized content (`src/compute-types/src/plan/validate/cost.rs`), constants by the encoded length of their rows, plus the width of its output, and the budget is `WORK_BUDGET` (1,000,000) plus `PLAN_SIZE_FACTOR` (8) times the content of the plan and the width of its imports (`validate.rs:325`, `:332`, `:606`, `:1740`). The builtin `mz_catalog.mz_views`, which holds a constant of the builtin views' SQL, needs about 686,000 units for one pass (commit `d336b98743`). In one local run on 2026-10-19 at commit `d336b98743`, with a temporary print of work and budget in `validate_dataflow` over `bin/sqllogictest --optimized` of `with_mutually_recursive.slt`, `ldbc_bi.slt`, `ldbc_bi_eager.slt`, `tpch_create_index.slt`, `tpch_create_materialized_view.slt`, `tpch_select.slt`, `transform/*.slt`, `transform/fold_vs_dataflow/*.slt`, `session-window-wmr.slt` and `recursive_type_unioning.slt`, its budget was 6,490,568, the tightest of 947 distinct dataflows, all others had 17.5 times headroom or more, and the largest non-builtin plan used 16,008 of 1,044,168 units.
 * `LetRec` passes: the values of a `LetRec` are visited until the binding types reach a fixpoint, at most `LET_REC_TYPE_ITERATIONS` (64) passes per binding (`validate.rs:307`, `:1533`). A chain where each binding reads a later one, as `WITH MUTUALLY RECURSIVE` produces when each definition reads the next, needs one pass per binding (test `infers_types_of_long_reversed_binding_chains`). Nested `LetRec`s multiply the visits of the values inside them, which the work budget bounds (tests `bounds_work_on_deeply_nested_let_rec`, `bounds_work_on_large_constant_in_nested_let_rec`).
 * Type size: column types are trees, and a type of more than `TYPE_SIZE_LIMIT` (256) nodes is unknown (`src/compute-types/src/plan/validate/types.rs:66`), which bounds each clone, comparison and unification by a constant. In user plans such a type is reported where it arises, and every function application or check that meets an unknown type is rejected (tests `rejects_oversized_literal_type_when_enforced`, `rejects_oversized_source_column_type_when_enforced`, `bounds_work_on_copies_of_large_column_types`).
 
-Without the content and width charges, a constant of many rows or a wide collection visited many times inside nested `LetRec`s costs orders of magnitude more than its visit count: with the charges clamped to one unit, `bounds_work_on_large_constant_in_nested_let_rec` and `bounds_work_on_wide_union` ran for more than 60 s, and with them they return the budget error in under 2 s in a debug build (Task 8).
+Without the content and width charges, a constant of many rows or a wide collection visited many times inside nested `LetRec`s costs orders of magnitude more than its visit count: in one local run on 2026-10-19 with the charges clamped to one unit by a temporary edit, `cargo test -p mz-compute-types --lib bounds_work_on_large_constant_in_nested_let_rec` and `bounds_work_on_wide_union` ran for more than 60 s, and with the charges both return the budget error in under 2 s in a debug build.
 Local bindings are looked up through a map from id to a stack of positions, since a `LetRec` binds all its ids at once and a linear scan per `Get` costs quadratic work (test `resolves_many_locals_quickly`).
 A validation of nested `LetRec`s that used up 1,000,000 units took 0.2 s in a debug build, and one of a plan of 200,000 operators that used up 17,000,000 units took 5 s (`WORK_BUDGET` doc).
 The budget scales with the plan's content, so a large plan passes and only amplification is rejected.
@@ -207,21 +210,20 @@ The budget scales with the plan's content, so a large plan passes and only ampli
 
 `test/sqllogictest/recursion_limit.slt` overflows the stack of a `tokio-rt-worker` thread in `environmentd` on its first query, which has 388 `UNION`s, independent of this work.
 A gdb backtrace shows the derived `Clone` of the SQL AST (`SetExpr::clone`, recursing through `Box<SetExpr>`), called from `mz_adapter::frontend_peek::try_frontend_peek`, with no frame in any code this work adds.
-The same file and stack reproduce at `d3b5806a06`, which adds only design documents on top of upstream main (Task 8, commit `6214fd7b86`).
+The same file and stack reproduced on 2026-10-19 with `bin/sqllogictest --optimized -- test/sqllogictest/recursion_limit.slt` in a worktree at `d3b5806a06`, which adds only design documents on top of upstream main.
 The overflow therefore predates the validator and the rest of this work, and it needs its own fix in the adapter.
 It also kept `recursion_limit.slt` out of the validator sweep.
 
-Whether a bucketed hierarchical reduce without buckets can panic was open after Task 7, and the answer is that it cannot.
+Whether a bucketed hierarchical reduce without buckets can panic was open while the operator rules were written, and the answer is that it cannot.
 Lowering emits that shape when the expected group size is at most 16 (`bucketing_of_expected_group_size`, `src/compute-types/src/plan.rs:1035`), and the builtin index `mz_wallclock_global_lag_recent_history_ind` has it and renders at every startup.
 `build_bucketed` takes the first modulus as 1 (`src/compute/src/render/reduce.rs:872`), and its final stage validates the input when no bucket stage did (`reduce.rs:955`), so `err_output.expect` cannot fail.
-A materialized view with `AGGREGATE INPUT GROUP SIZE = 1`, which plans `buckets=[]`, returned correct results across inserts and deletes, and the validator rule that rejected the shape was removed (test `accepts_bucketed_reduce_without_buckets`).
-This is the only rule the optimizer sweep removed.
-Of the other three sweep failures, one restricted the empty-constant arity rule to user plans and two were gaps in the validator's arity and type inference.
+In a local probe, a materialized view with `AGGREGATE INPUT GROUP SIZE = 1`, which plans `buckets=[]`, returned correct results across inserts and deletes, and the validator rule that rejected the shape was removed (test `accepts_bucketed_reduce_without_buckets`).
+This is the only rule the optimizer sweep removed (`737d0ddbcf`), and of the other three sweep failures, one restricted the empty-constant arity rule to user plans (`5c54785f21`) and two were gaps in the validator's arity and type inference (`80b7fe492d`, `8ffad63147`).
 
 ## A JSON Schema for the format
 
 A JSON Schema derived with `schemars` is the long-term option for describing the format to outside producers, since standard tooling generates types and validators from it.
-The prototype generated Python types from the serde registry `lir_v1.json` instead, by decision for the spike (Task 14 ruling).
+The prototype generated Python types from the serde registry `lir_v1.json` instead, because it needs no change to the Rust types (`misc/lir-datalog/gen_lir_types.py`).
 Every type reachable from `LirPlanEnvelope` would need a `JsonSchema` derive, including the scalar function types (593 variants in the registry), and `Row` and `StableRow` would need hand-written schemas for their custom serialization.
 The schema would also be a second description of the format to keep in sync with the registry snapshot, unless it replaced it.
 A schema could record what the registry loses, field defaults and the readable row form, but not the semantics of the [format obstacles](#format-obstacles-from-the-toy-compiler), which need prose or the validator's error messages.
@@ -231,18 +233,18 @@ A schema could record what the registry loses, field defaults and the readable r
 The demo replaces a cross join that the optimizer produces from SQL with a plan that is about 100 times faster to hydrate.
 `misc/lir-datalog/demo/flagged_transfers.sql` selects the transfers from or to a flagged account with `EXISTS (... WHERE f.account = t.src OR f.account = t.dst)`, which the optimizer decorrelates into a cross join of the distinct `(src, dst)` pairs with `flagged`, both arranged by the empty key, under a distinct reduction.
 `improve_plan.py` replaces the cross join with a `Union` of one linear equi-join per equality, and binds both inputs with `Let` so the joins share arrangements.
-`setup.sql` inserts 50,000 transfers, which are 50,000 distinct `(src, dst)` pairs, and 1,000 flagged accounts, and 1,982 transfers match: the views compare equal with 1,982 rows each (`compare.sql`), and the same count follows from the generating expressions.
+`setup.sql` inserts 50,000 transfers, which are 50,000 distinct `(src, dst)` pairs, and 1,000 flagged accounts, and 1,982 transfers match: a run of `demo.sh` shows both views with 1,982 rows and no difference (`compare.sql`), and the same count follows from the generating expressions.
 
-The step 1 measurement comes from a fresh environment on a local `bin/environmentd --optimized` with the default cluster (Task 15).
+The step 1 measurement is recorded in `misc/lir-datalog/demo/README.md` (commit `b0b8081c4f`), from a run of `misc/lir-datalog/demo/demo.sh` against a fresh local `bin/environmentd --optimized` with the default cluster on 2026-10-20.
 
 | Dataflow | Hydration | CPU time | Arranged records | Arranged size |
 |---|---|---|---|---|
 | SQL view (cross join) | 10.0 s | 10.9 s | 204,964 | 1826 kB |
-| Edited plan | about 0.1 s | 0.36 s | 254,964 | 2637 kB |
+| Edited plan | 0.1 s | 0.4 s | 254,964 | 2637 kB |
 
 Hydration is the wait of the first `SELECT count(*)` after `CREATE`, and CPU time is the root operator's `mz_scheduling_elapsed` per dataflow, since summing over all operators double counts nested scopes (`cost.sql`).
 The edited plan keeps one more arrangement of the pairs, because each equi-join reads them by a different key, which costs about 25% more arranged records and 45% more arranged bytes.
-On an environment with leftover dataflows the SQL view took 8.8 to 21 s to hydrate, so the absolute numbers depend on the machine and its load.
+In other local runs on 2026-10-20 on an environment with leftover dataflows, the SQL view took 8.8 to 21 s to hydrate, so the absolute numbers depend on the machine and its load.
 Writing the rewrite needed the closure row layout, canonical arrangement layouts, and `Let` bindings to share arrangements, none of which the registry states.
 Because the SQL view has no keys, step 6 replaces it in place with the improved plan.
 
