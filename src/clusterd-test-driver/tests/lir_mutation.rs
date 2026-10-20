@@ -20,11 +20,12 @@
 //! CockroachDB for persist consensus, the test also starts that replica, renders every
 //! accepted mutant on it over a small input, and asserts that the replica is alive
 //! afterwards. A replica that exits is restarted, and the mutant is reported. Without them,
-//! only the validation runs.
+//! only the validation runs. The replica runs with soft assertions enabled and overflows
+//! panicking, as in CI, so that both surface as crashes.
 //!
 //! Further environment variables:
 //!
-//! * `LIR_MUTANTS_PER_BASE`: mutants per base plan, by default 200.
+//! * `LIR_MUTANTS_PER_BASE`: mutants per base plan, by default [`DEFAULT_MUTANTS_PER_BASE`].
 //! * `LIR_MUTATION_SEED`: the seed, by default [`DEFAULT_SEED`].
 //! * `LIR_MUTATION_OUT`: a directory for `results.jsonl`, one line per mutant, and the JSON
 //!   of every accepted mutant that crashed or stalled the replica.
@@ -47,8 +48,10 @@ use mz_clusterd_test_driver::lir_plan::{
 use mz_clusterd_test_driver::persist_host::PersistHost;
 use mz_compute_client::protocol::command::{ComputeCommand, PeekTarget};
 use mz_compute_types::plan::envelope::parse_envelope;
+use mz_dyncfg::ConfigUpdates;
 use mz_persist_types::{PersistLocation, ShardId};
 use mz_repr::{GlobalId, RelationDesc, ReprRelationType, Row, SqlScalarType, Timestamp};
+use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use rand::rngs::StdRng;
 use rand::seq::IndexedRandom;
 use rand::{RngExt, SeedableRng};
@@ -57,6 +60,12 @@ use timely::progress::Antichain;
 
 /// The seed unless `LIR_MUTATION_SEED` overrides it.
 const DEFAULT_SEED: u64 = 0x5eed_0013;
+
+/// The mutants per base unless `LIR_MUTANTS_PER_BASE` overrides it.
+const DEFAULT_MUTANTS_PER_BASE: usize = 200;
+
+/// The fewest mutants a run with the default mutants per base must generate.
+const MIN_MUTANTS: usize = 1000;
 
 /// The exclusive upper of the input shards. Rows are spread over the times before it.
 const INPUT_UPPER: u64 = 5;
@@ -1279,6 +1288,7 @@ impl Replica {
                 &dir.join("scratch").display().to_string(),
             ])
             .env("PERSIST_PUBSUB_URL", pubsub_url)
+            .env("MZ_SOFT_ASSERTIONS", "1")
             .env("MZ_LOG_FILTER", "warn")
             .stdout(Stdio::from(log_file.try_clone().expect("log file")))
             .stderr(Stdio::from(log_file))
@@ -1333,8 +1343,10 @@ impl Replica {
             mz_storage_types::controller::CollectionMetadata,
         >,
     ) {
+        let mut config = ConfigUpdates::default();
+        config.add(&ORE_OVERFLOWING_BEHAVIOR, "panic");
         self.driver
-            .create_instance(None, false, Default::default())
+            .create_instance(None, false, config)
             .expect("create instance");
         self.driver
             .send(ComputeCommand::InitializationComplete)
@@ -1530,18 +1542,22 @@ async fn check_crash_detection(
 ) {
     let base = BASES.iter().find(|b| b.name == "join").expect("join base");
     let mut json: Value = serde_json::from_str(base.json).expect("base JSON");
-    let projection = &mut json["objects"][0]["plan"]["node"]["Join"]["plan"]["Linear"]
-        ["stage_plans"][0]["closure"]["before"]["mfp"]["projection"];
+    let projection = &mut json["objects"][0]["plan"]["node"]["Join"]["plan"]["Linear"]["stage_plans"]
+        [0]["closure"]["before"]["mfp"]["projection"];
     assert_eq!(*projection, json!([0, 2, 1]), "join base changed");
     *projection = json!([0, 9, 1]);
     let envelope = parse_envelope(&json.to_string()).expect("parses");
     let mut dataflow = LirPlanDataflow::new("crash-check", &envelope, catalog).expect("binds");
     let sink_id = GlobalId::User(999);
     let declared = declared_desc(
-        &LirPlanDataflow::new("crash-check", &parse_envelope(base.json).expect("parses"), catalog)
-            .expect("binds")
-            .output_type()
-            .expect("valid"),
+        &LirPlanDataflow::new(
+            "crash-check",
+            &parse_envelope(base.json).expect("parses"),
+            catalog,
+        )
+        .expect("binds")
+        .output_type()
+        .expect("valid"),
     );
     let target = PersistSink {
         shard: ShardId::new(),
@@ -1550,7 +1566,10 @@ async fn check_crash_detection(
     dataflow
         .as_of(Timestamp::from(0))
         .export_materialized_view(sink_id, declared, target);
-    assert!(dataflow.validate().is_err(), "the validator rejects the plan");
+    assert!(
+        dataflow.validate().is_err(),
+        "the validator rejects the plan"
+    );
     let dataflow = dataflow.finish().expect("converts");
     match replica.run(dataflow, sink_id, pu_desc).await {
         Outcome::Crashed(status) => {
@@ -1583,7 +1602,7 @@ struct Counts {
 #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
 #[cfg_attr(miri, ignore)]
 async fn lir_validator_mutations() {
-    let per_base: usize = env_or("LIR_MUTANTS_PER_BASE", 200);
+    let per_base: usize = env_or("LIR_MUTANTS_PER_BASE", DEFAULT_MUTANTS_PER_BASE);
     let seed: u64 = env_or("LIR_MUTATION_SEED", DEFAULT_SEED);
     let clusterd = std::env::var_os("LIR_MUTATION_CLUSTERD").map(PathBuf::from);
     let out_dir = std::env::var_os("LIR_MUTATION_OUT").map(PathBuf::from);
@@ -1826,4 +1845,11 @@ async fn lir_validator_mutations() {
         let _ = replica.child.wait();
     }
     assert!(failures.is_empty(), "{} failures", failures.len());
+    if per_base >= DEFAULT_MUTANTS_PER_BASE {
+        assert!(
+            counts.generated >= MIN_MUTANTS,
+            "only {} mutants generated",
+            counts.generated
+        );
+    }
 }
