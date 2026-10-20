@@ -578,6 +578,21 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_cluster_replica_sizes",
         ),
+        // `throttled_count` is recorded per execution: appended to
+        // `mz_statement_execution_history` as a nullable column, and retired on
+        // `mz_prepared_statement_history` by making it nullable (evolution cannot drop it).
+        MigrationStep::evolution(
+            "26.51.0-dev.0",
+            CatalogItemType::Source,
+            MZ_INTERNAL_SCHEMA,
+            "mz_prepared_statement_history",
+        ),
+        MigrationStep::evolution(
+            "26.51.0-dev.0",
+            CatalogItemType::Source,
+            MZ_INTERNAL_SCHEMA,
+            "mz_statement_execution_history",
+        ),
     ]
 });
 
