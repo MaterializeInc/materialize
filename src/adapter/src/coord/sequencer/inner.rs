@@ -40,8 +40,7 @@ use mz_repr::explain::json::json_string;
 use mz_repr::explain::{ExprHumanizer, ExprHumanizerExt, TransientItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, Datum, Diff, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
-    Row, Timestamp,
+    CatalogItemId, Datum, Diff, GlobalId, RelationDesc, RelationVersionSelector, Row, Timestamp,
 };
 use mz_secrets::SecretsReader;
 use mz_sql::ast::{
@@ -1043,76 +1042,20 @@ impl Coordinator {
             if_not_exists,
         } = plan;
 
-        let conn_id = if table.temporary {
-            Some(ctx.session().conn_id())
-        } else {
-            None
-        };
         let (table_id, global_id) = self.allocate_user_id().await?;
-        let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
-
-        let data_source = match table.data_source {
-            plan::TableDataSource::TableWrites { defaults } => {
-                TableDataSource::TableWrites { defaults }
-            }
-            plan::TableDataSource::DataSource {
-                desc: data_source_plan,
-                timeline,
-            } => match data_source_plan {
-                plan::DataSourceDesc::IngestionExport {
-                    ingestion_id,
-                    external_reference,
-                    details,
-                    data_config,
-                } => TableDataSource::DataSource {
-                    desc: DataSourceDesc::IngestionExport {
-                        ingestion_id,
-                        external_reference,
-                        details,
-                        data_config,
-                    },
-                    timeline,
-                },
-                plan::DataSourceDesc::Webhook {
-                    validate_using,
-                    body_format,
-                    headers,
-                    cluster_id,
-                } => TableDataSource::DataSource {
-                    desc: DataSourceDesc::Webhook {
-                        validate_using,
-                        body_format,
-                        headers,
-                        cluster_id: cluster_id.expect("Webhook Tables must have cluster_id set"),
-                    },
-                    timeline,
-                },
-                o => {
-                    unreachable!("CREATE TABLE data source got {:?}", o)
-                }
-            },
-        };
-
-        let is_webhook = if let TableDataSource::DataSource {
-            desc: DataSourceDesc::Webhook { .. },
-            timeline: _,
-        } = &data_source
-        {
-            true
-        } else {
-            false
-        };
-
-        let table = Table {
-            create_sql: Some(table.create_sql),
-            desc: table.desc,
-            collections,
-            conn_id: conn_id.cloned(),
+        let table = Table::from_plan(
+            table,
+            global_id,
+            ctx.session().conn_id().clone(),
             resolved_ids,
-            custom_logical_compaction_window: table.compaction_window,
-            is_retained_metrics_object: false,
-            data_source,
-        };
+        );
+        let is_webhook = matches!(
+            &table.data_source,
+            TableDataSource::DataSource {
+                desc: DataSourceDesc::Webhook { .. },
+                ..
+            }
+        );
         let ops = vec![catalog::Op::CreateItem {
             id: table_id,
             name: name.clone(),
