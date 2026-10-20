@@ -472,21 +472,24 @@ SELECT id FROM mz_tables WHERE name = 'pt'
 ----
 u10
 
-# Explaining an installed plan.
+# Explaining an installed plan. Its objects are renumbered to fresh transient ids, which
+# depend on how many ids were allocated before.
+replace (^|\s)t\d+\b  ${1}t<id>
+
 query T multiline
 EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW p2
 ----
-t3:
+t<id>:
   Reduce::Accumulable
     simple_aggrs[0]=(0, count(*))
     key_plan=id
     val_plan
       project=(#1)
       map=(true)
-    Get::Collection t2
+    Get::Collection t<id>
       raw=true
 
-t2:
+t<id>:
   Mfp
     project=(#0)
     Get::PassArrangements materialize.public.pt
@@ -511,17 +514,17 @@ EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW p2
 query T multiline
 EXPLAIN PHYSICAL PLAN FOR CREATE MATERIALIZED VIEW e (a int8 NOT NULL, n int8 NOT NULL) FROM PLAN '{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"materialize.public.pt"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":4,"node":{"Mfp":{"input":{"lir_id":3,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}},"mfp":{"mfp":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":2}},"lower_bounds":[],"upper_bounds":[]},"input_key_val":null}}}},{"id":{"Transient":3},"plan":{"lir_id":2,"node":{"Reduce":{"input_key":null,"input":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":2}},"keys":{"raw":true,"arranged":[]},"plan":{"Collection":{"mfp":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":1}},"lower_bounds":[],"upper_bounds":[]}}}}},"key_val_plan":{"key_plan":{"mfp":{"expressions":[],"predicates":[],"projection":[0],"input_arity":1}},"val_plan":{"mfp":{"expressions":[{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]}],"predicates":[],"projection":[1],"input_arity":1}}},"plan":{"Accumulable":{"full_aggrs":[{"func":"Count","expr":{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]},"distinct":false}],"simple_aggrs":[[0,{"func":"Count","expr":{"Literal":[{"Ok":{"$row":[{"Bool":true}]}},{"scalar_type":"Bool","nullable":false}]},"distinct":false}]],"distinct_aggrs":[]}},"mfp_after":{"mfp":{"expressions":[],"predicates":[],"projection":[0,1],"input_arity":2}},"temporal_bucketing_strategy":"Direct"}}}}],"output":{"Transient":3}}'
 ----
-t3:
+t<id>:
   Reduce::Accumulable
     simple_aggrs[0]=(0, count(*))
     key_plan=id
     val_plan
       project=(#1)
       map=(true)
-    Get::Collection t2
+    Get::Collection t<id>
       raw=true
 
-t2:
+t<id>:
   Mfp
     project=(#0)
     Get::PassArrangements materialize.public.pt
@@ -676,14 +679,14 @@ SELECT * FROM u
 query T multiline
 EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW u
 ----
-t4:
+t<id>:
   Union
     Get::PassArrangements materialize.public.t1
       raw=true
-    Get::Collection t3
+    Get::Collection t<id>
       raw=true
 
-t3:
+t<id>:
   Mfp
     project=(#1)
     map=((#0{a} + 1))
