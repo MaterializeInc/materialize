@@ -288,9 +288,9 @@ impl GcsBlob {
     async fn delete_inner(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         let path = self.get_path(key);
 
-        // GCS deletes don't report the object size, so fetch it first. Pinning
-        // the delete to the fetched generation keeps the reported size
-        // accurate.
+        // GCS deletes don't report the object size, so fetch it first. Making
+        // the delete conditional on the fetched generation keeps the reported
+        // size accurate.
         self.metrics.delete_head.inc();
         let obj = match self
             .storage_control_client
@@ -312,7 +312,9 @@ impl GcsBlob {
             .delete_object()
             .set_bucket(&self.formatted_bucket_path())
             .set_object(path)
-            .set_generation(obj.generation)
+            // NOTE: `set_generation` would permanently delete that generation,
+            // even in a versioned bucket, leaving nothing for `restore`.
+            .set_if_generation_match(obj.generation)
             .with_attempt_timeout(self.knobs.operation_attempt_timeout())
             .send()
             .await
@@ -462,6 +464,31 @@ mod tests {
             async move { GcsBlob::open(config).await }
         })
         .await
+    }
+
+    /// `blob_impl_test` accepts a backend that cannot restore, but `GcsBlob`
+    /// must restore from a versioned bucket, which the test bucket is.
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    async fn gcs_blob_restore() -> Result<(), ExternalError> {
+        let Some(config) = GcsBlobConfig::new_for_test().await? else {
+            info!(
+                "{} env not set: skipping test that uses external service",
+                GcsBlobConfig::EXTERNAL_TESTS_GCS_BUCKET
+            );
+            return Ok(());
+        };
+        let blob = GcsBlob::open(config).await?;
+        blob.set("k", Bytes::from("data")).await?;
+        assert_eq!(blob.delete("k").await?, Some("data".len()));
+        assert_eq!(blob.get("k").await?, None);
+        blob.restore("k").await?;
+        assert_eq!(
+            blob.get("k").await?.map(|b| b.into_contiguous()),
+            Some(b"data".to_vec())
+        );
+        blob.delete("k").await?;
+        Ok(())
     }
 
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
