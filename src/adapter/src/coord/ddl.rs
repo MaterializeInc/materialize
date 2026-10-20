@@ -1366,6 +1366,7 @@ impl Coordinator {
                 | Op::UpdateScopedSystemParameters { .. }
                 | Op::Comment { .. }
                 | Op::CheckClusterState { .. }
+                | Op::ValidateReads(_)
                 | Op::InjectAuditEvents { .. } => {}
             }
         }
