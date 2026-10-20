@@ -92,6 +92,7 @@ SCRIPTS = [
     "join.spec",
     "index_and_mv.spec",
     "create_time_config.spec",
+    "lir_plan.spec",
 ]
 
 

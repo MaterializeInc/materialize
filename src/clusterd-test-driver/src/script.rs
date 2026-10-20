@@ -192,6 +192,10 @@ pub struct LirRelationSpec {
     /// The shard's exclusive write upper (see `PersistSource::upper`).
     #[serde(default)]
     pub upper: Option<u64>,
+    /// Whether the collection is monotonic, as for an append-only source. The validator
+    /// admits monotonic reduce and top-k variants only over monotonic inputs.
+    #[serde(default)]
+    pub monotonic: bool,
 }
 
 /// An index a `create-lir-dataflow` plan imports, bound by the name the plan uses. The index
@@ -1221,17 +1225,22 @@ impl ScriptState {
                         }
                         None => None,
                     };
-                    // A relation read only through an index takes the index's type.
-                    let typ = match &persist {
-                        Some(source) => ReprRelationType::from(source.desc.typ()),
-                        None => self
+                    // The driver has no catalog of collection types. A relation's type is its
+                    // shard's schema, then a schema given for it, then the type of an index on
+                    // it, since every index of a collection arranges that collection's type.
+                    let typ = match (&persist, &relation.schema) {
+                        (Some(source), _) => ReprRelationType::from(source.desc.typ()),
+                        (None, Some(_)) => {
+                            ReprRelationType::from(self.resolve_schema(&relation.schema)?.typ())
+                        }
+                        (None, None) => self
                             .indexes
                             .values()
                             .find(|entry| entry.on_id == relation.id)
                             .map(|entry| entry.on_type.clone())
                             .ok_or_else(|| {
                                 anyhow::anyhow!(
-                                    "relation {} has neither a shard nor an index",
+                                    "relation {} has no shard, schema, or index to type it",
                                     relation.name
                                 )
                             })?,
@@ -1242,7 +1251,7 @@ impl ScriptState {
                             id: relation.id,
                             typ,
                             persist,
-                            monotonic: false,
+                            monotonic: relation.monotonic,
                         },
                     );
                 }

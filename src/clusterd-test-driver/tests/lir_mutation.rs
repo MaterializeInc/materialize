@@ -20,8 +20,26 @@
 //! CockroachDB for persist consensus, the test also starts that replica, renders every
 //! accepted mutant on it over a small input, and asserts that the replica is alive
 //! afterwards. A replica that exits is restarted, and the mutant is reported. Without them,
-//! only the validation runs. The replica runs with soft assertions enabled and overflows
-//! panicking, as in CI, so that both surface as crashes.
+//! only the validation runs, and the test says so on stderr. The replica runs with soft
+//! assertions enabled and overflows panicking, as in CI, so that both surface as crashes.
+//!
+//! The harness parses envelopes with `parse_envelope`, not with the SQL layer's
+//! `parse_user_envelope`, which is private to `mz-sql`. It therefore skips the checks that
+//! import and object ids are transient and that objects read catalog relations only through
+//! imports, and accepts mutants that point a `Get` at a non-transient id, which
+//! `CREATE MATERIALIZED VIEW ... FROM PLAN` rejects.
+//!
+//! To run the replica phase, from the repository root, with a CockroachDB on port 26257 that
+//! has a `mz_lir_mutation` schema in `defaultdb`:
+//!
+//! ```text
+//! CARGO_INCREMENTAL=0 memcap 32G cargo build --profile optimized -p mz-clusterd --bin clusterd
+//! CARGO_INCREMENTAL=0 LIR_MUTATION_CLUSTERD=$PWD/target/optimized/clusterd \
+//!   COCKROACH_URL='postgres://root@127.0.0.1:26257/defaultdb?options=--search_path=mz_lir_mutation' \
+//!   LIR_MUTATION_CLUSTERD_WRAPPER='memcap 4G' LIR_MUTATION_OUT=/tmp/lir-mutation \
+//!   memcap 32G cargo test --profile optimized -p mz-clusterd-test-driver \
+//!   --test lir_mutation -- --nocapture
+//! ```
 //!
 //! Further environment variables:
 //!
@@ -37,7 +55,6 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::TcpListener;
-use std::os::unix::process::CommandExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -79,7 +96,6 @@ const INPUT_UPPER: u64 = 5;
 struct Base {
     name: &'static str,
     json: &'static str,
-    #[allow(dead_code)]
     sql: &'static str,
     /// Whether the persist imports are monotonic, as for append-only sources. The plans were
     /// produced over tables, so they use the variants for non-monotonic inputs, which the
@@ -270,8 +286,6 @@ fn catalog(
     );
     catalog
 }
-
-// Mutation operators.
 
 #[derive(Clone, Debug)]
 enum Seg {
@@ -1169,8 +1183,6 @@ fn mutate(base: &Value, ops: &[Op], rng: &mut StdRng) -> Mutant {
     }
 }
 
-// Validation.
-
 /// What validating a mutant found.
 enum Verdict {
     Unparseable(String),
@@ -1220,8 +1232,6 @@ fn validate(
             .unwrap_or_else(|| "panic".to_string())
     })
 }
-
-// The replica.
 
 fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
@@ -1281,10 +1291,9 @@ impl Replica {
             }
             None => Command::new(binary),
         };
-        // The wrapper and `clusterd` share a process group of their own, which `kill` ends as
-        // a whole. Killing only the wrapper would leave `clusterd` holding its ports.
+        // `clusterd` stays in the test's process group, so a Ctrl-C in the terminal ends it
+        // with the test.
         command
-            .process_group(0)
             .args([
                 "--compute-controller-listen-addr",
                 compute_addr,
@@ -1528,13 +1537,36 @@ impl Replica {
     }
 }
 
-/// Kills the process group of `child`, which `Replica::spawn_clusterd` creates, and reaps
-/// `child`.
+/// Kills `child` and all its descendants, and reaps `child`.
+///
+/// Killing only a wrapper would leave `clusterd` running and holding its ports.
 fn kill(child: &mut Child) {
+    let mut pids = vec![child.id()];
+    let mut i = 0;
+    while i < pids.len() {
+        let pid = pids[i];
+        let children =
+            std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).unwrap_or_default();
+        pids.extend(
+            children
+                .split_whitespace()
+                .filter_map(|p| p.parse::<u32>().ok()),
+        );
+        i += 1;
+    }
     let _ = Command::new("kill")
-        .args(["-KILL", &format!("-{}", child.id())])
+        .arg("-KILL")
+        .args(pids.iter().map(|pid| pid.to_string()))
+        .stderr(Stdio::null())
         .status();
     let _ = child.wait();
+}
+
+impl Drop for Replica {
+    /// Ends `clusterd` also when the test panics, since its process group outlives the test.
+    fn drop(&mut self) {
+        kill(&mut self.child);
+    }
 }
 
 fn exit_status(child: &mut Child) -> Option<String> {
@@ -1690,7 +1722,14 @@ async fn lir_validator_mutations() {
             let dir = out_dir.clone().unwrap_or_else(|| work.path().to_path_buf());
             Some(Replica::start(binary, dir, host, &index).await)
         }
-        None => None,
+        None => {
+            eprintln!(
+                "lir_mutation: LIR_MUTATION_CLUSTERD is not set, so no replica renders the \
+                 accepted mutants. Set LIR_MUTATION_CLUSTERD to a clusterd binary and \
+                 COCKROACH_URL to a CockroachDB to run the replica phase."
+            );
+            None
+        }
     };
 
     if let Some(replica) = replica.as_mut() {
@@ -1771,7 +1810,10 @@ async fn lir_validator_mutations() {
                 };
             stats[0] += 1;
             if mutant.op == "none" && verdict != "accepted" {
-                panic!("base {} not accepted: {verdict}: {detail}", base.name);
+                panic!(
+                    "base {} ({}) not accepted: {verdict}: {detail}",
+                    base.name, base.sql
+                );
             }
 
             let mut outcome = None;
@@ -1873,9 +1915,7 @@ async fn lir_validator_mutations() {
     for failure in &failures {
         println!("FAILURE: {failure}");
     }
-    if let Some(mut replica) = replica {
-        kill(&mut replica.child);
-    }
+    drop(replica);
     assert!(failures.is_empty(), "{} failures", failures.len());
     if per_base >= DEFAULT_MUTANTS_PER_BASE {
         assert!(
