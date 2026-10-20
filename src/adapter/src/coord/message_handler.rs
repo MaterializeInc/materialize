@@ -29,7 +29,6 @@ use mz_ore::{soft_assert_or_log, soft_panic_or_log, task};
 use mz_persist_client::usage::ShardsUsageReferenced;
 use mz_repr::{Datum, Diff, Row};
 use mz_sql::ast::Statement;
-use mz_sql::names::ResolvedIds;
 use mz_sql::pure::PurifiedStatement;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::StorageDiff;
@@ -47,7 +46,7 @@ use crate::coord::{
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
 use crate::telemetry::{EventDetails, SegmentClientExt};
-use crate::{AdapterNotice, TimestampContext};
+use crate::{AdapterError, AdapterNotice, TimestampContext};
 
 /// How long an introspection subscribe must have been delivering data before
 /// the arrangement sizes snapshot trusts its replica's rows.
@@ -86,6 +85,20 @@ impl Coordinator {
                 {
                     self.message_controller(m).boxed_local().await
                 }
+            }
+            Message::SourceStatementReady {
+                pending,
+                response,
+                otel_ctx,
+            } => {
+                otel_ctx.attach_as_parent();
+                self.sequence_source_statement_ready(pending, Some(response))
+                    .boxed_local()
+                    .await;
+            }
+            Message::DdlCommandsReady { pending, otel_ctx } => {
+                otel_ctx.attach_as_parent();
+                self.sequence_ddl_commit(pending).boxed_local().await;
             }
             Message::PurifiedStatementReady(ready) => {
                 self.message_purified_statement_ready(ready)
@@ -846,60 +859,26 @@ impl Coordinator {
         };
 
         let plan = match purified_statement {
-            PurifiedStatement::PurifiedCreateSource {
-                create_progress_subsource,
-                create_source_stmt,
-                subsources,
-                available_source_references,
-            } => self
-                .plan_purified_create_source(
-                    &ctx,
-                    params,
-                    create_progress_subsource,
-                    create_source_stmt,
-                    subsources,
-                    available_source_references,
-                )
-                .await
-                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
-            PurifiedStatement::PurifiedAlterSourceAddSubsources {
-                source_name,
-                options,
-                subsources,
-            } => self
-                .plan_purified_alter_source_add_subsource(
-                    ctx.session(),
-                    params,
-                    source_name,
-                    options,
-                    subsources,
-                )
-                .await
-                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
-            PurifiedStatement::PurifiedAlterSourceRefreshReferences {
-                source_name,
-                available_source_references,
-            } => self
-                .plan_purified_alter_source_refresh_references(
-                    ctx.session(),
-                    params,
-                    source_name,
-                    available_source_references,
-                )
-                .map(|(plan, resolved_ids)| (plan, resolved_ids, ResolvedIds::empty())),
+            PurifiedStatement::PurifiedCreateSource { .. } => Err(AdapterError::Unsupported(
+                "CREATE SOURCE requires submitted intent",
+            )),
+            PurifiedStatement::PurifiedAlterSourceAddSubsources { .. }
+            | PurifiedStatement::PurifiedAlterSourceRefreshReferences { .. } => Err(
+                AdapterError::Unsupported("ALTER SOURCE requires submitted intent"),
+            ),
+            PurifiedStatement::PurifiedCreateTableFromSource { .. } => Err(
+                AdapterError::Unsupported("CREATE TABLE FROM SOURCE requires submitted intent"),
+            ),
             o @ (PurifiedStatement::PurifiedAlterSource { .. }
-            | PurifiedStatement::PurifiedCreateSink(..)
-            | PurifiedStatement::PurifiedCreateTableFromSource { .. }) => {
+            | PurifiedStatement::PurifiedCreateSink(..)) => {
                 // Unify these into a `Statement`.
                 let stmt = match o {
                     PurifiedStatement::PurifiedAlterSource { alter_source_stmt } => {
                         Statement::AlterSource(alter_source_stmt)
                     }
-                    PurifiedStatement::PurifiedCreateTableFromSource { stmt } => {
-                        Statement::CreateTableFromSource(stmt)
-                    }
                     PurifiedStatement::PurifiedCreateSink(stmt) => Statement::CreateSink(stmt),
                     PurifiedStatement::PurifiedCreateSource { .. }
+                    | PurifiedStatement::PurifiedCreateTableFromSource { .. }
                     | PurifiedStatement::PurifiedAlterSourceAddSubsources { .. }
                     | PurifiedStatement::PurifiedAlterSourceRefreshReferences { .. } => {
                         unreachable!("not part of exterior match stmt")

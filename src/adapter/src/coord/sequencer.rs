@@ -206,6 +206,15 @@ impl Coordinator {
 
             match plan {
                 Plan::CreateSource(plan) => {
+                    if !matches!(
+                        plan.source.data_source,
+                        plan::DataSourceDesc::Webhook { .. }
+                    ) {
+                        ctx.retire(Err(AdapterError::Unsupported(
+                            "CREATE SOURCE requires submitted intent",
+                        )));
+                        return;
+                    }
                     let (item_id, global_id) = return_if_err!(self.allocate_user_id().await, ctx);
                     let result = self
                         .sequence_create_source(
@@ -221,13 +230,10 @@ impl Coordinator {
                         .await;
                     ctx.retire(result);
                 }
-                Plan::CreateSources(plans) => {
-                    assert!(
-                        resolved_ids.is_empty(),
-                        "each plan has separate resolved_ids"
-                    );
-                    let result = self.sequence_create_source(&mut ctx, plans).await;
-                    ctx.retire(result);
+                Plan::CreateSources(_) => {
+                    ctx.retire(Err(AdapterError::Unsupported(
+                        "CREATE SOURCE requires submitted intent",
+                    )));
                 }
                 Plan::CreateConnection(plan) => {
                     self.sequence_create_connection(ctx, plan, resolved_ids)
@@ -261,6 +267,18 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::CreateTable(plan) => {
+                    if matches!(
+                        plan.table.data_source,
+                        plan::TableDataSource::DataSource {
+                            desc: plan::DataSourceDesc::IngestionExport { .. },
+                            ..
+                        }
+                    ) {
+                        ctx.retire(Err(AdapterError::Unsupported(
+                            "CREATE TABLE FROM SOURCE requires submitted intent",
+                        )));
+                        return;
+                    }
                     let result = self
                         .sequence_create_table(&mut ctx, plan, resolved_ids)
                         .await;
@@ -486,9 +504,10 @@ impl Coordinator {
                 Plan::AlterSink(plan) => {
                     self.sequence_alter_sink_prepare(ctx, plan).await;
                 }
-                Plan::AlterSource(plan) => {
-                    let result = self.sequence_alter_source(ctx.session_mut(), plan).await;
-                    ctx.retire(result);
+                Plan::AlterSource(_) => {
+                    ctx.retire(Err(AdapterError::Unsupported(
+                        "ALTER SOURCE requires submitted intent",
+                    )));
                 }
                 Plan::AlterSystemSet(plan) => {
                     let result = self.sequence_alter_system_set(ctx.session(), plan).await;
