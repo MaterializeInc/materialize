@@ -55,7 +55,7 @@
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::TcpListener;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
@@ -71,6 +71,7 @@ use mz_clusterd_test_driver::persist_host::PersistHost;
 use mz_compute_client::protocol::command::{ComputeCommand, PeekTarget};
 use mz_compute_types::plan::envelope::parse_envelope;
 use mz_dyncfg::ConfigUpdates;
+use mz_ore::panic::catch_unwind;
 use mz_persist_types::{PersistLocation, ShardId};
 use mz_repr::{GlobalId, RelationDesc, ReprRelationType, Row, SqlScalarType, Timestamp};
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
