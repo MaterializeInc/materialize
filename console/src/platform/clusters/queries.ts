@@ -1030,8 +1030,11 @@ export function useFreshnessObjectsWhere(
     .map((object): FreshnessObject => ({
       objectId: object.id,
       objectName: object.name,
+      schemaId: object.schemaId,
       schemaName: object.schemaName,
       databaseName: object.databaseName,
+      clusterId: object.clusterId,
+      clusterName: object.clusterName,
       objectType: object.objectType,
     }));
   // JSON keeps a null name apart from an empty one, and no name can break it.
@@ -1049,8 +1052,12 @@ export function useFreshnessObjectsWhere(
 export interface FreshnessObject {
   objectId: string;
   objectName: string | null;
+  schemaId: string | null;
   schemaName: string | null;
   databaseName: string | null;
+  /** Null for an object that runs on no cluster, such as a table. */
+  clusterId: string | null;
+  clusterName: string | null;
   objectType: string;
 }
 

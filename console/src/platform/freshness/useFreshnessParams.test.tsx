@@ -19,6 +19,7 @@ import {
   parseScope,
   parseTimePeriod,
   useFreshnessParams,
+  withScope,
 } from "./useFreshnessParams";
 
 describe("parsePositiveNumber", () => {
@@ -128,6 +129,27 @@ describe("parseObjectTypes", () => {
       "source",
       "table",
     ]);
+  });
+});
+
+describe("withScope", () => {
+  it("selects the given cluster or schema and keeps the other controls", () => {
+    const next = withScope(
+      new URLSearchParams("cluster=u1&threshold=5000&type=index"),
+      "schema",
+      "u3",
+    );
+
+    expect(next.toString()).toBe(
+      "threshold=5000&type=index&scope=schema&schema=u3",
+    );
+  });
+
+  it("does not modify the params it is given", () => {
+    const prev = new URLSearchParams("cluster=u1");
+    withScope(prev, "schema", "u3");
+
+    expect(prev.toString()).toBe("cluster=u1");
   });
 });
 

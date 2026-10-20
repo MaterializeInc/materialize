@@ -95,6 +95,37 @@ export function parseObjectTypes(
     .filter((value) => offered.includes(value));
 }
 
+/**
+ * The params for showing `id` in `scope`, or the scope's first option when
+ * `id` is absent, keeping the other controls.
+ *
+ * Drops the types the new scope's menu does not offer, so the param never
+ * carries a filter the menu cannot show.
+ */
+export function withScope(
+  prev: URLSearchParams,
+  scope: FreshnessScope,
+  id?: string,
+): URLSearchParams {
+  const next = new URLSearchParams(prev);
+  next.set(SCOPE_SEARCH_PARAM, scope);
+  next.delete(CLUSTER_SEARCH_PARAM);
+  next.delete(SCHEMA_SEARCH_PARAM);
+  const types = parseObjectTypes(next.get(OBJECT_TYPE_SEARCH_PARAM), scope);
+  if (types.length === 0) {
+    next.delete(OBJECT_TYPE_SEARCH_PARAM);
+  } else {
+    next.set(OBJECT_TYPE_SEARCH_PARAM, types.join(","));
+  }
+  if (id !== undefined) {
+    next.set(
+      scope === "cluster" ? CLUSTER_SEARCH_PARAM : SCHEMA_SEARCH_PARAM,
+      id,
+    );
+  }
+  return next;
+}
+
 export interface FreshnessParams {
   scope: FreshnessScope;
   clusterId: string | null;
@@ -142,28 +173,9 @@ export function useFreshnessParams(): FreshnessParams {
       { replace: true },
     );
 
-  // Drops both selections so the page falls back to the new scope's first
-  // option, and the types the new scope's menu does not offer, so the param
-  // never carries a filter the menu cannot show.
+  // Without an ID, so the page falls back to the new scope's first option.
   const setScope = (scope: FreshnessScope) =>
-    setSearchParams(
-      (prev) => {
-        prev.set(SCOPE_SEARCH_PARAM, scope);
-        prev.delete(CLUSTER_SEARCH_PARAM);
-        prev.delete(SCHEMA_SEARCH_PARAM);
-        const types = parseObjectTypes(
-          prev.get(OBJECT_TYPE_SEARCH_PARAM),
-          scope,
-        );
-        if (types.length === 0) {
-          prev.delete(OBJECT_TYPE_SEARCH_PARAM);
-        } else {
-          prev.set(OBJECT_TYPE_SEARCH_PARAM, types.join(","));
-        }
-        return prev;
-      },
-      { replace: true },
-    );
+    setSearchParams((prev) => withScope(prev, scope), { replace: true });
   const setClusterId = (id: string) => set(CLUSTER_SEARCH_PARAM, id);
   const setSchemaId = (id: string) => set(SCHEMA_SEARCH_PARAM, id);
   const setThreshold = (ms: number) => set(THRESHOLD_SEARCH_PARAM, String(ms));

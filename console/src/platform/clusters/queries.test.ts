@@ -401,6 +401,9 @@ describe("buildFreshnessData", () => {
       objectName: "orders_mv",
       schemaName: "public",
       databaseName: "materialize",
+      schemaId: "u3",
+      clusterId: "u1",
+      clusterName: "quickstart",
       objectType: "materialized-view",
     },
   ];

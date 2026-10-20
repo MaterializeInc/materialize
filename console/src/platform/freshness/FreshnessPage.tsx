@@ -67,6 +67,7 @@ import {
   describeThreshold,
   Predicate,
   PREDICATE_LABELS,
+  qualifiedSchemaName,
 } from "./freshnessRows";
 import { FreshnessTable } from "./FreshnessTable";
 import {
@@ -252,7 +253,11 @@ const FreshnessView = ({
                 All {rows.length} objects are within target.
               </Box>
             ) : (
-              <FreshnessTable rows={breaching} itemLabel="objects" />
+              <FreshnessTable
+                rows={breaching}
+                scope={scope}
+                itemLabel="objects"
+              />
             )}
           </AccordionPanel>
         </AccordionItem>
@@ -265,7 +270,7 @@ const FreshnessView = ({
                 No objects with freshness data {SCOPE_LABELS[scope].place}.
               </Box>
             ) : (
-              <FreshnessTable rows={rows} itemLabel="objects" />
+              <FreshnessTable rows={rows} scope={scope} itemLabel="objects" />
             )}
           </AccordionPanel>
         </AccordionItem>
@@ -305,8 +310,6 @@ const FreshnessPage = () => {
   const thresholdControl = useThresholdControl(threshold, setThreshold);
 
   const scopeLabels = SCOPE_LABELS[scope];
-  // A schema is named with its database, because every database has its own
-  // `public` and the bare names would be indistinguishable in the menu.
   const options: SelectOption[] = (
     scope === "cluster"
       ? clusters
@@ -314,7 +317,7 @@ const FreshnessPage = () => {
           .map((c) => ({ id: c.id, name: c.name }))
       : schemas.map((s) => ({
           id: s.id,
-          name: s.databaseName ? `${s.databaseName}.${s.name}` : s.name,
+          name: qualifiedSchemaName(s.databaseName, s.name),
         }))
   ).sort((a, b) => a.name.localeCompare(b.name));
   const selectedId = scope === "cluster" ? clusterId : schemaId;
