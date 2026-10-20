@@ -12,7 +12,6 @@ import { createStore } from "jotai";
 import { delay, http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { DatabaseObject } from "~/api/materialize/objects";
 import {
   buildColumns,
   mapKyselyToTabular,
@@ -24,7 +23,7 @@ import {
   useFreshnessObjectsWhere,
 } from "~/platform/clusters/queries";
 import { allObjects } from "~/store/allObjects";
-import { createProviderWrapper } from "~/test/utils";
+import { buildDatabaseObject, createProviderWrapper } from "~/test/utils";
 
 import { FreshnessScope } from "./constants";
 import {
@@ -146,41 +145,26 @@ describe("freshness queries", () => {
   });
 });
 
-const buildObject = (
-  overrides: Partial<DatabaseObject> & { id: string },
-): DatabaseObject =>
-  ({
-    name: overrides.id,
-    objectType: "materialized-view",
-    schemaId: "u3",
-    schemaName: "public",
-    databaseId: "u1",
-    databaseName: "materialize",
-    sourceType: null,
-    isWebhookTable: "false",
-    clusterId: "u1",
-    clusterName: "quickstart",
-    ...overrides,
-  }) as DatabaseObject;
-
 // Schema u3 holds objects on two clusters and none, of every type the page
 // either shows or must skip. Schema u9 and cluster u2 hold the decoys.
 const ENVIRONMENT = [
-  buildObject({ id: "u10", objectType: "table", clusterId: null }),
-  buildObject({ id: "u11", objectType: "materialized-view", clusterId: "u1" }),
-  buildObject({ id: "u12", objectType: "index", clusterId: "u2" }),
-  buildObject({ id: "u13", objectType: "source", clusterId: "u2" }),
-  buildObject({ id: "u14", objectType: "sink", clusterId: "u1" }),
-  buildObject({ id: "u15", objectType: "view", clusterId: null }),
-  buildObject({ id: "u16", objectType: "secret", clusterId: null }),
-  buildObject({ id: "u17", objectType: "connection", clusterId: null }),
-  buildObject({
-    id: "u18",
-    objectType: "source",
-    sourceType: "subsource",
-    clusterId: "u2",
-  }),
-  buildObject({ id: "u20", schemaId: "u9", clusterId: "u1" }),
+  ...[
+    { id: "u10", objectType: "table", clusterId: null },
+    { id: "u11", objectType: "materialized-view", clusterId: "u1" },
+    { id: "u12", objectType: "index", clusterId: "u2" },
+    { id: "u13", objectType: "source", clusterId: "u2" },
+    { id: "u14", objectType: "sink", clusterId: "u1" },
+    { id: "u15", objectType: "view", clusterId: null },
+    { id: "u16", objectType: "secret", clusterId: null },
+    { id: "u17", objectType: "connection", clusterId: null },
+    {
+      id: "u18",
+      objectType: "source",
+      sourceType: "subsource",
+      clusterId: "u2",
+    },
+  ].map((object) => buildDatabaseObject({ schemaId: "u3", ...object })),
+  buildDatabaseObject({ id: "u20", schemaId: "u9", clusterId: "u1" }),
 ];
 
 async function objectIdsIn(scope: FreshnessScope, scopeId: string) {

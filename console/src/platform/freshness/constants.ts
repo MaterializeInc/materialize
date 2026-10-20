@@ -63,6 +63,14 @@ export const SCOPE_LABELS: Record<
   },
 };
 
+const SCHEMA_OBJECT_TYPE_FILTERS = [
+  { label: "Sources", value: "source" },
+  { label: "Tables", value: "table" },
+  { label: "Materialized views", value: "materialized-view" },
+  { label: "Indexes", value: "index" },
+  { label: "Sinks", value: "sink" },
+];
+
 /**
  * The object types each scope offers to filter by, which are also the only
  * types a schema scope gathers: views, secrets and connections report no lag.
@@ -80,17 +88,8 @@ export const OBJECT_TYPE_FILTERS: Record<
   FreshnessScope,
   { label: string; value: string }[]
 > = {
-  cluster: [
-    { label: "Sources", value: "source" },
-    { label: "Materialized views", value: "materialized-view" },
-    { label: "Indexes", value: "index" },
-    { label: "Sinks", value: "sink" },
-  ],
-  schema: [
-    { label: "Sources", value: "source" },
-    { label: "Tables", value: "table" },
-    { label: "Materialized views", value: "materialized-view" },
-    { label: "Indexes", value: "index" },
-    { label: "Sinks", value: "sink" },
-  ],
+  cluster: SCHEMA_OBJECT_TYPE_FILTERS.filter(
+    (filter) => filter.value !== "table",
+  ),
+  schema: SCHEMA_OBJECT_TYPE_FILTERS,
 };

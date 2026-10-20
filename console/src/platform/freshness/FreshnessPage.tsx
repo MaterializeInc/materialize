@@ -338,6 +338,7 @@ const FreshnessPage = () => {
     ? options.find((option) => option.id === selectedId)
     : undefined;
   const notFound = Boolean(selectedId) && selected === undefined;
+  const ScopeIcon = scope === "cluster" ? ClustersIcon : SchemaIcon;
   const pickerProps = {
     ariaLabel: scopeLabels.menu,
     placeholder: `Select a ${scopeLabels.noun}`,
@@ -348,16 +349,9 @@ const FreshnessPage = () => {
     // control.
     containerWidth: "max-content",
     menuWidth: "240px",
-    leftIcon:
-      scope === "cluster" ? (
-        <ClustersIcon
-          height="4"
-          width="4"
-          color={colors.foreground.secondary}
-        />
-      ) : (
-        <SchemaIcon height="4" width="4" color={colors.foreground.secondary} />
-      ),
+    leftIcon: (
+      <ScopeIcon height="4" width="4" color={colors.foreground.secondary} />
+    ),
   };
   const scopeError = scope === "cluster" ? clustersError : schemasError;
   const scopeReady = scope === "cluster" ? clustersReady : schemasReady;

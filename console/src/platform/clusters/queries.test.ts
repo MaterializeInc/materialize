@@ -22,7 +22,7 @@ import server from "~/api/mocks/server";
 import { roleQueryKeys } from "~/platform/roles/queries";
 import { getQueryClient } from "~/queryClient";
 import { allObjects } from "~/store/allObjects";
-import { createProviderWrapper } from "~/test/utils";
+import { buildDatabaseObject, createProviderWrapper } from "~/test/utils";
 
 import {
   buildFreshnessData,
@@ -290,23 +290,6 @@ describe("useReplicaOfflineEvents", () => {
   });
 });
 
-const buildObject = (
-  overrides: Partial<DatabaseObject> & { id: string },
-): DatabaseObject =>
-  ({
-    name: "orders_mv",
-    objectType: "materialized-view",
-    schemaId: "u1",
-    schemaName: "public",
-    databaseId: "u1",
-    databaseName: "materialize",
-    sourceType: null,
-    isWebhookTable: "false",
-    clusterId: "u1",
-    clusterName: "quickstart",
-    ...overrides,
-  }) as DatabaseObject;
-
 async function renderFreshnessObjects(initial: DatabaseObject[]) {
   const store = createStore();
   store.set(allObjects, {
@@ -333,10 +316,10 @@ describe("useFreshnessObjects", () => {
     // `useAllObjects` emits a new array for any change in the environment. A
     // new array here rebuilds the stats and rows chain behind it, so a cluster
     // nobody is looking at would re-render the page.
-    const mine = buildObject({ id: "u10" });
+    const mine = buildDatabaseObject({ id: "u10" });
     const { result, store, renders } = await renderFreshnessObjects([
       mine,
-      buildObject({ id: "u20", clusterId: "u2", name: "elsewhere" }),
+      buildDatabaseObject({ id: "u20", clusterId: "u2", name: "elsewhere" }),
     ]);
 
     const first = result.current;
@@ -346,7 +329,7 @@ describe("useFreshnessObjects", () => {
     store.set(allObjects, {
       data: [
         mine,
-        buildObject({ id: "u20", clusterId: "u2", name: "renamed" }),
+        buildDatabaseObject({ id: "u20", clusterId: "u2", name: "renamed" }),
       ],
       error: undefined,
       snapshotComplete: true,
@@ -360,12 +343,12 @@ describe("useFreshnessObjects", () => {
 
   it("changes identity when one of its own objects is renamed", async () => {
     const { result, store } = await renderFreshnessObjects([
-      buildObject({ id: "u10", name: "before" }),
+      buildDatabaseObject({ id: "u10", name: "before" }),
     ]);
 
     const first = result.current;
     store.set(allObjects, {
-      data: [buildObject({ id: "u10", name: "after" })],
+      data: [buildDatabaseObject({ id: "u10", name: "after" })],
       error: undefined,
       snapshotComplete: true,
     });
@@ -376,8 +359,8 @@ describe("useFreshnessObjects", () => {
 
   it("keeps a name that contains control characters intact", async () => {
     const { result } = await renderFreshnessObjects([
-      buildObject({ id: "u10", name: "orders\u0001u2" }),
-      buildObject({ id: "u11", name: "\u0002" }),
+      buildDatabaseObject({ id: "u10", name: "orders\u0001u2" }),
+      buildDatabaseObject({ id: "u11", name: "\u0002" }),
     ]);
 
     expect(result.current.map((o) => [o.objectId, o.objectName])).toEqual([

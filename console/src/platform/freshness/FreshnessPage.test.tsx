@@ -14,14 +14,13 @@ import React from "react";
 import { describe, expect, it } from "vitest";
 
 import { Cluster } from "~/api/materialize/cluster/clusterList";
-import { DatabaseObject } from "~/api/materialize/objects";
 import { SchemaWithOptionalDatabase } from "~/api/materialize/schemaList";
 import { SubscribeError } from "~/api/materialize/SubscribeManager";
 import server from "~/api/mocks/server";
 import { allClusters } from "~/store/allClusters";
 import { allObjects } from "~/store/allObjects";
 import { allSchemas } from "~/store/allSchemas";
-import { renderComponent } from "~/test/utils";
+import { buildDatabaseObject, renderComponent } from "~/test/utils";
 
 import FreshnessPage from "./FreshnessPage";
 
@@ -82,19 +81,7 @@ const PROMPT =
   "Select a cluster or schema to see the freshness of its objects.";
 
 // One object on CLUSTER, so a selected cluster has something to query.
-const OBJECT = {
-  id: "u10",
-  name: "orders_mv",
-  objectType: "materialized-view",
-  schemaId: "u3",
-  schemaName: "public",
-  databaseId: "u1",
-  databaseName: "materialize",
-  sourceType: null,
-  isWebhookTable: "false",
-  clusterId: "u1",
-  clusterName: "quickstart",
-} as unknown as DatabaseObject;
+const OBJECT = buildDatabaseObject({ id: "u10", schemaId: "u3" });
 
 // Records each SQL request and never answers.
 const recordRequests = () => {
