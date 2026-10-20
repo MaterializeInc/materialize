@@ -85,7 +85,8 @@ HEADER = '''\
 """Python types for LIR plan envelopes, with a codec for their serde_json form.
 
 Every container of the serde registry is a dataclass named like its serde name. Enum
-variants are nested classes, for example `GetPlan.PassArrangements()`. Struct-like
+variants are attributes of the enum class, for example `GetPlan.PassArrangements()`,
+and derive from it. Struct-like
 classes take keyword arguments, newtype classes one positional `value`, and tuple-like
 classes positional `_0`, `_1`, .... Python keywords as names get a trailing underscore.
 
@@ -98,6 +99,7 @@ from __future__ import annotations
 import dataclasses as _dc
 import json as _json
 import math as _math
+from typing import ClassVar as _ClassVar
 
 # Readable datum kinds of `{"$row": [...]}`, see `mz_repr::row_to_readable`.
 _DATUM_KINDS = {
@@ -247,7 +249,7 @@ def _encode(fmt: object, value: object) -> object:
     if kind == "TYPENAME":
         if not isinstance(value, _ACCEPTS[inner]):
             raise TypeError(f"expected a {inner}, got {value!r}")
-        return value._to_json()
+        return to_json(value)
     if kind == "OPTION":
         return None if value is None else _encode(inner, value)
     if kind == "SEQ":
@@ -474,8 +476,10 @@ def annotation(fmt: object) -> str:
     """Renders the Python type of a serde format."""
     if isinstance(fmt, str):
         return PRIMITIVES[fmt]
+    assert isinstance(fmt, dict)
     ((kind, inner),) = fmt.items()
     if kind == "TYPENAME":
+        assert isinstance(inner, str)
         return HAND_WRITTEN.get(inner, inner)
     if kind == "OPTION":
         return f"{annotation(inner)} | None"
@@ -532,46 +536,60 @@ def gen_container(name: str, container: object) -> list[str]:
             lines.append(f"    _DEFAULTS = {defaults!r}")
         return lines
     if kind == "ENUM":
+        # Each variant derives from the enum class, so that a variant is a value of the
+        # enum's type. A class body cannot derive from its enclosing class, so the
+        # variants are module-level classes that the enum class declares as attributes.
         lines = [f"class {name}(_Enum):"]
+        lines += [
+            f"    {py_name(v)}: _ClassVar[type[_{name}_{py_name(v)}]]" for v in inner
+        ]
         for variant, vformat in inner.items():
-            cls = py_name(variant)
-            head = f"    class {cls}(_Variant):"
-            common = [f"        _NAME = {variant!r}"]
+            cls = f"_{name}_{py_name(variant)}"
+            head = f"class {cls}(_Variant, {name}):"
+            common = [f"    _NAME = {variant!r}"]
+            lines += ["", ""]
             if vformat == "UNIT":
-                lines += ["    @_dc.dataclass", head, *common, '        _KIND = "UNIT"']
-                continue
-            ((vkind, vinner),) = vformat.items()
-            if vkind == "NEWTYPE":
-                lines += [
-                    "    @_dc.dataclass",
-                    head,
-                    f"        value: {annotation(vinner)}",
-                    *common,
-                    '        _KIND = "NEWTYPE"',
-                    f"        _INNER = {vinner!r}",
-                ]
-            elif vkind == "TUPLE":
-                lines += ["    @_dc.dataclass", head]
-                lines += [
-                    f"        _{i}: {annotation(f)}" for i, f in enumerate(vinner)
-                ]
-                lines += [
-                    *common,
-                    '        _KIND = "TUPLE"',
-                    f"        _ITEMS = {tuple(vinner)!r}",
-                ]
-            elif vkind == "STRUCT":
-                lines += ["    @_dc.dataclass(kw_only=True)", head]
-                lines += struct_body(f"{name}::{variant}", vinner, "        ")
-                lines += [
-                    *common,
-                    '        _KIND = "STRUCT"',
-                    f"        _FIELDS = {fields_tuple(vinner)}",
-                ]
+                lines += ["@_dc.dataclass", head, *common, '    _KIND = "UNIT"']
             else:
-                raise ValueError(f"unsupported variant format {vformat}")
-        variants = ", ".join(f"{v!r}: {py_name(v)}" for v in inner)
-        lines.append(f"    _VARIANTS = {{{variants}}}")
+                ((vkind, vinner),) = vformat.items()
+                if vkind == "NEWTYPE":
+                    lines += [
+                        "@_dc.dataclass",
+                        head,
+                        f"    value: {annotation(vinner)}",
+                        *common,
+                        '    _KIND = "NEWTYPE"',
+                        f"    _INNER = {vinner!r}",
+                    ]
+                elif vkind == "TUPLE":
+                    lines += ["@_dc.dataclass", head]
+                    lines += [
+                        f"    _{i}: {annotation(f)}" for i, f in enumerate(vinner)
+                    ]
+                    lines += [
+                        *common,
+                        '    _KIND = "TUPLE"',
+                        f"    _ITEMS = {tuple(vinner)!r}",
+                    ]
+                elif vkind == "STRUCT":
+                    lines += ["@_dc.dataclass(kw_only=True)", head]
+                    lines += struct_body(f"{name}::{variant}", vinner, "    ")
+                    lines += [
+                        *common,
+                        '    _KIND = "STRUCT"',
+                        f"    _FIELDS = {fields_tuple(vinner)}",
+                    ]
+                else:
+                    raise ValueError(f"unsupported variant format {vformat}")
+            lines += [
+                "",
+                "",
+                f"{cls}.__name__ = {py_name(variant)!r}",
+                f"{cls}.__qualname__ = {name + '.' + py_name(variant)!r}",
+                f"{name}.{py_name(variant)} = {cls}",
+            ]
+        variants = ", ".join(f"{v!r}: {name}.{py_name(v)}" for v in inner)
+        lines.append(f"{name}._VARIANTS = {{{variants}}}")
         return lines
     raise ValueError(f"unsupported container {container}")
 

@@ -14,7 +14,8 @@
 """Python types for LIR plan envelopes, with a codec for their serde_json form.
 
 Every container of the serde registry is a dataclass named like its serde name. Enum
-variants are nested classes, for example `GetPlan.PassArrangements()`. Struct-like
+variants are attributes of the enum class, for example `GetPlan.PassArrangements()`,
+and derive from it. Struct-like
 classes take keyword arguments, newtype classes one positional `value`, and tuple-like
 classes positional `_0`, `_1`, .... Python keywords as names get a trailing underscore.
 
@@ -27,6 +28,7 @@ from __future__ import annotations
 import dataclasses as _dc
 import json as _json
 import math as _math
+from typing import ClassVar as _ClassVar
 
 # Readable datum kinds of `{"$row": [...]}`, see `mz_repr::row_to_readable`.
 _DATUM_KINDS = {
@@ -179,7 +181,7 @@ def _encode(fmt: object, value: object) -> object:
     if kind == "TYPENAME":
         if not isinstance(value, _ACCEPTS[inner]):
             raise TypeError(f"expected a {inner}, got {value!r}")
-        return value._to_json()
+        return to_json(value)
     if kind == "OPTION":
         return None if value is None else _encode(inner, value)
     if kind == "SEQ":
@@ -594,478 +596,947 @@ class AgeTimestampTz(_Unit):
 
 
 class AggregateFunc(_Enum):
-    @_dc.dataclass
-    class All(_Variant):
-        _NAME = "All"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class Any(_Variant):
-        _NAME = "Any"
-        _KIND = "UNIT"
-
-    @_dc.dataclass(kw_only=True)
-    class ArrayConcat(_Variant):
-        order_by: list[ColumnOrder]
-        _NAME = "ArrayConcat"
-        _KIND = "STRUCT"
-        _FIELDS = (("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),)
-
-    @_dc.dataclass
-    class Count(_Variant):
-        _NAME = "Count"
-        _KIND = "UNIT"
-
-    @_dc.dataclass(kw_only=True)
-    class DenseRank(_Variant):
-        order_by: list[ColumnOrder]
-        _NAME = "DenseRank"
-        _KIND = "STRUCT"
-        _FIELDS = (("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),)
-
-    @_dc.dataclass
-    class Dummy(_Variant):
-        _NAME = "Dummy"
-        _KIND = "UNIT"
-
-    @_dc.dataclass(kw_only=True)
-    class FirstValue(_Variant):
-        order_by: list[ColumnOrder]
-        window_frame: WindowFrame
-        _NAME = "FirstValue"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),
-            ("window_frame", "window_frame", {"TYPENAME": "WindowFrame"}),
-        )
-
-    @_dc.dataclass(kw_only=True)
-    class FusedValueWindowFunc(_Variant):
-        funcs: list[AggregateFunc]
-        order_by: list[ColumnOrder]
-        _NAME = "FusedValueWindowFunc"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("funcs", "funcs", {"SEQ": {"TYPENAME": "AggregateFunc"}}),
-            ("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),
-        )
-
-    @_dc.dataclass(kw_only=True)
-    class FusedWindowAggregate(_Variant):
-        order_by: list[ColumnOrder]
-        window_frame: WindowFrame
-        wrapped_aggregates: list[AggregateFunc]
-        _NAME = "FusedWindowAggregate"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),
-            ("window_frame", "window_frame", {"TYPENAME": "WindowFrame"}),
-            (
-                "wrapped_aggregates",
-                "wrapped_aggregates",
-                {"SEQ": {"TYPENAME": "AggregateFunc"}},
-            ),
-        )
-
-    @_dc.dataclass(kw_only=True)
-    class JsonbAgg(_Variant):
-        order_by: list[ColumnOrder]
-        _NAME = "JsonbAgg"
-        _KIND = "STRUCT"
-        _FIELDS = (("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),)
-
-    @_dc.dataclass(kw_only=True)
-    class JsonbObjectAgg(_Variant):
-        order_by: list[ColumnOrder]
-        _NAME = "JsonbObjectAgg"
-        _KIND = "STRUCT"
-        _FIELDS = (("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),)
-
-    @_dc.dataclass(kw_only=True)
-    class LagLead(_Variant):
-        ignore_nulls: bool
-        lag_lead: LagLeadType
-        order_by: list[ColumnOrder]
-        _NAME = "LagLead"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("ignore_nulls", "ignore_nulls", "BOOL"),
-            ("lag_lead", "lag_lead", {"TYPENAME": "LagLeadType"}),
-            ("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),
-        )
-
-    @_dc.dataclass(kw_only=True)
-    class LastValue(_Variant):
-        order_by: list[ColumnOrder]
-        window_frame: WindowFrame
-        _NAME = "LastValue"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),
-            ("window_frame", "window_frame", {"TYPENAME": "WindowFrame"}),
-        )
-
-    @_dc.dataclass(kw_only=True)
-    class ListConcat(_Variant):
-        order_by: list[ColumnOrder]
-        _NAME = "ListConcat"
-        _KIND = "STRUCT"
-        _FIELDS = (("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),)
-
-    @_dc.dataclass(kw_only=True)
-    class MapAgg(_Variant):
-        order_by: list[ColumnOrder]
-        value_type: SqlScalarType
-        _NAME = "MapAgg"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),
-            ("value_type", "value_type", {"TYPENAME": "SqlScalarType"}),
-        )
-
-    @_dc.dataclass
-    class MaxArray(_Variant):
-        _NAME = "MaxArray"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxBool(_Variant):
-        _NAME = "MaxBool"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxDate(_Variant):
-        _NAME = "MaxDate"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxFloat32(_Variant):
-        _NAME = "MaxFloat32"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxFloat64(_Variant):
-        _NAME = "MaxFloat64"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxInt16(_Variant):
-        _NAME = "MaxInt16"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxInt32(_Variant):
-        _NAME = "MaxInt32"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxInt64(_Variant):
-        _NAME = "MaxInt64"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxInterval(_Variant):
-        _NAME = "MaxInterval"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxList(_Variant):
-        _NAME = "MaxList"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxMzTimestamp(_Variant):
-        _NAME = "MaxMzTimestamp"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxNumeric(_Variant):
-        _NAME = "MaxNumeric"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxString(_Variant):
-        _NAME = "MaxString"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxTime(_Variant):
-        _NAME = "MaxTime"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxTimestamp(_Variant):
-        _NAME = "MaxTimestamp"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxTimestampTz(_Variant):
-        _NAME = "MaxTimestampTz"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxUInt16(_Variant):
-        _NAME = "MaxUInt16"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxUInt32(_Variant):
-        _NAME = "MaxUInt32"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MaxUInt64(_Variant):
-        _NAME = "MaxUInt64"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinArray(_Variant):
-        _NAME = "MinArray"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinBool(_Variant):
-        _NAME = "MinBool"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinDate(_Variant):
-        _NAME = "MinDate"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinFloat32(_Variant):
-        _NAME = "MinFloat32"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinFloat64(_Variant):
-        _NAME = "MinFloat64"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinInt16(_Variant):
-        _NAME = "MinInt16"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinInt32(_Variant):
-        _NAME = "MinInt32"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinInt64(_Variant):
-        _NAME = "MinInt64"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinInterval(_Variant):
-        _NAME = "MinInterval"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinList(_Variant):
-        _NAME = "MinList"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinMzTimestamp(_Variant):
-        _NAME = "MinMzTimestamp"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinNumeric(_Variant):
-        _NAME = "MinNumeric"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinString(_Variant):
-        _NAME = "MinString"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinTime(_Variant):
-        _NAME = "MinTime"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinTimestamp(_Variant):
-        _NAME = "MinTimestamp"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinTimestampTz(_Variant):
-        _NAME = "MinTimestampTz"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinUInt16(_Variant):
-        _NAME = "MinUInt16"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinUInt32(_Variant):
-        _NAME = "MinUInt32"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class MinUInt64(_Variant):
-        _NAME = "MinUInt64"
-        _KIND = "UNIT"
-
-    @_dc.dataclass(kw_only=True)
-    class Rank(_Variant):
-        order_by: list[ColumnOrder]
-        _NAME = "Rank"
-        _KIND = "STRUCT"
-        _FIELDS = (("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),)
-
-    @_dc.dataclass(kw_only=True)
-    class RowNumber(_Variant):
-        order_by: list[ColumnOrder]
-        _NAME = "RowNumber"
-        _KIND = "STRUCT"
-        _FIELDS = (("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),)
-
-    @_dc.dataclass(kw_only=True)
-    class StringAgg(_Variant):
-        order_by: list[ColumnOrder]
-        _NAME = "StringAgg"
-        _KIND = "STRUCT"
-        _FIELDS = (("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),)
-
-    @_dc.dataclass
-    class SumFloat32(_Variant):
-        _NAME = "SumFloat32"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class SumFloat64(_Variant):
-        _NAME = "SumFloat64"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class SumInt16(_Variant):
-        _NAME = "SumInt16"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class SumInt32(_Variant):
-        _NAME = "SumInt32"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class SumInt64(_Variant):
-        _NAME = "SumInt64"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class SumInterval(_Variant):
-        _NAME = "SumInterval"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class SumNumeric(_Variant):
-        _NAME = "SumNumeric"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class SumUInt16(_Variant):
-        _NAME = "SumUInt16"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class SumUInt32(_Variant):
-        _NAME = "SumUInt32"
-        _KIND = "UNIT"
-
-    @_dc.dataclass
-    class SumUInt64(_Variant):
-        _NAME = "SumUInt64"
-        _KIND = "UNIT"
-
-    @_dc.dataclass(kw_only=True)
-    class WindowAggregate(_Variant):
-        order_by: list[ColumnOrder]
-        window_frame: WindowFrame
-        wrapped_aggregate: AggregateFunc
-        _NAME = "WindowAggregate"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),
-            ("window_frame", "window_frame", {"TYPENAME": "WindowFrame"}),
-            ("wrapped_aggregate", "wrapped_aggregate", {"TYPENAME": "AggregateFunc"}),
-        )
-
-    _VARIANTS = {
-        "All": All,
-        "Any": Any,
-        "ArrayConcat": ArrayConcat,
-        "Count": Count,
-        "DenseRank": DenseRank,
-        "Dummy": Dummy,
-        "FirstValue": FirstValue,
-        "FusedValueWindowFunc": FusedValueWindowFunc,
-        "FusedWindowAggregate": FusedWindowAggregate,
-        "JsonbAgg": JsonbAgg,
-        "JsonbObjectAgg": JsonbObjectAgg,
-        "LagLead": LagLead,
-        "LastValue": LastValue,
-        "ListConcat": ListConcat,
-        "MapAgg": MapAgg,
-        "MaxArray": MaxArray,
-        "MaxBool": MaxBool,
-        "MaxDate": MaxDate,
-        "MaxFloat32": MaxFloat32,
-        "MaxFloat64": MaxFloat64,
-        "MaxInt16": MaxInt16,
-        "MaxInt32": MaxInt32,
-        "MaxInt64": MaxInt64,
-        "MaxInterval": MaxInterval,
-        "MaxList": MaxList,
-        "MaxMzTimestamp": MaxMzTimestamp,
-        "MaxNumeric": MaxNumeric,
-        "MaxString": MaxString,
-        "MaxTime": MaxTime,
-        "MaxTimestamp": MaxTimestamp,
-        "MaxTimestampTz": MaxTimestampTz,
-        "MaxUInt16": MaxUInt16,
-        "MaxUInt32": MaxUInt32,
-        "MaxUInt64": MaxUInt64,
-        "MinArray": MinArray,
-        "MinBool": MinBool,
-        "MinDate": MinDate,
-        "MinFloat32": MinFloat32,
-        "MinFloat64": MinFloat64,
-        "MinInt16": MinInt16,
-        "MinInt32": MinInt32,
-        "MinInt64": MinInt64,
-        "MinInterval": MinInterval,
-        "MinList": MinList,
-        "MinMzTimestamp": MinMzTimestamp,
-        "MinNumeric": MinNumeric,
-        "MinString": MinString,
-        "MinTime": MinTime,
-        "MinTimestamp": MinTimestamp,
-        "MinTimestampTz": MinTimestampTz,
-        "MinUInt16": MinUInt16,
-        "MinUInt32": MinUInt32,
-        "MinUInt64": MinUInt64,
-        "Rank": Rank,
-        "RowNumber": RowNumber,
-        "StringAgg": StringAgg,
-        "SumFloat32": SumFloat32,
-        "SumFloat64": SumFloat64,
-        "SumInt16": SumInt16,
-        "SumInt32": SumInt32,
-        "SumInt64": SumInt64,
-        "SumInterval": SumInterval,
-        "SumNumeric": SumNumeric,
-        "SumUInt16": SumUInt16,
-        "SumUInt32": SumUInt32,
-        "SumUInt64": SumUInt64,
-        "WindowAggregate": WindowAggregate,
-    }
+    All: _ClassVar[type[_AggregateFunc_All]]
+    Any: _ClassVar[type[_AggregateFunc_Any]]
+    ArrayConcat: _ClassVar[type[_AggregateFunc_ArrayConcat]]
+    Count: _ClassVar[type[_AggregateFunc_Count]]
+    DenseRank: _ClassVar[type[_AggregateFunc_DenseRank]]
+    Dummy: _ClassVar[type[_AggregateFunc_Dummy]]
+    FirstValue: _ClassVar[type[_AggregateFunc_FirstValue]]
+    FusedValueWindowFunc: _ClassVar[type[_AggregateFunc_FusedValueWindowFunc]]
+    FusedWindowAggregate: _ClassVar[type[_AggregateFunc_FusedWindowAggregate]]
+    JsonbAgg: _ClassVar[type[_AggregateFunc_JsonbAgg]]
+    JsonbObjectAgg: _ClassVar[type[_AggregateFunc_JsonbObjectAgg]]
+    LagLead: _ClassVar[type[_AggregateFunc_LagLead]]
+    LastValue: _ClassVar[type[_AggregateFunc_LastValue]]
+    ListConcat: _ClassVar[type[_AggregateFunc_ListConcat]]
+    MapAgg: _ClassVar[type[_AggregateFunc_MapAgg]]
+    MaxArray: _ClassVar[type[_AggregateFunc_MaxArray]]
+    MaxBool: _ClassVar[type[_AggregateFunc_MaxBool]]
+    MaxDate: _ClassVar[type[_AggregateFunc_MaxDate]]
+    MaxFloat32: _ClassVar[type[_AggregateFunc_MaxFloat32]]
+    MaxFloat64: _ClassVar[type[_AggregateFunc_MaxFloat64]]
+    MaxInt16: _ClassVar[type[_AggregateFunc_MaxInt16]]
+    MaxInt32: _ClassVar[type[_AggregateFunc_MaxInt32]]
+    MaxInt64: _ClassVar[type[_AggregateFunc_MaxInt64]]
+    MaxInterval: _ClassVar[type[_AggregateFunc_MaxInterval]]
+    MaxList: _ClassVar[type[_AggregateFunc_MaxList]]
+    MaxMzTimestamp: _ClassVar[type[_AggregateFunc_MaxMzTimestamp]]
+    MaxNumeric: _ClassVar[type[_AggregateFunc_MaxNumeric]]
+    MaxString: _ClassVar[type[_AggregateFunc_MaxString]]
+    MaxTime: _ClassVar[type[_AggregateFunc_MaxTime]]
+    MaxTimestamp: _ClassVar[type[_AggregateFunc_MaxTimestamp]]
+    MaxTimestampTz: _ClassVar[type[_AggregateFunc_MaxTimestampTz]]
+    MaxUInt16: _ClassVar[type[_AggregateFunc_MaxUInt16]]
+    MaxUInt32: _ClassVar[type[_AggregateFunc_MaxUInt32]]
+    MaxUInt64: _ClassVar[type[_AggregateFunc_MaxUInt64]]
+    MinArray: _ClassVar[type[_AggregateFunc_MinArray]]
+    MinBool: _ClassVar[type[_AggregateFunc_MinBool]]
+    MinDate: _ClassVar[type[_AggregateFunc_MinDate]]
+    MinFloat32: _ClassVar[type[_AggregateFunc_MinFloat32]]
+    MinFloat64: _ClassVar[type[_AggregateFunc_MinFloat64]]
+    MinInt16: _ClassVar[type[_AggregateFunc_MinInt16]]
+    MinInt32: _ClassVar[type[_AggregateFunc_MinInt32]]
+    MinInt64: _ClassVar[type[_AggregateFunc_MinInt64]]
+    MinInterval: _ClassVar[type[_AggregateFunc_MinInterval]]
+    MinList: _ClassVar[type[_AggregateFunc_MinList]]
+    MinMzTimestamp: _ClassVar[type[_AggregateFunc_MinMzTimestamp]]
+    MinNumeric: _ClassVar[type[_AggregateFunc_MinNumeric]]
+    MinString: _ClassVar[type[_AggregateFunc_MinString]]
+    MinTime: _ClassVar[type[_AggregateFunc_MinTime]]
+    MinTimestamp: _ClassVar[type[_AggregateFunc_MinTimestamp]]
+    MinTimestampTz: _ClassVar[type[_AggregateFunc_MinTimestampTz]]
+    MinUInt16: _ClassVar[type[_AggregateFunc_MinUInt16]]
+    MinUInt32: _ClassVar[type[_AggregateFunc_MinUInt32]]
+    MinUInt64: _ClassVar[type[_AggregateFunc_MinUInt64]]
+    Rank: _ClassVar[type[_AggregateFunc_Rank]]
+    RowNumber: _ClassVar[type[_AggregateFunc_RowNumber]]
+    StringAgg: _ClassVar[type[_AggregateFunc_StringAgg]]
+    SumFloat32: _ClassVar[type[_AggregateFunc_SumFloat32]]
+    SumFloat64: _ClassVar[type[_AggregateFunc_SumFloat64]]
+    SumInt16: _ClassVar[type[_AggregateFunc_SumInt16]]
+    SumInt32: _ClassVar[type[_AggregateFunc_SumInt32]]
+    SumInt64: _ClassVar[type[_AggregateFunc_SumInt64]]
+    SumInterval: _ClassVar[type[_AggregateFunc_SumInterval]]
+    SumNumeric: _ClassVar[type[_AggregateFunc_SumNumeric]]
+    SumUInt16: _ClassVar[type[_AggregateFunc_SumUInt16]]
+    SumUInt32: _ClassVar[type[_AggregateFunc_SumUInt32]]
+    SumUInt64: _ClassVar[type[_AggregateFunc_SumUInt64]]
+    WindowAggregate: _ClassVar[type[_AggregateFunc_WindowAggregate]]
+
+
+@_dc.dataclass
+class _AggregateFunc_All(_Variant, AggregateFunc):
+    _NAME = "All"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_All.__name__ = "All"
+_AggregateFunc_All.__qualname__ = "AggregateFunc.All"
+AggregateFunc.All = _AggregateFunc_All
+
+
+@_dc.dataclass
+class _AggregateFunc_Any(_Variant, AggregateFunc):
+    _NAME = "Any"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_Any.__name__ = "Any"
+_AggregateFunc_Any.__qualname__ = "AggregateFunc.Any"
+AggregateFunc.Any = _AggregateFunc_Any
+
+
+@_dc.dataclass(kw_only=True)
+class _AggregateFunc_ArrayConcat(_Variant, AggregateFunc):
+    order_by: list[ColumnOrder]
+    _NAME = "ArrayConcat"
+    _KIND = "STRUCT"
+    _FIELDS = (("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),)
+
+
+_AggregateFunc_ArrayConcat.__name__ = "ArrayConcat"
+_AggregateFunc_ArrayConcat.__qualname__ = "AggregateFunc.ArrayConcat"
+AggregateFunc.ArrayConcat = _AggregateFunc_ArrayConcat
+
+
+@_dc.dataclass
+class _AggregateFunc_Count(_Variant, AggregateFunc):
+    _NAME = "Count"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_Count.__name__ = "Count"
+_AggregateFunc_Count.__qualname__ = "AggregateFunc.Count"
+AggregateFunc.Count = _AggregateFunc_Count
+
+
+@_dc.dataclass(kw_only=True)
+class _AggregateFunc_DenseRank(_Variant, AggregateFunc):
+    order_by: list[ColumnOrder]
+    _NAME = "DenseRank"
+    _KIND = "STRUCT"
+    _FIELDS = (("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),)
+
+
+_AggregateFunc_DenseRank.__name__ = "DenseRank"
+_AggregateFunc_DenseRank.__qualname__ = "AggregateFunc.DenseRank"
+AggregateFunc.DenseRank = _AggregateFunc_DenseRank
+
+
+@_dc.dataclass
+class _AggregateFunc_Dummy(_Variant, AggregateFunc):
+    _NAME = "Dummy"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_Dummy.__name__ = "Dummy"
+_AggregateFunc_Dummy.__qualname__ = "AggregateFunc.Dummy"
+AggregateFunc.Dummy = _AggregateFunc_Dummy
+
+
+@_dc.dataclass(kw_only=True)
+class _AggregateFunc_FirstValue(_Variant, AggregateFunc):
+    order_by: list[ColumnOrder]
+    window_frame: WindowFrame
+    _NAME = "FirstValue"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),
+        ("window_frame", "window_frame", {"TYPENAME": "WindowFrame"}),
+    )
+
+
+_AggregateFunc_FirstValue.__name__ = "FirstValue"
+_AggregateFunc_FirstValue.__qualname__ = "AggregateFunc.FirstValue"
+AggregateFunc.FirstValue = _AggregateFunc_FirstValue
+
+
+@_dc.dataclass(kw_only=True)
+class _AggregateFunc_FusedValueWindowFunc(_Variant, AggregateFunc):
+    funcs: list[AggregateFunc]
+    order_by: list[ColumnOrder]
+    _NAME = "FusedValueWindowFunc"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("funcs", "funcs", {"SEQ": {"TYPENAME": "AggregateFunc"}}),
+        ("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),
+    )
+
+
+_AggregateFunc_FusedValueWindowFunc.__name__ = "FusedValueWindowFunc"
+_AggregateFunc_FusedValueWindowFunc.__qualname__ = "AggregateFunc.FusedValueWindowFunc"
+AggregateFunc.FusedValueWindowFunc = _AggregateFunc_FusedValueWindowFunc
+
+
+@_dc.dataclass(kw_only=True)
+class _AggregateFunc_FusedWindowAggregate(_Variant, AggregateFunc):
+    order_by: list[ColumnOrder]
+    window_frame: WindowFrame
+    wrapped_aggregates: list[AggregateFunc]
+    _NAME = "FusedWindowAggregate"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),
+        ("window_frame", "window_frame", {"TYPENAME": "WindowFrame"}),
+        (
+            "wrapped_aggregates",
+            "wrapped_aggregates",
+            {"SEQ": {"TYPENAME": "AggregateFunc"}},
+        ),
+    )
+
+
+_AggregateFunc_FusedWindowAggregate.__name__ = "FusedWindowAggregate"
+_AggregateFunc_FusedWindowAggregate.__qualname__ = "AggregateFunc.FusedWindowAggregate"
+AggregateFunc.FusedWindowAggregate = _AggregateFunc_FusedWindowAggregate
+
+
+@_dc.dataclass(kw_only=True)
+class _AggregateFunc_JsonbAgg(_Variant, AggregateFunc):
+    order_by: list[ColumnOrder]
+    _NAME = "JsonbAgg"
+    _KIND = "STRUCT"
+    _FIELDS = (("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),)
+
+
+_AggregateFunc_JsonbAgg.__name__ = "JsonbAgg"
+_AggregateFunc_JsonbAgg.__qualname__ = "AggregateFunc.JsonbAgg"
+AggregateFunc.JsonbAgg = _AggregateFunc_JsonbAgg
+
+
+@_dc.dataclass(kw_only=True)
+class _AggregateFunc_JsonbObjectAgg(_Variant, AggregateFunc):
+    order_by: list[ColumnOrder]
+    _NAME = "JsonbObjectAgg"
+    _KIND = "STRUCT"
+    _FIELDS = (("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),)
+
+
+_AggregateFunc_JsonbObjectAgg.__name__ = "JsonbObjectAgg"
+_AggregateFunc_JsonbObjectAgg.__qualname__ = "AggregateFunc.JsonbObjectAgg"
+AggregateFunc.JsonbObjectAgg = _AggregateFunc_JsonbObjectAgg
+
+
+@_dc.dataclass(kw_only=True)
+class _AggregateFunc_LagLead(_Variant, AggregateFunc):
+    ignore_nulls: bool
+    lag_lead: LagLeadType
+    order_by: list[ColumnOrder]
+    _NAME = "LagLead"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("ignore_nulls", "ignore_nulls", "BOOL"),
+        ("lag_lead", "lag_lead", {"TYPENAME": "LagLeadType"}),
+        ("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),
+    )
+
+
+_AggregateFunc_LagLead.__name__ = "LagLead"
+_AggregateFunc_LagLead.__qualname__ = "AggregateFunc.LagLead"
+AggregateFunc.LagLead = _AggregateFunc_LagLead
+
+
+@_dc.dataclass(kw_only=True)
+class _AggregateFunc_LastValue(_Variant, AggregateFunc):
+    order_by: list[ColumnOrder]
+    window_frame: WindowFrame
+    _NAME = "LastValue"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),
+        ("window_frame", "window_frame", {"TYPENAME": "WindowFrame"}),
+    )
+
+
+_AggregateFunc_LastValue.__name__ = "LastValue"
+_AggregateFunc_LastValue.__qualname__ = "AggregateFunc.LastValue"
+AggregateFunc.LastValue = _AggregateFunc_LastValue
+
+
+@_dc.dataclass(kw_only=True)
+class _AggregateFunc_ListConcat(_Variant, AggregateFunc):
+    order_by: list[ColumnOrder]
+    _NAME = "ListConcat"
+    _KIND = "STRUCT"
+    _FIELDS = (("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),)
+
+
+_AggregateFunc_ListConcat.__name__ = "ListConcat"
+_AggregateFunc_ListConcat.__qualname__ = "AggregateFunc.ListConcat"
+AggregateFunc.ListConcat = _AggregateFunc_ListConcat
+
+
+@_dc.dataclass(kw_only=True)
+class _AggregateFunc_MapAgg(_Variant, AggregateFunc):
+    order_by: list[ColumnOrder]
+    value_type: SqlScalarType
+    _NAME = "MapAgg"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),
+        ("value_type", "value_type", {"TYPENAME": "SqlScalarType"}),
+    )
+
+
+_AggregateFunc_MapAgg.__name__ = "MapAgg"
+_AggregateFunc_MapAgg.__qualname__ = "AggregateFunc.MapAgg"
+AggregateFunc.MapAgg = _AggregateFunc_MapAgg
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxArray(_Variant, AggregateFunc):
+    _NAME = "MaxArray"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxArray.__name__ = "MaxArray"
+_AggregateFunc_MaxArray.__qualname__ = "AggregateFunc.MaxArray"
+AggregateFunc.MaxArray = _AggregateFunc_MaxArray
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxBool(_Variant, AggregateFunc):
+    _NAME = "MaxBool"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxBool.__name__ = "MaxBool"
+_AggregateFunc_MaxBool.__qualname__ = "AggregateFunc.MaxBool"
+AggregateFunc.MaxBool = _AggregateFunc_MaxBool
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxDate(_Variant, AggregateFunc):
+    _NAME = "MaxDate"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxDate.__name__ = "MaxDate"
+_AggregateFunc_MaxDate.__qualname__ = "AggregateFunc.MaxDate"
+AggregateFunc.MaxDate = _AggregateFunc_MaxDate
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxFloat32(_Variant, AggregateFunc):
+    _NAME = "MaxFloat32"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxFloat32.__name__ = "MaxFloat32"
+_AggregateFunc_MaxFloat32.__qualname__ = "AggregateFunc.MaxFloat32"
+AggregateFunc.MaxFloat32 = _AggregateFunc_MaxFloat32
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxFloat64(_Variant, AggregateFunc):
+    _NAME = "MaxFloat64"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxFloat64.__name__ = "MaxFloat64"
+_AggregateFunc_MaxFloat64.__qualname__ = "AggregateFunc.MaxFloat64"
+AggregateFunc.MaxFloat64 = _AggregateFunc_MaxFloat64
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxInt16(_Variant, AggregateFunc):
+    _NAME = "MaxInt16"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxInt16.__name__ = "MaxInt16"
+_AggregateFunc_MaxInt16.__qualname__ = "AggregateFunc.MaxInt16"
+AggregateFunc.MaxInt16 = _AggregateFunc_MaxInt16
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxInt32(_Variant, AggregateFunc):
+    _NAME = "MaxInt32"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxInt32.__name__ = "MaxInt32"
+_AggregateFunc_MaxInt32.__qualname__ = "AggregateFunc.MaxInt32"
+AggregateFunc.MaxInt32 = _AggregateFunc_MaxInt32
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxInt64(_Variant, AggregateFunc):
+    _NAME = "MaxInt64"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxInt64.__name__ = "MaxInt64"
+_AggregateFunc_MaxInt64.__qualname__ = "AggregateFunc.MaxInt64"
+AggregateFunc.MaxInt64 = _AggregateFunc_MaxInt64
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxInterval(_Variant, AggregateFunc):
+    _NAME = "MaxInterval"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxInterval.__name__ = "MaxInterval"
+_AggregateFunc_MaxInterval.__qualname__ = "AggregateFunc.MaxInterval"
+AggregateFunc.MaxInterval = _AggregateFunc_MaxInterval
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxList(_Variant, AggregateFunc):
+    _NAME = "MaxList"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxList.__name__ = "MaxList"
+_AggregateFunc_MaxList.__qualname__ = "AggregateFunc.MaxList"
+AggregateFunc.MaxList = _AggregateFunc_MaxList
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxMzTimestamp(_Variant, AggregateFunc):
+    _NAME = "MaxMzTimestamp"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxMzTimestamp.__name__ = "MaxMzTimestamp"
+_AggregateFunc_MaxMzTimestamp.__qualname__ = "AggregateFunc.MaxMzTimestamp"
+AggregateFunc.MaxMzTimestamp = _AggregateFunc_MaxMzTimestamp
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxNumeric(_Variant, AggregateFunc):
+    _NAME = "MaxNumeric"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxNumeric.__name__ = "MaxNumeric"
+_AggregateFunc_MaxNumeric.__qualname__ = "AggregateFunc.MaxNumeric"
+AggregateFunc.MaxNumeric = _AggregateFunc_MaxNumeric
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxString(_Variant, AggregateFunc):
+    _NAME = "MaxString"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxString.__name__ = "MaxString"
+_AggregateFunc_MaxString.__qualname__ = "AggregateFunc.MaxString"
+AggregateFunc.MaxString = _AggregateFunc_MaxString
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxTime(_Variant, AggregateFunc):
+    _NAME = "MaxTime"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxTime.__name__ = "MaxTime"
+_AggregateFunc_MaxTime.__qualname__ = "AggregateFunc.MaxTime"
+AggregateFunc.MaxTime = _AggregateFunc_MaxTime
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxTimestamp(_Variant, AggregateFunc):
+    _NAME = "MaxTimestamp"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxTimestamp.__name__ = "MaxTimestamp"
+_AggregateFunc_MaxTimestamp.__qualname__ = "AggregateFunc.MaxTimestamp"
+AggregateFunc.MaxTimestamp = _AggregateFunc_MaxTimestamp
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxTimestampTz(_Variant, AggregateFunc):
+    _NAME = "MaxTimestampTz"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxTimestampTz.__name__ = "MaxTimestampTz"
+_AggregateFunc_MaxTimestampTz.__qualname__ = "AggregateFunc.MaxTimestampTz"
+AggregateFunc.MaxTimestampTz = _AggregateFunc_MaxTimestampTz
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxUInt16(_Variant, AggregateFunc):
+    _NAME = "MaxUInt16"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxUInt16.__name__ = "MaxUInt16"
+_AggregateFunc_MaxUInt16.__qualname__ = "AggregateFunc.MaxUInt16"
+AggregateFunc.MaxUInt16 = _AggregateFunc_MaxUInt16
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxUInt32(_Variant, AggregateFunc):
+    _NAME = "MaxUInt32"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxUInt32.__name__ = "MaxUInt32"
+_AggregateFunc_MaxUInt32.__qualname__ = "AggregateFunc.MaxUInt32"
+AggregateFunc.MaxUInt32 = _AggregateFunc_MaxUInt32
+
+
+@_dc.dataclass
+class _AggregateFunc_MaxUInt64(_Variant, AggregateFunc):
+    _NAME = "MaxUInt64"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MaxUInt64.__name__ = "MaxUInt64"
+_AggregateFunc_MaxUInt64.__qualname__ = "AggregateFunc.MaxUInt64"
+AggregateFunc.MaxUInt64 = _AggregateFunc_MaxUInt64
+
+
+@_dc.dataclass
+class _AggregateFunc_MinArray(_Variant, AggregateFunc):
+    _NAME = "MinArray"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinArray.__name__ = "MinArray"
+_AggregateFunc_MinArray.__qualname__ = "AggregateFunc.MinArray"
+AggregateFunc.MinArray = _AggregateFunc_MinArray
+
+
+@_dc.dataclass
+class _AggregateFunc_MinBool(_Variant, AggregateFunc):
+    _NAME = "MinBool"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinBool.__name__ = "MinBool"
+_AggregateFunc_MinBool.__qualname__ = "AggregateFunc.MinBool"
+AggregateFunc.MinBool = _AggregateFunc_MinBool
+
+
+@_dc.dataclass
+class _AggregateFunc_MinDate(_Variant, AggregateFunc):
+    _NAME = "MinDate"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinDate.__name__ = "MinDate"
+_AggregateFunc_MinDate.__qualname__ = "AggregateFunc.MinDate"
+AggregateFunc.MinDate = _AggregateFunc_MinDate
+
+
+@_dc.dataclass
+class _AggregateFunc_MinFloat32(_Variant, AggregateFunc):
+    _NAME = "MinFloat32"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinFloat32.__name__ = "MinFloat32"
+_AggregateFunc_MinFloat32.__qualname__ = "AggregateFunc.MinFloat32"
+AggregateFunc.MinFloat32 = _AggregateFunc_MinFloat32
+
+
+@_dc.dataclass
+class _AggregateFunc_MinFloat64(_Variant, AggregateFunc):
+    _NAME = "MinFloat64"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinFloat64.__name__ = "MinFloat64"
+_AggregateFunc_MinFloat64.__qualname__ = "AggregateFunc.MinFloat64"
+AggregateFunc.MinFloat64 = _AggregateFunc_MinFloat64
+
+
+@_dc.dataclass
+class _AggregateFunc_MinInt16(_Variant, AggregateFunc):
+    _NAME = "MinInt16"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinInt16.__name__ = "MinInt16"
+_AggregateFunc_MinInt16.__qualname__ = "AggregateFunc.MinInt16"
+AggregateFunc.MinInt16 = _AggregateFunc_MinInt16
+
+
+@_dc.dataclass
+class _AggregateFunc_MinInt32(_Variant, AggregateFunc):
+    _NAME = "MinInt32"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinInt32.__name__ = "MinInt32"
+_AggregateFunc_MinInt32.__qualname__ = "AggregateFunc.MinInt32"
+AggregateFunc.MinInt32 = _AggregateFunc_MinInt32
+
+
+@_dc.dataclass
+class _AggregateFunc_MinInt64(_Variant, AggregateFunc):
+    _NAME = "MinInt64"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinInt64.__name__ = "MinInt64"
+_AggregateFunc_MinInt64.__qualname__ = "AggregateFunc.MinInt64"
+AggregateFunc.MinInt64 = _AggregateFunc_MinInt64
+
+
+@_dc.dataclass
+class _AggregateFunc_MinInterval(_Variant, AggregateFunc):
+    _NAME = "MinInterval"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinInterval.__name__ = "MinInterval"
+_AggregateFunc_MinInterval.__qualname__ = "AggregateFunc.MinInterval"
+AggregateFunc.MinInterval = _AggregateFunc_MinInterval
+
+
+@_dc.dataclass
+class _AggregateFunc_MinList(_Variant, AggregateFunc):
+    _NAME = "MinList"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinList.__name__ = "MinList"
+_AggregateFunc_MinList.__qualname__ = "AggregateFunc.MinList"
+AggregateFunc.MinList = _AggregateFunc_MinList
+
+
+@_dc.dataclass
+class _AggregateFunc_MinMzTimestamp(_Variant, AggregateFunc):
+    _NAME = "MinMzTimestamp"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinMzTimestamp.__name__ = "MinMzTimestamp"
+_AggregateFunc_MinMzTimestamp.__qualname__ = "AggregateFunc.MinMzTimestamp"
+AggregateFunc.MinMzTimestamp = _AggregateFunc_MinMzTimestamp
+
+
+@_dc.dataclass
+class _AggregateFunc_MinNumeric(_Variant, AggregateFunc):
+    _NAME = "MinNumeric"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinNumeric.__name__ = "MinNumeric"
+_AggregateFunc_MinNumeric.__qualname__ = "AggregateFunc.MinNumeric"
+AggregateFunc.MinNumeric = _AggregateFunc_MinNumeric
+
+
+@_dc.dataclass
+class _AggregateFunc_MinString(_Variant, AggregateFunc):
+    _NAME = "MinString"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinString.__name__ = "MinString"
+_AggregateFunc_MinString.__qualname__ = "AggregateFunc.MinString"
+AggregateFunc.MinString = _AggregateFunc_MinString
+
+
+@_dc.dataclass
+class _AggregateFunc_MinTime(_Variant, AggregateFunc):
+    _NAME = "MinTime"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinTime.__name__ = "MinTime"
+_AggregateFunc_MinTime.__qualname__ = "AggregateFunc.MinTime"
+AggregateFunc.MinTime = _AggregateFunc_MinTime
+
+
+@_dc.dataclass
+class _AggregateFunc_MinTimestamp(_Variant, AggregateFunc):
+    _NAME = "MinTimestamp"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinTimestamp.__name__ = "MinTimestamp"
+_AggregateFunc_MinTimestamp.__qualname__ = "AggregateFunc.MinTimestamp"
+AggregateFunc.MinTimestamp = _AggregateFunc_MinTimestamp
+
+
+@_dc.dataclass
+class _AggregateFunc_MinTimestampTz(_Variant, AggregateFunc):
+    _NAME = "MinTimestampTz"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinTimestampTz.__name__ = "MinTimestampTz"
+_AggregateFunc_MinTimestampTz.__qualname__ = "AggregateFunc.MinTimestampTz"
+AggregateFunc.MinTimestampTz = _AggregateFunc_MinTimestampTz
+
+
+@_dc.dataclass
+class _AggregateFunc_MinUInt16(_Variant, AggregateFunc):
+    _NAME = "MinUInt16"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinUInt16.__name__ = "MinUInt16"
+_AggregateFunc_MinUInt16.__qualname__ = "AggregateFunc.MinUInt16"
+AggregateFunc.MinUInt16 = _AggregateFunc_MinUInt16
+
+
+@_dc.dataclass
+class _AggregateFunc_MinUInt32(_Variant, AggregateFunc):
+    _NAME = "MinUInt32"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinUInt32.__name__ = "MinUInt32"
+_AggregateFunc_MinUInt32.__qualname__ = "AggregateFunc.MinUInt32"
+AggregateFunc.MinUInt32 = _AggregateFunc_MinUInt32
+
+
+@_dc.dataclass
+class _AggregateFunc_MinUInt64(_Variant, AggregateFunc):
+    _NAME = "MinUInt64"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_MinUInt64.__name__ = "MinUInt64"
+_AggregateFunc_MinUInt64.__qualname__ = "AggregateFunc.MinUInt64"
+AggregateFunc.MinUInt64 = _AggregateFunc_MinUInt64
+
+
+@_dc.dataclass(kw_only=True)
+class _AggregateFunc_Rank(_Variant, AggregateFunc):
+    order_by: list[ColumnOrder]
+    _NAME = "Rank"
+    _KIND = "STRUCT"
+    _FIELDS = (("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),)
+
+
+_AggregateFunc_Rank.__name__ = "Rank"
+_AggregateFunc_Rank.__qualname__ = "AggregateFunc.Rank"
+AggregateFunc.Rank = _AggregateFunc_Rank
+
+
+@_dc.dataclass(kw_only=True)
+class _AggregateFunc_RowNumber(_Variant, AggregateFunc):
+    order_by: list[ColumnOrder]
+    _NAME = "RowNumber"
+    _KIND = "STRUCT"
+    _FIELDS = (("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),)
+
+
+_AggregateFunc_RowNumber.__name__ = "RowNumber"
+_AggregateFunc_RowNumber.__qualname__ = "AggregateFunc.RowNumber"
+AggregateFunc.RowNumber = _AggregateFunc_RowNumber
+
+
+@_dc.dataclass(kw_only=True)
+class _AggregateFunc_StringAgg(_Variant, AggregateFunc):
+    order_by: list[ColumnOrder]
+    _NAME = "StringAgg"
+    _KIND = "STRUCT"
+    _FIELDS = (("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),)
+
+
+_AggregateFunc_StringAgg.__name__ = "StringAgg"
+_AggregateFunc_StringAgg.__qualname__ = "AggregateFunc.StringAgg"
+AggregateFunc.StringAgg = _AggregateFunc_StringAgg
+
+
+@_dc.dataclass
+class _AggregateFunc_SumFloat32(_Variant, AggregateFunc):
+    _NAME = "SumFloat32"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_SumFloat32.__name__ = "SumFloat32"
+_AggregateFunc_SumFloat32.__qualname__ = "AggregateFunc.SumFloat32"
+AggregateFunc.SumFloat32 = _AggregateFunc_SumFloat32
+
+
+@_dc.dataclass
+class _AggregateFunc_SumFloat64(_Variant, AggregateFunc):
+    _NAME = "SumFloat64"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_SumFloat64.__name__ = "SumFloat64"
+_AggregateFunc_SumFloat64.__qualname__ = "AggregateFunc.SumFloat64"
+AggregateFunc.SumFloat64 = _AggregateFunc_SumFloat64
+
+
+@_dc.dataclass
+class _AggregateFunc_SumInt16(_Variant, AggregateFunc):
+    _NAME = "SumInt16"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_SumInt16.__name__ = "SumInt16"
+_AggregateFunc_SumInt16.__qualname__ = "AggregateFunc.SumInt16"
+AggregateFunc.SumInt16 = _AggregateFunc_SumInt16
+
+
+@_dc.dataclass
+class _AggregateFunc_SumInt32(_Variant, AggregateFunc):
+    _NAME = "SumInt32"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_SumInt32.__name__ = "SumInt32"
+_AggregateFunc_SumInt32.__qualname__ = "AggregateFunc.SumInt32"
+AggregateFunc.SumInt32 = _AggregateFunc_SumInt32
+
+
+@_dc.dataclass
+class _AggregateFunc_SumInt64(_Variant, AggregateFunc):
+    _NAME = "SumInt64"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_SumInt64.__name__ = "SumInt64"
+_AggregateFunc_SumInt64.__qualname__ = "AggregateFunc.SumInt64"
+AggregateFunc.SumInt64 = _AggregateFunc_SumInt64
+
+
+@_dc.dataclass
+class _AggregateFunc_SumInterval(_Variant, AggregateFunc):
+    _NAME = "SumInterval"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_SumInterval.__name__ = "SumInterval"
+_AggregateFunc_SumInterval.__qualname__ = "AggregateFunc.SumInterval"
+AggregateFunc.SumInterval = _AggregateFunc_SumInterval
+
+
+@_dc.dataclass
+class _AggregateFunc_SumNumeric(_Variant, AggregateFunc):
+    _NAME = "SumNumeric"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_SumNumeric.__name__ = "SumNumeric"
+_AggregateFunc_SumNumeric.__qualname__ = "AggregateFunc.SumNumeric"
+AggregateFunc.SumNumeric = _AggregateFunc_SumNumeric
+
+
+@_dc.dataclass
+class _AggregateFunc_SumUInt16(_Variant, AggregateFunc):
+    _NAME = "SumUInt16"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_SumUInt16.__name__ = "SumUInt16"
+_AggregateFunc_SumUInt16.__qualname__ = "AggregateFunc.SumUInt16"
+AggregateFunc.SumUInt16 = _AggregateFunc_SumUInt16
+
+
+@_dc.dataclass
+class _AggregateFunc_SumUInt32(_Variant, AggregateFunc):
+    _NAME = "SumUInt32"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_SumUInt32.__name__ = "SumUInt32"
+_AggregateFunc_SumUInt32.__qualname__ = "AggregateFunc.SumUInt32"
+AggregateFunc.SumUInt32 = _AggregateFunc_SumUInt32
+
+
+@_dc.dataclass
+class _AggregateFunc_SumUInt64(_Variant, AggregateFunc):
+    _NAME = "SumUInt64"
+    _KIND = "UNIT"
+
+
+_AggregateFunc_SumUInt64.__name__ = "SumUInt64"
+_AggregateFunc_SumUInt64.__qualname__ = "AggregateFunc.SumUInt64"
+AggregateFunc.SumUInt64 = _AggregateFunc_SumUInt64
+
+
+@_dc.dataclass(kw_only=True)
+class _AggregateFunc_WindowAggregate(_Variant, AggregateFunc):
+    order_by: list[ColumnOrder]
+    window_frame: WindowFrame
+    wrapped_aggregate: AggregateFunc
+    _NAME = "WindowAggregate"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("order_by", "order_by", {"SEQ": {"TYPENAME": "ColumnOrder"}}),
+        ("window_frame", "window_frame", {"TYPENAME": "WindowFrame"}),
+        ("wrapped_aggregate", "wrapped_aggregate", {"TYPENAME": "AggregateFunc"}),
+    )
+
+
+_AggregateFunc_WindowAggregate.__name__ = "WindowAggregate"
+_AggregateFunc_WindowAggregate.__qualname__ = "AggregateFunc.WindowAggregate"
+AggregateFunc.WindowAggregate = _AggregateFunc_WindowAggregate
+AggregateFunc._VARIANTS = {
+    "All": AggregateFunc.All,
+    "Any": AggregateFunc.Any,
+    "ArrayConcat": AggregateFunc.ArrayConcat,
+    "Count": AggregateFunc.Count,
+    "DenseRank": AggregateFunc.DenseRank,
+    "Dummy": AggregateFunc.Dummy,
+    "FirstValue": AggregateFunc.FirstValue,
+    "FusedValueWindowFunc": AggregateFunc.FusedValueWindowFunc,
+    "FusedWindowAggregate": AggregateFunc.FusedWindowAggregate,
+    "JsonbAgg": AggregateFunc.JsonbAgg,
+    "JsonbObjectAgg": AggregateFunc.JsonbObjectAgg,
+    "LagLead": AggregateFunc.LagLead,
+    "LastValue": AggregateFunc.LastValue,
+    "ListConcat": AggregateFunc.ListConcat,
+    "MapAgg": AggregateFunc.MapAgg,
+    "MaxArray": AggregateFunc.MaxArray,
+    "MaxBool": AggregateFunc.MaxBool,
+    "MaxDate": AggregateFunc.MaxDate,
+    "MaxFloat32": AggregateFunc.MaxFloat32,
+    "MaxFloat64": AggregateFunc.MaxFloat64,
+    "MaxInt16": AggregateFunc.MaxInt16,
+    "MaxInt32": AggregateFunc.MaxInt32,
+    "MaxInt64": AggregateFunc.MaxInt64,
+    "MaxInterval": AggregateFunc.MaxInterval,
+    "MaxList": AggregateFunc.MaxList,
+    "MaxMzTimestamp": AggregateFunc.MaxMzTimestamp,
+    "MaxNumeric": AggregateFunc.MaxNumeric,
+    "MaxString": AggregateFunc.MaxString,
+    "MaxTime": AggregateFunc.MaxTime,
+    "MaxTimestamp": AggregateFunc.MaxTimestamp,
+    "MaxTimestampTz": AggregateFunc.MaxTimestampTz,
+    "MaxUInt16": AggregateFunc.MaxUInt16,
+    "MaxUInt32": AggregateFunc.MaxUInt32,
+    "MaxUInt64": AggregateFunc.MaxUInt64,
+    "MinArray": AggregateFunc.MinArray,
+    "MinBool": AggregateFunc.MinBool,
+    "MinDate": AggregateFunc.MinDate,
+    "MinFloat32": AggregateFunc.MinFloat32,
+    "MinFloat64": AggregateFunc.MinFloat64,
+    "MinInt16": AggregateFunc.MinInt16,
+    "MinInt32": AggregateFunc.MinInt32,
+    "MinInt64": AggregateFunc.MinInt64,
+    "MinInterval": AggregateFunc.MinInterval,
+    "MinList": AggregateFunc.MinList,
+    "MinMzTimestamp": AggregateFunc.MinMzTimestamp,
+    "MinNumeric": AggregateFunc.MinNumeric,
+    "MinString": AggregateFunc.MinString,
+    "MinTime": AggregateFunc.MinTime,
+    "MinTimestamp": AggregateFunc.MinTimestamp,
+    "MinTimestampTz": AggregateFunc.MinTimestampTz,
+    "MinUInt16": AggregateFunc.MinUInt16,
+    "MinUInt32": AggregateFunc.MinUInt32,
+    "MinUInt64": AggregateFunc.MinUInt64,
+    "Rank": AggregateFunc.Rank,
+    "RowNumber": AggregateFunc.RowNumber,
+    "StringAgg": AggregateFunc.StringAgg,
+    "SumFloat32": AggregateFunc.SumFloat32,
+    "SumFloat64": AggregateFunc.SumFloat64,
+    "SumInt16": AggregateFunc.SumInt16,
+    "SumInt32": AggregateFunc.SumInt32,
+    "SumInt64": AggregateFunc.SumInt64,
+    "SumInterval": AggregateFunc.SumInterval,
+    "SumNumeric": AggregateFunc.SumNumeric,
+    "SumUInt16": AggregateFunc.SumUInt16,
+    "SumUInt32": AggregateFunc.SumUInt32,
+    "SumUInt64": AggregateFunc.SumUInt64,
+    "WindowAggregate": AggregateFunc.WindowAggregate,
+}
 
 
 @_dc.dataclass
@@ -1096,17 +1567,36 @@ class And(_Unit):
 
 
 class ArrangementStrategy(_Enum):
-    @_dc.dataclass
-    class Direct(_Variant):
-        _NAME = "Direct"
-        _KIND = "UNIT"
+    Direct: _ClassVar[type[_ArrangementStrategy_Direct]]
+    TemporalBucketing: _ClassVar[type[_ArrangementStrategy_TemporalBucketing]]
 
-    @_dc.dataclass
-    class TemporalBucketing(_Variant):
-        _NAME = "TemporalBucketing"
-        _KIND = "UNIT"
 
-    _VARIANTS = {"Direct": Direct, "TemporalBucketing": TemporalBucketing}
+@_dc.dataclass
+class _ArrangementStrategy_Direct(_Variant, ArrangementStrategy):
+    _NAME = "Direct"
+    _KIND = "UNIT"
+
+
+_ArrangementStrategy_Direct.__name__ = "Direct"
+_ArrangementStrategy_Direct.__qualname__ = "ArrangementStrategy.Direct"
+ArrangementStrategy.Direct = _ArrangementStrategy_Direct
+
+
+@_dc.dataclass
+class _ArrangementStrategy_TemporalBucketing(_Variant, ArrangementStrategy):
+    _NAME = "TemporalBucketing"
+    _KIND = "UNIT"
+
+
+_ArrangementStrategy_TemporalBucketing.__name__ = "TemporalBucketing"
+_ArrangementStrategy_TemporalBucketing.__qualname__ = (
+    "ArrangementStrategy.TemporalBucketing"
+)
+ArrangementStrategy.TemporalBucketing = _ArrangementStrategy_TemporalBucketing
+ArrangementStrategy._VARIANTS = {
+    "Direct": ArrangementStrategy.Direct,
+    "TemporalBucketing": ArrangementStrategy.TemporalBucketing,
+}
 
 
 @_dc.dataclass
@@ -1226,21 +1716,35 @@ class AvailableCollections(_Struct):
 
 
 class BasicPlan(_Enum):
-    @_dc.dataclass
-    class Multiple(_Variant):
-        value: list[LirAggregateExpr]
-        _NAME = "Multiple"
-        _KIND = "NEWTYPE"
-        _INNER = {"SEQ": {"TYPENAME": "LirAggregateExpr"}}
+    Multiple: _ClassVar[type[_BasicPlan_Multiple]]
+    Single: _ClassVar[type[_BasicPlan_Single]]
 
-    @_dc.dataclass
-    class Single(_Variant):
-        value: SingleBasicPlan
-        _NAME = "Single"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SingleBasicPlan"}
 
-    _VARIANTS = {"Multiple": Multiple, "Single": Single}
+@_dc.dataclass
+class _BasicPlan_Multiple(_Variant, BasicPlan):
+    value: list[LirAggregateExpr]
+    _NAME = "Multiple"
+    _KIND = "NEWTYPE"
+    _INNER = {"SEQ": {"TYPENAME": "LirAggregateExpr"}}
+
+
+_BasicPlan_Multiple.__name__ = "Multiple"
+_BasicPlan_Multiple.__qualname__ = "BasicPlan.Multiple"
+BasicPlan.Multiple = _BasicPlan_Multiple
+
+
+@_dc.dataclass
+class _BasicPlan_Single(_Variant, BasicPlan):
+    value: SingleBasicPlan
+    _NAME = "Single"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SingleBasicPlan"}
+
+
+_BasicPlan_Single.__name__ = "Single"
+_BasicPlan_Single.__qualname__ = "BasicPlan.Single"
+BasicPlan.Single = _BasicPlan_Single
+BasicPlan._VARIANTS = {"Multiple": BasicPlan.Multiple, "Single": BasicPlan.Single}
 
 
 @_dc.dataclass(kw_only=True)
@@ -1280,1704 +1784,3224 @@ class BasicTopKPlan(_Struct):
 
 
 class BinaryFunc(_Enum):
-    @_dc.dataclass
-    class AddDateInterval(_Variant):
-        value: AddDateInterval
-        _NAME = "AddDateInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AddDateInterval"}
-
-    @_dc.dataclass
-    class AddDateTime(_Variant):
-        value: AddDateTime
-        _NAME = "AddDateTime"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AddDateTime"}
-
-    @_dc.dataclass
-    class AddFloat32(_Variant):
-        value: AddFloat32
-        _NAME = "AddFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AddFloat32"}
-
-    @_dc.dataclass
-    class AddFloat64(_Variant):
-        value: AddFloat64
-        _NAME = "AddFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AddFloat64"}
-
-    @_dc.dataclass
-    class AddInt16(_Variant):
-        value: AddInt16
-        _NAME = "AddInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AddInt16"}
-
-    @_dc.dataclass
-    class AddInt32(_Variant):
-        value: AddInt32
-        _NAME = "AddInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AddInt32"}
-
-    @_dc.dataclass
-    class AddInt64(_Variant):
-        value: AddInt64
-        _NAME = "AddInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AddInt64"}
-
-    @_dc.dataclass
-    class AddInterval(_Variant):
-        value: AddInterval
-        _NAME = "AddInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AddInterval"}
-
-    @_dc.dataclass
-    class AddNumeric(_Variant):
-        value: AddNumeric
-        _NAME = "AddNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AddNumeric"}
-
-    @_dc.dataclass
-    class AddTimeInterval(_Variant):
-        value: AddTimeInterval
-        _NAME = "AddTimeInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AddTimeInterval"}
-
-    @_dc.dataclass
-    class AddTimestampInterval(_Variant):
-        value: AddTimestampInterval
-        _NAME = "AddTimestampInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AddTimestampInterval"}
-
-    @_dc.dataclass
-    class AddTimestampTzInterval(_Variant):
-        value: AddTimestampTzInterval
-        _NAME = "AddTimestampTzInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AddTimestampTzInterval"}
-
-    @_dc.dataclass
-    class AddUint16(_Variant):
-        value: AddUint16
-        _NAME = "AddUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AddUint16"}
-
-    @_dc.dataclass
-    class AddUint32(_Variant):
-        value: AddUint32
-        _NAME = "AddUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AddUint32"}
-
-    @_dc.dataclass
-    class AddUint64(_Variant):
-        value: AddUint64
-        _NAME = "AddUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AddUint64"}
-
-    @_dc.dataclass
-    class AgeTimestamp(_Variant):
-        value: AgeTimestamp
-        _NAME = "AgeTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AgeTimestamp"}
-
-    @_dc.dataclass
-    class AgeTimestampTz(_Variant):
-        value: AgeTimestampTz
-        _NAME = "AgeTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AgeTimestampTz"}
-
-    @_dc.dataclass
-    class ArrayArrayConcat(_Variant):
-        value: ArrayArrayConcat
-        _NAME = "ArrayArrayConcat"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ArrayArrayConcat"}
-
-    @_dc.dataclass
-    class ArrayContains(_Variant):
-        value: ArrayContains
-        _NAME = "ArrayContains"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ArrayContains"}
-
-    @_dc.dataclass
-    class ArrayContainsArray(_Variant):
-        value: ArrayContainsArray
-        _NAME = "ArrayContainsArray"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ArrayContainsArray"}
-
-    @_dc.dataclass
-    class ArrayContainsArrayRev(_Variant):
-        value: ArrayContainsArrayRev
-        _NAME = "ArrayContainsArrayRev"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ArrayContainsArrayRev"}
-
-    @_dc.dataclass
-    class ArrayLength(_Variant):
-        value: ArrayLength
-        _NAME = "ArrayLength"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ArrayLength"}
-
-    @_dc.dataclass
-    class ArrayLower(_Variant):
-        value: ArrayLower
-        _NAME = "ArrayLower"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ArrayLower"}
-
-    @_dc.dataclass
-    class ArrayRemove(_Variant):
-        value: ArrayRemove
-        _NAME = "ArrayRemove"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ArrayRemove"}
-
-    @_dc.dataclass
-    class ArrayUpper(_Variant):
-        value: ArrayUpper
-        _NAME = "ArrayUpper"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ArrayUpper"}
-
-    @_dc.dataclass
-    class BitAndInt16(_Variant):
-        value: BitAndInt16
-        _NAME = "BitAndInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitAndInt16"}
-
-    @_dc.dataclass
-    class BitAndInt32(_Variant):
-        value: BitAndInt32
-        _NAME = "BitAndInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitAndInt32"}
-
-    @_dc.dataclass
-    class BitAndInt64(_Variant):
-        value: BitAndInt64
-        _NAME = "BitAndInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitAndInt64"}
-
-    @_dc.dataclass
-    class BitAndUint16(_Variant):
-        value: BitAndUint16
-        _NAME = "BitAndUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitAndUint16"}
-
-    @_dc.dataclass
-    class BitAndUint32(_Variant):
-        value: BitAndUint32
-        _NAME = "BitAndUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitAndUint32"}
-
-    @_dc.dataclass
-    class BitAndUint64(_Variant):
-        value: BitAndUint64
-        _NAME = "BitAndUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitAndUint64"}
-
-    @_dc.dataclass
-    class BitOrInt16(_Variant):
-        value: BitOrInt16
-        _NAME = "BitOrInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitOrInt16"}
-
-    @_dc.dataclass
-    class BitOrInt32(_Variant):
-        value: BitOrInt32
-        _NAME = "BitOrInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitOrInt32"}
-
-    @_dc.dataclass
-    class BitOrInt64(_Variant):
-        value: BitOrInt64
-        _NAME = "BitOrInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitOrInt64"}
-
-    @_dc.dataclass
-    class BitOrUint16(_Variant):
-        value: BitOrUint16
-        _NAME = "BitOrUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitOrUint16"}
-
-    @_dc.dataclass
-    class BitOrUint32(_Variant):
-        value: BitOrUint32
-        _NAME = "BitOrUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitOrUint32"}
-
-    @_dc.dataclass
-    class BitOrUint64(_Variant):
-        value: BitOrUint64
-        _NAME = "BitOrUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitOrUint64"}
-
-    @_dc.dataclass
-    class BitShiftLeftInt16(_Variant):
-        value: BitShiftLeftInt16
-        _NAME = "BitShiftLeftInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitShiftLeftInt16"}
-
-    @_dc.dataclass
-    class BitShiftLeftInt32(_Variant):
-        value: BitShiftLeftInt32
-        _NAME = "BitShiftLeftInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitShiftLeftInt32"}
-
-    @_dc.dataclass
-    class BitShiftLeftInt64(_Variant):
-        value: BitShiftLeftInt64
-        _NAME = "BitShiftLeftInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitShiftLeftInt64"}
-
-    @_dc.dataclass
-    class BitShiftLeftUint16(_Variant):
-        value: BitShiftLeftUint16
-        _NAME = "BitShiftLeftUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitShiftLeftUint16"}
-
-    @_dc.dataclass
-    class BitShiftLeftUint32(_Variant):
-        value: BitShiftLeftUint32
-        _NAME = "BitShiftLeftUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitShiftLeftUint32"}
-
-    @_dc.dataclass
-    class BitShiftLeftUint64(_Variant):
-        value: BitShiftLeftUint64
-        _NAME = "BitShiftLeftUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitShiftLeftUint64"}
-
-    @_dc.dataclass
-    class BitShiftRightInt16(_Variant):
-        value: BitShiftRightInt16
-        _NAME = "BitShiftRightInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitShiftRightInt16"}
-
-    @_dc.dataclass
-    class BitShiftRightInt32(_Variant):
-        value: BitShiftRightInt32
-        _NAME = "BitShiftRightInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitShiftRightInt32"}
-
-    @_dc.dataclass
-    class BitShiftRightInt64(_Variant):
-        value: BitShiftRightInt64
-        _NAME = "BitShiftRightInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitShiftRightInt64"}
-
-    @_dc.dataclass
-    class BitShiftRightUint16(_Variant):
-        value: BitShiftRightUint16
-        _NAME = "BitShiftRightUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitShiftRightUint16"}
-
-    @_dc.dataclass
-    class BitShiftRightUint32(_Variant):
-        value: BitShiftRightUint32
-        _NAME = "BitShiftRightUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitShiftRightUint32"}
-
-    @_dc.dataclass
-    class BitShiftRightUint64(_Variant):
-        value: BitShiftRightUint64
-        _NAME = "BitShiftRightUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitShiftRightUint64"}
-
-    @_dc.dataclass
-    class BitXorInt16(_Variant):
-        value: BitXorInt16
-        _NAME = "BitXorInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitXorInt16"}
-
-    @_dc.dataclass
-    class BitXorInt32(_Variant):
-        value: BitXorInt32
-        _NAME = "BitXorInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitXorInt32"}
-
-    @_dc.dataclass
-    class BitXorInt64(_Variant):
-        value: BitXorInt64
-        _NAME = "BitXorInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitXorInt64"}
-
-    @_dc.dataclass
-    class BitXorUint16(_Variant):
-        value: BitXorUint16
-        _NAME = "BitXorUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitXorUint16"}
-
-    @_dc.dataclass
-    class BitXorUint32(_Variant):
-        value: BitXorUint32
-        _NAME = "BitXorUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitXorUint32"}
-
-    @_dc.dataclass
-    class BitXorUint64(_Variant):
-        value: BitXorUint64
-        _NAME = "BitXorUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitXorUint64"}
-
-    @_dc.dataclass
-    class ConstantTimeEqBytes(_Variant):
-        value: ConstantTimeEqBytes
-        _NAME = "ConstantTimeEqBytes"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ConstantTimeEqBytes"}
-
-    @_dc.dataclass
-    class ConstantTimeEqString(_Variant):
-        value: ConstantTimeEqString
-        _NAME = "ConstantTimeEqString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ConstantTimeEqString"}
-
-    @_dc.dataclass
-    class ConvertFrom(_Variant):
-        value: ConvertFrom
-        _NAME = "ConvertFrom"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ConvertFrom"}
-
-    @_dc.dataclass
-    class DateBinTimestamp(_Variant):
-        value: DateBinTimestamp
-        _NAME = "DateBinTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DateBinTimestamp"}
-
-    @_dc.dataclass
-    class DateBinTimestampTz(_Variant):
-        value: DateBinTimestampTz
-        _NAME = "DateBinTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DateBinTimestampTz"}
-
-    @_dc.dataclass
-    class DatePartInterval(_Variant):
-        value: DatePartIntervalF64
-        _NAME = "DatePartInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DatePartIntervalF64"}
-
-    @_dc.dataclass
-    class DatePartTime(_Variant):
-        value: DatePartTimeF64
-        _NAME = "DatePartTime"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DatePartTimeF64"}
-
-    @_dc.dataclass
-    class DatePartTimestamp(_Variant):
-        value: DatePartTimestampTimestampF64
-        _NAME = "DatePartTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DatePartTimestampTimestampF64"}
-
-    @_dc.dataclass
-    class DatePartTimestampTz(_Variant):
-        value: DatePartTimestampTimestampTzF64
-        _NAME = "DatePartTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DatePartTimestampTimestampTzF64"}
-
-    @_dc.dataclass
-    class DateTruncInterval(_Variant):
-        value: DateTruncInterval
-        _NAME = "DateTruncInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DateTruncInterval"}
-
-    @_dc.dataclass
-    class DateTruncTimestamp(_Variant):
-        value: DateTruncUnitsTimestamp
-        _NAME = "DateTruncTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DateTruncUnitsTimestamp"}
-
-    @_dc.dataclass
-    class DateTruncTimestampTz(_Variant):
-        value: DateTruncUnitsTimestampTz
-        _NAME = "DateTruncTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DateTruncUnitsTimestampTz"}
-
-    @_dc.dataclass
-    class Decode(_Variant):
-        value: Decode
-        _NAME = "Decode"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Decode"}
-
-    @_dc.dataclass
-    class DigestBytes(_Variant):
-        value: DigestBytes
-        _NAME = "DigestBytes"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DigestBytes"}
-
-    @_dc.dataclass
-    class DigestString(_Variant):
-        value: DigestString
-        _NAME = "DigestString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DigestString"}
-
-    @_dc.dataclass
-    class DivFloat32(_Variant):
-        value: DivFloat32
-        _NAME = "DivFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DivFloat32"}
-
-    @_dc.dataclass
-    class DivFloat64(_Variant):
-        value: DivFloat64
-        _NAME = "DivFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DivFloat64"}
-
-    @_dc.dataclass
-    class DivInt16(_Variant):
-        value: DivInt16
-        _NAME = "DivInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DivInt16"}
-
-    @_dc.dataclass
-    class DivInt32(_Variant):
-        value: DivInt32
-        _NAME = "DivInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DivInt32"}
-
-    @_dc.dataclass
-    class DivInt64(_Variant):
-        value: DivInt64
-        _NAME = "DivInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DivInt64"}
-
-    @_dc.dataclass
-    class DivInterval(_Variant):
-        value: DivInterval
-        _NAME = "DivInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DivInterval"}
-
-    @_dc.dataclass
-    class DivNumeric(_Variant):
-        value: DivNumeric
-        _NAME = "DivNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DivNumeric"}
-
-    @_dc.dataclass
-    class DivUint16(_Variant):
-        value: DivUint16
-        _NAME = "DivUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DivUint16"}
-
-    @_dc.dataclass
-    class DivUint32(_Variant):
-        value: DivUint32
-        _NAME = "DivUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DivUint32"}
-
-    @_dc.dataclass
-    class DivUint64(_Variant):
-        value: DivUint64
-        _NAME = "DivUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DivUint64"}
-
-    @_dc.dataclass
-    class ElementListConcat(_Variant):
-        value: ElementListConcat
-        _NAME = "ElementListConcat"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ElementListConcat"}
-
-    @_dc.dataclass
-    class Encode(_Variant):
-        value: Encode
-        _NAME = "Encode"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Encode"}
-
-    @_dc.dataclass
-    class EncodedBytesCharLength(_Variant):
-        value: EncodedBytesCharLength
-        _NAME = "EncodedBytesCharLength"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "EncodedBytesCharLength"}
-
-    @_dc.dataclass
-    class Eq(_Variant):
-        value: Eq
-        _NAME = "Eq"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Eq"}
-
-    @_dc.dataclass
-    class ExtractDate(_Variant):
-        value: ExtractDateUnits
-        _NAME = "ExtractDate"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ExtractDateUnits"}
-
-    @_dc.dataclass
-    class ExtractInterval(_Variant):
-        value: DatePartIntervalNumeric
-        _NAME = "ExtractInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DatePartIntervalNumeric"}
-
-    @_dc.dataclass
-    class ExtractTime(_Variant):
-        value: DatePartTimeNumeric
-        _NAME = "ExtractTime"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DatePartTimeNumeric"}
-
-    @_dc.dataclass
-    class ExtractTimestamp(_Variant):
-        value: DatePartTimestampTimestampNumeric
-        _NAME = "ExtractTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DatePartTimestampTimestampNumeric"}
-
-    @_dc.dataclass
-    class ExtractTimestampTz(_Variant):
-        value: DatePartTimestampTimestampTzNumeric
-        _NAME = "ExtractTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DatePartTimestampTimestampTzNumeric"}
-
-    @_dc.dataclass
-    class GetBit(_Variant):
-        value: GetBit
-        _NAME = "GetBit"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "GetBit"}
-
-    @_dc.dataclass
-    class GetByte(_Variant):
-        value: GetByte
-        _NAME = "GetByte"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "GetByte"}
-
-    @_dc.dataclass
-    class Gt(_Variant):
-        value: Gt
-        _NAME = "Gt"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Gt"}
-
-    @_dc.dataclass
-    class Gte(_Variant):
-        value: Gte
-        _NAME = "Gte"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Gte"}
-
-    @_dc.dataclass
-    class IsLikeMatchCaseInsensitive(_Variant):
-        value: IsLikeMatchCaseInsensitive
-        _NAME = "IsLikeMatchCaseInsensitive"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "IsLikeMatchCaseInsensitive"}
-
-    @_dc.dataclass
-    class IsLikeMatchCaseSensitive(_Variant):
-        value: IsLikeMatchCaseSensitive
-        _NAME = "IsLikeMatchCaseSensitive"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "IsLikeMatchCaseSensitive"}
-
-    @_dc.dataclass
-    class IsRegexpMatchCaseInsensitive(_Variant):
-        value: IsRegexpMatchCaseInsensitive
-        _NAME = "IsRegexpMatchCaseInsensitive"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "IsRegexpMatchCaseInsensitive"}
-
-    @_dc.dataclass
-    class IsRegexpMatchCaseSensitive(_Variant):
-        value: IsRegexpMatchCaseSensitive
-        _NAME = "IsRegexpMatchCaseSensitive"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "IsRegexpMatchCaseSensitive"}
-
-    @_dc.dataclass
-    class JsonbConcat(_Variant):
-        value: JsonbConcat
-        _NAME = "JsonbConcat"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbConcat"}
-
-    @_dc.dataclass
-    class JsonbContainsJsonb(_Variant):
-        value: JsonbContainsJsonb
-        _NAME = "JsonbContainsJsonb"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbContainsJsonb"}
-
-    @_dc.dataclass
-    class JsonbContainsString(_Variant):
-        value: JsonbContainsString
-        _NAME = "JsonbContainsString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbContainsString"}
-
-    @_dc.dataclass
-    class JsonbDeleteInt64(_Variant):
-        value: JsonbDeleteInt64
-        _NAME = "JsonbDeleteInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbDeleteInt64"}
-
-    @_dc.dataclass
-    class JsonbDeleteString(_Variant):
-        value: JsonbDeleteString
-        _NAME = "JsonbDeleteString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbDeleteString"}
-
-    @_dc.dataclass
-    class JsonbGetInt64(_Variant):
-        value: JsonbGetInt64
-        _NAME = "JsonbGetInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbGetInt64"}
-
-    @_dc.dataclass
-    class JsonbGetInt64Stringify(_Variant):
-        value: JsonbGetInt64Stringify
-        _NAME = "JsonbGetInt64Stringify"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbGetInt64Stringify"}
-
-    @_dc.dataclass
-    class JsonbGetPath(_Variant):
-        value: JsonbGetPath
-        _NAME = "JsonbGetPath"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbGetPath"}
-
-    @_dc.dataclass
-    class JsonbGetPathStringify(_Variant):
-        value: JsonbGetPathStringify
-        _NAME = "JsonbGetPathStringify"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbGetPathStringify"}
-
-    @_dc.dataclass
-    class JsonbGetString(_Variant):
-        value: JsonbGetString
-        _NAME = "JsonbGetString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbGetString"}
-
-    @_dc.dataclass
-    class JsonbGetStringStringify(_Variant):
-        value: JsonbGetStringStringify
-        _NAME = "JsonbGetStringStringify"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbGetStringStringify"}
-
-    @_dc.dataclass
-    class Left(_Variant):
-        value: Left
-        _NAME = "Left"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Left"}
-
-    @_dc.dataclass
-    class LikeEscape(_Variant):
-        value: LikeEscape
-        _NAME = "LikeEscape"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "LikeEscape"}
-
-    @_dc.dataclass
-    class ListContainsList(_Variant):
-        value: ListContainsList
-        _NAME = "ListContainsList"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ListContainsList"}
-
-    @_dc.dataclass
-    class ListContainsListRev(_Variant):
-        value: ListContainsListRev
-        _NAME = "ListContainsListRev"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ListContainsListRev"}
-
-    @_dc.dataclass
-    class ListElementConcat(_Variant):
-        value: ListElementConcat
-        _NAME = "ListElementConcat"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ListElementConcat"}
-
-    @_dc.dataclass
-    class ListLengthMax(_Variant):
-        value: ListLengthMax
-        _NAME = "ListLengthMax"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ListLengthMax"}
-
-    @_dc.dataclass
-    class ListListConcat(_Variant):
-        value: ListListConcat
-        _NAME = "ListListConcat"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ListListConcat"}
-
-    @_dc.dataclass
-    class ListRemove(_Variant):
-        value: ListRemove
-        _NAME = "ListRemove"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ListRemove"}
-
-    @_dc.dataclass
-    class LogNumeric(_Variant):
-        value: LogBaseNumeric
-        _NAME = "LogNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "LogBaseNumeric"}
-
-    @_dc.dataclass
-    class Lt(_Variant):
-        value: Lt
-        _NAME = "Lt"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Lt"}
-
-    @_dc.dataclass
-    class Lte(_Variant):
-        value: Lte
-        _NAME = "Lte"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Lte"}
-
-    @_dc.dataclass
-    class MapContainsAllKeys(_Variant):
-        value: MapContainsAllKeys
-        _NAME = "MapContainsAllKeys"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MapContainsAllKeys"}
-
-    @_dc.dataclass
-    class MapContainsAnyKeys(_Variant):
-        value: MapContainsAnyKeys
-        _NAME = "MapContainsAnyKeys"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MapContainsAnyKeys"}
-
-    @_dc.dataclass
-    class MapContainsKey(_Variant):
-        value: MapContainsKey
-        _NAME = "MapContainsKey"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MapContainsKey"}
-
-    @_dc.dataclass
-    class MapContainsMap(_Variant):
-        value: MapContainsMap
-        _NAME = "MapContainsMap"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MapContainsMap"}
-
-    @_dc.dataclass
-    class MapGetValue(_Variant):
-        value: MapGetValue
-        _NAME = "MapGetValue"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MapGetValue"}
-
-    @_dc.dataclass
-    class ModFloat32(_Variant):
-        value: ModFloat32
-        _NAME = "ModFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ModFloat32"}
-
-    @_dc.dataclass
-    class ModFloat64(_Variant):
-        value: ModFloat64
-        _NAME = "ModFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ModFloat64"}
-
-    @_dc.dataclass
-    class ModInt16(_Variant):
-        value: ModInt16
-        _NAME = "ModInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ModInt16"}
-
-    @_dc.dataclass
-    class ModInt32(_Variant):
-        value: ModInt32
-        _NAME = "ModInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ModInt32"}
-
-    @_dc.dataclass
-    class ModInt64(_Variant):
-        value: ModInt64
-        _NAME = "ModInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ModInt64"}
-
-    @_dc.dataclass
-    class ModNumeric(_Variant):
-        value: ModNumeric
-        _NAME = "ModNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ModNumeric"}
-
-    @_dc.dataclass
-    class ModUint16(_Variant):
-        value: ModUint16
-        _NAME = "ModUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ModUint16"}
-
-    @_dc.dataclass
-    class ModUint32(_Variant):
-        value: ModUint32
-        _NAME = "ModUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ModUint32"}
-
-    @_dc.dataclass
-    class ModUint64(_Variant):
-        value: ModUint64
-        _NAME = "ModUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ModUint64"}
-
-    @_dc.dataclass
-    class MulFloat32(_Variant):
-        value: MulFloat32
-        _NAME = "MulFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MulFloat32"}
-
-    @_dc.dataclass
-    class MulFloat64(_Variant):
-        value: MulFloat64
-        _NAME = "MulFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MulFloat64"}
-
-    @_dc.dataclass
-    class MulInt16(_Variant):
-        value: MulInt16
-        _NAME = "MulInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MulInt16"}
-
-    @_dc.dataclass
-    class MulInt32(_Variant):
-        value: MulInt32
-        _NAME = "MulInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MulInt32"}
-
-    @_dc.dataclass
-    class MulInt64(_Variant):
-        value: MulInt64
-        _NAME = "MulInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MulInt64"}
-
-    @_dc.dataclass
-    class MulInterval(_Variant):
-        value: MulInterval
-        _NAME = "MulInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MulInterval"}
-
-    @_dc.dataclass
-    class MulNumeric(_Variant):
-        value: MulNumeric
-        _NAME = "MulNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MulNumeric"}
-
-    @_dc.dataclass
-    class MulUint16(_Variant):
-        value: MulUint16
-        _NAME = "MulUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MulUint16"}
-
-    @_dc.dataclass
-    class MulUint32(_Variant):
-        value: MulUint32
-        _NAME = "MulUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MulUint32"}
-
-    @_dc.dataclass
-    class MulUint64(_Variant):
-        value: MulUint64
-        _NAME = "MulUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MulUint64"}
-
-    @_dc.dataclass
-    class MzAclItemContainsPrivilege(_Variant):
-        value: MzAclItemContainsPrivilege
-        _NAME = "MzAclItemContainsPrivilege"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MzAclItemContainsPrivilege"}
-
-    @_dc.dataclass
-    class MzRenderTypmod(_Variant):
-        value: MzRenderTypmod
-        _NAME = "MzRenderTypmod"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MzRenderTypmod"}
-
-    @_dc.dataclass
-    class Normalize(_Variant):
-        value: Normalize
-        _NAME = "Normalize"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Normalize"}
-
-    @_dc.dataclass
-    class NotEq(_Variant):
-        value: NotEq
-        _NAME = "NotEq"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "NotEq"}
-
-    @_dc.dataclass
-    class ParseIdent(_Variant):
-        value: ParseIdent
-        _NAME = "ParseIdent"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ParseIdent"}
-
-    @_dc.dataclass
-    class Position(_Variant):
-        value: Position
-        _NAME = "Position"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Position"}
-
-    @_dc.dataclass
-    class Power(_Variant):
-        value: Power
-        _NAME = "Power"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Power"}
-
-    @_dc.dataclass
-    class PowerNumeric(_Variant):
-        value: PowerNumeric
-        _NAME = "PowerNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "PowerNumeric"}
-
-    @_dc.dataclass
-    class PrettySql(_Variant):
-        value: PrettySql
-        _NAME = "PrettySql"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "PrettySql"}
-
-    @_dc.dataclass
-    class RangeAdjacent(_Variant):
-        value: RangeAdjacent
-        _NAME = "RangeAdjacent"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeAdjacent"}
-
-    @_dc.dataclass
-    class RangeAfter(_Variant):
-        value: RangeAfter
-        _NAME = "RangeAfter"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeAfter"}
-
-    @_dc.dataclass
-    class RangeBefore(_Variant):
-        value: RangeBefore
-        _NAME = "RangeBefore"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeBefore"}
-
-    @_dc.dataclass
-    class RangeContainsDate(_Variant):
-        value: RangeContainsDate
-        _NAME = "RangeContainsDate"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeContainsDate"}
-
-    @_dc.dataclass
-    class RangeContainsDateRev(_Variant):
-        value: RangeContainsDateRev
-        _NAME = "RangeContainsDateRev"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeContainsDateRev"}
-
-    @_dc.dataclass
-    class RangeContainsI32(_Variant):
-        value: RangeContainsI32
-        _NAME = "RangeContainsI32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeContainsI32"}
-
-    @_dc.dataclass
-    class RangeContainsI32Rev(_Variant):
-        value: RangeContainsI32Rev
-        _NAME = "RangeContainsI32Rev"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeContainsI32Rev"}
-
-    @_dc.dataclass
-    class RangeContainsI64(_Variant):
-        value: RangeContainsI64
-        _NAME = "RangeContainsI64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeContainsI64"}
-
-    @_dc.dataclass
-    class RangeContainsI64Rev(_Variant):
-        value: RangeContainsI64Rev
-        _NAME = "RangeContainsI64Rev"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeContainsI64Rev"}
-
-    @_dc.dataclass
-    class RangeContainsNumeric(_Variant):
-        value: RangeContainsNumeric
-        _NAME = "RangeContainsNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeContainsNumeric"}
-
-    @_dc.dataclass
-    class RangeContainsNumericRev(_Variant):
-        value: RangeContainsNumericRev
-        _NAME = "RangeContainsNumericRev"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeContainsNumericRev"}
-
-    @_dc.dataclass
-    class RangeContainsRange(_Variant):
-        value: RangeContainsRange
-        _NAME = "RangeContainsRange"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeContainsRange"}
-
-    @_dc.dataclass
-    class RangeContainsRangeRev(_Variant):
-        value: RangeContainsRangeRev
-        _NAME = "RangeContainsRangeRev"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeContainsRangeRev"}
-
-    @_dc.dataclass
-    class RangeContainsTimestamp(_Variant):
-        value: RangeContainsTimestamp
-        _NAME = "RangeContainsTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeContainsTimestamp"}
-
-    @_dc.dataclass
-    class RangeContainsTimestampRev(_Variant):
-        value: RangeContainsTimestampRev
-        _NAME = "RangeContainsTimestampRev"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeContainsTimestampRev"}
-
-    @_dc.dataclass
-    class RangeContainsTimestampTz(_Variant):
-        value: RangeContainsTimestampTz
-        _NAME = "RangeContainsTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeContainsTimestampTz"}
-
-    @_dc.dataclass
-    class RangeContainsTimestampTzRev(_Variant):
-        value: RangeContainsTimestampTzRev
-        _NAME = "RangeContainsTimestampTzRev"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeContainsTimestampTzRev"}
-
-    @_dc.dataclass
-    class RangeDifference(_Variant):
-        value: RangeDifference
-        _NAME = "RangeDifference"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeDifference"}
-
-    @_dc.dataclass
-    class RangeIntersection(_Variant):
-        value: RangeIntersection
-        _NAME = "RangeIntersection"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeIntersection"}
-
-    @_dc.dataclass
-    class RangeOverlaps(_Variant):
-        value: RangeOverlaps
-        _NAME = "RangeOverlaps"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeOverlaps"}
-
-    @_dc.dataclass
-    class RangeOverleft(_Variant):
-        value: RangeOverleft
-        _NAME = "RangeOverleft"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeOverleft"}
-
-    @_dc.dataclass
-    class RangeOverright(_Variant):
-        value: RangeOverright
-        _NAME = "RangeOverright"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeOverright"}
-
-    @_dc.dataclass
-    class RangeUnion(_Variant):
-        value: RangeUnion
-        _NAME = "RangeUnion"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeUnion"}
-
-    @_dc.dataclass
-    class RegexpReplace(_Variant):
-        value: RegexpReplaceStatic
-        _NAME = "RegexpReplace"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RegexpReplaceStatic"}
-
-    @_dc.dataclass
-    class RepeatString(_Variant):
-        value: RepeatString
-        _NAME = "RepeatString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RepeatString"}
-
-    @_dc.dataclass
-    class Right(_Variant):
-        value: Right
-        _NAME = "Right"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Right"}
-
-    @_dc.dataclass
-    class RoundNumeric(_Variant):
-        value: RoundNumericBinary
-        _NAME = "RoundNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RoundNumericBinary"}
-
-    @_dc.dataclass
-    class StartsWith(_Variant):
-        value: StartsWith
-        _NAME = "StartsWith"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "StartsWith"}
-
-    @_dc.dataclass
-    class Strpos(_Variant):
-        value: Strpos
-        _NAME = "Strpos"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Strpos"}
-
-    @_dc.dataclass
-    class SubDate(_Variant):
-        value: SubDate
-        _NAME = "SubDate"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubDate"}
-
-    @_dc.dataclass
-    class SubDateInterval(_Variant):
-        value: SubDateInterval
-        _NAME = "SubDateInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubDateInterval"}
-
-    @_dc.dataclass
-    class SubFloat32(_Variant):
-        value: SubFloat32
-        _NAME = "SubFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubFloat32"}
-
-    @_dc.dataclass
-    class SubFloat64(_Variant):
-        value: SubFloat64
-        _NAME = "SubFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubFloat64"}
-
-    @_dc.dataclass
-    class SubInt16(_Variant):
-        value: SubInt16
-        _NAME = "SubInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubInt16"}
-
-    @_dc.dataclass
-    class SubInt32(_Variant):
-        value: SubInt32
-        _NAME = "SubInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubInt32"}
-
-    @_dc.dataclass
-    class SubInt64(_Variant):
-        value: SubInt64
-        _NAME = "SubInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubInt64"}
-
-    @_dc.dataclass
-    class SubInterval(_Variant):
-        value: SubInterval
-        _NAME = "SubInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubInterval"}
-
-    @_dc.dataclass
-    class SubNumeric(_Variant):
-        value: SubNumeric
-        _NAME = "SubNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubNumeric"}
-
-    @_dc.dataclass
-    class SubTime(_Variant):
-        value: SubTime
-        _NAME = "SubTime"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubTime"}
-
-    @_dc.dataclass
-    class SubTimeInterval(_Variant):
-        value: SubTimeInterval
-        _NAME = "SubTimeInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubTimeInterval"}
-
-    @_dc.dataclass
-    class SubTimestamp(_Variant):
-        value: SubTimestamp
-        _NAME = "SubTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubTimestamp"}
-
-    @_dc.dataclass
-    class SubTimestampInterval(_Variant):
-        value: SubTimestampInterval
-        _NAME = "SubTimestampInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubTimestampInterval"}
-
-    @_dc.dataclass
-    class SubTimestampTz(_Variant):
-        value: SubTimestampTz
-        _NAME = "SubTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubTimestampTz"}
-
-    @_dc.dataclass
-    class SubTimestampTzInterval(_Variant):
-        value: SubTimestampTzInterval
-        _NAME = "SubTimestampTzInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubTimestampTzInterval"}
-
-    @_dc.dataclass
-    class SubUint16(_Variant):
-        value: SubUint16
-        _NAME = "SubUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubUint16"}
-
-    @_dc.dataclass
-    class SubUint32(_Variant):
-        value: SubUint32
-        _NAME = "SubUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubUint32"}
-
-    @_dc.dataclass
-    class SubUint64(_Variant):
-        value: SubUint64
-        _NAME = "SubUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SubUint64"}
-
-    @_dc.dataclass
-    class TextConcat(_Variant):
-        value: TextConcatBinary
-        _NAME = "TextConcat"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TextConcatBinary"}
-
-    @_dc.dataclass
-    class TimezoneIntervalTimeBinary(_Variant):
-        value: TimezoneIntervalTimeBinary
-        _NAME = "TimezoneIntervalTimeBinary"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TimezoneIntervalTimeBinary"}
-
-    @_dc.dataclass
-    class TimezoneIntervalTimestampBinary(_Variant):
-        value: TimezoneIntervalTimestampBinary
-        _NAME = "TimezoneIntervalTimestampBinary"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TimezoneIntervalTimestampBinary"}
-
-    @_dc.dataclass
-    class TimezoneIntervalTimestampTzBinary(_Variant):
-        value: TimezoneIntervalTimestampTzBinary
-        _NAME = "TimezoneIntervalTimestampTzBinary"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TimezoneIntervalTimestampTzBinary"}
-
-    @_dc.dataclass
-    class TimezoneOffset(_Variant):
-        value: TimezoneOffset
-        _NAME = "TimezoneOffset"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TimezoneOffset"}
-
-    @_dc.dataclass
-    class TimezoneTimestampBinary(_Variant):
-        value: TimezoneTimestampBinary
-        _NAME = "TimezoneTimestampBinary"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TimezoneTimestampBinary"}
-
-    @_dc.dataclass
-    class TimezoneTimestampTzBinary(_Variant):
-        value: TimezoneTimestampTzBinary
-        _NAME = "TimezoneTimestampTzBinary"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TimezoneTimestampTzBinary"}
-
-    @_dc.dataclass
-    class ToCharTimestamp(_Variant):
-        value: ToCharTimestampFormat
-        _NAME = "ToCharTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ToCharTimestampFormat"}
-
-    @_dc.dataclass
-    class ToCharTimestampTz(_Variant):
-        value: ToCharTimestampTzFormat
-        _NAME = "ToCharTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ToCharTimestampTzFormat"}
-
-    @_dc.dataclass
-    class Trim(_Variant):
-        value: Trim
-        _NAME = "Trim"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Trim"}
-
-    @_dc.dataclass
-    class TrimLeading(_Variant):
-        value: TrimLeading
-        _NAME = "TrimLeading"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TrimLeading"}
-
-    @_dc.dataclass
-    class TrimTrailing(_Variant):
-        value: TrimTrailing
-        _NAME = "TrimTrailing"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TrimTrailing"}
-
-    @_dc.dataclass
-    class UuidGenerateV5(_Variant):
-        value: UuidGenerateV5
-        _NAME = "UuidGenerateV5"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "UuidGenerateV5"}
-
-    _VARIANTS = {
-        "AddDateInterval": AddDateInterval,
-        "AddDateTime": AddDateTime,
-        "AddFloat32": AddFloat32,
-        "AddFloat64": AddFloat64,
-        "AddInt16": AddInt16,
-        "AddInt32": AddInt32,
-        "AddInt64": AddInt64,
-        "AddInterval": AddInterval,
-        "AddNumeric": AddNumeric,
-        "AddTimeInterval": AddTimeInterval,
-        "AddTimestampInterval": AddTimestampInterval,
-        "AddTimestampTzInterval": AddTimestampTzInterval,
-        "AddUint16": AddUint16,
-        "AddUint32": AddUint32,
-        "AddUint64": AddUint64,
-        "AgeTimestamp": AgeTimestamp,
-        "AgeTimestampTz": AgeTimestampTz,
-        "ArrayArrayConcat": ArrayArrayConcat,
-        "ArrayContains": ArrayContains,
-        "ArrayContainsArray": ArrayContainsArray,
-        "ArrayContainsArrayRev": ArrayContainsArrayRev,
-        "ArrayLength": ArrayLength,
-        "ArrayLower": ArrayLower,
-        "ArrayRemove": ArrayRemove,
-        "ArrayUpper": ArrayUpper,
-        "BitAndInt16": BitAndInt16,
-        "BitAndInt32": BitAndInt32,
-        "BitAndInt64": BitAndInt64,
-        "BitAndUint16": BitAndUint16,
-        "BitAndUint32": BitAndUint32,
-        "BitAndUint64": BitAndUint64,
-        "BitOrInt16": BitOrInt16,
-        "BitOrInt32": BitOrInt32,
-        "BitOrInt64": BitOrInt64,
-        "BitOrUint16": BitOrUint16,
-        "BitOrUint32": BitOrUint32,
-        "BitOrUint64": BitOrUint64,
-        "BitShiftLeftInt16": BitShiftLeftInt16,
-        "BitShiftLeftInt32": BitShiftLeftInt32,
-        "BitShiftLeftInt64": BitShiftLeftInt64,
-        "BitShiftLeftUint16": BitShiftLeftUint16,
-        "BitShiftLeftUint32": BitShiftLeftUint32,
-        "BitShiftLeftUint64": BitShiftLeftUint64,
-        "BitShiftRightInt16": BitShiftRightInt16,
-        "BitShiftRightInt32": BitShiftRightInt32,
-        "BitShiftRightInt64": BitShiftRightInt64,
-        "BitShiftRightUint16": BitShiftRightUint16,
-        "BitShiftRightUint32": BitShiftRightUint32,
-        "BitShiftRightUint64": BitShiftRightUint64,
-        "BitXorInt16": BitXorInt16,
-        "BitXorInt32": BitXorInt32,
-        "BitXorInt64": BitXorInt64,
-        "BitXorUint16": BitXorUint16,
-        "BitXorUint32": BitXorUint32,
-        "BitXorUint64": BitXorUint64,
-        "ConstantTimeEqBytes": ConstantTimeEqBytes,
-        "ConstantTimeEqString": ConstantTimeEqString,
-        "ConvertFrom": ConvertFrom,
-        "DateBinTimestamp": DateBinTimestamp,
-        "DateBinTimestampTz": DateBinTimestampTz,
-        "DatePartInterval": DatePartInterval,
-        "DatePartTime": DatePartTime,
-        "DatePartTimestamp": DatePartTimestamp,
-        "DatePartTimestampTz": DatePartTimestampTz,
-        "DateTruncInterval": DateTruncInterval,
-        "DateTruncTimestamp": DateTruncTimestamp,
-        "DateTruncTimestampTz": DateTruncTimestampTz,
-        "Decode": Decode,
-        "DigestBytes": DigestBytes,
-        "DigestString": DigestString,
-        "DivFloat32": DivFloat32,
-        "DivFloat64": DivFloat64,
-        "DivInt16": DivInt16,
-        "DivInt32": DivInt32,
-        "DivInt64": DivInt64,
-        "DivInterval": DivInterval,
-        "DivNumeric": DivNumeric,
-        "DivUint16": DivUint16,
-        "DivUint32": DivUint32,
-        "DivUint64": DivUint64,
-        "ElementListConcat": ElementListConcat,
-        "Encode": Encode,
-        "EncodedBytesCharLength": EncodedBytesCharLength,
-        "Eq": Eq,
-        "ExtractDate": ExtractDate,
-        "ExtractInterval": ExtractInterval,
-        "ExtractTime": ExtractTime,
-        "ExtractTimestamp": ExtractTimestamp,
-        "ExtractTimestampTz": ExtractTimestampTz,
-        "GetBit": GetBit,
-        "GetByte": GetByte,
-        "Gt": Gt,
-        "Gte": Gte,
-        "IsLikeMatchCaseInsensitive": IsLikeMatchCaseInsensitive,
-        "IsLikeMatchCaseSensitive": IsLikeMatchCaseSensitive,
-        "IsRegexpMatchCaseInsensitive": IsRegexpMatchCaseInsensitive,
-        "IsRegexpMatchCaseSensitive": IsRegexpMatchCaseSensitive,
-        "JsonbConcat": JsonbConcat,
-        "JsonbContainsJsonb": JsonbContainsJsonb,
-        "JsonbContainsString": JsonbContainsString,
-        "JsonbDeleteInt64": JsonbDeleteInt64,
-        "JsonbDeleteString": JsonbDeleteString,
-        "JsonbGetInt64": JsonbGetInt64,
-        "JsonbGetInt64Stringify": JsonbGetInt64Stringify,
-        "JsonbGetPath": JsonbGetPath,
-        "JsonbGetPathStringify": JsonbGetPathStringify,
-        "JsonbGetString": JsonbGetString,
-        "JsonbGetStringStringify": JsonbGetStringStringify,
-        "Left": Left,
-        "LikeEscape": LikeEscape,
-        "ListContainsList": ListContainsList,
-        "ListContainsListRev": ListContainsListRev,
-        "ListElementConcat": ListElementConcat,
-        "ListLengthMax": ListLengthMax,
-        "ListListConcat": ListListConcat,
-        "ListRemove": ListRemove,
-        "LogNumeric": LogNumeric,
-        "Lt": Lt,
-        "Lte": Lte,
-        "MapContainsAllKeys": MapContainsAllKeys,
-        "MapContainsAnyKeys": MapContainsAnyKeys,
-        "MapContainsKey": MapContainsKey,
-        "MapContainsMap": MapContainsMap,
-        "MapGetValue": MapGetValue,
-        "ModFloat32": ModFloat32,
-        "ModFloat64": ModFloat64,
-        "ModInt16": ModInt16,
-        "ModInt32": ModInt32,
-        "ModInt64": ModInt64,
-        "ModNumeric": ModNumeric,
-        "ModUint16": ModUint16,
-        "ModUint32": ModUint32,
-        "ModUint64": ModUint64,
-        "MulFloat32": MulFloat32,
-        "MulFloat64": MulFloat64,
-        "MulInt16": MulInt16,
-        "MulInt32": MulInt32,
-        "MulInt64": MulInt64,
-        "MulInterval": MulInterval,
-        "MulNumeric": MulNumeric,
-        "MulUint16": MulUint16,
-        "MulUint32": MulUint32,
-        "MulUint64": MulUint64,
-        "MzAclItemContainsPrivilege": MzAclItemContainsPrivilege,
-        "MzRenderTypmod": MzRenderTypmod,
-        "Normalize": Normalize,
-        "NotEq": NotEq,
-        "ParseIdent": ParseIdent,
-        "Position": Position,
-        "Power": Power,
-        "PowerNumeric": PowerNumeric,
-        "PrettySql": PrettySql,
-        "RangeAdjacent": RangeAdjacent,
-        "RangeAfter": RangeAfter,
-        "RangeBefore": RangeBefore,
-        "RangeContainsDate": RangeContainsDate,
-        "RangeContainsDateRev": RangeContainsDateRev,
-        "RangeContainsI32": RangeContainsI32,
-        "RangeContainsI32Rev": RangeContainsI32Rev,
-        "RangeContainsI64": RangeContainsI64,
-        "RangeContainsI64Rev": RangeContainsI64Rev,
-        "RangeContainsNumeric": RangeContainsNumeric,
-        "RangeContainsNumericRev": RangeContainsNumericRev,
-        "RangeContainsRange": RangeContainsRange,
-        "RangeContainsRangeRev": RangeContainsRangeRev,
-        "RangeContainsTimestamp": RangeContainsTimestamp,
-        "RangeContainsTimestampRev": RangeContainsTimestampRev,
-        "RangeContainsTimestampTz": RangeContainsTimestampTz,
-        "RangeContainsTimestampTzRev": RangeContainsTimestampTzRev,
-        "RangeDifference": RangeDifference,
-        "RangeIntersection": RangeIntersection,
-        "RangeOverlaps": RangeOverlaps,
-        "RangeOverleft": RangeOverleft,
-        "RangeOverright": RangeOverright,
-        "RangeUnion": RangeUnion,
-        "RegexpReplace": RegexpReplace,
-        "RepeatString": RepeatString,
-        "Right": Right,
-        "RoundNumeric": RoundNumeric,
-        "StartsWith": StartsWith,
-        "Strpos": Strpos,
-        "SubDate": SubDate,
-        "SubDateInterval": SubDateInterval,
-        "SubFloat32": SubFloat32,
-        "SubFloat64": SubFloat64,
-        "SubInt16": SubInt16,
-        "SubInt32": SubInt32,
-        "SubInt64": SubInt64,
-        "SubInterval": SubInterval,
-        "SubNumeric": SubNumeric,
-        "SubTime": SubTime,
-        "SubTimeInterval": SubTimeInterval,
-        "SubTimestamp": SubTimestamp,
-        "SubTimestampInterval": SubTimestampInterval,
-        "SubTimestampTz": SubTimestampTz,
-        "SubTimestampTzInterval": SubTimestampTzInterval,
-        "SubUint16": SubUint16,
-        "SubUint32": SubUint32,
-        "SubUint64": SubUint64,
-        "TextConcat": TextConcat,
-        "TimezoneIntervalTimeBinary": TimezoneIntervalTimeBinary,
-        "TimezoneIntervalTimestampBinary": TimezoneIntervalTimestampBinary,
-        "TimezoneIntervalTimestampTzBinary": TimezoneIntervalTimestampTzBinary,
-        "TimezoneOffset": TimezoneOffset,
-        "TimezoneTimestampBinary": TimezoneTimestampBinary,
-        "TimezoneTimestampTzBinary": TimezoneTimestampTzBinary,
-        "ToCharTimestamp": ToCharTimestamp,
-        "ToCharTimestampTz": ToCharTimestampTz,
-        "Trim": Trim,
-        "TrimLeading": TrimLeading,
-        "TrimTrailing": TrimTrailing,
-        "UuidGenerateV5": UuidGenerateV5,
-    }
+    AddDateInterval: _ClassVar[type[_BinaryFunc_AddDateInterval]]
+    AddDateTime: _ClassVar[type[_BinaryFunc_AddDateTime]]
+    AddFloat32: _ClassVar[type[_BinaryFunc_AddFloat32]]
+    AddFloat64: _ClassVar[type[_BinaryFunc_AddFloat64]]
+    AddInt16: _ClassVar[type[_BinaryFunc_AddInt16]]
+    AddInt32: _ClassVar[type[_BinaryFunc_AddInt32]]
+    AddInt64: _ClassVar[type[_BinaryFunc_AddInt64]]
+    AddInterval: _ClassVar[type[_BinaryFunc_AddInterval]]
+    AddNumeric: _ClassVar[type[_BinaryFunc_AddNumeric]]
+    AddTimeInterval: _ClassVar[type[_BinaryFunc_AddTimeInterval]]
+    AddTimestampInterval: _ClassVar[type[_BinaryFunc_AddTimestampInterval]]
+    AddTimestampTzInterval: _ClassVar[type[_BinaryFunc_AddTimestampTzInterval]]
+    AddUint16: _ClassVar[type[_BinaryFunc_AddUint16]]
+    AddUint32: _ClassVar[type[_BinaryFunc_AddUint32]]
+    AddUint64: _ClassVar[type[_BinaryFunc_AddUint64]]
+    AgeTimestamp: _ClassVar[type[_BinaryFunc_AgeTimestamp]]
+    AgeTimestampTz: _ClassVar[type[_BinaryFunc_AgeTimestampTz]]
+    ArrayArrayConcat: _ClassVar[type[_BinaryFunc_ArrayArrayConcat]]
+    ArrayContains: _ClassVar[type[_BinaryFunc_ArrayContains]]
+    ArrayContainsArray: _ClassVar[type[_BinaryFunc_ArrayContainsArray]]
+    ArrayContainsArrayRev: _ClassVar[type[_BinaryFunc_ArrayContainsArrayRev]]
+    ArrayLength: _ClassVar[type[_BinaryFunc_ArrayLength]]
+    ArrayLower: _ClassVar[type[_BinaryFunc_ArrayLower]]
+    ArrayRemove: _ClassVar[type[_BinaryFunc_ArrayRemove]]
+    ArrayUpper: _ClassVar[type[_BinaryFunc_ArrayUpper]]
+    BitAndInt16: _ClassVar[type[_BinaryFunc_BitAndInt16]]
+    BitAndInt32: _ClassVar[type[_BinaryFunc_BitAndInt32]]
+    BitAndInt64: _ClassVar[type[_BinaryFunc_BitAndInt64]]
+    BitAndUint16: _ClassVar[type[_BinaryFunc_BitAndUint16]]
+    BitAndUint32: _ClassVar[type[_BinaryFunc_BitAndUint32]]
+    BitAndUint64: _ClassVar[type[_BinaryFunc_BitAndUint64]]
+    BitOrInt16: _ClassVar[type[_BinaryFunc_BitOrInt16]]
+    BitOrInt32: _ClassVar[type[_BinaryFunc_BitOrInt32]]
+    BitOrInt64: _ClassVar[type[_BinaryFunc_BitOrInt64]]
+    BitOrUint16: _ClassVar[type[_BinaryFunc_BitOrUint16]]
+    BitOrUint32: _ClassVar[type[_BinaryFunc_BitOrUint32]]
+    BitOrUint64: _ClassVar[type[_BinaryFunc_BitOrUint64]]
+    BitShiftLeftInt16: _ClassVar[type[_BinaryFunc_BitShiftLeftInt16]]
+    BitShiftLeftInt32: _ClassVar[type[_BinaryFunc_BitShiftLeftInt32]]
+    BitShiftLeftInt64: _ClassVar[type[_BinaryFunc_BitShiftLeftInt64]]
+    BitShiftLeftUint16: _ClassVar[type[_BinaryFunc_BitShiftLeftUint16]]
+    BitShiftLeftUint32: _ClassVar[type[_BinaryFunc_BitShiftLeftUint32]]
+    BitShiftLeftUint64: _ClassVar[type[_BinaryFunc_BitShiftLeftUint64]]
+    BitShiftRightInt16: _ClassVar[type[_BinaryFunc_BitShiftRightInt16]]
+    BitShiftRightInt32: _ClassVar[type[_BinaryFunc_BitShiftRightInt32]]
+    BitShiftRightInt64: _ClassVar[type[_BinaryFunc_BitShiftRightInt64]]
+    BitShiftRightUint16: _ClassVar[type[_BinaryFunc_BitShiftRightUint16]]
+    BitShiftRightUint32: _ClassVar[type[_BinaryFunc_BitShiftRightUint32]]
+    BitShiftRightUint64: _ClassVar[type[_BinaryFunc_BitShiftRightUint64]]
+    BitXorInt16: _ClassVar[type[_BinaryFunc_BitXorInt16]]
+    BitXorInt32: _ClassVar[type[_BinaryFunc_BitXorInt32]]
+    BitXorInt64: _ClassVar[type[_BinaryFunc_BitXorInt64]]
+    BitXorUint16: _ClassVar[type[_BinaryFunc_BitXorUint16]]
+    BitXorUint32: _ClassVar[type[_BinaryFunc_BitXorUint32]]
+    BitXorUint64: _ClassVar[type[_BinaryFunc_BitXorUint64]]
+    ConstantTimeEqBytes: _ClassVar[type[_BinaryFunc_ConstantTimeEqBytes]]
+    ConstantTimeEqString: _ClassVar[type[_BinaryFunc_ConstantTimeEqString]]
+    ConvertFrom: _ClassVar[type[_BinaryFunc_ConvertFrom]]
+    DateBinTimestamp: _ClassVar[type[_BinaryFunc_DateBinTimestamp]]
+    DateBinTimestampTz: _ClassVar[type[_BinaryFunc_DateBinTimestampTz]]
+    DatePartInterval: _ClassVar[type[_BinaryFunc_DatePartInterval]]
+    DatePartTime: _ClassVar[type[_BinaryFunc_DatePartTime]]
+    DatePartTimestamp: _ClassVar[type[_BinaryFunc_DatePartTimestamp]]
+    DatePartTimestampTz: _ClassVar[type[_BinaryFunc_DatePartTimestampTz]]
+    DateTruncInterval: _ClassVar[type[_BinaryFunc_DateTruncInterval]]
+    DateTruncTimestamp: _ClassVar[type[_BinaryFunc_DateTruncTimestamp]]
+    DateTruncTimestampTz: _ClassVar[type[_BinaryFunc_DateTruncTimestampTz]]
+    Decode: _ClassVar[type[_BinaryFunc_Decode]]
+    DigestBytes: _ClassVar[type[_BinaryFunc_DigestBytes]]
+    DigestString: _ClassVar[type[_BinaryFunc_DigestString]]
+    DivFloat32: _ClassVar[type[_BinaryFunc_DivFloat32]]
+    DivFloat64: _ClassVar[type[_BinaryFunc_DivFloat64]]
+    DivInt16: _ClassVar[type[_BinaryFunc_DivInt16]]
+    DivInt32: _ClassVar[type[_BinaryFunc_DivInt32]]
+    DivInt64: _ClassVar[type[_BinaryFunc_DivInt64]]
+    DivInterval: _ClassVar[type[_BinaryFunc_DivInterval]]
+    DivNumeric: _ClassVar[type[_BinaryFunc_DivNumeric]]
+    DivUint16: _ClassVar[type[_BinaryFunc_DivUint16]]
+    DivUint32: _ClassVar[type[_BinaryFunc_DivUint32]]
+    DivUint64: _ClassVar[type[_BinaryFunc_DivUint64]]
+    ElementListConcat: _ClassVar[type[_BinaryFunc_ElementListConcat]]
+    Encode: _ClassVar[type[_BinaryFunc_Encode]]
+    EncodedBytesCharLength: _ClassVar[type[_BinaryFunc_EncodedBytesCharLength]]
+    Eq: _ClassVar[type[_BinaryFunc_Eq]]
+    ExtractDate: _ClassVar[type[_BinaryFunc_ExtractDate]]
+    ExtractInterval: _ClassVar[type[_BinaryFunc_ExtractInterval]]
+    ExtractTime: _ClassVar[type[_BinaryFunc_ExtractTime]]
+    ExtractTimestamp: _ClassVar[type[_BinaryFunc_ExtractTimestamp]]
+    ExtractTimestampTz: _ClassVar[type[_BinaryFunc_ExtractTimestampTz]]
+    GetBit: _ClassVar[type[_BinaryFunc_GetBit]]
+    GetByte: _ClassVar[type[_BinaryFunc_GetByte]]
+    Gt: _ClassVar[type[_BinaryFunc_Gt]]
+    Gte: _ClassVar[type[_BinaryFunc_Gte]]
+    IsLikeMatchCaseInsensitive: _ClassVar[type[_BinaryFunc_IsLikeMatchCaseInsensitive]]
+    IsLikeMatchCaseSensitive: _ClassVar[type[_BinaryFunc_IsLikeMatchCaseSensitive]]
+    IsRegexpMatchCaseInsensitive: _ClassVar[
+        type[_BinaryFunc_IsRegexpMatchCaseInsensitive]
+    ]
+    IsRegexpMatchCaseSensitive: _ClassVar[type[_BinaryFunc_IsRegexpMatchCaseSensitive]]
+    JsonbConcat: _ClassVar[type[_BinaryFunc_JsonbConcat]]
+    JsonbContainsJsonb: _ClassVar[type[_BinaryFunc_JsonbContainsJsonb]]
+    JsonbContainsString: _ClassVar[type[_BinaryFunc_JsonbContainsString]]
+    JsonbDeleteInt64: _ClassVar[type[_BinaryFunc_JsonbDeleteInt64]]
+    JsonbDeleteString: _ClassVar[type[_BinaryFunc_JsonbDeleteString]]
+    JsonbGetInt64: _ClassVar[type[_BinaryFunc_JsonbGetInt64]]
+    JsonbGetInt64Stringify: _ClassVar[type[_BinaryFunc_JsonbGetInt64Stringify]]
+    JsonbGetPath: _ClassVar[type[_BinaryFunc_JsonbGetPath]]
+    JsonbGetPathStringify: _ClassVar[type[_BinaryFunc_JsonbGetPathStringify]]
+    JsonbGetString: _ClassVar[type[_BinaryFunc_JsonbGetString]]
+    JsonbGetStringStringify: _ClassVar[type[_BinaryFunc_JsonbGetStringStringify]]
+    Left: _ClassVar[type[_BinaryFunc_Left]]
+    LikeEscape: _ClassVar[type[_BinaryFunc_LikeEscape]]
+    ListContainsList: _ClassVar[type[_BinaryFunc_ListContainsList]]
+    ListContainsListRev: _ClassVar[type[_BinaryFunc_ListContainsListRev]]
+    ListElementConcat: _ClassVar[type[_BinaryFunc_ListElementConcat]]
+    ListLengthMax: _ClassVar[type[_BinaryFunc_ListLengthMax]]
+    ListListConcat: _ClassVar[type[_BinaryFunc_ListListConcat]]
+    ListRemove: _ClassVar[type[_BinaryFunc_ListRemove]]
+    LogNumeric: _ClassVar[type[_BinaryFunc_LogNumeric]]
+    Lt: _ClassVar[type[_BinaryFunc_Lt]]
+    Lte: _ClassVar[type[_BinaryFunc_Lte]]
+    MapContainsAllKeys: _ClassVar[type[_BinaryFunc_MapContainsAllKeys]]
+    MapContainsAnyKeys: _ClassVar[type[_BinaryFunc_MapContainsAnyKeys]]
+    MapContainsKey: _ClassVar[type[_BinaryFunc_MapContainsKey]]
+    MapContainsMap: _ClassVar[type[_BinaryFunc_MapContainsMap]]
+    MapGetValue: _ClassVar[type[_BinaryFunc_MapGetValue]]
+    ModFloat32: _ClassVar[type[_BinaryFunc_ModFloat32]]
+    ModFloat64: _ClassVar[type[_BinaryFunc_ModFloat64]]
+    ModInt16: _ClassVar[type[_BinaryFunc_ModInt16]]
+    ModInt32: _ClassVar[type[_BinaryFunc_ModInt32]]
+    ModInt64: _ClassVar[type[_BinaryFunc_ModInt64]]
+    ModNumeric: _ClassVar[type[_BinaryFunc_ModNumeric]]
+    ModUint16: _ClassVar[type[_BinaryFunc_ModUint16]]
+    ModUint32: _ClassVar[type[_BinaryFunc_ModUint32]]
+    ModUint64: _ClassVar[type[_BinaryFunc_ModUint64]]
+    MulFloat32: _ClassVar[type[_BinaryFunc_MulFloat32]]
+    MulFloat64: _ClassVar[type[_BinaryFunc_MulFloat64]]
+    MulInt16: _ClassVar[type[_BinaryFunc_MulInt16]]
+    MulInt32: _ClassVar[type[_BinaryFunc_MulInt32]]
+    MulInt64: _ClassVar[type[_BinaryFunc_MulInt64]]
+    MulInterval: _ClassVar[type[_BinaryFunc_MulInterval]]
+    MulNumeric: _ClassVar[type[_BinaryFunc_MulNumeric]]
+    MulUint16: _ClassVar[type[_BinaryFunc_MulUint16]]
+    MulUint32: _ClassVar[type[_BinaryFunc_MulUint32]]
+    MulUint64: _ClassVar[type[_BinaryFunc_MulUint64]]
+    MzAclItemContainsPrivilege: _ClassVar[type[_BinaryFunc_MzAclItemContainsPrivilege]]
+    MzRenderTypmod: _ClassVar[type[_BinaryFunc_MzRenderTypmod]]
+    Normalize: _ClassVar[type[_BinaryFunc_Normalize]]
+    NotEq: _ClassVar[type[_BinaryFunc_NotEq]]
+    ParseIdent: _ClassVar[type[_BinaryFunc_ParseIdent]]
+    Position: _ClassVar[type[_BinaryFunc_Position]]
+    Power: _ClassVar[type[_BinaryFunc_Power]]
+    PowerNumeric: _ClassVar[type[_BinaryFunc_PowerNumeric]]
+    PrettySql: _ClassVar[type[_BinaryFunc_PrettySql]]
+    RangeAdjacent: _ClassVar[type[_BinaryFunc_RangeAdjacent]]
+    RangeAfter: _ClassVar[type[_BinaryFunc_RangeAfter]]
+    RangeBefore: _ClassVar[type[_BinaryFunc_RangeBefore]]
+    RangeContainsDate: _ClassVar[type[_BinaryFunc_RangeContainsDate]]
+    RangeContainsDateRev: _ClassVar[type[_BinaryFunc_RangeContainsDateRev]]
+    RangeContainsI32: _ClassVar[type[_BinaryFunc_RangeContainsI32]]
+    RangeContainsI32Rev: _ClassVar[type[_BinaryFunc_RangeContainsI32Rev]]
+    RangeContainsI64: _ClassVar[type[_BinaryFunc_RangeContainsI64]]
+    RangeContainsI64Rev: _ClassVar[type[_BinaryFunc_RangeContainsI64Rev]]
+    RangeContainsNumeric: _ClassVar[type[_BinaryFunc_RangeContainsNumeric]]
+    RangeContainsNumericRev: _ClassVar[type[_BinaryFunc_RangeContainsNumericRev]]
+    RangeContainsRange: _ClassVar[type[_BinaryFunc_RangeContainsRange]]
+    RangeContainsRangeRev: _ClassVar[type[_BinaryFunc_RangeContainsRangeRev]]
+    RangeContainsTimestamp: _ClassVar[type[_BinaryFunc_RangeContainsTimestamp]]
+    RangeContainsTimestampRev: _ClassVar[type[_BinaryFunc_RangeContainsTimestampRev]]
+    RangeContainsTimestampTz: _ClassVar[type[_BinaryFunc_RangeContainsTimestampTz]]
+    RangeContainsTimestampTzRev: _ClassVar[
+        type[_BinaryFunc_RangeContainsTimestampTzRev]
+    ]
+    RangeDifference: _ClassVar[type[_BinaryFunc_RangeDifference]]
+    RangeIntersection: _ClassVar[type[_BinaryFunc_RangeIntersection]]
+    RangeOverlaps: _ClassVar[type[_BinaryFunc_RangeOverlaps]]
+    RangeOverleft: _ClassVar[type[_BinaryFunc_RangeOverleft]]
+    RangeOverright: _ClassVar[type[_BinaryFunc_RangeOverright]]
+    RangeUnion: _ClassVar[type[_BinaryFunc_RangeUnion]]
+    RegexpReplace: _ClassVar[type[_BinaryFunc_RegexpReplace]]
+    RepeatString: _ClassVar[type[_BinaryFunc_RepeatString]]
+    Right: _ClassVar[type[_BinaryFunc_Right]]
+    RoundNumeric: _ClassVar[type[_BinaryFunc_RoundNumeric]]
+    StartsWith: _ClassVar[type[_BinaryFunc_StartsWith]]
+    Strpos: _ClassVar[type[_BinaryFunc_Strpos]]
+    SubDate: _ClassVar[type[_BinaryFunc_SubDate]]
+    SubDateInterval: _ClassVar[type[_BinaryFunc_SubDateInterval]]
+    SubFloat32: _ClassVar[type[_BinaryFunc_SubFloat32]]
+    SubFloat64: _ClassVar[type[_BinaryFunc_SubFloat64]]
+    SubInt16: _ClassVar[type[_BinaryFunc_SubInt16]]
+    SubInt32: _ClassVar[type[_BinaryFunc_SubInt32]]
+    SubInt64: _ClassVar[type[_BinaryFunc_SubInt64]]
+    SubInterval: _ClassVar[type[_BinaryFunc_SubInterval]]
+    SubNumeric: _ClassVar[type[_BinaryFunc_SubNumeric]]
+    SubTime: _ClassVar[type[_BinaryFunc_SubTime]]
+    SubTimeInterval: _ClassVar[type[_BinaryFunc_SubTimeInterval]]
+    SubTimestamp: _ClassVar[type[_BinaryFunc_SubTimestamp]]
+    SubTimestampInterval: _ClassVar[type[_BinaryFunc_SubTimestampInterval]]
+    SubTimestampTz: _ClassVar[type[_BinaryFunc_SubTimestampTz]]
+    SubTimestampTzInterval: _ClassVar[type[_BinaryFunc_SubTimestampTzInterval]]
+    SubUint16: _ClassVar[type[_BinaryFunc_SubUint16]]
+    SubUint32: _ClassVar[type[_BinaryFunc_SubUint32]]
+    SubUint64: _ClassVar[type[_BinaryFunc_SubUint64]]
+    TextConcat: _ClassVar[type[_BinaryFunc_TextConcat]]
+    TimezoneIntervalTimeBinary: _ClassVar[type[_BinaryFunc_TimezoneIntervalTimeBinary]]
+    TimezoneIntervalTimestampBinary: _ClassVar[
+        type[_BinaryFunc_TimezoneIntervalTimestampBinary]
+    ]
+    TimezoneIntervalTimestampTzBinary: _ClassVar[
+        type[_BinaryFunc_TimezoneIntervalTimestampTzBinary]
+    ]
+    TimezoneOffset: _ClassVar[type[_BinaryFunc_TimezoneOffset]]
+    TimezoneTimestampBinary: _ClassVar[type[_BinaryFunc_TimezoneTimestampBinary]]
+    TimezoneTimestampTzBinary: _ClassVar[type[_BinaryFunc_TimezoneTimestampTzBinary]]
+    ToCharTimestamp: _ClassVar[type[_BinaryFunc_ToCharTimestamp]]
+    ToCharTimestampTz: _ClassVar[type[_BinaryFunc_ToCharTimestampTz]]
+    Trim: _ClassVar[type[_BinaryFunc_Trim]]
+    TrimLeading: _ClassVar[type[_BinaryFunc_TrimLeading]]
+    TrimTrailing: _ClassVar[type[_BinaryFunc_TrimTrailing]]
+    UuidGenerateV5: _ClassVar[type[_BinaryFunc_UuidGenerateV5]]
+
+
+@_dc.dataclass
+class _BinaryFunc_AddDateInterval(_Variant, BinaryFunc):
+    value: AddDateInterval
+    _NAME = "AddDateInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AddDateInterval"}
+
+
+_BinaryFunc_AddDateInterval.__name__ = "AddDateInterval"
+_BinaryFunc_AddDateInterval.__qualname__ = "BinaryFunc.AddDateInterval"
+BinaryFunc.AddDateInterval = _BinaryFunc_AddDateInterval
+
+
+@_dc.dataclass
+class _BinaryFunc_AddDateTime(_Variant, BinaryFunc):
+    value: AddDateTime
+    _NAME = "AddDateTime"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AddDateTime"}
+
+
+_BinaryFunc_AddDateTime.__name__ = "AddDateTime"
+_BinaryFunc_AddDateTime.__qualname__ = "BinaryFunc.AddDateTime"
+BinaryFunc.AddDateTime = _BinaryFunc_AddDateTime
+
+
+@_dc.dataclass
+class _BinaryFunc_AddFloat32(_Variant, BinaryFunc):
+    value: AddFloat32
+    _NAME = "AddFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AddFloat32"}
+
+
+_BinaryFunc_AddFloat32.__name__ = "AddFloat32"
+_BinaryFunc_AddFloat32.__qualname__ = "BinaryFunc.AddFloat32"
+BinaryFunc.AddFloat32 = _BinaryFunc_AddFloat32
+
+
+@_dc.dataclass
+class _BinaryFunc_AddFloat64(_Variant, BinaryFunc):
+    value: AddFloat64
+    _NAME = "AddFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AddFloat64"}
+
+
+_BinaryFunc_AddFloat64.__name__ = "AddFloat64"
+_BinaryFunc_AddFloat64.__qualname__ = "BinaryFunc.AddFloat64"
+BinaryFunc.AddFloat64 = _BinaryFunc_AddFloat64
+
+
+@_dc.dataclass
+class _BinaryFunc_AddInt16(_Variant, BinaryFunc):
+    value: AddInt16
+    _NAME = "AddInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AddInt16"}
+
+
+_BinaryFunc_AddInt16.__name__ = "AddInt16"
+_BinaryFunc_AddInt16.__qualname__ = "BinaryFunc.AddInt16"
+BinaryFunc.AddInt16 = _BinaryFunc_AddInt16
+
+
+@_dc.dataclass
+class _BinaryFunc_AddInt32(_Variant, BinaryFunc):
+    value: AddInt32
+    _NAME = "AddInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AddInt32"}
+
+
+_BinaryFunc_AddInt32.__name__ = "AddInt32"
+_BinaryFunc_AddInt32.__qualname__ = "BinaryFunc.AddInt32"
+BinaryFunc.AddInt32 = _BinaryFunc_AddInt32
+
+
+@_dc.dataclass
+class _BinaryFunc_AddInt64(_Variant, BinaryFunc):
+    value: AddInt64
+    _NAME = "AddInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AddInt64"}
+
+
+_BinaryFunc_AddInt64.__name__ = "AddInt64"
+_BinaryFunc_AddInt64.__qualname__ = "BinaryFunc.AddInt64"
+BinaryFunc.AddInt64 = _BinaryFunc_AddInt64
+
+
+@_dc.dataclass
+class _BinaryFunc_AddInterval(_Variant, BinaryFunc):
+    value: AddInterval
+    _NAME = "AddInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AddInterval"}
+
+
+_BinaryFunc_AddInterval.__name__ = "AddInterval"
+_BinaryFunc_AddInterval.__qualname__ = "BinaryFunc.AddInterval"
+BinaryFunc.AddInterval = _BinaryFunc_AddInterval
+
+
+@_dc.dataclass
+class _BinaryFunc_AddNumeric(_Variant, BinaryFunc):
+    value: AddNumeric
+    _NAME = "AddNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AddNumeric"}
+
+
+_BinaryFunc_AddNumeric.__name__ = "AddNumeric"
+_BinaryFunc_AddNumeric.__qualname__ = "BinaryFunc.AddNumeric"
+BinaryFunc.AddNumeric = _BinaryFunc_AddNumeric
+
+
+@_dc.dataclass
+class _BinaryFunc_AddTimeInterval(_Variant, BinaryFunc):
+    value: AddTimeInterval
+    _NAME = "AddTimeInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AddTimeInterval"}
+
+
+_BinaryFunc_AddTimeInterval.__name__ = "AddTimeInterval"
+_BinaryFunc_AddTimeInterval.__qualname__ = "BinaryFunc.AddTimeInterval"
+BinaryFunc.AddTimeInterval = _BinaryFunc_AddTimeInterval
+
+
+@_dc.dataclass
+class _BinaryFunc_AddTimestampInterval(_Variant, BinaryFunc):
+    value: AddTimestampInterval
+    _NAME = "AddTimestampInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AddTimestampInterval"}
+
+
+_BinaryFunc_AddTimestampInterval.__name__ = "AddTimestampInterval"
+_BinaryFunc_AddTimestampInterval.__qualname__ = "BinaryFunc.AddTimestampInterval"
+BinaryFunc.AddTimestampInterval = _BinaryFunc_AddTimestampInterval
+
+
+@_dc.dataclass
+class _BinaryFunc_AddTimestampTzInterval(_Variant, BinaryFunc):
+    value: AddTimestampTzInterval
+    _NAME = "AddTimestampTzInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AddTimestampTzInterval"}
+
+
+_BinaryFunc_AddTimestampTzInterval.__name__ = "AddTimestampTzInterval"
+_BinaryFunc_AddTimestampTzInterval.__qualname__ = "BinaryFunc.AddTimestampTzInterval"
+BinaryFunc.AddTimestampTzInterval = _BinaryFunc_AddTimestampTzInterval
+
+
+@_dc.dataclass
+class _BinaryFunc_AddUint16(_Variant, BinaryFunc):
+    value: AddUint16
+    _NAME = "AddUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AddUint16"}
+
+
+_BinaryFunc_AddUint16.__name__ = "AddUint16"
+_BinaryFunc_AddUint16.__qualname__ = "BinaryFunc.AddUint16"
+BinaryFunc.AddUint16 = _BinaryFunc_AddUint16
+
+
+@_dc.dataclass
+class _BinaryFunc_AddUint32(_Variant, BinaryFunc):
+    value: AddUint32
+    _NAME = "AddUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AddUint32"}
+
+
+_BinaryFunc_AddUint32.__name__ = "AddUint32"
+_BinaryFunc_AddUint32.__qualname__ = "BinaryFunc.AddUint32"
+BinaryFunc.AddUint32 = _BinaryFunc_AddUint32
+
+
+@_dc.dataclass
+class _BinaryFunc_AddUint64(_Variant, BinaryFunc):
+    value: AddUint64
+    _NAME = "AddUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AddUint64"}
+
+
+_BinaryFunc_AddUint64.__name__ = "AddUint64"
+_BinaryFunc_AddUint64.__qualname__ = "BinaryFunc.AddUint64"
+BinaryFunc.AddUint64 = _BinaryFunc_AddUint64
+
+
+@_dc.dataclass
+class _BinaryFunc_AgeTimestamp(_Variant, BinaryFunc):
+    value: AgeTimestamp
+    _NAME = "AgeTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AgeTimestamp"}
+
+
+_BinaryFunc_AgeTimestamp.__name__ = "AgeTimestamp"
+_BinaryFunc_AgeTimestamp.__qualname__ = "BinaryFunc.AgeTimestamp"
+BinaryFunc.AgeTimestamp = _BinaryFunc_AgeTimestamp
+
+
+@_dc.dataclass
+class _BinaryFunc_AgeTimestampTz(_Variant, BinaryFunc):
+    value: AgeTimestampTz
+    _NAME = "AgeTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AgeTimestampTz"}
+
+
+_BinaryFunc_AgeTimestampTz.__name__ = "AgeTimestampTz"
+_BinaryFunc_AgeTimestampTz.__qualname__ = "BinaryFunc.AgeTimestampTz"
+BinaryFunc.AgeTimestampTz = _BinaryFunc_AgeTimestampTz
+
+
+@_dc.dataclass
+class _BinaryFunc_ArrayArrayConcat(_Variant, BinaryFunc):
+    value: ArrayArrayConcat
+    _NAME = "ArrayArrayConcat"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ArrayArrayConcat"}
+
+
+_BinaryFunc_ArrayArrayConcat.__name__ = "ArrayArrayConcat"
+_BinaryFunc_ArrayArrayConcat.__qualname__ = "BinaryFunc.ArrayArrayConcat"
+BinaryFunc.ArrayArrayConcat = _BinaryFunc_ArrayArrayConcat
+
+
+@_dc.dataclass
+class _BinaryFunc_ArrayContains(_Variant, BinaryFunc):
+    value: ArrayContains
+    _NAME = "ArrayContains"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ArrayContains"}
+
+
+_BinaryFunc_ArrayContains.__name__ = "ArrayContains"
+_BinaryFunc_ArrayContains.__qualname__ = "BinaryFunc.ArrayContains"
+BinaryFunc.ArrayContains = _BinaryFunc_ArrayContains
+
+
+@_dc.dataclass
+class _BinaryFunc_ArrayContainsArray(_Variant, BinaryFunc):
+    value: ArrayContainsArray
+    _NAME = "ArrayContainsArray"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ArrayContainsArray"}
+
+
+_BinaryFunc_ArrayContainsArray.__name__ = "ArrayContainsArray"
+_BinaryFunc_ArrayContainsArray.__qualname__ = "BinaryFunc.ArrayContainsArray"
+BinaryFunc.ArrayContainsArray = _BinaryFunc_ArrayContainsArray
+
+
+@_dc.dataclass
+class _BinaryFunc_ArrayContainsArrayRev(_Variant, BinaryFunc):
+    value: ArrayContainsArrayRev
+    _NAME = "ArrayContainsArrayRev"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ArrayContainsArrayRev"}
+
+
+_BinaryFunc_ArrayContainsArrayRev.__name__ = "ArrayContainsArrayRev"
+_BinaryFunc_ArrayContainsArrayRev.__qualname__ = "BinaryFunc.ArrayContainsArrayRev"
+BinaryFunc.ArrayContainsArrayRev = _BinaryFunc_ArrayContainsArrayRev
+
+
+@_dc.dataclass
+class _BinaryFunc_ArrayLength(_Variant, BinaryFunc):
+    value: ArrayLength
+    _NAME = "ArrayLength"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ArrayLength"}
+
+
+_BinaryFunc_ArrayLength.__name__ = "ArrayLength"
+_BinaryFunc_ArrayLength.__qualname__ = "BinaryFunc.ArrayLength"
+BinaryFunc.ArrayLength = _BinaryFunc_ArrayLength
+
+
+@_dc.dataclass
+class _BinaryFunc_ArrayLower(_Variant, BinaryFunc):
+    value: ArrayLower
+    _NAME = "ArrayLower"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ArrayLower"}
+
+
+_BinaryFunc_ArrayLower.__name__ = "ArrayLower"
+_BinaryFunc_ArrayLower.__qualname__ = "BinaryFunc.ArrayLower"
+BinaryFunc.ArrayLower = _BinaryFunc_ArrayLower
+
+
+@_dc.dataclass
+class _BinaryFunc_ArrayRemove(_Variant, BinaryFunc):
+    value: ArrayRemove
+    _NAME = "ArrayRemove"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ArrayRemove"}
+
+
+_BinaryFunc_ArrayRemove.__name__ = "ArrayRemove"
+_BinaryFunc_ArrayRemove.__qualname__ = "BinaryFunc.ArrayRemove"
+BinaryFunc.ArrayRemove = _BinaryFunc_ArrayRemove
+
+
+@_dc.dataclass
+class _BinaryFunc_ArrayUpper(_Variant, BinaryFunc):
+    value: ArrayUpper
+    _NAME = "ArrayUpper"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ArrayUpper"}
+
+
+_BinaryFunc_ArrayUpper.__name__ = "ArrayUpper"
+_BinaryFunc_ArrayUpper.__qualname__ = "BinaryFunc.ArrayUpper"
+BinaryFunc.ArrayUpper = _BinaryFunc_ArrayUpper
+
+
+@_dc.dataclass
+class _BinaryFunc_BitAndInt16(_Variant, BinaryFunc):
+    value: BitAndInt16
+    _NAME = "BitAndInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitAndInt16"}
+
+
+_BinaryFunc_BitAndInt16.__name__ = "BitAndInt16"
+_BinaryFunc_BitAndInt16.__qualname__ = "BinaryFunc.BitAndInt16"
+BinaryFunc.BitAndInt16 = _BinaryFunc_BitAndInt16
+
+
+@_dc.dataclass
+class _BinaryFunc_BitAndInt32(_Variant, BinaryFunc):
+    value: BitAndInt32
+    _NAME = "BitAndInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitAndInt32"}
+
+
+_BinaryFunc_BitAndInt32.__name__ = "BitAndInt32"
+_BinaryFunc_BitAndInt32.__qualname__ = "BinaryFunc.BitAndInt32"
+BinaryFunc.BitAndInt32 = _BinaryFunc_BitAndInt32
+
+
+@_dc.dataclass
+class _BinaryFunc_BitAndInt64(_Variant, BinaryFunc):
+    value: BitAndInt64
+    _NAME = "BitAndInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitAndInt64"}
+
+
+_BinaryFunc_BitAndInt64.__name__ = "BitAndInt64"
+_BinaryFunc_BitAndInt64.__qualname__ = "BinaryFunc.BitAndInt64"
+BinaryFunc.BitAndInt64 = _BinaryFunc_BitAndInt64
+
+
+@_dc.dataclass
+class _BinaryFunc_BitAndUint16(_Variant, BinaryFunc):
+    value: BitAndUint16
+    _NAME = "BitAndUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitAndUint16"}
+
+
+_BinaryFunc_BitAndUint16.__name__ = "BitAndUint16"
+_BinaryFunc_BitAndUint16.__qualname__ = "BinaryFunc.BitAndUint16"
+BinaryFunc.BitAndUint16 = _BinaryFunc_BitAndUint16
+
+
+@_dc.dataclass
+class _BinaryFunc_BitAndUint32(_Variant, BinaryFunc):
+    value: BitAndUint32
+    _NAME = "BitAndUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitAndUint32"}
+
+
+_BinaryFunc_BitAndUint32.__name__ = "BitAndUint32"
+_BinaryFunc_BitAndUint32.__qualname__ = "BinaryFunc.BitAndUint32"
+BinaryFunc.BitAndUint32 = _BinaryFunc_BitAndUint32
+
+
+@_dc.dataclass
+class _BinaryFunc_BitAndUint64(_Variant, BinaryFunc):
+    value: BitAndUint64
+    _NAME = "BitAndUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitAndUint64"}
+
+
+_BinaryFunc_BitAndUint64.__name__ = "BitAndUint64"
+_BinaryFunc_BitAndUint64.__qualname__ = "BinaryFunc.BitAndUint64"
+BinaryFunc.BitAndUint64 = _BinaryFunc_BitAndUint64
+
+
+@_dc.dataclass
+class _BinaryFunc_BitOrInt16(_Variant, BinaryFunc):
+    value: BitOrInt16
+    _NAME = "BitOrInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitOrInt16"}
+
+
+_BinaryFunc_BitOrInt16.__name__ = "BitOrInt16"
+_BinaryFunc_BitOrInt16.__qualname__ = "BinaryFunc.BitOrInt16"
+BinaryFunc.BitOrInt16 = _BinaryFunc_BitOrInt16
+
+
+@_dc.dataclass
+class _BinaryFunc_BitOrInt32(_Variant, BinaryFunc):
+    value: BitOrInt32
+    _NAME = "BitOrInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitOrInt32"}
+
+
+_BinaryFunc_BitOrInt32.__name__ = "BitOrInt32"
+_BinaryFunc_BitOrInt32.__qualname__ = "BinaryFunc.BitOrInt32"
+BinaryFunc.BitOrInt32 = _BinaryFunc_BitOrInt32
+
+
+@_dc.dataclass
+class _BinaryFunc_BitOrInt64(_Variant, BinaryFunc):
+    value: BitOrInt64
+    _NAME = "BitOrInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitOrInt64"}
+
+
+_BinaryFunc_BitOrInt64.__name__ = "BitOrInt64"
+_BinaryFunc_BitOrInt64.__qualname__ = "BinaryFunc.BitOrInt64"
+BinaryFunc.BitOrInt64 = _BinaryFunc_BitOrInt64
+
+
+@_dc.dataclass
+class _BinaryFunc_BitOrUint16(_Variant, BinaryFunc):
+    value: BitOrUint16
+    _NAME = "BitOrUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitOrUint16"}
+
+
+_BinaryFunc_BitOrUint16.__name__ = "BitOrUint16"
+_BinaryFunc_BitOrUint16.__qualname__ = "BinaryFunc.BitOrUint16"
+BinaryFunc.BitOrUint16 = _BinaryFunc_BitOrUint16
+
+
+@_dc.dataclass
+class _BinaryFunc_BitOrUint32(_Variant, BinaryFunc):
+    value: BitOrUint32
+    _NAME = "BitOrUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitOrUint32"}
+
+
+_BinaryFunc_BitOrUint32.__name__ = "BitOrUint32"
+_BinaryFunc_BitOrUint32.__qualname__ = "BinaryFunc.BitOrUint32"
+BinaryFunc.BitOrUint32 = _BinaryFunc_BitOrUint32
+
+
+@_dc.dataclass
+class _BinaryFunc_BitOrUint64(_Variant, BinaryFunc):
+    value: BitOrUint64
+    _NAME = "BitOrUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitOrUint64"}
+
+
+_BinaryFunc_BitOrUint64.__name__ = "BitOrUint64"
+_BinaryFunc_BitOrUint64.__qualname__ = "BinaryFunc.BitOrUint64"
+BinaryFunc.BitOrUint64 = _BinaryFunc_BitOrUint64
+
+
+@_dc.dataclass
+class _BinaryFunc_BitShiftLeftInt16(_Variant, BinaryFunc):
+    value: BitShiftLeftInt16
+    _NAME = "BitShiftLeftInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitShiftLeftInt16"}
+
+
+_BinaryFunc_BitShiftLeftInt16.__name__ = "BitShiftLeftInt16"
+_BinaryFunc_BitShiftLeftInt16.__qualname__ = "BinaryFunc.BitShiftLeftInt16"
+BinaryFunc.BitShiftLeftInt16 = _BinaryFunc_BitShiftLeftInt16
+
+
+@_dc.dataclass
+class _BinaryFunc_BitShiftLeftInt32(_Variant, BinaryFunc):
+    value: BitShiftLeftInt32
+    _NAME = "BitShiftLeftInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitShiftLeftInt32"}
+
+
+_BinaryFunc_BitShiftLeftInt32.__name__ = "BitShiftLeftInt32"
+_BinaryFunc_BitShiftLeftInt32.__qualname__ = "BinaryFunc.BitShiftLeftInt32"
+BinaryFunc.BitShiftLeftInt32 = _BinaryFunc_BitShiftLeftInt32
+
+
+@_dc.dataclass
+class _BinaryFunc_BitShiftLeftInt64(_Variant, BinaryFunc):
+    value: BitShiftLeftInt64
+    _NAME = "BitShiftLeftInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitShiftLeftInt64"}
+
+
+_BinaryFunc_BitShiftLeftInt64.__name__ = "BitShiftLeftInt64"
+_BinaryFunc_BitShiftLeftInt64.__qualname__ = "BinaryFunc.BitShiftLeftInt64"
+BinaryFunc.BitShiftLeftInt64 = _BinaryFunc_BitShiftLeftInt64
+
+
+@_dc.dataclass
+class _BinaryFunc_BitShiftLeftUint16(_Variant, BinaryFunc):
+    value: BitShiftLeftUint16
+    _NAME = "BitShiftLeftUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitShiftLeftUint16"}
+
+
+_BinaryFunc_BitShiftLeftUint16.__name__ = "BitShiftLeftUint16"
+_BinaryFunc_BitShiftLeftUint16.__qualname__ = "BinaryFunc.BitShiftLeftUint16"
+BinaryFunc.BitShiftLeftUint16 = _BinaryFunc_BitShiftLeftUint16
+
+
+@_dc.dataclass
+class _BinaryFunc_BitShiftLeftUint32(_Variant, BinaryFunc):
+    value: BitShiftLeftUint32
+    _NAME = "BitShiftLeftUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitShiftLeftUint32"}
+
+
+_BinaryFunc_BitShiftLeftUint32.__name__ = "BitShiftLeftUint32"
+_BinaryFunc_BitShiftLeftUint32.__qualname__ = "BinaryFunc.BitShiftLeftUint32"
+BinaryFunc.BitShiftLeftUint32 = _BinaryFunc_BitShiftLeftUint32
+
+
+@_dc.dataclass
+class _BinaryFunc_BitShiftLeftUint64(_Variant, BinaryFunc):
+    value: BitShiftLeftUint64
+    _NAME = "BitShiftLeftUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitShiftLeftUint64"}
+
+
+_BinaryFunc_BitShiftLeftUint64.__name__ = "BitShiftLeftUint64"
+_BinaryFunc_BitShiftLeftUint64.__qualname__ = "BinaryFunc.BitShiftLeftUint64"
+BinaryFunc.BitShiftLeftUint64 = _BinaryFunc_BitShiftLeftUint64
+
+
+@_dc.dataclass
+class _BinaryFunc_BitShiftRightInt16(_Variant, BinaryFunc):
+    value: BitShiftRightInt16
+    _NAME = "BitShiftRightInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitShiftRightInt16"}
+
+
+_BinaryFunc_BitShiftRightInt16.__name__ = "BitShiftRightInt16"
+_BinaryFunc_BitShiftRightInt16.__qualname__ = "BinaryFunc.BitShiftRightInt16"
+BinaryFunc.BitShiftRightInt16 = _BinaryFunc_BitShiftRightInt16
+
+
+@_dc.dataclass
+class _BinaryFunc_BitShiftRightInt32(_Variant, BinaryFunc):
+    value: BitShiftRightInt32
+    _NAME = "BitShiftRightInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitShiftRightInt32"}
+
+
+_BinaryFunc_BitShiftRightInt32.__name__ = "BitShiftRightInt32"
+_BinaryFunc_BitShiftRightInt32.__qualname__ = "BinaryFunc.BitShiftRightInt32"
+BinaryFunc.BitShiftRightInt32 = _BinaryFunc_BitShiftRightInt32
+
+
+@_dc.dataclass
+class _BinaryFunc_BitShiftRightInt64(_Variant, BinaryFunc):
+    value: BitShiftRightInt64
+    _NAME = "BitShiftRightInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitShiftRightInt64"}
+
+
+_BinaryFunc_BitShiftRightInt64.__name__ = "BitShiftRightInt64"
+_BinaryFunc_BitShiftRightInt64.__qualname__ = "BinaryFunc.BitShiftRightInt64"
+BinaryFunc.BitShiftRightInt64 = _BinaryFunc_BitShiftRightInt64
+
+
+@_dc.dataclass
+class _BinaryFunc_BitShiftRightUint16(_Variant, BinaryFunc):
+    value: BitShiftRightUint16
+    _NAME = "BitShiftRightUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitShiftRightUint16"}
+
+
+_BinaryFunc_BitShiftRightUint16.__name__ = "BitShiftRightUint16"
+_BinaryFunc_BitShiftRightUint16.__qualname__ = "BinaryFunc.BitShiftRightUint16"
+BinaryFunc.BitShiftRightUint16 = _BinaryFunc_BitShiftRightUint16
+
+
+@_dc.dataclass
+class _BinaryFunc_BitShiftRightUint32(_Variant, BinaryFunc):
+    value: BitShiftRightUint32
+    _NAME = "BitShiftRightUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitShiftRightUint32"}
+
+
+_BinaryFunc_BitShiftRightUint32.__name__ = "BitShiftRightUint32"
+_BinaryFunc_BitShiftRightUint32.__qualname__ = "BinaryFunc.BitShiftRightUint32"
+BinaryFunc.BitShiftRightUint32 = _BinaryFunc_BitShiftRightUint32
+
+
+@_dc.dataclass
+class _BinaryFunc_BitShiftRightUint64(_Variant, BinaryFunc):
+    value: BitShiftRightUint64
+    _NAME = "BitShiftRightUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitShiftRightUint64"}
+
+
+_BinaryFunc_BitShiftRightUint64.__name__ = "BitShiftRightUint64"
+_BinaryFunc_BitShiftRightUint64.__qualname__ = "BinaryFunc.BitShiftRightUint64"
+BinaryFunc.BitShiftRightUint64 = _BinaryFunc_BitShiftRightUint64
+
+
+@_dc.dataclass
+class _BinaryFunc_BitXorInt16(_Variant, BinaryFunc):
+    value: BitXorInt16
+    _NAME = "BitXorInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitXorInt16"}
+
+
+_BinaryFunc_BitXorInt16.__name__ = "BitXorInt16"
+_BinaryFunc_BitXorInt16.__qualname__ = "BinaryFunc.BitXorInt16"
+BinaryFunc.BitXorInt16 = _BinaryFunc_BitXorInt16
+
+
+@_dc.dataclass
+class _BinaryFunc_BitXorInt32(_Variant, BinaryFunc):
+    value: BitXorInt32
+    _NAME = "BitXorInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitXorInt32"}
+
+
+_BinaryFunc_BitXorInt32.__name__ = "BitXorInt32"
+_BinaryFunc_BitXorInt32.__qualname__ = "BinaryFunc.BitXorInt32"
+BinaryFunc.BitXorInt32 = _BinaryFunc_BitXorInt32
+
+
+@_dc.dataclass
+class _BinaryFunc_BitXorInt64(_Variant, BinaryFunc):
+    value: BitXorInt64
+    _NAME = "BitXorInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitXorInt64"}
+
+
+_BinaryFunc_BitXorInt64.__name__ = "BitXorInt64"
+_BinaryFunc_BitXorInt64.__qualname__ = "BinaryFunc.BitXorInt64"
+BinaryFunc.BitXorInt64 = _BinaryFunc_BitXorInt64
+
+
+@_dc.dataclass
+class _BinaryFunc_BitXorUint16(_Variant, BinaryFunc):
+    value: BitXorUint16
+    _NAME = "BitXorUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitXorUint16"}
+
+
+_BinaryFunc_BitXorUint16.__name__ = "BitXorUint16"
+_BinaryFunc_BitXorUint16.__qualname__ = "BinaryFunc.BitXorUint16"
+BinaryFunc.BitXorUint16 = _BinaryFunc_BitXorUint16
+
+
+@_dc.dataclass
+class _BinaryFunc_BitXorUint32(_Variant, BinaryFunc):
+    value: BitXorUint32
+    _NAME = "BitXorUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitXorUint32"}
+
+
+_BinaryFunc_BitXorUint32.__name__ = "BitXorUint32"
+_BinaryFunc_BitXorUint32.__qualname__ = "BinaryFunc.BitXorUint32"
+BinaryFunc.BitXorUint32 = _BinaryFunc_BitXorUint32
+
+
+@_dc.dataclass
+class _BinaryFunc_BitXorUint64(_Variant, BinaryFunc):
+    value: BitXorUint64
+    _NAME = "BitXorUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitXorUint64"}
+
+
+_BinaryFunc_BitXorUint64.__name__ = "BitXorUint64"
+_BinaryFunc_BitXorUint64.__qualname__ = "BinaryFunc.BitXorUint64"
+BinaryFunc.BitXorUint64 = _BinaryFunc_BitXorUint64
+
+
+@_dc.dataclass
+class _BinaryFunc_ConstantTimeEqBytes(_Variant, BinaryFunc):
+    value: ConstantTimeEqBytes
+    _NAME = "ConstantTimeEqBytes"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ConstantTimeEqBytes"}
+
+
+_BinaryFunc_ConstantTimeEqBytes.__name__ = "ConstantTimeEqBytes"
+_BinaryFunc_ConstantTimeEqBytes.__qualname__ = "BinaryFunc.ConstantTimeEqBytes"
+BinaryFunc.ConstantTimeEqBytes = _BinaryFunc_ConstantTimeEqBytes
+
+
+@_dc.dataclass
+class _BinaryFunc_ConstantTimeEqString(_Variant, BinaryFunc):
+    value: ConstantTimeEqString
+    _NAME = "ConstantTimeEqString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ConstantTimeEqString"}
+
+
+_BinaryFunc_ConstantTimeEqString.__name__ = "ConstantTimeEqString"
+_BinaryFunc_ConstantTimeEqString.__qualname__ = "BinaryFunc.ConstantTimeEqString"
+BinaryFunc.ConstantTimeEqString = _BinaryFunc_ConstantTimeEqString
+
+
+@_dc.dataclass
+class _BinaryFunc_ConvertFrom(_Variant, BinaryFunc):
+    value: ConvertFrom
+    _NAME = "ConvertFrom"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ConvertFrom"}
+
+
+_BinaryFunc_ConvertFrom.__name__ = "ConvertFrom"
+_BinaryFunc_ConvertFrom.__qualname__ = "BinaryFunc.ConvertFrom"
+BinaryFunc.ConvertFrom = _BinaryFunc_ConvertFrom
+
+
+@_dc.dataclass
+class _BinaryFunc_DateBinTimestamp(_Variant, BinaryFunc):
+    value: DateBinTimestamp
+    _NAME = "DateBinTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DateBinTimestamp"}
+
+
+_BinaryFunc_DateBinTimestamp.__name__ = "DateBinTimestamp"
+_BinaryFunc_DateBinTimestamp.__qualname__ = "BinaryFunc.DateBinTimestamp"
+BinaryFunc.DateBinTimestamp = _BinaryFunc_DateBinTimestamp
+
+
+@_dc.dataclass
+class _BinaryFunc_DateBinTimestampTz(_Variant, BinaryFunc):
+    value: DateBinTimestampTz
+    _NAME = "DateBinTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DateBinTimestampTz"}
+
+
+_BinaryFunc_DateBinTimestampTz.__name__ = "DateBinTimestampTz"
+_BinaryFunc_DateBinTimestampTz.__qualname__ = "BinaryFunc.DateBinTimestampTz"
+BinaryFunc.DateBinTimestampTz = _BinaryFunc_DateBinTimestampTz
+
+
+@_dc.dataclass
+class _BinaryFunc_DatePartInterval(_Variant, BinaryFunc):
+    value: DatePartIntervalF64
+    _NAME = "DatePartInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DatePartIntervalF64"}
+
+
+_BinaryFunc_DatePartInterval.__name__ = "DatePartInterval"
+_BinaryFunc_DatePartInterval.__qualname__ = "BinaryFunc.DatePartInterval"
+BinaryFunc.DatePartInterval = _BinaryFunc_DatePartInterval
+
+
+@_dc.dataclass
+class _BinaryFunc_DatePartTime(_Variant, BinaryFunc):
+    value: DatePartTimeF64
+    _NAME = "DatePartTime"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DatePartTimeF64"}
+
+
+_BinaryFunc_DatePartTime.__name__ = "DatePartTime"
+_BinaryFunc_DatePartTime.__qualname__ = "BinaryFunc.DatePartTime"
+BinaryFunc.DatePartTime = _BinaryFunc_DatePartTime
+
+
+@_dc.dataclass
+class _BinaryFunc_DatePartTimestamp(_Variant, BinaryFunc):
+    value: DatePartTimestampTimestampF64
+    _NAME = "DatePartTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DatePartTimestampTimestampF64"}
+
+
+_BinaryFunc_DatePartTimestamp.__name__ = "DatePartTimestamp"
+_BinaryFunc_DatePartTimestamp.__qualname__ = "BinaryFunc.DatePartTimestamp"
+BinaryFunc.DatePartTimestamp = _BinaryFunc_DatePartTimestamp
+
+
+@_dc.dataclass
+class _BinaryFunc_DatePartTimestampTz(_Variant, BinaryFunc):
+    value: DatePartTimestampTimestampTzF64
+    _NAME = "DatePartTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DatePartTimestampTimestampTzF64"}
+
+
+_BinaryFunc_DatePartTimestampTz.__name__ = "DatePartTimestampTz"
+_BinaryFunc_DatePartTimestampTz.__qualname__ = "BinaryFunc.DatePartTimestampTz"
+BinaryFunc.DatePartTimestampTz = _BinaryFunc_DatePartTimestampTz
+
+
+@_dc.dataclass
+class _BinaryFunc_DateTruncInterval(_Variant, BinaryFunc):
+    value: DateTruncInterval
+    _NAME = "DateTruncInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DateTruncInterval"}
+
+
+_BinaryFunc_DateTruncInterval.__name__ = "DateTruncInterval"
+_BinaryFunc_DateTruncInterval.__qualname__ = "BinaryFunc.DateTruncInterval"
+BinaryFunc.DateTruncInterval = _BinaryFunc_DateTruncInterval
+
+
+@_dc.dataclass
+class _BinaryFunc_DateTruncTimestamp(_Variant, BinaryFunc):
+    value: DateTruncUnitsTimestamp
+    _NAME = "DateTruncTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DateTruncUnitsTimestamp"}
+
+
+_BinaryFunc_DateTruncTimestamp.__name__ = "DateTruncTimestamp"
+_BinaryFunc_DateTruncTimestamp.__qualname__ = "BinaryFunc.DateTruncTimestamp"
+BinaryFunc.DateTruncTimestamp = _BinaryFunc_DateTruncTimestamp
+
+
+@_dc.dataclass
+class _BinaryFunc_DateTruncTimestampTz(_Variant, BinaryFunc):
+    value: DateTruncUnitsTimestampTz
+    _NAME = "DateTruncTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DateTruncUnitsTimestampTz"}
+
+
+_BinaryFunc_DateTruncTimestampTz.__name__ = "DateTruncTimestampTz"
+_BinaryFunc_DateTruncTimestampTz.__qualname__ = "BinaryFunc.DateTruncTimestampTz"
+BinaryFunc.DateTruncTimestampTz = _BinaryFunc_DateTruncTimestampTz
+
+
+@_dc.dataclass
+class _BinaryFunc_Decode(_Variant, BinaryFunc):
+    value: Decode
+    _NAME = "Decode"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Decode"}
+
+
+_BinaryFunc_Decode.__name__ = "Decode"
+_BinaryFunc_Decode.__qualname__ = "BinaryFunc.Decode"
+BinaryFunc.Decode = _BinaryFunc_Decode
+
+
+@_dc.dataclass
+class _BinaryFunc_DigestBytes(_Variant, BinaryFunc):
+    value: DigestBytes
+    _NAME = "DigestBytes"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DigestBytes"}
+
+
+_BinaryFunc_DigestBytes.__name__ = "DigestBytes"
+_BinaryFunc_DigestBytes.__qualname__ = "BinaryFunc.DigestBytes"
+BinaryFunc.DigestBytes = _BinaryFunc_DigestBytes
+
+
+@_dc.dataclass
+class _BinaryFunc_DigestString(_Variant, BinaryFunc):
+    value: DigestString
+    _NAME = "DigestString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DigestString"}
+
+
+_BinaryFunc_DigestString.__name__ = "DigestString"
+_BinaryFunc_DigestString.__qualname__ = "BinaryFunc.DigestString"
+BinaryFunc.DigestString = _BinaryFunc_DigestString
+
+
+@_dc.dataclass
+class _BinaryFunc_DivFloat32(_Variant, BinaryFunc):
+    value: DivFloat32
+    _NAME = "DivFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DivFloat32"}
+
+
+_BinaryFunc_DivFloat32.__name__ = "DivFloat32"
+_BinaryFunc_DivFloat32.__qualname__ = "BinaryFunc.DivFloat32"
+BinaryFunc.DivFloat32 = _BinaryFunc_DivFloat32
+
+
+@_dc.dataclass
+class _BinaryFunc_DivFloat64(_Variant, BinaryFunc):
+    value: DivFloat64
+    _NAME = "DivFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DivFloat64"}
+
+
+_BinaryFunc_DivFloat64.__name__ = "DivFloat64"
+_BinaryFunc_DivFloat64.__qualname__ = "BinaryFunc.DivFloat64"
+BinaryFunc.DivFloat64 = _BinaryFunc_DivFloat64
+
+
+@_dc.dataclass
+class _BinaryFunc_DivInt16(_Variant, BinaryFunc):
+    value: DivInt16
+    _NAME = "DivInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DivInt16"}
+
+
+_BinaryFunc_DivInt16.__name__ = "DivInt16"
+_BinaryFunc_DivInt16.__qualname__ = "BinaryFunc.DivInt16"
+BinaryFunc.DivInt16 = _BinaryFunc_DivInt16
+
+
+@_dc.dataclass
+class _BinaryFunc_DivInt32(_Variant, BinaryFunc):
+    value: DivInt32
+    _NAME = "DivInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DivInt32"}
+
+
+_BinaryFunc_DivInt32.__name__ = "DivInt32"
+_BinaryFunc_DivInt32.__qualname__ = "BinaryFunc.DivInt32"
+BinaryFunc.DivInt32 = _BinaryFunc_DivInt32
+
+
+@_dc.dataclass
+class _BinaryFunc_DivInt64(_Variant, BinaryFunc):
+    value: DivInt64
+    _NAME = "DivInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DivInt64"}
+
+
+_BinaryFunc_DivInt64.__name__ = "DivInt64"
+_BinaryFunc_DivInt64.__qualname__ = "BinaryFunc.DivInt64"
+BinaryFunc.DivInt64 = _BinaryFunc_DivInt64
+
+
+@_dc.dataclass
+class _BinaryFunc_DivInterval(_Variant, BinaryFunc):
+    value: DivInterval
+    _NAME = "DivInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DivInterval"}
+
+
+_BinaryFunc_DivInterval.__name__ = "DivInterval"
+_BinaryFunc_DivInterval.__qualname__ = "BinaryFunc.DivInterval"
+BinaryFunc.DivInterval = _BinaryFunc_DivInterval
+
+
+@_dc.dataclass
+class _BinaryFunc_DivNumeric(_Variant, BinaryFunc):
+    value: DivNumeric
+    _NAME = "DivNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DivNumeric"}
+
+
+_BinaryFunc_DivNumeric.__name__ = "DivNumeric"
+_BinaryFunc_DivNumeric.__qualname__ = "BinaryFunc.DivNumeric"
+BinaryFunc.DivNumeric = _BinaryFunc_DivNumeric
+
+
+@_dc.dataclass
+class _BinaryFunc_DivUint16(_Variant, BinaryFunc):
+    value: DivUint16
+    _NAME = "DivUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DivUint16"}
+
+
+_BinaryFunc_DivUint16.__name__ = "DivUint16"
+_BinaryFunc_DivUint16.__qualname__ = "BinaryFunc.DivUint16"
+BinaryFunc.DivUint16 = _BinaryFunc_DivUint16
+
+
+@_dc.dataclass
+class _BinaryFunc_DivUint32(_Variant, BinaryFunc):
+    value: DivUint32
+    _NAME = "DivUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DivUint32"}
+
+
+_BinaryFunc_DivUint32.__name__ = "DivUint32"
+_BinaryFunc_DivUint32.__qualname__ = "BinaryFunc.DivUint32"
+BinaryFunc.DivUint32 = _BinaryFunc_DivUint32
+
+
+@_dc.dataclass
+class _BinaryFunc_DivUint64(_Variant, BinaryFunc):
+    value: DivUint64
+    _NAME = "DivUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DivUint64"}
+
+
+_BinaryFunc_DivUint64.__name__ = "DivUint64"
+_BinaryFunc_DivUint64.__qualname__ = "BinaryFunc.DivUint64"
+BinaryFunc.DivUint64 = _BinaryFunc_DivUint64
+
+
+@_dc.dataclass
+class _BinaryFunc_ElementListConcat(_Variant, BinaryFunc):
+    value: ElementListConcat
+    _NAME = "ElementListConcat"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ElementListConcat"}
+
+
+_BinaryFunc_ElementListConcat.__name__ = "ElementListConcat"
+_BinaryFunc_ElementListConcat.__qualname__ = "BinaryFunc.ElementListConcat"
+BinaryFunc.ElementListConcat = _BinaryFunc_ElementListConcat
+
+
+@_dc.dataclass
+class _BinaryFunc_Encode(_Variant, BinaryFunc):
+    value: Encode
+    _NAME = "Encode"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Encode"}
+
+
+_BinaryFunc_Encode.__name__ = "Encode"
+_BinaryFunc_Encode.__qualname__ = "BinaryFunc.Encode"
+BinaryFunc.Encode = _BinaryFunc_Encode
+
+
+@_dc.dataclass
+class _BinaryFunc_EncodedBytesCharLength(_Variant, BinaryFunc):
+    value: EncodedBytesCharLength
+    _NAME = "EncodedBytesCharLength"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "EncodedBytesCharLength"}
+
+
+_BinaryFunc_EncodedBytesCharLength.__name__ = "EncodedBytesCharLength"
+_BinaryFunc_EncodedBytesCharLength.__qualname__ = "BinaryFunc.EncodedBytesCharLength"
+BinaryFunc.EncodedBytesCharLength = _BinaryFunc_EncodedBytesCharLength
+
+
+@_dc.dataclass
+class _BinaryFunc_Eq(_Variant, BinaryFunc):
+    value: Eq
+    _NAME = "Eq"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Eq"}
+
+
+_BinaryFunc_Eq.__name__ = "Eq"
+_BinaryFunc_Eq.__qualname__ = "BinaryFunc.Eq"
+BinaryFunc.Eq = _BinaryFunc_Eq
+
+
+@_dc.dataclass
+class _BinaryFunc_ExtractDate(_Variant, BinaryFunc):
+    value: ExtractDateUnits
+    _NAME = "ExtractDate"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ExtractDateUnits"}
+
+
+_BinaryFunc_ExtractDate.__name__ = "ExtractDate"
+_BinaryFunc_ExtractDate.__qualname__ = "BinaryFunc.ExtractDate"
+BinaryFunc.ExtractDate = _BinaryFunc_ExtractDate
+
+
+@_dc.dataclass
+class _BinaryFunc_ExtractInterval(_Variant, BinaryFunc):
+    value: DatePartIntervalNumeric
+    _NAME = "ExtractInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DatePartIntervalNumeric"}
+
+
+_BinaryFunc_ExtractInterval.__name__ = "ExtractInterval"
+_BinaryFunc_ExtractInterval.__qualname__ = "BinaryFunc.ExtractInterval"
+BinaryFunc.ExtractInterval = _BinaryFunc_ExtractInterval
+
+
+@_dc.dataclass
+class _BinaryFunc_ExtractTime(_Variant, BinaryFunc):
+    value: DatePartTimeNumeric
+    _NAME = "ExtractTime"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DatePartTimeNumeric"}
+
+
+_BinaryFunc_ExtractTime.__name__ = "ExtractTime"
+_BinaryFunc_ExtractTime.__qualname__ = "BinaryFunc.ExtractTime"
+BinaryFunc.ExtractTime = _BinaryFunc_ExtractTime
+
+
+@_dc.dataclass
+class _BinaryFunc_ExtractTimestamp(_Variant, BinaryFunc):
+    value: DatePartTimestampTimestampNumeric
+    _NAME = "ExtractTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DatePartTimestampTimestampNumeric"}
+
+
+_BinaryFunc_ExtractTimestamp.__name__ = "ExtractTimestamp"
+_BinaryFunc_ExtractTimestamp.__qualname__ = "BinaryFunc.ExtractTimestamp"
+BinaryFunc.ExtractTimestamp = _BinaryFunc_ExtractTimestamp
+
+
+@_dc.dataclass
+class _BinaryFunc_ExtractTimestampTz(_Variant, BinaryFunc):
+    value: DatePartTimestampTimestampTzNumeric
+    _NAME = "ExtractTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DatePartTimestampTimestampTzNumeric"}
+
+
+_BinaryFunc_ExtractTimestampTz.__name__ = "ExtractTimestampTz"
+_BinaryFunc_ExtractTimestampTz.__qualname__ = "BinaryFunc.ExtractTimestampTz"
+BinaryFunc.ExtractTimestampTz = _BinaryFunc_ExtractTimestampTz
+
+
+@_dc.dataclass
+class _BinaryFunc_GetBit(_Variant, BinaryFunc):
+    value: GetBit
+    _NAME = "GetBit"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "GetBit"}
+
+
+_BinaryFunc_GetBit.__name__ = "GetBit"
+_BinaryFunc_GetBit.__qualname__ = "BinaryFunc.GetBit"
+BinaryFunc.GetBit = _BinaryFunc_GetBit
+
+
+@_dc.dataclass
+class _BinaryFunc_GetByte(_Variant, BinaryFunc):
+    value: GetByte
+    _NAME = "GetByte"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "GetByte"}
+
+
+_BinaryFunc_GetByte.__name__ = "GetByte"
+_BinaryFunc_GetByte.__qualname__ = "BinaryFunc.GetByte"
+BinaryFunc.GetByte = _BinaryFunc_GetByte
+
+
+@_dc.dataclass
+class _BinaryFunc_Gt(_Variant, BinaryFunc):
+    value: Gt
+    _NAME = "Gt"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Gt"}
+
+
+_BinaryFunc_Gt.__name__ = "Gt"
+_BinaryFunc_Gt.__qualname__ = "BinaryFunc.Gt"
+BinaryFunc.Gt = _BinaryFunc_Gt
+
+
+@_dc.dataclass
+class _BinaryFunc_Gte(_Variant, BinaryFunc):
+    value: Gte
+    _NAME = "Gte"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Gte"}
+
+
+_BinaryFunc_Gte.__name__ = "Gte"
+_BinaryFunc_Gte.__qualname__ = "BinaryFunc.Gte"
+BinaryFunc.Gte = _BinaryFunc_Gte
+
+
+@_dc.dataclass
+class _BinaryFunc_IsLikeMatchCaseInsensitive(_Variant, BinaryFunc):
+    value: IsLikeMatchCaseInsensitive
+    _NAME = "IsLikeMatchCaseInsensitive"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "IsLikeMatchCaseInsensitive"}
+
+
+_BinaryFunc_IsLikeMatchCaseInsensitive.__name__ = "IsLikeMatchCaseInsensitive"
+_BinaryFunc_IsLikeMatchCaseInsensitive.__qualname__ = (
+    "BinaryFunc.IsLikeMatchCaseInsensitive"
+)
+BinaryFunc.IsLikeMatchCaseInsensitive = _BinaryFunc_IsLikeMatchCaseInsensitive
+
+
+@_dc.dataclass
+class _BinaryFunc_IsLikeMatchCaseSensitive(_Variant, BinaryFunc):
+    value: IsLikeMatchCaseSensitive
+    _NAME = "IsLikeMatchCaseSensitive"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "IsLikeMatchCaseSensitive"}
+
+
+_BinaryFunc_IsLikeMatchCaseSensitive.__name__ = "IsLikeMatchCaseSensitive"
+_BinaryFunc_IsLikeMatchCaseSensitive.__qualname__ = (
+    "BinaryFunc.IsLikeMatchCaseSensitive"
+)
+BinaryFunc.IsLikeMatchCaseSensitive = _BinaryFunc_IsLikeMatchCaseSensitive
+
+
+@_dc.dataclass
+class _BinaryFunc_IsRegexpMatchCaseInsensitive(_Variant, BinaryFunc):
+    value: IsRegexpMatchCaseInsensitive
+    _NAME = "IsRegexpMatchCaseInsensitive"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "IsRegexpMatchCaseInsensitive"}
+
+
+_BinaryFunc_IsRegexpMatchCaseInsensitive.__name__ = "IsRegexpMatchCaseInsensitive"
+_BinaryFunc_IsRegexpMatchCaseInsensitive.__qualname__ = (
+    "BinaryFunc.IsRegexpMatchCaseInsensitive"
+)
+BinaryFunc.IsRegexpMatchCaseInsensitive = _BinaryFunc_IsRegexpMatchCaseInsensitive
+
+
+@_dc.dataclass
+class _BinaryFunc_IsRegexpMatchCaseSensitive(_Variant, BinaryFunc):
+    value: IsRegexpMatchCaseSensitive
+    _NAME = "IsRegexpMatchCaseSensitive"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "IsRegexpMatchCaseSensitive"}
+
+
+_BinaryFunc_IsRegexpMatchCaseSensitive.__name__ = "IsRegexpMatchCaseSensitive"
+_BinaryFunc_IsRegexpMatchCaseSensitive.__qualname__ = (
+    "BinaryFunc.IsRegexpMatchCaseSensitive"
+)
+BinaryFunc.IsRegexpMatchCaseSensitive = _BinaryFunc_IsRegexpMatchCaseSensitive
+
+
+@_dc.dataclass
+class _BinaryFunc_JsonbConcat(_Variant, BinaryFunc):
+    value: JsonbConcat
+    _NAME = "JsonbConcat"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbConcat"}
+
+
+_BinaryFunc_JsonbConcat.__name__ = "JsonbConcat"
+_BinaryFunc_JsonbConcat.__qualname__ = "BinaryFunc.JsonbConcat"
+BinaryFunc.JsonbConcat = _BinaryFunc_JsonbConcat
+
+
+@_dc.dataclass
+class _BinaryFunc_JsonbContainsJsonb(_Variant, BinaryFunc):
+    value: JsonbContainsJsonb
+    _NAME = "JsonbContainsJsonb"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbContainsJsonb"}
+
+
+_BinaryFunc_JsonbContainsJsonb.__name__ = "JsonbContainsJsonb"
+_BinaryFunc_JsonbContainsJsonb.__qualname__ = "BinaryFunc.JsonbContainsJsonb"
+BinaryFunc.JsonbContainsJsonb = _BinaryFunc_JsonbContainsJsonb
+
+
+@_dc.dataclass
+class _BinaryFunc_JsonbContainsString(_Variant, BinaryFunc):
+    value: JsonbContainsString
+    _NAME = "JsonbContainsString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbContainsString"}
+
+
+_BinaryFunc_JsonbContainsString.__name__ = "JsonbContainsString"
+_BinaryFunc_JsonbContainsString.__qualname__ = "BinaryFunc.JsonbContainsString"
+BinaryFunc.JsonbContainsString = _BinaryFunc_JsonbContainsString
+
+
+@_dc.dataclass
+class _BinaryFunc_JsonbDeleteInt64(_Variant, BinaryFunc):
+    value: JsonbDeleteInt64
+    _NAME = "JsonbDeleteInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbDeleteInt64"}
+
+
+_BinaryFunc_JsonbDeleteInt64.__name__ = "JsonbDeleteInt64"
+_BinaryFunc_JsonbDeleteInt64.__qualname__ = "BinaryFunc.JsonbDeleteInt64"
+BinaryFunc.JsonbDeleteInt64 = _BinaryFunc_JsonbDeleteInt64
+
+
+@_dc.dataclass
+class _BinaryFunc_JsonbDeleteString(_Variant, BinaryFunc):
+    value: JsonbDeleteString
+    _NAME = "JsonbDeleteString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbDeleteString"}
+
+
+_BinaryFunc_JsonbDeleteString.__name__ = "JsonbDeleteString"
+_BinaryFunc_JsonbDeleteString.__qualname__ = "BinaryFunc.JsonbDeleteString"
+BinaryFunc.JsonbDeleteString = _BinaryFunc_JsonbDeleteString
+
+
+@_dc.dataclass
+class _BinaryFunc_JsonbGetInt64(_Variant, BinaryFunc):
+    value: JsonbGetInt64
+    _NAME = "JsonbGetInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbGetInt64"}
+
+
+_BinaryFunc_JsonbGetInt64.__name__ = "JsonbGetInt64"
+_BinaryFunc_JsonbGetInt64.__qualname__ = "BinaryFunc.JsonbGetInt64"
+BinaryFunc.JsonbGetInt64 = _BinaryFunc_JsonbGetInt64
+
+
+@_dc.dataclass
+class _BinaryFunc_JsonbGetInt64Stringify(_Variant, BinaryFunc):
+    value: JsonbGetInt64Stringify
+    _NAME = "JsonbGetInt64Stringify"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbGetInt64Stringify"}
+
+
+_BinaryFunc_JsonbGetInt64Stringify.__name__ = "JsonbGetInt64Stringify"
+_BinaryFunc_JsonbGetInt64Stringify.__qualname__ = "BinaryFunc.JsonbGetInt64Stringify"
+BinaryFunc.JsonbGetInt64Stringify = _BinaryFunc_JsonbGetInt64Stringify
+
+
+@_dc.dataclass
+class _BinaryFunc_JsonbGetPath(_Variant, BinaryFunc):
+    value: JsonbGetPath
+    _NAME = "JsonbGetPath"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbGetPath"}
+
+
+_BinaryFunc_JsonbGetPath.__name__ = "JsonbGetPath"
+_BinaryFunc_JsonbGetPath.__qualname__ = "BinaryFunc.JsonbGetPath"
+BinaryFunc.JsonbGetPath = _BinaryFunc_JsonbGetPath
+
+
+@_dc.dataclass
+class _BinaryFunc_JsonbGetPathStringify(_Variant, BinaryFunc):
+    value: JsonbGetPathStringify
+    _NAME = "JsonbGetPathStringify"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbGetPathStringify"}
+
+
+_BinaryFunc_JsonbGetPathStringify.__name__ = "JsonbGetPathStringify"
+_BinaryFunc_JsonbGetPathStringify.__qualname__ = "BinaryFunc.JsonbGetPathStringify"
+BinaryFunc.JsonbGetPathStringify = _BinaryFunc_JsonbGetPathStringify
+
+
+@_dc.dataclass
+class _BinaryFunc_JsonbGetString(_Variant, BinaryFunc):
+    value: JsonbGetString
+    _NAME = "JsonbGetString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbGetString"}
+
+
+_BinaryFunc_JsonbGetString.__name__ = "JsonbGetString"
+_BinaryFunc_JsonbGetString.__qualname__ = "BinaryFunc.JsonbGetString"
+BinaryFunc.JsonbGetString = _BinaryFunc_JsonbGetString
+
+
+@_dc.dataclass
+class _BinaryFunc_JsonbGetStringStringify(_Variant, BinaryFunc):
+    value: JsonbGetStringStringify
+    _NAME = "JsonbGetStringStringify"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbGetStringStringify"}
+
+
+_BinaryFunc_JsonbGetStringStringify.__name__ = "JsonbGetStringStringify"
+_BinaryFunc_JsonbGetStringStringify.__qualname__ = "BinaryFunc.JsonbGetStringStringify"
+BinaryFunc.JsonbGetStringStringify = _BinaryFunc_JsonbGetStringStringify
+
+
+@_dc.dataclass
+class _BinaryFunc_Left(_Variant, BinaryFunc):
+    value: Left
+    _NAME = "Left"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Left"}
+
+
+_BinaryFunc_Left.__name__ = "Left"
+_BinaryFunc_Left.__qualname__ = "BinaryFunc.Left"
+BinaryFunc.Left = _BinaryFunc_Left
+
+
+@_dc.dataclass
+class _BinaryFunc_LikeEscape(_Variant, BinaryFunc):
+    value: LikeEscape
+    _NAME = "LikeEscape"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "LikeEscape"}
+
+
+_BinaryFunc_LikeEscape.__name__ = "LikeEscape"
+_BinaryFunc_LikeEscape.__qualname__ = "BinaryFunc.LikeEscape"
+BinaryFunc.LikeEscape = _BinaryFunc_LikeEscape
+
+
+@_dc.dataclass
+class _BinaryFunc_ListContainsList(_Variant, BinaryFunc):
+    value: ListContainsList
+    _NAME = "ListContainsList"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ListContainsList"}
+
+
+_BinaryFunc_ListContainsList.__name__ = "ListContainsList"
+_BinaryFunc_ListContainsList.__qualname__ = "BinaryFunc.ListContainsList"
+BinaryFunc.ListContainsList = _BinaryFunc_ListContainsList
+
+
+@_dc.dataclass
+class _BinaryFunc_ListContainsListRev(_Variant, BinaryFunc):
+    value: ListContainsListRev
+    _NAME = "ListContainsListRev"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ListContainsListRev"}
+
+
+_BinaryFunc_ListContainsListRev.__name__ = "ListContainsListRev"
+_BinaryFunc_ListContainsListRev.__qualname__ = "BinaryFunc.ListContainsListRev"
+BinaryFunc.ListContainsListRev = _BinaryFunc_ListContainsListRev
+
+
+@_dc.dataclass
+class _BinaryFunc_ListElementConcat(_Variant, BinaryFunc):
+    value: ListElementConcat
+    _NAME = "ListElementConcat"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ListElementConcat"}
+
+
+_BinaryFunc_ListElementConcat.__name__ = "ListElementConcat"
+_BinaryFunc_ListElementConcat.__qualname__ = "BinaryFunc.ListElementConcat"
+BinaryFunc.ListElementConcat = _BinaryFunc_ListElementConcat
+
+
+@_dc.dataclass
+class _BinaryFunc_ListLengthMax(_Variant, BinaryFunc):
+    value: ListLengthMax
+    _NAME = "ListLengthMax"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ListLengthMax"}
+
+
+_BinaryFunc_ListLengthMax.__name__ = "ListLengthMax"
+_BinaryFunc_ListLengthMax.__qualname__ = "BinaryFunc.ListLengthMax"
+BinaryFunc.ListLengthMax = _BinaryFunc_ListLengthMax
+
+
+@_dc.dataclass
+class _BinaryFunc_ListListConcat(_Variant, BinaryFunc):
+    value: ListListConcat
+    _NAME = "ListListConcat"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ListListConcat"}
+
+
+_BinaryFunc_ListListConcat.__name__ = "ListListConcat"
+_BinaryFunc_ListListConcat.__qualname__ = "BinaryFunc.ListListConcat"
+BinaryFunc.ListListConcat = _BinaryFunc_ListListConcat
+
+
+@_dc.dataclass
+class _BinaryFunc_ListRemove(_Variant, BinaryFunc):
+    value: ListRemove
+    _NAME = "ListRemove"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ListRemove"}
+
+
+_BinaryFunc_ListRemove.__name__ = "ListRemove"
+_BinaryFunc_ListRemove.__qualname__ = "BinaryFunc.ListRemove"
+BinaryFunc.ListRemove = _BinaryFunc_ListRemove
+
+
+@_dc.dataclass
+class _BinaryFunc_LogNumeric(_Variant, BinaryFunc):
+    value: LogBaseNumeric
+    _NAME = "LogNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "LogBaseNumeric"}
+
+
+_BinaryFunc_LogNumeric.__name__ = "LogNumeric"
+_BinaryFunc_LogNumeric.__qualname__ = "BinaryFunc.LogNumeric"
+BinaryFunc.LogNumeric = _BinaryFunc_LogNumeric
+
+
+@_dc.dataclass
+class _BinaryFunc_Lt(_Variant, BinaryFunc):
+    value: Lt
+    _NAME = "Lt"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Lt"}
+
+
+_BinaryFunc_Lt.__name__ = "Lt"
+_BinaryFunc_Lt.__qualname__ = "BinaryFunc.Lt"
+BinaryFunc.Lt = _BinaryFunc_Lt
+
+
+@_dc.dataclass
+class _BinaryFunc_Lte(_Variant, BinaryFunc):
+    value: Lte
+    _NAME = "Lte"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Lte"}
+
+
+_BinaryFunc_Lte.__name__ = "Lte"
+_BinaryFunc_Lte.__qualname__ = "BinaryFunc.Lte"
+BinaryFunc.Lte = _BinaryFunc_Lte
+
+
+@_dc.dataclass
+class _BinaryFunc_MapContainsAllKeys(_Variant, BinaryFunc):
+    value: MapContainsAllKeys
+    _NAME = "MapContainsAllKeys"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MapContainsAllKeys"}
+
+
+_BinaryFunc_MapContainsAllKeys.__name__ = "MapContainsAllKeys"
+_BinaryFunc_MapContainsAllKeys.__qualname__ = "BinaryFunc.MapContainsAllKeys"
+BinaryFunc.MapContainsAllKeys = _BinaryFunc_MapContainsAllKeys
+
+
+@_dc.dataclass
+class _BinaryFunc_MapContainsAnyKeys(_Variant, BinaryFunc):
+    value: MapContainsAnyKeys
+    _NAME = "MapContainsAnyKeys"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MapContainsAnyKeys"}
+
+
+_BinaryFunc_MapContainsAnyKeys.__name__ = "MapContainsAnyKeys"
+_BinaryFunc_MapContainsAnyKeys.__qualname__ = "BinaryFunc.MapContainsAnyKeys"
+BinaryFunc.MapContainsAnyKeys = _BinaryFunc_MapContainsAnyKeys
+
+
+@_dc.dataclass
+class _BinaryFunc_MapContainsKey(_Variant, BinaryFunc):
+    value: MapContainsKey
+    _NAME = "MapContainsKey"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MapContainsKey"}
+
+
+_BinaryFunc_MapContainsKey.__name__ = "MapContainsKey"
+_BinaryFunc_MapContainsKey.__qualname__ = "BinaryFunc.MapContainsKey"
+BinaryFunc.MapContainsKey = _BinaryFunc_MapContainsKey
+
+
+@_dc.dataclass
+class _BinaryFunc_MapContainsMap(_Variant, BinaryFunc):
+    value: MapContainsMap
+    _NAME = "MapContainsMap"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MapContainsMap"}
+
+
+_BinaryFunc_MapContainsMap.__name__ = "MapContainsMap"
+_BinaryFunc_MapContainsMap.__qualname__ = "BinaryFunc.MapContainsMap"
+BinaryFunc.MapContainsMap = _BinaryFunc_MapContainsMap
+
+
+@_dc.dataclass
+class _BinaryFunc_MapGetValue(_Variant, BinaryFunc):
+    value: MapGetValue
+    _NAME = "MapGetValue"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MapGetValue"}
+
+
+_BinaryFunc_MapGetValue.__name__ = "MapGetValue"
+_BinaryFunc_MapGetValue.__qualname__ = "BinaryFunc.MapGetValue"
+BinaryFunc.MapGetValue = _BinaryFunc_MapGetValue
+
+
+@_dc.dataclass
+class _BinaryFunc_ModFloat32(_Variant, BinaryFunc):
+    value: ModFloat32
+    _NAME = "ModFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ModFloat32"}
+
+
+_BinaryFunc_ModFloat32.__name__ = "ModFloat32"
+_BinaryFunc_ModFloat32.__qualname__ = "BinaryFunc.ModFloat32"
+BinaryFunc.ModFloat32 = _BinaryFunc_ModFloat32
+
+
+@_dc.dataclass
+class _BinaryFunc_ModFloat64(_Variant, BinaryFunc):
+    value: ModFloat64
+    _NAME = "ModFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ModFloat64"}
+
+
+_BinaryFunc_ModFloat64.__name__ = "ModFloat64"
+_BinaryFunc_ModFloat64.__qualname__ = "BinaryFunc.ModFloat64"
+BinaryFunc.ModFloat64 = _BinaryFunc_ModFloat64
+
+
+@_dc.dataclass
+class _BinaryFunc_ModInt16(_Variant, BinaryFunc):
+    value: ModInt16
+    _NAME = "ModInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ModInt16"}
+
+
+_BinaryFunc_ModInt16.__name__ = "ModInt16"
+_BinaryFunc_ModInt16.__qualname__ = "BinaryFunc.ModInt16"
+BinaryFunc.ModInt16 = _BinaryFunc_ModInt16
+
+
+@_dc.dataclass
+class _BinaryFunc_ModInt32(_Variant, BinaryFunc):
+    value: ModInt32
+    _NAME = "ModInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ModInt32"}
+
+
+_BinaryFunc_ModInt32.__name__ = "ModInt32"
+_BinaryFunc_ModInt32.__qualname__ = "BinaryFunc.ModInt32"
+BinaryFunc.ModInt32 = _BinaryFunc_ModInt32
+
+
+@_dc.dataclass
+class _BinaryFunc_ModInt64(_Variant, BinaryFunc):
+    value: ModInt64
+    _NAME = "ModInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ModInt64"}
+
+
+_BinaryFunc_ModInt64.__name__ = "ModInt64"
+_BinaryFunc_ModInt64.__qualname__ = "BinaryFunc.ModInt64"
+BinaryFunc.ModInt64 = _BinaryFunc_ModInt64
+
+
+@_dc.dataclass
+class _BinaryFunc_ModNumeric(_Variant, BinaryFunc):
+    value: ModNumeric
+    _NAME = "ModNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ModNumeric"}
+
+
+_BinaryFunc_ModNumeric.__name__ = "ModNumeric"
+_BinaryFunc_ModNumeric.__qualname__ = "BinaryFunc.ModNumeric"
+BinaryFunc.ModNumeric = _BinaryFunc_ModNumeric
+
+
+@_dc.dataclass
+class _BinaryFunc_ModUint16(_Variant, BinaryFunc):
+    value: ModUint16
+    _NAME = "ModUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ModUint16"}
+
+
+_BinaryFunc_ModUint16.__name__ = "ModUint16"
+_BinaryFunc_ModUint16.__qualname__ = "BinaryFunc.ModUint16"
+BinaryFunc.ModUint16 = _BinaryFunc_ModUint16
+
+
+@_dc.dataclass
+class _BinaryFunc_ModUint32(_Variant, BinaryFunc):
+    value: ModUint32
+    _NAME = "ModUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ModUint32"}
+
+
+_BinaryFunc_ModUint32.__name__ = "ModUint32"
+_BinaryFunc_ModUint32.__qualname__ = "BinaryFunc.ModUint32"
+BinaryFunc.ModUint32 = _BinaryFunc_ModUint32
+
+
+@_dc.dataclass
+class _BinaryFunc_ModUint64(_Variant, BinaryFunc):
+    value: ModUint64
+    _NAME = "ModUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ModUint64"}
+
+
+_BinaryFunc_ModUint64.__name__ = "ModUint64"
+_BinaryFunc_ModUint64.__qualname__ = "BinaryFunc.ModUint64"
+BinaryFunc.ModUint64 = _BinaryFunc_ModUint64
+
+
+@_dc.dataclass
+class _BinaryFunc_MulFloat32(_Variant, BinaryFunc):
+    value: MulFloat32
+    _NAME = "MulFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MulFloat32"}
+
+
+_BinaryFunc_MulFloat32.__name__ = "MulFloat32"
+_BinaryFunc_MulFloat32.__qualname__ = "BinaryFunc.MulFloat32"
+BinaryFunc.MulFloat32 = _BinaryFunc_MulFloat32
+
+
+@_dc.dataclass
+class _BinaryFunc_MulFloat64(_Variant, BinaryFunc):
+    value: MulFloat64
+    _NAME = "MulFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MulFloat64"}
+
+
+_BinaryFunc_MulFloat64.__name__ = "MulFloat64"
+_BinaryFunc_MulFloat64.__qualname__ = "BinaryFunc.MulFloat64"
+BinaryFunc.MulFloat64 = _BinaryFunc_MulFloat64
+
+
+@_dc.dataclass
+class _BinaryFunc_MulInt16(_Variant, BinaryFunc):
+    value: MulInt16
+    _NAME = "MulInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MulInt16"}
+
+
+_BinaryFunc_MulInt16.__name__ = "MulInt16"
+_BinaryFunc_MulInt16.__qualname__ = "BinaryFunc.MulInt16"
+BinaryFunc.MulInt16 = _BinaryFunc_MulInt16
+
+
+@_dc.dataclass
+class _BinaryFunc_MulInt32(_Variant, BinaryFunc):
+    value: MulInt32
+    _NAME = "MulInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MulInt32"}
+
+
+_BinaryFunc_MulInt32.__name__ = "MulInt32"
+_BinaryFunc_MulInt32.__qualname__ = "BinaryFunc.MulInt32"
+BinaryFunc.MulInt32 = _BinaryFunc_MulInt32
+
+
+@_dc.dataclass
+class _BinaryFunc_MulInt64(_Variant, BinaryFunc):
+    value: MulInt64
+    _NAME = "MulInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MulInt64"}
+
+
+_BinaryFunc_MulInt64.__name__ = "MulInt64"
+_BinaryFunc_MulInt64.__qualname__ = "BinaryFunc.MulInt64"
+BinaryFunc.MulInt64 = _BinaryFunc_MulInt64
+
+
+@_dc.dataclass
+class _BinaryFunc_MulInterval(_Variant, BinaryFunc):
+    value: MulInterval
+    _NAME = "MulInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MulInterval"}
+
+
+_BinaryFunc_MulInterval.__name__ = "MulInterval"
+_BinaryFunc_MulInterval.__qualname__ = "BinaryFunc.MulInterval"
+BinaryFunc.MulInterval = _BinaryFunc_MulInterval
+
+
+@_dc.dataclass
+class _BinaryFunc_MulNumeric(_Variant, BinaryFunc):
+    value: MulNumeric
+    _NAME = "MulNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MulNumeric"}
+
+
+_BinaryFunc_MulNumeric.__name__ = "MulNumeric"
+_BinaryFunc_MulNumeric.__qualname__ = "BinaryFunc.MulNumeric"
+BinaryFunc.MulNumeric = _BinaryFunc_MulNumeric
+
+
+@_dc.dataclass
+class _BinaryFunc_MulUint16(_Variant, BinaryFunc):
+    value: MulUint16
+    _NAME = "MulUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MulUint16"}
+
+
+_BinaryFunc_MulUint16.__name__ = "MulUint16"
+_BinaryFunc_MulUint16.__qualname__ = "BinaryFunc.MulUint16"
+BinaryFunc.MulUint16 = _BinaryFunc_MulUint16
+
+
+@_dc.dataclass
+class _BinaryFunc_MulUint32(_Variant, BinaryFunc):
+    value: MulUint32
+    _NAME = "MulUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MulUint32"}
+
+
+_BinaryFunc_MulUint32.__name__ = "MulUint32"
+_BinaryFunc_MulUint32.__qualname__ = "BinaryFunc.MulUint32"
+BinaryFunc.MulUint32 = _BinaryFunc_MulUint32
+
+
+@_dc.dataclass
+class _BinaryFunc_MulUint64(_Variant, BinaryFunc):
+    value: MulUint64
+    _NAME = "MulUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MulUint64"}
+
+
+_BinaryFunc_MulUint64.__name__ = "MulUint64"
+_BinaryFunc_MulUint64.__qualname__ = "BinaryFunc.MulUint64"
+BinaryFunc.MulUint64 = _BinaryFunc_MulUint64
+
+
+@_dc.dataclass
+class _BinaryFunc_MzAclItemContainsPrivilege(_Variant, BinaryFunc):
+    value: MzAclItemContainsPrivilege
+    _NAME = "MzAclItemContainsPrivilege"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MzAclItemContainsPrivilege"}
+
+
+_BinaryFunc_MzAclItemContainsPrivilege.__name__ = "MzAclItemContainsPrivilege"
+_BinaryFunc_MzAclItemContainsPrivilege.__qualname__ = (
+    "BinaryFunc.MzAclItemContainsPrivilege"
+)
+BinaryFunc.MzAclItemContainsPrivilege = _BinaryFunc_MzAclItemContainsPrivilege
+
+
+@_dc.dataclass
+class _BinaryFunc_MzRenderTypmod(_Variant, BinaryFunc):
+    value: MzRenderTypmod
+    _NAME = "MzRenderTypmod"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MzRenderTypmod"}
+
+
+_BinaryFunc_MzRenderTypmod.__name__ = "MzRenderTypmod"
+_BinaryFunc_MzRenderTypmod.__qualname__ = "BinaryFunc.MzRenderTypmod"
+BinaryFunc.MzRenderTypmod = _BinaryFunc_MzRenderTypmod
+
+
+@_dc.dataclass
+class _BinaryFunc_Normalize(_Variant, BinaryFunc):
+    value: Normalize
+    _NAME = "Normalize"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Normalize"}
+
+
+_BinaryFunc_Normalize.__name__ = "Normalize"
+_BinaryFunc_Normalize.__qualname__ = "BinaryFunc.Normalize"
+BinaryFunc.Normalize = _BinaryFunc_Normalize
+
+
+@_dc.dataclass
+class _BinaryFunc_NotEq(_Variant, BinaryFunc):
+    value: NotEq
+    _NAME = "NotEq"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "NotEq"}
+
+
+_BinaryFunc_NotEq.__name__ = "NotEq"
+_BinaryFunc_NotEq.__qualname__ = "BinaryFunc.NotEq"
+BinaryFunc.NotEq = _BinaryFunc_NotEq
+
+
+@_dc.dataclass
+class _BinaryFunc_ParseIdent(_Variant, BinaryFunc):
+    value: ParseIdent
+    _NAME = "ParseIdent"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ParseIdent"}
+
+
+_BinaryFunc_ParseIdent.__name__ = "ParseIdent"
+_BinaryFunc_ParseIdent.__qualname__ = "BinaryFunc.ParseIdent"
+BinaryFunc.ParseIdent = _BinaryFunc_ParseIdent
+
+
+@_dc.dataclass
+class _BinaryFunc_Position(_Variant, BinaryFunc):
+    value: Position
+    _NAME = "Position"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Position"}
+
+
+_BinaryFunc_Position.__name__ = "Position"
+_BinaryFunc_Position.__qualname__ = "BinaryFunc.Position"
+BinaryFunc.Position = _BinaryFunc_Position
+
+
+@_dc.dataclass
+class _BinaryFunc_Power(_Variant, BinaryFunc):
+    value: Power
+    _NAME = "Power"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Power"}
+
+
+_BinaryFunc_Power.__name__ = "Power"
+_BinaryFunc_Power.__qualname__ = "BinaryFunc.Power"
+BinaryFunc.Power = _BinaryFunc_Power
+
+
+@_dc.dataclass
+class _BinaryFunc_PowerNumeric(_Variant, BinaryFunc):
+    value: PowerNumeric
+    _NAME = "PowerNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "PowerNumeric"}
+
+
+_BinaryFunc_PowerNumeric.__name__ = "PowerNumeric"
+_BinaryFunc_PowerNumeric.__qualname__ = "BinaryFunc.PowerNumeric"
+BinaryFunc.PowerNumeric = _BinaryFunc_PowerNumeric
+
+
+@_dc.dataclass
+class _BinaryFunc_PrettySql(_Variant, BinaryFunc):
+    value: PrettySql
+    _NAME = "PrettySql"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "PrettySql"}
+
+
+_BinaryFunc_PrettySql.__name__ = "PrettySql"
+_BinaryFunc_PrettySql.__qualname__ = "BinaryFunc.PrettySql"
+BinaryFunc.PrettySql = _BinaryFunc_PrettySql
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeAdjacent(_Variant, BinaryFunc):
+    value: RangeAdjacent
+    _NAME = "RangeAdjacent"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeAdjacent"}
+
+
+_BinaryFunc_RangeAdjacent.__name__ = "RangeAdjacent"
+_BinaryFunc_RangeAdjacent.__qualname__ = "BinaryFunc.RangeAdjacent"
+BinaryFunc.RangeAdjacent = _BinaryFunc_RangeAdjacent
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeAfter(_Variant, BinaryFunc):
+    value: RangeAfter
+    _NAME = "RangeAfter"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeAfter"}
+
+
+_BinaryFunc_RangeAfter.__name__ = "RangeAfter"
+_BinaryFunc_RangeAfter.__qualname__ = "BinaryFunc.RangeAfter"
+BinaryFunc.RangeAfter = _BinaryFunc_RangeAfter
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeBefore(_Variant, BinaryFunc):
+    value: RangeBefore
+    _NAME = "RangeBefore"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeBefore"}
+
+
+_BinaryFunc_RangeBefore.__name__ = "RangeBefore"
+_BinaryFunc_RangeBefore.__qualname__ = "BinaryFunc.RangeBefore"
+BinaryFunc.RangeBefore = _BinaryFunc_RangeBefore
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeContainsDate(_Variant, BinaryFunc):
+    value: RangeContainsDate
+    _NAME = "RangeContainsDate"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeContainsDate"}
+
+
+_BinaryFunc_RangeContainsDate.__name__ = "RangeContainsDate"
+_BinaryFunc_RangeContainsDate.__qualname__ = "BinaryFunc.RangeContainsDate"
+BinaryFunc.RangeContainsDate = _BinaryFunc_RangeContainsDate
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeContainsDateRev(_Variant, BinaryFunc):
+    value: RangeContainsDateRev
+    _NAME = "RangeContainsDateRev"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeContainsDateRev"}
+
+
+_BinaryFunc_RangeContainsDateRev.__name__ = "RangeContainsDateRev"
+_BinaryFunc_RangeContainsDateRev.__qualname__ = "BinaryFunc.RangeContainsDateRev"
+BinaryFunc.RangeContainsDateRev = _BinaryFunc_RangeContainsDateRev
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeContainsI32(_Variant, BinaryFunc):
+    value: RangeContainsI32
+    _NAME = "RangeContainsI32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeContainsI32"}
+
+
+_BinaryFunc_RangeContainsI32.__name__ = "RangeContainsI32"
+_BinaryFunc_RangeContainsI32.__qualname__ = "BinaryFunc.RangeContainsI32"
+BinaryFunc.RangeContainsI32 = _BinaryFunc_RangeContainsI32
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeContainsI32Rev(_Variant, BinaryFunc):
+    value: RangeContainsI32Rev
+    _NAME = "RangeContainsI32Rev"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeContainsI32Rev"}
+
+
+_BinaryFunc_RangeContainsI32Rev.__name__ = "RangeContainsI32Rev"
+_BinaryFunc_RangeContainsI32Rev.__qualname__ = "BinaryFunc.RangeContainsI32Rev"
+BinaryFunc.RangeContainsI32Rev = _BinaryFunc_RangeContainsI32Rev
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeContainsI64(_Variant, BinaryFunc):
+    value: RangeContainsI64
+    _NAME = "RangeContainsI64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeContainsI64"}
+
+
+_BinaryFunc_RangeContainsI64.__name__ = "RangeContainsI64"
+_BinaryFunc_RangeContainsI64.__qualname__ = "BinaryFunc.RangeContainsI64"
+BinaryFunc.RangeContainsI64 = _BinaryFunc_RangeContainsI64
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeContainsI64Rev(_Variant, BinaryFunc):
+    value: RangeContainsI64Rev
+    _NAME = "RangeContainsI64Rev"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeContainsI64Rev"}
+
+
+_BinaryFunc_RangeContainsI64Rev.__name__ = "RangeContainsI64Rev"
+_BinaryFunc_RangeContainsI64Rev.__qualname__ = "BinaryFunc.RangeContainsI64Rev"
+BinaryFunc.RangeContainsI64Rev = _BinaryFunc_RangeContainsI64Rev
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeContainsNumeric(_Variant, BinaryFunc):
+    value: RangeContainsNumeric
+    _NAME = "RangeContainsNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeContainsNumeric"}
+
+
+_BinaryFunc_RangeContainsNumeric.__name__ = "RangeContainsNumeric"
+_BinaryFunc_RangeContainsNumeric.__qualname__ = "BinaryFunc.RangeContainsNumeric"
+BinaryFunc.RangeContainsNumeric = _BinaryFunc_RangeContainsNumeric
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeContainsNumericRev(_Variant, BinaryFunc):
+    value: RangeContainsNumericRev
+    _NAME = "RangeContainsNumericRev"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeContainsNumericRev"}
+
+
+_BinaryFunc_RangeContainsNumericRev.__name__ = "RangeContainsNumericRev"
+_BinaryFunc_RangeContainsNumericRev.__qualname__ = "BinaryFunc.RangeContainsNumericRev"
+BinaryFunc.RangeContainsNumericRev = _BinaryFunc_RangeContainsNumericRev
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeContainsRange(_Variant, BinaryFunc):
+    value: RangeContainsRange
+    _NAME = "RangeContainsRange"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeContainsRange"}
+
+
+_BinaryFunc_RangeContainsRange.__name__ = "RangeContainsRange"
+_BinaryFunc_RangeContainsRange.__qualname__ = "BinaryFunc.RangeContainsRange"
+BinaryFunc.RangeContainsRange = _BinaryFunc_RangeContainsRange
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeContainsRangeRev(_Variant, BinaryFunc):
+    value: RangeContainsRangeRev
+    _NAME = "RangeContainsRangeRev"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeContainsRangeRev"}
+
+
+_BinaryFunc_RangeContainsRangeRev.__name__ = "RangeContainsRangeRev"
+_BinaryFunc_RangeContainsRangeRev.__qualname__ = "BinaryFunc.RangeContainsRangeRev"
+BinaryFunc.RangeContainsRangeRev = _BinaryFunc_RangeContainsRangeRev
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeContainsTimestamp(_Variant, BinaryFunc):
+    value: RangeContainsTimestamp
+    _NAME = "RangeContainsTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeContainsTimestamp"}
+
+
+_BinaryFunc_RangeContainsTimestamp.__name__ = "RangeContainsTimestamp"
+_BinaryFunc_RangeContainsTimestamp.__qualname__ = "BinaryFunc.RangeContainsTimestamp"
+BinaryFunc.RangeContainsTimestamp = _BinaryFunc_RangeContainsTimestamp
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeContainsTimestampRev(_Variant, BinaryFunc):
+    value: RangeContainsTimestampRev
+    _NAME = "RangeContainsTimestampRev"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeContainsTimestampRev"}
+
+
+_BinaryFunc_RangeContainsTimestampRev.__name__ = "RangeContainsTimestampRev"
+_BinaryFunc_RangeContainsTimestampRev.__qualname__ = (
+    "BinaryFunc.RangeContainsTimestampRev"
+)
+BinaryFunc.RangeContainsTimestampRev = _BinaryFunc_RangeContainsTimestampRev
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeContainsTimestampTz(_Variant, BinaryFunc):
+    value: RangeContainsTimestampTz
+    _NAME = "RangeContainsTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeContainsTimestampTz"}
+
+
+_BinaryFunc_RangeContainsTimestampTz.__name__ = "RangeContainsTimestampTz"
+_BinaryFunc_RangeContainsTimestampTz.__qualname__ = (
+    "BinaryFunc.RangeContainsTimestampTz"
+)
+BinaryFunc.RangeContainsTimestampTz = _BinaryFunc_RangeContainsTimestampTz
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeContainsTimestampTzRev(_Variant, BinaryFunc):
+    value: RangeContainsTimestampTzRev
+    _NAME = "RangeContainsTimestampTzRev"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeContainsTimestampTzRev"}
+
+
+_BinaryFunc_RangeContainsTimestampTzRev.__name__ = "RangeContainsTimestampTzRev"
+_BinaryFunc_RangeContainsTimestampTzRev.__qualname__ = (
+    "BinaryFunc.RangeContainsTimestampTzRev"
+)
+BinaryFunc.RangeContainsTimestampTzRev = _BinaryFunc_RangeContainsTimestampTzRev
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeDifference(_Variant, BinaryFunc):
+    value: RangeDifference
+    _NAME = "RangeDifference"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeDifference"}
+
+
+_BinaryFunc_RangeDifference.__name__ = "RangeDifference"
+_BinaryFunc_RangeDifference.__qualname__ = "BinaryFunc.RangeDifference"
+BinaryFunc.RangeDifference = _BinaryFunc_RangeDifference
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeIntersection(_Variant, BinaryFunc):
+    value: RangeIntersection
+    _NAME = "RangeIntersection"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeIntersection"}
+
+
+_BinaryFunc_RangeIntersection.__name__ = "RangeIntersection"
+_BinaryFunc_RangeIntersection.__qualname__ = "BinaryFunc.RangeIntersection"
+BinaryFunc.RangeIntersection = _BinaryFunc_RangeIntersection
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeOverlaps(_Variant, BinaryFunc):
+    value: RangeOverlaps
+    _NAME = "RangeOverlaps"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeOverlaps"}
+
+
+_BinaryFunc_RangeOverlaps.__name__ = "RangeOverlaps"
+_BinaryFunc_RangeOverlaps.__qualname__ = "BinaryFunc.RangeOverlaps"
+BinaryFunc.RangeOverlaps = _BinaryFunc_RangeOverlaps
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeOverleft(_Variant, BinaryFunc):
+    value: RangeOverleft
+    _NAME = "RangeOverleft"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeOverleft"}
+
+
+_BinaryFunc_RangeOverleft.__name__ = "RangeOverleft"
+_BinaryFunc_RangeOverleft.__qualname__ = "BinaryFunc.RangeOverleft"
+BinaryFunc.RangeOverleft = _BinaryFunc_RangeOverleft
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeOverright(_Variant, BinaryFunc):
+    value: RangeOverright
+    _NAME = "RangeOverright"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeOverright"}
+
+
+_BinaryFunc_RangeOverright.__name__ = "RangeOverright"
+_BinaryFunc_RangeOverright.__qualname__ = "BinaryFunc.RangeOverright"
+BinaryFunc.RangeOverright = _BinaryFunc_RangeOverright
+
+
+@_dc.dataclass
+class _BinaryFunc_RangeUnion(_Variant, BinaryFunc):
+    value: RangeUnion
+    _NAME = "RangeUnion"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeUnion"}
+
+
+_BinaryFunc_RangeUnion.__name__ = "RangeUnion"
+_BinaryFunc_RangeUnion.__qualname__ = "BinaryFunc.RangeUnion"
+BinaryFunc.RangeUnion = _BinaryFunc_RangeUnion
+
+
+@_dc.dataclass
+class _BinaryFunc_RegexpReplace(_Variant, BinaryFunc):
+    value: RegexpReplaceStatic
+    _NAME = "RegexpReplace"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RegexpReplaceStatic"}
+
+
+_BinaryFunc_RegexpReplace.__name__ = "RegexpReplace"
+_BinaryFunc_RegexpReplace.__qualname__ = "BinaryFunc.RegexpReplace"
+BinaryFunc.RegexpReplace = _BinaryFunc_RegexpReplace
+
+
+@_dc.dataclass
+class _BinaryFunc_RepeatString(_Variant, BinaryFunc):
+    value: RepeatString
+    _NAME = "RepeatString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RepeatString"}
+
+
+_BinaryFunc_RepeatString.__name__ = "RepeatString"
+_BinaryFunc_RepeatString.__qualname__ = "BinaryFunc.RepeatString"
+BinaryFunc.RepeatString = _BinaryFunc_RepeatString
+
+
+@_dc.dataclass
+class _BinaryFunc_Right(_Variant, BinaryFunc):
+    value: Right
+    _NAME = "Right"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Right"}
+
+
+_BinaryFunc_Right.__name__ = "Right"
+_BinaryFunc_Right.__qualname__ = "BinaryFunc.Right"
+BinaryFunc.Right = _BinaryFunc_Right
+
+
+@_dc.dataclass
+class _BinaryFunc_RoundNumeric(_Variant, BinaryFunc):
+    value: RoundNumericBinary
+    _NAME = "RoundNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RoundNumericBinary"}
+
+
+_BinaryFunc_RoundNumeric.__name__ = "RoundNumeric"
+_BinaryFunc_RoundNumeric.__qualname__ = "BinaryFunc.RoundNumeric"
+BinaryFunc.RoundNumeric = _BinaryFunc_RoundNumeric
+
+
+@_dc.dataclass
+class _BinaryFunc_StartsWith(_Variant, BinaryFunc):
+    value: StartsWith
+    _NAME = "StartsWith"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "StartsWith"}
+
+
+_BinaryFunc_StartsWith.__name__ = "StartsWith"
+_BinaryFunc_StartsWith.__qualname__ = "BinaryFunc.StartsWith"
+BinaryFunc.StartsWith = _BinaryFunc_StartsWith
+
+
+@_dc.dataclass
+class _BinaryFunc_Strpos(_Variant, BinaryFunc):
+    value: Strpos
+    _NAME = "Strpos"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Strpos"}
+
+
+_BinaryFunc_Strpos.__name__ = "Strpos"
+_BinaryFunc_Strpos.__qualname__ = "BinaryFunc.Strpos"
+BinaryFunc.Strpos = _BinaryFunc_Strpos
+
+
+@_dc.dataclass
+class _BinaryFunc_SubDate(_Variant, BinaryFunc):
+    value: SubDate
+    _NAME = "SubDate"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubDate"}
+
+
+_BinaryFunc_SubDate.__name__ = "SubDate"
+_BinaryFunc_SubDate.__qualname__ = "BinaryFunc.SubDate"
+BinaryFunc.SubDate = _BinaryFunc_SubDate
+
+
+@_dc.dataclass
+class _BinaryFunc_SubDateInterval(_Variant, BinaryFunc):
+    value: SubDateInterval
+    _NAME = "SubDateInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubDateInterval"}
+
+
+_BinaryFunc_SubDateInterval.__name__ = "SubDateInterval"
+_BinaryFunc_SubDateInterval.__qualname__ = "BinaryFunc.SubDateInterval"
+BinaryFunc.SubDateInterval = _BinaryFunc_SubDateInterval
+
+
+@_dc.dataclass
+class _BinaryFunc_SubFloat32(_Variant, BinaryFunc):
+    value: SubFloat32
+    _NAME = "SubFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubFloat32"}
+
+
+_BinaryFunc_SubFloat32.__name__ = "SubFloat32"
+_BinaryFunc_SubFloat32.__qualname__ = "BinaryFunc.SubFloat32"
+BinaryFunc.SubFloat32 = _BinaryFunc_SubFloat32
+
+
+@_dc.dataclass
+class _BinaryFunc_SubFloat64(_Variant, BinaryFunc):
+    value: SubFloat64
+    _NAME = "SubFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubFloat64"}
+
+
+_BinaryFunc_SubFloat64.__name__ = "SubFloat64"
+_BinaryFunc_SubFloat64.__qualname__ = "BinaryFunc.SubFloat64"
+BinaryFunc.SubFloat64 = _BinaryFunc_SubFloat64
+
+
+@_dc.dataclass
+class _BinaryFunc_SubInt16(_Variant, BinaryFunc):
+    value: SubInt16
+    _NAME = "SubInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubInt16"}
+
+
+_BinaryFunc_SubInt16.__name__ = "SubInt16"
+_BinaryFunc_SubInt16.__qualname__ = "BinaryFunc.SubInt16"
+BinaryFunc.SubInt16 = _BinaryFunc_SubInt16
+
+
+@_dc.dataclass
+class _BinaryFunc_SubInt32(_Variant, BinaryFunc):
+    value: SubInt32
+    _NAME = "SubInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubInt32"}
+
+
+_BinaryFunc_SubInt32.__name__ = "SubInt32"
+_BinaryFunc_SubInt32.__qualname__ = "BinaryFunc.SubInt32"
+BinaryFunc.SubInt32 = _BinaryFunc_SubInt32
+
+
+@_dc.dataclass
+class _BinaryFunc_SubInt64(_Variant, BinaryFunc):
+    value: SubInt64
+    _NAME = "SubInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubInt64"}
+
+
+_BinaryFunc_SubInt64.__name__ = "SubInt64"
+_BinaryFunc_SubInt64.__qualname__ = "BinaryFunc.SubInt64"
+BinaryFunc.SubInt64 = _BinaryFunc_SubInt64
+
+
+@_dc.dataclass
+class _BinaryFunc_SubInterval(_Variant, BinaryFunc):
+    value: SubInterval
+    _NAME = "SubInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubInterval"}
+
+
+_BinaryFunc_SubInterval.__name__ = "SubInterval"
+_BinaryFunc_SubInterval.__qualname__ = "BinaryFunc.SubInterval"
+BinaryFunc.SubInterval = _BinaryFunc_SubInterval
+
+
+@_dc.dataclass
+class _BinaryFunc_SubNumeric(_Variant, BinaryFunc):
+    value: SubNumeric
+    _NAME = "SubNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubNumeric"}
+
+
+_BinaryFunc_SubNumeric.__name__ = "SubNumeric"
+_BinaryFunc_SubNumeric.__qualname__ = "BinaryFunc.SubNumeric"
+BinaryFunc.SubNumeric = _BinaryFunc_SubNumeric
+
+
+@_dc.dataclass
+class _BinaryFunc_SubTime(_Variant, BinaryFunc):
+    value: SubTime
+    _NAME = "SubTime"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubTime"}
+
+
+_BinaryFunc_SubTime.__name__ = "SubTime"
+_BinaryFunc_SubTime.__qualname__ = "BinaryFunc.SubTime"
+BinaryFunc.SubTime = _BinaryFunc_SubTime
+
+
+@_dc.dataclass
+class _BinaryFunc_SubTimeInterval(_Variant, BinaryFunc):
+    value: SubTimeInterval
+    _NAME = "SubTimeInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubTimeInterval"}
+
+
+_BinaryFunc_SubTimeInterval.__name__ = "SubTimeInterval"
+_BinaryFunc_SubTimeInterval.__qualname__ = "BinaryFunc.SubTimeInterval"
+BinaryFunc.SubTimeInterval = _BinaryFunc_SubTimeInterval
+
+
+@_dc.dataclass
+class _BinaryFunc_SubTimestamp(_Variant, BinaryFunc):
+    value: SubTimestamp
+    _NAME = "SubTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubTimestamp"}
+
+
+_BinaryFunc_SubTimestamp.__name__ = "SubTimestamp"
+_BinaryFunc_SubTimestamp.__qualname__ = "BinaryFunc.SubTimestamp"
+BinaryFunc.SubTimestamp = _BinaryFunc_SubTimestamp
+
+
+@_dc.dataclass
+class _BinaryFunc_SubTimestampInterval(_Variant, BinaryFunc):
+    value: SubTimestampInterval
+    _NAME = "SubTimestampInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubTimestampInterval"}
+
+
+_BinaryFunc_SubTimestampInterval.__name__ = "SubTimestampInterval"
+_BinaryFunc_SubTimestampInterval.__qualname__ = "BinaryFunc.SubTimestampInterval"
+BinaryFunc.SubTimestampInterval = _BinaryFunc_SubTimestampInterval
+
+
+@_dc.dataclass
+class _BinaryFunc_SubTimestampTz(_Variant, BinaryFunc):
+    value: SubTimestampTz
+    _NAME = "SubTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubTimestampTz"}
+
+
+_BinaryFunc_SubTimestampTz.__name__ = "SubTimestampTz"
+_BinaryFunc_SubTimestampTz.__qualname__ = "BinaryFunc.SubTimestampTz"
+BinaryFunc.SubTimestampTz = _BinaryFunc_SubTimestampTz
+
+
+@_dc.dataclass
+class _BinaryFunc_SubTimestampTzInterval(_Variant, BinaryFunc):
+    value: SubTimestampTzInterval
+    _NAME = "SubTimestampTzInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubTimestampTzInterval"}
+
+
+_BinaryFunc_SubTimestampTzInterval.__name__ = "SubTimestampTzInterval"
+_BinaryFunc_SubTimestampTzInterval.__qualname__ = "BinaryFunc.SubTimestampTzInterval"
+BinaryFunc.SubTimestampTzInterval = _BinaryFunc_SubTimestampTzInterval
+
+
+@_dc.dataclass
+class _BinaryFunc_SubUint16(_Variant, BinaryFunc):
+    value: SubUint16
+    _NAME = "SubUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubUint16"}
+
+
+_BinaryFunc_SubUint16.__name__ = "SubUint16"
+_BinaryFunc_SubUint16.__qualname__ = "BinaryFunc.SubUint16"
+BinaryFunc.SubUint16 = _BinaryFunc_SubUint16
+
+
+@_dc.dataclass
+class _BinaryFunc_SubUint32(_Variant, BinaryFunc):
+    value: SubUint32
+    _NAME = "SubUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubUint32"}
+
+
+_BinaryFunc_SubUint32.__name__ = "SubUint32"
+_BinaryFunc_SubUint32.__qualname__ = "BinaryFunc.SubUint32"
+BinaryFunc.SubUint32 = _BinaryFunc_SubUint32
+
+
+@_dc.dataclass
+class _BinaryFunc_SubUint64(_Variant, BinaryFunc):
+    value: SubUint64
+    _NAME = "SubUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SubUint64"}
+
+
+_BinaryFunc_SubUint64.__name__ = "SubUint64"
+_BinaryFunc_SubUint64.__qualname__ = "BinaryFunc.SubUint64"
+BinaryFunc.SubUint64 = _BinaryFunc_SubUint64
+
+
+@_dc.dataclass
+class _BinaryFunc_TextConcat(_Variant, BinaryFunc):
+    value: TextConcatBinary
+    _NAME = "TextConcat"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TextConcatBinary"}
+
+
+_BinaryFunc_TextConcat.__name__ = "TextConcat"
+_BinaryFunc_TextConcat.__qualname__ = "BinaryFunc.TextConcat"
+BinaryFunc.TextConcat = _BinaryFunc_TextConcat
+
+
+@_dc.dataclass
+class _BinaryFunc_TimezoneIntervalTimeBinary(_Variant, BinaryFunc):
+    value: TimezoneIntervalTimeBinary
+    _NAME = "TimezoneIntervalTimeBinary"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TimezoneIntervalTimeBinary"}
+
+
+_BinaryFunc_TimezoneIntervalTimeBinary.__name__ = "TimezoneIntervalTimeBinary"
+_BinaryFunc_TimezoneIntervalTimeBinary.__qualname__ = (
+    "BinaryFunc.TimezoneIntervalTimeBinary"
+)
+BinaryFunc.TimezoneIntervalTimeBinary = _BinaryFunc_TimezoneIntervalTimeBinary
+
+
+@_dc.dataclass
+class _BinaryFunc_TimezoneIntervalTimestampBinary(_Variant, BinaryFunc):
+    value: TimezoneIntervalTimestampBinary
+    _NAME = "TimezoneIntervalTimestampBinary"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TimezoneIntervalTimestampBinary"}
+
+
+_BinaryFunc_TimezoneIntervalTimestampBinary.__name__ = "TimezoneIntervalTimestampBinary"
+_BinaryFunc_TimezoneIntervalTimestampBinary.__qualname__ = (
+    "BinaryFunc.TimezoneIntervalTimestampBinary"
+)
+BinaryFunc.TimezoneIntervalTimestampBinary = _BinaryFunc_TimezoneIntervalTimestampBinary
+
+
+@_dc.dataclass
+class _BinaryFunc_TimezoneIntervalTimestampTzBinary(_Variant, BinaryFunc):
+    value: TimezoneIntervalTimestampTzBinary
+    _NAME = "TimezoneIntervalTimestampTzBinary"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TimezoneIntervalTimestampTzBinary"}
+
+
+_BinaryFunc_TimezoneIntervalTimestampTzBinary.__name__ = (
+    "TimezoneIntervalTimestampTzBinary"
+)
+_BinaryFunc_TimezoneIntervalTimestampTzBinary.__qualname__ = (
+    "BinaryFunc.TimezoneIntervalTimestampTzBinary"
+)
+BinaryFunc.TimezoneIntervalTimestampTzBinary = (
+    _BinaryFunc_TimezoneIntervalTimestampTzBinary
+)
+
+
+@_dc.dataclass
+class _BinaryFunc_TimezoneOffset(_Variant, BinaryFunc):
+    value: TimezoneOffset
+    _NAME = "TimezoneOffset"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TimezoneOffset"}
+
+
+_BinaryFunc_TimezoneOffset.__name__ = "TimezoneOffset"
+_BinaryFunc_TimezoneOffset.__qualname__ = "BinaryFunc.TimezoneOffset"
+BinaryFunc.TimezoneOffset = _BinaryFunc_TimezoneOffset
+
+
+@_dc.dataclass
+class _BinaryFunc_TimezoneTimestampBinary(_Variant, BinaryFunc):
+    value: TimezoneTimestampBinary
+    _NAME = "TimezoneTimestampBinary"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TimezoneTimestampBinary"}
+
+
+_BinaryFunc_TimezoneTimestampBinary.__name__ = "TimezoneTimestampBinary"
+_BinaryFunc_TimezoneTimestampBinary.__qualname__ = "BinaryFunc.TimezoneTimestampBinary"
+BinaryFunc.TimezoneTimestampBinary = _BinaryFunc_TimezoneTimestampBinary
+
+
+@_dc.dataclass
+class _BinaryFunc_TimezoneTimestampTzBinary(_Variant, BinaryFunc):
+    value: TimezoneTimestampTzBinary
+    _NAME = "TimezoneTimestampTzBinary"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TimezoneTimestampTzBinary"}
+
+
+_BinaryFunc_TimezoneTimestampTzBinary.__name__ = "TimezoneTimestampTzBinary"
+_BinaryFunc_TimezoneTimestampTzBinary.__qualname__ = (
+    "BinaryFunc.TimezoneTimestampTzBinary"
+)
+BinaryFunc.TimezoneTimestampTzBinary = _BinaryFunc_TimezoneTimestampTzBinary
+
+
+@_dc.dataclass
+class _BinaryFunc_ToCharTimestamp(_Variant, BinaryFunc):
+    value: ToCharTimestampFormat
+    _NAME = "ToCharTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ToCharTimestampFormat"}
+
+
+_BinaryFunc_ToCharTimestamp.__name__ = "ToCharTimestamp"
+_BinaryFunc_ToCharTimestamp.__qualname__ = "BinaryFunc.ToCharTimestamp"
+BinaryFunc.ToCharTimestamp = _BinaryFunc_ToCharTimestamp
+
+
+@_dc.dataclass
+class _BinaryFunc_ToCharTimestampTz(_Variant, BinaryFunc):
+    value: ToCharTimestampTzFormat
+    _NAME = "ToCharTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ToCharTimestampTzFormat"}
+
+
+_BinaryFunc_ToCharTimestampTz.__name__ = "ToCharTimestampTz"
+_BinaryFunc_ToCharTimestampTz.__qualname__ = "BinaryFunc.ToCharTimestampTz"
+BinaryFunc.ToCharTimestampTz = _BinaryFunc_ToCharTimestampTz
+
+
+@_dc.dataclass
+class _BinaryFunc_Trim(_Variant, BinaryFunc):
+    value: Trim
+    _NAME = "Trim"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Trim"}
+
+
+_BinaryFunc_Trim.__name__ = "Trim"
+_BinaryFunc_Trim.__qualname__ = "BinaryFunc.Trim"
+BinaryFunc.Trim = _BinaryFunc_Trim
+
+
+@_dc.dataclass
+class _BinaryFunc_TrimLeading(_Variant, BinaryFunc):
+    value: TrimLeading
+    _NAME = "TrimLeading"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TrimLeading"}
+
+
+_BinaryFunc_TrimLeading.__name__ = "TrimLeading"
+_BinaryFunc_TrimLeading.__qualname__ = "BinaryFunc.TrimLeading"
+BinaryFunc.TrimLeading = _BinaryFunc_TrimLeading
+
+
+@_dc.dataclass
+class _BinaryFunc_TrimTrailing(_Variant, BinaryFunc):
+    value: TrimTrailing
+    _NAME = "TrimTrailing"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TrimTrailing"}
+
+
+_BinaryFunc_TrimTrailing.__name__ = "TrimTrailing"
+_BinaryFunc_TrimTrailing.__qualname__ = "BinaryFunc.TrimTrailing"
+BinaryFunc.TrimTrailing = _BinaryFunc_TrimTrailing
+
+
+@_dc.dataclass
+class _BinaryFunc_UuidGenerateV5(_Variant, BinaryFunc):
+    value: UuidGenerateV5
+    _NAME = "UuidGenerateV5"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "UuidGenerateV5"}
+
+
+_BinaryFunc_UuidGenerateV5.__name__ = "UuidGenerateV5"
+_BinaryFunc_UuidGenerateV5.__qualname__ = "BinaryFunc.UuidGenerateV5"
+BinaryFunc.UuidGenerateV5 = _BinaryFunc_UuidGenerateV5
+BinaryFunc._VARIANTS = {
+    "AddDateInterval": BinaryFunc.AddDateInterval,
+    "AddDateTime": BinaryFunc.AddDateTime,
+    "AddFloat32": BinaryFunc.AddFloat32,
+    "AddFloat64": BinaryFunc.AddFloat64,
+    "AddInt16": BinaryFunc.AddInt16,
+    "AddInt32": BinaryFunc.AddInt32,
+    "AddInt64": BinaryFunc.AddInt64,
+    "AddInterval": BinaryFunc.AddInterval,
+    "AddNumeric": BinaryFunc.AddNumeric,
+    "AddTimeInterval": BinaryFunc.AddTimeInterval,
+    "AddTimestampInterval": BinaryFunc.AddTimestampInterval,
+    "AddTimestampTzInterval": BinaryFunc.AddTimestampTzInterval,
+    "AddUint16": BinaryFunc.AddUint16,
+    "AddUint32": BinaryFunc.AddUint32,
+    "AddUint64": BinaryFunc.AddUint64,
+    "AgeTimestamp": BinaryFunc.AgeTimestamp,
+    "AgeTimestampTz": BinaryFunc.AgeTimestampTz,
+    "ArrayArrayConcat": BinaryFunc.ArrayArrayConcat,
+    "ArrayContains": BinaryFunc.ArrayContains,
+    "ArrayContainsArray": BinaryFunc.ArrayContainsArray,
+    "ArrayContainsArrayRev": BinaryFunc.ArrayContainsArrayRev,
+    "ArrayLength": BinaryFunc.ArrayLength,
+    "ArrayLower": BinaryFunc.ArrayLower,
+    "ArrayRemove": BinaryFunc.ArrayRemove,
+    "ArrayUpper": BinaryFunc.ArrayUpper,
+    "BitAndInt16": BinaryFunc.BitAndInt16,
+    "BitAndInt32": BinaryFunc.BitAndInt32,
+    "BitAndInt64": BinaryFunc.BitAndInt64,
+    "BitAndUint16": BinaryFunc.BitAndUint16,
+    "BitAndUint32": BinaryFunc.BitAndUint32,
+    "BitAndUint64": BinaryFunc.BitAndUint64,
+    "BitOrInt16": BinaryFunc.BitOrInt16,
+    "BitOrInt32": BinaryFunc.BitOrInt32,
+    "BitOrInt64": BinaryFunc.BitOrInt64,
+    "BitOrUint16": BinaryFunc.BitOrUint16,
+    "BitOrUint32": BinaryFunc.BitOrUint32,
+    "BitOrUint64": BinaryFunc.BitOrUint64,
+    "BitShiftLeftInt16": BinaryFunc.BitShiftLeftInt16,
+    "BitShiftLeftInt32": BinaryFunc.BitShiftLeftInt32,
+    "BitShiftLeftInt64": BinaryFunc.BitShiftLeftInt64,
+    "BitShiftLeftUint16": BinaryFunc.BitShiftLeftUint16,
+    "BitShiftLeftUint32": BinaryFunc.BitShiftLeftUint32,
+    "BitShiftLeftUint64": BinaryFunc.BitShiftLeftUint64,
+    "BitShiftRightInt16": BinaryFunc.BitShiftRightInt16,
+    "BitShiftRightInt32": BinaryFunc.BitShiftRightInt32,
+    "BitShiftRightInt64": BinaryFunc.BitShiftRightInt64,
+    "BitShiftRightUint16": BinaryFunc.BitShiftRightUint16,
+    "BitShiftRightUint32": BinaryFunc.BitShiftRightUint32,
+    "BitShiftRightUint64": BinaryFunc.BitShiftRightUint64,
+    "BitXorInt16": BinaryFunc.BitXorInt16,
+    "BitXorInt32": BinaryFunc.BitXorInt32,
+    "BitXorInt64": BinaryFunc.BitXorInt64,
+    "BitXorUint16": BinaryFunc.BitXorUint16,
+    "BitXorUint32": BinaryFunc.BitXorUint32,
+    "BitXorUint64": BinaryFunc.BitXorUint64,
+    "ConstantTimeEqBytes": BinaryFunc.ConstantTimeEqBytes,
+    "ConstantTimeEqString": BinaryFunc.ConstantTimeEqString,
+    "ConvertFrom": BinaryFunc.ConvertFrom,
+    "DateBinTimestamp": BinaryFunc.DateBinTimestamp,
+    "DateBinTimestampTz": BinaryFunc.DateBinTimestampTz,
+    "DatePartInterval": BinaryFunc.DatePartInterval,
+    "DatePartTime": BinaryFunc.DatePartTime,
+    "DatePartTimestamp": BinaryFunc.DatePartTimestamp,
+    "DatePartTimestampTz": BinaryFunc.DatePartTimestampTz,
+    "DateTruncInterval": BinaryFunc.DateTruncInterval,
+    "DateTruncTimestamp": BinaryFunc.DateTruncTimestamp,
+    "DateTruncTimestampTz": BinaryFunc.DateTruncTimestampTz,
+    "Decode": BinaryFunc.Decode,
+    "DigestBytes": BinaryFunc.DigestBytes,
+    "DigestString": BinaryFunc.DigestString,
+    "DivFloat32": BinaryFunc.DivFloat32,
+    "DivFloat64": BinaryFunc.DivFloat64,
+    "DivInt16": BinaryFunc.DivInt16,
+    "DivInt32": BinaryFunc.DivInt32,
+    "DivInt64": BinaryFunc.DivInt64,
+    "DivInterval": BinaryFunc.DivInterval,
+    "DivNumeric": BinaryFunc.DivNumeric,
+    "DivUint16": BinaryFunc.DivUint16,
+    "DivUint32": BinaryFunc.DivUint32,
+    "DivUint64": BinaryFunc.DivUint64,
+    "ElementListConcat": BinaryFunc.ElementListConcat,
+    "Encode": BinaryFunc.Encode,
+    "EncodedBytesCharLength": BinaryFunc.EncodedBytesCharLength,
+    "Eq": BinaryFunc.Eq,
+    "ExtractDate": BinaryFunc.ExtractDate,
+    "ExtractInterval": BinaryFunc.ExtractInterval,
+    "ExtractTime": BinaryFunc.ExtractTime,
+    "ExtractTimestamp": BinaryFunc.ExtractTimestamp,
+    "ExtractTimestampTz": BinaryFunc.ExtractTimestampTz,
+    "GetBit": BinaryFunc.GetBit,
+    "GetByte": BinaryFunc.GetByte,
+    "Gt": BinaryFunc.Gt,
+    "Gte": BinaryFunc.Gte,
+    "IsLikeMatchCaseInsensitive": BinaryFunc.IsLikeMatchCaseInsensitive,
+    "IsLikeMatchCaseSensitive": BinaryFunc.IsLikeMatchCaseSensitive,
+    "IsRegexpMatchCaseInsensitive": BinaryFunc.IsRegexpMatchCaseInsensitive,
+    "IsRegexpMatchCaseSensitive": BinaryFunc.IsRegexpMatchCaseSensitive,
+    "JsonbConcat": BinaryFunc.JsonbConcat,
+    "JsonbContainsJsonb": BinaryFunc.JsonbContainsJsonb,
+    "JsonbContainsString": BinaryFunc.JsonbContainsString,
+    "JsonbDeleteInt64": BinaryFunc.JsonbDeleteInt64,
+    "JsonbDeleteString": BinaryFunc.JsonbDeleteString,
+    "JsonbGetInt64": BinaryFunc.JsonbGetInt64,
+    "JsonbGetInt64Stringify": BinaryFunc.JsonbGetInt64Stringify,
+    "JsonbGetPath": BinaryFunc.JsonbGetPath,
+    "JsonbGetPathStringify": BinaryFunc.JsonbGetPathStringify,
+    "JsonbGetString": BinaryFunc.JsonbGetString,
+    "JsonbGetStringStringify": BinaryFunc.JsonbGetStringStringify,
+    "Left": BinaryFunc.Left,
+    "LikeEscape": BinaryFunc.LikeEscape,
+    "ListContainsList": BinaryFunc.ListContainsList,
+    "ListContainsListRev": BinaryFunc.ListContainsListRev,
+    "ListElementConcat": BinaryFunc.ListElementConcat,
+    "ListLengthMax": BinaryFunc.ListLengthMax,
+    "ListListConcat": BinaryFunc.ListListConcat,
+    "ListRemove": BinaryFunc.ListRemove,
+    "LogNumeric": BinaryFunc.LogNumeric,
+    "Lt": BinaryFunc.Lt,
+    "Lte": BinaryFunc.Lte,
+    "MapContainsAllKeys": BinaryFunc.MapContainsAllKeys,
+    "MapContainsAnyKeys": BinaryFunc.MapContainsAnyKeys,
+    "MapContainsKey": BinaryFunc.MapContainsKey,
+    "MapContainsMap": BinaryFunc.MapContainsMap,
+    "MapGetValue": BinaryFunc.MapGetValue,
+    "ModFloat32": BinaryFunc.ModFloat32,
+    "ModFloat64": BinaryFunc.ModFloat64,
+    "ModInt16": BinaryFunc.ModInt16,
+    "ModInt32": BinaryFunc.ModInt32,
+    "ModInt64": BinaryFunc.ModInt64,
+    "ModNumeric": BinaryFunc.ModNumeric,
+    "ModUint16": BinaryFunc.ModUint16,
+    "ModUint32": BinaryFunc.ModUint32,
+    "ModUint64": BinaryFunc.ModUint64,
+    "MulFloat32": BinaryFunc.MulFloat32,
+    "MulFloat64": BinaryFunc.MulFloat64,
+    "MulInt16": BinaryFunc.MulInt16,
+    "MulInt32": BinaryFunc.MulInt32,
+    "MulInt64": BinaryFunc.MulInt64,
+    "MulInterval": BinaryFunc.MulInterval,
+    "MulNumeric": BinaryFunc.MulNumeric,
+    "MulUint16": BinaryFunc.MulUint16,
+    "MulUint32": BinaryFunc.MulUint32,
+    "MulUint64": BinaryFunc.MulUint64,
+    "MzAclItemContainsPrivilege": BinaryFunc.MzAclItemContainsPrivilege,
+    "MzRenderTypmod": BinaryFunc.MzRenderTypmod,
+    "Normalize": BinaryFunc.Normalize,
+    "NotEq": BinaryFunc.NotEq,
+    "ParseIdent": BinaryFunc.ParseIdent,
+    "Position": BinaryFunc.Position,
+    "Power": BinaryFunc.Power,
+    "PowerNumeric": BinaryFunc.PowerNumeric,
+    "PrettySql": BinaryFunc.PrettySql,
+    "RangeAdjacent": BinaryFunc.RangeAdjacent,
+    "RangeAfter": BinaryFunc.RangeAfter,
+    "RangeBefore": BinaryFunc.RangeBefore,
+    "RangeContainsDate": BinaryFunc.RangeContainsDate,
+    "RangeContainsDateRev": BinaryFunc.RangeContainsDateRev,
+    "RangeContainsI32": BinaryFunc.RangeContainsI32,
+    "RangeContainsI32Rev": BinaryFunc.RangeContainsI32Rev,
+    "RangeContainsI64": BinaryFunc.RangeContainsI64,
+    "RangeContainsI64Rev": BinaryFunc.RangeContainsI64Rev,
+    "RangeContainsNumeric": BinaryFunc.RangeContainsNumeric,
+    "RangeContainsNumericRev": BinaryFunc.RangeContainsNumericRev,
+    "RangeContainsRange": BinaryFunc.RangeContainsRange,
+    "RangeContainsRangeRev": BinaryFunc.RangeContainsRangeRev,
+    "RangeContainsTimestamp": BinaryFunc.RangeContainsTimestamp,
+    "RangeContainsTimestampRev": BinaryFunc.RangeContainsTimestampRev,
+    "RangeContainsTimestampTz": BinaryFunc.RangeContainsTimestampTz,
+    "RangeContainsTimestampTzRev": BinaryFunc.RangeContainsTimestampTzRev,
+    "RangeDifference": BinaryFunc.RangeDifference,
+    "RangeIntersection": BinaryFunc.RangeIntersection,
+    "RangeOverlaps": BinaryFunc.RangeOverlaps,
+    "RangeOverleft": BinaryFunc.RangeOverleft,
+    "RangeOverright": BinaryFunc.RangeOverright,
+    "RangeUnion": BinaryFunc.RangeUnion,
+    "RegexpReplace": BinaryFunc.RegexpReplace,
+    "RepeatString": BinaryFunc.RepeatString,
+    "Right": BinaryFunc.Right,
+    "RoundNumeric": BinaryFunc.RoundNumeric,
+    "StartsWith": BinaryFunc.StartsWith,
+    "Strpos": BinaryFunc.Strpos,
+    "SubDate": BinaryFunc.SubDate,
+    "SubDateInterval": BinaryFunc.SubDateInterval,
+    "SubFloat32": BinaryFunc.SubFloat32,
+    "SubFloat64": BinaryFunc.SubFloat64,
+    "SubInt16": BinaryFunc.SubInt16,
+    "SubInt32": BinaryFunc.SubInt32,
+    "SubInt64": BinaryFunc.SubInt64,
+    "SubInterval": BinaryFunc.SubInterval,
+    "SubNumeric": BinaryFunc.SubNumeric,
+    "SubTime": BinaryFunc.SubTime,
+    "SubTimeInterval": BinaryFunc.SubTimeInterval,
+    "SubTimestamp": BinaryFunc.SubTimestamp,
+    "SubTimestampInterval": BinaryFunc.SubTimestampInterval,
+    "SubTimestampTz": BinaryFunc.SubTimestampTz,
+    "SubTimestampTzInterval": BinaryFunc.SubTimestampTzInterval,
+    "SubUint16": BinaryFunc.SubUint16,
+    "SubUint32": BinaryFunc.SubUint32,
+    "SubUint64": BinaryFunc.SubUint64,
+    "TextConcat": BinaryFunc.TextConcat,
+    "TimezoneIntervalTimeBinary": BinaryFunc.TimezoneIntervalTimeBinary,
+    "TimezoneIntervalTimestampBinary": BinaryFunc.TimezoneIntervalTimestampBinary,
+    "TimezoneIntervalTimestampTzBinary": BinaryFunc.TimezoneIntervalTimestampTzBinary,
+    "TimezoneOffset": BinaryFunc.TimezoneOffset,
+    "TimezoneTimestampBinary": BinaryFunc.TimezoneTimestampBinary,
+    "TimezoneTimestampTzBinary": BinaryFunc.TimezoneTimestampTzBinary,
+    "ToCharTimestamp": BinaryFunc.ToCharTimestamp,
+    "ToCharTimestampTz": BinaryFunc.ToCharTimestampTz,
+    "Trim": BinaryFunc.Trim,
+    "TrimLeading": BinaryFunc.TrimLeading,
+    "TrimTrailing": BinaryFunc.TrimTrailing,
+    "UuidGenerateV5": BinaryFunc.UuidGenerateV5,
+}
 
 
 @_dc.dataclass
@@ -4224,40 +6248,70 @@ class CastVarCharToString(_Unit):
 
 
 class CatalogItemId(_Enum):
-    @_dc.dataclass
-    class IntrospectionSourceIndex(_Variant):
-        value: int
-        _NAME = "IntrospectionSourceIndex"
-        _KIND = "NEWTYPE"
-        _INNER = "U64"
+    IntrospectionSourceIndex: _ClassVar[type[_CatalogItemId_IntrospectionSourceIndex]]
+    System: _ClassVar[type[_CatalogItemId_System]]
+    Transient: _ClassVar[type[_CatalogItemId_Transient]]
+    User: _ClassVar[type[_CatalogItemId_User]]
 
-    @_dc.dataclass
-    class System(_Variant):
-        value: int
-        _NAME = "System"
-        _KIND = "NEWTYPE"
-        _INNER = "U64"
 
-    @_dc.dataclass
-    class Transient(_Variant):
-        value: int
-        _NAME = "Transient"
-        _KIND = "NEWTYPE"
-        _INNER = "U64"
+@_dc.dataclass
+class _CatalogItemId_IntrospectionSourceIndex(_Variant, CatalogItemId):
+    value: int
+    _NAME = "IntrospectionSourceIndex"
+    _KIND = "NEWTYPE"
+    _INNER = "U64"
 
-    @_dc.dataclass
-    class User(_Variant):
-        value: int
-        _NAME = "User"
-        _KIND = "NEWTYPE"
-        _INNER = "U64"
 
-    _VARIANTS = {
-        "IntrospectionSourceIndex": IntrospectionSourceIndex,
-        "System": System,
-        "Transient": Transient,
-        "User": User,
-    }
+_CatalogItemId_IntrospectionSourceIndex.__name__ = "IntrospectionSourceIndex"
+_CatalogItemId_IntrospectionSourceIndex.__qualname__ = (
+    "CatalogItemId.IntrospectionSourceIndex"
+)
+CatalogItemId.IntrospectionSourceIndex = _CatalogItemId_IntrospectionSourceIndex
+
+
+@_dc.dataclass
+class _CatalogItemId_System(_Variant, CatalogItemId):
+    value: int
+    _NAME = "System"
+    _KIND = "NEWTYPE"
+    _INNER = "U64"
+
+
+_CatalogItemId_System.__name__ = "System"
+_CatalogItemId_System.__qualname__ = "CatalogItemId.System"
+CatalogItemId.System = _CatalogItemId_System
+
+
+@_dc.dataclass
+class _CatalogItemId_Transient(_Variant, CatalogItemId):
+    value: int
+    _NAME = "Transient"
+    _KIND = "NEWTYPE"
+    _INNER = "U64"
+
+
+_CatalogItemId_Transient.__name__ = "Transient"
+_CatalogItemId_Transient.__qualname__ = "CatalogItemId.Transient"
+CatalogItemId.Transient = _CatalogItemId_Transient
+
+
+@_dc.dataclass
+class _CatalogItemId_User(_Variant, CatalogItemId):
+    value: int
+    _NAME = "User"
+    _KIND = "NEWTYPE"
+    _INNER = "U64"
+
+
+_CatalogItemId_User.__name__ = "User"
+_CatalogItemId_User.__qualname__ = "CatalogItemId.User"
+CatalogItemId.User = _CatalogItemId_User
+CatalogItemId._VARIANTS = {
+    "IntrospectionSourceIndex": CatalogItemId.IntrospectionSourceIndex,
+    "System": CatalogItemId.System,
+    "Transient": CatalogItemId.Transient,
+    "User": CatalogItemId.User,
+}
 
 
 @_dc.dataclass
@@ -4331,25 +6385,39 @@ class ConcatWs(_Unit):
 
 
 class ConstantRows(_Enum):
-    @_dc.dataclass
-    class Err(_Variant):
-        value: StableEvalError
-        _NAME = "Err"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "StableEvalError"}
+    Err: _ClassVar[type[_ConstantRows_Err]]
+    Ok: _ClassVar[type[_ConstantRows_Ok]]
 
-    @_dc.dataclass
-    class Ok(_Variant):
-        value: list[tuple[Row | RawStableRow, int, Overflowing]]
-        _NAME = "Ok"
-        _KIND = "NEWTYPE"
-        _INNER = {
-            "SEQ": {
-                "TUPLE": [{"TYPENAME": "StableRow"}, "U64", {"TYPENAME": "Overflowing"}]
-            }
+
+@_dc.dataclass
+class _ConstantRows_Err(_Variant, ConstantRows):
+    value: StableEvalError
+    _NAME = "Err"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "StableEvalError"}
+
+
+_ConstantRows_Err.__name__ = "Err"
+_ConstantRows_Err.__qualname__ = "ConstantRows.Err"
+ConstantRows.Err = _ConstantRows_Err
+
+
+@_dc.dataclass
+class _ConstantRows_Ok(_Variant, ConstantRows):
+    value: list[tuple[Row | RawStableRow, int, Overflowing]]
+    _NAME = "Ok"
+    _KIND = "NEWTYPE"
+    _INNER = {
+        "SEQ": {
+            "TUPLE": [{"TYPENAME": "StableRow"}, "U64", {"TYPENAME": "Overflowing"}]
         }
+    }
 
-    _VARIANTS = {"Err": Err, "Ok": Ok}
+
+_ConstantRows_Ok.__name__ = "Ok"
+_ConstantRows_Ok.__qualname__ = "ConstantRows.Ok"
+ConstantRows.Ok = _ConstantRows_Ok
+ConstantRows._VARIANTS = {"Err": ConstantRows.Err, "Ok": ConstantRows.Ok}
 
 
 @_dc.dataclass
@@ -4487,12 +6555,19 @@ class DatePartTimestampTz(_Newtype):
 
 
 class DateTimeField(_Enum):
-    @_dc.dataclass
-    class Hour12(_Variant):
-        _NAME = "Hour12"
-        _KIND = "UNIT"
+    Hour12: _ClassVar[type[_DateTimeField_Hour12]]
 
-    _VARIANTS = {"Hour12": Hour12}
+
+@_dc.dataclass
+class _DateTimeField_Hour12(_Variant, DateTimeField):
+    _NAME = "Hour12"
+    _KIND = "UNIT"
+
+
+_DateTimeField_Hour12.__name__ = "Hour12"
+_DateTimeField_Hour12.__qualname__ = "DateTimeField.Hour12"
+DateTimeField.Hour12 = _DateTimeField_Hour12
+DateTimeField._VARIANTS = {"Hour12": DateTimeField.Hour12}
 
 
 @_dc.dataclass
@@ -4502,151 +6577,305 @@ class DateTimeFormat(_Newtype):
 
 
 class DateTimeFormatNode(_Enum):
-    @_dc.dataclass(kw_only=True)
-    class Field(_Variant):
-        field: DateTimeField
-        fill: bool
-        ordinal: OrdinalMode
-        _NAME = "Field"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("field", "field", {"TYPENAME": "DateTimeField"}),
-            ("fill", "fill", "BOOL"),
-            ("ordinal", "ordinal", {"TYPENAME": "OrdinalMode"}),
-        )
+    Field: _ClassVar[type[_DateTimeFormatNode_Field]]
 
-    _VARIANTS = {"Field": Field}
+
+@_dc.dataclass(kw_only=True)
+class _DateTimeFormatNode_Field(_Variant, DateTimeFormatNode):
+    field: DateTimeField
+    fill: bool
+    ordinal: OrdinalMode
+    _NAME = "Field"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("field", "field", {"TYPENAME": "DateTimeField"}),
+        ("fill", "fill", "BOOL"),
+        ("ordinal", "ordinal", {"TYPENAME": "OrdinalMode"}),
+    )
+
+
+_DateTimeFormatNode_Field.__name__ = "Field"
+_DateTimeFormatNode_Field.__qualname__ = "DateTimeFormatNode.Field"
+DateTimeFormatNode.Field = _DateTimeFormatNode_Field
+DateTimeFormatNode._VARIANTS = {"Field": DateTimeFormatNode.Field}
 
 
 class DateTimeUnits(_Enum):
-    @_dc.dataclass
-    class Century(_Variant):
-        _NAME = "Century"
-        _KIND = "UNIT"
+    Century: _ClassVar[type[_DateTimeUnits_Century]]
+    Day: _ClassVar[type[_DateTimeUnits_Day]]
+    DayOfWeek: _ClassVar[type[_DateTimeUnits_DayOfWeek]]
+    DayOfYear: _ClassVar[type[_DateTimeUnits_DayOfYear]]
+    Decade: _ClassVar[type[_DateTimeUnits_Decade]]
+    Epoch: _ClassVar[type[_DateTimeUnits_Epoch]]
+    Hour: _ClassVar[type[_DateTimeUnits_Hour]]
+    IsoDayOfWeek: _ClassVar[type[_DateTimeUnits_IsoDayOfWeek]]
+    IsoDayOfYear: _ClassVar[type[_DateTimeUnits_IsoDayOfYear]]
+    Microseconds: _ClassVar[type[_DateTimeUnits_Microseconds]]
+    Millennium: _ClassVar[type[_DateTimeUnits_Millennium]]
+    Milliseconds: _ClassVar[type[_DateTimeUnits_Milliseconds]]
+    Minute: _ClassVar[type[_DateTimeUnits_Minute]]
+    Month: _ClassVar[type[_DateTimeUnits_Month]]
+    Quarter: _ClassVar[type[_DateTimeUnits_Quarter]]
+    Second: _ClassVar[type[_DateTimeUnits_Second]]
+    Timezone: _ClassVar[type[_DateTimeUnits_Timezone]]
+    TimezoneHour: _ClassVar[type[_DateTimeUnits_TimezoneHour]]
+    TimezoneMinute: _ClassVar[type[_DateTimeUnits_TimezoneMinute]]
+    Week: _ClassVar[type[_DateTimeUnits_Week]]
+    Year: _ClassVar[type[_DateTimeUnits_Year]]
 
-    @_dc.dataclass
-    class Day(_Variant):
-        _NAME = "Day"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class DayOfWeek(_Variant):
-        _NAME = "DayOfWeek"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _DateTimeUnits_Century(_Variant, DateTimeUnits):
+    _NAME = "Century"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class DayOfYear(_Variant):
-        _NAME = "DayOfYear"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Decade(_Variant):
-        _NAME = "Decade"
-        _KIND = "UNIT"
+_DateTimeUnits_Century.__name__ = "Century"
+_DateTimeUnits_Century.__qualname__ = "DateTimeUnits.Century"
+DateTimeUnits.Century = _DateTimeUnits_Century
 
-    @_dc.dataclass
-    class Epoch(_Variant):
-        _NAME = "Epoch"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Hour(_Variant):
-        _NAME = "Hour"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _DateTimeUnits_Day(_Variant, DateTimeUnits):
+    _NAME = "Day"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class IsoDayOfWeek(_Variant):
-        _NAME = "IsoDayOfWeek"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class IsoDayOfYear(_Variant):
-        _NAME = "IsoDayOfYear"
-        _KIND = "UNIT"
+_DateTimeUnits_Day.__name__ = "Day"
+_DateTimeUnits_Day.__qualname__ = "DateTimeUnits.Day"
+DateTimeUnits.Day = _DateTimeUnits_Day
 
-    @_dc.dataclass
-    class Microseconds(_Variant):
-        _NAME = "Microseconds"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Millennium(_Variant):
-        _NAME = "Millennium"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _DateTimeUnits_DayOfWeek(_Variant, DateTimeUnits):
+    _NAME = "DayOfWeek"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Milliseconds(_Variant):
-        _NAME = "Milliseconds"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Minute(_Variant):
-        _NAME = "Minute"
-        _KIND = "UNIT"
+_DateTimeUnits_DayOfWeek.__name__ = "DayOfWeek"
+_DateTimeUnits_DayOfWeek.__qualname__ = "DateTimeUnits.DayOfWeek"
+DateTimeUnits.DayOfWeek = _DateTimeUnits_DayOfWeek
 
-    @_dc.dataclass
-    class Month(_Variant):
-        _NAME = "Month"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Quarter(_Variant):
-        _NAME = "Quarter"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _DateTimeUnits_DayOfYear(_Variant, DateTimeUnits):
+    _NAME = "DayOfYear"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Second(_Variant):
-        _NAME = "Second"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Timezone(_Variant):
-        _NAME = "Timezone"
-        _KIND = "UNIT"
+_DateTimeUnits_DayOfYear.__name__ = "DayOfYear"
+_DateTimeUnits_DayOfYear.__qualname__ = "DateTimeUnits.DayOfYear"
+DateTimeUnits.DayOfYear = _DateTimeUnits_DayOfYear
 
-    @_dc.dataclass
-    class TimezoneHour(_Variant):
-        _NAME = "TimezoneHour"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class TimezoneMinute(_Variant):
-        _NAME = "TimezoneMinute"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _DateTimeUnits_Decade(_Variant, DateTimeUnits):
+    _NAME = "Decade"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Week(_Variant):
-        _NAME = "Week"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Year(_Variant):
-        _NAME = "Year"
-        _KIND = "UNIT"
+_DateTimeUnits_Decade.__name__ = "Decade"
+_DateTimeUnits_Decade.__qualname__ = "DateTimeUnits.Decade"
+DateTimeUnits.Decade = _DateTimeUnits_Decade
 
-    _VARIANTS = {
-        "Century": Century,
-        "Day": Day,
-        "DayOfWeek": DayOfWeek,
-        "DayOfYear": DayOfYear,
-        "Decade": Decade,
-        "Epoch": Epoch,
-        "Hour": Hour,
-        "IsoDayOfWeek": IsoDayOfWeek,
-        "IsoDayOfYear": IsoDayOfYear,
-        "Microseconds": Microseconds,
-        "Millennium": Millennium,
-        "Milliseconds": Milliseconds,
-        "Minute": Minute,
-        "Month": Month,
-        "Quarter": Quarter,
-        "Second": Second,
-        "Timezone": Timezone,
-        "TimezoneHour": TimezoneHour,
-        "TimezoneMinute": TimezoneMinute,
-        "Week": Week,
-        "Year": Year,
-    }
+
+@_dc.dataclass
+class _DateTimeUnits_Epoch(_Variant, DateTimeUnits):
+    _NAME = "Epoch"
+    _KIND = "UNIT"
+
+
+_DateTimeUnits_Epoch.__name__ = "Epoch"
+_DateTimeUnits_Epoch.__qualname__ = "DateTimeUnits.Epoch"
+DateTimeUnits.Epoch = _DateTimeUnits_Epoch
+
+
+@_dc.dataclass
+class _DateTimeUnits_Hour(_Variant, DateTimeUnits):
+    _NAME = "Hour"
+    _KIND = "UNIT"
+
+
+_DateTimeUnits_Hour.__name__ = "Hour"
+_DateTimeUnits_Hour.__qualname__ = "DateTimeUnits.Hour"
+DateTimeUnits.Hour = _DateTimeUnits_Hour
+
+
+@_dc.dataclass
+class _DateTimeUnits_IsoDayOfWeek(_Variant, DateTimeUnits):
+    _NAME = "IsoDayOfWeek"
+    _KIND = "UNIT"
+
+
+_DateTimeUnits_IsoDayOfWeek.__name__ = "IsoDayOfWeek"
+_DateTimeUnits_IsoDayOfWeek.__qualname__ = "DateTimeUnits.IsoDayOfWeek"
+DateTimeUnits.IsoDayOfWeek = _DateTimeUnits_IsoDayOfWeek
+
+
+@_dc.dataclass
+class _DateTimeUnits_IsoDayOfYear(_Variant, DateTimeUnits):
+    _NAME = "IsoDayOfYear"
+    _KIND = "UNIT"
+
+
+_DateTimeUnits_IsoDayOfYear.__name__ = "IsoDayOfYear"
+_DateTimeUnits_IsoDayOfYear.__qualname__ = "DateTimeUnits.IsoDayOfYear"
+DateTimeUnits.IsoDayOfYear = _DateTimeUnits_IsoDayOfYear
+
+
+@_dc.dataclass
+class _DateTimeUnits_Microseconds(_Variant, DateTimeUnits):
+    _NAME = "Microseconds"
+    _KIND = "UNIT"
+
+
+_DateTimeUnits_Microseconds.__name__ = "Microseconds"
+_DateTimeUnits_Microseconds.__qualname__ = "DateTimeUnits.Microseconds"
+DateTimeUnits.Microseconds = _DateTimeUnits_Microseconds
+
+
+@_dc.dataclass
+class _DateTimeUnits_Millennium(_Variant, DateTimeUnits):
+    _NAME = "Millennium"
+    _KIND = "UNIT"
+
+
+_DateTimeUnits_Millennium.__name__ = "Millennium"
+_DateTimeUnits_Millennium.__qualname__ = "DateTimeUnits.Millennium"
+DateTimeUnits.Millennium = _DateTimeUnits_Millennium
+
+
+@_dc.dataclass
+class _DateTimeUnits_Milliseconds(_Variant, DateTimeUnits):
+    _NAME = "Milliseconds"
+    _KIND = "UNIT"
+
+
+_DateTimeUnits_Milliseconds.__name__ = "Milliseconds"
+_DateTimeUnits_Milliseconds.__qualname__ = "DateTimeUnits.Milliseconds"
+DateTimeUnits.Milliseconds = _DateTimeUnits_Milliseconds
+
+
+@_dc.dataclass
+class _DateTimeUnits_Minute(_Variant, DateTimeUnits):
+    _NAME = "Minute"
+    _KIND = "UNIT"
+
+
+_DateTimeUnits_Minute.__name__ = "Minute"
+_DateTimeUnits_Minute.__qualname__ = "DateTimeUnits.Minute"
+DateTimeUnits.Minute = _DateTimeUnits_Minute
+
+
+@_dc.dataclass
+class _DateTimeUnits_Month(_Variant, DateTimeUnits):
+    _NAME = "Month"
+    _KIND = "UNIT"
+
+
+_DateTimeUnits_Month.__name__ = "Month"
+_DateTimeUnits_Month.__qualname__ = "DateTimeUnits.Month"
+DateTimeUnits.Month = _DateTimeUnits_Month
+
+
+@_dc.dataclass
+class _DateTimeUnits_Quarter(_Variant, DateTimeUnits):
+    _NAME = "Quarter"
+    _KIND = "UNIT"
+
+
+_DateTimeUnits_Quarter.__name__ = "Quarter"
+_DateTimeUnits_Quarter.__qualname__ = "DateTimeUnits.Quarter"
+DateTimeUnits.Quarter = _DateTimeUnits_Quarter
+
+
+@_dc.dataclass
+class _DateTimeUnits_Second(_Variant, DateTimeUnits):
+    _NAME = "Second"
+    _KIND = "UNIT"
+
+
+_DateTimeUnits_Second.__name__ = "Second"
+_DateTimeUnits_Second.__qualname__ = "DateTimeUnits.Second"
+DateTimeUnits.Second = _DateTimeUnits_Second
+
+
+@_dc.dataclass
+class _DateTimeUnits_Timezone(_Variant, DateTimeUnits):
+    _NAME = "Timezone"
+    _KIND = "UNIT"
+
+
+_DateTimeUnits_Timezone.__name__ = "Timezone"
+_DateTimeUnits_Timezone.__qualname__ = "DateTimeUnits.Timezone"
+DateTimeUnits.Timezone = _DateTimeUnits_Timezone
+
+
+@_dc.dataclass
+class _DateTimeUnits_TimezoneHour(_Variant, DateTimeUnits):
+    _NAME = "TimezoneHour"
+    _KIND = "UNIT"
+
+
+_DateTimeUnits_TimezoneHour.__name__ = "TimezoneHour"
+_DateTimeUnits_TimezoneHour.__qualname__ = "DateTimeUnits.TimezoneHour"
+DateTimeUnits.TimezoneHour = _DateTimeUnits_TimezoneHour
+
+
+@_dc.dataclass
+class _DateTimeUnits_TimezoneMinute(_Variant, DateTimeUnits):
+    _NAME = "TimezoneMinute"
+    _KIND = "UNIT"
+
+
+_DateTimeUnits_TimezoneMinute.__name__ = "TimezoneMinute"
+_DateTimeUnits_TimezoneMinute.__qualname__ = "DateTimeUnits.TimezoneMinute"
+DateTimeUnits.TimezoneMinute = _DateTimeUnits_TimezoneMinute
+
+
+@_dc.dataclass
+class _DateTimeUnits_Week(_Variant, DateTimeUnits):
+    _NAME = "Week"
+    _KIND = "UNIT"
+
+
+_DateTimeUnits_Week.__name__ = "Week"
+_DateTimeUnits_Week.__qualname__ = "DateTimeUnits.Week"
+DateTimeUnits.Week = _DateTimeUnits_Week
+
+
+@_dc.dataclass
+class _DateTimeUnits_Year(_Variant, DateTimeUnits):
+    _NAME = "Year"
+    _KIND = "UNIT"
+
+
+_DateTimeUnits_Year.__name__ = "Year"
+_DateTimeUnits_Year.__qualname__ = "DateTimeUnits.Year"
+DateTimeUnits.Year = _DateTimeUnits_Year
+DateTimeUnits._VARIANTS = {
+    "Century": DateTimeUnits.Century,
+    "Day": DateTimeUnits.Day,
+    "DayOfWeek": DateTimeUnits.DayOfWeek,
+    "DayOfYear": DateTimeUnits.DayOfYear,
+    "Decade": DateTimeUnits.Decade,
+    "Epoch": DateTimeUnits.Epoch,
+    "Hour": DateTimeUnits.Hour,
+    "IsoDayOfWeek": DateTimeUnits.IsoDayOfWeek,
+    "IsoDayOfYear": DateTimeUnits.IsoDayOfYear,
+    "Microseconds": DateTimeUnits.Microseconds,
+    "Millennium": DateTimeUnits.Millennium,
+    "Milliseconds": DateTimeUnits.Milliseconds,
+    "Minute": DateTimeUnits.Minute,
+    "Month": DateTimeUnits.Month,
+    "Quarter": DateTimeUnits.Quarter,
+    "Second": DateTimeUnits.Second,
+    "Timezone": DateTimeUnits.Timezone,
+    "TimezoneHour": DateTimeUnits.TimezoneHour,
+    "TimezoneMinute": DateTimeUnits.TimezoneMinute,
+    "Week": DateTimeUnits.Week,
+    "Year": DateTimeUnits.Year,
+}
 
 
 @_dc.dataclass
@@ -4908,79 +7137,135 @@ class GetByte(_Unit):
 
 
 class GetPlan(_Enum):
-    @_dc.dataclass
-    class Arrangement(_Variant):
-        _0: list[LirScalarExpr]
-        _1: Row | RawStableRow | None
-        _2: MfpPlan
-        _NAME = "Arrangement"
-        _KIND = "TUPLE"
-        _ITEMS = (
-            {"SEQ": {"TYPENAME": "LirScalarExpr"}},
-            {"OPTION": {"TYPENAME": "StableRow"}},
-            {"TYPENAME": "MfpPlan"},
-        )
+    Arrangement: _ClassVar[type[_GetPlan_Arrangement]]
+    Collection: _ClassVar[type[_GetPlan_Collection]]
+    PassArrangements: _ClassVar[type[_GetPlan_PassArrangements]]
 
-    @_dc.dataclass
-    class Collection(_Variant):
-        value: MfpPlan
-        _NAME = "Collection"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MfpPlan"}
 
-    @_dc.dataclass
-    class PassArrangements(_Variant):
-        _NAME = "PassArrangements"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _GetPlan_Arrangement(_Variant, GetPlan):
+    _0: list[LirScalarExpr]
+    _1: Row | RawStableRow | None
+    _2: MfpPlan
+    _NAME = "Arrangement"
+    _KIND = "TUPLE"
+    _ITEMS = (
+        {"SEQ": {"TYPENAME": "LirScalarExpr"}},
+        {"OPTION": {"TYPENAME": "StableRow"}},
+        {"TYPENAME": "MfpPlan"},
+    )
 
-    _VARIANTS = {
-        "Arrangement": Arrangement,
-        "Collection": Collection,
-        "PassArrangements": PassArrangements,
-    }
+
+_GetPlan_Arrangement.__name__ = "Arrangement"
+_GetPlan_Arrangement.__qualname__ = "GetPlan.Arrangement"
+GetPlan.Arrangement = _GetPlan_Arrangement
+
+
+@_dc.dataclass
+class _GetPlan_Collection(_Variant, GetPlan):
+    value: MfpPlan
+    _NAME = "Collection"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MfpPlan"}
+
+
+_GetPlan_Collection.__name__ = "Collection"
+_GetPlan_Collection.__qualname__ = "GetPlan.Collection"
+GetPlan.Collection = _GetPlan_Collection
+
+
+@_dc.dataclass
+class _GetPlan_PassArrangements(_Variant, GetPlan):
+    _NAME = "PassArrangements"
+    _KIND = "UNIT"
+
+
+_GetPlan_PassArrangements.__name__ = "PassArrangements"
+_GetPlan_PassArrangements.__qualname__ = "GetPlan.PassArrangements"
+GetPlan.PassArrangements = _GetPlan_PassArrangements
+GetPlan._VARIANTS = {
+    "Arrangement": GetPlan.Arrangement,
+    "Collection": GetPlan.Collection,
+    "PassArrangements": GetPlan.PassArrangements,
+}
 
 
 class GlobalId(_Enum):
-    @_dc.dataclass
-    class Explain(_Variant):
-        _NAME = "Explain"
-        _KIND = "UNIT"
+    Explain: _ClassVar[type[_GlobalId_Explain]]
+    IntrospectionSourceIndex: _ClassVar[type[_GlobalId_IntrospectionSourceIndex]]
+    System: _ClassVar[type[_GlobalId_System]]
+    Transient: _ClassVar[type[_GlobalId_Transient]]
+    User: _ClassVar[type[_GlobalId_User]]
 
-    @_dc.dataclass
-    class IntrospectionSourceIndex(_Variant):
-        value: int
-        _NAME = "IntrospectionSourceIndex"
-        _KIND = "NEWTYPE"
-        _INNER = "U64"
 
-    @_dc.dataclass
-    class System(_Variant):
-        value: int
-        _NAME = "System"
-        _KIND = "NEWTYPE"
-        _INNER = "U64"
+@_dc.dataclass
+class _GlobalId_Explain(_Variant, GlobalId):
+    _NAME = "Explain"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Transient(_Variant):
-        value: int
-        _NAME = "Transient"
-        _KIND = "NEWTYPE"
-        _INNER = "U64"
 
-    @_dc.dataclass
-    class User(_Variant):
-        value: int
-        _NAME = "User"
-        _KIND = "NEWTYPE"
-        _INNER = "U64"
+_GlobalId_Explain.__name__ = "Explain"
+_GlobalId_Explain.__qualname__ = "GlobalId.Explain"
+GlobalId.Explain = _GlobalId_Explain
 
-    _VARIANTS = {
-        "Explain": Explain,
-        "IntrospectionSourceIndex": IntrospectionSourceIndex,
-        "System": System,
-        "Transient": Transient,
-        "User": User,
-    }
+
+@_dc.dataclass
+class _GlobalId_IntrospectionSourceIndex(_Variant, GlobalId):
+    value: int
+    _NAME = "IntrospectionSourceIndex"
+    _KIND = "NEWTYPE"
+    _INNER = "U64"
+
+
+_GlobalId_IntrospectionSourceIndex.__name__ = "IntrospectionSourceIndex"
+_GlobalId_IntrospectionSourceIndex.__qualname__ = "GlobalId.IntrospectionSourceIndex"
+GlobalId.IntrospectionSourceIndex = _GlobalId_IntrospectionSourceIndex
+
+
+@_dc.dataclass
+class _GlobalId_System(_Variant, GlobalId):
+    value: int
+    _NAME = "System"
+    _KIND = "NEWTYPE"
+    _INNER = "U64"
+
+
+_GlobalId_System.__name__ = "System"
+_GlobalId_System.__qualname__ = "GlobalId.System"
+GlobalId.System = _GlobalId_System
+
+
+@_dc.dataclass
+class _GlobalId_Transient(_Variant, GlobalId):
+    value: int
+    _NAME = "Transient"
+    _KIND = "NEWTYPE"
+    _INNER = "U64"
+
+
+_GlobalId_Transient.__name__ = "Transient"
+_GlobalId_Transient.__qualname__ = "GlobalId.Transient"
+GlobalId.Transient = _GlobalId_Transient
+
+
+@_dc.dataclass
+class _GlobalId_User(_Variant, GlobalId):
+    value: int
+    _NAME = "User"
+    _KIND = "NEWTYPE"
+    _INNER = "U64"
+
+
+_GlobalId_User.__name__ = "User"
+_GlobalId_User.__qualname__ = "GlobalId.User"
+GlobalId.User = _GlobalId_User
+GlobalId._VARIANTS = {
+    "Explain": GlobalId.Explain,
+    "IntrospectionSourceIndex": GlobalId.IntrospectionSourceIndex,
+    "System": GlobalId.System,
+    "Transient": GlobalId.Transient,
+    "User": GlobalId.User,
+}
 
 
 @_dc.dataclass
@@ -4999,21 +7284,38 @@ class Gte(_Unit):
 
 
 class HierarchicalPlan(_Enum):
-    @_dc.dataclass
-    class Bucketed(_Variant):
-        value: BucketedPlan
-        _NAME = "Bucketed"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BucketedPlan"}
+    Bucketed: _ClassVar[type[_HierarchicalPlan_Bucketed]]
+    Monotonic: _ClassVar[type[_HierarchicalPlan_Monotonic]]
 
-    @_dc.dataclass
-    class Monotonic(_Variant):
-        value: MonotonicPlan
-        _NAME = "Monotonic"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MonotonicPlan"}
 
-    _VARIANTS = {"Bucketed": Bucketed, "Monotonic": Monotonic}
+@_dc.dataclass
+class _HierarchicalPlan_Bucketed(_Variant, HierarchicalPlan):
+    value: BucketedPlan
+    _NAME = "Bucketed"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BucketedPlan"}
+
+
+_HierarchicalPlan_Bucketed.__name__ = "Bucketed"
+_HierarchicalPlan_Bucketed.__qualname__ = "HierarchicalPlan.Bucketed"
+HierarchicalPlan.Bucketed = _HierarchicalPlan_Bucketed
+
+
+@_dc.dataclass
+class _HierarchicalPlan_Monotonic(_Variant, HierarchicalPlan):
+    value: MonotonicPlan
+    _NAME = "Monotonic"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MonotonicPlan"}
+
+
+_HierarchicalPlan_Monotonic.__name__ = "Monotonic"
+_HierarchicalPlan_Monotonic.__qualname__ = "HierarchicalPlan.Monotonic"
+HierarchicalPlan.Monotonic = _HierarchicalPlan_Monotonic
+HierarchicalPlan._VARIANTS = {
+    "Bucketed": HierarchicalPlan.Bucketed,
+    "Monotonic": HierarchicalPlan.Monotonic,
+}
 
 
 @_dc.dataclass
@@ -5027,43 +7329,71 @@ class HmacString(_Unit):
 
 
 class Id(_Enum):
-    @_dc.dataclass
-    class Global(_Variant):
-        value: GlobalId
-        _NAME = "Global"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "GlobalId"}
+    Global: _ClassVar[type[_Id_Global]]
+    Local: _ClassVar[type[_Id_Local]]
 
-    @_dc.dataclass
-    class Local(_Variant):
-        value: LocalId
-        _NAME = "Local"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "LocalId"}
 
-    _VARIANTS = {"Global": Global, "Local": Local}
+@_dc.dataclass
+class _Id_Global(_Variant, Id):
+    value: GlobalId
+    _NAME = "Global"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "GlobalId"}
+
+
+_Id_Global.__name__ = "Global"
+_Id_Global.__qualname__ = "Id.Global"
+Id.Global = _Id_Global
+
+
+@_dc.dataclass
+class _Id_Local(_Variant, Id):
+    value: LocalId
+    _NAME = "Local"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "LocalId"}
+
+
+_Id_Local.__name__ = "Local"
+_Id_Local.__qualname__ = "Id.Local"
+Id.Local = _Id_Local
+Id._VARIANTS = {"Global": Id.Global, "Local": Id.Local}
 
 
 class ImportSource(_Enum):
-    @_dc.dataclass(kw_only=True)
-    class Item(_Variant):
-        item_id: CatalogItemId
-        version: RelationVersion
-        _NAME = "Item"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("item_id", "item_id", {"TYPENAME": "CatalogItemId"}),
-            ("version", "version", {"TYPENAME": "RelationVersion"}),
-        )
+    Item: _ClassVar[type[_ImportSource_Item]]
+    Name: _ClassVar[type[_ImportSource_Name]]
 
-    @_dc.dataclass
-    class Name(_Variant):
-        value: str
-        _NAME = "Name"
-        _KIND = "NEWTYPE"
-        _INNER = "STR"
 
-    _VARIANTS = {"Item": Item, "Name": Name}
+@_dc.dataclass(kw_only=True)
+class _ImportSource_Item(_Variant, ImportSource):
+    item_id: CatalogItemId
+    version: RelationVersion
+    _NAME = "Item"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("item_id", "item_id", {"TYPENAME": "CatalogItemId"}),
+        ("version", "version", {"TYPENAME": "RelationVersion"}),
+    )
+
+
+_ImportSource_Item.__name__ = "Item"
+_ImportSource_Item.__qualname__ = "ImportSource.Item"
+ImportSource.Item = _ImportSource_Item
+
+
+@_dc.dataclass
+class _ImportSource_Name(_Variant, ImportSource):
+    value: str
+    _NAME = "Name"
+    _KIND = "NEWTYPE"
+    _INNER = "STR"
+
+
+_ImportSource_Name.__name__ = "Name"
+_ImportSource_Name.__qualname__ = "ImportSource.Name"
+ImportSource.Name = _ImportSource_Name
+ImportSource._VARIANTS = {"Item": ImportSource.Item, "Name": ImportSource.Name}
 
 
 @_dc.dataclass
@@ -5133,21 +7463,35 @@ class JoinClosure(_Struct):
 
 
 class JoinPlan(_Enum):
-    @_dc.dataclass
-    class Delta(_Variant):
-        value: DeltaJoinPlan
-        _NAME = "Delta"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DeltaJoinPlan"}
+    Delta: _ClassVar[type[_JoinPlan_Delta]]
+    Linear: _ClassVar[type[_JoinPlan_Linear]]
 
-    @_dc.dataclass
-    class Linear(_Variant):
-        value: LinearJoinPlan
-        _NAME = "Linear"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "LinearJoinPlan"}
 
-    _VARIANTS = {"Delta": Delta, "Linear": Linear}
+@_dc.dataclass
+class _JoinPlan_Delta(_Variant, JoinPlan):
+    value: DeltaJoinPlan
+    _NAME = "Delta"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DeltaJoinPlan"}
+
+
+_JoinPlan_Delta.__name__ = "Delta"
+_JoinPlan_Delta.__qualname__ = "JoinPlan.Delta"
+JoinPlan.Delta = _JoinPlan_Delta
+
+
+@_dc.dataclass
+class _JoinPlan_Linear(_Variant, JoinPlan):
+    value: LinearJoinPlan
+    _NAME = "Linear"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "LinearJoinPlan"}
+
+
+_JoinPlan_Linear.__name__ = "Linear"
+_JoinPlan_Linear.__qualname__ = "JoinPlan.Linear"
+JoinPlan.Linear = _JoinPlan_Linear
+JoinPlan._VARIANTS = {"Delta": JoinPlan.Delta, "Linear": JoinPlan.Linear}
 
 
 @_dc.dataclass
@@ -5277,17 +7621,31 @@ class KeyValPlan(_Struct):
 
 
 class LagLeadType(_Enum):
-    @_dc.dataclass
-    class Lag(_Variant):
-        _NAME = "Lag"
-        _KIND = "UNIT"
+    Lag: _ClassVar[type[_LagLeadType_Lag]]
+    Lead: _ClassVar[type[_LagLeadType_Lead]]
 
-    @_dc.dataclass
-    class Lead(_Variant):
-        _NAME = "Lead"
-        _KIND = "UNIT"
 
-    _VARIANTS = {"Lag": Lag, "Lead": Lead}
+@_dc.dataclass
+class _LagLeadType_Lag(_Variant, LagLeadType):
+    _NAME = "Lag"
+    _KIND = "UNIT"
+
+
+_LagLeadType_Lag.__name__ = "Lag"
+_LagLeadType_Lag.__qualname__ = "LagLeadType.Lag"
+LagLeadType.Lag = _LagLeadType_Lag
+
+
+@_dc.dataclass
+class _LagLeadType_Lead(_Variant, LagLeadType):
+    _NAME = "Lead"
+    _KIND = "UNIT"
+
+
+_LagLeadType_Lead.__name__ = "Lead"
+_LagLeadType_Lead.__qualname__ = "LagLeadType.Lead"
+LagLeadType.Lead = _LagLeadType_Lead
+LagLeadType._VARIANTS = {"Lag": LagLeadType.Lag, "Lead": LagLeadType.Lead}
 
 
 @_dc.dataclass
@@ -5395,300 +7753,421 @@ class LirRelationExpr(_Struct):
 
 
 class LirRelationNode(_Enum):
-    @_dc.dataclass(kw_only=True)
-    class ArrangeBy(_Variant):
-        forms: AvailableCollections
-        input: LirRelationExpr
-        input_key: list[LirScalarExpr] | None
-        input_mfp: MfpPlan
-        strategy: ArrangementStrategy
-        _NAME = "ArrangeBy"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("forms", "forms", {"TYPENAME": "AvailableCollections"}),
-            ("input", "input", {"TYPENAME": "LirRelationExpr"}),
-            (
-                "input_key",
-                "input_key",
-                {"OPTION": {"SEQ": {"TYPENAME": "LirScalarExpr"}}},
-            ),
-            ("input_mfp", "input_mfp", {"TYPENAME": "MfpPlan"}),
-            ("strategy", "strategy", {"TYPENAME": "ArrangementStrategy"}),
-        )
+    ArrangeBy: _ClassVar[type[_LirRelationNode_ArrangeBy]]
+    Constant: _ClassVar[type[_LirRelationNode_Constant]]
+    FlatMap: _ClassVar[type[_LirRelationNode_FlatMap]]
+    Get: _ClassVar[type[_LirRelationNode_Get]]
+    Join: _ClassVar[type[_LirRelationNode_Join]]
+    Let: _ClassVar[type[_LirRelationNode_Let]]
+    LetRec: _ClassVar[type[_LirRelationNode_LetRec]]
+    Mfp: _ClassVar[type[_LirRelationNode_Mfp]]
+    Negate: _ClassVar[type[_LirRelationNode_Negate]]
+    Reduce: _ClassVar[type[_LirRelationNode_Reduce]]
+    Threshold: _ClassVar[type[_LirRelationNode_Threshold]]
+    TopK: _ClassVar[type[_LirRelationNode_TopK]]
+    Union: _ClassVar[type[_LirRelationNode_Union]]
 
-    @_dc.dataclass(kw_only=True)
-    class Constant(_Variant):
-        rows: ConstantRows
-        _NAME = "Constant"
-        _KIND = "STRUCT"
-        _FIELDS = (("rows", "rows", {"TYPENAME": "ConstantRows"}),)
 
-    @_dc.dataclass(kw_only=True)
-    class FlatMap(_Variant):
-        exprs: list[LirScalarExpr]
-        func: TableFunc
-        input: LirRelationExpr
-        input_key: list[LirScalarExpr] | None
-        mfp_after: MfpPlan
-        _NAME = "FlatMap"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("exprs", "exprs", {"SEQ": {"TYPENAME": "LirScalarExpr"}}),
-            ("func", "func", {"TYPENAME": "TableFunc"}),
-            ("input", "input", {"TYPENAME": "LirRelationExpr"}),
-            (
-                "input_key",
-                "input_key",
-                {"OPTION": {"SEQ": {"TYPENAME": "LirScalarExpr"}}},
-            ),
-            ("mfp_after", "mfp_after", {"TYPENAME": "MfpPlan"}),
-        )
+@_dc.dataclass(kw_only=True)
+class _LirRelationNode_ArrangeBy(_Variant, LirRelationNode):
+    forms: AvailableCollections
+    input: LirRelationExpr
+    input_key: list[LirScalarExpr] | None
+    input_mfp: MfpPlan
+    strategy: ArrangementStrategy
+    _NAME = "ArrangeBy"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("forms", "forms", {"TYPENAME": "AvailableCollections"}),
+        ("input", "input", {"TYPENAME": "LirRelationExpr"}),
+        ("input_key", "input_key", {"OPTION": {"SEQ": {"TYPENAME": "LirScalarExpr"}}}),
+        ("input_mfp", "input_mfp", {"TYPENAME": "MfpPlan"}),
+        ("strategy", "strategy", {"TYPENAME": "ArrangementStrategy"}),
+    )
 
-    @_dc.dataclass(kw_only=True)
-    class Get(_Variant):
-        id: Id
-        keys: AvailableCollections
-        plan: GetPlan
-        _NAME = "Get"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("id", "id", {"TYPENAME": "Id"}),
-            ("keys", "keys", {"TYPENAME": "AvailableCollections"}),
-            ("plan", "plan", {"TYPENAME": "GetPlan"}),
-        )
 
-    @_dc.dataclass(kw_only=True)
-    class Join(_Variant):
-        inputs: list[LirRelationExpr]
-        plan: JoinPlan
-        _NAME = "Join"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("inputs", "inputs", {"SEQ": {"TYPENAME": "LirRelationExpr"}}),
-            ("plan", "plan", {"TYPENAME": "JoinPlan"}),
-        )
+_LirRelationNode_ArrangeBy.__name__ = "ArrangeBy"
+_LirRelationNode_ArrangeBy.__qualname__ = "LirRelationNode.ArrangeBy"
+LirRelationNode.ArrangeBy = _LirRelationNode_ArrangeBy
 
-    @_dc.dataclass(kw_only=True)
-    class Let(_Variant):
-        body: LirRelationExpr
-        id: LocalId
-        value: LirRelationExpr
-        _NAME = "Let"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("body", "body", {"TYPENAME": "LirRelationExpr"}),
-            ("id", "id", {"TYPENAME": "LocalId"}),
-            ("value", "value", {"TYPENAME": "LirRelationExpr"}),
-        )
 
-    @_dc.dataclass(kw_only=True)
-    class LetRec(_Variant):
-        body: LirRelationExpr
-        ids: list[LocalId]
-        limits: list[LetRecLimit | None]
-        values: list[LirRelationExpr]
-        _NAME = "LetRec"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("body", "body", {"TYPENAME": "LirRelationExpr"}),
-            ("ids", "ids", {"SEQ": {"TYPENAME": "LocalId"}}),
-            ("limits", "limits", {"SEQ": {"OPTION": {"TYPENAME": "LetRecLimit"}}}),
-            ("values", "values", {"SEQ": {"TYPENAME": "LirRelationExpr"}}),
-        )
+@_dc.dataclass(kw_only=True)
+class _LirRelationNode_Constant(_Variant, LirRelationNode):
+    rows: ConstantRows
+    _NAME = "Constant"
+    _KIND = "STRUCT"
+    _FIELDS = (("rows", "rows", {"TYPENAME": "ConstantRows"}),)
 
-    @_dc.dataclass(kw_only=True)
-    class Mfp(_Variant):
-        input: LirRelationExpr
-        input_key_val: tuple[list[LirScalarExpr], Row | RawStableRow | None] | None
-        mfp: MfpPlan
-        _NAME = "Mfp"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("input", "input", {"TYPENAME": "LirRelationExpr"}),
-            (
-                "input_key_val",
-                "input_key_val",
-                {
-                    "OPTION": {
-                        "TUPLE": [
-                            {"SEQ": {"TYPENAME": "LirScalarExpr"}},
-                            {"OPTION": {"TYPENAME": "StableRow"}},
-                        ]
-                    }
-                },
-            ),
-            ("mfp", "mfp", {"TYPENAME": "MfpPlan"}),
-        )
 
-    @_dc.dataclass(kw_only=True)
-    class Negate(_Variant):
-        input: LirRelationExpr
-        _NAME = "Negate"
-        _KIND = "STRUCT"
-        _FIELDS = (("input", "input", {"TYPENAME": "LirRelationExpr"}),)
+_LirRelationNode_Constant.__name__ = "Constant"
+_LirRelationNode_Constant.__qualname__ = "LirRelationNode.Constant"
+LirRelationNode.Constant = _LirRelationNode_Constant
 
-    @_dc.dataclass(kw_only=True)
-    class Reduce(_Variant):
-        input: LirRelationExpr
-        input_key: list[LirScalarExpr] | None
-        key_val_plan: KeyValPlan
-        mfp_after: SafeMfpPlan
-        plan: ReducePlan
-        temporal_bucketing_strategy: ArrangementStrategy
-        _NAME = "Reduce"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("input", "input", {"TYPENAME": "LirRelationExpr"}),
-            (
-                "input_key",
-                "input_key",
-                {"OPTION": {"SEQ": {"TYPENAME": "LirScalarExpr"}}},
-            ),
-            ("key_val_plan", "key_val_plan", {"TYPENAME": "KeyValPlan"}),
-            ("mfp_after", "mfp_after", {"TYPENAME": "SafeMfpPlan"}),
-            ("plan", "plan", {"TYPENAME": "ReducePlan"}),
-            (
-                "temporal_bucketing_strategy",
-                "temporal_bucketing_strategy",
-                {"TYPENAME": "ArrangementStrategy"},
-            ),
-        )
 
-    @_dc.dataclass(kw_only=True)
-    class Threshold(_Variant):
-        input: LirRelationExpr
-        threshold_plan: ThresholdPlan
-        _NAME = "Threshold"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("input", "input", {"TYPENAME": "LirRelationExpr"}),
-            ("threshold_plan", "threshold_plan", {"TYPENAME": "ThresholdPlan"}),
-        )
+@_dc.dataclass(kw_only=True)
+class _LirRelationNode_FlatMap(_Variant, LirRelationNode):
+    exprs: list[LirScalarExpr]
+    func: TableFunc
+    input: LirRelationExpr
+    input_key: list[LirScalarExpr] | None
+    mfp_after: MfpPlan
+    _NAME = "FlatMap"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("exprs", "exprs", {"SEQ": {"TYPENAME": "LirScalarExpr"}}),
+        ("func", "func", {"TYPENAME": "TableFunc"}),
+        ("input", "input", {"TYPENAME": "LirRelationExpr"}),
+        ("input_key", "input_key", {"OPTION": {"SEQ": {"TYPENAME": "LirScalarExpr"}}}),
+        ("mfp_after", "mfp_after", {"TYPENAME": "MfpPlan"}),
+    )
 
-    @_dc.dataclass(kw_only=True)
-    class TopK(_Variant):
-        input: LirRelationExpr
-        temporal_bucketing_strategy: ArrangementStrategy
-        top_k_plan: TopKPlan
-        _NAME = "TopK"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("input", "input", {"TYPENAME": "LirRelationExpr"}),
-            (
-                "temporal_bucketing_strategy",
-                "temporal_bucketing_strategy",
-                {"TYPENAME": "ArrangementStrategy"},
-            ),
-            ("top_k_plan", "top_k_plan", {"TYPENAME": "TopKPlan"}),
-        )
 
-    @_dc.dataclass(kw_only=True)
-    class Union(_Variant):
-        consolidate_output: bool
-        inputs: list[LirRelationExpr]
-        temporal_bucketing_strategies: list[ArrangementStrategy]
-        _NAME = "Union"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("consolidate_output", "consolidate_output", "BOOL"),
-            ("inputs", "inputs", {"SEQ": {"TYPENAME": "LirRelationExpr"}}),
-            (
-                "temporal_bucketing_strategies",
-                "temporal_bucketing_strategies",
-                {"SEQ": {"TYPENAME": "ArrangementStrategy"}},
-            ),
-        )
+_LirRelationNode_FlatMap.__name__ = "FlatMap"
+_LirRelationNode_FlatMap.__qualname__ = "LirRelationNode.FlatMap"
+LirRelationNode.FlatMap = _LirRelationNode_FlatMap
 
-    _VARIANTS = {
-        "ArrangeBy": ArrangeBy,
-        "Constant": Constant,
-        "FlatMap": FlatMap,
-        "Get": Get,
-        "Join": Join,
-        "Let": Let,
-        "LetRec": LetRec,
-        "Mfp": Mfp,
-        "Negate": Negate,
-        "Reduce": Reduce,
-        "Threshold": Threshold,
-        "TopK": TopK,
-        "Union": Union,
-    }
+
+@_dc.dataclass(kw_only=True)
+class _LirRelationNode_Get(_Variant, LirRelationNode):
+    id: Id
+    keys: AvailableCollections
+    plan: GetPlan
+    _NAME = "Get"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("id", "id", {"TYPENAME": "Id"}),
+        ("keys", "keys", {"TYPENAME": "AvailableCollections"}),
+        ("plan", "plan", {"TYPENAME": "GetPlan"}),
+    )
+
+
+_LirRelationNode_Get.__name__ = "Get"
+_LirRelationNode_Get.__qualname__ = "LirRelationNode.Get"
+LirRelationNode.Get = _LirRelationNode_Get
+
+
+@_dc.dataclass(kw_only=True)
+class _LirRelationNode_Join(_Variant, LirRelationNode):
+    inputs: list[LirRelationExpr]
+    plan: JoinPlan
+    _NAME = "Join"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("inputs", "inputs", {"SEQ": {"TYPENAME": "LirRelationExpr"}}),
+        ("plan", "plan", {"TYPENAME": "JoinPlan"}),
+    )
+
+
+_LirRelationNode_Join.__name__ = "Join"
+_LirRelationNode_Join.__qualname__ = "LirRelationNode.Join"
+LirRelationNode.Join = _LirRelationNode_Join
+
+
+@_dc.dataclass(kw_only=True)
+class _LirRelationNode_Let(_Variant, LirRelationNode):
+    body: LirRelationExpr
+    id: LocalId
+    value: LirRelationExpr
+    _NAME = "Let"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("body", "body", {"TYPENAME": "LirRelationExpr"}),
+        ("id", "id", {"TYPENAME": "LocalId"}),
+        ("value", "value", {"TYPENAME": "LirRelationExpr"}),
+    )
+
+
+_LirRelationNode_Let.__name__ = "Let"
+_LirRelationNode_Let.__qualname__ = "LirRelationNode.Let"
+LirRelationNode.Let = _LirRelationNode_Let
+
+
+@_dc.dataclass(kw_only=True)
+class _LirRelationNode_LetRec(_Variant, LirRelationNode):
+    body: LirRelationExpr
+    ids: list[LocalId]
+    limits: list[LetRecLimit | None]
+    values: list[LirRelationExpr]
+    _NAME = "LetRec"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("body", "body", {"TYPENAME": "LirRelationExpr"}),
+        ("ids", "ids", {"SEQ": {"TYPENAME": "LocalId"}}),
+        ("limits", "limits", {"SEQ": {"OPTION": {"TYPENAME": "LetRecLimit"}}}),
+        ("values", "values", {"SEQ": {"TYPENAME": "LirRelationExpr"}}),
+    )
+
+
+_LirRelationNode_LetRec.__name__ = "LetRec"
+_LirRelationNode_LetRec.__qualname__ = "LirRelationNode.LetRec"
+LirRelationNode.LetRec = _LirRelationNode_LetRec
+
+
+@_dc.dataclass(kw_only=True)
+class _LirRelationNode_Mfp(_Variant, LirRelationNode):
+    input: LirRelationExpr
+    input_key_val: tuple[list[LirScalarExpr], Row | RawStableRow | None] | None
+    mfp: MfpPlan
+    _NAME = "Mfp"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("input", "input", {"TYPENAME": "LirRelationExpr"}),
+        (
+            "input_key_val",
+            "input_key_val",
+            {
+                "OPTION": {
+                    "TUPLE": [
+                        {"SEQ": {"TYPENAME": "LirScalarExpr"}},
+                        {"OPTION": {"TYPENAME": "StableRow"}},
+                    ]
+                }
+            },
+        ),
+        ("mfp", "mfp", {"TYPENAME": "MfpPlan"}),
+    )
+
+
+_LirRelationNode_Mfp.__name__ = "Mfp"
+_LirRelationNode_Mfp.__qualname__ = "LirRelationNode.Mfp"
+LirRelationNode.Mfp = _LirRelationNode_Mfp
+
+
+@_dc.dataclass(kw_only=True)
+class _LirRelationNode_Negate(_Variant, LirRelationNode):
+    input: LirRelationExpr
+    _NAME = "Negate"
+    _KIND = "STRUCT"
+    _FIELDS = (("input", "input", {"TYPENAME": "LirRelationExpr"}),)
+
+
+_LirRelationNode_Negate.__name__ = "Negate"
+_LirRelationNode_Negate.__qualname__ = "LirRelationNode.Negate"
+LirRelationNode.Negate = _LirRelationNode_Negate
+
+
+@_dc.dataclass(kw_only=True)
+class _LirRelationNode_Reduce(_Variant, LirRelationNode):
+    input: LirRelationExpr
+    input_key: list[LirScalarExpr] | None
+    key_val_plan: KeyValPlan
+    mfp_after: SafeMfpPlan
+    plan: ReducePlan
+    temporal_bucketing_strategy: ArrangementStrategy
+    _NAME = "Reduce"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("input", "input", {"TYPENAME": "LirRelationExpr"}),
+        ("input_key", "input_key", {"OPTION": {"SEQ": {"TYPENAME": "LirScalarExpr"}}}),
+        ("key_val_plan", "key_val_plan", {"TYPENAME": "KeyValPlan"}),
+        ("mfp_after", "mfp_after", {"TYPENAME": "SafeMfpPlan"}),
+        ("plan", "plan", {"TYPENAME": "ReducePlan"}),
+        (
+            "temporal_bucketing_strategy",
+            "temporal_bucketing_strategy",
+            {"TYPENAME": "ArrangementStrategy"},
+        ),
+    )
+
+
+_LirRelationNode_Reduce.__name__ = "Reduce"
+_LirRelationNode_Reduce.__qualname__ = "LirRelationNode.Reduce"
+LirRelationNode.Reduce = _LirRelationNode_Reduce
+
+
+@_dc.dataclass(kw_only=True)
+class _LirRelationNode_Threshold(_Variant, LirRelationNode):
+    input: LirRelationExpr
+    threshold_plan: ThresholdPlan
+    _NAME = "Threshold"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("input", "input", {"TYPENAME": "LirRelationExpr"}),
+        ("threshold_plan", "threshold_plan", {"TYPENAME": "ThresholdPlan"}),
+    )
+
+
+_LirRelationNode_Threshold.__name__ = "Threshold"
+_LirRelationNode_Threshold.__qualname__ = "LirRelationNode.Threshold"
+LirRelationNode.Threshold = _LirRelationNode_Threshold
+
+
+@_dc.dataclass(kw_only=True)
+class _LirRelationNode_TopK(_Variant, LirRelationNode):
+    input: LirRelationExpr
+    temporal_bucketing_strategy: ArrangementStrategy
+    top_k_plan: TopKPlan
+    _NAME = "TopK"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("input", "input", {"TYPENAME": "LirRelationExpr"}),
+        (
+            "temporal_bucketing_strategy",
+            "temporal_bucketing_strategy",
+            {"TYPENAME": "ArrangementStrategy"},
+        ),
+        ("top_k_plan", "top_k_plan", {"TYPENAME": "TopKPlan"}),
+    )
+
+
+_LirRelationNode_TopK.__name__ = "TopK"
+_LirRelationNode_TopK.__qualname__ = "LirRelationNode.TopK"
+LirRelationNode.TopK = _LirRelationNode_TopK
+
+
+@_dc.dataclass(kw_only=True)
+class _LirRelationNode_Union(_Variant, LirRelationNode):
+    consolidate_output: bool
+    inputs: list[LirRelationExpr]
+    temporal_bucketing_strategies: list[ArrangementStrategy]
+    _NAME = "Union"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("consolidate_output", "consolidate_output", "BOOL"),
+        ("inputs", "inputs", {"SEQ": {"TYPENAME": "LirRelationExpr"}}),
+        (
+            "temporal_bucketing_strategies",
+            "temporal_bucketing_strategies",
+            {"SEQ": {"TYPENAME": "ArrangementStrategy"}},
+        ),
+    )
+
+
+_LirRelationNode_Union.__name__ = "Union"
+_LirRelationNode_Union.__qualname__ = "LirRelationNode.Union"
+LirRelationNode.Union = _LirRelationNode_Union
+LirRelationNode._VARIANTS = {
+    "ArrangeBy": LirRelationNode.ArrangeBy,
+    "Constant": LirRelationNode.Constant,
+    "FlatMap": LirRelationNode.FlatMap,
+    "Get": LirRelationNode.Get,
+    "Join": LirRelationNode.Join,
+    "Let": LirRelationNode.Let,
+    "LetRec": LirRelationNode.LetRec,
+    "Mfp": LirRelationNode.Mfp,
+    "Negate": LirRelationNode.Negate,
+    "Reduce": LirRelationNode.Reduce,
+    "Threshold": LirRelationNode.Threshold,
+    "TopK": LirRelationNode.TopK,
+    "Union": LirRelationNode.Union,
+}
 
 
 class LirScalarExpr(_Enum):
-    @_dc.dataclass(kw_only=True)
-    class CallBinary(_Variant):
-        expr1: LirScalarExpr
-        expr2: LirScalarExpr
-        func: BinaryFunc
-        _NAME = "CallBinary"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("expr1", "expr1", {"TYPENAME": "LirScalarExpr"}),
-            ("expr2", "expr2", {"TYPENAME": "LirScalarExpr"}),
-            ("func", "func", {"TYPENAME": "BinaryFunc"}),
-        )
+    CallBinary: _ClassVar[type[_LirScalarExpr_CallBinary]]
+    CallUnary: _ClassVar[type[_LirScalarExpr_CallUnary]]
+    CallVariadic: _ClassVar[type[_LirScalarExpr_CallVariadic]]
+    Column: _ClassVar[type[_LirScalarExpr_Column]]
+    If: _ClassVar[type[_LirScalarExpr_If]]
+    Literal: _ClassVar[type[_LirScalarExpr_Literal]]
 
-    @_dc.dataclass(kw_only=True)
-    class CallUnary(_Variant):
-        expr: LirScalarExpr
-        func: UnaryFunc
-        _NAME = "CallUnary"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("expr", "expr", {"TYPENAME": "LirScalarExpr"}),
-            ("func", "func", {"TYPENAME": "UnaryFunc"}),
-        )
 
-    @_dc.dataclass(kw_only=True)
-    class CallVariadic(_Variant):
-        exprs: list[LirScalarExpr]
-        func: VariadicFunc
-        _NAME = "CallVariadic"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("exprs", "exprs", {"SEQ": {"TYPENAME": "LirScalarExpr"}}),
-            ("func", "func", {"TYPENAME": "VariadicFunc"}),
-        )
+@_dc.dataclass(kw_only=True)
+class _LirScalarExpr_CallBinary(_Variant, LirScalarExpr):
+    expr1: LirScalarExpr
+    expr2: LirScalarExpr
+    func: BinaryFunc
+    _NAME = "CallBinary"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("expr1", "expr1", {"TYPENAME": "LirScalarExpr"}),
+        ("expr2", "expr2", {"TYPENAME": "LirScalarExpr"}),
+        ("func", "func", {"TYPENAME": "BinaryFunc"}),
+    )
 
-    @_dc.dataclass
-    class Column(_Variant):
-        _0: int
-        _1: str | None
-        _NAME = "Column"
-        _KIND = "TUPLE"
-        _ITEMS = ("U64", {"OPTION": "STR"})
 
-    @_dc.dataclass(kw_only=True)
-    class If(_Variant):
-        cond: LirScalarExpr
-        els: LirScalarExpr
-        then: LirScalarExpr
-        _NAME = "If"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("cond", "cond", {"TYPENAME": "LirScalarExpr"}),
-            ("els", "els", {"TYPENAME": "LirScalarExpr"}),
-            ("then", "then", {"TYPENAME": "LirScalarExpr"}),
-        )
+_LirScalarExpr_CallBinary.__name__ = "CallBinary"
+_LirScalarExpr_CallBinary.__qualname__ = "LirScalarExpr.CallBinary"
+LirScalarExpr.CallBinary = _LirScalarExpr_CallBinary
 
-    @_dc.dataclass
-    class Literal(_Variant):
-        _0: LiteralValue
-        _1: ReprColumnType
-        _NAME = "Literal"
-        _KIND = "TUPLE"
-        _ITEMS = ({"TYPENAME": "LiteralValue"}, {"TYPENAME": "ReprColumnType"})
 
-    _VARIANTS = {
-        "CallBinary": CallBinary,
-        "CallUnary": CallUnary,
-        "CallVariadic": CallVariadic,
-        "Column": Column,
-        "If": If,
-        "Literal": Literal,
-    }
+@_dc.dataclass(kw_only=True)
+class _LirScalarExpr_CallUnary(_Variant, LirScalarExpr):
+    expr: LirScalarExpr
+    func: UnaryFunc
+    _NAME = "CallUnary"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("expr", "expr", {"TYPENAME": "LirScalarExpr"}),
+        ("func", "func", {"TYPENAME": "UnaryFunc"}),
+    )
+
+
+_LirScalarExpr_CallUnary.__name__ = "CallUnary"
+_LirScalarExpr_CallUnary.__qualname__ = "LirScalarExpr.CallUnary"
+LirScalarExpr.CallUnary = _LirScalarExpr_CallUnary
+
+
+@_dc.dataclass(kw_only=True)
+class _LirScalarExpr_CallVariadic(_Variant, LirScalarExpr):
+    exprs: list[LirScalarExpr]
+    func: VariadicFunc
+    _NAME = "CallVariadic"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("exprs", "exprs", {"SEQ": {"TYPENAME": "LirScalarExpr"}}),
+        ("func", "func", {"TYPENAME": "VariadicFunc"}),
+    )
+
+
+_LirScalarExpr_CallVariadic.__name__ = "CallVariadic"
+_LirScalarExpr_CallVariadic.__qualname__ = "LirScalarExpr.CallVariadic"
+LirScalarExpr.CallVariadic = _LirScalarExpr_CallVariadic
+
+
+@_dc.dataclass
+class _LirScalarExpr_Column(_Variant, LirScalarExpr):
+    _0: int
+    _1: str | None
+    _NAME = "Column"
+    _KIND = "TUPLE"
+    _ITEMS = ("U64", {"OPTION": "STR"})
+
+
+_LirScalarExpr_Column.__name__ = "Column"
+_LirScalarExpr_Column.__qualname__ = "LirScalarExpr.Column"
+LirScalarExpr.Column = _LirScalarExpr_Column
+
+
+@_dc.dataclass(kw_only=True)
+class _LirScalarExpr_If(_Variant, LirScalarExpr):
+    cond: LirScalarExpr
+    els: LirScalarExpr
+    then: LirScalarExpr
+    _NAME = "If"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("cond", "cond", {"TYPENAME": "LirScalarExpr"}),
+        ("els", "els", {"TYPENAME": "LirScalarExpr"}),
+        ("then", "then", {"TYPENAME": "LirScalarExpr"}),
+    )
+
+
+_LirScalarExpr_If.__name__ = "If"
+_LirScalarExpr_If.__qualname__ = "LirScalarExpr.If"
+LirScalarExpr.If = _LirScalarExpr_If
+
+
+@_dc.dataclass
+class _LirScalarExpr_Literal(_Variant, LirScalarExpr):
+    _0: LiteralValue
+    _1: ReprColumnType
+    _NAME = "Literal"
+    _KIND = "TUPLE"
+    _ITEMS = ({"TYPENAME": "LiteralValue"}, {"TYPENAME": "ReprColumnType"})
+
+
+_LirScalarExpr_Literal.__name__ = "Literal"
+_LirScalarExpr_Literal.__qualname__ = "LirScalarExpr.Literal"
+LirScalarExpr.Literal = _LirScalarExpr_Literal
+LirScalarExpr._VARIANTS = {
+    "CallBinary": LirScalarExpr.CallBinary,
+    "CallUnary": LirScalarExpr.CallUnary,
+    "CallVariadic": LirScalarExpr.CallVariadic,
+    "Column": LirScalarExpr.Column,
+    "If": LirScalarExpr.If,
+    "Literal": LirScalarExpr.Literal,
+}
 
 
 @_dc.dataclass
@@ -5744,21 +8223,35 @@ class ListSliceLinear(_Unit):
 
 
 class LiteralValue(_Enum):
-    @_dc.dataclass
-    class Err(_Variant):
-        value: StableEvalError
-        _NAME = "Err"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "StableEvalError"}
+    Err: _ClassVar[type[_LiteralValue_Err]]
+    Ok: _ClassVar[type[_LiteralValue_Ok]]
 
-    @_dc.dataclass
-    class Ok(_Variant):
-        value: Row | RawStableRow
-        _NAME = "Ok"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "StableRow"}
 
-    _VARIANTS = {"Err": Err, "Ok": Ok}
+@_dc.dataclass
+class _LiteralValue_Err(_Variant, LiteralValue):
+    value: StableEvalError
+    _NAME = "Err"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "StableEvalError"}
+
+
+_LiteralValue_Err.__name__ = "Err"
+_LiteralValue_Err.__qualname__ = "LiteralValue.Err"
+LiteralValue.Err = _LiteralValue_Err
+
+
+@_dc.dataclass
+class _LiteralValue_Ok(_Variant, LiteralValue):
+    value: Row | RawStableRow
+    _NAME = "Ok"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "StableRow"}
+
+
+_LiteralValue_Ok.__name__ = "Ok"
+_LiteralValue_Ok.__qualname__ = "LiteralValue.Ok"
+LiteralValue.Ok = _LiteralValue_Ok
+LiteralValue._VARIANTS = {"Err": LiteralValue.Err, "Ok": LiteralValue.Ok}
 
 
 @_dc.dataclass
@@ -5895,21 +8388,35 @@ class Matcher(_Struct):
 
 
 class MatcherImpl(_Enum):
-    @_dc.dataclass
-    class Regex(_Variant):
-        value: Regex
-        _NAME = "Regex"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Regex"}
+    Regex: _ClassVar[type[_MatcherImpl_Regex]]
+    String: _ClassVar[type[_MatcherImpl_String]]
 
-    @_dc.dataclass
-    class String(_Variant):
-        value: list[Subpattern]
-        _NAME = "String"
-        _KIND = "NEWTYPE"
-        _INNER = {"SEQ": {"TYPENAME": "Subpattern"}}
 
-    _VARIANTS = {"Regex": Regex, "String": String}
+@_dc.dataclass
+class _MatcherImpl_Regex(_Variant, MatcherImpl):
+    value: Regex
+    _NAME = "Regex"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Regex"}
+
+
+_MatcherImpl_Regex.__name__ = "Regex"
+_MatcherImpl_Regex.__qualname__ = "MatcherImpl.Regex"
+MatcherImpl.Regex = _MatcherImpl_Regex
+
+
+@_dc.dataclass
+class _MatcherImpl_String(_Variant, MatcherImpl):
+    value: list[Subpattern]
+    _NAME = "String"
+    _KIND = "NEWTYPE"
+    _INNER = {"SEQ": {"TYPENAME": "Subpattern"}}
+
+
+_MatcherImpl_String.__name__ = "String"
+_MatcherImpl_String.__qualname__ = "MatcherImpl.String"
+MatcherImpl.String = _MatcherImpl_String
+MatcherImpl._VARIANTS = {"Regex": MatcherImpl.Regex, "String": MatcherImpl.String}
 
 
 @_dc.dataclass(kw_only=True)
@@ -6171,12 +8678,19 @@ class Or(_Unit):
 
 
 class OrdinalMode(_Enum):
-    @_dc.dataclass
-    class None_(_Variant):
-        _NAME = "None"
-        _KIND = "UNIT"
+    None_: _ClassVar[type[_OrdinalMode_None_]]
 
-    _VARIANTS = {"None": None_}
+
+@_dc.dataclass
+class _OrdinalMode_None_(_Variant, OrdinalMode):
+    _NAME = "None"
+    _KIND = "UNIT"
+
+
+_OrdinalMode_None_.__name__ = "None_"
+_OrdinalMode_None_.__qualname__ = "OrdinalMode.None_"
+OrdinalMode.None_ = _OrdinalMode_None_
+OrdinalMode._VARIANTS = {"None": OrdinalMode.None_}
 
 
 @_dc.dataclass
@@ -6470,38 +8984,66 @@ class RedactSql(_Unit):
 
 
 class ReducePlan(_Enum):
-    @_dc.dataclass
-    class Accumulable(_Variant):
-        value: AccumulablePlan
-        _NAME = "Accumulable"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AccumulablePlan"}
+    Accumulable: _ClassVar[type[_ReducePlan_Accumulable]]
+    Basic: _ClassVar[type[_ReducePlan_Basic]]
+    Distinct: _ClassVar[type[_ReducePlan_Distinct]]
+    Hierarchical: _ClassVar[type[_ReducePlan_Hierarchical]]
 
-    @_dc.dataclass
-    class Basic(_Variant):
-        value: BasicPlan
-        _NAME = "Basic"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BasicPlan"}
 
-    @_dc.dataclass
-    class Distinct(_Variant):
-        _NAME = "Distinct"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _ReducePlan_Accumulable(_Variant, ReducePlan):
+    value: AccumulablePlan
+    _NAME = "Accumulable"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AccumulablePlan"}
 
-    @_dc.dataclass
-    class Hierarchical(_Variant):
-        value: HierarchicalPlan
-        _NAME = "Hierarchical"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "HierarchicalPlan"}
 
-    _VARIANTS = {
-        "Accumulable": Accumulable,
-        "Basic": Basic,
-        "Distinct": Distinct,
-        "Hierarchical": Hierarchical,
-    }
+_ReducePlan_Accumulable.__name__ = "Accumulable"
+_ReducePlan_Accumulable.__qualname__ = "ReducePlan.Accumulable"
+ReducePlan.Accumulable = _ReducePlan_Accumulable
+
+
+@_dc.dataclass
+class _ReducePlan_Basic(_Variant, ReducePlan):
+    value: BasicPlan
+    _NAME = "Basic"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BasicPlan"}
+
+
+_ReducePlan_Basic.__name__ = "Basic"
+_ReducePlan_Basic.__qualname__ = "ReducePlan.Basic"
+ReducePlan.Basic = _ReducePlan_Basic
+
+
+@_dc.dataclass
+class _ReducePlan_Distinct(_Variant, ReducePlan):
+    _NAME = "Distinct"
+    _KIND = "UNIT"
+
+
+_ReducePlan_Distinct.__name__ = "Distinct"
+_ReducePlan_Distinct.__qualname__ = "ReducePlan.Distinct"
+ReducePlan.Distinct = _ReducePlan_Distinct
+
+
+@_dc.dataclass
+class _ReducePlan_Hierarchical(_Variant, ReducePlan):
+    value: HierarchicalPlan
+    _NAME = "Hierarchical"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "HierarchicalPlan"}
+
+
+_ReducePlan_Hierarchical.__name__ = "Hierarchical"
+_ReducePlan_Hierarchical.__qualname__ = "ReducePlan.Hierarchical"
+ReducePlan.Hierarchical = _ReducePlan_Hierarchical
+ReducePlan._VARIANTS = {
+    "Accumulable": ReducePlan.Accumulable,
+    "Basic": ReducePlan.Basic,
+    "Distinct": ReducePlan.Distinct,
+    "Hierarchical": ReducePlan.Hierarchical,
+}
 
 
 @_dc.dataclass(kw_only=True)
@@ -6578,192 +9120,395 @@ class ReprColumnType(_Struct):
 
 
 class ReprScalarType(_Enum):
-    @_dc.dataclass
-    class AclItem(_Variant):
-        _NAME = "AclItem"
-        _KIND = "UNIT"
+    AclItem: _ClassVar[type[_ReprScalarType_AclItem]]
+    Array: _ClassVar[type[_ReprScalarType_Array]]
+    Bool: _ClassVar[type[_ReprScalarType_Bool]]
+    Bytes: _ClassVar[type[_ReprScalarType_Bytes]]
+    Date: _ClassVar[type[_ReprScalarType_Date]]
+    Float32: _ClassVar[type[_ReprScalarType_Float32]]
+    Float64: _ClassVar[type[_ReprScalarType_Float64]]
+    Int16: _ClassVar[type[_ReprScalarType_Int16]]
+    Int2Vector: _ClassVar[type[_ReprScalarType_Int2Vector]]
+    Int32: _ClassVar[type[_ReprScalarType_Int32]]
+    Int64: _ClassVar[type[_ReprScalarType_Int64]]
+    Interval: _ClassVar[type[_ReprScalarType_Interval]]
+    Jsonb: _ClassVar[type[_ReprScalarType_Jsonb]]
+    List: _ClassVar[type[_ReprScalarType_List]]
+    Map: _ClassVar[type[_ReprScalarType_Map]]
+    MzAclItem: _ClassVar[type[_ReprScalarType_MzAclItem]]
+    MzTimestamp: _ClassVar[type[_ReprScalarType_MzTimestamp]]
+    Numeric: _ClassVar[type[_ReprScalarType_Numeric]]
+    Range: _ClassVar[type[_ReprScalarType_Range]]
+    Record: _ClassVar[type[_ReprScalarType_Record]]
+    String: _ClassVar[type[_ReprScalarType_String]]
+    Time: _ClassVar[type[_ReprScalarType_Time]]
+    Timestamp: _ClassVar[type[_ReprScalarType_Timestamp]]
+    TimestampTz: _ClassVar[type[_ReprScalarType_TimestampTz]]
+    UInt16: _ClassVar[type[_ReprScalarType_UInt16]]
+    UInt32: _ClassVar[type[_ReprScalarType_UInt32]]
+    UInt64: _ClassVar[type[_ReprScalarType_UInt64]]
+    UInt8: _ClassVar[type[_ReprScalarType_UInt8]]
+    Uuid: _ClassVar[type[_ReprScalarType_Uuid]]
 
-    @_dc.dataclass
-    class Array(_Variant):
-        value: ReprScalarType
-        _NAME = "Array"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ReprScalarType"}
 
-    @_dc.dataclass
-    class Bool(_Variant):
-        _NAME = "Bool"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _ReprScalarType_AclItem(_Variant, ReprScalarType):
+    _NAME = "AclItem"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Bytes(_Variant):
-        _NAME = "Bytes"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Date(_Variant):
-        _NAME = "Date"
-        _KIND = "UNIT"
+_ReprScalarType_AclItem.__name__ = "AclItem"
+_ReprScalarType_AclItem.__qualname__ = "ReprScalarType.AclItem"
+ReprScalarType.AclItem = _ReprScalarType_AclItem
 
-    @_dc.dataclass
-    class Float32(_Variant):
-        _NAME = "Float32"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Float64(_Variant):
-        _NAME = "Float64"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _ReprScalarType_Array(_Variant, ReprScalarType):
+    value: ReprScalarType
+    _NAME = "Array"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ReprScalarType"}
 
-    @_dc.dataclass
-    class Int16(_Variant):
-        _NAME = "Int16"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Int2Vector(_Variant):
-        _NAME = "Int2Vector"
-        _KIND = "UNIT"
+_ReprScalarType_Array.__name__ = "Array"
+_ReprScalarType_Array.__qualname__ = "ReprScalarType.Array"
+ReprScalarType.Array = _ReprScalarType_Array
 
-    @_dc.dataclass
-    class Int32(_Variant):
-        _NAME = "Int32"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Int64(_Variant):
-        _NAME = "Int64"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _ReprScalarType_Bool(_Variant, ReprScalarType):
+    _NAME = "Bool"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Interval(_Variant):
-        _NAME = "Interval"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Jsonb(_Variant):
-        _NAME = "Jsonb"
-        _KIND = "UNIT"
+_ReprScalarType_Bool.__name__ = "Bool"
+_ReprScalarType_Bool.__qualname__ = "ReprScalarType.Bool"
+ReprScalarType.Bool = _ReprScalarType_Bool
 
-    @_dc.dataclass(kw_only=True)
-    class List(_Variant):
-        element_type: ReprScalarType
-        _NAME = "List"
-        _KIND = "STRUCT"
-        _FIELDS = (("element_type", "element_type", {"TYPENAME": "ReprScalarType"}),)
 
-    @_dc.dataclass(kw_only=True)
-    class Map(_Variant):
-        value_type: ReprScalarType
-        _NAME = "Map"
-        _KIND = "STRUCT"
-        _FIELDS = (("value_type", "value_type", {"TYPENAME": "ReprScalarType"}),)
+@_dc.dataclass
+class _ReprScalarType_Bytes(_Variant, ReprScalarType):
+    _NAME = "Bytes"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class MzAclItem(_Variant):
-        _NAME = "MzAclItem"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class MzTimestamp(_Variant):
-        _NAME = "MzTimestamp"
-        _KIND = "UNIT"
+_ReprScalarType_Bytes.__name__ = "Bytes"
+_ReprScalarType_Bytes.__qualname__ = "ReprScalarType.Bytes"
+ReprScalarType.Bytes = _ReprScalarType_Bytes
 
-    @_dc.dataclass
-    class Numeric(_Variant):
-        _NAME = "Numeric"
-        _KIND = "UNIT"
 
-    @_dc.dataclass(kw_only=True)
-    class Range(_Variant):
-        element_type: ReprScalarType
-        _NAME = "Range"
-        _KIND = "STRUCT"
-        _FIELDS = (("element_type", "element_type", {"TYPENAME": "ReprScalarType"}),)
+@_dc.dataclass
+class _ReprScalarType_Date(_Variant, ReprScalarType):
+    _NAME = "Date"
+    _KIND = "UNIT"
 
-    @_dc.dataclass(kw_only=True)
-    class Record(_Variant):
-        fields: list[ReprColumnType]
-        _NAME = "Record"
-        _KIND = "STRUCT"
-        _FIELDS = (("fields", "fields", {"SEQ": {"TYPENAME": "ReprColumnType"}}),)
 
-    @_dc.dataclass
-    class String(_Variant):
-        _NAME = "String"
-        _KIND = "UNIT"
+_ReprScalarType_Date.__name__ = "Date"
+_ReprScalarType_Date.__qualname__ = "ReprScalarType.Date"
+ReprScalarType.Date = _ReprScalarType_Date
 
-    @_dc.dataclass
-    class Time(_Variant):
-        _NAME = "Time"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Timestamp(_Variant):
-        _NAME = "Timestamp"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _ReprScalarType_Float32(_Variant, ReprScalarType):
+    _NAME = "Float32"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class TimestampTz(_Variant):
-        _NAME = "TimestampTz"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class UInt16(_Variant):
-        _NAME = "UInt16"
-        _KIND = "UNIT"
+_ReprScalarType_Float32.__name__ = "Float32"
+_ReprScalarType_Float32.__qualname__ = "ReprScalarType.Float32"
+ReprScalarType.Float32 = _ReprScalarType_Float32
 
-    @_dc.dataclass
-    class UInt32(_Variant):
-        _NAME = "UInt32"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class UInt64(_Variant):
-        _NAME = "UInt64"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _ReprScalarType_Float64(_Variant, ReprScalarType):
+    _NAME = "Float64"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class UInt8(_Variant):
-        _NAME = "UInt8"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Uuid(_Variant):
-        _NAME = "Uuid"
-        _KIND = "UNIT"
+_ReprScalarType_Float64.__name__ = "Float64"
+_ReprScalarType_Float64.__qualname__ = "ReprScalarType.Float64"
+ReprScalarType.Float64 = _ReprScalarType_Float64
 
-    _VARIANTS = {
-        "AclItem": AclItem,
-        "Array": Array,
-        "Bool": Bool,
-        "Bytes": Bytes,
-        "Date": Date,
-        "Float32": Float32,
-        "Float64": Float64,
-        "Int16": Int16,
-        "Int2Vector": Int2Vector,
-        "Int32": Int32,
-        "Int64": Int64,
-        "Interval": Interval,
-        "Jsonb": Jsonb,
-        "List": List,
-        "Map": Map,
-        "MzAclItem": MzAclItem,
-        "MzTimestamp": MzTimestamp,
-        "Numeric": Numeric,
-        "Range": Range,
-        "Record": Record,
-        "String": String,
-        "Time": Time,
-        "Timestamp": Timestamp,
-        "TimestampTz": TimestampTz,
-        "UInt16": UInt16,
-        "UInt32": UInt32,
-        "UInt64": UInt64,
-        "UInt8": UInt8,
-        "Uuid": Uuid,
-    }
+
+@_dc.dataclass
+class _ReprScalarType_Int16(_Variant, ReprScalarType):
+    _NAME = "Int16"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_Int16.__name__ = "Int16"
+_ReprScalarType_Int16.__qualname__ = "ReprScalarType.Int16"
+ReprScalarType.Int16 = _ReprScalarType_Int16
+
+
+@_dc.dataclass
+class _ReprScalarType_Int2Vector(_Variant, ReprScalarType):
+    _NAME = "Int2Vector"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_Int2Vector.__name__ = "Int2Vector"
+_ReprScalarType_Int2Vector.__qualname__ = "ReprScalarType.Int2Vector"
+ReprScalarType.Int2Vector = _ReprScalarType_Int2Vector
+
+
+@_dc.dataclass
+class _ReprScalarType_Int32(_Variant, ReprScalarType):
+    _NAME = "Int32"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_Int32.__name__ = "Int32"
+_ReprScalarType_Int32.__qualname__ = "ReprScalarType.Int32"
+ReprScalarType.Int32 = _ReprScalarType_Int32
+
+
+@_dc.dataclass
+class _ReprScalarType_Int64(_Variant, ReprScalarType):
+    _NAME = "Int64"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_Int64.__name__ = "Int64"
+_ReprScalarType_Int64.__qualname__ = "ReprScalarType.Int64"
+ReprScalarType.Int64 = _ReprScalarType_Int64
+
+
+@_dc.dataclass
+class _ReprScalarType_Interval(_Variant, ReprScalarType):
+    _NAME = "Interval"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_Interval.__name__ = "Interval"
+_ReprScalarType_Interval.__qualname__ = "ReprScalarType.Interval"
+ReprScalarType.Interval = _ReprScalarType_Interval
+
+
+@_dc.dataclass
+class _ReprScalarType_Jsonb(_Variant, ReprScalarType):
+    _NAME = "Jsonb"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_Jsonb.__name__ = "Jsonb"
+_ReprScalarType_Jsonb.__qualname__ = "ReprScalarType.Jsonb"
+ReprScalarType.Jsonb = _ReprScalarType_Jsonb
+
+
+@_dc.dataclass(kw_only=True)
+class _ReprScalarType_List(_Variant, ReprScalarType):
+    element_type: ReprScalarType
+    _NAME = "List"
+    _KIND = "STRUCT"
+    _FIELDS = (("element_type", "element_type", {"TYPENAME": "ReprScalarType"}),)
+
+
+_ReprScalarType_List.__name__ = "List"
+_ReprScalarType_List.__qualname__ = "ReprScalarType.List"
+ReprScalarType.List = _ReprScalarType_List
+
+
+@_dc.dataclass(kw_only=True)
+class _ReprScalarType_Map(_Variant, ReprScalarType):
+    value_type: ReprScalarType
+    _NAME = "Map"
+    _KIND = "STRUCT"
+    _FIELDS = (("value_type", "value_type", {"TYPENAME": "ReprScalarType"}),)
+
+
+_ReprScalarType_Map.__name__ = "Map"
+_ReprScalarType_Map.__qualname__ = "ReprScalarType.Map"
+ReprScalarType.Map = _ReprScalarType_Map
+
+
+@_dc.dataclass
+class _ReprScalarType_MzAclItem(_Variant, ReprScalarType):
+    _NAME = "MzAclItem"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_MzAclItem.__name__ = "MzAclItem"
+_ReprScalarType_MzAclItem.__qualname__ = "ReprScalarType.MzAclItem"
+ReprScalarType.MzAclItem = _ReprScalarType_MzAclItem
+
+
+@_dc.dataclass
+class _ReprScalarType_MzTimestamp(_Variant, ReprScalarType):
+    _NAME = "MzTimestamp"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_MzTimestamp.__name__ = "MzTimestamp"
+_ReprScalarType_MzTimestamp.__qualname__ = "ReprScalarType.MzTimestamp"
+ReprScalarType.MzTimestamp = _ReprScalarType_MzTimestamp
+
+
+@_dc.dataclass
+class _ReprScalarType_Numeric(_Variant, ReprScalarType):
+    _NAME = "Numeric"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_Numeric.__name__ = "Numeric"
+_ReprScalarType_Numeric.__qualname__ = "ReprScalarType.Numeric"
+ReprScalarType.Numeric = _ReprScalarType_Numeric
+
+
+@_dc.dataclass(kw_only=True)
+class _ReprScalarType_Range(_Variant, ReprScalarType):
+    element_type: ReprScalarType
+    _NAME = "Range"
+    _KIND = "STRUCT"
+    _FIELDS = (("element_type", "element_type", {"TYPENAME": "ReprScalarType"}),)
+
+
+_ReprScalarType_Range.__name__ = "Range"
+_ReprScalarType_Range.__qualname__ = "ReprScalarType.Range"
+ReprScalarType.Range = _ReprScalarType_Range
+
+
+@_dc.dataclass(kw_only=True)
+class _ReprScalarType_Record(_Variant, ReprScalarType):
+    fields: list[ReprColumnType]
+    _NAME = "Record"
+    _KIND = "STRUCT"
+    _FIELDS = (("fields", "fields", {"SEQ": {"TYPENAME": "ReprColumnType"}}),)
+
+
+_ReprScalarType_Record.__name__ = "Record"
+_ReprScalarType_Record.__qualname__ = "ReprScalarType.Record"
+ReprScalarType.Record = _ReprScalarType_Record
+
+
+@_dc.dataclass
+class _ReprScalarType_String(_Variant, ReprScalarType):
+    _NAME = "String"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_String.__name__ = "String"
+_ReprScalarType_String.__qualname__ = "ReprScalarType.String"
+ReprScalarType.String = _ReprScalarType_String
+
+
+@_dc.dataclass
+class _ReprScalarType_Time(_Variant, ReprScalarType):
+    _NAME = "Time"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_Time.__name__ = "Time"
+_ReprScalarType_Time.__qualname__ = "ReprScalarType.Time"
+ReprScalarType.Time = _ReprScalarType_Time
+
+
+@_dc.dataclass
+class _ReprScalarType_Timestamp(_Variant, ReprScalarType):
+    _NAME = "Timestamp"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_Timestamp.__name__ = "Timestamp"
+_ReprScalarType_Timestamp.__qualname__ = "ReprScalarType.Timestamp"
+ReprScalarType.Timestamp = _ReprScalarType_Timestamp
+
+
+@_dc.dataclass
+class _ReprScalarType_TimestampTz(_Variant, ReprScalarType):
+    _NAME = "TimestampTz"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_TimestampTz.__name__ = "TimestampTz"
+_ReprScalarType_TimestampTz.__qualname__ = "ReprScalarType.TimestampTz"
+ReprScalarType.TimestampTz = _ReprScalarType_TimestampTz
+
+
+@_dc.dataclass
+class _ReprScalarType_UInt16(_Variant, ReprScalarType):
+    _NAME = "UInt16"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_UInt16.__name__ = "UInt16"
+_ReprScalarType_UInt16.__qualname__ = "ReprScalarType.UInt16"
+ReprScalarType.UInt16 = _ReprScalarType_UInt16
+
+
+@_dc.dataclass
+class _ReprScalarType_UInt32(_Variant, ReprScalarType):
+    _NAME = "UInt32"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_UInt32.__name__ = "UInt32"
+_ReprScalarType_UInt32.__qualname__ = "ReprScalarType.UInt32"
+ReprScalarType.UInt32 = _ReprScalarType_UInt32
+
+
+@_dc.dataclass
+class _ReprScalarType_UInt64(_Variant, ReprScalarType):
+    _NAME = "UInt64"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_UInt64.__name__ = "UInt64"
+_ReprScalarType_UInt64.__qualname__ = "ReprScalarType.UInt64"
+ReprScalarType.UInt64 = _ReprScalarType_UInt64
+
+
+@_dc.dataclass
+class _ReprScalarType_UInt8(_Variant, ReprScalarType):
+    _NAME = "UInt8"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_UInt8.__name__ = "UInt8"
+_ReprScalarType_UInt8.__qualname__ = "ReprScalarType.UInt8"
+ReprScalarType.UInt8 = _ReprScalarType_UInt8
+
+
+@_dc.dataclass
+class _ReprScalarType_Uuid(_Variant, ReprScalarType):
+    _NAME = "Uuid"
+    _KIND = "UNIT"
+
+
+_ReprScalarType_Uuid.__name__ = "Uuid"
+_ReprScalarType_Uuid.__qualname__ = "ReprScalarType.Uuid"
+ReprScalarType.Uuid = _ReprScalarType_Uuid
+ReprScalarType._VARIANTS = {
+    "AclItem": ReprScalarType.AclItem,
+    "Array": ReprScalarType.Array,
+    "Bool": ReprScalarType.Bool,
+    "Bytes": ReprScalarType.Bytes,
+    "Date": ReprScalarType.Date,
+    "Float32": ReprScalarType.Float32,
+    "Float64": ReprScalarType.Float64,
+    "Int16": ReprScalarType.Int16,
+    "Int2Vector": ReprScalarType.Int2Vector,
+    "Int32": ReprScalarType.Int32,
+    "Int64": ReprScalarType.Int64,
+    "Interval": ReprScalarType.Interval,
+    "Jsonb": ReprScalarType.Jsonb,
+    "List": ReprScalarType.List,
+    "Map": ReprScalarType.Map,
+    "MzAclItem": ReprScalarType.MzAclItem,
+    "MzTimestamp": ReprScalarType.MzTimestamp,
+    "Numeric": ReprScalarType.Numeric,
+    "Range": ReprScalarType.Range,
+    "Record": ReprScalarType.Record,
+    "String": ReprScalarType.String,
+    "Time": ReprScalarType.Time,
+    "Timestamp": ReprScalarType.Timestamp,
+    "TimestampTz": ReprScalarType.TimestampTz,
+    "UInt16": ReprScalarType.UInt16,
+    "UInt32": ReprScalarType.UInt32,
+    "UInt64": ReprScalarType.UInt64,
+    "UInt8": ReprScalarType.UInt8,
+    "Uuid": ReprScalarType.Uuid,
+}
 
 
 @_dc.dataclass
@@ -6865,275 +9610,522 @@ class SqlRelationType(_Struct):
 
 
 class SqlScalarType(_Enum):
-    @_dc.dataclass
-    class AclItem(_Variant):
-        _NAME = "AclItem"
-        _KIND = "UNIT"
+    AclItem: _ClassVar[type[_SqlScalarType_AclItem]]
+    Array: _ClassVar[type[_SqlScalarType_Array]]
+    Bool: _ClassVar[type[_SqlScalarType_Bool]]
+    Bytes: _ClassVar[type[_SqlScalarType_Bytes]]
+    Char: _ClassVar[type[_SqlScalarType_Char]]
+    Date: _ClassVar[type[_SqlScalarType_Date]]
+    Float32: _ClassVar[type[_SqlScalarType_Float32]]
+    Float64: _ClassVar[type[_SqlScalarType_Float64]]
+    Int16: _ClassVar[type[_SqlScalarType_Int16]]
+    Int2Vector: _ClassVar[type[_SqlScalarType_Int2Vector]]
+    Int32: _ClassVar[type[_SqlScalarType_Int32]]
+    Int64: _ClassVar[type[_SqlScalarType_Int64]]
+    Interval: _ClassVar[type[_SqlScalarType_Interval]]
+    Jsonb: _ClassVar[type[_SqlScalarType_Jsonb]]
+    List: _ClassVar[type[_SqlScalarType_List]]
+    Map: _ClassVar[type[_SqlScalarType_Map]]
+    MzAclItem: _ClassVar[type[_SqlScalarType_MzAclItem]]
+    MzTimestamp: _ClassVar[type[_SqlScalarType_MzTimestamp]]
+    Numeric: _ClassVar[type[_SqlScalarType_Numeric]]
+    Oid: _ClassVar[type[_SqlScalarType_Oid]]
+    PgLegacyChar: _ClassVar[type[_SqlScalarType_PgLegacyChar]]
+    PgLegacyName: _ClassVar[type[_SqlScalarType_PgLegacyName]]
+    Range: _ClassVar[type[_SqlScalarType_Range]]
+    Record: _ClassVar[type[_SqlScalarType_Record]]
+    RegClass: _ClassVar[type[_SqlScalarType_RegClass]]
+    RegProc: _ClassVar[type[_SqlScalarType_RegProc]]
+    RegType: _ClassVar[type[_SqlScalarType_RegType]]
+    String: _ClassVar[type[_SqlScalarType_String]]
+    Time: _ClassVar[type[_SqlScalarType_Time]]
+    Timestamp: _ClassVar[type[_SqlScalarType_Timestamp]]
+    TimestampTz: _ClassVar[type[_SqlScalarType_TimestampTz]]
+    UInt16: _ClassVar[type[_SqlScalarType_UInt16]]
+    UInt32: _ClassVar[type[_SqlScalarType_UInt32]]
+    UInt64: _ClassVar[type[_SqlScalarType_UInt64]]
+    Uuid: _ClassVar[type[_SqlScalarType_Uuid]]
+    VarChar: _ClassVar[type[_SqlScalarType_VarChar]]
 
-    @_dc.dataclass
-    class Array(_Variant):
-        value: SqlScalarType
-        _NAME = "Array"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SqlScalarType"}
 
-    @_dc.dataclass
-    class Bool(_Variant):
-        _NAME = "Bool"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _SqlScalarType_AclItem(_Variant, SqlScalarType):
+    _NAME = "AclItem"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Bytes(_Variant):
-        _NAME = "Bytes"
-        _KIND = "UNIT"
 
-    @_dc.dataclass(kw_only=True)
-    class Char(_Variant):
-        length: CharMaxLength | None
-        _NAME = "Char"
-        _KIND = "STRUCT"
-        _FIELDS = (("length", "length", {"OPTION": {"TYPENAME": "CharMaxLength"}}),)
+_SqlScalarType_AclItem.__name__ = "AclItem"
+_SqlScalarType_AclItem.__qualname__ = "SqlScalarType.AclItem"
+SqlScalarType.AclItem = _SqlScalarType_AclItem
 
-    @_dc.dataclass
-    class Date(_Variant):
-        _NAME = "Date"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Float32(_Variant):
-        _NAME = "Float32"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _SqlScalarType_Array(_Variant, SqlScalarType):
+    value: SqlScalarType
+    _NAME = "Array"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SqlScalarType"}
 
-    @_dc.dataclass
-    class Float64(_Variant):
-        _NAME = "Float64"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Int16(_Variant):
-        _NAME = "Int16"
-        _KIND = "UNIT"
+_SqlScalarType_Array.__name__ = "Array"
+_SqlScalarType_Array.__qualname__ = "SqlScalarType.Array"
+SqlScalarType.Array = _SqlScalarType_Array
 
-    @_dc.dataclass
-    class Int2Vector(_Variant):
-        _NAME = "Int2Vector"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Int32(_Variant):
-        _NAME = "Int32"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _SqlScalarType_Bool(_Variant, SqlScalarType):
+    _NAME = "Bool"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Int64(_Variant):
-        _NAME = "Int64"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Interval(_Variant):
-        _NAME = "Interval"
-        _KIND = "UNIT"
+_SqlScalarType_Bool.__name__ = "Bool"
+_SqlScalarType_Bool.__qualname__ = "SqlScalarType.Bool"
+SqlScalarType.Bool = _SqlScalarType_Bool
 
-    @_dc.dataclass
-    class Jsonb(_Variant):
-        _NAME = "Jsonb"
-        _KIND = "UNIT"
 
-    @_dc.dataclass(kw_only=True)
-    class List(_Variant):
-        custom_id: CatalogItemId | None
-        element_type: SqlScalarType
-        _NAME = "List"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("custom_id", "custom_id", {"OPTION": {"TYPENAME": "CatalogItemId"}}),
-            ("element_type", "element_type", {"TYPENAME": "SqlScalarType"}),
-        )
+@_dc.dataclass
+class _SqlScalarType_Bytes(_Variant, SqlScalarType):
+    _NAME = "Bytes"
+    _KIND = "UNIT"
 
-    @_dc.dataclass(kw_only=True)
-    class Map(_Variant):
-        custom_id: CatalogItemId | None
-        value_type: SqlScalarType
-        _NAME = "Map"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("custom_id", "custom_id", {"OPTION": {"TYPENAME": "CatalogItemId"}}),
-            ("value_type", "value_type", {"TYPENAME": "SqlScalarType"}),
-        )
 
-    @_dc.dataclass
-    class MzAclItem(_Variant):
-        _NAME = "MzAclItem"
-        _KIND = "UNIT"
+_SqlScalarType_Bytes.__name__ = "Bytes"
+_SqlScalarType_Bytes.__qualname__ = "SqlScalarType.Bytes"
+SqlScalarType.Bytes = _SqlScalarType_Bytes
 
-    @_dc.dataclass
-    class MzTimestamp(_Variant):
-        _NAME = "MzTimestamp"
-        _KIND = "UNIT"
 
-    @_dc.dataclass(kw_only=True)
-    class Numeric(_Variant):
-        max_scale: NumericMaxScale | None
-        _NAME = "Numeric"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("max_scale", "max_scale", {"OPTION": {"TYPENAME": "NumericMaxScale"}}),
-        )
+@_dc.dataclass(kw_only=True)
+class _SqlScalarType_Char(_Variant, SqlScalarType):
+    length: CharMaxLength | None
+    _NAME = "Char"
+    _KIND = "STRUCT"
+    _FIELDS = (("length", "length", {"OPTION": {"TYPENAME": "CharMaxLength"}}),)
 
-    @_dc.dataclass
-    class Oid(_Variant):
-        _NAME = "Oid"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class PgLegacyChar(_Variant):
-        _NAME = "PgLegacyChar"
-        _KIND = "UNIT"
+_SqlScalarType_Char.__name__ = "Char"
+_SqlScalarType_Char.__qualname__ = "SqlScalarType.Char"
+SqlScalarType.Char = _SqlScalarType_Char
 
-    @_dc.dataclass
-    class PgLegacyName(_Variant):
-        _NAME = "PgLegacyName"
-        _KIND = "UNIT"
 
-    @_dc.dataclass(kw_only=True)
-    class Range(_Variant):
-        element_type: SqlScalarType
-        _NAME = "Range"
-        _KIND = "STRUCT"
-        _FIELDS = (("element_type", "element_type", {"TYPENAME": "SqlScalarType"}),)
+@_dc.dataclass
+class _SqlScalarType_Date(_Variant, SqlScalarType):
+    _NAME = "Date"
+    _KIND = "UNIT"
 
-    @_dc.dataclass(kw_only=True)
-    class Record(_Variant):
-        custom_id: CatalogItemId | None
-        fields: list[tuple[ColumnName, SqlColumnType]]
-        _NAME = "Record"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("custom_id", "custom_id", {"OPTION": {"TYPENAME": "CatalogItemId"}}),
-            (
-                "fields",
-                "fields",
-                {
-                    "SEQ": {
-                        "TUPLE": [
-                            {"TYPENAME": "ColumnName"},
-                            {"TYPENAME": "SqlColumnType"},
-                        ]
-                    }
-                },
-            ),
-        )
 
-    @_dc.dataclass
-    class RegClass(_Variant):
-        _NAME = "RegClass"
-        _KIND = "UNIT"
+_SqlScalarType_Date.__name__ = "Date"
+_SqlScalarType_Date.__qualname__ = "SqlScalarType.Date"
+SqlScalarType.Date = _SqlScalarType_Date
 
-    @_dc.dataclass
-    class RegProc(_Variant):
-        _NAME = "RegProc"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class RegType(_Variant):
-        _NAME = "RegType"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _SqlScalarType_Float32(_Variant, SqlScalarType):
+    _NAME = "Float32"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class String(_Variant):
-        _NAME = "String"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Time(_Variant):
-        _NAME = "Time"
-        _KIND = "UNIT"
+_SqlScalarType_Float32.__name__ = "Float32"
+_SqlScalarType_Float32.__qualname__ = "SqlScalarType.Float32"
+SqlScalarType.Float32 = _SqlScalarType_Float32
 
-    @_dc.dataclass(kw_only=True)
-    class Timestamp(_Variant):
-        precision: TimestampPrecision | None
-        _NAME = "Timestamp"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("precision", "precision", {"OPTION": {"TYPENAME": "TimestampPrecision"}}),
-        )
 
-    @_dc.dataclass(kw_only=True)
-    class TimestampTz(_Variant):
-        precision: TimestampPrecision | None
-        _NAME = "TimestampTz"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("precision", "precision", {"OPTION": {"TYPENAME": "TimestampPrecision"}}),
-        )
+@_dc.dataclass
+class _SqlScalarType_Float64(_Variant, SqlScalarType):
+    _NAME = "Float64"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class UInt16(_Variant):
-        _NAME = "UInt16"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class UInt32(_Variant):
-        _NAME = "UInt32"
-        _KIND = "UNIT"
+_SqlScalarType_Float64.__name__ = "Float64"
+_SqlScalarType_Float64.__qualname__ = "SqlScalarType.Float64"
+SqlScalarType.Float64 = _SqlScalarType_Float64
 
-    @_dc.dataclass
-    class UInt64(_Variant):
-        _NAME = "UInt64"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Uuid(_Variant):
-        _NAME = "Uuid"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _SqlScalarType_Int16(_Variant, SqlScalarType):
+    _NAME = "Int16"
+    _KIND = "UNIT"
 
-    @_dc.dataclass(kw_only=True)
-    class VarChar(_Variant):
-        max_length: VarCharMaxLength | None
-        _NAME = "VarChar"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("max_length", "max_length", {"OPTION": {"TYPENAME": "VarCharMaxLength"}}),
-        )
 
-    _VARIANTS = {
-        "AclItem": AclItem,
-        "Array": Array,
-        "Bool": Bool,
-        "Bytes": Bytes,
-        "Char": Char,
-        "Date": Date,
-        "Float32": Float32,
-        "Float64": Float64,
-        "Int16": Int16,
-        "Int2Vector": Int2Vector,
-        "Int32": Int32,
-        "Int64": Int64,
-        "Interval": Interval,
-        "Jsonb": Jsonb,
-        "List": List,
-        "Map": Map,
-        "MzAclItem": MzAclItem,
-        "MzTimestamp": MzTimestamp,
-        "Numeric": Numeric,
-        "Oid": Oid,
-        "PgLegacyChar": PgLegacyChar,
-        "PgLegacyName": PgLegacyName,
-        "Range": Range,
-        "Record": Record,
-        "RegClass": RegClass,
-        "RegProc": RegProc,
-        "RegType": RegType,
-        "String": String,
-        "Time": Time,
-        "Timestamp": Timestamp,
-        "TimestampTz": TimestampTz,
-        "UInt16": UInt16,
-        "UInt32": UInt32,
-        "UInt64": UInt64,
-        "Uuid": Uuid,
-        "VarChar": VarChar,
-    }
+_SqlScalarType_Int16.__name__ = "Int16"
+_SqlScalarType_Int16.__qualname__ = "SqlScalarType.Int16"
+SqlScalarType.Int16 = _SqlScalarType_Int16
+
+
+@_dc.dataclass
+class _SqlScalarType_Int2Vector(_Variant, SqlScalarType):
+    _NAME = "Int2Vector"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_Int2Vector.__name__ = "Int2Vector"
+_SqlScalarType_Int2Vector.__qualname__ = "SqlScalarType.Int2Vector"
+SqlScalarType.Int2Vector = _SqlScalarType_Int2Vector
+
+
+@_dc.dataclass
+class _SqlScalarType_Int32(_Variant, SqlScalarType):
+    _NAME = "Int32"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_Int32.__name__ = "Int32"
+_SqlScalarType_Int32.__qualname__ = "SqlScalarType.Int32"
+SqlScalarType.Int32 = _SqlScalarType_Int32
+
+
+@_dc.dataclass
+class _SqlScalarType_Int64(_Variant, SqlScalarType):
+    _NAME = "Int64"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_Int64.__name__ = "Int64"
+_SqlScalarType_Int64.__qualname__ = "SqlScalarType.Int64"
+SqlScalarType.Int64 = _SqlScalarType_Int64
+
+
+@_dc.dataclass
+class _SqlScalarType_Interval(_Variant, SqlScalarType):
+    _NAME = "Interval"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_Interval.__name__ = "Interval"
+_SqlScalarType_Interval.__qualname__ = "SqlScalarType.Interval"
+SqlScalarType.Interval = _SqlScalarType_Interval
+
+
+@_dc.dataclass
+class _SqlScalarType_Jsonb(_Variant, SqlScalarType):
+    _NAME = "Jsonb"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_Jsonb.__name__ = "Jsonb"
+_SqlScalarType_Jsonb.__qualname__ = "SqlScalarType.Jsonb"
+SqlScalarType.Jsonb = _SqlScalarType_Jsonb
+
+
+@_dc.dataclass(kw_only=True)
+class _SqlScalarType_List(_Variant, SqlScalarType):
+    custom_id: CatalogItemId | None
+    element_type: SqlScalarType
+    _NAME = "List"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("custom_id", "custom_id", {"OPTION": {"TYPENAME": "CatalogItemId"}}),
+        ("element_type", "element_type", {"TYPENAME": "SqlScalarType"}),
+    )
+
+
+_SqlScalarType_List.__name__ = "List"
+_SqlScalarType_List.__qualname__ = "SqlScalarType.List"
+SqlScalarType.List = _SqlScalarType_List
+
+
+@_dc.dataclass(kw_only=True)
+class _SqlScalarType_Map(_Variant, SqlScalarType):
+    custom_id: CatalogItemId | None
+    value_type: SqlScalarType
+    _NAME = "Map"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("custom_id", "custom_id", {"OPTION": {"TYPENAME": "CatalogItemId"}}),
+        ("value_type", "value_type", {"TYPENAME": "SqlScalarType"}),
+    )
+
+
+_SqlScalarType_Map.__name__ = "Map"
+_SqlScalarType_Map.__qualname__ = "SqlScalarType.Map"
+SqlScalarType.Map = _SqlScalarType_Map
+
+
+@_dc.dataclass
+class _SqlScalarType_MzAclItem(_Variant, SqlScalarType):
+    _NAME = "MzAclItem"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_MzAclItem.__name__ = "MzAclItem"
+_SqlScalarType_MzAclItem.__qualname__ = "SqlScalarType.MzAclItem"
+SqlScalarType.MzAclItem = _SqlScalarType_MzAclItem
+
+
+@_dc.dataclass
+class _SqlScalarType_MzTimestamp(_Variant, SqlScalarType):
+    _NAME = "MzTimestamp"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_MzTimestamp.__name__ = "MzTimestamp"
+_SqlScalarType_MzTimestamp.__qualname__ = "SqlScalarType.MzTimestamp"
+SqlScalarType.MzTimestamp = _SqlScalarType_MzTimestamp
+
+
+@_dc.dataclass(kw_only=True)
+class _SqlScalarType_Numeric(_Variant, SqlScalarType):
+    max_scale: NumericMaxScale | None
+    _NAME = "Numeric"
+    _KIND = "STRUCT"
+    _FIELDS = (("max_scale", "max_scale", {"OPTION": {"TYPENAME": "NumericMaxScale"}}),)
+
+
+_SqlScalarType_Numeric.__name__ = "Numeric"
+_SqlScalarType_Numeric.__qualname__ = "SqlScalarType.Numeric"
+SqlScalarType.Numeric = _SqlScalarType_Numeric
+
+
+@_dc.dataclass
+class _SqlScalarType_Oid(_Variant, SqlScalarType):
+    _NAME = "Oid"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_Oid.__name__ = "Oid"
+_SqlScalarType_Oid.__qualname__ = "SqlScalarType.Oid"
+SqlScalarType.Oid = _SqlScalarType_Oid
+
+
+@_dc.dataclass
+class _SqlScalarType_PgLegacyChar(_Variant, SqlScalarType):
+    _NAME = "PgLegacyChar"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_PgLegacyChar.__name__ = "PgLegacyChar"
+_SqlScalarType_PgLegacyChar.__qualname__ = "SqlScalarType.PgLegacyChar"
+SqlScalarType.PgLegacyChar = _SqlScalarType_PgLegacyChar
+
+
+@_dc.dataclass
+class _SqlScalarType_PgLegacyName(_Variant, SqlScalarType):
+    _NAME = "PgLegacyName"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_PgLegacyName.__name__ = "PgLegacyName"
+_SqlScalarType_PgLegacyName.__qualname__ = "SqlScalarType.PgLegacyName"
+SqlScalarType.PgLegacyName = _SqlScalarType_PgLegacyName
+
+
+@_dc.dataclass(kw_only=True)
+class _SqlScalarType_Range(_Variant, SqlScalarType):
+    element_type: SqlScalarType
+    _NAME = "Range"
+    _KIND = "STRUCT"
+    _FIELDS = (("element_type", "element_type", {"TYPENAME": "SqlScalarType"}),)
+
+
+_SqlScalarType_Range.__name__ = "Range"
+_SqlScalarType_Range.__qualname__ = "SqlScalarType.Range"
+SqlScalarType.Range = _SqlScalarType_Range
+
+
+@_dc.dataclass(kw_only=True)
+class _SqlScalarType_Record(_Variant, SqlScalarType):
+    custom_id: CatalogItemId | None
+    fields: list[tuple[ColumnName, SqlColumnType]]
+    _NAME = "Record"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("custom_id", "custom_id", {"OPTION": {"TYPENAME": "CatalogItemId"}}),
+        (
+            "fields",
+            "fields",
+            {
+                "SEQ": {
+                    "TUPLE": [{"TYPENAME": "ColumnName"}, {"TYPENAME": "SqlColumnType"}]
+                }
+            },
+        ),
+    )
+
+
+_SqlScalarType_Record.__name__ = "Record"
+_SqlScalarType_Record.__qualname__ = "SqlScalarType.Record"
+SqlScalarType.Record = _SqlScalarType_Record
+
+
+@_dc.dataclass
+class _SqlScalarType_RegClass(_Variant, SqlScalarType):
+    _NAME = "RegClass"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_RegClass.__name__ = "RegClass"
+_SqlScalarType_RegClass.__qualname__ = "SqlScalarType.RegClass"
+SqlScalarType.RegClass = _SqlScalarType_RegClass
+
+
+@_dc.dataclass
+class _SqlScalarType_RegProc(_Variant, SqlScalarType):
+    _NAME = "RegProc"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_RegProc.__name__ = "RegProc"
+_SqlScalarType_RegProc.__qualname__ = "SqlScalarType.RegProc"
+SqlScalarType.RegProc = _SqlScalarType_RegProc
+
+
+@_dc.dataclass
+class _SqlScalarType_RegType(_Variant, SqlScalarType):
+    _NAME = "RegType"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_RegType.__name__ = "RegType"
+_SqlScalarType_RegType.__qualname__ = "SqlScalarType.RegType"
+SqlScalarType.RegType = _SqlScalarType_RegType
+
+
+@_dc.dataclass
+class _SqlScalarType_String(_Variant, SqlScalarType):
+    _NAME = "String"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_String.__name__ = "String"
+_SqlScalarType_String.__qualname__ = "SqlScalarType.String"
+SqlScalarType.String = _SqlScalarType_String
+
+
+@_dc.dataclass
+class _SqlScalarType_Time(_Variant, SqlScalarType):
+    _NAME = "Time"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_Time.__name__ = "Time"
+_SqlScalarType_Time.__qualname__ = "SqlScalarType.Time"
+SqlScalarType.Time = _SqlScalarType_Time
+
+
+@_dc.dataclass(kw_only=True)
+class _SqlScalarType_Timestamp(_Variant, SqlScalarType):
+    precision: TimestampPrecision | None
+    _NAME = "Timestamp"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("precision", "precision", {"OPTION": {"TYPENAME": "TimestampPrecision"}}),
+    )
+
+
+_SqlScalarType_Timestamp.__name__ = "Timestamp"
+_SqlScalarType_Timestamp.__qualname__ = "SqlScalarType.Timestamp"
+SqlScalarType.Timestamp = _SqlScalarType_Timestamp
+
+
+@_dc.dataclass(kw_only=True)
+class _SqlScalarType_TimestampTz(_Variant, SqlScalarType):
+    precision: TimestampPrecision | None
+    _NAME = "TimestampTz"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("precision", "precision", {"OPTION": {"TYPENAME": "TimestampPrecision"}}),
+    )
+
+
+_SqlScalarType_TimestampTz.__name__ = "TimestampTz"
+_SqlScalarType_TimestampTz.__qualname__ = "SqlScalarType.TimestampTz"
+SqlScalarType.TimestampTz = _SqlScalarType_TimestampTz
+
+
+@_dc.dataclass
+class _SqlScalarType_UInt16(_Variant, SqlScalarType):
+    _NAME = "UInt16"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_UInt16.__name__ = "UInt16"
+_SqlScalarType_UInt16.__qualname__ = "SqlScalarType.UInt16"
+SqlScalarType.UInt16 = _SqlScalarType_UInt16
+
+
+@_dc.dataclass
+class _SqlScalarType_UInt32(_Variant, SqlScalarType):
+    _NAME = "UInt32"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_UInt32.__name__ = "UInt32"
+_SqlScalarType_UInt32.__qualname__ = "SqlScalarType.UInt32"
+SqlScalarType.UInt32 = _SqlScalarType_UInt32
+
+
+@_dc.dataclass
+class _SqlScalarType_UInt64(_Variant, SqlScalarType):
+    _NAME = "UInt64"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_UInt64.__name__ = "UInt64"
+_SqlScalarType_UInt64.__qualname__ = "SqlScalarType.UInt64"
+SqlScalarType.UInt64 = _SqlScalarType_UInt64
+
+
+@_dc.dataclass
+class _SqlScalarType_Uuid(_Variant, SqlScalarType):
+    _NAME = "Uuid"
+    _KIND = "UNIT"
+
+
+_SqlScalarType_Uuid.__name__ = "Uuid"
+_SqlScalarType_Uuid.__qualname__ = "SqlScalarType.Uuid"
+SqlScalarType.Uuid = _SqlScalarType_Uuid
+
+
+@_dc.dataclass(kw_only=True)
+class _SqlScalarType_VarChar(_Variant, SqlScalarType):
+    max_length: VarCharMaxLength | None
+    _NAME = "VarChar"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("max_length", "max_length", {"OPTION": {"TYPENAME": "VarCharMaxLength"}}),
+    )
+
+
+_SqlScalarType_VarChar.__name__ = "VarChar"
+_SqlScalarType_VarChar.__qualname__ = "SqlScalarType.VarChar"
+SqlScalarType.VarChar = _SqlScalarType_VarChar
+SqlScalarType._VARIANTS = {
+    "AclItem": SqlScalarType.AclItem,
+    "Array": SqlScalarType.Array,
+    "Bool": SqlScalarType.Bool,
+    "Bytes": SqlScalarType.Bytes,
+    "Char": SqlScalarType.Char,
+    "Date": SqlScalarType.Date,
+    "Float32": SqlScalarType.Float32,
+    "Float64": SqlScalarType.Float64,
+    "Int16": SqlScalarType.Int16,
+    "Int2Vector": SqlScalarType.Int2Vector,
+    "Int32": SqlScalarType.Int32,
+    "Int64": SqlScalarType.Int64,
+    "Interval": SqlScalarType.Interval,
+    "Jsonb": SqlScalarType.Jsonb,
+    "List": SqlScalarType.List,
+    "Map": SqlScalarType.Map,
+    "MzAclItem": SqlScalarType.MzAclItem,
+    "MzTimestamp": SqlScalarType.MzTimestamp,
+    "Numeric": SqlScalarType.Numeric,
+    "Oid": SqlScalarType.Oid,
+    "PgLegacyChar": SqlScalarType.PgLegacyChar,
+    "PgLegacyName": SqlScalarType.PgLegacyName,
+    "Range": SqlScalarType.Range,
+    "Record": SqlScalarType.Record,
+    "RegClass": SqlScalarType.RegClass,
+    "RegProc": SqlScalarType.RegProc,
+    "RegType": SqlScalarType.RegType,
+    "String": SqlScalarType.String,
+    "Time": SqlScalarType.Time,
+    "Timestamp": SqlScalarType.Timestamp,
+    "TimestampTz": SqlScalarType.TimestampTz,
+    "UInt16": SqlScalarType.UInt16,
+    "UInt32": SqlScalarType.UInt32,
+    "UInt64": SqlScalarType.UInt64,
+    "Uuid": SqlScalarType.Uuid,
+    "VarChar": SqlScalarType.VarChar,
+}
 
 
 @_dc.dataclass
@@ -7280,184 +10272,365 @@ class Substr(_Unit):
 
 
 class TableFunc(_Enum):
-    @_dc.dataclass
-    class AclExplode(_Variant):
-        _NAME = "AclExplode"
-        _KIND = "UNIT"
+    AclExplode: _ClassVar[type[_TableFunc_AclExplode]]
+    CsvExtract: _ClassVar[type[_TableFunc_CsvExtract]]
+    GenerateSeriesInt32: _ClassVar[type[_TableFunc_GenerateSeriesInt32]]
+    GenerateSeriesInt64: _ClassVar[type[_TableFunc_GenerateSeriesInt64]]
+    GenerateSeriesTimestamp: _ClassVar[type[_TableFunc_GenerateSeriesTimestamp]]
+    GenerateSeriesTimestampTz: _ClassVar[type[_TableFunc_GenerateSeriesTimestampTz]]
+    GenerateSeriesUnoptimized: _ClassVar[type[_TableFunc_GenerateSeriesUnoptimized]]
+    GenerateSubscriptsArray: _ClassVar[type[_TableFunc_GenerateSubscriptsArray]]
+    GuardSubquerySize: _ClassVar[type[_TableFunc_GuardSubquerySize]]
+    JsonbArrayElements: _ClassVar[type[_TableFunc_JsonbArrayElements]]
+    JsonbArrayElementsStringify: _ClassVar[type[_TableFunc_JsonbArrayElementsStringify]]
+    JsonbEach: _ClassVar[type[_TableFunc_JsonbEach]]
+    JsonbEachStringify: _ClassVar[type[_TableFunc_JsonbEachStringify]]
+    JsonbObjectKeys: _ClassVar[type[_TableFunc_JsonbObjectKeys]]
+    MzAclExplode: _ClassVar[type[_TableFunc_MzAclExplode]]
+    RegexpExtract: _ClassVar[type[_TableFunc_RegexpExtract]]
+    RegexpMatches: _ClassVar[type[_TableFunc_RegexpMatches]]
+    RepeatRow: _ClassVar[type[_TableFunc_RepeatRow]]
+    RepeatRowNonNegative: _ClassVar[type[_TableFunc_RepeatRowNonNegative]]
+    TabletizedScalar: _ClassVar[type[_TableFunc_TabletizedScalar]]
+    UnnestArray: _ClassVar[type[_TableFunc_UnnestArray]]
+    UnnestList: _ClassVar[type[_TableFunc_UnnestList]]
+    UnnestMap: _ClassVar[type[_TableFunc_UnnestMap]]
+    WithOrdinality: _ClassVar[type[_TableFunc_WithOrdinality]]
+    Wrap: _ClassVar[type[_TableFunc_Wrap]]
 
-    @_dc.dataclass
-    class CsvExtract(_Variant):
-        value: int
-        _NAME = "CsvExtract"
-        _KIND = "NEWTYPE"
-        _INNER = "U64"
 
-    @_dc.dataclass
-    class GenerateSeriesInt32(_Variant):
-        _NAME = "GenerateSeriesInt32"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _TableFunc_AclExplode(_Variant, TableFunc):
+    _NAME = "AclExplode"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class GenerateSeriesInt64(_Variant):
-        _NAME = "GenerateSeriesInt64"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class GenerateSeriesTimestamp(_Variant):
-        _NAME = "GenerateSeriesTimestamp"
-        _KIND = "UNIT"
+_TableFunc_AclExplode.__name__ = "AclExplode"
+_TableFunc_AclExplode.__qualname__ = "TableFunc.AclExplode"
+TableFunc.AclExplode = _TableFunc_AclExplode
 
-    @_dc.dataclass
-    class GenerateSeriesTimestampTz(_Variant):
-        _NAME = "GenerateSeriesTimestampTz"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class GenerateSeriesUnoptimized(_Variant):
-        _NAME = "GenerateSeriesUnoptimized"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _TableFunc_CsvExtract(_Variant, TableFunc):
+    value: int
+    _NAME = "CsvExtract"
+    _KIND = "NEWTYPE"
+    _INNER = "U64"
 
-    @_dc.dataclass
-    class GenerateSubscriptsArray(_Variant):
-        _NAME = "GenerateSubscriptsArray"
-        _KIND = "UNIT"
 
-    @_dc.dataclass(kw_only=True)
-    class GuardSubquerySize(_Variant):
-        column_type: SqlScalarType
-        _NAME = "GuardSubquerySize"
-        _KIND = "STRUCT"
-        _FIELDS = (("column_type", "column_type", {"TYPENAME": "SqlScalarType"}),)
+_TableFunc_CsvExtract.__name__ = "CsvExtract"
+_TableFunc_CsvExtract.__qualname__ = "TableFunc.CsvExtract"
+TableFunc.CsvExtract = _TableFunc_CsvExtract
 
-    @_dc.dataclass
-    class JsonbArrayElements(_Variant):
-        _NAME = "JsonbArrayElements"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class JsonbArrayElementsStringify(_Variant):
-        _NAME = "JsonbArrayElementsStringify"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _TableFunc_GenerateSeriesInt32(_Variant, TableFunc):
+    _NAME = "GenerateSeriesInt32"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class JsonbEach(_Variant):
-        _NAME = "JsonbEach"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class JsonbEachStringify(_Variant):
-        _NAME = "JsonbEachStringify"
-        _KIND = "UNIT"
+_TableFunc_GenerateSeriesInt32.__name__ = "GenerateSeriesInt32"
+_TableFunc_GenerateSeriesInt32.__qualname__ = "TableFunc.GenerateSeriesInt32"
+TableFunc.GenerateSeriesInt32 = _TableFunc_GenerateSeriesInt32
 
-    @_dc.dataclass
-    class JsonbObjectKeys(_Variant):
-        _NAME = "JsonbObjectKeys"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class MzAclExplode(_Variant):
-        _NAME = "MzAclExplode"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _TableFunc_GenerateSeriesInt64(_Variant, TableFunc):
+    _NAME = "GenerateSeriesInt64"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class RegexpExtract(_Variant):
-        value: AnalyzedRegex
-        _NAME = "RegexpExtract"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AnalyzedRegex"}
 
-    @_dc.dataclass
-    class RegexpMatches(_Variant):
-        _NAME = "RegexpMatches"
-        _KIND = "UNIT"
+_TableFunc_GenerateSeriesInt64.__name__ = "GenerateSeriesInt64"
+_TableFunc_GenerateSeriesInt64.__qualname__ = "TableFunc.GenerateSeriesInt64"
+TableFunc.GenerateSeriesInt64 = _TableFunc_GenerateSeriesInt64
 
-    @_dc.dataclass
-    class RepeatRow(_Variant):
-        _NAME = "RepeatRow"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class RepeatRowNonNegative(_Variant):
-        _NAME = "RepeatRowNonNegative"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _TableFunc_GenerateSeriesTimestamp(_Variant, TableFunc):
+    _NAME = "GenerateSeriesTimestamp"
+    _KIND = "UNIT"
 
-    @_dc.dataclass(kw_only=True)
-    class TabletizedScalar(_Variant):
-        name: str
-        relation: SqlRelationType
-        _NAME = "TabletizedScalar"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("name", "name", "STR"),
-            ("relation", "relation", {"TYPENAME": "SqlRelationType"}),
-        )
 
-    @_dc.dataclass(kw_only=True)
-    class UnnestArray(_Variant):
-        el_typ: SqlScalarType
-        _NAME = "UnnestArray"
-        _KIND = "STRUCT"
-        _FIELDS = (("el_typ", "el_typ", {"TYPENAME": "SqlScalarType"}),)
+_TableFunc_GenerateSeriesTimestamp.__name__ = "GenerateSeriesTimestamp"
+_TableFunc_GenerateSeriesTimestamp.__qualname__ = "TableFunc.GenerateSeriesTimestamp"
+TableFunc.GenerateSeriesTimestamp = _TableFunc_GenerateSeriesTimestamp
 
-    @_dc.dataclass(kw_only=True)
-    class UnnestList(_Variant):
-        el_typ: SqlScalarType
-        _NAME = "UnnestList"
-        _KIND = "STRUCT"
-        _FIELDS = (("el_typ", "el_typ", {"TYPENAME": "SqlScalarType"}),)
 
-    @_dc.dataclass(kw_only=True)
-    class UnnestMap(_Variant):
-        value_type: SqlScalarType
-        _NAME = "UnnestMap"
-        _KIND = "STRUCT"
-        _FIELDS = (("value_type", "value_type", {"TYPENAME": "SqlScalarType"}),)
+@_dc.dataclass
+class _TableFunc_GenerateSeriesTimestampTz(_Variant, TableFunc):
+    _NAME = "GenerateSeriesTimestampTz"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class WithOrdinality(_Variant):
-        value: WithOrdinality
-        _NAME = "WithOrdinality"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "WithOrdinality"}
 
-    @_dc.dataclass(kw_only=True)
-    class Wrap(_Variant):
-        types: list[SqlColumnType]
-        width: int
-        _NAME = "Wrap"
-        _KIND = "STRUCT"
-        _FIELDS = (
-            ("types", "types", {"SEQ": {"TYPENAME": "SqlColumnType"}}),
-            ("width", "width", "U64"),
-        )
+_TableFunc_GenerateSeriesTimestampTz.__name__ = "GenerateSeriesTimestampTz"
+_TableFunc_GenerateSeriesTimestampTz.__qualname__ = (
+    "TableFunc.GenerateSeriesTimestampTz"
+)
+TableFunc.GenerateSeriesTimestampTz = _TableFunc_GenerateSeriesTimestampTz
 
-    _VARIANTS = {
-        "AclExplode": AclExplode,
-        "CsvExtract": CsvExtract,
-        "GenerateSeriesInt32": GenerateSeriesInt32,
-        "GenerateSeriesInt64": GenerateSeriesInt64,
-        "GenerateSeriesTimestamp": GenerateSeriesTimestamp,
-        "GenerateSeriesTimestampTz": GenerateSeriesTimestampTz,
-        "GenerateSeriesUnoptimized": GenerateSeriesUnoptimized,
-        "GenerateSubscriptsArray": GenerateSubscriptsArray,
-        "GuardSubquerySize": GuardSubquerySize,
-        "JsonbArrayElements": JsonbArrayElements,
-        "JsonbArrayElementsStringify": JsonbArrayElementsStringify,
-        "JsonbEach": JsonbEach,
-        "JsonbEachStringify": JsonbEachStringify,
-        "JsonbObjectKeys": JsonbObjectKeys,
-        "MzAclExplode": MzAclExplode,
-        "RegexpExtract": RegexpExtract,
-        "RegexpMatches": RegexpMatches,
-        "RepeatRow": RepeatRow,
-        "RepeatRowNonNegative": RepeatRowNonNegative,
-        "TabletizedScalar": TabletizedScalar,
-        "UnnestArray": UnnestArray,
-        "UnnestList": UnnestList,
-        "UnnestMap": UnnestMap,
-        "WithOrdinality": WithOrdinality,
-        "Wrap": Wrap,
-    }
+
+@_dc.dataclass
+class _TableFunc_GenerateSeriesUnoptimized(_Variant, TableFunc):
+    _NAME = "GenerateSeriesUnoptimized"
+    _KIND = "UNIT"
+
+
+_TableFunc_GenerateSeriesUnoptimized.__name__ = "GenerateSeriesUnoptimized"
+_TableFunc_GenerateSeriesUnoptimized.__qualname__ = (
+    "TableFunc.GenerateSeriesUnoptimized"
+)
+TableFunc.GenerateSeriesUnoptimized = _TableFunc_GenerateSeriesUnoptimized
+
+
+@_dc.dataclass
+class _TableFunc_GenerateSubscriptsArray(_Variant, TableFunc):
+    _NAME = "GenerateSubscriptsArray"
+    _KIND = "UNIT"
+
+
+_TableFunc_GenerateSubscriptsArray.__name__ = "GenerateSubscriptsArray"
+_TableFunc_GenerateSubscriptsArray.__qualname__ = "TableFunc.GenerateSubscriptsArray"
+TableFunc.GenerateSubscriptsArray = _TableFunc_GenerateSubscriptsArray
+
+
+@_dc.dataclass(kw_only=True)
+class _TableFunc_GuardSubquerySize(_Variant, TableFunc):
+    column_type: SqlScalarType
+    _NAME = "GuardSubquerySize"
+    _KIND = "STRUCT"
+    _FIELDS = (("column_type", "column_type", {"TYPENAME": "SqlScalarType"}),)
+
+
+_TableFunc_GuardSubquerySize.__name__ = "GuardSubquerySize"
+_TableFunc_GuardSubquerySize.__qualname__ = "TableFunc.GuardSubquerySize"
+TableFunc.GuardSubquerySize = _TableFunc_GuardSubquerySize
+
+
+@_dc.dataclass
+class _TableFunc_JsonbArrayElements(_Variant, TableFunc):
+    _NAME = "JsonbArrayElements"
+    _KIND = "UNIT"
+
+
+_TableFunc_JsonbArrayElements.__name__ = "JsonbArrayElements"
+_TableFunc_JsonbArrayElements.__qualname__ = "TableFunc.JsonbArrayElements"
+TableFunc.JsonbArrayElements = _TableFunc_JsonbArrayElements
+
+
+@_dc.dataclass
+class _TableFunc_JsonbArrayElementsStringify(_Variant, TableFunc):
+    _NAME = "JsonbArrayElementsStringify"
+    _KIND = "UNIT"
+
+
+_TableFunc_JsonbArrayElementsStringify.__name__ = "JsonbArrayElementsStringify"
+_TableFunc_JsonbArrayElementsStringify.__qualname__ = (
+    "TableFunc.JsonbArrayElementsStringify"
+)
+TableFunc.JsonbArrayElementsStringify = _TableFunc_JsonbArrayElementsStringify
+
+
+@_dc.dataclass
+class _TableFunc_JsonbEach(_Variant, TableFunc):
+    _NAME = "JsonbEach"
+    _KIND = "UNIT"
+
+
+_TableFunc_JsonbEach.__name__ = "JsonbEach"
+_TableFunc_JsonbEach.__qualname__ = "TableFunc.JsonbEach"
+TableFunc.JsonbEach = _TableFunc_JsonbEach
+
+
+@_dc.dataclass
+class _TableFunc_JsonbEachStringify(_Variant, TableFunc):
+    _NAME = "JsonbEachStringify"
+    _KIND = "UNIT"
+
+
+_TableFunc_JsonbEachStringify.__name__ = "JsonbEachStringify"
+_TableFunc_JsonbEachStringify.__qualname__ = "TableFunc.JsonbEachStringify"
+TableFunc.JsonbEachStringify = _TableFunc_JsonbEachStringify
+
+
+@_dc.dataclass
+class _TableFunc_JsonbObjectKeys(_Variant, TableFunc):
+    _NAME = "JsonbObjectKeys"
+    _KIND = "UNIT"
+
+
+_TableFunc_JsonbObjectKeys.__name__ = "JsonbObjectKeys"
+_TableFunc_JsonbObjectKeys.__qualname__ = "TableFunc.JsonbObjectKeys"
+TableFunc.JsonbObjectKeys = _TableFunc_JsonbObjectKeys
+
+
+@_dc.dataclass
+class _TableFunc_MzAclExplode(_Variant, TableFunc):
+    _NAME = "MzAclExplode"
+    _KIND = "UNIT"
+
+
+_TableFunc_MzAclExplode.__name__ = "MzAclExplode"
+_TableFunc_MzAclExplode.__qualname__ = "TableFunc.MzAclExplode"
+TableFunc.MzAclExplode = _TableFunc_MzAclExplode
+
+
+@_dc.dataclass
+class _TableFunc_RegexpExtract(_Variant, TableFunc):
+    value: AnalyzedRegex
+    _NAME = "RegexpExtract"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AnalyzedRegex"}
+
+
+_TableFunc_RegexpExtract.__name__ = "RegexpExtract"
+_TableFunc_RegexpExtract.__qualname__ = "TableFunc.RegexpExtract"
+TableFunc.RegexpExtract = _TableFunc_RegexpExtract
+
+
+@_dc.dataclass
+class _TableFunc_RegexpMatches(_Variant, TableFunc):
+    _NAME = "RegexpMatches"
+    _KIND = "UNIT"
+
+
+_TableFunc_RegexpMatches.__name__ = "RegexpMatches"
+_TableFunc_RegexpMatches.__qualname__ = "TableFunc.RegexpMatches"
+TableFunc.RegexpMatches = _TableFunc_RegexpMatches
+
+
+@_dc.dataclass
+class _TableFunc_RepeatRow(_Variant, TableFunc):
+    _NAME = "RepeatRow"
+    _KIND = "UNIT"
+
+
+_TableFunc_RepeatRow.__name__ = "RepeatRow"
+_TableFunc_RepeatRow.__qualname__ = "TableFunc.RepeatRow"
+TableFunc.RepeatRow = _TableFunc_RepeatRow
+
+
+@_dc.dataclass
+class _TableFunc_RepeatRowNonNegative(_Variant, TableFunc):
+    _NAME = "RepeatRowNonNegative"
+    _KIND = "UNIT"
+
+
+_TableFunc_RepeatRowNonNegative.__name__ = "RepeatRowNonNegative"
+_TableFunc_RepeatRowNonNegative.__qualname__ = "TableFunc.RepeatRowNonNegative"
+TableFunc.RepeatRowNonNegative = _TableFunc_RepeatRowNonNegative
+
+
+@_dc.dataclass(kw_only=True)
+class _TableFunc_TabletizedScalar(_Variant, TableFunc):
+    name: str
+    relation: SqlRelationType
+    _NAME = "TabletizedScalar"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("name", "name", "STR"),
+        ("relation", "relation", {"TYPENAME": "SqlRelationType"}),
+    )
+
+
+_TableFunc_TabletizedScalar.__name__ = "TabletizedScalar"
+_TableFunc_TabletizedScalar.__qualname__ = "TableFunc.TabletizedScalar"
+TableFunc.TabletizedScalar = _TableFunc_TabletizedScalar
+
+
+@_dc.dataclass(kw_only=True)
+class _TableFunc_UnnestArray(_Variant, TableFunc):
+    el_typ: SqlScalarType
+    _NAME = "UnnestArray"
+    _KIND = "STRUCT"
+    _FIELDS = (("el_typ", "el_typ", {"TYPENAME": "SqlScalarType"}),)
+
+
+_TableFunc_UnnestArray.__name__ = "UnnestArray"
+_TableFunc_UnnestArray.__qualname__ = "TableFunc.UnnestArray"
+TableFunc.UnnestArray = _TableFunc_UnnestArray
+
+
+@_dc.dataclass(kw_only=True)
+class _TableFunc_UnnestList(_Variant, TableFunc):
+    el_typ: SqlScalarType
+    _NAME = "UnnestList"
+    _KIND = "STRUCT"
+    _FIELDS = (("el_typ", "el_typ", {"TYPENAME": "SqlScalarType"}),)
+
+
+_TableFunc_UnnestList.__name__ = "UnnestList"
+_TableFunc_UnnestList.__qualname__ = "TableFunc.UnnestList"
+TableFunc.UnnestList = _TableFunc_UnnestList
+
+
+@_dc.dataclass(kw_only=True)
+class _TableFunc_UnnestMap(_Variant, TableFunc):
+    value_type: SqlScalarType
+    _NAME = "UnnestMap"
+    _KIND = "STRUCT"
+    _FIELDS = (("value_type", "value_type", {"TYPENAME": "SqlScalarType"}),)
+
+
+_TableFunc_UnnestMap.__name__ = "UnnestMap"
+_TableFunc_UnnestMap.__qualname__ = "TableFunc.UnnestMap"
+TableFunc.UnnestMap = _TableFunc_UnnestMap
+
+
+@_dc.dataclass
+class _TableFunc_WithOrdinality(_Variant, TableFunc):
+    value: WithOrdinality
+    _NAME = "WithOrdinality"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "WithOrdinality"}
+
+
+_TableFunc_WithOrdinality.__name__ = "WithOrdinality"
+_TableFunc_WithOrdinality.__qualname__ = "TableFunc.WithOrdinality"
+TableFunc.WithOrdinality = _TableFunc_WithOrdinality
+
+
+@_dc.dataclass(kw_only=True)
+class _TableFunc_Wrap(_Variant, TableFunc):
+    types: list[SqlColumnType]
+    width: int
+    _NAME = "Wrap"
+    _KIND = "STRUCT"
+    _FIELDS = (
+        ("types", "types", {"SEQ": {"TYPENAME": "SqlColumnType"}}),
+        ("width", "width", "U64"),
+    )
+
+
+_TableFunc_Wrap.__name__ = "Wrap"
+_TableFunc_Wrap.__qualname__ = "TableFunc.Wrap"
+TableFunc.Wrap = _TableFunc_Wrap
+TableFunc._VARIANTS = {
+    "AclExplode": TableFunc.AclExplode,
+    "CsvExtract": TableFunc.CsvExtract,
+    "GenerateSeriesInt32": TableFunc.GenerateSeriesInt32,
+    "GenerateSeriesInt64": TableFunc.GenerateSeriesInt64,
+    "GenerateSeriesTimestamp": TableFunc.GenerateSeriesTimestamp,
+    "GenerateSeriesTimestampTz": TableFunc.GenerateSeriesTimestampTz,
+    "GenerateSeriesUnoptimized": TableFunc.GenerateSeriesUnoptimized,
+    "GenerateSubscriptsArray": TableFunc.GenerateSubscriptsArray,
+    "GuardSubquerySize": TableFunc.GuardSubquerySize,
+    "JsonbArrayElements": TableFunc.JsonbArrayElements,
+    "JsonbArrayElementsStringify": TableFunc.JsonbArrayElementsStringify,
+    "JsonbEach": TableFunc.JsonbEach,
+    "JsonbEachStringify": TableFunc.JsonbEachStringify,
+    "JsonbObjectKeys": TableFunc.JsonbObjectKeys,
+    "MzAclExplode": TableFunc.MzAclExplode,
+    "RegexpExtract": TableFunc.RegexpExtract,
+    "RegexpMatches": TableFunc.RegexpMatches,
+    "RepeatRow": TableFunc.RepeatRow,
+    "RepeatRowNonNegative": TableFunc.RepeatRowNonNegative,
+    "TabletizedScalar": TableFunc.TabletizedScalar,
+    "UnnestArray": TableFunc.UnnestArray,
+    "UnnestList": TableFunc.UnnestList,
+    "UnnestMap": TableFunc.UnnestMap,
+    "WithOrdinality": TableFunc.WithOrdinality,
+    "Wrap": TableFunc.Wrap,
+}
 
 
 @_dc.dataclass
@@ -7476,14 +10649,21 @@ class TextConcatBinary(_Unit):
 
 
 class ThresholdPlan(_Enum):
-    @_dc.dataclass
-    class Basic(_Variant):
-        value: BasicThresholdPlan
-        _NAME = "Basic"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BasicThresholdPlan"}
+    Basic: _ClassVar[type[_ThresholdPlan_Basic]]
 
-    _VARIANTS = {"Basic": Basic}
+
+@_dc.dataclass
+class _ThresholdPlan_Basic(_Variant, ThresholdPlan):
+    value: BasicThresholdPlan
+    _NAME = "Basic"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BasicThresholdPlan"}
+
+
+_ThresholdPlan_Basic.__name__ = "Basic"
+_ThresholdPlan_Basic.__qualname__ = "ThresholdPlan.Basic"
+ThresholdPlan.Basic = _ThresholdPlan_Basic
+ThresholdPlan._VARIANTS = {"Basic": ThresholdPlan.Basic}
 
 
 @_dc.dataclass
@@ -7493,21 +10673,35 @@ class TimestampPrecision(_Newtype):
 
 
 class Timezone(_Enum):
-    @_dc.dataclass
-    class FixedOffset(_Variant):
-        value: int
-        _NAME = "FixedOffset"
-        _KIND = "NEWTYPE"
-        _INNER = "I32"
+    FixedOffset: _ClassVar[type[_Timezone_FixedOffset]]
+    Tz: _ClassVar[type[_Timezone_Tz]]
 
-    @_dc.dataclass
-    class Tz(_Variant):
-        value: str
-        _NAME = "Tz"
-        _KIND = "NEWTYPE"
-        _INNER = "STR"
 
-    _VARIANTS = {"FixedOffset": FixedOffset, "Tz": Tz}
+@_dc.dataclass
+class _Timezone_FixedOffset(_Variant, Timezone):
+    value: int
+    _NAME = "FixedOffset"
+    _KIND = "NEWTYPE"
+    _INNER = "I32"
+
+
+_Timezone_FixedOffset.__name__ = "FixedOffset"
+_Timezone_FixedOffset.__qualname__ = "Timezone.FixedOffset"
+Timezone.FixedOffset = _Timezone_FixedOffset
+
+
+@_dc.dataclass
+class _Timezone_Tz(_Variant, Timezone):
+    value: str
+    _NAME = "Tz"
+    _KIND = "NEWTYPE"
+    _INNER = "STR"
+
+
+_Timezone_Tz.__name__ = "Tz"
+_Timezone_Tz.__qualname__ = "Timezone.Tz"
+Timezone.Tz = _Timezone_Tz
+Timezone._VARIANTS = {"FixedOffset": Timezone.FixedOffset, "Tz": Timezone.Tz}
 
 
 @_dc.dataclass
@@ -7603,32 +10797,53 @@ class ToTimestamp(_Unit):
 
 
 class TopKPlan(_Enum):
-    @_dc.dataclass
-    class Basic(_Variant):
-        value: BasicTopKPlan
-        _NAME = "Basic"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BasicTopKPlan"}
+    Basic: _ClassVar[type[_TopKPlan_Basic]]
+    MonotonicTop1: _ClassVar[type[_TopKPlan_MonotonicTop1]]
+    MonotonicTopK: _ClassVar[type[_TopKPlan_MonotonicTopK]]
 
-    @_dc.dataclass
-    class MonotonicTop1(_Variant):
-        value: MonotonicTop1Plan
-        _NAME = "MonotonicTop1"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MonotonicTop1Plan"}
 
-    @_dc.dataclass
-    class MonotonicTopK(_Variant):
-        value: MonotonicTopKPlan
-        _NAME = "MonotonicTopK"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MonotonicTopKPlan"}
+@_dc.dataclass
+class _TopKPlan_Basic(_Variant, TopKPlan):
+    value: BasicTopKPlan
+    _NAME = "Basic"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BasicTopKPlan"}
 
-    _VARIANTS = {
-        "Basic": Basic,
-        "MonotonicTop1": MonotonicTop1,
-        "MonotonicTopK": MonotonicTopK,
-    }
+
+_TopKPlan_Basic.__name__ = "Basic"
+_TopKPlan_Basic.__qualname__ = "TopKPlan.Basic"
+TopKPlan.Basic = _TopKPlan_Basic
+
+
+@_dc.dataclass
+class _TopKPlan_MonotonicTop1(_Variant, TopKPlan):
+    value: MonotonicTop1Plan
+    _NAME = "MonotonicTop1"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MonotonicTop1Plan"}
+
+
+_TopKPlan_MonotonicTop1.__name__ = "MonotonicTop1"
+_TopKPlan_MonotonicTop1.__qualname__ = "TopKPlan.MonotonicTop1"
+TopKPlan.MonotonicTop1 = _TopKPlan_MonotonicTop1
+
+
+@_dc.dataclass
+class _TopKPlan_MonotonicTopK(_Variant, TopKPlan):
+    value: MonotonicTopKPlan
+    _NAME = "MonotonicTopK"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MonotonicTopKPlan"}
+
+
+_TopKPlan_MonotonicTopK.__name__ = "MonotonicTopK"
+_TopKPlan_MonotonicTopK.__qualname__ = "TopKPlan.MonotonicTopK"
+TopKPlan.MonotonicTopK = _TopKPlan_MonotonicTopK
+TopKPlan._VARIANTS = {
+    "Basic": TopKPlan.Basic,
+    "MonotonicTop1": TopKPlan.MonotonicTop1,
+    "MonotonicTopK": TopKPlan.MonotonicTopK,
+}
 
 
 @_dc.dataclass
@@ -7693,2712 +10908,5114 @@ class TryParseMonotonicIso8601Timestamp(_Unit):
 
 
 class UnaryFunc(_Enum):
-    @_dc.dataclass
-    class AbsFloat32(_Variant):
-        value: AbsFloat32
-        _NAME = "AbsFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AbsFloat32"}
-
-    @_dc.dataclass
-    class AbsFloat64(_Variant):
-        value: AbsFloat64
-        _NAME = "AbsFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AbsFloat64"}
-
-    @_dc.dataclass
-    class AbsInt16(_Variant):
-        value: AbsInt16
-        _NAME = "AbsInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AbsInt16"}
-
-    @_dc.dataclass
-    class AbsInt32(_Variant):
-        value: AbsInt32
-        _NAME = "AbsInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AbsInt32"}
-
-    @_dc.dataclass
-    class AbsInt64(_Variant):
-        value: AbsInt64
-        _NAME = "AbsInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AbsInt64"}
-
-    @_dc.dataclass
-    class AbsNumeric(_Variant):
-        value: AbsNumeric
-        _NAME = "AbsNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AbsNumeric"}
-
-    @_dc.dataclass
-    class AclItemGrantee(_Variant):
-        value: AclItemGrantee
-        _NAME = "AclItemGrantee"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AclItemGrantee"}
-
-    @_dc.dataclass
-    class AclItemGrantor(_Variant):
-        value: AclItemGrantor
-        _NAME = "AclItemGrantor"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AclItemGrantor"}
-
-    @_dc.dataclass
-    class AclItemPrivileges(_Variant):
-        value: AclItemPrivileges
-        _NAME = "AclItemPrivileges"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AclItemPrivileges"}
-
-    @_dc.dataclass
-    class Acos(_Variant):
-        value: Acos
-        _NAME = "Acos"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Acos"}
-
-    @_dc.dataclass
-    class Acosh(_Variant):
-        value: Acosh
-        _NAME = "Acosh"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Acosh"}
-
-    @_dc.dataclass
-    class AdjustNumericScale(_Variant):
-        value: AdjustNumericScale
-        _NAME = "AdjustNumericScale"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AdjustNumericScale"}
-
-    @_dc.dataclass
-    class AdjustTimestampPrecision(_Variant):
-        value: AdjustTimestampPrecision
-        _NAME = "AdjustTimestampPrecision"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AdjustTimestampPrecision"}
-
-    @_dc.dataclass
-    class AdjustTimestampTzPrecision(_Variant):
-        value: AdjustTimestampTzPrecision
-        _NAME = "AdjustTimestampTzPrecision"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "AdjustTimestampTzPrecision"}
-
-    @_dc.dataclass
-    class Ascii(_Variant):
-        value: Ascii
-        _NAME = "Ascii"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Ascii"}
-
-    @_dc.dataclass
-    class Asin(_Variant):
-        value: Asin
-        _NAME = "Asin"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Asin"}
-
-    @_dc.dataclass
-    class Asinh(_Variant):
-        value: Asinh
-        _NAME = "Asinh"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Asinh"}
-
-    @_dc.dataclass
-    class Atan(_Variant):
-        value: Atan
-        _NAME = "Atan"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Atan"}
-
-    @_dc.dataclass
-    class Atanh(_Variant):
-        value: Atanh
-        _NAME = "Atanh"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Atanh"}
-
-    @_dc.dataclass
-    class BitCountBytes(_Variant):
-        value: BitCountBytes
-        _NAME = "BitCountBytes"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitCountBytes"}
-
-    @_dc.dataclass
-    class BitLengthBytes(_Variant):
-        value: BitLengthBytes
-        _NAME = "BitLengthBytes"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitLengthBytes"}
-
-    @_dc.dataclass
-    class BitLengthString(_Variant):
-        value: BitLengthString
-        _NAME = "BitLengthString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitLengthString"}
-
-    @_dc.dataclass
-    class BitNotInt16(_Variant):
-        value: BitNotInt16
-        _NAME = "BitNotInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitNotInt16"}
-
-    @_dc.dataclass
-    class BitNotInt32(_Variant):
-        value: BitNotInt32
-        _NAME = "BitNotInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitNotInt32"}
-
-    @_dc.dataclass
-    class BitNotInt64(_Variant):
-        value: BitNotInt64
-        _NAME = "BitNotInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitNotInt64"}
-
-    @_dc.dataclass
-    class BitNotUint16(_Variant):
-        value: BitNotUint16
-        _NAME = "BitNotUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitNotUint16"}
-
-    @_dc.dataclass
-    class BitNotUint32(_Variant):
-        value: BitNotUint32
-        _NAME = "BitNotUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitNotUint32"}
-
-    @_dc.dataclass
-    class BitNotUint64(_Variant):
-        value: BitNotUint64
-        _NAME = "BitNotUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "BitNotUint64"}
-
-    @_dc.dataclass
-    class ByteLengthBytes(_Variant):
-        value: ByteLengthBytes
-        _NAME = "ByteLengthBytes"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ByteLengthBytes"}
-
-    @_dc.dataclass
-    class ByteLengthString(_Variant):
-        value: ByteLengthString
-        _NAME = "ByteLengthString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ByteLengthString"}
-
-    @_dc.dataclass
-    class CastArrayToArray(_Variant):
-        value: CastArrayToArray
-        _NAME = "CastArrayToArray"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastArrayToArray"}
-
-    @_dc.dataclass
-    class CastArrayToJsonb(_Variant):
-        value: CastArrayToJsonb
-        _NAME = "CastArrayToJsonb"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastArrayToJsonb"}
-
-    @_dc.dataclass
-    class CastArrayToListOneDim(_Variant):
-        value: CastArrayToListOneDim
-        _NAME = "CastArrayToListOneDim"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastArrayToListOneDim"}
-
-    @_dc.dataclass
-    class CastArrayToString(_Variant):
-        value: CastArrayToString
-        _NAME = "CastArrayToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastArrayToString"}
-
-    @_dc.dataclass
-    class CastBoolToInt32(_Variant):
-        value: CastBoolToInt32
-        _NAME = "CastBoolToInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastBoolToInt32"}
-
-    @_dc.dataclass
-    class CastBoolToInt64(_Variant):
-        value: CastBoolToInt64
-        _NAME = "CastBoolToInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastBoolToInt64"}
-
-    @_dc.dataclass
-    class CastBoolToString(_Variant):
-        value: CastBoolToString
-        _NAME = "CastBoolToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastBoolToString"}
-
-    @_dc.dataclass
-    class CastBoolToStringNonstandard(_Variant):
-        value: CastBoolToStringNonstandard
-        _NAME = "CastBoolToStringNonstandard"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastBoolToStringNonstandard"}
-
-    @_dc.dataclass
-    class CastBytesToString(_Variant):
-        value: CastBytesToString
-        _NAME = "CastBytesToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastBytesToString"}
-
-    @_dc.dataclass
-    class CastCharToString(_Variant):
-        value: CastCharToString
-        _NAME = "CastCharToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastCharToString"}
-
-    @_dc.dataclass
-    class CastDateToMzTimestamp(_Variant):
-        value: CastDateToMzTimestamp
-        _NAME = "CastDateToMzTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastDateToMzTimestamp"}
-
-    @_dc.dataclass
-    class CastDateToString(_Variant):
-        value: CastDateToString
-        _NAME = "CastDateToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastDateToString"}
-
-    @_dc.dataclass
-    class CastDateToTimestamp(_Variant):
-        value: CastDateToTimestamp
-        _NAME = "CastDateToTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastDateToTimestamp"}
-
-    @_dc.dataclass
-    class CastDateToTimestampTz(_Variant):
-        value: CastDateToTimestampTz
-        _NAME = "CastDateToTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastDateToTimestampTz"}
-
-    @_dc.dataclass
-    class CastFloat32ToFloat64(_Variant):
-        value: CastFloat32ToFloat64
-        _NAME = "CastFloat32ToFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat32ToFloat64"}
-
-    @_dc.dataclass
-    class CastFloat32ToInt16(_Variant):
-        value: CastFloat32ToInt16
-        _NAME = "CastFloat32ToInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat32ToInt16"}
-
-    @_dc.dataclass
-    class CastFloat32ToInt32(_Variant):
-        value: CastFloat32ToInt32
-        _NAME = "CastFloat32ToInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat32ToInt32"}
-
-    @_dc.dataclass
-    class CastFloat32ToInt64(_Variant):
-        value: CastFloat32ToInt64
-        _NAME = "CastFloat32ToInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat32ToInt64"}
-
-    @_dc.dataclass
-    class CastFloat32ToNumeric(_Variant):
-        value: CastFloat32ToNumeric
-        _NAME = "CastFloat32ToNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat32ToNumeric"}
-
-    @_dc.dataclass
-    class CastFloat32ToString(_Variant):
-        value: CastFloat32ToString
-        _NAME = "CastFloat32ToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat32ToString"}
-
-    @_dc.dataclass
-    class CastFloat32ToUint16(_Variant):
-        value: CastFloat32ToUint16
-        _NAME = "CastFloat32ToUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat32ToUint16"}
-
-    @_dc.dataclass
-    class CastFloat32ToUint32(_Variant):
-        value: CastFloat32ToUint32
-        _NAME = "CastFloat32ToUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat32ToUint32"}
-
-    @_dc.dataclass
-    class CastFloat32ToUint64(_Variant):
-        value: CastFloat32ToUint64
-        _NAME = "CastFloat32ToUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat32ToUint64"}
-
-    @_dc.dataclass
-    class CastFloat64ToFloat32(_Variant):
-        value: CastFloat64ToFloat32
-        _NAME = "CastFloat64ToFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat64ToFloat32"}
-
-    @_dc.dataclass
-    class CastFloat64ToInt16(_Variant):
-        value: CastFloat64ToInt16
-        _NAME = "CastFloat64ToInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat64ToInt16"}
-
-    @_dc.dataclass
-    class CastFloat64ToInt32(_Variant):
-        value: CastFloat64ToInt32
-        _NAME = "CastFloat64ToInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat64ToInt32"}
-
-    @_dc.dataclass
-    class CastFloat64ToInt64(_Variant):
-        value: CastFloat64ToInt64
-        _NAME = "CastFloat64ToInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat64ToInt64"}
-
-    @_dc.dataclass
-    class CastFloat64ToNumeric(_Variant):
-        value: CastFloat64ToNumeric
-        _NAME = "CastFloat64ToNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat64ToNumeric"}
-
-    @_dc.dataclass
-    class CastFloat64ToString(_Variant):
-        value: CastFloat64ToString
-        _NAME = "CastFloat64ToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat64ToString"}
-
-    @_dc.dataclass
-    class CastFloat64ToUint16(_Variant):
-        value: CastFloat64ToUint16
-        _NAME = "CastFloat64ToUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat64ToUint16"}
-
-    @_dc.dataclass
-    class CastFloat64ToUint32(_Variant):
-        value: CastFloat64ToUint32
-        _NAME = "CastFloat64ToUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat64ToUint32"}
-
-    @_dc.dataclass
-    class CastFloat64ToUint64(_Variant):
-        value: CastFloat64ToUint64
-        _NAME = "CastFloat64ToUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastFloat64ToUint64"}
-
-    @_dc.dataclass
-    class CastInt16ToFloat32(_Variant):
-        value: CastInt16ToFloat32
-        _NAME = "CastInt16ToFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt16ToFloat32"}
-
-    @_dc.dataclass
-    class CastInt16ToFloat64(_Variant):
-        value: CastInt16ToFloat64
-        _NAME = "CastInt16ToFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt16ToFloat64"}
-
-    @_dc.dataclass
-    class CastInt16ToInt32(_Variant):
-        value: CastInt16ToInt32
-        _NAME = "CastInt16ToInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt16ToInt32"}
-
-    @_dc.dataclass
-    class CastInt16ToInt64(_Variant):
-        value: CastInt16ToInt64
-        _NAME = "CastInt16ToInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt16ToInt64"}
-
-    @_dc.dataclass
-    class CastInt16ToNumeric(_Variant):
-        value: CastInt16ToNumeric
-        _NAME = "CastInt16ToNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt16ToNumeric"}
-
-    @_dc.dataclass
-    class CastInt16ToString(_Variant):
-        value: CastInt16ToString
-        _NAME = "CastInt16ToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt16ToString"}
-
-    @_dc.dataclass
-    class CastInt16ToUint16(_Variant):
-        value: CastInt16ToUint16
-        _NAME = "CastInt16ToUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt16ToUint16"}
-
-    @_dc.dataclass
-    class CastInt16ToUint32(_Variant):
-        value: CastInt16ToUint32
-        _NAME = "CastInt16ToUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt16ToUint32"}
-
-    @_dc.dataclass
-    class CastInt16ToUint64(_Variant):
-        value: CastInt16ToUint64
-        _NAME = "CastInt16ToUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt16ToUint64"}
-
-    @_dc.dataclass
-    class CastInt2VectorToArray(_Variant):
-        value: CastInt2VectorToArray
-        _NAME = "CastInt2VectorToArray"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt2VectorToArray"}
-
-    @_dc.dataclass
-    class CastInt2VectorToString(_Variant):
-        value: CastInt2VectorToString
-        _NAME = "CastInt2VectorToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt2VectorToString"}
-
-    @_dc.dataclass
-    class CastInt32ToBool(_Variant):
-        value: CastInt32ToBool
-        _NAME = "CastInt32ToBool"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt32ToBool"}
-
-    @_dc.dataclass
-    class CastInt32ToFloat32(_Variant):
-        value: CastInt32ToFloat32
-        _NAME = "CastInt32ToFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt32ToFloat32"}
-
-    @_dc.dataclass
-    class CastInt32ToFloat64(_Variant):
-        value: CastInt32ToFloat64
-        _NAME = "CastInt32ToFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt32ToFloat64"}
-
-    @_dc.dataclass
-    class CastInt32ToInt16(_Variant):
-        value: CastInt32ToInt16
-        _NAME = "CastInt32ToInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt32ToInt16"}
-
-    @_dc.dataclass
-    class CastInt32ToInt64(_Variant):
-        value: CastInt32ToInt64
-        _NAME = "CastInt32ToInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt32ToInt64"}
-
-    @_dc.dataclass
-    class CastInt32ToMzTimestamp(_Variant):
-        value: CastInt32ToMzTimestamp
-        _NAME = "CastInt32ToMzTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt32ToMzTimestamp"}
-
-    @_dc.dataclass
-    class CastInt32ToNumeric(_Variant):
-        value: CastInt32ToNumeric
-        _NAME = "CastInt32ToNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt32ToNumeric"}
-
-    @_dc.dataclass
-    class CastInt32ToOid(_Variant):
-        value: CastInt32ToOid
-        _NAME = "CastInt32ToOid"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt32ToOid"}
-
-    @_dc.dataclass
-    class CastInt32ToPgLegacyChar(_Variant):
-        value: CastInt32ToPgLegacyChar
-        _NAME = "CastInt32ToPgLegacyChar"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt32ToPgLegacyChar"}
-
-    @_dc.dataclass
-    class CastInt32ToString(_Variant):
-        value: CastInt32ToString
-        _NAME = "CastInt32ToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt32ToString"}
-
-    @_dc.dataclass
-    class CastInt32ToUint16(_Variant):
-        value: CastInt32ToUint16
-        _NAME = "CastInt32ToUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt32ToUint16"}
-
-    @_dc.dataclass
-    class CastInt32ToUint32(_Variant):
-        value: CastInt32ToUint32
-        _NAME = "CastInt32ToUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt32ToUint32"}
-
-    @_dc.dataclass
-    class CastInt32ToUint64(_Variant):
-        value: CastInt32ToUint64
-        _NAME = "CastInt32ToUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt32ToUint64"}
-
-    @_dc.dataclass
-    class CastInt64ToBool(_Variant):
-        value: CastInt64ToBool
-        _NAME = "CastInt64ToBool"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt64ToBool"}
-
-    @_dc.dataclass
-    class CastInt64ToFloat32(_Variant):
-        value: CastInt64ToFloat32
-        _NAME = "CastInt64ToFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt64ToFloat32"}
-
-    @_dc.dataclass
-    class CastInt64ToFloat64(_Variant):
-        value: CastInt64ToFloat64
-        _NAME = "CastInt64ToFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt64ToFloat64"}
-
-    @_dc.dataclass
-    class CastInt64ToInt16(_Variant):
-        value: CastInt64ToInt16
-        _NAME = "CastInt64ToInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt64ToInt16"}
-
-    @_dc.dataclass
-    class CastInt64ToInt32(_Variant):
-        value: CastInt64ToInt32
-        _NAME = "CastInt64ToInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt64ToInt32"}
-
-    @_dc.dataclass
-    class CastInt64ToMzTimestamp(_Variant):
-        value: CastInt64ToMzTimestamp
-        _NAME = "CastInt64ToMzTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt64ToMzTimestamp"}
-
-    @_dc.dataclass
-    class CastInt64ToNumeric(_Variant):
-        value: CastInt64ToNumeric
-        _NAME = "CastInt64ToNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt64ToNumeric"}
-
-    @_dc.dataclass
-    class CastInt64ToOid(_Variant):
-        value: CastInt64ToOid
-        _NAME = "CastInt64ToOid"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt64ToOid"}
-
-    @_dc.dataclass
-    class CastInt64ToString(_Variant):
-        value: CastInt64ToString
-        _NAME = "CastInt64ToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt64ToString"}
-
-    @_dc.dataclass
-    class CastInt64ToUint16(_Variant):
-        value: CastInt64ToUint16
-        _NAME = "CastInt64ToUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt64ToUint16"}
-
-    @_dc.dataclass
-    class CastInt64ToUint32(_Variant):
-        value: CastInt64ToUint32
-        _NAME = "CastInt64ToUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt64ToUint32"}
-
-    @_dc.dataclass
-    class CastInt64ToUint64(_Variant):
-        value: CastInt64ToUint64
-        _NAME = "CastInt64ToUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastInt64ToUint64"}
-
-    @_dc.dataclass
-    class CastIntervalToString(_Variant):
-        value: CastIntervalToString
-        _NAME = "CastIntervalToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastIntervalToString"}
-
-    @_dc.dataclass
-    class CastIntervalToTime(_Variant):
-        value: CastIntervalToTime
-        _NAME = "CastIntervalToTime"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastIntervalToTime"}
-
-    @_dc.dataclass
-    class CastJsonbToBool(_Variant):
-        value: CastJsonbToBool
-        _NAME = "CastJsonbToBool"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastJsonbToBool"}
-
-    @_dc.dataclass
-    class CastJsonbToFloat32(_Variant):
-        value: CastJsonbToFloat32
-        _NAME = "CastJsonbToFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastJsonbToFloat32"}
-
-    @_dc.dataclass
-    class CastJsonbToFloat64(_Variant):
-        value: CastJsonbToFloat64
-        _NAME = "CastJsonbToFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastJsonbToFloat64"}
-
-    @_dc.dataclass
-    class CastJsonbToInt16(_Variant):
-        value: CastJsonbToInt16
-        _NAME = "CastJsonbToInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastJsonbToInt16"}
-
-    @_dc.dataclass
-    class CastJsonbToInt32(_Variant):
-        value: CastJsonbToInt32
-        _NAME = "CastJsonbToInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastJsonbToInt32"}
-
-    @_dc.dataclass
-    class CastJsonbToInt64(_Variant):
-        value: CastJsonbToInt64
-        _NAME = "CastJsonbToInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastJsonbToInt64"}
-
-    @_dc.dataclass
-    class CastJsonbToNumeric(_Variant):
-        value: CastJsonbToNumeric
-        _NAME = "CastJsonbToNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastJsonbToNumeric"}
-
-    @_dc.dataclass
-    class CastJsonbToString(_Variant):
-        value: CastJsonbToString
-        _NAME = "CastJsonbToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastJsonbToString"}
-
-    @_dc.dataclass
-    class CastJsonbableToJsonb(_Variant):
-        value: CastJsonbableToJsonb
-        _NAME = "CastJsonbableToJsonb"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastJsonbableToJsonb"}
-
-    @_dc.dataclass
-    class CastList1ToList2(_Variant):
-        value: CastList1ToList2
-        _NAME = "CastList1ToList2"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastList1ToList2"}
-
-    @_dc.dataclass
-    class CastListToJsonb(_Variant):
-        value: CastListToJsonb
-        _NAME = "CastListToJsonb"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastListToJsonb"}
-
-    @_dc.dataclass
-    class CastListToString(_Variant):
-        value: CastListToString
-        _NAME = "CastListToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastListToString"}
-
-    @_dc.dataclass
-    class CastMapToString(_Variant):
-        value: CastMapToString
-        _NAME = "CastMapToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastMapToString"}
-
-    @_dc.dataclass
-    class CastMzTimestampToString(_Variant):
-        value: CastMzTimestampToString
-        _NAME = "CastMzTimestampToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastMzTimestampToString"}
-
-    @_dc.dataclass
-    class CastMzTimestampToTimestamp(_Variant):
-        value: CastMzTimestampToTimestamp
-        _NAME = "CastMzTimestampToTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastMzTimestampToTimestamp"}
-
-    @_dc.dataclass
-    class CastMzTimestampToTimestampTz(_Variant):
-        value: CastMzTimestampToTimestampTz
-        _NAME = "CastMzTimestampToTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastMzTimestampToTimestampTz"}
-
-    @_dc.dataclass
-    class CastNumericToFloat32(_Variant):
-        value: CastNumericToFloat32
-        _NAME = "CastNumericToFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastNumericToFloat32"}
-
-    @_dc.dataclass
-    class CastNumericToFloat64(_Variant):
-        value: CastNumericToFloat64
-        _NAME = "CastNumericToFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastNumericToFloat64"}
-
-    @_dc.dataclass
-    class CastNumericToInt16(_Variant):
-        value: CastNumericToInt16
-        _NAME = "CastNumericToInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastNumericToInt16"}
-
-    @_dc.dataclass
-    class CastNumericToInt32(_Variant):
-        value: CastNumericToInt32
-        _NAME = "CastNumericToInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastNumericToInt32"}
-
-    @_dc.dataclass
-    class CastNumericToInt64(_Variant):
-        value: CastNumericToInt64
-        _NAME = "CastNumericToInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastNumericToInt64"}
-
-    @_dc.dataclass
-    class CastNumericToMzTimestamp(_Variant):
-        value: CastNumericToMzTimestamp
-        _NAME = "CastNumericToMzTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastNumericToMzTimestamp"}
-
-    @_dc.dataclass
-    class CastNumericToString(_Variant):
-        value: CastNumericToString
-        _NAME = "CastNumericToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastNumericToString"}
-
-    @_dc.dataclass
-    class CastNumericToUint16(_Variant):
-        value: CastNumericToUint16
-        _NAME = "CastNumericToUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastNumericToUint16"}
-
-    @_dc.dataclass
-    class CastNumericToUint32(_Variant):
-        value: CastNumericToUint32
-        _NAME = "CastNumericToUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastNumericToUint32"}
-
-    @_dc.dataclass
-    class CastNumericToUint64(_Variant):
-        value: CastNumericToUint64
-        _NAME = "CastNumericToUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastNumericToUint64"}
-
-    @_dc.dataclass
-    class CastOidToInt32(_Variant):
-        value: CastOidToInt32
-        _NAME = "CastOidToInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastOidToInt32"}
-
-    @_dc.dataclass
-    class CastOidToInt64(_Variant):
-        value: CastOidToInt64
-        _NAME = "CastOidToInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastOidToInt64"}
-
-    @_dc.dataclass
-    class CastOidToRegClass(_Variant):
-        value: CastOidToRegClass
-        _NAME = "CastOidToRegClass"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastOidToRegClass"}
-
-    @_dc.dataclass
-    class CastOidToRegProc(_Variant):
-        value: CastOidToRegProc
-        _NAME = "CastOidToRegProc"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastOidToRegProc"}
-
-    @_dc.dataclass
-    class CastOidToRegType(_Variant):
-        value: CastOidToRegType
-        _NAME = "CastOidToRegType"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastOidToRegType"}
-
-    @_dc.dataclass
-    class CastOidToString(_Variant):
-        value: CastOidToString
-        _NAME = "CastOidToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastOidToString"}
-
-    @_dc.dataclass
-    class CastPgLegacyCharToChar(_Variant):
-        value: CastPgLegacyCharToChar
-        _NAME = "CastPgLegacyCharToChar"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastPgLegacyCharToChar"}
-
-    @_dc.dataclass
-    class CastPgLegacyCharToInt32(_Variant):
-        value: CastPgLegacyCharToInt32
-        _NAME = "CastPgLegacyCharToInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastPgLegacyCharToInt32"}
-
-    @_dc.dataclass
-    class CastPgLegacyCharToString(_Variant):
-        value: CastPgLegacyCharToString
-        _NAME = "CastPgLegacyCharToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastPgLegacyCharToString"}
-
-    @_dc.dataclass
-    class CastPgLegacyCharToVarChar(_Variant):
-        value: CastPgLegacyCharToVarChar
-        _NAME = "CastPgLegacyCharToVarChar"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastPgLegacyCharToVarChar"}
-
-    @_dc.dataclass
-    class CastRangeToString(_Variant):
-        value: CastRangeToString
-        _NAME = "CastRangeToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastRangeToString"}
-
-    @_dc.dataclass
-    class CastRecord1ToRecord2(_Variant):
-        value: CastRecord1ToRecord2
-        _NAME = "CastRecord1ToRecord2"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastRecord1ToRecord2"}
-
-    @_dc.dataclass
-    class CastRecordToString(_Variant):
-        value: CastRecordToString
-        _NAME = "CastRecordToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastRecordToString"}
-
-    @_dc.dataclass
-    class CastRegClassToOid(_Variant):
-        value: CastRegClassToOid
-        _NAME = "CastRegClassToOid"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastRegClassToOid"}
-
-    @_dc.dataclass
-    class CastRegProcToOid(_Variant):
-        value: CastRegProcToOid
-        _NAME = "CastRegProcToOid"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastRegProcToOid"}
-
-    @_dc.dataclass
-    class CastRegTypeToOid(_Variant):
-        value: CastRegTypeToOid
-        _NAME = "CastRegTypeToOid"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastRegTypeToOid"}
-
-    @_dc.dataclass
-    class CastStringToArray(_Variant):
-        value: CastStringToArray
-        _NAME = "CastStringToArray"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToArray"}
-
-    @_dc.dataclass
-    class CastStringToBool(_Variant):
-        value: CastStringToBool
-        _NAME = "CastStringToBool"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToBool"}
-
-    @_dc.dataclass
-    class CastStringToBytes(_Variant):
-        value: CastStringToBytes
-        _NAME = "CastStringToBytes"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToBytes"}
-
-    @_dc.dataclass
-    class CastStringToChar(_Variant):
-        value: CastStringToChar
-        _NAME = "CastStringToChar"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToChar"}
-
-    @_dc.dataclass
-    class CastStringToDate(_Variant):
-        value: CastStringToDate
-        _NAME = "CastStringToDate"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToDate"}
-
-    @_dc.dataclass
-    class CastStringToFloat32(_Variant):
-        value: CastStringToFloat32
-        _NAME = "CastStringToFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToFloat32"}
-
-    @_dc.dataclass
-    class CastStringToFloat64(_Variant):
-        value: CastStringToFloat64
-        _NAME = "CastStringToFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToFloat64"}
-
-    @_dc.dataclass
-    class CastStringToInt16(_Variant):
-        value: CastStringToInt16
-        _NAME = "CastStringToInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToInt16"}
-
-    @_dc.dataclass
-    class CastStringToInt2Vector(_Variant):
-        value: CastStringToInt2Vector
-        _NAME = "CastStringToInt2Vector"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToInt2Vector"}
-
-    @_dc.dataclass
-    class CastStringToInt32(_Variant):
-        value: CastStringToInt32
-        _NAME = "CastStringToInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToInt32"}
-
-    @_dc.dataclass
-    class CastStringToInt64(_Variant):
-        value: CastStringToInt64
-        _NAME = "CastStringToInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToInt64"}
-
-    @_dc.dataclass
-    class CastStringToInterval(_Variant):
-        value: CastStringToInterval
-        _NAME = "CastStringToInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToInterval"}
-
-    @_dc.dataclass
-    class CastStringToJsonb(_Variant):
-        value: CastStringToJsonb
-        _NAME = "CastStringToJsonb"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToJsonb"}
-
-    @_dc.dataclass
-    class CastStringToList(_Variant):
-        value: CastStringToList
-        _NAME = "CastStringToList"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToList"}
-
-    @_dc.dataclass
-    class CastStringToMap(_Variant):
-        value: CastStringToMap
-        _NAME = "CastStringToMap"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToMap"}
-
-    @_dc.dataclass
-    class CastStringToMzTimestamp(_Variant):
-        value: CastStringToMzTimestamp
-        _NAME = "CastStringToMzTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToMzTimestamp"}
-
-    @_dc.dataclass
-    class CastStringToNumeric(_Variant):
-        value: CastStringToNumeric
-        _NAME = "CastStringToNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToNumeric"}
-
-    @_dc.dataclass
-    class CastStringToOid(_Variant):
-        value: CastStringToOid
-        _NAME = "CastStringToOid"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToOid"}
-
-    @_dc.dataclass
-    class CastStringToPgLegacyChar(_Variant):
-        value: CastStringToPgLegacyChar
-        _NAME = "CastStringToPgLegacyChar"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToPgLegacyChar"}
-
-    @_dc.dataclass
-    class CastStringToPgLegacyName(_Variant):
-        value: CastStringToPgLegacyName
-        _NAME = "CastStringToPgLegacyName"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToPgLegacyName"}
-
-    @_dc.dataclass
-    class CastStringToRange(_Variant):
-        value: CastStringToRange
-        _NAME = "CastStringToRange"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToRange"}
-
-    @_dc.dataclass
-    class CastStringToTime(_Variant):
-        value: CastStringToTime
-        _NAME = "CastStringToTime"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToTime"}
-
-    @_dc.dataclass
-    class CastStringToTimestamp(_Variant):
-        value: CastStringToTimestamp
-        _NAME = "CastStringToTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToTimestamp"}
-
-    @_dc.dataclass
-    class CastStringToTimestampTz(_Variant):
-        value: CastStringToTimestampTz
-        _NAME = "CastStringToTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToTimestampTz"}
-
-    @_dc.dataclass
-    class CastStringToUint16(_Variant):
-        value: CastStringToUint16
-        _NAME = "CastStringToUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToUint16"}
-
-    @_dc.dataclass
-    class CastStringToUint32(_Variant):
-        value: CastStringToUint32
-        _NAME = "CastStringToUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToUint32"}
-
-    @_dc.dataclass
-    class CastStringToUint64(_Variant):
-        value: CastStringToUint64
-        _NAME = "CastStringToUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToUint64"}
-
-    @_dc.dataclass
-    class CastStringToUuid(_Variant):
-        value: CastStringToUuid
-        _NAME = "CastStringToUuid"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToUuid"}
-
-    @_dc.dataclass
-    class CastStringToVarChar(_Variant):
-        value: CastStringToVarChar
-        _NAME = "CastStringToVarChar"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastStringToVarChar"}
-
-    @_dc.dataclass
-    class CastTimeToInterval(_Variant):
-        value: CastTimeToInterval
-        _NAME = "CastTimeToInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastTimeToInterval"}
-
-    @_dc.dataclass
-    class CastTimeToString(_Variant):
-        value: CastTimeToString
-        _NAME = "CastTimeToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastTimeToString"}
-
-    @_dc.dataclass
-    class CastTimestampToDate(_Variant):
-        value: CastTimestampToDate
-        _NAME = "CastTimestampToDate"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastTimestampToDate"}
-
-    @_dc.dataclass
-    class CastTimestampToMzTimestamp(_Variant):
-        value: CastTimestampToMzTimestamp
-        _NAME = "CastTimestampToMzTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastTimestampToMzTimestamp"}
-
-    @_dc.dataclass
-    class CastTimestampToString(_Variant):
-        value: CastTimestampToString
-        _NAME = "CastTimestampToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastTimestampToString"}
-
-    @_dc.dataclass
-    class CastTimestampToTime(_Variant):
-        value: CastTimestampToTime
-        _NAME = "CastTimestampToTime"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastTimestampToTime"}
-
-    @_dc.dataclass
-    class CastTimestampToTimestampTz(_Variant):
-        value: CastTimestampToTimestampTz
-        _NAME = "CastTimestampToTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastTimestampToTimestampTz"}
-
-    @_dc.dataclass
-    class CastTimestampTzToDate(_Variant):
-        value: CastTimestampTzToDate
-        _NAME = "CastTimestampTzToDate"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastTimestampTzToDate"}
-
-    @_dc.dataclass
-    class CastTimestampTzToMzTimestamp(_Variant):
-        value: CastTimestampTzToMzTimestamp
-        _NAME = "CastTimestampTzToMzTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastTimestampTzToMzTimestamp"}
-
-    @_dc.dataclass
-    class CastTimestampTzToString(_Variant):
-        value: CastTimestampTzToString
-        _NAME = "CastTimestampTzToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastTimestampTzToString"}
-
-    @_dc.dataclass
-    class CastTimestampTzToTime(_Variant):
-        value: CastTimestampTzToTime
-        _NAME = "CastTimestampTzToTime"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastTimestampTzToTime"}
-
-    @_dc.dataclass
-    class CastTimestampTzToTimestamp(_Variant):
-        value: CastTimestampTzToTimestamp
-        _NAME = "CastTimestampTzToTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastTimestampTzToTimestamp"}
-
-    @_dc.dataclass
-    class CastUint16ToFloat32(_Variant):
-        value: CastUint16ToFloat32
-        _NAME = "CastUint16ToFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint16ToFloat32"}
-
-    @_dc.dataclass
-    class CastUint16ToFloat64(_Variant):
-        value: CastUint16ToFloat64
-        _NAME = "CastUint16ToFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint16ToFloat64"}
-
-    @_dc.dataclass
-    class CastUint16ToInt16(_Variant):
-        value: CastUint16ToInt16
-        _NAME = "CastUint16ToInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint16ToInt16"}
-
-    @_dc.dataclass
-    class CastUint16ToInt32(_Variant):
-        value: CastUint16ToInt32
-        _NAME = "CastUint16ToInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint16ToInt32"}
-
-    @_dc.dataclass
-    class CastUint16ToInt64(_Variant):
-        value: CastUint16ToInt64
-        _NAME = "CastUint16ToInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint16ToInt64"}
-
-    @_dc.dataclass
-    class CastUint16ToNumeric(_Variant):
-        value: CastUint16ToNumeric
-        _NAME = "CastUint16ToNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint16ToNumeric"}
-
-    @_dc.dataclass
-    class CastUint16ToString(_Variant):
-        value: CastUint16ToString
-        _NAME = "CastUint16ToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint16ToString"}
-
-    @_dc.dataclass
-    class CastUint16ToUint32(_Variant):
-        value: CastUint16ToUint32
-        _NAME = "CastUint16ToUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint16ToUint32"}
-
-    @_dc.dataclass
-    class CastUint16ToUint64(_Variant):
-        value: CastUint16ToUint64
-        _NAME = "CastUint16ToUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint16ToUint64"}
-
-    @_dc.dataclass
-    class CastUint32ToFloat32(_Variant):
-        value: CastUint32ToFloat32
-        _NAME = "CastUint32ToFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint32ToFloat32"}
-
-    @_dc.dataclass
-    class CastUint32ToFloat64(_Variant):
-        value: CastUint32ToFloat64
-        _NAME = "CastUint32ToFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint32ToFloat64"}
-
-    @_dc.dataclass
-    class CastUint32ToInt16(_Variant):
-        value: CastUint32ToInt16
-        _NAME = "CastUint32ToInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint32ToInt16"}
-
-    @_dc.dataclass
-    class CastUint32ToInt32(_Variant):
-        value: CastUint32ToInt32
-        _NAME = "CastUint32ToInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint32ToInt32"}
-
-    @_dc.dataclass
-    class CastUint32ToInt64(_Variant):
-        value: CastUint32ToInt64
-        _NAME = "CastUint32ToInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint32ToInt64"}
-
-    @_dc.dataclass
-    class CastUint32ToMzTimestamp(_Variant):
-        value: CastUint32ToMzTimestamp
-        _NAME = "CastUint32ToMzTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint32ToMzTimestamp"}
-
-    @_dc.dataclass
-    class CastUint32ToNumeric(_Variant):
-        value: CastUint32ToNumeric
-        _NAME = "CastUint32ToNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint32ToNumeric"}
-
-    @_dc.dataclass
-    class CastUint32ToString(_Variant):
-        value: CastUint32ToString
-        _NAME = "CastUint32ToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint32ToString"}
-
-    @_dc.dataclass
-    class CastUint32ToUint16(_Variant):
-        value: CastUint32ToUint16
-        _NAME = "CastUint32ToUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint32ToUint16"}
-
-    @_dc.dataclass
-    class CastUint32ToUint64(_Variant):
-        value: CastUint32ToUint64
-        _NAME = "CastUint32ToUint64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint32ToUint64"}
-
-    @_dc.dataclass
-    class CastUint64ToFloat32(_Variant):
-        value: CastUint64ToFloat32
-        _NAME = "CastUint64ToFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint64ToFloat32"}
-
-    @_dc.dataclass
-    class CastUint64ToFloat64(_Variant):
-        value: CastUint64ToFloat64
-        _NAME = "CastUint64ToFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint64ToFloat64"}
-
-    @_dc.dataclass
-    class CastUint64ToInt16(_Variant):
-        value: CastUint64ToInt16
-        _NAME = "CastUint64ToInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint64ToInt16"}
-
-    @_dc.dataclass
-    class CastUint64ToInt32(_Variant):
-        value: CastUint64ToInt32
-        _NAME = "CastUint64ToInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint64ToInt32"}
-
-    @_dc.dataclass
-    class CastUint64ToInt64(_Variant):
-        value: CastUint64ToInt64
-        _NAME = "CastUint64ToInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint64ToInt64"}
-
-    @_dc.dataclass
-    class CastUint64ToMzTimestamp(_Variant):
-        value: CastUint64ToMzTimestamp
-        _NAME = "CastUint64ToMzTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint64ToMzTimestamp"}
-
-    @_dc.dataclass
-    class CastUint64ToNumeric(_Variant):
-        value: CastUint64ToNumeric
-        _NAME = "CastUint64ToNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint64ToNumeric"}
-
-    @_dc.dataclass
-    class CastUint64ToString(_Variant):
-        value: CastUint64ToString
-        _NAME = "CastUint64ToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint64ToString"}
-
-    @_dc.dataclass
-    class CastUint64ToUint16(_Variant):
-        value: CastUint64ToUint16
-        _NAME = "CastUint64ToUint16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint64ToUint16"}
-
-    @_dc.dataclass
-    class CastUint64ToUint32(_Variant):
-        value: CastUint64ToUint32
-        _NAME = "CastUint64ToUint32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUint64ToUint32"}
-
-    @_dc.dataclass
-    class CastUuidToString(_Variant):
-        value: CastUuidToString
-        _NAME = "CastUuidToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastUuidToString"}
-
-    @_dc.dataclass
-    class CastVarCharToString(_Variant):
-        value: CastVarCharToString
-        _NAME = "CastVarCharToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CastVarCharToString"}
-
-    @_dc.dataclass
-    class CbrtFloat64(_Variant):
-        value: CbrtFloat64
-        _NAME = "CbrtFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CbrtFloat64"}
-
-    @_dc.dataclass
-    class CeilFloat32(_Variant):
-        value: CeilFloat32
-        _NAME = "CeilFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CeilFloat32"}
-
-    @_dc.dataclass
-    class CeilFloat64(_Variant):
-        value: CeilFloat64
-        _NAME = "CeilFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CeilFloat64"}
-
-    @_dc.dataclass
-    class CeilNumeric(_Variant):
-        value: CeilNumeric
-        _NAME = "CeilNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CeilNumeric"}
-
-    @_dc.dataclass
-    class CharLength(_Variant):
-        value: CharLength
-        _NAME = "CharLength"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CharLength"}
-
-    @_dc.dataclass
-    class Chr(_Variant):
-        value: Chr
-        _NAME = "Chr"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Chr"}
-
-    @_dc.dataclass
-    class Cos(_Variant):
-        value: Cos
-        _NAME = "Cos"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Cos"}
-
-    @_dc.dataclass
-    class Cosh(_Variant):
-        value: Cosh
-        _NAME = "Cosh"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Cosh"}
-
-    @_dc.dataclass
-    class Cot(_Variant):
-        value: Cot
-        _NAME = "Cot"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Cot"}
-
-    @_dc.dataclass
-    class Crc32Bytes(_Variant):
-        value: Crc32Bytes
-        _NAME = "Crc32Bytes"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Crc32Bytes"}
-
-    @_dc.dataclass
-    class Crc32String(_Variant):
-        value: Crc32String
-        _NAME = "Crc32String"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Crc32String"}
-
-    @_dc.dataclass
-    class DatePartInterval(_Variant):
-        value: DatePartInterval
-        _NAME = "DatePartInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DatePartInterval"}
-
-    @_dc.dataclass
-    class DatePartTime(_Variant):
-        value: DatePartTime
-        _NAME = "DatePartTime"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DatePartTime"}
-
-    @_dc.dataclass
-    class DatePartTimestamp(_Variant):
-        value: DatePartTimestamp
-        _NAME = "DatePartTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DatePartTimestamp"}
-
-    @_dc.dataclass
-    class DatePartTimestampTz(_Variant):
-        value: DatePartTimestampTz
-        _NAME = "DatePartTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DatePartTimestampTz"}
-
-    @_dc.dataclass
-    class DateTruncTimestamp(_Variant):
-        value: DateTruncTimestamp
-        _NAME = "DateTruncTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DateTruncTimestamp"}
-
-    @_dc.dataclass
-    class DateTruncTimestampTz(_Variant):
-        value: DateTruncTimestampTz
-        _NAME = "DateTruncTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DateTruncTimestampTz"}
-
-    @_dc.dataclass
-    class Degrees(_Variant):
-        value: Degrees
-        _NAME = "Degrees"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Degrees"}
-
-    @_dc.dataclass
-    class Exp(_Variant):
-        value: Exp
-        _NAME = "Exp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Exp"}
-
-    @_dc.dataclass
-    class ExpNumeric(_Variant):
-        value: ExpNumeric
-        _NAME = "ExpNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ExpNumeric"}
-
-    @_dc.dataclass
-    class ExtractDate(_Variant):
-        value: ExtractDate
-        _NAME = "ExtractDate"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ExtractDate"}
-
-    @_dc.dataclass
-    class ExtractInterval(_Variant):
-        value: ExtractInterval
-        _NAME = "ExtractInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ExtractInterval"}
-
-    @_dc.dataclass
-    class ExtractTime(_Variant):
-        value: ExtractTime
-        _NAME = "ExtractTime"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ExtractTime"}
-
-    @_dc.dataclass
-    class ExtractTimestamp(_Variant):
-        value: ExtractTimestamp
-        _NAME = "ExtractTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ExtractTimestamp"}
-
-    @_dc.dataclass
-    class ExtractTimestampTz(_Variant):
-        value: ExtractTimestampTz
-        _NAME = "ExtractTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ExtractTimestampTz"}
-
-    @_dc.dataclass
-    class FloorFloat32(_Variant):
-        value: FloorFloat32
-        _NAME = "FloorFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "FloorFloat32"}
-
-    @_dc.dataclass
-    class FloorFloat64(_Variant):
-        value: FloorFloat64
-        _NAME = "FloorFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "FloorFloat64"}
-
-    @_dc.dataclass
-    class FloorNumeric(_Variant):
-        value: FloorNumeric
-        _NAME = "FloorNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "FloorNumeric"}
-
-    @_dc.dataclass
-    class Initcap(_Variant):
-        value: Initcap
-        _NAME = "Initcap"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Initcap"}
-
-    @_dc.dataclass
-    class IsFalse(_Variant):
-        value: IsFalse
-        _NAME = "IsFalse"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "IsFalse"}
-
-    @_dc.dataclass
-    class IsLikeMatch(_Variant):
-        value: IsLikeMatch
-        _NAME = "IsLikeMatch"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "IsLikeMatch"}
-
-    @_dc.dataclass
-    class IsNull(_Variant):
-        value: IsNull
-        _NAME = "IsNull"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "IsNull"}
-
-    @_dc.dataclass
-    class IsRegexpMatch(_Variant):
-        value: IsRegexpMatch
-        _NAME = "IsRegexpMatch"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "IsRegexpMatch"}
-
-    @_dc.dataclass
-    class IsTrue(_Variant):
-        value: IsTrue
-        _NAME = "IsTrue"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "IsTrue"}
-
-    @_dc.dataclass
-    class Jq(_Variant):
-        value: Jq
-        _NAME = "Jq"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Jq"}
-
-    @_dc.dataclass
-    class JsonbArrayLength(_Variant):
-        value: JsonbArrayLength
-        _NAME = "JsonbArrayLength"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbArrayLength"}
-
-    @_dc.dataclass
-    class JsonbPretty(_Variant):
-        value: JsonbPretty
-        _NAME = "JsonbPretty"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbPretty"}
-
-    @_dc.dataclass
-    class JsonbStripNulls(_Variant):
-        value: JsonbStripNulls
-        _NAME = "JsonbStripNulls"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbStripNulls"}
-
-    @_dc.dataclass
-    class JsonbTypeof(_Variant):
-        value: JsonbTypeof
-        _NAME = "JsonbTypeof"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbTypeof"}
-
-    @_dc.dataclass
-    class JustifyDays(_Variant):
-        value: JustifyDays
-        _NAME = "JustifyDays"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JustifyDays"}
-
-    @_dc.dataclass
-    class JustifyHours(_Variant):
-        value: JustifyHours
-        _NAME = "JustifyHours"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JustifyHours"}
-
-    @_dc.dataclass
-    class JustifyInterval(_Variant):
-        value: JustifyInterval
-        _NAME = "JustifyInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JustifyInterval"}
-
-    @_dc.dataclass
-    class KafkaMurmur2Bytes(_Variant):
-        value: KafkaMurmur2Bytes
-        _NAME = "KafkaMurmur2Bytes"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "KafkaMurmur2Bytes"}
-
-    @_dc.dataclass
-    class KafkaMurmur2String(_Variant):
-        value: KafkaMurmur2String
-        _NAME = "KafkaMurmur2String"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "KafkaMurmur2String"}
-
-    @_dc.dataclass
-    class ListLength(_Variant):
-        value: ListLength
-        _NAME = "ListLength"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ListLength"}
-
-    @_dc.dataclass
-    class Ln(_Variant):
-        value: Ln
-        _NAME = "Ln"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Ln"}
-
-    @_dc.dataclass
-    class LnNumeric(_Variant):
-        value: LnNumeric
-        _NAME = "LnNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "LnNumeric"}
-
-    @_dc.dataclass
-    class Log10(_Variant):
-        value: Log10
-        _NAME = "Log10"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Log10"}
-
-    @_dc.dataclass
-    class Log10Numeric(_Variant):
-        value: Log10Numeric
-        _NAME = "Log10Numeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Log10Numeric"}
-
-    @_dc.dataclass
-    class Lower(_Variant):
-        value: Lower
-        _NAME = "Lower"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Lower"}
-
-    @_dc.dataclass
-    class MapBuildFromRecordList(_Variant):
-        value: MapBuildFromRecordList
-        _NAME = "MapBuildFromRecordList"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MapBuildFromRecordList"}
-
-    @_dc.dataclass
-    class MapLength(_Variant):
-        value: MapLength
-        _NAME = "MapLength"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MapLength"}
-
-    @_dc.dataclass
-    class MzAclItemGrantee(_Variant):
-        value: MzAclItemGrantee
-        _NAME = "MzAclItemGrantee"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MzAclItemGrantee"}
-
-    @_dc.dataclass
-    class MzAclItemGrantor(_Variant):
-        value: MzAclItemGrantor
-        _NAME = "MzAclItemGrantor"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MzAclItemGrantor"}
-
-    @_dc.dataclass
-    class MzAclItemPrivileges(_Variant):
-        value: MzAclItemPrivileges
-        _NAME = "MzAclItemPrivileges"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MzAclItemPrivileges"}
-
-    @_dc.dataclass
-    class MzFormatPrivileges(_Variant):
-        value: MzFormatPrivileges
-        _NAME = "MzFormatPrivileges"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MzFormatPrivileges"}
-
-    @_dc.dataclass
-    class MzRowSize(_Variant):
-        value: MzRowSize
-        _NAME = "MzRowSize"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MzRowSize"}
-
-    @_dc.dataclass
-    class MzTypeName(_Variant):
-        value: MzTypeName
-        _NAME = "MzTypeName"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MzTypeName"}
-
-    @_dc.dataclass
-    class MzValidatePrivileges(_Variant):
-        value: MzValidatePrivileges
-        _NAME = "MzValidatePrivileges"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MzValidatePrivileges"}
-
-    @_dc.dataclass
-    class MzValidateRolePrivilege(_Variant):
-        value: MzValidateRolePrivilege
-        _NAME = "MzValidateRolePrivilege"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MzValidateRolePrivilege"}
-
-    @_dc.dataclass
-    class NegFloat32(_Variant):
-        value: NegFloat32
-        _NAME = "NegFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "NegFloat32"}
-
-    @_dc.dataclass
-    class NegFloat64(_Variant):
-        value: NegFloat64
-        _NAME = "NegFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "NegFloat64"}
-
-    @_dc.dataclass
-    class NegInt16(_Variant):
-        value: NegInt16
-        _NAME = "NegInt16"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "NegInt16"}
-
-    @_dc.dataclass
-    class NegInt32(_Variant):
-        value: NegInt32
-        _NAME = "NegInt32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "NegInt32"}
-
-    @_dc.dataclass
-    class NegInt64(_Variant):
-        value: NegInt64
-        _NAME = "NegInt64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "NegInt64"}
-
-    @_dc.dataclass
-    class NegInterval(_Variant):
-        value: NegInterval
-        _NAME = "NegInterval"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "NegInterval"}
-
-    @_dc.dataclass
-    class NegNumeric(_Variant):
-        value: NegNumeric
-        _NAME = "NegNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "NegNumeric"}
-
-    @_dc.dataclass
-    class Not(_Variant):
-        value: Not
-        _NAME = "Not"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Not"}
-
-    @_dc.dataclass
-    class PadChar(_Variant):
-        value: PadChar
-        _NAME = "PadChar"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "PadChar"}
-
-    @_dc.dataclass
-    class Panic(_Variant):
-        value: Panic
-        _NAME = "Panic"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Panic"}
-
-    @_dc.dataclass
-    class ParseCatalogAclMode(_Variant):
-        value: ParseCatalogAclMode
-        _NAME = "ParseCatalogAclMode"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ParseCatalogAclMode"}
-
-    @_dc.dataclass
-    class ParseCatalogAuditLogDetails(_Variant):
-        value: ParseCatalogAuditLogDetails
-        _NAME = "ParseCatalogAuditLogDetails"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ParseCatalogAuditLogDetails"}
-
-    @_dc.dataclass
-    class ParseCatalogCreateSql(_Variant):
-        value: ParseCatalogCreateSql
-        _NAME = "ParseCatalogCreateSql"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ParseCatalogCreateSql"}
-
-    @_dc.dataclass
-    class ParseCatalogId(_Variant):
-        value: ParseCatalogId
-        _NAME = "ParseCatalogId"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ParseCatalogId"}
-
-    @_dc.dataclass
-    class ParseCatalogItemReferences(_Variant):
-        value: ParseCatalogItemReferences
-        _NAME = "ParseCatalogItemReferences"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ParseCatalogItemReferences"}
-
-    @_dc.dataclass
-    class ParseCatalogPrivileges(_Variant):
-        value: ParseCatalogPrivileges
-        _NAME = "ParseCatalogPrivileges"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ParseCatalogPrivileges"}
-
-    @_dc.dataclass
-    class ParseConnectionDetails(_Variant):
-        value: ParseConnectionDetails
-        _NAME = "ParseConnectionDetails"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ParseConnectionDetails"}
-
-    @_dc.dataclass
-    class ParseKafkaSourceDetails(_Variant):
-        value: ParseKafkaSourceDetails
-        _NAME = "ParseKafkaSourceDetails"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ParseKafkaSourceDetails"}
-
-    @_dc.dataclass
-    class ParsePostgresSourceDetails(_Variant):
-        value: ParsePostgresSourceDetails
-        _NAME = "ParsePostgresSourceDetails"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ParsePostgresSourceDetails"}
-
-    @_dc.dataclass
-    class ParseSourceExportDetails(_Variant):
-        value: ParseSourceExportDetails
-        _NAME = "ParseSourceExportDetails"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ParseSourceExportDetails"}
-
-    @_dc.dataclass
-    class PgColumnSize(_Variant):
-        value: PgColumnSize
-        _NAME = "PgColumnSize"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "PgColumnSize"}
-
-    @_dc.dataclass
-    class PgSizePretty(_Variant):
-        value: PgSizePretty
-        _NAME = "PgSizePretty"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "PgSizePretty"}
-
-    @_dc.dataclass
-    class QuoteIdent(_Variant):
-        value: QuoteIdent
-        _NAME = "QuoteIdent"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "QuoteIdent"}
-
-    @_dc.dataclass
-    class Radians(_Variant):
-        value: Radians
-        _NAME = "Radians"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Radians"}
-
-    @_dc.dataclass
-    class RangeEmpty(_Variant):
-        value: RangeEmpty
-        _NAME = "RangeEmpty"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeEmpty"}
-
-    @_dc.dataclass
-    class RangeLower(_Variant):
-        value: RangeLower
-        _NAME = "RangeLower"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeLower"}
-
-    @_dc.dataclass
-    class RangeLowerInc(_Variant):
-        value: RangeLowerInc
-        _NAME = "RangeLowerInc"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeLowerInc"}
-
-    @_dc.dataclass
-    class RangeLowerInf(_Variant):
-        value: RangeLowerInf
-        _NAME = "RangeLowerInf"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeLowerInf"}
-
-    @_dc.dataclass
-    class RangeUpper(_Variant):
-        value: RangeUpper
-        _NAME = "RangeUpper"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeUpper"}
-
-    @_dc.dataclass
-    class RangeUpperInc(_Variant):
-        value: RangeUpperInc
-        _NAME = "RangeUpperInc"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeUpperInc"}
-
-    @_dc.dataclass
-    class RangeUpperInf(_Variant):
-        value: RangeUpperInf
-        _NAME = "RangeUpperInf"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeUpperInf"}
-
-    @_dc.dataclass
-    class RecordGet(_Variant):
-        value: RecordGet
-        _NAME = "RecordGet"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RecordGet"}
-
-    @_dc.dataclass
-    class RedactSql(_Variant):
-        value: RedactSql
-        _NAME = "RedactSql"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RedactSql"}
-
-    @_dc.dataclass
-    class RegexpMatch(_Variant):
-        value: RegexpMatchStatic
-        _NAME = "RegexpMatch"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RegexpMatchStatic"}
-
-    @_dc.dataclass
-    class RegexpSplitToArray(_Variant):
-        value: RegexpSplitToArrayStatic
-        _NAME = "RegexpSplitToArray"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RegexpSplitToArrayStatic"}
-
-    @_dc.dataclass
-    class Reverse(_Variant):
-        value: Reverse
-        _NAME = "Reverse"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Reverse"}
-
-    @_dc.dataclass
-    class RoundFloat32(_Variant):
-        value: RoundFloat32
-        _NAME = "RoundFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RoundFloat32"}
-
-    @_dc.dataclass
-    class RoundFloat64(_Variant):
-        value: RoundFloat64
-        _NAME = "RoundFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RoundFloat64"}
-
-    @_dc.dataclass
-    class RoundNumeric(_Variant):
-        value: RoundNumeric
-        _NAME = "RoundNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RoundNumeric"}
-
-    @_dc.dataclass
-    class SeahashBytes(_Variant):
-        value: SeahashBytes
-        _NAME = "SeahashBytes"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SeahashBytes"}
-
-    @_dc.dataclass
-    class SeahashString(_Variant):
-        value: SeahashString
-        _NAME = "SeahashString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SeahashString"}
-
-    @_dc.dataclass
-    class Sin(_Variant):
-        value: Sin
-        _NAME = "Sin"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Sin"}
-
-    @_dc.dataclass
-    class Sinh(_Variant):
-        value: Sinh
-        _NAME = "Sinh"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Sinh"}
-
-    @_dc.dataclass
-    class Sleep(_Variant):
-        value: Sleep
-        _NAME = "Sleep"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Sleep"}
-
-    @_dc.dataclass
-    class SqrtFloat64(_Variant):
-        value: SqrtFloat64
-        _NAME = "SqrtFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SqrtFloat64"}
-
-    @_dc.dataclass
-    class SqrtNumeric(_Variant):
-        value: SqrtNumeric
-        _NAME = "SqrtNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SqrtNumeric"}
-
-    @_dc.dataclass
-    class StepMzTimestamp(_Variant):
-        value: StepMzTimestamp
-        _NAME = "StepMzTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "StepMzTimestamp"}
-
-    @_dc.dataclass
-    class Tan(_Variant):
-        value: Tan
-        _NAME = "Tan"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Tan"}
-
-    @_dc.dataclass
-    class Tanh(_Variant):
-        value: Tanh
-        _NAME = "Tanh"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Tanh"}
-
-    @_dc.dataclass
-    class TimezoneTime(_Variant):
-        value: TimezoneTime
-        _NAME = "TimezoneTime"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TimezoneTime"}
-
-    @_dc.dataclass
-    class TimezoneTimestamp(_Variant):
-        value: TimezoneTimestamp
-        _NAME = "TimezoneTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TimezoneTimestamp"}
-
-    @_dc.dataclass
-    class TimezoneTimestampTz(_Variant):
-        value: TimezoneTimestampTz
-        _NAME = "TimezoneTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TimezoneTimestampTz"}
-
-    @_dc.dataclass
-    class ToCharTimestamp(_Variant):
-        value: ToCharTimestamp
-        _NAME = "ToCharTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ToCharTimestamp"}
-
-    @_dc.dataclass
-    class ToCharTimestampTz(_Variant):
-        value: ToCharTimestampTz
-        _NAME = "ToCharTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ToCharTimestampTz"}
-
-    @_dc.dataclass
-    class ToTimestamp(_Variant):
-        value: ToTimestamp
-        _NAME = "ToTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ToTimestamp"}
-
-    @_dc.dataclass
-    class TrimLeadingWhitespace(_Variant):
-        value: TrimLeadingWhitespace
-        _NAME = "TrimLeadingWhitespace"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TrimLeadingWhitespace"}
-
-    @_dc.dataclass
-    class TrimTrailingWhitespace(_Variant):
-        value: TrimTrailingWhitespace
-        _NAME = "TrimTrailingWhitespace"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TrimTrailingWhitespace"}
-
-    @_dc.dataclass
-    class TrimWhitespace(_Variant):
-        value: TrimWhitespace
-        _NAME = "TrimWhitespace"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TrimWhitespace"}
-
-    @_dc.dataclass
-    class TruncFloat32(_Variant):
-        value: TruncFloat32
-        _NAME = "TruncFloat32"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TruncFloat32"}
-
-    @_dc.dataclass
-    class TruncFloat64(_Variant):
-        value: TruncFloat64
-        _NAME = "TruncFloat64"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TruncFloat64"}
-
-    @_dc.dataclass
-    class TruncNumeric(_Variant):
-        value: TruncNumeric
-        _NAME = "TruncNumeric"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TruncNumeric"}
-
-    @_dc.dataclass
-    class TryCast(_Variant):
-        value: TryCast
-        _NAME = "TryCast"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TryCast"}
-
-    @_dc.dataclass
-    class TryParseMonotonicIso8601Timestamp(_Variant):
-        value: TryParseMonotonicIso8601Timestamp
-        _NAME = "TryParseMonotonicIso8601Timestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TryParseMonotonicIso8601Timestamp"}
-
-    @_dc.dataclass
-    class Upper(_Variant):
-        value: Upper
-        _NAME = "Upper"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Upper"}
-
-    _VARIANTS = {
-        "AbsFloat32": AbsFloat32,
-        "AbsFloat64": AbsFloat64,
-        "AbsInt16": AbsInt16,
-        "AbsInt32": AbsInt32,
-        "AbsInt64": AbsInt64,
-        "AbsNumeric": AbsNumeric,
-        "AclItemGrantee": AclItemGrantee,
-        "AclItemGrantor": AclItemGrantor,
-        "AclItemPrivileges": AclItemPrivileges,
-        "Acos": Acos,
-        "Acosh": Acosh,
-        "AdjustNumericScale": AdjustNumericScale,
-        "AdjustTimestampPrecision": AdjustTimestampPrecision,
-        "AdjustTimestampTzPrecision": AdjustTimestampTzPrecision,
-        "Ascii": Ascii,
-        "Asin": Asin,
-        "Asinh": Asinh,
-        "Atan": Atan,
-        "Atanh": Atanh,
-        "BitCountBytes": BitCountBytes,
-        "BitLengthBytes": BitLengthBytes,
-        "BitLengthString": BitLengthString,
-        "BitNotInt16": BitNotInt16,
-        "BitNotInt32": BitNotInt32,
-        "BitNotInt64": BitNotInt64,
-        "BitNotUint16": BitNotUint16,
-        "BitNotUint32": BitNotUint32,
-        "BitNotUint64": BitNotUint64,
-        "ByteLengthBytes": ByteLengthBytes,
-        "ByteLengthString": ByteLengthString,
-        "CastArrayToArray": CastArrayToArray,
-        "CastArrayToJsonb": CastArrayToJsonb,
-        "CastArrayToListOneDim": CastArrayToListOneDim,
-        "CastArrayToString": CastArrayToString,
-        "CastBoolToInt32": CastBoolToInt32,
-        "CastBoolToInt64": CastBoolToInt64,
-        "CastBoolToString": CastBoolToString,
-        "CastBoolToStringNonstandard": CastBoolToStringNonstandard,
-        "CastBytesToString": CastBytesToString,
-        "CastCharToString": CastCharToString,
-        "CastDateToMzTimestamp": CastDateToMzTimestamp,
-        "CastDateToString": CastDateToString,
-        "CastDateToTimestamp": CastDateToTimestamp,
-        "CastDateToTimestampTz": CastDateToTimestampTz,
-        "CastFloat32ToFloat64": CastFloat32ToFloat64,
-        "CastFloat32ToInt16": CastFloat32ToInt16,
-        "CastFloat32ToInt32": CastFloat32ToInt32,
-        "CastFloat32ToInt64": CastFloat32ToInt64,
-        "CastFloat32ToNumeric": CastFloat32ToNumeric,
-        "CastFloat32ToString": CastFloat32ToString,
-        "CastFloat32ToUint16": CastFloat32ToUint16,
-        "CastFloat32ToUint32": CastFloat32ToUint32,
-        "CastFloat32ToUint64": CastFloat32ToUint64,
-        "CastFloat64ToFloat32": CastFloat64ToFloat32,
-        "CastFloat64ToInt16": CastFloat64ToInt16,
-        "CastFloat64ToInt32": CastFloat64ToInt32,
-        "CastFloat64ToInt64": CastFloat64ToInt64,
-        "CastFloat64ToNumeric": CastFloat64ToNumeric,
-        "CastFloat64ToString": CastFloat64ToString,
-        "CastFloat64ToUint16": CastFloat64ToUint16,
-        "CastFloat64ToUint32": CastFloat64ToUint32,
-        "CastFloat64ToUint64": CastFloat64ToUint64,
-        "CastInt16ToFloat32": CastInt16ToFloat32,
-        "CastInt16ToFloat64": CastInt16ToFloat64,
-        "CastInt16ToInt32": CastInt16ToInt32,
-        "CastInt16ToInt64": CastInt16ToInt64,
-        "CastInt16ToNumeric": CastInt16ToNumeric,
-        "CastInt16ToString": CastInt16ToString,
-        "CastInt16ToUint16": CastInt16ToUint16,
-        "CastInt16ToUint32": CastInt16ToUint32,
-        "CastInt16ToUint64": CastInt16ToUint64,
-        "CastInt2VectorToArray": CastInt2VectorToArray,
-        "CastInt2VectorToString": CastInt2VectorToString,
-        "CastInt32ToBool": CastInt32ToBool,
-        "CastInt32ToFloat32": CastInt32ToFloat32,
-        "CastInt32ToFloat64": CastInt32ToFloat64,
-        "CastInt32ToInt16": CastInt32ToInt16,
-        "CastInt32ToInt64": CastInt32ToInt64,
-        "CastInt32ToMzTimestamp": CastInt32ToMzTimestamp,
-        "CastInt32ToNumeric": CastInt32ToNumeric,
-        "CastInt32ToOid": CastInt32ToOid,
-        "CastInt32ToPgLegacyChar": CastInt32ToPgLegacyChar,
-        "CastInt32ToString": CastInt32ToString,
-        "CastInt32ToUint16": CastInt32ToUint16,
-        "CastInt32ToUint32": CastInt32ToUint32,
-        "CastInt32ToUint64": CastInt32ToUint64,
-        "CastInt64ToBool": CastInt64ToBool,
-        "CastInt64ToFloat32": CastInt64ToFloat32,
-        "CastInt64ToFloat64": CastInt64ToFloat64,
-        "CastInt64ToInt16": CastInt64ToInt16,
-        "CastInt64ToInt32": CastInt64ToInt32,
-        "CastInt64ToMzTimestamp": CastInt64ToMzTimestamp,
-        "CastInt64ToNumeric": CastInt64ToNumeric,
-        "CastInt64ToOid": CastInt64ToOid,
-        "CastInt64ToString": CastInt64ToString,
-        "CastInt64ToUint16": CastInt64ToUint16,
-        "CastInt64ToUint32": CastInt64ToUint32,
-        "CastInt64ToUint64": CastInt64ToUint64,
-        "CastIntervalToString": CastIntervalToString,
-        "CastIntervalToTime": CastIntervalToTime,
-        "CastJsonbToBool": CastJsonbToBool,
-        "CastJsonbToFloat32": CastJsonbToFloat32,
-        "CastJsonbToFloat64": CastJsonbToFloat64,
-        "CastJsonbToInt16": CastJsonbToInt16,
-        "CastJsonbToInt32": CastJsonbToInt32,
-        "CastJsonbToInt64": CastJsonbToInt64,
-        "CastJsonbToNumeric": CastJsonbToNumeric,
-        "CastJsonbToString": CastJsonbToString,
-        "CastJsonbableToJsonb": CastJsonbableToJsonb,
-        "CastList1ToList2": CastList1ToList2,
-        "CastListToJsonb": CastListToJsonb,
-        "CastListToString": CastListToString,
-        "CastMapToString": CastMapToString,
-        "CastMzTimestampToString": CastMzTimestampToString,
-        "CastMzTimestampToTimestamp": CastMzTimestampToTimestamp,
-        "CastMzTimestampToTimestampTz": CastMzTimestampToTimestampTz,
-        "CastNumericToFloat32": CastNumericToFloat32,
-        "CastNumericToFloat64": CastNumericToFloat64,
-        "CastNumericToInt16": CastNumericToInt16,
-        "CastNumericToInt32": CastNumericToInt32,
-        "CastNumericToInt64": CastNumericToInt64,
-        "CastNumericToMzTimestamp": CastNumericToMzTimestamp,
-        "CastNumericToString": CastNumericToString,
-        "CastNumericToUint16": CastNumericToUint16,
-        "CastNumericToUint32": CastNumericToUint32,
-        "CastNumericToUint64": CastNumericToUint64,
-        "CastOidToInt32": CastOidToInt32,
-        "CastOidToInt64": CastOidToInt64,
-        "CastOidToRegClass": CastOidToRegClass,
-        "CastOidToRegProc": CastOidToRegProc,
-        "CastOidToRegType": CastOidToRegType,
-        "CastOidToString": CastOidToString,
-        "CastPgLegacyCharToChar": CastPgLegacyCharToChar,
-        "CastPgLegacyCharToInt32": CastPgLegacyCharToInt32,
-        "CastPgLegacyCharToString": CastPgLegacyCharToString,
-        "CastPgLegacyCharToVarChar": CastPgLegacyCharToVarChar,
-        "CastRangeToString": CastRangeToString,
-        "CastRecord1ToRecord2": CastRecord1ToRecord2,
-        "CastRecordToString": CastRecordToString,
-        "CastRegClassToOid": CastRegClassToOid,
-        "CastRegProcToOid": CastRegProcToOid,
-        "CastRegTypeToOid": CastRegTypeToOid,
-        "CastStringToArray": CastStringToArray,
-        "CastStringToBool": CastStringToBool,
-        "CastStringToBytes": CastStringToBytes,
-        "CastStringToChar": CastStringToChar,
-        "CastStringToDate": CastStringToDate,
-        "CastStringToFloat32": CastStringToFloat32,
-        "CastStringToFloat64": CastStringToFloat64,
-        "CastStringToInt16": CastStringToInt16,
-        "CastStringToInt2Vector": CastStringToInt2Vector,
-        "CastStringToInt32": CastStringToInt32,
-        "CastStringToInt64": CastStringToInt64,
-        "CastStringToInterval": CastStringToInterval,
-        "CastStringToJsonb": CastStringToJsonb,
-        "CastStringToList": CastStringToList,
-        "CastStringToMap": CastStringToMap,
-        "CastStringToMzTimestamp": CastStringToMzTimestamp,
-        "CastStringToNumeric": CastStringToNumeric,
-        "CastStringToOid": CastStringToOid,
-        "CastStringToPgLegacyChar": CastStringToPgLegacyChar,
-        "CastStringToPgLegacyName": CastStringToPgLegacyName,
-        "CastStringToRange": CastStringToRange,
-        "CastStringToTime": CastStringToTime,
-        "CastStringToTimestamp": CastStringToTimestamp,
-        "CastStringToTimestampTz": CastStringToTimestampTz,
-        "CastStringToUint16": CastStringToUint16,
-        "CastStringToUint32": CastStringToUint32,
-        "CastStringToUint64": CastStringToUint64,
-        "CastStringToUuid": CastStringToUuid,
-        "CastStringToVarChar": CastStringToVarChar,
-        "CastTimeToInterval": CastTimeToInterval,
-        "CastTimeToString": CastTimeToString,
-        "CastTimestampToDate": CastTimestampToDate,
-        "CastTimestampToMzTimestamp": CastTimestampToMzTimestamp,
-        "CastTimestampToString": CastTimestampToString,
-        "CastTimestampToTime": CastTimestampToTime,
-        "CastTimestampToTimestampTz": CastTimestampToTimestampTz,
-        "CastTimestampTzToDate": CastTimestampTzToDate,
-        "CastTimestampTzToMzTimestamp": CastTimestampTzToMzTimestamp,
-        "CastTimestampTzToString": CastTimestampTzToString,
-        "CastTimestampTzToTime": CastTimestampTzToTime,
-        "CastTimestampTzToTimestamp": CastTimestampTzToTimestamp,
-        "CastUint16ToFloat32": CastUint16ToFloat32,
-        "CastUint16ToFloat64": CastUint16ToFloat64,
-        "CastUint16ToInt16": CastUint16ToInt16,
-        "CastUint16ToInt32": CastUint16ToInt32,
-        "CastUint16ToInt64": CastUint16ToInt64,
-        "CastUint16ToNumeric": CastUint16ToNumeric,
-        "CastUint16ToString": CastUint16ToString,
-        "CastUint16ToUint32": CastUint16ToUint32,
-        "CastUint16ToUint64": CastUint16ToUint64,
-        "CastUint32ToFloat32": CastUint32ToFloat32,
-        "CastUint32ToFloat64": CastUint32ToFloat64,
-        "CastUint32ToInt16": CastUint32ToInt16,
-        "CastUint32ToInt32": CastUint32ToInt32,
-        "CastUint32ToInt64": CastUint32ToInt64,
-        "CastUint32ToMzTimestamp": CastUint32ToMzTimestamp,
-        "CastUint32ToNumeric": CastUint32ToNumeric,
-        "CastUint32ToString": CastUint32ToString,
-        "CastUint32ToUint16": CastUint32ToUint16,
-        "CastUint32ToUint64": CastUint32ToUint64,
-        "CastUint64ToFloat32": CastUint64ToFloat32,
-        "CastUint64ToFloat64": CastUint64ToFloat64,
-        "CastUint64ToInt16": CastUint64ToInt16,
-        "CastUint64ToInt32": CastUint64ToInt32,
-        "CastUint64ToInt64": CastUint64ToInt64,
-        "CastUint64ToMzTimestamp": CastUint64ToMzTimestamp,
-        "CastUint64ToNumeric": CastUint64ToNumeric,
-        "CastUint64ToString": CastUint64ToString,
-        "CastUint64ToUint16": CastUint64ToUint16,
-        "CastUint64ToUint32": CastUint64ToUint32,
-        "CastUuidToString": CastUuidToString,
-        "CastVarCharToString": CastVarCharToString,
-        "CbrtFloat64": CbrtFloat64,
-        "CeilFloat32": CeilFloat32,
-        "CeilFloat64": CeilFloat64,
-        "CeilNumeric": CeilNumeric,
-        "CharLength": CharLength,
-        "Chr": Chr,
-        "Cos": Cos,
-        "Cosh": Cosh,
-        "Cot": Cot,
-        "Crc32Bytes": Crc32Bytes,
-        "Crc32String": Crc32String,
-        "DatePartInterval": DatePartInterval,
-        "DatePartTime": DatePartTime,
-        "DatePartTimestamp": DatePartTimestamp,
-        "DatePartTimestampTz": DatePartTimestampTz,
-        "DateTruncTimestamp": DateTruncTimestamp,
-        "DateTruncTimestampTz": DateTruncTimestampTz,
-        "Degrees": Degrees,
-        "Exp": Exp,
-        "ExpNumeric": ExpNumeric,
-        "ExtractDate": ExtractDate,
-        "ExtractInterval": ExtractInterval,
-        "ExtractTime": ExtractTime,
-        "ExtractTimestamp": ExtractTimestamp,
-        "ExtractTimestampTz": ExtractTimestampTz,
-        "FloorFloat32": FloorFloat32,
-        "FloorFloat64": FloorFloat64,
-        "FloorNumeric": FloorNumeric,
-        "Initcap": Initcap,
-        "IsFalse": IsFalse,
-        "IsLikeMatch": IsLikeMatch,
-        "IsNull": IsNull,
-        "IsRegexpMatch": IsRegexpMatch,
-        "IsTrue": IsTrue,
-        "Jq": Jq,
-        "JsonbArrayLength": JsonbArrayLength,
-        "JsonbPretty": JsonbPretty,
-        "JsonbStripNulls": JsonbStripNulls,
-        "JsonbTypeof": JsonbTypeof,
-        "JustifyDays": JustifyDays,
-        "JustifyHours": JustifyHours,
-        "JustifyInterval": JustifyInterval,
-        "KafkaMurmur2Bytes": KafkaMurmur2Bytes,
-        "KafkaMurmur2String": KafkaMurmur2String,
-        "ListLength": ListLength,
-        "Ln": Ln,
-        "LnNumeric": LnNumeric,
-        "Log10": Log10,
-        "Log10Numeric": Log10Numeric,
-        "Lower": Lower,
-        "MapBuildFromRecordList": MapBuildFromRecordList,
-        "MapLength": MapLength,
-        "MzAclItemGrantee": MzAclItemGrantee,
-        "MzAclItemGrantor": MzAclItemGrantor,
-        "MzAclItemPrivileges": MzAclItemPrivileges,
-        "MzFormatPrivileges": MzFormatPrivileges,
-        "MzRowSize": MzRowSize,
-        "MzTypeName": MzTypeName,
-        "MzValidatePrivileges": MzValidatePrivileges,
-        "MzValidateRolePrivilege": MzValidateRolePrivilege,
-        "NegFloat32": NegFloat32,
-        "NegFloat64": NegFloat64,
-        "NegInt16": NegInt16,
-        "NegInt32": NegInt32,
-        "NegInt64": NegInt64,
-        "NegInterval": NegInterval,
-        "NegNumeric": NegNumeric,
-        "Not": Not,
-        "PadChar": PadChar,
-        "Panic": Panic,
-        "ParseCatalogAclMode": ParseCatalogAclMode,
-        "ParseCatalogAuditLogDetails": ParseCatalogAuditLogDetails,
-        "ParseCatalogCreateSql": ParseCatalogCreateSql,
-        "ParseCatalogId": ParseCatalogId,
-        "ParseCatalogItemReferences": ParseCatalogItemReferences,
-        "ParseCatalogPrivileges": ParseCatalogPrivileges,
-        "ParseConnectionDetails": ParseConnectionDetails,
-        "ParseKafkaSourceDetails": ParseKafkaSourceDetails,
-        "ParsePostgresSourceDetails": ParsePostgresSourceDetails,
-        "ParseSourceExportDetails": ParseSourceExportDetails,
-        "PgColumnSize": PgColumnSize,
-        "PgSizePretty": PgSizePretty,
-        "QuoteIdent": QuoteIdent,
-        "Radians": Radians,
-        "RangeEmpty": RangeEmpty,
-        "RangeLower": RangeLower,
-        "RangeLowerInc": RangeLowerInc,
-        "RangeLowerInf": RangeLowerInf,
-        "RangeUpper": RangeUpper,
-        "RangeUpperInc": RangeUpperInc,
-        "RangeUpperInf": RangeUpperInf,
-        "RecordGet": RecordGet,
-        "RedactSql": RedactSql,
-        "RegexpMatch": RegexpMatch,
-        "RegexpSplitToArray": RegexpSplitToArray,
-        "Reverse": Reverse,
-        "RoundFloat32": RoundFloat32,
-        "RoundFloat64": RoundFloat64,
-        "RoundNumeric": RoundNumeric,
-        "SeahashBytes": SeahashBytes,
-        "SeahashString": SeahashString,
-        "Sin": Sin,
-        "Sinh": Sinh,
-        "Sleep": Sleep,
-        "SqrtFloat64": SqrtFloat64,
-        "SqrtNumeric": SqrtNumeric,
-        "StepMzTimestamp": StepMzTimestamp,
-        "Tan": Tan,
-        "Tanh": Tanh,
-        "TimezoneTime": TimezoneTime,
-        "TimezoneTimestamp": TimezoneTimestamp,
-        "TimezoneTimestampTz": TimezoneTimestampTz,
-        "ToCharTimestamp": ToCharTimestamp,
-        "ToCharTimestampTz": ToCharTimestampTz,
-        "ToTimestamp": ToTimestamp,
-        "TrimLeadingWhitespace": TrimLeadingWhitespace,
-        "TrimTrailingWhitespace": TrimTrailingWhitespace,
-        "TrimWhitespace": TrimWhitespace,
-        "TruncFloat32": TruncFloat32,
-        "TruncFloat64": TruncFloat64,
-        "TruncNumeric": TruncNumeric,
-        "TryCast": TryCast,
-        "TryParseMonotonicIso8601Timestamp": TryParseMonotonicIso8601Timestamp,
-        "Upper": Upper,
-    }
+    AbsFloat32: _ClassVar[type[_UnaryFunc_AbsFloat32]]
+    AbsFloat64: _ClassVar[type[_UnaryFunc_AbsFloat64]]
+    AbsInt16: _ClassVar[type[_UnaryFunc_AbsInt16]]
+    AbsInt32: _ClassVar[type[_UnaryFunc_AbsInt32]]
+    AbsInt64: _ClassVar[type[_UnaryFunc_AbsInt64]]
+    AbsNumeric: _ClassVar[type[_UnaryFunc_AbsNumeric]]
+    AclItemGrantee: _ClassVar[type[_UnaryFunc_AclItemGrantee]]
+    AclItemGrantor: _ClassVar[type[_UnaryFunc_AclItemGrantor]]
+    AclItemPrivileges: _ClassVar[type[_UnaryFunc_AclItemPrivileges]]
+    Acos: _ClassVar[type[_UnaryFunc_Acos]]
+    Acosh: _ClassVar[type[_UnaryFunc_Acosh]]
+    AdjustNumericScale: _ClassVar[type[_UnaryFunc_AdjustNumericScale]]
+    AdjustTimestampPrecision: _ClassVar[type[_UnaryFunc_AdjustTimestampPrecision]]
+    AdjustTimestampTzPrecision: _ClassVar[type[_UnaryFunc_AdjustTimestampTzPrecision]]
+    Ascii: _ClassVar[type[_UnaryFunc_Ascii]]
+    Asin: _ClassVar[type[_UnaryFunc_Asin]]
+    Asinh: _ClassVar[type[_UnaryFunc_Asinh]]
+    Atan: _ClassVar[type[_UnaryFunc_Atan]]
+    Atanh: _ClassVar[type[_UnaryFunc_Atanh]]
+    BitCountBytes: _ClassVar[type[_UnaryFunc_BitCountBytes]]
+    BitLengthBytes: _ClassVar[type[_UnaryFunc_BitLengthBytes]]
+    BitLengthString: _ClassVar[type[_UnaryFunc_BitLengthString]]
+    BitNotInt16: _ClassVar[type[_UnaryFunc_BitNotInt16]]
+    BitNotInt32: _ClassVar[type[_UnaryFunc_BitNotInt32]]
+    BitNotInt64: _ClassVar[type[_UnaryFunc_BitNotInt64]]
+    BitNotUint16: _ClassVar[type[_UnaryFunc_BitNotUint16]]
+    BitNotUint32: _ClassVar[type[_UnaryFunc_BitNotUint32]]
+    BitNotUint64: _ClassVar[type[_UnaryFunc_BitNotUint64]]
+    ByteLengthBytes: _ClassVar[type[_UnaryFunc_ByteLengthBytes]]
+    ByteLengthString: _ClassVar[type[_UnaryFunc_ByteLengthString]]
+    CastArrayToArray: _ClassVar[type[_UnaryFunc_CastArrayToArray]]
+    CastArrayToJsonb: _ClassVar[type[_UnaryFunc_CastArrayToJsonb]]
+    CastArrayToListOneDim: _ClassVar[type[_UnaryFunc_CastArrayToListOneDim]]
+    CastArrayToString: _ClassVar[type[_UnaryFunc_CastArrayToString]]
+    CastBoolToInt32: _ClassVar[type[_UnaryFunc_CastBoolToInt32]]
+    CastBoolToInt64: _ClassVar[type[_UnaryFunc_CastBoolToInt64]]
+    CastBoolToString: _ClassVar[type[_UnaryFunc_CastBoolToString]]
+    CastBoolToStringNonstandard: _ClassVar[type[_UnaryFunc_CastBoolToStringNonstandard]]
+    CastBytesToString: _ClassVar[type[_UnaryFunc_CastBytesToString]]
+    CastCharToString: _ClassVar[type[_UnaryFunc_CastCharToString]]
+    CastDateToMzTimestamp: _ClassVar[type[_UnaryFunc_CastDateToMzTimestamp]]
+    CastDateToString: _ClassVar[type[_UnaryFunc_CastDateToString]]
+    CastDateToTimestamp: _ClassVar[type[_UnaryFunc_CastDateToTimestamp]]
+    CastDateToTimestampTz: _ClassVar[type[_UnaryFunc_CastDateToTimestampTz]]
+    CastFloat32ToFloat64: _ClassVar[type[_UnaryFunc_CastFloat32ToFloat64]]
+    CastFloat32ToInt16: _ClassVar[type[_UnaryFunc_CastFloat32ToInt16]]
+    CastFloat32ToInt32: _ClassVar[type[_UnaryFunc_CastFloat32ToInt32]]
+    CastFloat32ToInt64: _ClassVar[type[_UnaryFunc_CastFloat32ToInt64]]
+    CastFloat32ToNumeric: _ClassVar[type[_UnaryFunc_CastFloat32ToNumeric]]
+    CastFloat32ToString: _ClassVar[type[_UnaryFunc_CastFloat32ToString]]
+    CastFloat32ToUint16: _ClassVar[type[_UnaryFunc_CastFloat32ToUint16]]
+    CastFloat32ToUint32: _ClassVar[type[_UnaryFunc_CastFloat32ToUint32]]
+    CastFloat32ToUint64: _ClassVar[type[_UnaryFunc_CastFloat32ToUint64]]
+    CastFloat64ToFloat32: _ClassVar[type[_UnaryFunc_CastFloat64ToFloat32]]
+    CastFloat64ToInt16: _ClassVar[type[_UnaryFunc_CastFloat64ToInt16]]
+    CastFloat64ToInt32: _ClassVar[type[_UnaryFunc_CastFloat64ToInt32]]
+    CastFloat64ToInt64: _ClassVar[type[_UnaryFunc_CastFloat64ToInt64]]
+    CastFloat64ToNumeric: _ClassVar[type[_UnaryFunc_CastFloat64ToNumeric]]
+    CastFloat64ToString: _ClassVar[type[_UnaryFunc_CastFloat64ToString]]
+    CastFloat64ToUint16: _ClassVar[type[_UnaryFunc_CastFloat64ToUint16]]
+    CastFloat64ToUint32: _ClassVar[type[_UnaryFunc_CastFloat64ToUint32]]
+    CastFloat64ToUint64: _ClassVar[type[_UnaryFunc_CastFloat64ToUint64]]
+    CastInt16ToFloat32: _ClassVar[type[_UnaryFunc_CastInt16ToFloat32]]
+    CastInt16ToFloat64: _ClassVar[type[_UnaryFunc_CastInt16ToFloat64]]
+    CastInt16ToInt32: _ClassVar[type[_UnaryFunc_CastInt16ToInt32]]
+    CastInt16ToInt64: _ClassVar[type[_UnaryFunc_CastInt16ToInt64]]
+    CastInt16ToNumeric: _ClassVar[type[_UnaryFunc_CastInt16ToNumeric]]
+    CastInt16ToString: _ClassVar[type[_UnaryFunc_CastInt16ToString]]
+    CastInt16ToUint16: _ClassVar[type[_UnaryFunc_CastInt16ToUint16]]
+    CastInt16ToUint32: _ClassVar[type[_UnaryFunc_CastInt16ToUint32]]
+    CastInt16ToUint64: _ClassVar[type[_UnaryFunc_CastInt16ToUint64]]
+    CastInt2VectorToArray: _ClassVar[type[_UnaryFunc_CastInt2VectorToArray]]
+    CastInt2VectorToString: _ClassVar[type[_UnaryFunc_CastInt2VectorToString]]
+    CastInt32ToBool: _ClassVar[type[_UnaryFunc_CastInt32ToBool]]
+    CastInt32ToFloat32: _ClassVar[type[_UnaryFunc_CastInt32ToFloat32]]
+    CastInt32ToFloat64: _ClassVar[type[_UnaryFunc_CastInt32ToFloat64]]
+    CastInt32ToInt16: _ClassVar[type[_UnaryFunc_CastInt32ToInt16]]
+    CastInt32ToInt64: _ClassVar[type[_UnaryFunc_CastInt32ToInt64]]
+    CastInt32ToMzTimestamp: _ClassVar[type[_UnaryFunc_CastInt32ToMzTimestamp]]
+    CastInt32ToNumeric: _ClassVar[type[_UnaryFunc_CastInt32ToNumeric]]
+    CastInt32ToOid: _ClassVar[type[_UnaryFunc_CastInt32ToOid]]
+    CastInt32ToPgLegacyChar: _ClassVar[type[_UnaryFunc_CastInt32ToPgLegacyChar]]
+    CastInt32ToString: _ClassVar[type[_UnaryFunc_CastInt32ToString]]
+    CastInt32ToUint16: _ClassVar[type[_UnaryFunc_CastInt32ToUint16]]
+    CastInt32ToUint32: _ClassVar[type[_UnaryFunc_CastInt32ToUint32]]
+    CastInt32ToUint64: _ClassVar[type[_UnaryFunc_CastInt32ToUint64]]
+    CastInt64ToBool: _ClassVar[type[_UnaryFunc_CastInt64ToBool]]
+    CastInt64ToFloat32: _ClassVar[type[_UnaryFunc_CastInt64ToFloat32]]
+    CastInt64ToFloat64: _ClassVar[type[_UnaryFunc_CastInt64ToFloat64]]
+    CastInt64ToInt16: _ClassVar[type[_UnaryFunc_CastInt64ToInt16]]
+    CastInt64ToInt32: _ClassVar[type[_UnaryFunc_CastInt64ToInt32]]
+    CastInt64ToMzTimestamp: _ClassVar[type[_UnaryFunc_CastInt64ToMzTimestamp]]
+    CastInt64ToNumeric: _ClassVar[type[_UnaryFunc_CastInt64ToNumeric]]
+    CastInt64ToOid: _ClassVar[type[_UnaryFunc_CastInt64ToOid]]
+    CastInt64ToString: _ClassVar[type[_UnaryFunc_CastInt64ToString]]
+    CastInt64ToUint16: _ClassVar[type[_UnaryFunc_CastInt64ToUint16]]
+    CastInt64ToUint32: _ClassVar[type[_UnaryFunc_CastInt64ToUint32]]
+    CastInt64ToUint64: _ClassVar[type[_UnaryFunc_CastInt64ToUint64]]
+    CastIntervalToString: _ClassVar[type[_UnaryFunc_CastIntervalToString]]
+    CastIntervalToTime: _ClassVar[type[_UnaryFunc_CastIntervalToTime]]
+    CastJsonbToBool: _ClassVar[type[_UnaryFunc_CastJsonbToBool]]
+    CastJsonbToFloat32: _ClassVar[type[_UnaryFunc_CastJsonbToFloat32]]
+    CastJsonbToFloat64: _ClassVar[type[_UnaryFunc_CastJsonbToFloat64]]
+    CastJsonbToInt16: _ClassVar[type[_UnaryFunc_CastJsonbToInt16]]
+    CastJsonbToInt32: _ClassVar[type[_UnaryFunc_CastJsonbToInt32]]
+    CastJsonbToInt64: _ClassVar[type[_UnaryFunc_CastJsonbToInt64]]
+    CastJsonbToNumeric: _ClassVar[type[_UnaryFunc_CastJsonbToNumeric]]
+    CastJsonbToString: _ClassVar[type[_UnaryFunc_CastJsonbToString]]
+    CastJsonbableToJsonb: _ClassVar[type[_UnaryFunc_CastJsonbableToJsonb]]
+    CastList1ToList2: _ClassVar[type[_UnaryFunc_CastList1ToList2]]
+    CastListToJsonb: _ClassVar[type[_UnaryFunc_CastListToJsonb]]
+    CastListToString: _ClassVar[type[_UnaryFunc_CastListToString]]
+    CastMapToString: _ClassVar[type[_UnaryFunc_CastMapToString]]
+    CastMzTimestampToString: _ClassVar[type[_UnaryFunc_CastMzTimestampToString]]
+    CastMzTimestampToTimestamp: _ClassVar[type[_UnaryFunc_CastMzTimestampToTimestamp]]
+    CastMzTimestampToTimestampTz: _ClassVar[
+        type[_UnaryFunc_CastMzTimestampToTimestampTz]
+    ]
+    CastNumericToFloat32: _ClassVar[type[_UnaryFunc_CastNumericToFloat32]]
+    CastNumericToFloat64: _ClassVar[type[_UnaryFunc_CastNumericToFloat64]]
+    CastNumericToInt16: _ClassVar[type[_UnaryFunc_CastNumericToInt16]]
+    CastNumericToInt32: _ClassVar[type[_UnaryFunc_CastNumericToInt32]]
+    CastNumericToInt64: _ClassVar[type[_UnaryFunc_CastNumericToInt64]]
+    CastNumericToMzTimestamp: _ClassVar[type[_UnaryFunc_CastNumericToMzTimestamp]]
+    CastNumericToString: _ClassVar[type[_UnaryFunc_CastNumericToString]]
+    CastNumericToUint16: _ClassVar[type[_UnaryFunc_CastNumericToUint16]]
+    CastNumericToUint32: _ClassVar[type[_UnaryFunc_CastNumericToUint32]]
+    CastNumericToUint64: _ClassVar[type[_UnaryFunc_CastNumericToUint64]]
+    CastOidToInt32: _ClassVar[type[_UnaryFunc_CastOidToInt32]]
+    CastOidToInt64: _ClassVar[type[_UnaryFunc_CastOidToInt64]]
+    CastOidToRegClass: _ClassVar[type[_UnaryFunc_CastOidToRegClass]]
+    CastOidToRegProc: _ClassVar[type[_UnaryFunc_CastOidToRegProc]]
+    CastOidToRegType: _ClassVar[type[_UnaryFunc_CastOidToRegType]]
+    CastOidToString: _ClassVar[type[_UnaryFunc_CastOidToString]]
+    CastPgLegacyCharToChar: _ClassVar[type[_UnaryFunc_CastPgLegacyCharToChar]]
+    CastPgLegacyCharToInt32: _ClassVar[type[_UnaryFunc_CastPgLegacyCharToInt32]]
+    CastPgLegacyCharToString: _ClassVar[type[_UnaryFunc_CastPgLegacyCharToString]]
+    CastPgLegacyCharToVarChar: _ClassVar[type[_UnaryFunc_CastPgLegacyCharToVarChar]]
+    CastRangeToString: _ClassVar[type[_UnaryFunc_CastRangeToString]]
+    CastRecord1ToRecord2: _ClassVar[type[_UnaryFunc_CastRecord1ToRecord2]]
+    CastRecordToString: _ClassVar[type[_UnaryFunc_CastRecordToString]]
+    CastRegClassToOid: _ClassVar[type[_UnaryFunc_CastRegClassToOid]]
+    CastRegProcToOid: _ClassVar[type[_UnaryFunc_CastRegProcToOid]]
+    CastRegTypeToOid: _ClassVar[type[_UnaryFunc_CastRegTypeToOid]]
+    CastStringToArray: _ClassVar[type[_UnaryFunc_CastStringToArray]]
+    CastStringToBool: _ClassVar[type[_UnaryFunc_CastStringToBool]]
+    CastStringToBytes: _ClassVar[type[_UnaryFunc_CastStringToBytes]]
+    CastStringToChar: _ClassVar[type[_UnaryFunc_CastStringToChar]]
+    CastStringToDate: _ClassVar[type[_UnaryFunc_CastStringToDate]]
+    CastStringToFloat32: _ClassVar[type[_UnaryFunc_CastStringToFloat32]]
+    CastStringToFloat64: _ClassVar[type[_UnaryFunc_CastStringToFloat64]]
+    CastStringToInt16: _ClassVar[type[_UnaryFunc_CastStringToInt16]]
+    CastStringToInt2Vector: _ClassVar[type[_UnaryFunc_CastStringToInt2Vector]]
+    CastStringToInt32: _ClassVar[type[_UnaryFunc_CastStringToInt32]]
+    CastStringToInt64: _ClassVar[type[_UnaryFunc_CastStringToInt64]]
+    CastStringToInterval: _ClassVar[type[_UnaryFunc_CastStringToInterval]]
+    CastStringToJsonb: _ClassVar[type[_UnaryFunc_CastStringToJsonb]]
+    CastStringToList: _ClassVar[type[_UnaryFunc_CastStringToList]]
+    CastStringToMap: _ClassVar[type[_UnaryFunc_CastStringToMap]]
+    CastStringToMzTimestamp: _ClassVar[type[_UnaryFunc_CastStringToMzTimestamp]]
+    CastStringToNumeric: _ClassVar[type[_UnaryFunc_CastStringToNumeric]]
+    CastStringToOid: _ClassVar[type[_UnaryFunc_CastStringToOid]]
+    CastStringToPgLegacyChar: _ClassVar[type[_UnaryFunc_CastStringToPgLegacyChar]]
+    CastStringToPgLegacyName: _ClassVar[type[_UnaryFunc_CastStringToPgLegacyName]]
+    CastStringToRange: _ClassVar[type[_UnaryFunc_CastStringToRange]]
+    CastStringToTime: _ClassVar[type[_UnaryFunc_CastStringToTime]]
+    CastStringToTimestamp: _ClassVar[type[_UnaryFunc_CastStringToTimestamp]]
+    CastStringToTimestampTz: _ClassVar[type[_UnaryFunc_CastStringToTimestampTz]]
+    CastStringToUint16: _ClassVar[type[_UnaryFunc_CastStringToUint16]]
+    CastStringToUint32: _ClassVar[type[_UnaryFunc_CastStringToUint32]]
+    CastStringToUint64: _ClassVar[type[_UnaryFunc_CastStringToUint64]]
+    CastStringToUuid: _ClassVar[type[_UnaryFunc_CastStringToUuid]]
+    CastStringToVarChar: _ClassVar[type[_UnaryFunc_CastStringToVarChar]]
+    CastTimeToInterval: _ClassVar[type[_UnaryFunc_CastTimeToInterval]]
+    CastTimeToString: _ClassVar[type[_UnaryFunc_CastTimeToString]]
+    CastTimestampToDate: _ClassVar[type[_UnaryFunc_CastTimestampToDate]]
+    CastTimestampToMzTimestamp: _ClassVar[type[_UnaryFunc_CastTimestampToMzTimestamp]]
+    CastTimestampToString: _ClassVar[type[_UnaryFunc_CastTimestampToString]]
+    CastTimestampToTime: _ClassVar[type[_UnaryFunc_CastTimestampToTime]]
+    CastTimestampToTimestampTz: _ClassVar[type[_UnaryFunc_CastTimestampToTimestampTz]]
+    CastTimestampTzToDate: _ClassVar[type[_UnaryFunc_CastTimestampTzToDate]]
+    CastTimestampTzToMzTimestamp: _ClassVar[
+        type[_UnaryFunc_CastTimestampTzToMzTimestamp]
+    ]
+    CastTimestampTzToString: _ClassVar[type[_UnaryFunc_CastTimestampTzToString]]
+    CastTimestampTzToTime: _ClassVar[type[_UnaryFunc_CastTimestampTzToTime]]
+    CastTimestampTzToTimestamp: _ClassVar[type[_UnaryFunc_CastTimestampTzToTimestamp]]
+    CastUint16ToFloat32: _ClassVar[type[_UnaryFunc_CastUint16ToFloat32]]
+    CastUint16ToFloat64: _ClassVar[type[_UnaryFunc_CastUint16ToFloat64]]
+    CastUint16ToInt16: _ClassVar[type[_UnaryFunc_CastUint16ToInt16]]
+    CastUint16ToInt32: _ClassVar[type[_UnaryFunc_CastUint16ToInt32]]
+    CastUint16ToInt64: _ClassVar[type[_UnaryFunc_CastUint16ToInt64]]
+    CastUint16ToNumeric: _ClassVar[type[_UnaryFunc_CastUint16ToNumeric]]
+    CastUint16ToString: _ClassVar[type[_UnaryFunc_CastUint16ToString]]
+    CastUint16ToUint32: _ClassVar[type[_UnaryFunc_CastUint16ToUint32]]
+    CastUint16ToUint64: _ClassVar[type[_UnaryFunc_CastUint16ToUint64]]
+    CastUint32ToFloat32: _ClassVar[type[_UnaryFunc_CastUint32ToFloat32]]
+    CastUint32ToFloat64: _ClassVar[type[_UnaryFunc_CastUint32ToFloat64]]
+    CastUint32ToInt16: _ClassVar[type[_UnaryFunc_CastUint32ToInt16]]
+    CastUint32ToInt32: _ClassVar[type[_UnaryFunc_CastUint32ToInt32]]
+    CastUint32ToInt64: _ClassVar[type[_UnaryFunc_CastUint32ToInt64]]
+    CastUint32ToMzTimestamp: _ClassVar[type[_UnaryFunc_CastUint32ToMzTimestamp]]
+    CastUint32ToNumeric: _ClassVar[type[_UnaryFunc_CastUint32ToNumeric]]
+    CastUint32ToString: _ClassVar[type[_UnaryFunc_CastUint32ToString]]
+    CastUint32ToUint16: _ClassVar[type[_UnaryFunc_CastUint32ToUint16]]
+    CastUint32ToUint64: _ClassVar[type[_UnaryFunc_CastUint32ToUint64]]
+    CastUint64ToFloat32: _ClassVar[type[_UnaryFunc_CastUint64ToFloat32]]
+    CastUint64ToFloat64: _ClassVar[type[_UnaryFunc_CastUint64ToFloat64]]
+    CastUint64ToInt16: _ClassVar[type[_UnaryFunc_CastUint64ToInt16]]
+    CastUint64ToInt32: _ClassVar[type[_UnaryFunc_CastUint64ToInt32]]
+    CastUint64ToInt64: _ClassVar[type[_UnaryFunc_CastUint64ToInt64]]
+    CastUint64ToMzTimestamp: _ClassVar[type[_UnaryFunc_CastUint64ToMzTimestamp]]
+    CastUint64ToNumeric: _ClassVar[type[_UnaryFunc_CastUint64ToNumeric]]
+    CastUint64ToString: _ClassVar[type[_UnaryFunc_CastUint64ToString]]
+    CastUint64ToUint16: _ClassVar[type[_UnaryFunc_CastUint64ToUint16]]
+    CastUint64ToUint32: _ClassVar[type[_UnaryFunc_CastUint64ToUint32]]
+    CastUuidToString: _ClassVar[type[_UnaryFunc_CastUuidToString]]
+    CastVarCharToString: _ClassVar[type[_UnaryFunc_CastVarCharToString]]
+    CbrtFloat64: _ClassVar[type[_UnaryFunc_CbrtFloat64]]
+    CeilFloat32: _ClassVar[type[_UnaryFunc_CeilFloat32]]
+    CeilFloat64: _ClassVar[type[_UnaryFunc_CeilFloat64]]
+    CeilNumeric: _ClassVar[type[_UnaryFunc_CeilNumeric]]
+    CharLength: _ClassVar[type[_UnaryFunc_CharLength]]
+    Chr: _ClassVar[type[_UnaryFunc_Chr]]
+    Cos: _ClassVar[type[_UnaryFunc_Cos]]
+    Cosh: _ClassVar[type[_UnaryFunc_Cosh]]
+    Cot: _ClassVar[type[_UnaryFunc_Cot]]
+    Crc32Bytes: _ClassVar[type[_UnaryFunc_Crc32Bytes]]
+    Crc32String: _ClassVar[type[_UnaryFunc_Crc32String]]
+    DatePartInterval: _ClassVar[type[_UnaryFunc_DatePartInterval]]
+    DatePartTime: _ClassVar[type[_UnaryFunc_DatePartTime]]
+    DatePartTimestamp: _ClassVar[type[_UnaryFunc_DatePartTimestamp]]
+    DatePartTimestampTz: _ClassVar[type[_UnaryFunc_DatePartTimestampTz]]
+    DateTruncTimestamp: _ClassVar[type[_UnaryFunc_DateTruncTimestamp]]
+    DateTruncTimestampTz: _ClassVar[type[_UnaryFunc_DateTruncTimestampTz]]
+    Degrees: _ClassVar[type[_UnaryFunc_Degrees]]
+    Exp: _ClassVar[type[_UnaryFunc_Exp]]
+    ExpNumeric: _ClassVar[type[_UnaryFunc_ExpNumeric]]
+    ExtractDate: _ClassVar[type[_UnaryFunc_ExtractDate]]
+    ExtractInterval: _ClassVar[type[_UnaryFunc_ExtractInterval]]
+    ExtractTime: _ClassVar[type[_UnaryFunc_ExtractTime]]
+    ExtractTimestamp: _ClassVar[type[_UnaryFunc_ExtractTimestamp]]
+    ExtractTimestampTz: _ClassVar[type[_UnaryFunc_ExtractTimestampTz]]
+    FloorFloat32: _ClassVar[type[_UnaryFunc_FloorFloat32]]
+    FloorFloat64: _ClassVar[type[_UnaryFunc_FloorFloat64]]
+    FloorNumeric: _ClassVar[type[_UnaryFunc_FloorNumeric]]
+    Initcap: _ClassVar[type[_UnaryFunc_Initcap]]
+    IsFalse: _ClassVar[type[_UnaryFunc_IsFalse]]
+    IsLikeMatch: _ClassVar[type[_UnaryFunc_IsLikeMatch]]
+    IsNull: _ClassVar[type[_UnaryFunc_IsNull]]
+    IsRegexpMatch: _ClassVar[type[_UnaryFunc_IsRegexpMatch]]
+    IsTrue: _ClassVar[type[_UnaryFunc_IsTrue]]
+    Jq: _ClassVar[type[_UnaryFunc_Jq]]
+    JsonbArrayLength: _ClassVar[type[_UnaryFunc_JsonbArrayLength]]
+    JsonbPretty: _ClassVar[type[_UnaryFunc_JsonbPretty]]
+    JsonbStripNulls: _ClassVar[type[_UnaryFunc_JsonbStripNulls]]
+    JsonbTypeof: _ClassVar[type[_UnaryFunc_JsonbTypeof]]
+    JustifyDays: _ClassVar[type[_UnaryFunc_JustifyDays]]
+    JustifyHours: _ClassVar[type[_UnaryFunc_JustifyHours]]
+    JustifyInterval: _ClassVar[type[_UnaryFunc_JustifyInterval]]
+    KafkaMurmur2Bytes: _ClassVar[type[_UnaryFunc_KafkaMurmur2Bytes]]
+    KafkaMurmur2String: _ClassVar[type[_UnaryFunc_KafkaMurmur2String]]
+    ListLength: _ClassVar[type[_UnaryFunc_ListLength]]
+    Ln: _ClassVar[type[_UnaryFunc_Ln]]
+    LnNumeric: _ClassVar[type[_UnaryFunc_LnNumeric]]
+    Log10: _ClassVar[type[_UnaryFunc_Log10]]
+    Log10Numeric: _ClassVar[type[_UnaryFunc_Log10Numeric]]
+    Lower: _ClassVar[type[_UnaryFunc_Lower]]
+    MapBuildFromRecordList: _ClassVar[type[_UnaryFunc_MapBuildFromRecordList]]
+    MapLength: _ClassVar[type[_UnaryFunc_MapLength]]
+    MzAclItemGrantee: _ClassVar[type[_UnaryFunc_MzAclItemGrantee]]
+    MzAclItemGrantor: _ClassVar[type[_UnaryFunc_MzAclItemGrantor]]
+    MzAclItemPrivileges: _ClassVar[type[_UnaryFunc_MzAclItemPrivileges]]
+    MzFormatPrivileges: _ClassVar[type[_UnaryFunc_MzFormatPrivileges]]
+    MzRowSize: _ClassVar[type[_UnaryFunc_MzRowSize]]
+    MzTypeName: _ClassVar[type[_UnaryFunc_MzTypeName]]
+    MzValidatePrivileges: _ClassVar[type[_UnaryFunc_MzValidatePrivileges]]
+    MzValidateRolePrivilege: _ClassVar[type[_UnaryFunc_MzValidateRolePrivilege]]
+    NegFloat32: _ClassVar[type[_UnaryFunc_NegFloat32]]
+    NegFloat64: _ClassVar[type[_UnaryFunc_NegFloat64]]
+    NegInt16: _ClassVar[type[_UnaryFunc_NegInt16]]
+    NegInt32: _ClassVar[type[_UnaryFunc_NegInt32]]
+    NegInt64: _ClassVar[type[_UnaryFunc_NegInt64]]
+    NegInterval: _ClassVar[type[_UnaryFunc_NegInterval]]
+    NegNumeric: _ClassVar[type[_UnaryFunc_NegNumeric]]
+    Not: _ClassVar[type[_UnaryFunc_Not]]
+    PadChar: _ClassVar[type[_UnaryFunc_PadChar]]
+    Panic: _ClassVar[type[_UnaryFunc_Panic]]
+    ParseCatalogAclMode: _ClassVar[type[_UnaryFunc_ParseCatalogAclMode]]
+    ParseCatalogAuditLogDetails: _ClassVar[type[_UnaryFunc_ParseCatalogAuditLogDetails]]
+    ParseCatalogCreateSql: _ClassVar[type[_UnaryFunc_ParseCatalogCreateSql]]
+    ParseCatalogId: _ClassVar[type[_UnaryFunc_ParseCatalogId]]
+    ParseCatalogItemReferences: _ClassVar[type[_UnaryFunc_ParseCatalogItemReferences]]
+    ParseCatalogPrivileges: _ClassVar[type[_UnaryFunc_ParseCatalogPrivileges]]
+    ParseConnectionDetails: _ClassVar[type[_UnaryFunc_ParseConnectionDetails]]
+    ParseKafkaSourceDetails: _ClassVar[type[_UnaryFunc_ParseKafkaSourceDetails]]
+    ParsePostgresSourceDetails: _ClassVar[type[_UnaryFunc_ParsePostgresSourceDetails]]
+    ParseSourceExportDetails: _ClassVar[type[_UnaryFunc_ParseSourceExportDetails]]
+    PgColumnSize: _ClassVar[type[_UnaryFunc_PgColumnSize]]
+    PgSizePretty: _ClassVar[type[_UnaryFunc_PgSizePretty]]
+    QuoteIdent: _ClassVar[type[_UnaryFunc_QuoteIdent]]
+    Radians: _ClassVar[type[_UnaryFunc_Radians]]
+    RangeEmpty: _ClassVar[type[_UnaryFunc_RangeEmpty]]
+    RangeLower: _ClassVar[type[_UnaryFunc_RangeLower]]
+    RangeLowerInc: _ClassVar[type[_UnaryFunc_RangeLowerInc]]
+    RangeLowerInf: _ClassVar[type[_UnaryFunc_RangeLowerInf]]
+    RangeUpper: _ClassVar[type[_UnaryFunc_RangeUpper]]
+    RangeUpperInc: _ClassVar[type[_UnaryFunc_RangeUpperInc]]
+    RangeUpperInf: _ClassVar[type[_UnaryFunc_RangeUpperInf]]
+    RecordGet: _ClassVar[type[_UnaryFunc_RecordGet]]
+    RedactSql: _ClassVar[type[_UnaryFunc_RedactSql]]
+    RegexpMatch: _ClassVar[type[_UnaryFunc_RegexpMatch]]
+    RegexpSplitToArray: _ClassVar[type[_UnaryFunc_RegexpSplitToArray]]
+    Reverse: _ClassVar[type[_UnaryFunc_Reverse]]
+    RoundFloat32: _ClassVar[type[_UnaryFunc_RoundFloat32]]
+    RoundFloat64: _ClassVar[type[_UnaryFunc_RoundFloat64]]
+    RoundNumeric: _ClassVar[type[_UnaryFunc_RoundNumeric]]
+    SeahashBytes: _ClassVar[type[_UnaryFunc_SeahashBytes]]
+    SeahashString: _ClassVar[type[_UnaryFunc_SeahashString]]
+    Sin: _ClassVar[type[_UnaryFunc_Sin]]
+    Sinh: _ClassVar[type[_UnaryFunc_Sinh]]
+    Sleep: _ClassVar[type[_UnaryFunc_Sleep]]
+    SqrtFloat64: _ClassVar[type[_UnaryFunc_SqrtFloat64]]
+    SqrtNumeric: _ClassVar[type[_UnaryFunc_SqrtNumeric]]
+    StepMzTimestamp: _ClassVar[type[_UnaryFunc_StepMzTimestamp]]
+    Tan: _ClassVar[type[_UnaryFunc_Tan]]
+    Tanh: _ClassVar[type[_UnaryFunc_Tanh]]
+    TimezoneTime: _ClassVar[type[_UnaryFunc_TimezoneTime]]
+    TimezoneTimestamp: _ClassVar[type[_UnaryFunc_TimezoneTimestamp]]
+    TimezoneTimestampTz: _ClassVar[type[_UnaryFunc_TimezoneTimestampTz]]
+    ToCharTimestamp: _ClassVar[type[_UnaryFunc_ToCharTimestamp]]
+    ToCharTimestampTz: _ClassVar[type[_UnaryFunc_ToCharTimestampTz]]
+    ToTimestamp: _ClassVar[type[_UnaryFunc_ToTimestamp]]
+    TrimLeadingWhitespace: _ClassVar[type[_UnaryFunc_TrimLeadingWhitespace]]
+    TrimTrailingWhitespace: _ClassVar[type[_UnaryFunc_TrimTrailingWhitespace]]
+    TrimWhitespace: _ClassVar[type[_UnaryFunc_TrimWhitespace]]
+    TruncFloat32: _ClassVar[type[_UnaryFunc_TruncFloat32]]
+    TruncFloat64: _ClassVar[type[_UnaryFunc_TruncFloat64]]
+    TruncNumeric: _ClassVar[type[_UnaryFunc_TruncNumeric]]
+    TryCast: _ClassVar[type[_UnaryFunc_TryCast]]
+    TryParseMonotonicIso8601Timestamp: _ClassVar[
+        type[_UnaryFunc_TryParseMonotonicIso8601Timestamp]
+    ]
+    Upper: _ClassVar[type[_UnaryFunc_Upper]]
+
+
+@_dc.dataclass
+class _UnaryFunc_AbsFloat32(_Variant, UnaryFunc):
+    value: AbsFloat32
+    _NAME = "AbsFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AbsFloat32"}
+
+
+_UnaryFunc_AbsFloat32.__name__ = "AbsFloat32"
+_UnaryFunc_AbsFloat32.__qualname__ = "UnaryFunc.AbsFloat32"
+UnaryFunc.AbsFloat32 = _UnaryFunc_AbsFloat32
+
+
+@_dc.dataclass
+class _UnaryFunc_AbsFloat64(_Variant, UnaryFunc):
+    value: AbsFloat64
+    _NAME = "AbsFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AbsFloat64"}
+
+
+_UnaryFunc_AbsFloat64.__name__ = "AbsFloat64"
+_UnaryFunc_AbsFloat64.__qualname__ = "UnaryFunc.AbsFloat64"
+UnaryFunc.AbsFloat64 = _UnaryFunc_AbsFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_AbsInt16(_Variant, UnaryFunc):
+    value: AbsInt16
+    _NAME = "AbsInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AbsInt16"}
+
+
+_UnaryFunc_AbsInt16.__name__ = "AbsInt16"
+_UnaryFunc_AbsInt16.__qualname__ = "UnaryFunc.AbsInt16"
+UnaryFunc.AbsInt16 = _UnaryFunc_AbsInt16
+
+
+@_dc.dataclass
+class _UnaryFunc_AbsInt32(_Variant, UnaryFunc):
+    value: AbsInt32
+    _NAME = "AbsInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AbsInt32"}
+
+
+_UnaryFunc_AbsInt32.__name__ = "AbsInt32"
+_UnaryFunc_AbsInt32.__qualname__ = "UnaryFunc.AbsInt32"
+UnaryFunc.AbsInt32 = _UnaryFunc_AbsInt32
+
+
+@_dc.dataclass
+class _UnaryFunc_AbsInt64(_Variant, UnaryFunc):
+    value: AbsInt64
+    _NAME = "AbsInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AbsInt64"}
+
+
+_UnaryFunc_AbsInt64.__name__ = "AbsInt64"
+_UnaryFunc_AbsInt64.__qualname__ = "UnaryFunc.AbsInt64"
+UnaryFunc.AbsInt64 = _UnaryFunc_AbsInt64
+
+
+@_dc.dataclass
+class _UnaryFunc_AbsNumeric(_Variant, UnaryFunc):
+    value: AbsNumeric
+    _NAME = "AbsNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AbsNumeric"}
+
+
+_UnaryFunc_AbsNumeric.__name__ = "AbsNumeric"
+_UnaryFunc_AbsNumeric.__qualname__ = "UnaryFunc.AbsNumeric"
+UnaryFunc.AbsNumeric = _UnaryFunc_AbsNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_AclItemGrantee(_Variant, UnaryFunc):
+    value: AclItemGrantee
+    _NAME = "AclItemGrantee"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AclItemGrantee"}
+
+
+_UnaryFunc_AclItemGrantee.__name__ = "AclItemGrantee"
+_UnaryFunc_AclItemGrantee.__qualname__ = "UnaryFunc.AclItemGrantee"
+UnaryFunc.AclItemGrantee = _UnaryFunc_AclItemGrantee
+
+
+@_dc.dataclass
+class _UnaryFunc_AclItemGrantor(_Variant, UnaryFunc):
+    value: AclItemGrantor
+    _NAME = "AclItemGrantor"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AclItemGrantor"}
+
+
+_UnaryFunc_AclItemGrantor.__name__ = "AclItemGrantor"
+_UnaryFunc_AclItemGrantor.__qualname__ = "UnaryFunc.AclItemGrantor"
+UnaryFunc.AclItemGrantor = _UnaryFunc_AclItemGrantor
+
+
+@_dc.dataclass
+class _UnaryFunc_AclItemPrivileges(_Variant, UnaryFunc):
+    value: AclItemPrivileges
+    _NAME = "AclItemPrivileges"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AclItemPrivileges"}
+
+
+_UnaryFunc_AclItemPrivileges.__name__ = "AclItemPrivileges"
+_UnaryFunc_AclItemPrivileges.__qualname__ = "UnaryFunc.AclItemPrivileges"
+UnaryFunc.AclItemPrivileges = _UnaryFunc_AclItemPrivileges
+
+
+@_dc.dataclass
+class _UnaryFunc_Acos(_Variant, UnaryFunc):
+    value: Acos
+    _NAME = "Acos"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Acos"}
+
+
+_UnaryFunc_Acos.__name__ = "Acos"
+_UnaryFunc_Acos.__qualname__ = "UnaryFunc.Acos"
+UnaryFunc.Acos = _UnaryFunc_Acos
+
+
+@_dc.dataclass
+class _UnaryFunc_Acosh(_Variant, UnaryFunc):
+    value: Acosh
+    _NAME = "Acosh"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Acosh"}
+
+
+_UnaryFunc_Acosh.__name__ = "Acosh"
+_UnaryFunc_Acosh.__qualname__ = "UnaryFunc.Acosh"
+UnaryFunc.Acosh = _UnaryFunc_Acosh
+
+
+@_dc.dataclass
+class _UnaryFunc_AdjustNumericScale(_Variant, UnaryFunc):
+    value: AdjustNumericScale
+    _NAME = "AdjustNumericScale"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AdjustNumericScale"}
+
+
+_UnaryFunc_AdjustNumericScale.__name__ = "AdjustNumericScale"
+_UnaryFunc_AdjustNumericScale.__qualname__ = "UnaryFunc.AdjustNumericScale"
+UnaryFunc.AdjustNumericScale = _UnaryFunc_AdjustNumericScale
+
+
+@_dc.dataclass
+class _UnaryFunc_AdjustTimestampPrecision(_Variant, UnaryFunc):
+    value: AdjustTimestampPrecision
+    _NAME = "AdjustTimestampPrecision"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AdjustTimestampPrecision"}
+
+
+_UnaryFunc_AdjustTimestampPrecision.__name__ = "AdjustTimestampPrecision"
+_UnaryFunc_AdjustTimestampPrecision.__qualname__ = "UnaryFunc.AdjustTimestampPrecision"
+UnaryFunc.AdjustTimestampPrecision = _UnaryFunc_AdjustTimestampPrecision
+
+
+@_dc.dataclass
+class _UnaryFunc_AdjustTimestampTzPrecision(_Variant, UnaryFunc):
+    value: AdjustTimestampTzPrecision
+    _NAME = "AdjustTimestampTzPrecision"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "AdjustTimestampTzPrecision"}
+
+
+_UnaryFunc_AdjustTimestampTzPrecision.__name__ = "AdjustTimestampTzPrecision"
+_UnaryFunc_AdjustTimestampTzPrecision.__qualname__ = (
+    "UnaryFunc.AdjustTimestampTzPrecision"
+)
+UnaryFunc.AdjustTimestampTzPrecision = _UnaryFunc_AdjustTimestampTzPrecision
+
+
+@_dc.dataclass
+class _UnaryFunc_Ascii(_Variant, UnaryFunc):
+    value: Ascii
+    _NAME = "Ascii"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Ascii"}
+
+
+_UnaryFunc_Ascii.__name__ = "Ascii"
+_UnaryFunc_Ascii.__qualname__ = "UnaryFunc.Ascii"
+UnaryFunc.Ascii = _UnaryFunc_Ascii
+
+
+@_dc.dataclass
+class _UnaryFunc_Asin(_Variant, UnaryFunc):
+    value: Asin
+    _NAME = "Asin"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Asin"}
+
+
+_UnaryFunc_Asin.__name__ = "Asin"
+_UnaryFunc_Asin.__qualname__ = "UnaryFunc.Asin"
+UnaryFunc.Asin = _UnaryFunc_Asin
+
+
+@_dc.dataclass
+class _UnaryFunc_Asinh(_Variant, UnaryFunc):
+    value: Asinh
+    _NAME = "Asinh"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Asinh"}
+
+
+_UnaryFunc_Asinh.__name__ = "Asinh"
+_UnaryFunc_Asinh.__qualname__ = "UnaryFunc.Asinh"
+UnaryFunc.Asinh = _UnaryFunc_Asinh
+
+
+@_dc.dataclass
+class _UnaryFunc_Atan(_Variant, UnaryFunc):
+    value: Atan
+    _NAME = "Atan"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Atan"}
+
+
+_UnaryFunc_Atan.__name__ = "Atan"
+_UnaryFunc_Atan.__qualname__ = "UnaryFunc.Atan"
+UnaryFunc.Atan = _UnaryFunc_Atan
+
+
+@_dc.dataclass
+class _UnaryFunc_Atanh(_Variant, UnaryFunc):
+    value: Atanh
+    _NAME = "Atanh"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Atanh"}
+
+
+_UnaryFunc_Atanh.__name__ = "Atanh"
+_UnaryFunc_Atanh.__qualname__ = "UnaryFunc.Atanh"
+UnaryFunc.Atanh = _UnaryFunc_Atanh
+
+
+@_dc.dataclass
+class _UnaryFunc_BitCountBytes(_Variant, UnaryFunc):
+    value: BitCountBytes
+    _NAME = "BitCountBytes"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitCountBytes"}
+
+
+_UnaryFunc_BitCountBytes.__name__ = "BitCountBytes"
+_UnaryFunc_BitCountBytes.__qualname__ = "UnaryFunc.BitCountBytes"
+UnaryFunc.BitCountBytes = _UnaryFunc_BitCountBytes
+
+
+@_dc.dataclass
+class _UnaryFunc_BitLengthBytes(_Variant, UnaryFunc):
+    value: BitLengthBytes
+    _NAME = "BitLengthBytes"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitLengthBytes"}
+
+
+_UnaryFunc_BitLengthBytes.__name__ = "BitLengthBytes"
+_UnaryFunc_BitLengthBytes.__qualname__ = "UnaryFunc.BitLengthBytes"
+UnaryFunc.BitLengthBytes = _UnaryFunc_BitLengthBytes
+
+
+@_dc.dataclass
+class _UnaryFunc_BitLengthString(_Variant, UnaryFunc):
+    value: BitLengthString
+    _NAME = "BitLengthString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitLengthString"}
+
+
+_UnaryFunc_BitLengthString.__name__ = "BitLengthString"
+_UnaryFunc_BitLengthString.__qualname__ = "UnaryFunc.BitLengthString"
+UnaryFunc.BitLengthString = _UnaryFunc_BitLengthString
+
+
+@_dc.dataclass
+class _UnaryFunc_BitNotInt16(_Variant, UnaryFunc):
+    value: BitNotInt16
+    _NAME = "BitNotInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitNotInt16"}
+
+
+_UnaryFunc_BitNotInt16.__name__ = "BitNotInt16"
+_UnaryFunc_BitNotInt16.__qualname__ = "UnaryFunc.BitNotInt16"
+UnaryFunc.BitNotInt16 = _UnaryFunc_BitNotInt16
+
+
+@_dc.dataclass
+class _UnaryFunc_BitNotInt32(_Variant, UnaryFunc):
+    value: BitNotInt32
+    _NAME = "BitNotInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitNotInt32"}
+
+
+_UnaryFunc_BitNotInt32.__name__ = "BitNotInt32"
+_UnaryFunc_BitNotInt32.__qualname__ = "UnaryFunc.BitNotInt32"
+UnaryFunc.BitNotInt32 = _UnaryFunc_BitNotInt32
+
+
+@_dc.dataclass
+class _UnaryFunc_BitNotInt64(_Variant, UnaryFunc):
+    value: BitNotInt64
+    _NAME = "BitNotInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitNotInt64"}
+
+
+_UnaryFunc_BitNotInt64.__name__ = "BitNotInt64"
+_UnaryFunc_BitNotInt64.__qualname__ = "UnaryFunc.BitNotInt64"
+UnaryFunc.BitNotInt64 = _UnaryFunc_BitNotInt64
+
+
+@_dc.dataclass
+class _UnaryFunc_BitNotUint16(_Variant, UnaryFunc):
+    value: BitNotUint16
+    _NAME = "BitNotUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitNotUint16"}
+
+
+_UnaryFunc_BitNotUint16.__name__ = "BitNotUint16"
+_UnaryFunc_BitNotUint16.__qualname__ = "UnaryFunc.BitNotUint16"
+UnaryFunc.BitNotUint16 = _UnaryFunc_BitNotUint16
+
+
+@_dc.dataclass
+class _UnaryFunc_BitNotUint32(_Variant, UnaryFunc):
+    value: BitNotUint32
+    _NAME = "BitNotUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitNotUint32"}
+
+
+_UnaryFunc_BitNotUint32.__name__ = "BitNotUint32"
+_UnaryFunc_BitNotUint32.__qualname__ = "UnaryFunc.BitNotUint32"
+UnaryFunc.BitNotUint32 = _UnaryFunc_BitNotUint32
+
+
+@_dc.dataclass
+class _UnaryFunc_BitNotUint64(_Variant, UnaryFunc):
+    value: BitNotUint64
+    _NAME = "BitNotUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "BitNotUint64"}
+
+
+_UnaryFunc_BitNotUint64.__name__ = "BitNotUint64"
+_UnaryFunc_BitNotUint64.__qualname__ = "UnaryFunc.BitNotUint64"
+UnaryFunc.BitNotUint64 = _UnaryFunc_BitNotUint64
+
+
+@_dc.dataclass
+class _UnaryFunc_ByteLengthBytes(_Variant, UnaryFunc):
+    value: ByteLengthBytes
+    _NAME = "ByteLengthBytes"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ByteLengthBytes"}
+
+
+_UnaryFunc_ByteLengthBytes.__name__ = "ByteLengthBytes"
+_UnaryFunc_ByteLengthBytes.__qualname__ = "UnaryFunc.ByteLengthBytes"
+UnaryFunc.ByteLengthBytes = _UnaryFunc_ByteLengthBytes
+
+
+@_dc.dataclass
+class _UnaryFunc_ByteLengthString(_Variant, UnaryFunc):
+    value: ByteLengthString
+    _NAME = "ByteLengthString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ByteLengthString"}
+
+
+_UnaryFunc_ByteLengthString.__name__ = "ByteLengthString"
+_UnaryFunc_ByteLengthString.__qualname__ = "UnaryFunc.ByteLengthString"
+UnaryFunc.ByteLengthString = _UnaryFunc_ByteLengthString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastArrayToArray(_Variant, UnaryFunc):
+    value: CastArrayToArray
+    _NAME = "CastArrayToArray"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastArrayToArray"}
+
+
+_UnaryFunc_CastArrayToArray.__name__ = "CastArrayToArray"
+_UnaryFunc_CastArrayToArray.__qualname__ = "UnaryFunc.CastArrayToArray"
+UnaryFunc.CastArrayToArray = _UnaryFunc_CastArrayToArray
+
+
+@_dc.dataclass
+class _UnaryFunc_CastArrayToJsonb(_Variant, UnaryFunc):
+    value: CastArrayToJsonb
+    _NAME = "CastArrayToJsonb"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastArrayToJsonb"}
+
+
+_UnaryFunc_CastArrayToJsonb.__name__ = "CastArrayToJsonb"
+_UnaryFunc_CastArrayToJsonb.__qualname__ = "UnaryFunc.CastArrayToJsonb"
+UnaryFunc.CastArrayToJsonb = _UnaryFunc_CastArrayToJsonb
+
+
+@_dc.dataclass
+class _UnaryFunc_CastArrayToListOneDim(_Variant, UnaryFunc):
+    value: CastArrayToListOneDim
+    _NAME = "CastArrayToListOneDim"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastArrayToListOneDim"}
+
+
+_UnaryFunc_CastArrayToListOneDim.__name__ = "CastArrayToListOneDim"
+_UnaryFunc_CastArrayToListOneDim.__qualname__ = "UnaryFunc.CastArrayToListOneDim"
+UnaryFunc.CastArrayToListOneDim = _UnaryFunc_CastArrayToListOneDim
+
+
+@_dc.dataclass
+class _UnaryFunc_CastArrayToString(_Variant, UnaryFunc):
+    value: CastArrayToString
+    _NAME = "CastArrayToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastArrayToString"}
+
+
+_UnaryFunc_CastArrayToString.__name__ = "CastArrayToString"
+_UnaryFunc_CastArrayToString.__qualname__ = "UnaryFunc.CastArrayToString"
+UnaryFunc.CastArrayToString = _UnaryFunc_CastArrayToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastBoolToInt32(_Variant, UnaryFunc):
+    value: CastBoolToInt32
+    _NAME = "CastBoolToInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastBoolToInt32"}
+
+
+_UnaryFunc_CastBoolToInt32.__name__ = "CastBoolToInt32"
+_UnaryFunc_CastBoolToInt32.__qualname__ = "UnaryFunc.CastBoolToInt32"
+UnaryFunc.CastBoolToInt32 = _UnaryFunc_CastBoolToInt32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastBoolToInt64(_Variant, UnaryFunc):
+    value: CastBoolToInt64
+    _NAME = "CastBoolToInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastBoolToInt64"}
+
+
+_UnaryFunc_CastBoolToInt64.__name__ = "CastBoolToInt64"
+_UnaryFunc_CastBoolToInt64.__qualname__ = "UnaryFunc.CastBoolToInt64"
+UnaryFunc.CastBoolToInt64 = _UnaryFunc_CastBoolToInt64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastBoolToString(_Variant, UnaryFunc):
+    value: CastBoolToString
+    _NAME = "CastBoolToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastBoolToString"}
+
+
+_UnaryFunc_CastBoolToString.__name__ = "CastBoolToString"
+_UnaryFunc_CastBoolToString.__qualname__ = "UnaryFunc.CastBoolToString"
+UnaryFunc.CastBoolToString = _UnaryFunc_CastBoolToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastBoolToStringNonstandard(_Variant, UnaryFunc):
+    value: CastBoolToStringNonstandard
+    _NAME = "CastBoolToStringNonstandard"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastBoolToStringNonstandard"}
+
+
+_UnaryFunc_CastBoolToStringNonstandard.__name__ = "CastBoolToStringNonstandard"
+_UnaryFunc_CastBoolToStringNonstandard.__qualname__ = (
+    "UnaryFunc.CastBoolToStringNonstandard"
+)
+UnaryFunc.CastBoolToStringNonstandard = _UnaryFunc_CastBoolToStringNonstandard
+
+
+@_dc.dataclass
+class _UnaryFunc_CastBytesToString(_Variant, UnaryFunc):
+    value: CastBytesToString
+    _NAME = "CastBytesToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastBytesToString"}
+
+
+_UnaryFunc_CastBytesToString.__name__ = "CastBytesToString"
+_UnaryFunc_CastBytesToString.__qualname__ = "UnaryFunc.CastBytesToString"
+UnaryFunc.CastBytesToString = _UnaryFunc_CastBytesToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastCharToString(_Variant, UnaryFunc):
+    value: CastCharToString
+    _NAME = "CastCharToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastCharToString"}
+
+
+_UnaryFunc_CastCharToString.__name__ = "CastCharToString"
+_UnaryFunc_CastCharToString.__qualname__ = "UnaryFunc.CastCharToString"
+UnaryFunc.CastCharToString = _UnaryFunc_CastCharToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastDateToMzTimestamp(_Variant, UnaryFunc):
+    value: CastDateToMzTimestamp
+    _NAME = "CastDateToMzTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastDateToMzTimestamp"}
+
+
+_UnaryFunc_CastDateToMzTimestamp.__name__ = "CastDateToMzTimestamp"
+_UnaryFunc_CastDateToMzTimestamp.__qualname__ = "UnaryFunc.CastDateToMzTimestamp"
+UnaryFunc.CastDateToMzTimestamp = _UnaryFunc_CastDateToMzTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_CastDateToString(_Variant, UnaryFunc):
+    value: CastDateToString
+    _NAME = "CastDateToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastDateToString"}
+
+
+_UnaryFunc_CastDateToString.__name__ = "CastDateToString"
+_UnaryFunc_CastDateToString.__qualname__ = "UnaryFunc.CastDateToString"
+UnaryFunc.CastDateToString = _UnaryFunc_CastDateToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastDateToTimestamp(_Variant, UnaryFunc):
+    value: CastDateToTimestamp
+    _NAME = "CastDateToTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastDateToTimestamp"}
+
+
+_UnaryFunc_CastDateToTimestamp.__name__ = "CastDateToTimestamp"
+_UnaryFunc_CastDateToTimestamp.__qualname__ = "UnaryFunc.CastDateToTimestamp"
+UnaryFunc.CastDateToTimestamp = _UnaryFunc_CastDateToTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_CastDateToTimestampTz(_Variant, UnaryFunc):
+    value: CastDateToTimestampTz
+    _NAME = "CastDateToTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastDateToTimestampTz"}
+
+
+_UnaryFunc_CastDateToTimestampTz.__name__ = "CastDateToTimestampTz"
+_UnaryFunc_CastDateToTimestampTz.__qualname__ = "UnaryFunc.CastDateToTimestampTz"
+UnaryFunc.CastDateToTimestampTz = _UnaryFunc_CastDateToTimestampTz
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat32ToFloat64(_Variant, UnaryFunc):
+    value: CastFloat32ToFloat64
+    _NAME = "CastFloat32ToFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat32ToFloat64"}
+
+
+_UnaryFunc_CastFloat32ToFloat64.__name__ = "CastFloat32ToFloat64"
+_UnaryFunc_CastFloat32ToFloat64.__qualname__ = "UnaryFunc.CastFloat32ToFloat64"
+UnaryFunc.CastFloat32ToFloat64 = _UnaryFunc_CastFloat32ToFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat32ToInt16(_Variant, UnaryFunc):
+    value: CastFloat32ToInt16
+    _NAME = "CastFloat32ToInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat32ToInt16"}
+
+
+_UnaryFunc_CastFloat32ToInt16.__name__ = "CastFloat32ToInt16"
+_UnaryFunc_CastFloat32ToInt16.__qualname__ = "UnaryFunc.CastFloat32ToInt16"
+UnaryFunc.CastFloat32ToInt16 = _UnaryFunc_CastFloat32ToInt16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat32ToInt32(_Variant, UnaryFunc):
+    value: CastFloat32ToInt32
+    _NAME = "CastFloat32ToInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat32ToInt32"}
+
+
+_UnaryFunc_CastFloat32ToInt32.__name__ = "CastFloat32ToInt32"
+_UnaryFunc_CastFloat32ToInt32.__qualname__ = "UnaryFunc.CastFloat32ToInt32"
+UnaryFunc.CastFloat32ToInt32 = _UnaryFunc_CastFloat32ToInt32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat32ToInt64(_Variant, UnaryFunc):
+    value: CastFloat32ToInt64
+    _NAME = "CastFloat32ToInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat32ToInt64"}
+
+
+_UnaryFunc_CastFloat32ToInt64.__name__ = "CastFloat32ToInt64"
+_UnaryFunc_CastFloat32ToInt64.__qualname__ = "UnaryFunc.CastFloat32ToInt64"
+UnaryFunc.CastFloat32ToInt64 = _UnaryFunc_CastFloat32ToInt64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat32ToNumeric(_Variant, UnaryFunc):
+    value: CastFloat32ToNumeric
+    _NAME = "CastFloat32ToNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat32ToNumeric"}
+
+
+_UnaryFunc_CastFloat32ToNumeric.__name__ = "CastFloat32ToNumeric"
+_UnaryFunc_CastFloat32ToNumeric.__qualname__ = "UnaryFunc.CastFloat32ToNumeric"
+UnaryFunc.CastFloat32ToNumeric = _UnaryFunc_CastFloat32ToNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat32ToString(_Variant, UnaryFunc):
+    value: CastFloat32ToString
+    _NAME = "CastFloat32ToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat32ToString"}
+
+
+_UnaryFunc_CastFloat32ToString.__name__ = "CastFloat32ToString"
+_UnaryFunc_CastFloat32ToString.__qualname__ = "UnaryFunc.CastFloat32ToString"
+UnaryFunc.CastFloat32ToString = _UnaryFunc_CastFloat32ToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat32ToUint16(_Variant, UnaryFunc):
+    value: CastFloat32ToUint16
+    _NAME = "CastFloat32ToUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat32ToUint16"}
+
+
+_UnaryFunc_CastFloat32ToUint16.__name__ = "CastFloat32ToUint16"
+_UnaryFunc_CastFloat32ToUint16.__qualname__ = "UnaryFunc.CastFloat32ToUint16"
+UnaryFunc.CastFloat32ToUint16 = _UnaryFunc_CastFloat32ToUint16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat32ToUint32(_Variant, UnaryFunc):
+    value: CastFloat32ToUint32
+    _NAME = "CastFloat32ToUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat32ToUint32"}
+
+
+_UnaryFunc_CastFloat32ToUint32.__name__ = "CastFloat32ToUint32"
+_UnaryFunc_CastFloat32ToUint32.__qualname__ = "UnaryFunc.CastFloat32ToUint32"
+UnaryFunc.CastFloat32ToUint32 = _UnaryFunc_CastFloat32ToUint32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat32ToUint64(_Variant, UnaryFunc):
+    value: CastFloat32ToUint64
+    _NAME = "CastFloat32ToUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat32ToUint64"}
+
+
+_UnaryFunc_CastFloat32ToUint64.__name__ = "CastFloat32ToUint64"
+_UnaryFunc_CastFloat32ToUint64.__qualname__ = "UnaryFunc.CastFloat32ToUint64"
+UnaryFunc.CastFloat32ToUint64 = _UnaryFunc_CastFloat32ToUint64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat64ToFloat32(_Variant, UnaryFunc):
+    value: CastFloat64ToFloat32
+    _NAME = "CastFloat64ToFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat64ToFloat32"}
+
+
+_UnaryFunc_CastFloat64ToFloat32.__name__ = "CastFloat64ToFloat32"
+_UnaryFunc_CastFloat64ToFloat32.__qualname__ = "UnaryFunc.CastFloat64ToFloat32"
+UnaryFunc.CastFloat64ToFloat32 = _UnaryFunc_CastFloat64ToFloat32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat64ToInt16(_Variant, UnaryFunc):
+    value: CastFloat64ToInt16
+    _NAME = "CastFloat64ToInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat64ToInt16"}
+
+
+_UnaryFunc_CastFloat64ToInt16.__name__ = "CastFloat64ToInt16"
+_UnaryFunc_CastFloat64ToInt16.__qualname__ = "UnaryFunc.CastFloat64ToInt16"
+UnaryFunc.CastFloat64ToInt16 = _UnaryFunc_CastFloat64ToInt16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat64ToInt32(_Variant, UnaryFunc):
+    value: CastFloat64ToInt32
+    _NAME = "CastFloat64ToInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat64ToInt32"}
+
+
+_UnaryFunc_CastFloat64ToInt32.__name__ = "CastFloat64ToInt32"
+_UnaryFunc_CastFloat64ToInt32.__qualname__ = "UnaryFunc.CastFloat64ToInt32"
+UnaryFunc.CastFloat64ToInt32 = _UnaryFunc_CastFloat64ToInt32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat64ToInt64(_Variant, UnaryFunc):
+    value: CastFloat64ToInt64
+    _NAME = "CastFloat64ToInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat64ToInt64"}
+
+
+_UnaryFunc_CastFloat64ToInt64.__name__ = "CastFloat64ToInt64"
+_UnaryFunc_CastFloat64ToInt64.__qualname__ = "UnaryFunc.CastFloat64ToInt64"
+UnaryFunc.CastFloat64ToInt64 = _UnaryFunc_CastFloat64ToInt64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat64ToNumeric(_Variant, UnaryFunc):
+    value: CastFloat64ToNumeric
+    _NAME = "CastFloat64ToNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat64ToNumeric"}
+
+
+_UnaryFunc_CastFloat64ToNumeric.__name__ = "CastFloat64ToNumeric"
+_UnaryFunc_CastFloat64ToNumeric.__qualname__ = "UnaryFunc.CastFloat64ToNumeric"
+UnaryFunc.CastFloat64ToNumeric = _UnaryFunc_CastFloat64ToNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat64ToString(_Variant, UnaryFunc):
+    value: CastFloat64ToString
+    _NAME = "CastFloat64ToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat64ToString"}
+
+
+_UnaryFunc_CastFloat64ToString.__name__ = "CastFloat64ToString"
+_UnaryFunc_CastFloat64ToString.__qualname__ = "UnaryFunc.CastFloat64ToString"
+UnaryFunc.CastFloat64ToString = _UnaryFunc_CastFloat64ToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat64ToUint16(_Variant, UnaryFunc):
+    value: CastFloat64ToUint16
+    _NAME = "CastFloat64ToUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat64ToUint16"}
+
+
+_UnaryFunc_CastFloat64ToUint16.__name__ = "CastFloat64ToUint16"
+_UnaryFunc_CastFloat64ToUint16.__qualname__ = "UnaryFunc.CastFloat64ToUint16"
+UnaryFunc.CastFloat64ToUint16 = _UnaryFunc_CastFloat64ToUint16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat64ToUint32(_Variant, UnaryFunc):
+    value: CastFloat64ToUint32
+    _NAME = "CastFloat64ToUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat64ToUint32"}
+
+
+_UnaryFunc_CastFloat64ToUint32.__name__ = "CastFloat64ToUint32"
+_UnaryFunc_CastFloat64ToUint32.__qualname__ = "UnaryFunc.CastFloat64ToUint32"
+UnaryFunc.CastFloat64ToUint32 = _UnaryFunc_CastFloat64ToUint32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastFloat64ToUint64(_Variant, UnaryFunc):
+    value: CastFloat64ToUint64
+    _NAME = "CastFloat64ToUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastFloat64ToUint64"}
+
+
+_UnaryFunc_CastFloat64ToUint64.__name__ = "CastFloat64ToUint64"
+_UnaryFunc_CastFloat64ToUint64.__qualname__ = "UnaryFunc.CastFloat64ToUint64"
+UnaryFunc.CastFloat64ToUint64 = _UnaryFunc_CastFloat64ToUint64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt16ToFloat32(_Variant, UnaryFunc):
+    value: CastInt16ToFloat32
+    _NAME = "CastInt16ToFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt16ToFloat32"}
+
+
+_UnaryFunc_CastInt16ToFloat32.__name__ = "CastInt16ToFloat32"
+_UnaryFunc_CastInt16ToFloat32.__qualname__ = "UnaryFunc.CastInt16ToFloat32"
+UnaryFunc.CastInt16ToFloat32 = _UnaryFunc_CastInt16ToFloat32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt16ToFloat64(_Variant, UnaryFunc):
+    value: CastInt16ToFloat64
+    _NAME = "CastInt16ToFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt16ToFloat64"}
+
+
+_UnaryFunc_CastInt16ToFloat64.__name__ = "CastInt16ToFloat64"
+_UnaryFunc_CastInt16ToFloat64.__qualname__ = "UnaryFunc.CastInt16ToFloat64"
+UnaryFunc.CastInt16ToFloat64 = _UnaryFunc_CastInt16ToFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt16ToInt32(_Variant, UnaryFunc):
+    value: CastInt16ToInt32
+    _NAME = "CastInt16ToInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt16ToInt32"}
+
+
+_UnaryFunc_CastInt16ToInt32.__name__ = "CastInt16ToInt32"
+_UnaryFunc_CastInt16ToInt32.__qualname__ = "UnaryFunc.CastInt16ToInt32"
+UnaryFunc.CastInt16ToInt32 = _UnaryFunc_CastInt16ToInt32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt16ToInt64(_Variant, UnaryFunc):
+    value: CastInt16ToInt64
+    _NAME = "CastInt16ToInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt16ToInt64"}
+
+
+_UnaryFunc_CastInt16ToInt64.__name__ = "CastInt16ToInt64"
+_UnaryFunc_CastInt16ToInt64.__qualname__ = "UnaryFunc.CastInt16ToInt64"
+UnaryFunc.CastInt16ToInt64 = _UnaryFunc_CastInt16ToInt64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt16ToNumeric(_Variant, UnaryFunc):
+    value: CastInt16ToNumeric
+    _NAME = "CastInt16ToNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt16ToNumeric"}
+
+
+_UnaryFunc_CastInt16ToNumeric.__name__ = "CastInt16ToNumeric"
+_UnaryFunc_CastInt16ToNumeric.__qualname__ = "UnaryFunc.CastInt16ToNumeric"
+UnaryFunc.CastInt16ToNumeric = _UnaryFunc_CastInt16ToNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt16ToString(_Variant, UnaryFunc):
+    value: CastInt16ToString
+    _NAME = "CastInt16ToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt16ToString"}
+
+
+_UnaryFunc_CastInt16ToString.__name__ = "CastInt16ToString"
+_UnaryFunc_CastInt16ToString.__qualname__ = "UnaryFunc.CastInt16ToString"
+UnaryFunc.CastInt16ToString = _UnaryFunc_CastInt16ToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt16ToUint16(_Variant, UnaryFunc):
+    value: CastInt16ToUint16
+    _NAME = "CastInt16ToUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt16ToUint16"}
+
+
+_UnaryFunc_CastInt16ToUint16.__name__ = "CastInt16ToUint16"
+_UnaryFunc_CastInt16ToUint16.__qualname__ = "UnaryFunc.CastInt16ToUint16"
+UnaryFunc.CastInt16ToUint16 = _UnaryFunc_CastInt16ToUint16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt16ToUint32(_Variant, UnaryFunc):
+    value: CastInt16ToUint32
+    _NAME = "CastInt16ToUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt16ToUint32"}
+
+
+_UnaryFunc_CastInt16ToUint32.__name__ = "CastInt16ToUint32"
+_UnaryFunc_CastInt16ToUint32.__qualname__ = "UnaryFunc.CastInt16ToUint32"
+UnaryFunc.CastInt16ToUint32 = _UnaryFunc_CastInt16ToUint32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt16ToUint64(_Variant, UnaryFunc):
+    value: CastInt16ToUint64
+    _NAME = "CastInt16ToUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt16ToUint64"}
+
+
+_UnaryFunc_CastInt16ToUint64.__name__ = "CastInt16ToUint64"
+_UnaryFunc_CastInt16ToUint64.__qualname__ = "UnaryFunc.CastInt16ToUint64"
+UnaryFunc.CastInt16ToUint64 = _UnaryFunc_CastInt16ToUint64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt2VectorToArray(_Variant, UnaryFunc):
+    value: CastInt2VectorToArray
+    _NAME = "CastInt2VectorToArray"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt2VectorToArray"}
+
+
+_UnaryFunc_CastInt2VectorToArray.__name__ = "CastInt2VectorToArray"
+_UnaryFunc_CastInt2VectorToArray.__qualname__ = "UnaryFunc.CastInt2VectorToArray"
+UnaryFunc.CastInt2VectorToArray = _UnaryFunc_CastInt2VectorToArray
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt2VectorToString(_Variant, UnaryFunc):
+    value: CastInt2VectorToString
+    _NAME = "CastInt2VectorToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt2VectorToString"}
+
+
+_UnaryFunc_CastInt2VectorToString.__name__ = "CastInt2VectorToString"
+_UnaryFunc_CastInt2VectorToString.__qualname__ = "UnaryFunc.CastInt2VectorToString"
+UnaryFunc.CastInt2VectorToString = _UnaryFunc_CastInt2VectorToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt32ToBool(_Variant, UnaryFunc):
+    value: CastInt32ToBool
+    _NAME = "CastInt32ToBool"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt32ToBool"}
+
+
+_UnaryFunc_CastInt32ToBool.__name__ = "CastInt32ToBool"
+_UnaryFunc_CastInt32ToBool.__qualname__ = "UnaryFunc.CastInt32ToBool"
+UnaryFunc.CastInt32ToBool = _UnaryFunc_CastInt32ToBool
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt32ToFloat32(_Variant, UnaryFunc):
+    value: CastInt32ToFloat32
+    _NAME = "CastInt32ToFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt32ToFloat32"}
+
+
+_UnaryFunc_CastInt32ToFloat32.__name__ = "CastInt32ToFloat32"
+_UnaryFunc_CastInt32ToFloat32.__qualname__ = "UnaryFunc.CastInt32ToFloat32"
+UnaryFunc.CastInt32ToFloat32 = _UnaryFunc_CastInt32ToFloat32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt32ToFloat64(_Variant, UnaryFunc):
+    value: CastInt32ToFloat64
+    _NAME = "CastInt32ToFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt32ToFloat64"}
+
+
+_UnaryFunc_CastInt32ToFloat64.__name__ = "CastInt32ToFloat64"
+_UnaryFunc_CastInt32ToFloat64.__qualname__ = "UnaryFunc.CastInt32ToFloat64"
+UnaryFunc.CastInt32ToFloat64 = _UnaryFunc_CastInt32ToFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt32ToInt16(_Variant, UnaryFunc):
+    value: CastInt32ToInt16
+    _NAME = "CastInt32ToInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt32ToInt16"}
+
+
+_UnaryFunc_CastInt32ToInt16.__name__ = "CastInt32ToInt16"
+_UnaryFunc_CastInt32ToInt16.__qualname__ = "UnaryFunc.CastInt32ToInt16"
+UnaryFunc.CastInt32ToInt16 = _UnaryFunc_CastInt32ToInt16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt32ToInt64(_Variant, UnaryFunc):
+    value: CastInt32ToInt64
+    _NAME = "CastInt32ToInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt32ToInt64"}
+
+
+_UnaryFunc_CastInt32ToInt64.__name__ = "CastInt32ToInt64"
+_UnaryFunc_CastInt32ToInt64.__qualname__ = "UnaryFunc.CastInt32ToInt64"
+UnaryFunc.CastInt32ToInt64 = _UnaryFunc_CastInt32ToInt64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt32ToMzTimestamp(_Variant, UnaryFunc):
+    value: CastInt32ToMzTimestamp
+    _NAME = "CastInt32ToMzTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt32ToMzTimestamp"}
+
+
+_UnaryFunc_CastInt32ToMzTimestamp.__name__ = "CastInt32ToMzTimestamp"
+_UnaryFunc_CastInt32ToMzTimestamp.__qualname__ = "UnaryFunc.CastInt32ToMzTimestamp"
+UnaryFunc.CastInt32ToMzTimestamp = _UnaryFunc_CastInt32ToMzTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt32ToNumeric(_Variant, UnaryFunc):
+    value: CastInt32ToNumeric
+    _NAME = "CastInt32ToNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt32ToNumeric"}
+
+
+_UnaryFunc_CastInt32ToNumeric.__name__ = "CastInt32ToNumeric"
+_UnaryFunc_CastInt32ToNumeric.__qualname__ = "UnaryFunc.CastInt32ToNumeric"
+UnaryFunc.CastInt32ToNumeric = _UnaryFunc_CastInt32ToNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt32ToOid(_Variant, UnaryFunc):
+    value: CastInt32ToOid
+    _NAME = "CastInt32ToOid"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt32ToOid"}
+
+
+_UnaryFunc_CastInt32ToOid.__name__ = "CastInt32ToOid"
+_UnaryFunc_CastInt32ToOid.__qualname__ = "UnaryFunc.CastInt32ToOid"
+UnaryFunc.CastInt32ToOid = _UnaryFunc_CastInt32ToOid
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt32ToPgLegacyChar(_Variant, UnaryFunc):
+    value: CastInt32ToPgLegacyChar
+    _NAME = "CastInt32ToPgLegacyChar"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt32ToPgLegacyChar"}
+
+
+_UnaryFunc_CastInt32ToPgLegacyChar.__name__ = "CastInt32ToPgLegacyChar"
+_UnaryFunc_CastInt32ToPgLegacyChar.__qualname__ = "UnaryFunc.CastInt32ToPgLegacyChar"
+UnaryFunc.CastInt32ToPgLegacyChar = _UnaryFunc_CastInt32ToPgLegacyChar
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt32ToString(_Variant, UnaryFunc):
+    value: CastInt32ToString
+    _NAME = "CastInt32ToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt32ToString"}
+
+
+_UnaryFunc_CastInt32ToString.__name__ = "CastInt32ToString"
+_UnaryFunc_CastInt32ToString.__qualname__ = "UnaryFunc.CastInt32ToString"
+UnaryFunc.CastInt32ToString = _UnaryFunc_CastInt32ToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt32ToUint16(_Variant, UnaryFunc):
+    value: CastInt32ToUint16
+    _NAME = "CastInt32ToUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt32ToUint16"}
+
+
+_UnaryFunc_CastInt32ToUint16.__name__ = "CastInt32ToUint16"
+_UnaryFunc_CastInt32ToUint16.__qualname__ = "UnaryFunc.CastInt32ToUint16"
+UnaryFunc.CastInt32ToUint16 = _UnaryFunc_CastInt32ToUint16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt32ToUint32(_Variant, UnaryFunc):
+    value: CastInt32ToUint32
+    _NAME = "CastInt32ToUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt32ToUint32"}
+
+
+_UnaryFunc_CastInt32ToUint32.__name__ = "CastInt32ToUint32"
+_UnaryFunc_CastInt32ToUint32.__qualname__ = "UnaryFunc.CastInt32ToUint32"
+UnaryFunc.CastInt32ToUint32 = _UnaryFunc_CastInt32ToUint32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt32ToUint64(_Variant, UnaryFunc):
+    value: CastInt32ToUint64
+    _NAME = "CastInt32ToUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt32ToUint64"}
+
+
+_UnaryFunc_CastInt32ToUint64.__name__ = "CastInt32ToUint64"
+_UnaryFunc_CastInt32ToUint64.__qualname__ = "UnaryFunc.CastInt32ToUint64"
+UnaryFunc.CastInt32ToUint64 = _UnaryFunc_CastInt32ToUint64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt64ToBool(_Variant, UnaryFunc):
+    value: CastInt64ToBool
+    _NAME = "CastInt64ToBool"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt64ToBool"}
+
+
+_UnaryFunc_CastInt64ToBool.__name__ = "CastInt64ToBool"
+_UnaryFunc_CastInt64ToBool.__qualname__ = "UnaryFunc.CastInt64ToBool"
+UnaryFunc.CastInt64ToBool = _UnaryFunc_CastInt64ToBool
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt64ToFloat32(_Variant, UnaryFunc):
+    value: CastInt64ToFloat32
+    _NAME = "CastInt64ToFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt64ToFloat32"}
+
+
+_UnaryFunc_CastInt64ToFloat32.__name__ = "CastInt64ToFloat32"
+_UnaryFunc_CastInt64ToFloat32.__qualname__ = "UnaryFunc.CastInt64ToFloat32"
+UnaryFunc.CastInt64ToFloat32 = _UnaryFunc_CastInt64ToFloat32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt64ToFloat64(_Variant, UnaryFunc):
+    value: CastInt64ToFloat64
+    _NAME = "CastInt64ToFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt64ToFloat64"}
+
+
+_UnaryFunc_CastInt64ToFloat64.__name__ = "CastInt64ToFloat64"
+_UnaryFunc_CastInt64ToFloat64.__qualname__ = "UnaryFunc.CastInt64ToFloat64"
+UnaryFunc.CastInt64ToFloat64 = _UnaryFunc_CastInt64ToFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt64ToInt16(_Variant, UnaryFunc):
+    value: CastInt64ToInt16
+    _NAME = "CastInt64ToInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt64ToInt16"}
+
+
+_UnaryFunc_CastInt64ToInt16.__name__ = "CastInt64ToInt16"
+_UnaryFunc_CastInt64ToInt16.__qualname__ = "UnaryFunc.CastInt64ToInt16"
+UnaryFunc.CastInt64ToInt16 = _UnaryFunc_CastInt64ToInt16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt64ToInt32(_Variant, UnaryFunc):
+    value: CastInt64ToInt32
+    _NAME = "CastInt64ToInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt64ToInt32"}
+
+
+_UnaryFunc_CastInt64ToInt32.__name__ = "CastInt64ToInt32"
+_UnaryFunc_CastInt64ToInt32.__qualname__ = "UnaryFunc.CastInt64ToInt32"
+UnaryFunc.CastInt64ToInt32 = _UnaryFunc_CastInt64ToInt32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt64ToMzTimestamp(_Variant, UnaryFunc):
+    value: CastInt64ToMzTimestamp
+    _NAME = "CastInt64ToMzTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt64ToMzTimestamp"}
+
+
+_UnaryFunc_CastInt64ToMzTimestamp.__name__ = "CastInt64ToMzTimestamp"
+_UnaryFunc_CastInt64ToMzTimestamp.__qualname__ = "UnaryFunc.CastInt64ToMzTimestamp"
+UnaryFunc.CastInt64ToMzTimestamp = _UnaryFunc_CastInt64ToMzTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt64ToNumeric(_Variant, UnaryFunc):
+    value: CastInt64ToNumeric
+    _NAME = "CastInt64ToNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt64ToNumeric"}
+
+
+_UnaryFunc_CastInt64ToNumeric.__name__ = "CastInt64ToNumeric"
+_UnaryFunc_CastInt64ToNumeric.__qualname__ = "UnaryFunc.CastInt64ToNumeric"
+UnaryFunc.CastInt64ToNumeric = _UnaryFunc_CastInt64ToNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt64ToOid(_Variant, UnaryFunc):
+    value: CastInt64ToOid
+    _NAME = "CastInt64ToOid"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt64ToOid"}
+
+
+_UnaryFunc_CastInt64ToOid.__name__ = "CastInt64ToOid"
+_UnaryFunc_CastInt64ToOid.__qualname__ = "UnaryFunc.CastInt64ToOid"
+UnaryFunc.CastInt64ToOid = _UnaryFunc_CastInt64ToOid
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt64ToString(_Variant, UnaryFunc):
+    value: CastInt64ToString
+    _NAME = "CastInt64ToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt64ToString"}
+
+
+_UnaryFunc_CastInt64ToString.__name__ = "CastInt64ToString"
+_UnaryFunc_CastInt64ToString.__qualname__ = "UnaryFunc.CastInt64ToString"
+UnaryFunc.CastInt64ToString = _UnaryFunc_CastInt64ToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt64ToUint16(_Variant, UnaryFunc):
+    value: CastInt64ToUint16
+    _NAME = "CastInt64ToUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt64ToUint16"}
+
+
+_UnaryFunc_CastInt64ToUint16.__name__ = "CastInt64ToUint16"
+_UnaryFunc_CastInt64ToUint16.__qualname__ = "UnaryFunc.CastInt64ToUint16"
+UnaryFunc.CastInt64ToUint16 = _UnaryFunc_CastInt64ToUint16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt64ToUint32(_Variant, UnaryFunc):
+    value: CastInt64ToUint32
+    _NAME = "CastInt64ToUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt64ToUint32"}
+
+
+_UnaryFunc_CastInt64ToUint32.__name__ = "CastInt64ToUint32"
+_UnaryFunc_CastInt64ToUint32.__qualname__ = "UnaryFunc.CastInt64ToUint32"
+UnaryFunc.CastInt64ToUint32 = _UnaryFunc_CastInt64ToUint32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastInt64ToUint64(_Variant, UnaryFunc):
+    value: CastInt64ToUint64
+    _NAME = "CastInt64ToUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastInt64ToUint64"}
+
+
+_UnaryFunc_CastInt64ToUint64.__name__ = "CastInt64ToUint64"
+_UnaryFunc_CastInt64ToUint64.__qualname__ = "UnaryFunc.CastInt64ToUint64"
+UnaryFunc.CastInt64ToUint64 = _UnaryFunc_CastInt64ToUint64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastIntervalToString(_Variant, UnaryFunc):
+    value: CastIntervalToString
+    _NAME = "CastIntervalToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastIntervalToString"}
+
+
+_UnaryFunc_CastIntervalToString.__name__ = "CastIntervalToString"
+_UnaryFunc_CastIntervalToString.__qualname__ = "UnaryFunc.CastIntervalToString"
+UnaryFunc.CastIntervalToString = _UnaryFunc_CastIntervalToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastIntervalToTime(_Variant, UnaryFunc):
+    value: CastIntervalToTime
+    _NAME = "CastIntervalToTime"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastIntervalToTime"}
+
+
+_UnaryFunc_CastIntervalToTime.__name__ = "CastIntervalToTime"
+_UnaryFunc_CastIntervalToTime.__qualname__ = "UnaryFunc.CastIntervalToTime"
+UnaryFunc.CastIntervalToTime = _UnaryFunc_CastIntervalToTime
+
+
+@_dc.dataclass
+class _UnaryFunc_CastJsonbToBool(_Variant, UnaryFunc):
+    value: CastJsonbToBool
+    _NAME = "CastJsonbToBool"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastJsonbToBool"}
+
+
+_UnaryFunc_CastJsonbToBool.__name__ = "CastJsonbToBool"
+_UnaryFunc_CastJsonbToBool.__qualname__ = "UnaryFunc.CastJsonbToBool"
+UnaryFunc.CastJsonbToBool = _UnaryFunc_CastJsonbToBool
+
+
+@_dc.dataclass
+class _UnaryFunc_CastJsonbToFloat32(_Variant, UnaryFunc):
+    value: CastJsonbToFloat32
+    _NAME = "CastJsonbToFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastJsonbToFloat32"}
+
+
+_UnaryFunc_CastJsonbToFloat32.__name__ = "CastJsonbToFloat32"
+_UnaryFunc_CastJsonbToFloat32.__qualname__ = "UnaryFunc.CastJsonbToFloat32"
+UnaryFunc.CastJsonbToFloat32 = _UnaryFunc_CastJsonbToFloat32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastJsonbToFloat64(_Variant, UnaryFunc):
+    value: CastJsonbToFloat64
+    _NAME = "CastJsonbToFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastJsonbToFloat64"}
+
+
+_UnaryFunc_CastJsonbToFloat64.__name__ = "CastJsonbToFloat64"
+_UnaryFunc_CastJsonbToFloat64.__qualname__ = "UnaryFunc.CastJsonbToFloat64"
+UnaryFunc.CastJsonbToFloat64 = _UnaryFunc_CastJsonbToFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastJsonbToInt16(_Variant, UnaryFunc):
+    value: CastJsonbToInt16
+    _NAME = "CastJsonbToInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastJsonbToInt16"}
+
+
+_UnaryFunc_CastJsonbToInt16.__name__ = "CastJsonbToInt16"
+_UnaryFunc_CastJsonbToInt16.__qualname__ = "UnaryFunc.CastJsonbToInt16"
+UnaryFunc.CastJsonbToInt16 = _UnaryFunc_CastJsonbToInt16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastJsonbToInt32(_Variant, UnaryFunc):
+    value: CastJsonbToInt32
+    _NAME = "CastJsonbToInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastJsonbToInt32"}
+
+
+_UnaryFunc_CastJsonbToInt32.__name__ = "CastJsonbToInt32"
+_UnaryFunc_CastJsonbToInt32.__qualname__ = "UnaryFunc.CastJsonbToInt32"
+UnaryFunc.CastJsonbToInt32 = _UnaryFunc_CastJsonbToInt32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastJsonbToInt64(_Variant, UnaryFunc):
+    value: CastJsonbToInt64
+    _NAME = "CastJsonbToInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastJsonbToInt64"}
+
+
+_UnaryFunc_CastJsonbToInt64.__name__ = "CastJsonbToInt64"
+_UnaryFunc_CastJsonbToInt64.__qualname__ = "UnaryFunc.CastJsonbToInt64"
+UnaryFunc.CastJsonbToInt64 = _UnaryFunc_CastJsonbToInt64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastJsonbToNumeric(_Variant, UnaryFunc):
+    value: CastJsonbToNumeric
+    _NAME = "CastJsonbToNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastJsonbToNumeric"}
+
+
+_UnaryFunc_CastJsonbToNumeric.__name__ = "CastJsonbToNumeric"
+_UnaryFunc_CastJsonbToNumeric.__qualname__ = "UnaryFunc.CastJsonbToNumeric"
+UnaryFunc.CastJsonbToNumeric = _UnaryFunc_CastJsonbToNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_CastJsonbToString(_Variant, UnaryFunc):
+    value: CastJsonbToString
+    _NAME = "CastJsonbToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastJsonbToString"}
+
+
+_UnaryFunc_CastJsonbToString.__name__ = "CastJsonbToString"
+_UnaryFunc_CastJsonbToString.__qualname__ = "UnaryFunc.CastJsonbToString"
+UnaryFunc.CastJsonbToString = _UnaryFunc_CastJsonbToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastJsonbableToJsonb(_Variant, UnaryFunc):
+    value: CastJsonbableToJsonb
+    _NAME = "CastJsonbableToJsonb"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastJsonbableToJsonb"}
+
+
+_UnaryFunc_CastJsonbableToJsonb.__name__ = "CastJsonbableToJsonb"
+_UnaryFunc_CastJsonbableToJsonb.__qualname__ = "UnaryFunc.CastJsonbableToJsonb"
+UnaryFunc.CastJsonbableToJsonb = _UnaryFunc_CastJsonbableToJsonb
+
+
+@_dc.dataclass
+class _UnaryFunc_CastList1ToList2(_Variant, UnaryFunc):
+    value: CastList1ToList2
+    _NAME = "CastList1ToList2"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastList1ToList2"}
+
+
+_UnaryFunc_CastList1ToList2.__name__ = "CastList1ToList2"
+_UnaryFunc_CastList1ToList2.__qualname__ = "UnaryFunc.CastList1ToList2"
+UnaryFunc.CastList1ToList2 = _UnaryFunc_CastList1ToList2
+
+
+@_dc.dataclass
+class _UnaryFunc_CastListToJsonb(_Variant, UnaryFunc):
+    value: CastListToJsonb
+    _NAME = "CastListToJsonb"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastListToJsonb"}
+
+
+_UnaryFunc_CastListToJsonb.__name__ = "CastListToJsonb"
+_UnaryFunc_CastListToJsonb.__qualname__ = "UnaryFunc.CastListToJsonb"
+UnaryFunc.CastListToJsonb = _UnaryFunc_CastListToJsonb
+
+
+@_dc.dataclass
+class _UnaryFunc_CastListToString(_Variant, UnaryFunc):
+    value: CastListToString
+    _NAME = "CastListToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastListToString"}
+
+
+_UnaryFunc_CastListToString.__name__ = "CastListToString"
+_UnaryFunc_CastListToString.__qualname__ = "UnaryFunc.CastListToString"
+UnaryFunc.CastListToString = _UnaryFunc_CastListToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastMapToString(_Variant, UnaryFunc):
+    value: CastMapToString
+    _NAME = "CastMapToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastMapToString"}
+
+
+_UnaryFunc_CastMapToString.__name__ = "CastMapToString"
+_UnaryFunc_CastMapToString.__qualname__ = "UnaryFunc.CastMapToString"
+UnaryFunc.CastMapToString = _UnaryFunc_CastMapToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastMzTimestampToString(_Variant, UnaryFunc):
+    value: CastMzTimestampToString
+    _NAME = "CastMzTimestampToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastMzTimestampToString"}
+
+
+_UnaryFunc_CastMzTimestampToString.__name__ = "CastMzTimestampToString"
+_UnaryFunc_CastMzTimestampToString.__qualname__ = "UnaryFunc.CastMzTimestampToString"
+UnaryFunc.CastMzTimestampToString = _UnaryFunc_CastMzTimestampToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastMzTimestampToTimestamp(_Variant, UnaryFunc):
+    value: CastMzTimestampToTimestamp
+    _NAME = "CastMzTimestampToTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastMzTimestampToTimestamp"}
+
+
+_UnaryFunc_CastMzTimestampToTimestamp.__name__ = "CastMzTimestampToTimestamp"
+_UnaryFunc_CastMzTimestampToTimestamp.__qualname__ = (
+    "UnaryFunc.CastMzTimestampToTimestamp"
+)
+UnaryFunc.CastMzTimestampToTimestamp = _UnaryFunc_CastMzTimestampToTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_CastMzTimestampToTimestampTz(_Variant, UnaryFunc):
+    value: CastMzTimestampToTimestampTz
+    _NAME = "CastMzTimestampToTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastMzTimestampToTimestampTz"}
+
+
+_UnaryFunc_CastMzTimestampToTimestampTz.__name__ = "CastMzTimestampToTimestampTz"
+_UnaryFunc_CastMzTimestampToTimestampTz.__qualname__ = (
+    "UnaryFunc.CastMzTimestampToTimestampTz"
+)
+UnaryFunc.CastMzTimestampToTimestampTz = _UnaryFunc_CastMzTimestampToTimestampTz
+
+
+@_dc.dataclass
+class _UnaryFunc_CastNumericToFloat32(_Variant, UnaryFunc):
+    value: CastNumericToFloat32
+    _NAME = "CastNumericToFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastNumericToFloat32"}
+
+
+_UnaryFunc_CastNumericToFloat32.__name__ = "CastNumericToFloat32"
+_UnaryFunc_CastNumericToFloat32.__qualname__ = "UnaryFunc.CastNumericToFloat32"
+UnaryFunc.CastNumericToFloat32 = _UnaryFunc_CastNumericToFloat32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastNumericToFloat64(_Variant, UnaryFunc):
+    value: CastNumericToFloat64
+    _NAME = "CastNumericToFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastNumericToFloat64"}
+
+
+_UnaryFunc_CastNumericToFloat64.__name__ = "CastNumericToFloat64"
+_UnaryFunc_CastNumericToFloat64.__qualname__ = "UnaryFunc.CastNumericToFloat64"
+UnaryFunc.CastNumericToFloat64 = _UnaryFunc_CastNumericToFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastNumericToInt16(_Variant, UnaryFunc):
+    value: CastNumericToInt16
+    _NAME = "CastNumericToInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastNumericToInt16"}
+
+
+_UnaryFunc_CastNumericToInt16.__name__ = "CastNumericToInt16"
+_UnaryFunc_CastNumericToInt16.__qualname__ = "UnaryFunc.CastNumericToInt16"
+UnaryFunc.CastNumericToInt16 = _UnaryFunc_CastNumericToInt16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastNumericToInt32(_Variant, UnaryFunc):
+    value: CastNumericToInt32
+    _NAME = "CastNumericToInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastNumericToInt32"}
+
+
+_UnaryFunc_CastNumericToInt32.__name__ = "CastNumericToInt32"
+_UnaryFunc_CastNumericToInt32.__qualname__ = "UnaryFunc.CastNumericToInt32"
+UnaryFunc.CastNumericToInt32 = _UnaryFunc_CastNumericToInt32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastNumericToInt64(_Variant, UnaryFunc):
+    value: CastNumericToInt64
+    _NAME = "CastNumericToInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastNumericToInt64"}
+
+
+_UnaryFunc_CastNumericToInt64.__name__ = "CastNumericToInt64"
+_UnaryFunc_CastNumericToInt64.__qualname__ = "UnaryFunc.CastNumericToInt64"
+UnaryFunc.CastNumericToInt64 = _UnaryFunc_CastNumericToInt64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastNumericToMzTimestamp(_Variant, UnaryFunc):
+    value: CastNumericToMzTimestamp
+    _NAME = "CastNumericToMzTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastNumericToMzTimestamp"}
+
+
+_UnaryFunc_CastNumericToMzTimestamp.__name__ = "CastNumericToMzTimestamp"
+_UnaryFunc_CastNumericToMzTimestamp.__qualname__ = "UnaryFunc.CastNumericToMzTimestamp"
+UnaryFunc.CastNumericToMzTimestamp = _UnaryFunc_CastNumericToMzTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_CastNumericToString(_Variant, UnaryFunc):
+    value: CastNumericToString
+    _NAME = "CastNumericToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastNumericToString"}
+
+
+_UnaryFunc_CastNumericToString.__name__ = "CastNumericToString"
+_UnaryFunc_CastNumericToString.__qualname__ = "UnaryFunc.CastNumericToString"
+UnaryFunc.CastNumericToString = _UnaryFunc_CastNumericToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastNumericToUint16(_Variant, UnaryFunc):
+    value: CastNumericToUint16
+    _NAME = "CastNumericToUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastNumericToUint16"}
+
+
+_UnaryFunc_CastNumericToUint16.__name__ = "CastNumericToUint16"
+_UnaryFunc_CastNumericToUint16.__qualname__ = "UnaryFunc.CastNumericToUint16"
+UnaryFunc.CastNumericToUint16 = _UnaryFunc_CastNumericToUint16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastNumericToUint32(_Variant, UnaryFunc):
+    value: CastNumericToUint32
+    _NAME = "CastNumericToUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastNumericToUint32"}
+
+
+_UnaryFunc_CastNumericToUint32.__name__ = "CastNumericToUint32"
+_UnaryFunc_CastNumericToUint32.__qualname__ = "UnaryFunc.CastNumericToUint32"
+UnaryFunc.CastNumericToUint32 = _UnaryFunc_CastNumericToUint32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastNumericToUint64(_Variant, UnaryFunc):
+    value: CastNumericToUint64
+    _NAME = "CastNumericToUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastNumericToUint64"}
+
+
+_UnaryFunc_CastNumericToUint64.__name__ = "CastNumericToUint64"
+_UnaryFunc_CastNumericToUint64.__qualname__ = "UnaryFunc.CastNumericToUint64"
+UnaryFunc.CastNumericToUint64 = _UnaryFunc_CastNumericToUint64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastOidToInt32(_Variant, UnaryFunc):
+    value: CastOidToInt32
+    _NAME = "CastOidToInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastOidToInt32"}
+
+
+_UnaryFunc_CastOidToInt32.__name__ = "CastOidToInt32"
+_UnaryFunc_CastOidToInt32.__qualname__ = "UnaryFunc.CastOidToInt32"
+UnaryFunc.CastOidToInt32 = _UnaryFunc_CastOidToInt32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastOidToInt64(_Variant, UnaryFunc):
+    value: CastOidToInt64
+    _NAME = "CastOidToInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastOidToInt64"}
+
+
+_UnaryFunc_CastOidToInt64.__name__ = "CastOidToInt64"
+_UnaryFunc_CastOidToInt64.__qualname__ = "UnaryFunc.CastOidToInt64"
+UnaryFunc.CastOidToInt64 = _UnaryFunc_CastOidToInt64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastOidToRegClass(_Variant, UnaryFunc):
+    value: CastOidToRegClass
+    _NAME = "CastOidToRegClass"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastOidToRegClass"}
+
+
+_UnaryFunc_CastOidToRegClass.__name__ = "CastOidToRegClass"
+_UnaryFunc_CastOidToRegClass.__qualname__ = "UnaryFunc.CastOidToRegClass"
+UnaryFunc.CastOidToRegClass = _UnaryFunc_CastOidToRegClass
+
+
+@_dc.dataclass
+class _UnaryFunc_CastOidToRegProc(_Variant, UnaryFunc):
+    value: CastOidToRegProc
+    _NAME = "CastOidToRegProc"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastOidToRegProc"}
+
+
+_UnaryFunc_CastOidToRegProc.__name__ = "CastOidToRegProc"
+_UnaryFunc_CastOidToRegProc.__qualname__ = "UnaryFunc.CastOidToRegProc"
+UnaryFunc.CastOidToRegProc = _UnaryFunc_CastOidToRegProc
+
+
+@_dc.dataclass
+class _UnaryFunc_CastOidToRegType(_Variant, UnaryFunc):
+    value: CastOidToRegType
+    _NAME = "CastOidToRegType"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastOidToRegType"}
+
+
+_UnaryFunc_CastOidToRegType.__name__ = "CastOidToRegType"
+_UnaryFunc_CastOidToRegType.__qualname__ = "UnaryFunc.CastOidToRegType"
+UnaryFunc.CastOidToRegType = _UnaryFunc_CastOidToRegType
+
+
+@_dc.dataclass
+class _UnaryFunc_CastOidToString(_Variant, UnaryFunc):
+    value: CastOidToString
+    _NAME = "CastOidToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastOidToString"}
+
+
+_UnaryFunc_CastOidToString.__name__ = "CastOidToString"
+_UnaryFunc_CastOidToString.__qualname__ = "UnaryFunc.CastOidToString"
+UnaryFunc.CastOidToString = _UnaryFunc_CastOidToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastPgLegacyCharToChar(_Variant, UnaryFunc):
+    value: CastPgLegacyCharToChar
+    _NAME = "CastPgLegacyCharToChar"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastPgLegacyCharToChar"}
+
+
+_UnaryFunc_CastPgLegacyCharToChar.__name__ = "CastPgLegacyCharToChar"
+_UnaryFunc_CastPgLegacyCharToChar.__qualname__ = "UnaryFunc.CastPgLegacyCharToChar"
+UnaryFunc.CastPgLegacyCharToChar = _UnaryFunc_CastPgLegacyCharToChar
+
+
+@_dc.dataclass
+class _UnaryFunc_CastPgLegacyCharToInt32(_Variant, UnaryFunc):
+    value: CastPgLegacyCharToInt32
+    _NAME = "CastPgLegacyCharToInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastPgLegacyCharToInt32"}
+
+
+_UnaryFunc_CastPgLegacyCharToInt32.__name__ = "CastPgLegacyCharToInt32"
+_UnaryFunc_CastPgLegacyCharToInt32.__qualname__ = "UnaryFunc.CastPgLegacyCharToInt32"
+UnaryFunc.CastPgLegacyCharToInt32 = _UnaryFunc_CastPgLegacyCharToInt32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastPgLegacyCharToString(_Variant, UnaryFunc):
+    value: CastPgLegacyCharToString
+    _NAME = "CastPgLegacyCharToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastPgLegacyCharToString"}
+
+
+_UnaryFunc_CastPgLegacyCharToString.__name__ = "CastPgLegacyCharToString"
+_UnaryFunc_CastPgLegacyCharToString.__qualname__ = "UnaryFunc.CastPgLegacyCharToString"
+UnaryFunc.CastPgLegacyCharToString = _UnaryFunc_CastPgLegacyCharToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastPgLegacyCharToVarChar(_Variant, UnaryFunc):
+    value: CastPgLegacyCharToVarChar
+    _NAME = "CastPgLegacyCharToVarChar"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastPgLegacyCharToVarChar"}
+
+
+_UnaryFunc_CastPgLegacyCharToVarChar.__name__ = "CastPgLegacyCharToVarChar"
+_UnaryFunc_CastPgLegacyCharToVarChar.__qualname__ = (
+    "UnaryFunc.CastPgLegacyCharToVarChar"
+)
+UnaryFunc.CastPgLegacyCharToVarChar = _UnaryFunc_CastPgLegacyCharToVarChar
+
+
+@_dc.dataclass
+class _UnaryFunc_CastRangeToString(_Variant, UnaryFunc):
+    value: CastRangeToString
+    _NAME = "CastRangeToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastRangeToString"}
+
+
+_UnaryFunc_CastRangeToString.__name__ = "CastRangeToString"
+_UnaryFunc_CastRangeToString.__qualname__ = "UnaryFunc.CastRangeToString"
+UnaryFunc.CastRangeToString = _UnaryFunc_CastRangeToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastRecord1ToRecord2(_Variant, UnaryFunc):
+    value: CastRecord1ToRecord2
+    _NAME = "CastRecord1ToRecord2"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastRecord1ToRecord2"}
+
+
+_UnaryFunc_CastRecord1ToRecord2.__name__ = "CastRecord1ToRecord2"
+_UnaryFunc_CastRecord1ToRecord2.__qualname__ = "UnaryFunc.CastRecord1ToRecord2"
+UnaryFunc.CastRecord1ToRecord2 = _UnaryFunc_CastRecord1ToRecord2
+
+
+@_dc.dataclass
+class _UnaryFunc_CastRecordToString(_Variant, UnaryFunc):
+    value: CastRecordToString
+    _NAME = "CastRecordToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastRecordToString"}
+
+
+_UnaryFunc_CastRecordToString.__name__ = "CastRecordToString"
+_UnaryFunc_CastRecordToString.__qualname__ = "UnaryFunc.CastRecordToString"
+UnaryFunc.CastRecordToString = _UnaryFunc_CastRecordToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastRegClassToOid(_Variant, UnaryFunc):
+    value: CastRegClassToOid
+    _NAME = "CastRegClassToOid"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastRegClassToOid"}
+
+
+_UnaryFunc_CastRegClassToOid.__name__ = "CastRegClassToOid"
+_UnaryFunc_CastRegClassToOid.__qualname__ = "UnaryFunc.CastRegClassToOid"
+UnaryFunc.CastRegClassToOid = _UnaryFunc_CastRegClassToOid
+
+
+@_dc.dataclass
+class _UnaryFunc_CastRegProcToOid(_Variant, UnaryFunc):
+    value: CastRegProcToOid
+    _NAME = "CastRegProcToOid"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastRegProcToOid"}
+
+
+_UnaryFunc_CastRegProcToOid.__name__ = "CastRegProcToOid"
+_UnaryFunc_CastRegProcToOid.__qualname__ = "UnaryFunc.CastRegProcToOid"
+UnaryFunc.CastRegProcToOid = _UnaryFunc_CastRegProcToOid
+
+
+@_dc.dataclass
+class _UnaryFunc_CastRegTypeToOid(_Variant, UnaryFunc):
+    value: CastRegTypeToOid
+    _NAME = "CastRegTypeToOid"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastRegTypeToOid"}
+
+
+_UnaryFunc_CastRegTypeToOid.__name__ = "CastRegTypeToOid"
+_UnaryFunc_CastRegTypeToOid.__qualname__ = "UnaryFunc.CastRegTypeToOid"
+UnaryFunc.CastRegTypeToOid = _UnaryFunc_CastRegTypeToOid
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToArray(_Variant, UnaryFunc):
+    value: CastStringToArray
+    _NAME = "CastStringToArray"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToArray"}
+
+
+_UnaryFunc_CastStringToArray.__name__ = "CastStringToArray"
+_UnaryFunc_CastStringToArray.__qualname__ = "UnaryFunc.CastStringToArray"
+UnaryFunc.CastStringToArray = _UnaryFunc_CastStringToArray
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToBool(_Variant, UnaryFunc):
+    value: CastStringToBool
+    _NAME = "CastStringToBool"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToBool"}
+
+
+_UnaryFunc_CastStringToBool.__name__ = "CastStringToBool"
+_UnaryFunc_CastStringToBool.__qualname__ = "UnaryFunc.CastStringToBool"
+UnaryFunc.CastStringToBool = _UnaryFunc_CastStringToBool
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToBytes(_Variant, UnaryFunc):
+    value: CastStringToBytes
+    _NAME = "CastStringToBytes"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToBytes"}
+
+
+_UnaryFunc_CastStringToBytes.__name__ = "CastStringToBytes"
+_UnaryFunc_CastStringToBytes.__qualname__ = "UnaryFunc.CastStringToBytes"
+UnaryFunc.CastStringToBytes = _UnaryFunc_CastStringToBytes
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToChar(_Variant, UnaryFunc):
+    value: CastStringToChar
+    _NAME = "CastStringToChar"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToChar"}
+
+
+_UnaryFunc_CastStringToChar.__name__ = "CastStringToChar"
+_UnaryFunc_CastStringToChar.__qualname__ = "UnaryFunc.CastStringToChar"
+UnaryFunc.CastStringToChar = _UnaryFunc_CastStringToChar
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToDate(_Variant, UnaryFunc):
+    value: CastStringToDate
+    _NAME = "CastStringToDate"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToDate"}
+
+
+_UnaryFunc_CastStringToDate.__name__ = "CastStringToDate"
+_UnaryFunc_CastStringToDate.__qualname__ = "UnaryFunc.CastStringToDate"
+UnaryFunc.CastStringToDate = _UnaryFunc_CastStringToDate
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToFloat32(_Variant, UnaryFunc):
+    value: CastStringToFloat32
+    _NAME = "CastStringToFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToFloat32"}
+
+
+_UnaryFunc_CastStringToFloat32.__name__ = "CastStringToFloat32"
+_UnaryFunc_CastStringToFloat32.__qualname__ = "UnaryFunc.CastStringToFloat32"
+UnaryFunc.CastStringToFloat32 = _UnaryFunc_CastStringToFloat32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToFloat64(_Variant, UnaryFunc):
+    value: CastStringToFloat64
+    _NAME = "CastStringToFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToFloat64"}
+
+
+_UnaryFunc_CastStringToFloat64.__name__ = "CastStringToFloat64"
+_UnaryFunc_CastStringToFloat64.__qualname__ = "UnaryFunc.CastStringToFloat64"
+UnaryFunc.CastStringToFloat64 = _UnaryFunc_CastStringToFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToInt16(_Variant, UnaryFunc):
+    value: CastStringToInt16
+    _NAME = "CastStringToInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToInt16"}
+
+
+_UnaryFunc_CastStringToInt16.__name__ = "CastStringToInt16"
+_UnaryFunc_CastStringToInt16.__qualname__ = "UnaryFunc.CastStringToInt16"
+UnaryFunc.CastStringToInt16 = _UnaryFunc_CastStringToInt16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToInt2Vector(_Variant, UnaryFunc):
+    value: CastStringToInt2Vector
+    _NAME = "CastStringToInt2Vector"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToInt2Vector"}
+
+
+_UnaryFunc_CastStringToInt2Vector.__name__ = "CastStringToInt2Vector"
+_UnaryFunc_CastStringToInt2Vector.__qualname__ = "UnaryFunc.CastStringToInt2Vector"
+UnaryFunc.CastStringToInt2Vector = _UnaryFunc_CastStringToInt2Vector
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToInt32(_Variant, UnaryFunc):
+    value: CastStringToInt32
+    _NAME = "CastStringToInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToInt32"}
+
+
+_UnaryFunc_CastStringToInt32.__name__ = "CastStringToInt32"
+_UnaryFunc_CastStringToInt32.__qualname__ = "UnaryFunc.CastStringToInt32"
+UnaryFunc.CastStringToInt32 = _UnaryFunc_CastStringToInt32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToInt64(_Variant, UnaryFunc):
+    value: CastStringToInt64
+    _NAME = "CastStringToInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToInt64"}
+
+
+_UnaryFunc_CastStringToInt64.__name__ = "CastStringToInt64"
+_UnaryFunc_CastStringToInt64.__qualname__ = "UnaryFunc.CastStringToInt64"
+UnaryFunc.CastStringToInt64 = _UnaryFunc_CastStringToInt64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToInterval(_Variant, UnaryFunc):
+    value: CastStringToInterval
+    _NAME = "CastStringToInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToInterval"}
+
+
+_UnaryFunc_CastStringToInterval.__name__ = "CastStringToInterval"
+_UnaryFunc_CastStringToInterval.__qualname__ = "UnaryFunc.CastStringToInterval"
+UnaryFunc.CastStringToInterval = _UnaryFunc_CastStringToInterval
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToJsonb(_Variant, UnaryFunc):
+    value: CastStringToJsonb
+    _NAME = "CastStringToJsonb"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToJsonb"}
+
+
+_UnaryFunc_CastStringToJsonb.__name__ = "CastStringToJsonb"
+_UnaryFunc_CastStringToJsonb.__qualname__ = "UnaryFunc.CastStringToJsonb"
+UnaryFunc.CastStringToJsonb = _UnaryFunc_CastStringToJsonb
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToList(_Variant, UnaryFunc):
+    value: CastStringToList
+    _NAME = "CastStringToList"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToList"}
+
+
+_UnaryFunc_CastStringToList.__name__ = "CastStringToList"
+_UnaryFunc_CastStringToList.__qualname__ = "UnaryFunc.CastStringToList"
+UnaryFunc.CastStringToList = _UnaryFunc_CastStringToList
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToMap(_Variant, UnaryFunc):
+    value: CastStringToMap
+    _NAME = "CastStringToMap"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToMap"}
+
+
+_UnaryFunc_CastStringToMap.__name__ = "CastStringToMap"
+_UnaryFunc_CastStringToMap.__qualname__ = "UnaryFunc.CastStringToMap"
+UnaryFunc.CastStringToMap = _UnaryFunc_CastStringToMap
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToMzTimestamp(_Variant, UnaryFunc):
+    value: CastStringToMzTimestamp
+    _NAME = "CastStringToMzTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToMzTimestamp"}
+
+
+_UnaryFunc_CastStringToMzTimestamp.__name__ = "CastStringToMzTimestamp"
+_UnaryFunc_CastStringToMzTimestamp.__qualname__ = "UnaryFunc.CastStringToMzTimestamp"
+UnaryFunc.CastStringToMzTimestamp = _UnaryFunc_CastStringToMzTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToNumeric(_Variant, UnaryFunc):
+    value: CastStringToNumeric
+    _NAME = "CastStringToNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToNumeric"}
+
+
+_UnaryFunc_CastStringToNumeric.__name__ = "CastStringToNumeric"
+_UnaryFunc_CastStringToNumeric.__qualname__ = "UnaryFunc.CastStringToNumeric"
+UnaryFunc.CastStringToNumeric = _UnaryFunc_CastStringToNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToOid(_Variant, UnaryFunc):
+    value: CastStringToOid
+    _NAME = "CastStringToOid"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToOid"}
+
+
+_UnaryFunc_CastStringToOid.__name__ = "CastStringToOid"
+_UnaryFunc_CastStringToOid.__qualname__ = "UnaryFunc.CastStringToOid"
+UnaryFunc.CastStringToOid = _UnaryFunc_CastStringToOid
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToPgLegacyChar(_Variant, UnaryFunc):
+    value: CastStringToPgLegacyChar
+    _NAME = "CastStringToPgLegacyChar"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToPgLegacyChar"}
+
+
+_UnaryFunc_CastStringToPgLegacyChar.__name__ = "CastStringToPgLegacyChar"
+_UnaryFunc_CastStringToPgLegacyChar.__qualname__ = "UnaryFunc.CastStringToPgLegacyChar"
+UnaryFunc.CastStringToPgLegacyChar = _UnaryFunc_CastStringToPgLegacyChar
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToPgLegacyName(_Variant, UnaryFunc):
+    value: CastStringToPgLegacyName
+    _NAME = "CastStringToPgLegacyName"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToPgLegacyName"}
+
+
+_UnaryFunc_CastStringToPgLegacyName.__name__ = "CastStringToPgLegacyName"
+_UnaryFunc_CastStringToPgLegacyName.__qualname__ = "UnaryFunc.CastStringToPgLegacyName"
+UnaryFunc.CastStringToPgLegacyName = _UnaryFunc_CastStringToPgLegacyName
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToRange(_Variant, UnaryFunc):
+    value: CastStringToRange
+    _NAME = "CastStringToRange"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToRange"}
+
+
+_UnaryFunc_CastStringToRange.__name__ = "CastStringToRange"
+_UnaryFunc_CastStringToRange.__qualname__ = "UnaryFunc.CastStringToRange"
+UnaryFunc.CastStringToRange = _UnaryFunc_CastStringToRange
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToTime(_Variant, UnaryFunc):
+    value: CastStringToTime
+    _NAME = "CastStringToTime"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToTime"}
+
+
+_UnaryFunc_CastStringToTime.__name__ = "CastStringToTime"
+_UnaryFunc_CastStringToTime.__qualname__ = "UnaryFunc.CastStringToTime"
+UnaryFunc.CastStringToTime = _UnaryFunc_CastStringToTime
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToTimestamp(_Variant, UnaryFunc):
+    value: CastStringToTimestamp
+    _NAME = "CastStringToTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToTimestamp"}
+
+
+_UnaryFunc_CastStringToTimestamp.__name__ = "CastStringToTimestamp"
+_UnaryFunc_CastStringToTimestamp.__qualname__ = "UnaryFunc.CastStringToTimestamp"
+UnaryFunc.CastStringToTimestamp = _UnaryFunc_CastStringToTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToTimestampTz(_Variant, UnaryFunc):
+    value: CastStringToTimestampTz
+    _NAME = "CastStringToTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToTimestampTz"}
+
+
+_UnaryFunc_CastStringToTimestampTz.__name__ = "CastStringToTimestampTz"
+_UnaryFunc_CastStringToTimestampTz.__qualname__ = "UnaryFunc.CastStringToTimestampTz"
+UnaryFunc.CastStringToTimestampTz = _UnaryFunc_CastStringToTimestampTz
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToUint16(_Variant, UnaryFunc):
+    value: CastStringToUint16
+    _NAME = "CastStringToUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToUint16"}
+
+
+_UnaryFunc_CastStringToUint16.__name__ = "CastStringToUint16"
+_UnaryFunc_CastStringToUint16.__qualname__ = "UnaryFunc.CastStringToUint16"
+UnaryFunc.CastStringToUint16 = _UnaryFunc_CastStringToUint16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToUint32(_Variant, UnaryFunc):
+    value: CastStringToUint32
+    _NAME = "CastStringToUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToUint32"}
+
+
+_UnaryFunc_CastStringToUint32.__name__ = "CastStringToUint32"
+_UnaryFunc_CastStringToUint32.__qualname__ = "UnaryFunc.CastStringToUint32"
+UnaryFunc.CastStringToUint32 = _UnaryFunc_CastStringToUint32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToUint64(_Variant, UnaryFunc):
+    value: CastStringToUint64
+    _NAME = "CastStringToUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToUint64"}
+
+
+_UnaryFunc_CastStringToUint64.__name__ = "CastStringToUint64"
+_UnaryFunc_CastStringToUint64.__qualname__ = "UnaryFunc.CastStringToUint64"
+UnaryFunc.CastStringToUint64 = _UnaryFunc_CastStringToUint64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToUuid(_Variant, UnaryFunc):
+    value: CastStringToUuid
+    _NAME = "CastStringToUuid"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToUuid"}
+
+
+_UnaryFunc_CastStringToUuid.__name__ = "CastStringToUuid"
+_UnaryFunc_CastStringToUuid.__qualname__ = "UnaryFunc.CastStringToUuid"
+UnaryFunc.CastStringToUuid = _UnaryFunc_CastStringToUuid
+
+
+@_dc.dataclass
+class _UnaryFunc_CastStringToVarChar(_Variant, UnaryFunc):
+    value: CastStringToVarChar
+    _NAME = "CastStringToVarChar"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastStringToVarChar"}
+
+
+_UnaryFunc_CastStringToVarChar.__name__ = "CastStringToVarChar"
+_UnaryFunc_CastStringToVarChar.__qualname__ = "UnaryFunc.CastStringToVarChar"
+UnaryFunc.CastStringToVarChar = _UnaryFunc_CastStringToVarChar
+
+
+@_dc.dataclass
+class _UnaryFunc_CastTimeToInterval(_Variant, UnaryFunc):
+    value: CastTimeToInterval
+    _NAME = "CastTimeToInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastTimeToInterval"}
+
+
+_UnaryFunc_CastTimeToInterval.__name__ = "CastTimeToInterval"
+_UnaryFunc_CastTimeToInterval.__qualname__ = "UnaryFunc.CastTimeToInterval"
+UnaryFunc.CastTimeToInterval = _UnaryFunc_CastTimeToInterval
+
+
+@_dc.dataclass
+class _UnaryFunc_CastTimeToString(_Variant, UnaryFunc):
+    value: CastTimeToString
+    _NAME = "CastTimeToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastTimeToString"}
+
+
+_UnaryFunc_CastTimeToString.__name__ = "CastTimeToString"
+_UnaryFunc_CastTimeToString.__qualname__ = "UnaryFunc.CastTimeToString"
+UnaryFunc.CastTimeToString = _UnaryFunc_CastTimeToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastTimestampToDate(_Variant, UnaryFunc):
+    value: CastTimestampToDate
+    _NAME = "CastTimestampToDate"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastTimestampToDate"}
+
+
+_UnaryFunc_CastTimestampToDate.__name__ = "CastTimestampToDate"
+_UnaryFunc_CastTimestampToDate.__qualname__ = "UnaryFunc.CastTimestampToDate"
+UnaryFunc.CastTimestampToDate = _UnaryFunc_CastTimestampToDate
+
+
+@_dc.dataclass
+class _UnaryFunc_CastTimestampToMzTimestamp(_Variant, UnaryFunc):
+    value: CastTimestampToMzTimestamp
+    _NAME = "CastTimestampToMzTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastTimestampToMzTimestamp"}
+
+
+_UnaryFunc_CastTimestampToMzTimestamp.__name__ = "CastTimestampToMzTimestamp"
+_UnaryFunc_CastTimestampToMzTimestamp.__qualname__ = (
+    "UnaryFunc.CastTimestampToMzTimestamp"
+)
+UnaryFunc.CastTimestampToMzTimestamp = _UnaryFunc_CastTimestampToMzTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_CastTimestampToString(_Variant, UnaryFunc):
+    value: CastTimestampToString
+    _NAME = "CastTimestampToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastTimestampToString"}
+
+
+_UnaryFunc_CastTimestampToString.__name__ = "CastTimestampToString"
+_UnaryFunc_CastTimestampToString.__qualname__ = "UnaryFunc.CastTimestampToString"
+UnaryFunc.CastTimestampToString = _UnaryFunc_CastTimestampToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastTimestampToTime(_Variant, UnaryFunc):
+    value: CastTimestampToTime
+    _NAME = "CastTimestampToTime"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastTimestampToTime"}
+
+
+_UnaryFunc_CastTimestampToTime.__name__ = "CastTimestampToTime"
+_UnaryFunc_CastTimestampToTime.__qualname__ = "UnaryFunc.CastTimestampToTime"
+UnaryFunc.CastTimestampToTime = _UnaryFunc_CastTimestampToTime
+
+
+@_dc.dataclass
+class _UnaryFunc_CastTimestampToTimestampTz(_Variant, UnaryFunc):
+    value: CastTimestampToTimestampTz
+    _NAME = "CastTimestampToTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastTimestampToTimestampTz"}
+
+
+_UnaryFunc_CastTimestampToTimestampTz.__name__ = "CastTimestampToTimestampTz"
+_UnaryFunc_CastTimestampToTimestampTz.__qualname__ = (
+    "UnaryFunc.CastTimestampToTimestampTz"
+)
+UnaryFunc.CastTimestampToTimestampTz = _UnaryFunc_CastTimestampToTimestampTz
+
+
+@_dc.dataclass
+class _UnaryFunc_CastTimestampTzToDate(_Variant, UnaryFunc):
+    value: CastTimestampTzToDate
+    _NAME = "CastTimestampTzToDate"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastTimestampTzToDate"}
+
+
+_UnaryFunc_CastTimestampTzToDate.__name__ = "CastTimestampTzToDate"
+_UnaryFunc_CastTimestampTzToDate.__qualname__ = "UnaryFunc.CastTimestampTzToDate"
+UnaryFunc.CastTimestampTzToDate = _UnaryFunc_CastTimestampTzToDate
+
+
+@_dc.dataclass
+class _UnaryFunc_CastTimestampTzToMzTimestamp(_Variant, UnaryFunc):
+    value: CastTimestampTzToMzTimestamp
+    _NAME = "CastTimestampTzToMzTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastTimestampTzToMzTimestamp"}
+
+
+_UnaryFunc_CastTimestampTzToMzTimestamp.__name__ = "CastTimestampTzToMzTimestamp"
+_UnaryFunc_CastTimestampTzToMzTimestamp.__qualname__ = (
+    "UnaryFunc.CastTimestampTzToMzTimestamp"
+)
+UnaryFunc.CastTimestampTzToMzTimestamp = _UnaryFunc_CastTimestampTzToMzTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_CastTimestampTzToString(_Variant, UnaryFunc):
+    value: CastTimestampTzToString
+    _NAME = "CastTimestampTzToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastTimestampTzToString"}
+
+
+_UnaryFunc_CastTimestampTzToString.__name__ = "CastTimestampTzToString"
+_UnaryFunc_CastTimestampTzToString.__qualname__ = "UnaryFunc.CastTimestampTzToString"
+UnaryFunc.CastTimestampTzToString = _UnaryFunc_CastTimestampTzToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastTimestampTzToTime(_Variant, UnaryFunc):
+    value: CastTimestampTzToTime
+    _NAME = "CastTimestampTzToTime"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastTimestampTzToTime"}
+
+
+_UnaryFunc_CastTimestampTzToTime.__name__ = "CastTimestampTzToTime"
+_UnaryFunc_CastTimestampTzToTime.__qualname__ = "UnaryFunc.CastTimestampTzToTime"
+UnaryFunc.CastTimestampTzToTime = _UnaryFunc_CastTimestampTzToTime
+
+
+@_dc.dataclass
+class _UnaryFunc_CastTimestampTzToTimestamp(_Variant, UnaryFunc):
+    value: CastTimestampTzToTimestamp
+    _NAME = "CastTimestampTzToTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastTimestampTzToTimestamp"}
+
+
+_UnaryFunc_CastTimestampTzToTimestamp.__name__ = "CastTimestampTzToTimestamp"
+_UnaryFunc_CastTimestampTzToTimestamp.__qualname__ = (
+    "UnaryFunc.CastTimestampTzToTimestamp"
+)
+UnaryFunc.CastTimestampTzToTimestamp = _UnaryFunc_CastTimestampTzToTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint16ToFloat32(_Variant, UnaryFunc):
+    value: CastUint16ToFloat32
+    _NAME = "CastUint16ToFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint16ToFloat32"}
+
+
+_UnaryFunc_CastUint16ToFloat32.__name__ = "CastUint16ToFloat32"
+_UnaryFunc_CastUint16ToFloat32.__qualname__ = "UnaryFunc.CastUint16ToFloat32"
+UnaryFunc.CastUint16ToFloat32 = _UnaryFunc_CastUint16ToFloat32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint16ToFloat64(_Variant, UnaryFunc):
+    value: CastUint16ToFloat64
+    _NAME = "CastUint16ToFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint16ToFloat64"}
+
+
+_UnaryFunc_CastUint16ToFloat64.__name__ = "CastUint16ToFloat64"
+_UnaryFunc_CastUint16ToFloat64.__qualname__ = "UnaryFunc.CastUint16ToFloat64"
+UnaryFunc.CastUint16ToFloat64 = _UnaryFunc_CastUint16ToFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint16ToInt16(_Variant, UnaryFunc):
+    value: CastUint16ToInt16
+    _NAME = "CastUint16ToInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint16ToInt16"}
+
+
+_UnaryFunc_CastUint16ToInt16.__name__ = "CastUint16ToInt16"
+_UnaryFunc_CastUint16ToInt16.__qualname__ = "UnaryFunc.CastUint16ToInt16"
+UnaryFunc.CastUint16ToInt16 = _UnaryFunc_CastUint16ToInt16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint16ToInt32(_Variant, UnaryFunc):
+    value: CastUint16ToInt32
+    _NAME = "CastUint16ToInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint16ToInt32"}
+
+
+_UnaryFunc_CastUint16ToInt32.__name__ = "CastUint16ToInt32"
+_UnaryFunc_CastUint16ToInt32.__qualname__ = "UnaryFunc.CastUint16ToInt32"
+UnaryFunc.CastUint16ToInt32 = _UnaryFunc_CastUint16ToInt32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint16ToInt64(_Variant, UnaryFunc):
+    value: CastUint16ToInt64
+    _NAME = "CastUint16ToInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint16ToInt64"}
+
+
+_UnaryFunc_CastUint16ToInt64.__name__ = "CastUint16ToInt64"
+_UnaryFunc_CastUint16ToInt64.__qualname__ = "UnaryFunc.CastUint16ToInt64"
+UnaryFunc.CastUint16ToInt64 = _UnaryFunc_CastUint16ToInt64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint16ToNumeric(_Variant, UnaryFunc):
+    value: CastUint16ToNumeric
+    _NAME = "CastUint16ToNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint16ToNumeric"}
+
+
+_UnaryFunc_CastUint16ToNumeric.__name__ = "CastUint16ToNumeric"
+_UnaryFunc_CastUint16ToNumeric.__qualname__ = "UnaryFunc.CastUint16ToNumeric"
+UnaryFunc.CastUint16ToNumeric = _UnaryFunc_CastUint16ToNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint16ToString(_Variant, UnaryFunc):
+    value: CastUint16ToString
+    _NAME = "CastUint16ToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint16ToString"}
+
+
+_UnaryFunc_CastUint16ToString.__name__ = "CastUint16ToString"
+_UnaryFunc_CastUint16ToString.__qualname__ = "UnaryFunc.CastUint16ToString"
+UnaryFunc.CastUint16ToString = _UnaryFunc_CastUint16ToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint16ToUint32(_Variant, UnaryFunc):
+    value: CastUint16ToUint32
+    _NAME = "CastUint16ToUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint16ToUint32"}
+
+
+_UnaryFunc_CastUint16ToUint32.__name__ = "CastUint16ToUint32"
+_UnaryFunc_CastUint16ToUint32.__qualname__ = "UnaryFunc.CastUint16ToUint32"
+UnaryFunc.CastUint16ToUint32 = _UnaryFunc_CastUint16ToUint32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint16ToUint64(_Variant, UnaryFunc):
+    value: CastUint16ToUint64
+    _NAME = "CastUint16ToUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint16ToUint64"}
+
+
+_UnaryFunc_CastUint16ToUint64.__name__ = "CastUint16ToUint64"
+_UnaryFunc_CastUint16ToUint64.__qualname__ = "UnaryFunc.CastUint16ToUint64"
+UnaryFunc.CastUint16ToUint64 = _UnaryFunc_CastUint16ToUint64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint32ToFloat32(_Variant, UnaryFunc):
+    value: CastUint32ToFloat32
+    _NAME = "CastUint32ToFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint32ToFloat32"}
+
+
+_UnaryFunc_CastUint32ToFloat32.__name__ = "CastUint32ToFloat32"
+_UnaryFunc_CastUint32ToFloat32.__qualname__ = "UnaryFunc.CastUint32ToFloat32"
+UnaryFunc.CastUint32ToFloat32 = _UnaryFunc_CastUint32ToFloat32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint32ToFloat64(_Variant, UnaryFunc):
+    value: CastUint32ToFloat64
+    _NAME = "CastUint32ToFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint32ToFloat64"}
+
+
+_UnaryFunc_CastUint32ToFloat64.__name__ = "CastUint32ToFloat64"
+_UnaryFunc_CastUint32ToFloat64.__qualname__ = "UnaryFunc.CastUint32ToFloat64"
+UnaryFunc.CastUint32ToFloat64 = _UnaryFunc_CastUint32ToFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint32ToInt16(_Variant, UnaryFunc):
+    value: CastUint32ToInt16
+    _NAME = "CastUint32ToInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint32ToInt16"}
+
+
+_UnaryFunc_CastUint32ToInt16.__name__ = "CastUint32ToInt16"
+_UnaryFunc_CastUint32ToInt16.__qualname__ = "UnaryFunc.CastUint32ToInt16"
+UnaryFunc.CastUint32ToInt16 = _UnaryFunc_CastUint32ToInt16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint32ToInt32(_Variant, UnaryFunc):
+    value: CastUint32ToInt32
+    _NAME = "CastUint32ToInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint32ToInt32"}
+
+
+_UnaryFunc_CastUint32ToInt32.__name__ = "CastUint32ToInt32"
+_UnaryFunc_CastUint32ToInt32.__qualname__ = "UnaryFunc.CastUint32ToInt32"
+UnaryFunc.CastUint32ToInt32 = _UnaryFunc_CastUint32ToInt32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint32ToInt64(_Variant, UnaryFunc):
+    value: CastUint32ToInt64
+    _NAME = "CastUint32ToInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint32ToInt64"}
+
+
+_UnaryFunc_CastUint32ToInt64.__name__ = "CastUint32ToInt64"
+_UnaryFunc_CastUint32ToInt64.__qualname__ = "UnaryFunc.CastUint32ToInt64"
+UnaryFunc.CastUint32ToInt64 = _UnaryFunc_CastUint32ToInt64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint32ToMzTimestamp(_Variant, UnaryFunc):
+    value: CastUint32ToMzTimestamp
+    _NAME = "CastUint32ToMzTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint32ToMzTimestamp"}
+
+
+_UnaryFunc_CastUint32ToMzTimestamp.__name__ = "CastUint32ToMzTimestamp"
+_UnaryFunc_CastUint32ToMzTimestamp.__qualname__ = "UnaryFunc.CastUint32ToMzTimestamp"
+UnaryFunc.CastUint32ToMzTimestamp = _UnaryFunc_CastUint32ToMzTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint32ToNumeric(_Variant, UnaryFunc):
+    value: CastUint32ToNumeric
+    _NAME = "CastUint32ToNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint32ToNumeric"}
+
+
+_UnaryFunc_CastUint32ToNumeric.__name__ = "CastUint32ToNumeric"
+_UnaryFunc_CastUint32ToNumeric.__qualname__ = "UnaryFunc.CastUint32ToNumeric"
+UnaryFunc.CastUint32ToNumeric = _UnaryFunc_CastUint32ToNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint32ToString(_Variant, UnaryFunc):
+    value: CastUint32ToString
+    _NAME = "CastUint32ToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint32ToString"}
+
+
+_UnaryFunc_CastUint32ToString.__name__ = "CastUint32ToString"
+_UnaryFunc_CastUint32ToString.__qualname__ = "UnaryFunc.CastUint32ToString"
+UnaryFunc.CastUint32ToString = _UnaryFunc_CastUint32ToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint32ToUint16(_Variant, UnaryFunc):
+    value: CastUint32ToUint16
+    _NAME = "CastUint32ToUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint32ToUint16"}
+
+
+_UnaryFunc_CastUint32ToUint16.__name__ = "CastUint32ToUint16"
+_UnaryFunc_CastUint32ToUint16.__qualname__ = "UnaryFunc.CastUint32ToUint16"
+UnaryFunc.CastUint32ToUint16 = _UnaryFunc_CastUint32ToUint16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint32ToUint64(_Variant, UnaryFunc):
+    value: CastUint32ToUint64
+    _NAME = "CastUint32ToUint64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint32ToUint64"}
+
+
+_UnaryFunc_CastUint32ToUint64.__name__ = "CastUint32ToUint64"
+_UnaryFunc_CastUint32ToUint64.__qualname__ = "UnaryFunc.CastUint32ToUint64"
+UnaryFunc.CastUint32ToUint64 = _UnaryFunc_CastUint32ToUint64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint64ToFloat32(_Variant, UnaryFunc):
+    value: CastUint64ToFloat32
+    _NAME = "CastUint64ToFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint64ToFloat32"}
+
+
+_UnaryFunc_CastUint64ToFloat32.__name__ = "CastUint64ToFloat32"
+_UnaryFunc_CastUint64ToFloat32.__qualname__ = "UnaryFunc.CastUint64ToFloat32"
+UnaryFunc.CastUint64ToFloat32 = _UnaryFunc_CastUint64ToFloat32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint64ToFloat64(_Variant, UnaryFunc):
+    value: CastUint64ToFloat64
+    _NAME = "CastUint64ToFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint64ToFloat64"}
+
+
+_UnaryFunc_CastUint64ToFloat64.__name__ = "CastUint64ToFloat64"
+_UnaryFunc_CastUint64ToFloat64.__qualname__ = "UnaryFunc.CastUint64ToFloat64"
+UnaryFunc.CastUint64ToFloat64 = _UnaryFunc_CastUint64ToFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint64ToInt16(_Variant, UnaryFunc):
+    value: CastUint64ToInt16
+    _NAME = "CastUint64ToInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint64ToInt16"}
+
+
+_UnaryFunc_CastUint64ToInt16.__name__ = "CastUint64ToInt16"
+_UnaryFunc_CastUint64ToInt16.__qualname__ = "UnaryFunc.CastUint64ToInt16"
+UnaryFunc.CastUint64ToInt16 = _UnaryFunc_CastUint64ToInt16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint64ToInt32(_Variant, UnaryFunc):
+    value: CastUint64ToInt32
+    _NAME = "CastUint64ToInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint64ToInt32"}
+
+
+_UnaryFunc_CastUint64ToInt32.__name__ = "CastUint64ToInt32"
+_UnaryFunc_CastUint64ToInt32.__qualname__ = "UnaryFunc.CastUint64ToInt32"
+UnaryFunc.CastUint64ToInt32 = _UnaryFunc_CastUint64ToInt32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint64ToInt64(_Variant, UnaryFunc):
+    value: CastUint64ToInt64
+    _NAME = "CastUint64ToInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint64ToInt64"}
+
+
+_UnaryFunc_CastUint64ToInt64.__name__ = "CastUint64ToInt64"
+_UnaryFunc_CastUint64ToInt64.__qualname__ = "UnaryFunc.CastUint64ToInt64"
+UnaryFunc.CastUint64ToInt64 = _UnaryFunc_CastUint64ToInt64
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint64ToMzTimestamp(_Variant, UnaryFunc):
+    value: CastUint64ToMzTimestamp
+    _NAME = "CastUint64ToMzTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint64ToMzTimestamp"}
+
+
+_UnaryFunc_CastUint64ToMzTimestamp.__name__ = "CastUint64ToMzTimestamp"
+_UnaryFunc_CastUint64ToMzTimestamp.__qualname__ = "UnaryFunc.CastUint64ToMzTimestamp"
+UnaryFunc.CastUint64ToMzTimestamp = _UnaryFunc_CastUint64ToMzTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint64ToNumeric(_Variant, UnaryFunc):
+    value: CastUint64ToNumeric
+    _NAME = "CastUint64ToNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint64ToNumeric"}
+
+
+_UnaryFunc_CastUint64ToNumeric.__name__ = "CastUint64ToNumeric"
+_UnaryFunc_CastUint64ToNumeric.__qualname__ = "UnaryFunc.CastUint64ToNumeric"
+UnaryFunc.CastUint64ToNumeric = _UnaryFunc_CastUint64ToNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint64ToString(_Variant, UnaryFunc):
+    value: CastUint64ToString
+    _NAME = "CastUint64ToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint64ToString"}
+
+
+_UnaryFunc_CastUint64ToString.__name__ = "CastUint64ToString"
+_UnaryFunc_CastUint64ToString.__qualname__ = "UnaryFunc.CastUint64ToString"
+UnaryFunc.CastUint64ToString = _UnaryFunc_CastUint64ToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint64ToUint16(_Variant, UnaryFunc):
+    value: CastUint64ToUint16
+    _NAME = "CastUint64ToUint16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint64ToUint16"}
+
+
+_UnaryFunc_CastUint64ToUint16.__name__ = "CastUint64ToUint16"
+_UnaryFunc_CastUint64ToUint16.__qualname__ = "UnaryFunc.CastUint64ToUint16"
+UnaryFunc.CastUint64ToUint16 = _UnaryFunc_CastUint64ToUint16
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUint64ToUint32(_Variant, UnaryFunc):
+    value: CastUint64ToUint32
+    _NAME = "CastUint64ToUint32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUint64ToUint32"}
+
+
+_UnaryFunc_CastUint64ToUint32.__name__ = "CastUint64ToUint32"
+_UnaryFunc_CastUint64ToUint32.__qualname__ = "UnaryFunc.CastUint64ToUint32"
+UnaryFunc.CastUint64ToUint32 = _UnaryFunc_CastUint64ToUint32
+
+
+@_dc.dataclass
+class _UnaryFunc_CastUuidToString(_Variant, UnaryFunc):
+    value: CastUuidToString
+    _NAME = "CastUuidToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastUuidToString"}
+
+
+_UnaryFunc_CastUuidToString.__name__ = "CastUuidToString"
+_UnaryFunc_CastUuidToString.__qualname__ = "UnaryFunc.CastUuidToString"
+UnaryFunc.CastUuidToString = _UnaryFunc_CastUuidToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CastVarCharToString(_Variant, UnaryFunc):
+    value: CastVarCharToString
+    _NAME = "CastVarCharToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CastVarCharToString"}
+
+
+_UnaryFunc_CastVarCharToString.__name__ = "CastVarCharToString"
+_UnaryFunc_CastVarCharToString.__qualname__ = "UnaryFunc.CastVarCharToString"
+UnaryFunc.CastVarCharToString = _UnaryFunc_CastVarCharToString
+
+
+@_dc.dataclass
+class _UnaryFunc_CbrtFloat64(_Variant, UnaryFunc):
+    value: CbrtFloat64
+    _NAME = "CbrtFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CbrtFloat64"}
+
+
+_UnaryFunc_CbrtFloat64.__name__ = "CbrtFloat64"
+_UnaryFunc_CbrtFloat64.__qualname__ = "UnaryFunc.CbrtFloat64"
+UnaryFunc.CbrtFloat64 = _UnaryFunc_CbrtFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_CeilFloat32(_Variant, UnaryFunc):
+    value: CeilFloat32
+    _NAME = "CeilFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CeilFloat32"}
+
+
+_UnaryFunc_CeilFloat32.__name__ = "CeilFloat32"
+_UnaryFunc_CeilFloat32.__qualname__ = "UnaryFunc.CeilFloat32"
+UnaryFunc.CeilFloat32 = _UnaryFunc_CeilFloat32
+
+
+@_dc.dataclass
+class _UnaryFunc_CeilFloat64(_Variant, UnaryFunc):
+    value: CeilFloat64
+    _NAME = "CeilFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CeilFloat64"}
+
+
+_UnaryFunc_CeilFloat64.__name__ = "CeilFloat64"
+_UnaryFunc_CeilFloat64.__qualname__ = "UnaryFunc.CeilFloat64"
+UnaryFunc.CeilFloat64 = _UnaryFunc_CeilFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_CeilNumeric(_Variant, UnaryFunc):
+    value: CeilNumeric
+    _NAME = "CeilNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CeilNumeric"}
+
+
+_UnaryFunc_CeilNumeric.__name__ = "CeilNumeric"
+_UnaryFunc_CeilNumeric.__qualname__ = "UnaryFunc.CeilNumeric"
+UnaryFunc.CeilNumeric = _UnaryFunc_CeilNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_CharLength(_Variant, UnaryFunc):
+    value: CharLength
+    _NAME = "CharLength"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CharLength"}
+
+
+_UnaryFunc_CharLength.__name__ = "CharLength"
+_UnaryFunc_CharLength.__qualname__ = "UnaryFunc.CharLength"
+UnaryFunc.CharLength = _UnaryFunc_CharLength
+
+
+@_dc.dataclass
+class _UnaryFunc_Chr(_Variant, UnaryFunc):
+    value: Chr
+    _NAME = "Chr"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Chr"}
+
+
+_UnaryFunc_Chr.__name__ = "Chr"
+_UnaryFunc_Chr.__qualname__ = "UnaryFunc.Chr"
+UnaryFunc.Chr = _UnaryFunc_Chr
+
+
+@_dc.dataclass
+class _UnaryFunc_Cos(_Variant, UnaryFunc):
+    value: Cos
+    _NAME = "Cos"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Cos"}
+
+
+_UnaryFunc_Cos.__name__ = "Cos"
+_UnaryFunc_Cos.__qualname__ = "UnaryFunc.Cos"
+UnaryFunc.Cos = _UnaryFunc_Cos
+
+
+@_dc.dataclass
+class _UnaryFunc_Cosh(_Variant, UnaryFunc):
+    value: Cosh
+    _NAME = "Cosh"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Cosh"}
+
+
+_UnaryFunc_Cosh.__name__ = "Cosh"
+_UnaryFunc_Cosh.__qualname__ = "UnaryFunc.Cosh"
+UnaryFunc.Cosh = _UnaryFunc_Cosh
+
+
+@_dc.dataclass
+class _UnaryFunc_Cot(_Variant, UnaryFunc):
+    value: Cot
+    _NAME = "Cot"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Cot"}
+
+
+_UnaryFunc_Cot.__name__ = "Cot"
+_UnaryFunc_Cot.__qualname__ = "UnaryFunc.Cot"
+UnaryFunc.Cot = _UnaryFunc_Cot
+
+
+@_dc.dataclass
+class _UnaryFunc_Crc32Bytes(_Variant, UnaryFunc):
+    value: Crc32Bytes
+    _NAME = "Crc32Bytes"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Crc32Bytes"}
+
+
+_UnaryFunc_Crc32Bytes.__name__ = "Crc32Bytes"
+_UnaryFunc_Crc32Bytes.__qualname__ = "UnaryFunc.Crc32Bytes"
+UnaryFunc.Crc32Bytes = _UnaryFunc_Crc32Bytes
+
+
+@_dc.dataclass
+class _UnaryFunc_Crc32String(_Variant, UnaryFunc):
+    value: Crc32String
+    _NAME = "Crc32String"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Crc32String"}
+
+
+_UnaryFunc_Crc32String.__name__ = "Crc32String"
+_UnaryFunc_Crc32String.__qualname__ = "UnaryFunc.Crc32String"
+UnaryFunc.Crc32String = _UnaryFunc_Crc32String
+
+
+@_dc.dataclass
+class _UnaryFunc_DatePartInterval(_Variant, UnaryFunc):
+    value: DatePartInterval
+    _NAME = "DatePartInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DatePartInterval"}
+
+
+_UnaryFunc_DatePartInterval.__name__ = "DatePartInterval"
+_UnaryFunc_DatePartInterval.__qualname__ = "UnaryFunc.DatePartInterval"
+UnaryFunc.DatePartInterval = _UnaryFunc_DatePartInterval
+
+
+@_dc.dataclass
+class _UnaryFunc_DatePartTime(_Variant, UnaryFunc):
+    value: DatePartTime
+    _NAME = "DatePartTime"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DatePartTime"}
+
+
+_UnaryFunc_DatePartTime.__name__ = "DatePartTime"
+_UnaryFunc_DatePartTime.__qualname__ = "UnaryFunc.DatePartTime"
+UnaryFunc.DatePartTime = _UnaryFunc_DatePartTime
+
+
+@_dc.dataclass
+class _UnaryFunc_DatePartTimestamp(_Variant, UnaryFunc):
+    value: DatePartTimestamp
+    _NAME = "DatePartTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DatePartTimestamp"}
+
+
+_UnaryFunc_DatePartTimestamp.__name__ = "DatePartTimestamp"
+_UnaryFunc_DatePartTimestamp.__qualname__ = "UnaryFunc.DatePartTimestamp"
+UnaryFunc.DatePartTimestamp = _UnaryFunc_DatePartTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_DatePartTimestampTz(_Variant, UnaryFunc):
+    value: DatePartTimestampTz
+    _NAME = "DatePartTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DatePartTimestampTz"}
+
+
+_UnaryFunc_DatePartTimestampTz.__name__ = "DatePartTimestampTz"
+_UnaryFunc_DatePartTimestampTz.__qualname__ = "UnaryFunc.DatePartTimestampTz"
+UnaryFunc.DatePartTimestampTz = _UnaryFunc_DatePartTimestampTz
+
+
+@_dc.dataclass
+class _UnaryFunc_DateTruncTimestamp(_Variant, UnaryFunc):
+    value: DateTruncTimestamp
+    _NAME = "DateTruncTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DateTruncTimestamp"}
+
+
+_UnaryFunc_DateTruncTimestamp.__name__ = "DateTruncTimestamp"
+_UnaryFunc_DateTruncTimestamp.__qualname__ = "UnaryFunc.DateTruncTimestamp"
+UnaryFunc.DateTruncTimestamp = _UnaryFunc_DateTruncTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_DateTruncTimestampTz(_Variant, UnaryFunc):
+    value: DateTruncTimestampTz
+    _NAME = "DateTruncTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DateTruncTimestampTz"}
+
+
+_UnaryFunc_DateTruncTimestampTz.__name__ = "DateTruncTimestampTz"
+_UnaryFunc_DateTruncTimestampTz.__qualname__ = "UnaryFunc.DateTruncTimestampTz"
+UnaryFunc.DateTruncTimestampTz = _UnaryFunc_DateTruncTimestampTz
+
+
+@_dc.dataclass
+class _UnaryFunc_Degrees(_Variant, UnaryFunc):
+    value: Degrees
+    _NAME = "Degrees"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Degrees"}
+
+
+_UnaryFunc_Degrees.__name__ = "Degrees"
+_UnaryFunc_Degrees.__qualname__ = "UnaryFunc.Degrees"
+UnaryFunc.Degrees = _UnaryFunc_Degrees
+
+
+@_dc.dataclass
+class _UnaryFunc_Exp(_Variant, UnaryFunc):
+    value: Exp
+    _NAME = "Exp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Exp"}
+
+
+_UnaryFunc_Exp.__name__ = "Exp"
+_UnaryFunc_Exp.__qualname__ = "UnaryFunc.Exp"
+UnaryFunc.Exp = _UnaryFunc_Exp
+
+
+@_dc.dataclass
+class _UnaryFunc_ExpNumeric(_Variant, UnaryFunc):
+    value: ExpNumeric
+    _NAME = "ExpNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ExpNumeric"}
+
+
+_UnaryFunc_ExpNumeric.__name__ = "ExpNumeric"
+_UnaryFunc_ExpNumeric.__qualname__ = "UnaryFunc.ExpNumeric"
+UnaryFunc.ExpNumeric = _UnaryFunc_ExpNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_ExtractDate(_Variant, UnaryFunc):
+    value: ExtractDate
+    _NAME = "ExtractDate"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ExtractDate"}
+
+
+_UnaryFunc_ExtractDate.__name__ = "ExtractDate"
+_UnaryFunc_ExtractDate.__qualname__ = "UnaryFunc.ExtractDate"
+UnaryFunc.ExtractDate = _UnaryFunc_ExtractDate
+
+
+@_dc.dataclass
+class _UnaryFunc_ExtractInterval(_Variant, UnaryFunc):
+    value: ExtractInterval
+    _NAME = "ExtractInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ExtractInterval"}
+
+
+_UnaryFunc_ExtractInterval.__name__ = "ExtractInterval"
+_UnaryFunc_ExtractInterval.__qualname__ = "UnaryFunc.ExtractInterval"
+UnaryFunc.ExtractInterval = _UnaryFunc_ExtractInterval
+
+
+@_dc.dataclass
+class _UnaryFunc_ExtractTime(_Variant, UnaryFunc):
+    value: ExtractTime
+    _NAME = "ExtractTime"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ExtractTime"}
+
+
+_UnaryFunc_ExtractTime.__name__ = "ExtractTime"
+_UnaryFunc_ExtractTime.__qualname__ = "UnaryFunc.ExtractTime"
+UnaryFunc.ExtractTime = _UnaryFunc_ExtractTime
+
+
+@_dc.dataclass
+class _UnaryFunc_ExtractTimestamp(_Variant, UnaryFunc):
+    value: ExtractTimestamp
+    _NAME = "ExtractTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ExtractTimestamp"}
+
+
+_UnaryFunc_ExtractTimestamp.__name__ = "ExtractTimestamp"
+_UnaryFunc_ExtractTimestamp.__qualname__ = "UnaryFunc.ExtractTimestamp"
+UnaryFunc.ExtractTimestamp = _UnaryFunc_ExtractTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_ExtractTimestampTz(_Variant, UnaryFunc):
+    value: ExtractTimestampTz
+    _NAME = "ExtractTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ExtractTimestampTz"}
+
+
+_UnaryFunc_ExtractTimestampTz.__name__ = "ExtractTimestampTz"
+_UnaryFunc_ExtractTimestampTz.__qualname__ = "UnaryFunc.ExtractTimestampTz"
+UnaryFunc.ExtractTimestampTz = _UnaryFunc_ExtractTimestampTz
+
+
+@_dc.dataclass
+class _UnaryFunc_FloorFloat32(_Variant, UnaryFunc):
+    value: FloorFloat32
+    _NAME = "FloorFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "FloorFloat32"}
+
+
+_UnaryFunc_FloorFloat32.__name__ = "FloorFloat32"
+_UnaryFunc_FloorFloat32.__qualname__ = "UnaryFunc.FloorFloat32"
+UnaryFunc.FloorFloat32 = _UnaryFunc_FloorFloat32
+
+
+@_dc.dataclass
+class _UnaryFunc_FloorFloat64(_Variant, UnaryFunc):
+    value: FloorFloat64
+    _NAME = "FloorFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "FloorFloat64"}
+
+
+_UnaryFunc_FloorFloat64.__name__ = "FloorFloat64"
+_UnaryFunc_FloorFloat64.__qualname__ = "UnaryFunc.FloorFloat64"
+UnaryFunc.FloorFloat64 = _UnaryFunc_FloorFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_FloorNumeric(_Variant, UnaryFunc):
+    value: FloorNumeric
+    _NAME = "FloorNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "FloorNumeric"}
+
+
+_UnaryFunc_FloorNumeric.__name__ = "FloorNumeric"
+_UnaryFunc_FloorNumeric.__qualname__ = "UnaryFunc.FloorNumeric"
+UnaryFunc.FloorNumeric = _UnaryFunc_FloorNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_Initcap(_Variant, UnaryFunc):
+    value: Initcap
+    _NAME = "Initcap"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Initcap"}
+
+
+_UnaryFunc_Initcap.__name__ = "Initcap"
+_UnaryFunc_Initcap.__qualname__ = "UnaryFunc.Initcap"
+UnaryFunc.Initcap = _UnaryFunc_Initcap
+
+
+@_dc.dataclass
+class _UnaryFunc_IsFalse(_Variant, UnaryFunc):
+    value: IsFalse
+    _NAME = "IsFalse"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "IsFalse"}
+
+
+_UnaryFunc_IsFalse.__name__ = "IsFalse"
+_UnaryFunc_IsFalse.__qualname__ = "UnaryFunc.IsFalse"
+UnaryFunc.IsFalse = _UnaryFunc_IsFalse
+
+
+@_dc.dataclass
+class _UnaryFunc_IsLikeMatch(_Variant, UnaryFunc):
+    value: IsLikeMatch
+    _NAME = "IsLikeMatch"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "IsLikeMatch"}
+
+
+_UnaryFunc_IsLikeMatch.__name__ = "IsLikeMatch"
+_UnaryFunc_IsLikeMatch.__qualname__ = "UnaryFunc.IsLikeMatch"
+UnaryFunc.IsLikeMatch = _UnaryFunc_IsLikeMatch
+
+
+@_dc.dataclass
+class _UnaryFunc_IsNull(_Variant, UnaryFunc):
+    value: IsNull
+    _NAME = "IsNull"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "IsNull"}
+
+
+_UnaryFunc_IsNull.__name__ = "IsNull"
+_UnaryFunc_IsNull.__qualname__ = "UnaryFunc.IsNull"
+UnaryFunc.IsNull = _UnaryFunc_IsNull
+
+
+@_dc.dataclass
+class _UnaryFunc_IsRegexpMatch(_Variant, UnaryFunc):
+    value: IsRegexpMatch
+    _NAME = "IsRegexpMatch"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "IsRegexpMatch"}
+
+
+_UnaryFunc_IsRegexpMatch.__name__ = "IsRegexpMatch"
+_UnaryFunc_IsRegexpMatch.__qualname__ = "UnaryFunc.IsRegexpMatch"
+UnaryFunc.IsRegexpMatch = _UnaryFunc_IsRegexpMatch
+
+
+@_dc.dataclass
+class _UnaryFunc_IsTrue(_Variant, UnaryFunc):
+    value: IsTrue
+    _NAME = "IsTrue"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "IsTrue"}
+
+
+_UnaryFunc_IsTrue.__name__ = "IsTrue"
+_UnaryFunc_IsTrue.__qualname__ = "UnaryFunc.IsTrue"
+UnaryFunc.IsTrue = _UnaryFunc_IsTrue
+
+
+@_dc.dataclass
+class _UnaryFunc_Jq(_Variant, UnaryFunc):
+    value: Jq
+    _NAME = "Jq"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Jq"}
+
+
+_UnaryFunc_Jq.__name__ = "Jq"
+_UnaryFunc_Jq.__qualname__ = "UnaryFunc.Jq"
+UnaryFunc.Jq = _UnaryFunc_Jq
+
+
+@_dc.dataclass
+class _UnaryFunc_JsonbArrayLength(_Variant, UnaryFunc):
+    value: JsonbArrayLength
+    _NAME = "JsonbArrayLength"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbArrayLength"}
+
+
+_UnaryFunc_JsonbArrayLength.__name__ = "JsonbArrayLength"
+_UnaryFunc_JsonbArrayLength.__qualname__ = "UnaryFunc.JsonbArrayLength"
+UnaryFunc.JsonbArrayLength = _UnaryFunc_JsonbArrayLength
+
+
+@_dc.dataclass
+class _UnaryFunc_JsonbPretty(_Variant, UnaryFunc):
+    value: JsonbPretty
+    _NAME = "JsonbPretty"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbPretty"}
+
+
+_UnaryFunc_JsonbPretty.__name__ = "JsonbPretty"
+_UnaryFunc_JsonbPretty.__qualname__ = "UnaryFunc.JsonbPretty"
+UnaryFunc.JsonbPretty = _UnaryFunc_JsonbPretty
+
+
+@_dc.dataclass
+class _UnaryFunc_JsonbStripNulls(_Variant, UnaryFunc):
+    value: JsonbStripNulls
+    _NAME = "JsonbStripNulls"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbStripNulls"}
+
+
+_UnaryFunc_JsonbStripNulls.__name__ = "JsonbStripNulls"
+_UnaryFunc_JsonbStripNulls.__qualname__ = "UnaryFunc.JsonbStripNulls"
+UnaryFunc.JsonbStripNulls = _UnaryFunc_JsonbStripNulls
+
+
+@_dc.dataclass
+class _UnaryFunc_JsonbTypeof(_Variant, UnaryFunc):
+    value: JsonbTypeof
+    _NAME = "JsonbTypeof"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbTypeof"}
+
+
+_UnaryFunc_JsonbTypeof.__name__ = "JsonbTypeof"
+_UnaryFunc_JsonbTypeof.__qualname__ = "UnaryFunc.JsonbTypeof"
+UnaryFunc.JsonbTypeof = _UnaryFunc_JsonbTypeof
+
+
+@_dc.dataclass
+class _UnaryFunc_JustifyDays(_Variant, UnaryFunc):
+    value: JustifyDays
+    _NAME = "JustifyDays"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JustifyDays"}
+
+
+_UnaryFunc_JustifyDays.__name__ = "JustifyDays"
+_UnaryFunc_JustifyDays.__qualname__ = "UnaryFunc.JustifyDays"
+UnaryFunc.JustifyDays = _UnaryFunc_JustifyDays
+
+
+@_dc.dataclass
+class _UnaryFunc_JustifyHours(_Variant, UnaryFunc):
+    value: JustifyHours
+    _NAME = "JustifyHours"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JustifyHours"}
+
+
+_UnaryFunc_JustifyHours.__name__ = "JustifyHours"
+_UnaryFunc_JustifyHours.__qualname__ = "UnaryFunc.JustifyHours"
+UnaryFunc.JustifyHours = _UnaryFunc_JustifyHours
+
+
+@_dc.dataclass
+class _UnaryFunc_JustifyInterval(_Variant, UnaryFunc):
+    value: JustifyInterval
+    _NAME = "JustifyInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JustifyInterval"}
+
+
+_UnaryFunc_JustifyInterval.__name__ = "JustifyInterval"
+_UnaryFunc_JustifyInterval.__qualname__ = "UnaryFunc.JustifyInterval"
+UnaryFunc.JustifyInterval = _UnaryFunc_JustifyInterval
+
+
+@_dc.dataclass
+class _UnaryFunc_KafkaMurmur2Bytes(_Variant, UnaryFunc):
+    value: KafkaMurmur2Bytes
+    _NAME = "KafkaMurmur2Bytes"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "KafkaMurmur2Bytes"}
+
+
+_UnaryFunc_KafkaMurmur2Bytes.__name__ = "KafkaMurmur2Bytes"
+_UnaryFunc_KafkaMurmur2Bytes.__qualname__ = "UnaryFunc.KafkaMurmur2Bytes"
+UnaryFunc.KafkaMurmur2Bytes = _UnaryFunc_KafkaMurmur2Bytes
+
+
+@_dc.dataclass
+class _UnaryFunc_KafkaMurmur2String(_Variant, UnaryFunc):
+    value: KafkaMurmur2String
+    _NAME = "KafkaMurmur2String"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "KafkaMurmur2String"}
+
+
+_UnaryFunc_KafkaMurmur2String.__name__ = "KafkaMurmur2String"
+_UnaryFunc_KafkaMurmur2String.__qualname__ = "UnaryFunc.KafkaMurmur2String"
+UnaryFunc.KafkaMurmur2String = _UnaryFunc_KafkaMurmur2String
+
+
+@_dc.dataclass
+class _UnaryFunc_ListLength(_Variant, UnaryFunc):
+    value: ListLength
+    _NAME = "ListLength"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ListLength"}
+
+
+_UnaryFunc_ListLength.__name__ = "ListLength"
+_UnaryFunc_ListLength.__qualname__ = "UnaryFunc.ListLength"
+UnaryFunc.ListLength = _UnaryFunc_ListLength
+
+
+@_dc.dataclass
+class _UnaryFunc_Ln(_Variant, UnaryFunc):
+    value: Ln
+    _NAME = "Ln"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Ln"}
+
+
+_UnaryFunc_Ln.__name__ = "Ln"
+_UnaryFunc_Ln.__qualname__ = "UnaryFunc.Ln"
+UnaryFunc.Ln = _UnaryFunc_Ln
+
+
+@_dc.dataclass
+class _UnaryFunc_LnNumeric(_Variant, UnaryFunc):
+    value: LnNumeric
+    _NAME = "LnNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "LnNumeric"}
+
+
+_UnaryFunc_LnNumeric.__name__ = "LnNumeric"
+_UnaryFunc_LnNumeric.__qualname__ = "UnaryFunc.LnNumeric"
+UnaryFunc.LnNumeric = _UnaryFunc_LnNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_Log10(_Variant, UnaryFunc):
+    value: Log10
+    _NAME = "Log10"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Log10"}
+
+
+_UnaryFunc_Log10.__name__ = "Log10"
+_UnaryFunc_Log10.__qualname__ = "UnaryFunc.Log10"
+UnaryFunc.Log10 = _UnaryFunc_Log10
+
+
+@_dc.dataclass
+class _UnaryFunc_Log10Numeric(_Variant, UnaryFunc):
+    value: Log10Numeric
+    _NAME = "Log10Numeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Log10Numeric"}
+
+
+_UnaryFunc_Log10Numeric.__name__ = "Log10Numeric"
+_UnaryFunc_Log10Numeric.__qualname__ = "UnaryFunc.Log10Numeric"
+UnaryFunc.Log10Numeric = _UnaryFunc_Log10Numeric
+
+
+@_dc.dataclass
+class _UnaryFunc_Lower(_Variant, UnaryFunc):
+    value: Lower
+    _NAME = "Lower"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Lower"}
+
+
+_UnaryFunc_Lower.__name__ = "Lower"
+_UnaryFunc_Lower.__qualname__ = "UnaryFunc.Lower"
+UnaryFunc.Lower = _UnaryFunc_Lower
+
+
+@_dc.dataclass
+class _UnaryFunc_MapBuildFromRecordList(_Variant, UnaryFunc):
+    value: MapBuildFromRecordList
+    _NAME = "MapBuildFromRecordList"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MapBuildFromRecordList"}
+
+
+_UnaryFunc_MapBuildFromRecordList.__name__ = "MapBuildFromRecordList"
+_UnaryFunc_MapBuildFromRecordList.__qualname__ = "UnaryFunc.MapBuildFromRecordList"
+UnaryFunc.MapBuildFromRecordList = _UnaryFunc_MapBuildFromRecordList
+
+
+@_dc.dataclass
+class _UnaryFunc_MapLength(_Variant, UnaryFunc):
+    value: MapLength
+    _NAME = "MapLength"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MapLength"}
+
+
+_UnaryFunc_MapLength.__name__ = "MapLength"
+_UnaryFunc_MapLength.__qualname__ = "UnaryFunc.MapLength"
+UnaryFunc.MapLength = _UnaryFunc_MapLength
+
+
+@_dc.dataclass
+class _UnaryFunc_MzAclItemGrantee(_Variant, UnaryFunc):
+    value: MzAclItemGrantee
+    _NAME = "MzAclItemGrantee"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MzAclItemGrantee"}
+
+
+_UnaryFunc_MzAclItemGrantee.__name__ = "MzAclItemGrantee"
+_UnaryFunc_MzAclItemGrantee.__qualname__ = "UnaryFunc.MzAclItemGrantee"
+UnaryFunc.MzAclItemGrantee = _UnaryFunc_MzAclItemGrantee
+
+
+@_dc.dataclass
+class _UnaryFunc_MzAclItemGrantor(_Variant, UnaryFunc):
+    value: MzAclItemGrantor
+    _NAME = "MzAclItemGrantor"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MzAclItemGrantor"}
+
+
+_UnaryFunc_MzAclItemGrantor.__name__ = "MzAclItemGrantor"
+_UnaryFunc_MzAclItemGrantor.__qualname__ = "UnaryFunc.MzAclItemGrantor"
+UnaryFunc.MzAclItemGrantor = _UnaryFunc_MzAclItemGrantor
+
+
+@_dc.dataclass
+class _UnaryFunc_MzAclItemPrivileges(_Variant, UnaryFunc):
+    value: MzAclItemPrivileges
+    _NAME = "MzAclItemPrivileges"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MzAclItemPrivileges"}
+
+
+_UnaryFunc_MzAclItemPrivileges.__name__ = "MzAclItemPrivileges"
+_UnaryFunc_MzAclItemPrivileges.__qualname__ = "UnaryFunc.MzAclItemPrivileges"
+UnaryFunc.MzAclItemPrivileges = _UnaryFunc_MzAclItemPrivileges
+
+
+@_dc.dataclass
+class _UnaryFunc_MzFormatPrivileges(_Variant, UnaryFunc):
+    value: MzFormatPrivileges
+    _NAME = "MzFormatPrivileges"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MzFormatPrivileges"}
+
+
+_UnaryFunc_MzFormatPrivileges.__name__ = "MzFormatPrivileges"
+_UnaryFunc_MzFormatPrivileges.__qualname__ = "UnaryFunc.MzFormatPrivileges"
+UnaryFunc.MzFormatPrivileges = _UnaryFunc_MzFormatPrivileges
+
+
+@_dc.dataclass
+class _UnaryFunc_MzRowSize(_Variant, UnaryFunc):
+    value: MzRowSize
+    _NAME = "MzRowSize"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MzRowSize"}
+
+
+_UnaryFunc_MzRowSize.__name__ = "MzRowSize"
+_UnaryFunc_MzRowSize.__qualname__ = "UnaryFunc.MzRowSize"
+UnaryFunc.MzRowSize = _UnaryFunc_MzRowSize
+
+
+@_dc.dataclass
+class _UnaryFunc_MzTypeName(_Variant, UnaryFunc):
+    value: MzTypeName
+    _NAME = "MzTypeName"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MzTypeName"}
+
+
+_UnaryFunc_MzTypeName.__name__ = "MzTypeName"
+_UnaryFunc_MzTypeName.__qualname__ = "UnaryFunc.MzTypeName"
+UnaryFunc.MzTypeName = _UnaryFunc_MzTypeName
+
+
+@_dc.dataclass
+class _UnaryFunc_MzValidatePrivileges(_Variant, UnaryFunc):
+    value: MzValidatePrivileges
+    _NAME = "MzValidatePrivileges"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MzValidatePrivileges"}
+
+
+_UnaryFunc_MzValidatePrivileges.__name__ = "MzValidatePrivileges"
+_UnaryFunc_MzValidatePrivileges.__qualname__ = "UnaryFunc.MzValidatePrivileges"
+UnaryFunc.MzValidatePrivileges = _UnaryFunc_MzValidatePrivileges
+
+
+@_dc.dataclass
+class _UnaryFunc_MzValidateRolePrivilege(_Variant, UnaryFunc):
+    value: MzValidateRolePrivilege
+    _NAME = "MzValidateRolePrivilege"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MzValidateRolePrivilege"}
+
+
+_UnaryFunc_MzValidateRolePrivilege.__name__ = "MzValidateRolePrivilege"
+_UnaryFunc_MzValidateRolePrivilege.__qualname__ = "UnaryFunc.MzValidateRolePrivilege"
+UnaryFunc.MzValidateRolePrivilege = _UnaryFunc_MzValidateRolePrivilege
+
+
+@_dc.dataclass
+class _UnaryFunc_NegFloat32(_Variant, UnaryFunc):
+    value: NegFloat32
+    _NAME = "NegFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "NegFloat32"}
+
+
+_UnaryFunc_NegFloat32.__name__ = "NegFloat32"
+_UnaryFunc_NegFloat32.__qualname__ = "UnaryFunc.NegFloat32"
+UnaryFunc.NegFloat32 = _UnaryFunc_NegFloat32
+
+
+@_dc.dataclass
+class _UnaryFunc_NegFloat64(_Variant, UnaryFunc):
+    value: NegFloat64
+    _NAME = "NegFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "NegFloat64"}
+
+
+_UnaryFunc_NegFloat64.__name__ = "NegFloat64"
+_UnaryFunc_NegFloat64.__qualname__ = "UnaryFunc.NegFloat64"
+UnaryFunc.NegFloat64 = _UnaryFunc_NegFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_NegInt16(_Variant, UnaryFunc):
+    value: NegInt16
+    _NAME = "NegInt16"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "NegInt16"}
+
+
+_UnaryFunc_NegInt16.__name__ = "NegInt16"
+_UnaryFunc_NegInt16.__qualname__ = "UnaryFunc.NegInt16"
+UnaryFunc.NegInt16 = _UnaryFunc_NegInt16
+
+
+@_dc.dataclass
+class _UnaryFunc_NegInt32(_Variant, UnaryFunc):
+    value: NegInt32
+    _NAME = "NegInt32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "NegInt32"}
+
+
+_UnaryFunc_NegInt32.__name__ = "NegInt32"
+_UnaryFunc_NegInt32.__qualname__ = "UnaryFunc.NegInt32"
+UnaryFunc.NegInt32 = _UnaryFunc_NegInt32
+
+
+@_dc.dataclass
+class _UnaryFunc_NegInt64(_Variant, UnaryFunc):
+    value: NegInt64
+    _NAME = "NegInt64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "NegInt64"}
+
+
+_UnaryFunc_NegInt64.__name__ = "NegInt64"
+_UnaryFunc_NegInt64.__qualname__ = "UnaryFunc.NegInt64"
+UnaryFunc.NegInt64 = _UnaryFunc_NegInt64
+
+
+@_dc.dataclass
+class _UnaryFunc_NegInterval(_Variant, UnaryFunc):
+    value: NegInterval
+    _NAME = "NegInterval"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "NegInterval"}
+
+
+_UnaryFunc_NegInterval.__name__ = "NegInterval"
+_UnaryFunc_NegInterval.__qualname__ = "UnaryFunc.NegInterval"
+UnaryFunc.NegInterval = _UnaryFunc_NegInterval
+
+
+@_dc.dataclass
+class _UnaryFunc_NegNumeric(_Variant, UnaryFunc):
+    value: NegNumeric
+    _NAME = "NegNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "NegNumeric"}
+
+
+_UnaryFunc_NegNumeric.__name__ = "NegNumeric"
+_UnaryFunc_NegNumeric.__qualname__ = "UnaryFunc.NegNumeric"
+UnaryFunc.NegNumeric = _UnaryFunc_NegNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_Not(_Variant, UnaryFunc):
+    value: Not
+    _NAME = "Not"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Not"}
+
+
+_UnaryFunc_Not.__name__ = "Not"
+_UnaryFunc_Not.__qualname__ = "UnaryFunc.Not"
+UnaryFunc.Not = _UnaryFunc_Not
+
+
+@_dc.dataclass
+class _UnaryFunc_PadChar(_Variant, UnaryFunc):
+    value: PadChar
+    _NAME = "PadChar"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "PadChar"}
+
+
+_UnaryFunc_PadChar.__name__ = "PadChar"
+_UnaryFunc_PadChar.__qualname__ = "UnaryFunc.PadChar"
+UnaryFunc.PadChar = _UnaryFunc_PadChar
+
+
+@_dc.dataclass
+class _UnaryFunc_Panic(_Variant, UnaryFunc):
+    value: Panic
+    _NAME = "Panic"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Panic"}
+
+
+_UnaryFunc_Panic.__name__ = "Panic"
+_UnaryFunc_Panic.__qualname__ = "UnaryFunc.Panic"
+UnaryFunc.Panic = _UnaryFunc_Panic
+
+
+@_dc.dataclass
+class _UnaryFunc_ParseCatalogAclMode(_Variant, UnaryFunc):
+    value: ParseCatalogAclMode
+    _NAME = "ParseCatalogAclMode"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ParseCatalogAclMode"}
+
+
+_UnaryFunc_ParseCatalogAclMode.__name__ = "ParseCatalogAclMode"
+_UnaryFunc_ParseCatalogAclMode.__qualname__ = "UnaryFunc.ParseCatalogAclMode"
+UnaryFunc.ParseCatalogAclMode = _UnaryFunc_ParseCatalogAclMode
+
+
+@_dc.dataclass
+class _UnaryFunc_ParseCatalogAuditLogDetails(_Variant, UnaryFunc):
+    value: ParseCatalogAuditLogDetails
+    _NAME = "ParseCatalogAuditLogDetails"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ParseCatalogAuditLogDetails"}
+
+
+_UnaryFunc_ParseCatalogAuditLogDetails.__name__ = "ParseCatalogAuditLogDetails"
+_UnaryFunc_ParseCatalogAuditLogDetails.__qualname__ = (
+    "UnaryFunc.ParseCatalogAuditLogDetails"
+)
+UnaryFunc.ParseCatalogAuditLogDetails = _UnaryFunc_ParseCatalogAuditLogDetails
+
+
+@_dc.dataclass
+class _UnaryFunc_ParseCatalogCreateSql(_Variant, UnaryFunc):
+    value: ParseCatalogCreateSql
+    _NAME = "ParseCatalogCreateSql"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ParseCatalogCreateSql"}
+
+
+_UnaryFunc_ParseCatalogCreateSql.__name__ = "ParseCatalogCreateSql"
+_UnaryFunc_ParseCatalogCreateSql.__qualname__ = "UnaryFunc.ParseCatalogCreateSql"
+UnaryFunc.ParseCatalogCreateSql = _UnaryFunc_ParseCatalogCreateSql
+
+
+@_dc.dataclass
+class _UnaryFunc_ParseCatalogId(_Variant, UnaryFunc):
+    value: ParseCatalogId
+    _NAME = "ParseCatalogId"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ParseCatalogId"}
+
+
+_UnaryFunc_ParseCatalogId.__name__ = "ParseCatalogId"
+_UnaryFunc_ParseCatalogId.__qualname__ = "UnaryFunc.ParseCatalogId"
+UnaryFunc.ParseCatalogId = _UnaryFunc_ParseCatalogId
+
+
+@_dc.dataclass
+class _UnaryFunc_ParseCatalogItemReferences(_Variant, UnaryFunc):
+    value: ParseCatalogItemReferences
+    _NAME = "ParseCatalogItemReferences"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ParseCatalogItemReferences"}
+
+
+_UnaryFunc_ParseCatalogItemReferences.__name__ = "ParseCatalogItemReferences"
+_UnaryFunc_ParseCatalogItemReferences.__qualname__ = (
+    "UnaryFunc.ParseCatalogItemReferences"
+)
+UnaryFunc.ParseCatalogItemReferences = _UnaryFunc_ParseCatalogItemReferences
+
+
+@_dc.dataclass
+class _UnaryFunc_ParseCatalogPrivileges(_Variant, UnaryFunc):
+    value: ParseCatalogPrivileges
+    _NAME = "ParseCatalogPrivileges"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ParseCatalogPrivileges"}
+
+
+_UnaryFunc_ParseCatalogPrivileges.__name__ = "ParseCatalogPrivileges"
+_UnaryFunc_ParseCatalogPrivileges.__qualname__ = "UnaryFunc.ParseCatalogPrivileges"
+UnaryFunc.ParseCatalogPrivileges = _UnaryFunc_ParseCatalogPrivileges
+
+
+@_dc.dataclass
+class _UnaryFunc_ParseConnectionDetails(_Variant, UnaryFunc):
+    value: ParseConnectionDetails
+    _NAME = "ParseConnectionDetails"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ParseConnectionDetails"}
+
+
+_UnaryFunc_ParseConnectionDetails.__name__ = "ParseConnectionDetails"
+_UnaryFunc_ParseConnectionDetails.__qualname__ = "UnaryFunc.ParseConnectionDetails"
+UnaryFunc.ParseConnectionDetails = _UnaryFunc_ParseConnectionDetails
+
+
+@_dc.dataclass
+class _UnaryFunc_ParseKafkaSourceDetails(_Variant, UnaryFunc):
+    value: ParseKafkaSourceDetails
+    _NAME = "ParseKafkaSourceDetails"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ParseKafkaSourceDetails"}
+
+
+_UnaryFunc_ParseKafkaSourceDetails.__name__ = "ParseKafkaSourceDetails"
+_UnaryFunc_ParseKafkaSourceDetails.__qualname__ = "UnaryFunc.ParseKafkaSourceDetails"
+UnaryFunc.ParseKafkaSourceDetails = _UnaryFunc_ParseKafkaSourceDetails
+
+
+@_dc.dataclass
+class _UnaryFunc_ParsePostgresSourceDetails(_Variant, UnaryFunc):
+    value: ParsePostgresSourceDetails
+    _NAME = "ParsePostgresSourceDetails"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ParsePostgresSourceDetails"}
+
+
+_UnaryFunc_ParsePostgresSourceDetails.__name__ = "ParsePostgresSourceDetails"
+_UnaryFunc_ParsePostgresSourceDetails.__qualname__ = (
+    "UnaryFunc.ParsePostgresSourceDetails"
+)
+UnaryFunc.ParsePostgresSourceDetails = _UnaryFunc_ParsePostgresSourceDetails
+
+
+@_dc.dataclass
+class _UnaryFunc_ParseSourceExportDetails(_Variant, UnaryFunc):
+    value: ParseSourceExportDetails
+    _NAME = "ParseSourceExportDetails"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ParseSourceExportDetails"}
+
+
+_UnaryFunc_ParseSourceExportDetails.__name__ = "ParseSourceExportDetails"
+_UnaryFunc_ParseSourceExportDetails.__qualname__ = "UnaryFunc.ParseSourceExportDetails"
+UnaryFunc.ParseSourceExportDetails = _UnaryFunc_ParseSourceExportDetails
+
+
+@_dc.dataclass
+class _UnaryFunc_PgColumnSize(_Variant, UnaryFunc):
+    value: PgColumnSize
+    _NAME = "PgColumnSize"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "PgColumnSize"}
+
+
+_UnaryFunc_PgColumnSize.__name__ = "PgColumnSize"
+_UnaryFunc_PgColumnSize.__qualname__ = "UnaryFunc.PgColumnSize"
+UnaryFunc.PgColumnSize = _UnaryFunc_PgColumnSize
+
+
+@_dc.dataclass
+class _UnaryFunc_PgSizePretty(_Variant, UnaryFunc):
+    value: PgSizePretty
+    _NAME = "PgSizePretty"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "PgSizePretty"}
+
+
+_UnaryFunc_PgSizePretty.__name__ = "PgSizePretty"
+_UnaryFunc_PgSizePretty.__qualname__ = "UnaryFunc.PgSizePretty"
+UnaryFunc.PgSizePretty = _UnaryFunc_PgSizePretty
+
+
+@_dc.dataclass
+class _UnaryFunc_QuoteIdent(_Variant, UnaryFunc):
+    value: QuoteIdent
+    _NAME = "QuoteIdent"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "QuoteIdent"}
+
+
+_UnaryFunc_QuoteIdent.__name__ = "QuoteIdent"
+_UnaryFunc_QuoteIdent.__qualname__ = "UnaryFunc.QuoteIdent"
+UnaryFunc.QuoteIdent = _UnaryFunc_QuoteIdent
+
+
+@_dc.dataclass
+class _UnaryFunc_Radians(_Variant, UnaryFunc):
+    value: Radians
+    _NAME = "Radians"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Radians"}
+
+
+_UnaryFunc_Radians.__name__ = "Radians"
+_UnaryFunc_Radians.__qualname__ = "UnaryFunc.Radians"
+UnaryFunc.Radians = _UnaryFunc_Radians
+
+
+@_dc.dataclass
+class _UnaryFunc_RangeEmpty(_Variant, UnaryFunc):
+    value: RangeEmpty
+    _NAME = "RangeEmpty"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeEmpty"}
+
+
+_UnaryFunc_RangeEmpty.__name__ = "RangeEmpty"
+_UnaryFunc_RangeEmpty.__qualname__ = "UnaryFunc.RangeEmpty"
+UnaryFunc.RangeEmpty = _UnaryFunc_RangeEmpty
+
+
+@_dc.dataclass
+class _UnaryFunc_RangeLower(_Variant, UnaryFunc):
+    value: RangeLower
+    _NAME = "RangeLower"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeLower"}
+
+
+_UnaryFunc_RangeLower.__name__ = "RangeLower"
+_UnaryFunc_RangeLower.__qualname__ = "UnaryFunc.RangeLower"
+UnaryFunc.RangeLower = _UnaryFunc_RangeLower
+
+
+@_dc.dataclass
+class _UnaryFunc_RangeLowerInc(_Variant, UnaryFunc):
+    value: RangeLowerInc
+    _NAME = "RangeLowerInc"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeLowerInc"}
+
+
+_UnaryFunc_RangeLowerInc.__name__ = "RangeLowerInc"
+_UnaryFunc_RangeLowerInc.__qualname__ = "UnaryFunc.RangeLowerInc"
+UnaryFunc.RangeLowerInc = _UnaryFunc_RangeLowerInc
+
+
+@_dc.dataclass
+class _UnaryFunc_RangeLowerInf(_Variant, UnaryFunc):
+    value: RangeLowerInf
+    _NAME = "RangeLowerInf"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeLowerInf"}
+
+
+_UnaryFunc_RangeLowerInf.__name__ = "RangeLowerInf"
+_UnaryFunc_RangeLowerInf.__qualname__ = "UnaryFunc.RangeLowerInf"
+UnaryFunc.RangeLowerInf = _UnaryFunc_RangeLowerInf
+
+
+@_dc.dataclass
+class _UnaryFunc_RangeUpper(_Variant, UnaryFunc):
+    value: RangeUpper
+    _NAME = "RangeUpper"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeUpper"}
+
+
+_UnaryFunc_RangeUpper.__name__ = "RangeUpper"
+_UnaryFunc_RangeUpper.__qualname__ = "UnaryFunc.RangeUpper"
+UnaryFunc.RangeUpper = _UnaryFunc_RangeUpper
+
+
+@_dc.dataclass
+class _UnaryFunc_RangeUpperInc(_Variant, UnaryFunc):
+    value: RangeUpperInc
+    _NAME = "RangeUpperInc"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeUpperInc"}
+
+
+_UnaryFunc_RangeUpperInc.__name__ = "RangeUpperInc"
+_UnaryFunc_RangeUpperInc.__qualname__ = "UnaryFunc.RangeUpperInc"
+UnaryFunc.RangeUpperInc = _UnaryFunc_RangeUpperInc
+
+
+@_dc.dataclass
+class _UnaryFunc_RangeUpperInf(_Variant, UnaryFunc):
+    value: RangeUpperInf
+    _NAME = "RangeUpperInf"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeUpperInf"}
+
+
+_UnaryFunc_RangeUpperInf.__name__ = "RangeUpperInf"
+_UnaryFunc_RangeUpperInf.__qualname__ = "UnaryFunc.RangeUpperInf"
+UnaryFunc.RangeUpperInf = _UnaryFunc_RangeUpperInf
+
+
+@_dc.dataclass
+class _UnaryFunc_RecordGet(_Variant, UnaryFunc):
+    value: RecordGet
+    _NAME = "RecordGet"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RecordGet"}
+
+
+_UnaryFunc_RecordGet.__name__ = "RecordGet"
+_UnaryFunc_RecordGet.__qualname__ = "UnaryFunc.RecordGet"
+UnaryFunc.RecordGet = _UnaryFunc_RecordGet
+
+
+@_dc.dataclass
+class _UnaryFunc_RedactSql(_Variant, UnaryFunc):
+    value: RedactSql
+    _NAME = "RedactSql"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RedactSql"}
+
+
+_UnaryFunc_RedactSql.__name__ = "RedactSql"
+_UnaryFunc_RedactSql.__qualname__ = "UnaryFunc.RedactSql"
+UnaryFunc.RedactSql = _UnaryFunc_RedactSql
+
+
+@_dc.dataclass
+class _UnaryFunc_RegexpMatch(_Variant, UnaryFunc):
+    value: RegexpMatchStatic
+    _NAME = "RegexpMatch"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RegexpMatchStatic"}
+
+
+_UnaryFunc_RegexpMatch.__name__ = "RegexpMatch"
+_UnaryFunc_RegexpMatch.__qualname__ = "UnaryFunc.RegexpMatch"
+UnaryFunc.RegexpMatch = _UnaryFunc_RegexpMatch
+
+
+@_dc.dataclass
+class _UnaryFunc_RegexpSplitToArray(_Variant, UnaryFunc):
+    value: RegexpSplitToArrayStatic
+    _NAME = "RegexpSplitToArray"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RegexpSplitToArrayStatic"}
+
+
+_UnaryFunc_RegexpSplitToArray.__name__ = "RegexpSplitToArray"
+_UnaryFunc_RegexpSplitToArray.__qualname__ = "UnaryFunc.RegexpSplitToArray"
+UnaryFunc.RegexpSplitToArray = _UnaryFunc_RegexpSplitToArray
+
+
+@_dc.dataclass
+class _UnaryFunc_Reverse(_Variant, UnaryFunc):
+    value: Reverse
+    _NAME = "Reverse"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Reverse"}
+
+
+_UnaryFunc_Reverse.__name__ = "Reverse"
+_UnaryFunc_Reverse.__qualname__ = "UnaryFunc.Reverse"
+UnaryFunc.Reverse = _UnaryFunc_Reverse
+
+
+@_dc.dataclass
+class _UnaryFunc_RoundFloat32(_Variant, UnaryFunc):
+    value: RoundFloat32
+    _NAME = "RoundFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RoundFloat32"}
+
+
+_UnaryFunc_RoundFloat32.__name__ = "RoundFloat32"
+_UnaryFunc_RoundFloat32.__qualname__ = "UnaryFunc.RoundFloat32"
+UnaryFunc.RoundFloat32 = _UnaryFunc_RoundFloat32
+
+
+@_dc.dataclass
+class _UnaryFunc_RoundFloat64(_Variant, UnaryFunc):
+    value: RoundFloat64
+    _NAME = "RoundFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RoundFloat64"}
+
+
+_UnaryFunc_RoundFloat64.__name__ = "RoundFloat64"
+_UnaryFunc_RoundFloat64.__qualname__ = "UnaryFunc.RoundFloat64"
+UnaryFunc.RoundFloat64 = _UnaryFunc_RoundFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_RoundNumeric(_Variant, UnaryFunc):
+    value: RoundNumeric
+    _NAME = "RoundNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RoundNumeric"}
+
+
+_UnaryFunc_RoundNumeric.__name__ = "RoundNumeric"
+_UnaryFunc_RoundNumeric.__qualname__ = "UnaryFunc.RoundNumeric"
+UnaryFunc.RoundNumeric = _UnaryFunc_RoundNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_SeahashBytes(_Variant, UnaryFunc):
+    value: SeahashBytes
+    _NAME = "SeahashBytes"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SeahashBytes"}
+
+
+_UnaryFunc_SeahashBytes.__name__ = "SeahashBytes"
+_UnaryFunc_SeahashBytes.__qualname__ = "UnaryFunc.SeahashBytes"
+UnaryFunc.SeahashBytes = _UnaryFunc_SeahashBytes
+
+
+@_dc.dataclass
+class _UnaryFunc_SeahashString(_Variant, UnaryFunc):
+    value: SeahashString
+    _NAME = "SeahashString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SeahashString"}
+
+
+_UnaryFunc_SeahashString.__name__ = "SeahashString"
+_UnaryFunc_SeahashString.__qualname__ = "UnaryFunc.SeahashString"
+UnaryFunc.SeahashString = _UnaryFunc_SeahashString
+
+
+@_dc.dataclass
+class _UnaryFunc_Sin(_Variant, UnaryFunc):
+    value: Sin
+    _NAME = "Sin"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Sin"}
+
+
+_UnaryFunc_Sin.__name__ = "Sin"
+_UnaryFunc_Sin.__qualname__ = "UnaryFunc.Sin"
+UnaryFunc.Sin = _UnaryFunc_Sin
+
+
+@_dc.dataclass
+class _UnaryFunc_Sinh(_Variant, UnaryFunc):
+    value: Sinh
+    _NAME = "Sinh"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Sinh"}
+
+
+_UnaryFunc_Sinh.__name__ = "Sinh"
+_UnaryFunc_Sinh.__qualname__ = "UnaryFunc.Sinh"
+UnaryFunc.Sinh = _UnaryFunc_Sinh
+
+
+@_dc.dataclass
+class _UnaryFunc_Sleep(_Variant, UnaryFunc):
+    value: Sleep
+    _NAME = "Sleep"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Sleep"}
+
+
+_UnaryFunc_Sleep.__name__ = "Sleep"
+_UnaryFunc_Sleep.__qualname__ = "UnaryFunc.Sleep"
+UnaryFunc.Sleep = _UnaryFunc_Sleep
+
+
+@_dc.dataclass
+class _UnaryFunc_SqrtFloat64(_Variant, UnaryFunc):
+    value: SqrtFloat64
+    _NAME = "SqrtFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SqrtFloat64"}
+
+
+_UnaryFunc_SqrtFloat64.__name__ = "SqrtFloat64"
+_UnaryFunc_SqrtFloat64.__qualname__ = "UnaryFunc.SqrtFloat64"
+UnaryFunc.SqrtFloat64 = _UnaryFunc_SqrtFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_SqrtNumeric(_Variant, UnaryFunc):
+    value: SqrtNumeric
+    _NAME = "SqrtNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SqrtNumeric"}
+
+
+_UnaryFunc_SqrtNumeric.__name__ = "SqrtNumeric"
+_UnaryFunc_SqrtNumeric.__qualname__ = "UnaryFunc.SqrtNumeric"
+UnaryFunc.SqrtNumeric = _UnaryFunc_SqrtNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_StepMzTimestamp(_Variant, UnaryFunc):
+    value: StepMzTimestamp
+    _NAME = "StepMzTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "StepMzTimestamp"}
+
+
+_UnaryFunc_StepMzTimestamp.__name__ = "StepMzTimestamp"
+_UnaryFunc_StepMzTimestamp.__qualname__ = "UnaryFunc.StepMzTimestamp"
+UnaryFunc.StepMzTimestamp = _UnaryFunc_StepMzTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_Tan(_Variant, UnaryFunc):
+    value: Tan
+    _NAME = "Tan"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Tan"}
+
+
+_UnaryFunc_Tan.__name__ = "Tan"
+_UnaryFunc_Tan.__qualname__ = "UnaryFunc.Tan"
+UnaryFunc.Tan = _UnaryFunc_Tan
+
+
+@_dc.dataclass
+class _UnaryFunc_Tanh(_Variant, UnaryFunc):
+    value: Tanh
+    _NAME = "Tanh"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Tanh"}
+
+
+_UnaryFunc_Tanh.__name__ = "Tanh"
+_UnaryFunc_Tanh.__qualname__ = "UnaryFunc.Tanh"
+UnaryFunc.Tanh = _UnaryFunc_Tanh
+
+
+@_dc.dataclass
+class _UnaryFunc_TimezoneTime(_Variant, UnaryFunc):
+    value: TimezoneTime
+    _NAME = "TimezoneTime"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TimezoneTime"}
+
+
+_UnaryFunc_TimezoneTime.__name__ = "TimezoneTime"
+_UnaryFunc_TimezoneTime.__qualname__ = "UnaryFunc.TimezoneTime"
+UnaryFunc.TimezoneTime = _UnaryFunc_TimezoneTime
+
+
+@_dc.dataclass
+class _UnaryFunc_TimezoneTimestamp(_Variant, UnaryFunc):
+    value: TimezoneTimestamp
+    _NAME = "TimezoneTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TimezoneTimestamp"}
+
+
+_UnaryFunc_TimezoneTimestamp.__name__ = "TimezoneTimestamp"
+_UnaryFunc_TimezoneTimestamp.__qualname__ = "UnaryFunc.TimezoneTimestamp"
+UnaryFunc.TimezoneTimestamp = _UnaryFunc_TimezoneTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_TimezoneTimestampTz(_Variant, UnaryFunc):
+    value: TimezoneTimestampTz
+    _NAME = "TimezoneTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TimezoneTimestampTz"}
+
+
+_UnaryFunc_TimezoneTimestampTz.__name__ = "TimezoneTimestampTz"
+_UnaryFunc_TimezoneTimestampTz.__qualname__ = "UnaryFunc.TimezoneTimestampTz"
+UnaryFunc.TimezoneTimestampTz = _UnaryFunc_TimezoneTimestampTz
+
+
+@_dc.dataclass
+class _UnaryFunc_ToCharTimestamp(_Variant, UnaryFunc):
+    value: ToCharTimestamp
+    _NAME = "ToCharTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ToCharTimestamp"}
+
+
+_UnaryFunc_ToCharTimestamp.__name__ = "ToCharTimestamp"
+_UnaryFunc_ToCharTimestamp.__qualname__ = "UnaryFunc.ToCharTimestamp"
+UnaryFunc.ToCharTimestamp = _UnaryFunc_ToCharTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_ToCharTimestampTz(_Variant, UnaryFunc):
+    value: ToCharTimestampTz
+    _NAME = "ToCharTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ToCharTimestampTz"}
+
+
+_UnaryFunc_ToCharTimestampTz.__name__ = "ToCharTimestampTz"
+_UnaryFunc_ToCharTimestampTz.__qualname__ = "UnaryFunc.ToCharTimestampTz"
+UnaryFunc.ToCharTimestampTz = _UnaryFunc_ToCharTimestampTz
+
+
+@_dc.dataclass
+class _UnaryFunc_ToTimestamp(_Variant, UnaryFunc):
+    value: ToTimestamp
+    _NAME = "ToTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ToTimestamp"}
+
+
+_UnaryFunc_ToTimestamp.__name__ = "ToTimestamp"
+_UnaryFunc_ToTimestamp.__qualname__ = "UnaryFunc.ToTimestamp"
+UnaryFunc.ToTimestamp = _UnaryFunc_ToTimestamp
+
+
+@_dc.dataclass
+class _UnaryFunc_TrimLeadingWhitespace(_Variant, UnaryFunc):
+    value: TrimLeadingWhitespace
+    _NAME = "TrimLeadingWhitespace"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TrimLeadingWhitespace"}
+
+
+_UnaryFunc_TrimLeadingWhitespace.__name__ = "TrimLeadingWhitespace"
+_UnaryFunc_TrimLeadingWhitespace.__qualname__ = "UnaryFunc.TrimLeadingWhitespace"
+UnaryFunc.TrimLeadingWhitespace = _UnaryFunc_TrimLeadingWhitespace
+
+
+@_dc.dataclass
+class _UnaryFunc_TrimTrailingWhitespace(_Variant, UnaryFunc):
+    value: TrimTrailingWhitespace
+    _NAME = "TrimTrailingWhitespace"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TrimTrailingWhitespace"}
+
+
+_UnaryFunc_TrimTrailingWhitespace.__name__ = "TrimTrailingWhitespace"
+_UnaryFunc_TrimTrailingWhitespace.__qualname__ = "UnaryFunc.TrimTrailingWhitespace"
+UnaryFunc.TrimTrailingWhitespace = _UnaryFunc_TrimTrailingWhitespace
+
+
+@_dc.dataclass
+class _UnaryFunc_TrimWhitespace(_Variant, UnaryFunc):
+    value: TrimWhitespace
+    _NAME = "TrimWhitespace"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TrimWhitespace"}
+
+
+_UnaryFunc_TrimWhitespace.__name__ = "TrimWhitespace"
+_UnaryFunc_TrimWhitespace.__qualname__ = "UnaryFunc.TrimWhitespace"
+UnaryFunc.TrimWhitespace = _UnaryFunc_TrimWhitespace
+
+
+@_dc.dataclass
+class _UnaryFunc_TruncFloat32(_Variant, UnaryFunc):
+    value: TruncFloat32
+    _NAME = "TruncFloat32"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TruncFloat32"}
+
+
+_UnaryFunc_TruncFloat32.__name__ = "TruncFloat32"
+_UnaryFunc_TruncFloat32.__qualname__ = "UnaryFunc.TruncFloat32"
+UnaryFunc.TruncFloat32 = _UnaryFunc_TruncFloat32
+
+
+@_dc.dataclass
+class _UnaryFunc_TruncFloat64(_Variant, UnaryFunc):
+    value: TruncFloat64
+    _NAME = "TruncFloat64"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TruncFloat64"}
+
+
+_UnaryFunc_TruncFloat64.__name__ = "TruncFloat64"
+_UnaryFunc_TruncFloat64.__qualname__ = "UnaryFunc.TruncFloat64"
+UnaryFunc.TruncFloat64 = _UnaryFunc_TruncFloat64
+
+
+@_dc.dataclass
+class _UnaryFunc_TruncNumeric(_Variant, UnaryFunc):
+    value: TruncNumeric
+    _NAME = "TruncNumeric"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TruncNumeric"}
+
+
+_UnaryFunc_TruncNumeric.__name__ = "TruncNumeric"
+_UnaryFunc_TruncNumeric.__qualname__ = "UnaryFunc.TruncNumeric"
+UnaryFunc.TruncNumeric = _UnaryFunc_TruncNumeric
+
+
+@_dc.dataclass
+class _UnaryFunc_TryCast(_Variant, UnaryFunc):
+    value: TryCast
+    _NAME = "TryCast"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TryCast"}
+
+
+_UnaryFunc_TryCast.__name__ = "TryCast"
+_UnaryFunc_TryCast.__qualname__ = "UnaryFunc.TryCast"
+UnaryFunc.TryCast = _UnaryFunc_TryCast
+
+
+@_dc.dataclass
+class _UnaryFunc_TryParseMonotonicIso8601Timestamp(_Variant, UnaryFunc):
+    value: TryParseMonotonicIso8601Timestamp
+    _NAME = "TryParseMonotonicIso8601Timestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TryParseMonotonicIso8601Timestamp"}
+
+
+_UnaryFunc_TryParseMonotonicIso8601Timestamp.__name__ = (
+    "TryParseMonotonicIso8601Timestamp"
+)
+_UnaryFunc_TryParseMonotonicIso8601Timestamp.__qualname__ = (
+    "UnaryFunc.TryParseMonotonicIso8601Timestamp"
+)
+UnaryFunc.TryParseMonotonicIso8601Timestamp = (
+    _UnaryFunc_TryParseMonotonicIso8601Timestamp
+)
+
+
+@_dc.dataclass
+class _UnaryFunc_Upper(_Variant, UnaryFunc):
+    value: Upper
+    _NAME = "Upper"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Upper"}
+
+
+_UnaryFunc_Upper.__name__ = "Upper"
+_UnaryFunc_Upper.__qualname__ = "UnaryFunc.Upper"
+UnaryFunc.Upper = _UnaryFunc_Upper
+UnaryFunc._VARIANTS = {
+    "AbsFloat32": UnaryFunc.AbsFloat32,
+    "AbsFloat64": UnaryFunc.AbsFloat64,
+    "AbsInt16": UnaryFunc.AbsInt16,
+    "AbsInt32": UnaryFunc.AbsInt32,
+    "AbsInt64": UnaryFunc.AbsInt64,
+    "AbsNumeric": UnaryFunc.AbsNumeric,
+    "AclItemGrantee": UnaryFunc.AclItemGrantee,
+    "AclItemGrantor": UnaryFunc.AclItemGrantor,
+    "AclItemPrivileges": UnaryFunc.AclItemPrivileges,
+    "Acos": UnaryFunc.Acos,
+    "Acosh": UnaryFunc.Acosh,
+    "AdjustNumericScale": UnaryFunc.AdjustNumericScale,
+    "AdjustTimestampPrecision": UnaryFunc.AdjustTimestampPrecision,
+    "AdjustTimestampTzPrecision": UnaryFunc.AdjustTimestampTzPrecision,
+    "Ascii": UnaryFunc.Ascii,
+    "Asin": UnaryFunc.Asin,
+    "Asinh": UnaryFunc.Asinh,
+    "Atan": UnaryFunc.Atan,
+    "Atanh": UnaryFunc.Atanh,
+    "BitCountBytes": UnaryFunc.BitCountBytes,
+    "BitLengthBytes": UnaryFunc.BitLengthBytes,
+    "BitLengthString": UnaryFunc.BitLengthString,
+    "BitNotInt16": UnaryFunc.BitNotInt16,
+    "BitNotInt32": UnaryFunc.BitNotInt32,
+    "BitNotInt64": UnaryFunc.BitNotInt64,
+    "BitNotUint16": UnaryFunc.BitNotUint16,
+    "BitNotUint32": UnaryFunc.BitNotUint32,
+    "BitNotUint64": UnaryFunc.BitNotUint64,
+    "ByteLengthBytes": UnaryFunc.ByteLengthBytes,
+    "ByteLengthString": UnaryFunc.ByteLengthString,
+    "CastArrayToArray": UnaryFunc.CastArrayToArray,
+    "CastArrayToJsonb": UnaryFunc.CastArrayToJsonb,
+    "CastArrayToListOneDim": UnaryFunc.CastArrayToListOneDim,
+    "CastArrayToString": UnaryFunc.CastArrayToString,
+    "CastBoolToInt32": UnaryFunc.CastBoolToInt32,
+    "CastBoolToInt64": UnaryFunc.CastBoolToInt64,
+    "CastBoolToString": UnaryFunc.CastBoolToString,
+    "CastBoolToStringNonstandard": UnaryFunc.CastBoolToStringNonstandard,
+    "CastBytesToString": UnaryFunc.CastBytesToString,
+    "CastCharToString": UnaryFunc.CastCharToString,
+    "CastDateToMzTimestamp": UnaryFunc.CastDateToMzTimestamp,
+    "CastDateToString": UnaryFunc.CastDateToString,
+    "CastDateToTimestamp": UnaryFunc.CastDateToTimestamp,
+    "CastDateToTimestampTz": UnaryFunc.CastDateToTimestampTz,
+    "CastFloat32ToFloat64": UnaryFunc.CastFloat32ToFloat64,
+    "CastFloat32ToInt16": UnaryFunc.CastFloat32ToInt16,
+    "CastFloat32ToInt32": UnaryFunc.CastFloat32ToInt32,
+    "CastFloat32ToInt64": UnaryFunc.CastFloat32ToInt64,
+    "CastFloat32ToNumeric": UnaryFunc.CastFloat32ToNumeric,
+    "CastFloat32ToString": UnaryFunc.CastFloat32ToString,
+    "CastFloat32ToUint16": UnaryFunc.CastFloat32ToUint16,
+    "CastFloat32ToUint32": UnaryFunc.CastFloat32ToUint32,
+    "CastFloat32ToUint64": UnaryFunc.CastFloat32ToUint64,
+    "CastFloat64ToFloat32": UnaryFunc.CastFloat64ToFloat32,
+    "CastFloat64ToInt16": UnaryFunc.CastFloat64ToInt16,
+    "CastFloat64ToInt32": UnaryFunc.CastFloat64ToInt32,
+    "CastFloat64ToInt64": UnaryFunc.CastFloat64ToInt64,
+    "CastFloat64ToNumeric": UnaryFunc.CastFloat64ToNumeric,
+    "CastFloat64ToString": UnaryFunc.CastFloat64ToString,
+    "CastFloat64ToUint16": UnaryFunc.CastFloat64ToUint16,
+    "CastFloat64ToUint32": UnaryFunc.CastFloat64ToUint32,
+    "CastFloat64ToUint64": UnaryFunc.CastFloat64ToUint64,
+    "CastInt16ToFloat32": UnaryFunc.CastInt16ToFloat32,
+    "CastInt16ToFloat64": UnaryFunc.CastInt16ToFloat64,
+    "CastInt16ToInt32": UnaryFunc.CastInt16ToInt32,
+    "CastInt16ToInt64": UnaryFunc.CastInt16ToInt64,
+    "CastInt16ToNumeric": UnaryFunc.CastInt16ToNumeric,
+    "CastInt16ToString": UnaryFunc.CastInt16ToString,
+    "CastInt16ToUint16": UnaryFunc.CastInt16ToUint16,
+    "CastInt16ToUint32": UnaryFunc.CastInt16ToUint32,
+    "CastInt16ToUint64": UnaryFunc.CastInt16ToUint64,
+    "CastInt2VectorToArray": UnaryFunc.CastInt2VectorToArray,
+    "CastInt2VectorToString": UnaryFunc.CastInt2VectorToString,
+    "CastInt32ToBool": UnaryFunc.CastInt32ToBool,
+    "CastInt32ToFloat32": UnaryFunc.CastInt32ToFloat32,
+    "CastInt32ToFloat64": UnaryFunc.CastInt32ToFloat64,
+    "CastInt32ToInt16": UnaryFunc.CastInt32ToInt16,
+    "CastInt32ToInt64": UnaryFunc.CastInt32ToInt64,
+    "CastInt32ToMzTimestamp": UnaryFunc.CastInt32ToMzTimestamp,
+    "CastInt32ToNumeric": UnaryFunc.CastInt32ToNumeric,
+    "CastInt32ToOid": UnaryFunc.CastInt32ToOid,
+    "CastInt32ToPgLegacyChar": UnaryFunc.CastInt32ToPgLegacyChar,
+    "CastInt32ToString": UnaryFunc.CastInt32ToString,
+    "CastInt32ToUint16": UnaryFunc.CastInt32ToUint16,
+    "CastInt32ToUint32": UnaryFunc.CastInt32ToUint32,
+    "CastInt32ToUint64": UnaryFunc.CastInt32ToUint64,
+    "CastInt64ToBool": UnaryFunc.CastInt64ToBool,
+    "CastInt64ToFloat32": UnaryFunc.CastInt64ToFloat32,
+    "CastInt64ToFloat64": UnaryFunc.CastInt64ToFloat64,
+    "CastInt64ToInt16": UnaryFunc.CastInt64ToInt16,
+    "CastInt64ToInt32": UnaryFunc.CastInt64ToInt32,
+    "CastInt64ToMzTimestamp": UnaryFunc.CastInt64ToMzTimestamp,
+    "CastInt64ToNumeric": UnaryFunc.CastInt64ToNumeric,
+    "CastInt64ToOid": UnaryFunc.CastInt64ToOid,
+    "CastInt64ToString": UnaryFunc.CastInt64ToString,
+    "CastInt64ToUint16": UnaryFunc.CastInt64ToUint16,
+    "CastInt64ToUint32": UnaryFunc.CastInt64ToUint32,
+    "CastInt64ToUint64": UnaryFunc.CastInt64ToUint64,
+    "CastIntervalToString": UnaryFunc.CastIntervalToString,
+    "CastIntervalToTime": UnaryFunc.CastIntervalToTime,
+    "CastJsonbToBool": UnaryFunc.CastJsonbToBool,
+    "CastJsonbToFloat32": UnaryFunc.CastJsonbToFloat32,
+    "CastJsonbToFloat64": UnaryFunc.CastJsonbToFloat64,
+    "CastJsonbToInt16": UnaryFunc.CastJsonbToInt16,
+    "CastJsonbToInt32": UnaryFunc.CastJsonbToInt32,
+    "CastJsonbToInt64": UnaryFunc.CastJsonbToInt64,
+    "CastJsonbToNumeric": UnaryFunc.CastJsonbToNumeric,
+    "CastJsonbToString": UnaryFunc.CastJsonbToString,
+    "CastJsonbableToJsonb": UnaryFunc.CastJsonbableToJsonb,
+    "CastList1ToList2": UnaryFunc.CastList1ToList2,
+    "CastListToJsonb": UnaryFunc.CastListToJsonb,
+    "CastListToString": UnaryFunc.CastListToString,
+    "CastMapToString": UnaryFunc.CastMapToString,
+    "CastMzTimestampToString": UnaryFunc.CastMzTimestampToString,
+    "CastMzTimestampToTimestamp": UnaryFunc.CastMzTimestampToTimestamp,
+    "CastMzTimestampToTimestampTz": UnaryFunc.CastMzTimestampToTimestampTz,
+    "CastNumericToFloat32": UnaryFunc.CastNumericToFloat32,
+    "CastNumericToFloat64": UnaryFunc.CastNumericToFloat64,
+    "CastNumericToInt16": UnaryFunc.CastNumericToInt16,
+    "CastNumericToInt32": UnaryFunc.CastNumericToInt32,
+    "CastNumericToInt64": UnaryFunc.CastNumericToInt64,
+    "CastNumericToMzTimestamp": UnaryFunc.CastNumericToMzTimestamp,
+    "CastNumericToString": UnaryFunc.CastNumericToString,
+    "CastNumericToUint16": UnaryFunc.CastNumericToUint16,
+    "CastNumericToUint32": UnaryFunc.CastNumericToUint32,
+    "CastNumericToUint64": UnaryFunc.CastNumericToUint64,
+    "CastOidToInt32": UnaryFunc.CastOidToInt32,
+    "CastOidToInt64": UnaryFunc.CastOidToInt64,
+    "CastOidToRegClass": UnaryFunc.CastOidToRegClass,
+    "CastOidToRegProc": UnaryFunc.CastOidToRegProc,
+    "CastOidToRegType": UnaryFunc.CastOidToRegType,
+    "CastOidToString": UnaryFunc.CastOidToString,
+    "CastPgLegacyCharToChar": UnaryFunc.CastPgLegacyCharToChar,
+    "CastPgLegacyCharToInt32": UnaryFunc.CastPgLegacyCharToInt32,
+    "CastPgLegacyCharToString": UnaryFunc.CastPgLegacyCharToString,
+    "CastPgLegacyCharToVarChar": UnaryFunc.CastPgLegacyCharToVarChar,
+    "CastRangeToString": UnaryFunc.CastRangeToString,
+    "CastRecord1ToRecord2": UnaryFunc.CastRecord1ToRecord2,
+    "CastRecordToString": UnaryFunc.CastRecordToString,
+    "CastRegClassToOid": UnaryFunc.CastRegClassToOid,
+    "CastRegProcToOid": UnaryFunc.CastRegProcToOid,
+    "CastRegTypeToOid": UnaryFunc.CastRegTypeToOid,
+    "CastStringToArray": UnaryFunc.CastStringToArray,
+    "CastStringToBool": UnaryFunc.CastStringToBool,
+    "CastStringToBytes": UnaryFunc.CastStringToBytes,
+    "CastStringToChar": UnaryFunc.CastStringToChar,
+    "CastStringToDate": UnaryFunc.CastStringToDate,
+    "CastStringToFloat32": UnaryFunc.CastStringToFloat32,
+    "CastStringToFloat64": UnaryFunc.CastStringToFloat64,
+    "CastStringToInt16": UnaryFunc.CastStringToInt16,
+    "CastStringToInt2Vector": UnaryFunc.CastStringToInt2Vector,
+    "CastStringToInt32": UnaryFunc.CastStringToInt32,
+    "CastStringToInt64": UnaryFunc.CastStringToInt64,
+    "CastStringToInterval": UnaryFunc.CastStringToInterval,
+    "CastStringToJsonb": UnaryFunc.CastStringToJsonb,
+    "CastStringToList": UnaryFunc.CastStringToList,
+    "CastStringToMap": UnaryFunc.CastStringToMap,
+    "CastStringToMzTimestamp": UnaryFunc.CastStringToMzTimestamp,
+    "CastStringToNumeric": UnaryFunc.CastStringToNumeric,
+    "CastStringToOid": UnaryFunc.CastStringToOid,
+    "CastStringToPgLegacyChar": UnaryFunc.CastStringToPgLegacyChar,
+    "CastStringToPgLegacyName": UnaryFunc.CastStringToPgLegacyName,
+    "CastStringToRange": UnaryFunc.CastStringToRange,
+    "CastStringToTime": UnaryFunc.CastStringToTime,
+    "CastStringToTimestamp": UnaryFunc.CastStringToTimestamp,
+    "CastStringToTimestampTz": UnaryFunc.CastStringToTimestampTz,
+    "CastStringToUint16": UnaryFunc.CastStringToUint16,
+    "CastStringToUint32": UnaryFunc.CastStringToUint32,
+    "CastStringToUint64": UnaryFunc.CastStringToUint64,
+    "CastStringToUuid": UnaryFunc.CastStringToUuid,
+    "CastStringToVarChar": UnaryFunc.CastStringToVarChar,
+    "CastTimeToInterval": UnaryFunc.CastTimeToInterval,
+    "CastTimeToString": UnaryFunc.CastTimeToString,
+    "CastTimestampToDate": UnaryFunc.CastTimestampToDate,
+    "CastTimestampToMzTimestamp": UnaryFunc.CastTimestampToMzTimestamp,
+    "CastTimestampToString": UnaryFunc.CastTimestampToString,
+    "CastTimestampToTime": UnaryFunc.CastTimestampToTime,
+    "CastTimestampToTimestampTz": UnaryFunc.CastTimestampToTimestampTz,
+    "CastTimestampTzToDate": UnaryFunc.CastTimestampTzToDate,
+    "CastTimestampTzToMzTimestamp": UnaryFunc.CastTimestampTzToMzTimestamp,
+    "CastTimestampTzToString": UnaryFunc.CastTimestampTzToString,
+    "CastTimestampTzToTime": UnaryFunc.CastTimestampTzToTime,
+    "CastTimestampTzToTimestamp": UnaryFunc.CastTimestampTzToTimestamp,
+    "CastUint16ToFloat32": UnaryFunc.CastUint16ToFloat32,
+    "CastUint16ToFloat64": UnaryFunc.CastUint16ToFloat64,
+    "CastUint16ToInt16": UnaryFunc.CastUint16ToInt16,
+    "CastUint16ToInt32": UnaryFunc.CastUint16ToInt32,
+    "CastUint16ToInt64": UnaryFunc.CastUint16ToInt64,
+    "CastUint16ToNumeric": UnaryFunc.CastUint16ToNumeric,
+    "CastUint16ToString": UnaryFunc.CastUint16ToString,
+    "CastUint16ToUint32": UnaryFunc.CastUint16ToUint32,
+    "CastUint16ToUint64": UnaryFunc.CastUint16ToUint64,
+    "CastUint32ToFloat32": UnaryFunc.CastUint32ToFloat32,
+    "CastUint32ToFloat64": UnaryFunc.CastUint32ToFloat64,
+    "CastUint32ToInt16": UnaryFunc.CastUint32ToInt16,
+    "CastUint32ToInt32": UnaryFunc.CastUint32ToInt32,
+    "CastUint32ToInt64": UnaryFunc.CastUint32ToInt64,
+    "CastUint32ToMzTimestamp": UnaryFunc.CastUint32ToMzTimestamp,
+    "CastUint32ToNumeric": UnaryFunc.CastUint32ToNumeric,
+    "CastUint32ToString": UnaryFunc.CastUint32ToString,
+    "CastUint32ToUint16": UnaryFunc.CastUint32ToUint16,
+    "CastUint32ToUint64": UnaryFunc.CastUint32ToUint64,
+    "CastUint64ToFloat32": UnaryFunc.CastUint64ToFloat32,
+    "CastUint64ToFloat64": UnaryFunc.CastUint64ToFloat64,
+    "CastUint64ToInt16": UnaryFunc.CastUint64ToInt16,
+    "CastUint64ToInt32": UnaryFunc.CastUint64ToInt32,
+    "CastUint64ToInt64": UnaryFunc.CastUint64ToInt64,
+    "CastUint64ToMzTimestamp": UnaryFunc.CastUint64ToMzTimestamp,
+    "CastUint64ToNumeric": UnaryFunc.CastUint64ToNumeric,
+    "CastUint64ToString": UnaryFunc.CastUint64ToString,
+    "CastUint64ToUint16": UnaryFunc.CastUint64ToUint16,
+    "CastUint64ToUint32": UnaryFunc.CastUint64ToUint32,
+    "CastUuidToString": UnaryFunc.CastUuidToString,
+    "CastVarCharToString": UnaryFunc.CastVarCharToString,
+    "CbrtFloat64": UnaryFunc.CbrtFloat64,
+    "CeilFloat32": UnaryFunc.CeilFloat32,
+    "CeilFloat64": UnaryFunc.CeilFloat64,
+    "CeilNumeric": UnaryFunc.CeilNumeric,
+    "CharLength": UnaryFunc.CharLength,
+    "Chr": UnaryFunc.Chr,
+    "Cos": UnaryFunc.Cos,
+    "Cosh": UnaryFunc.Cosh,
+    "Cot": UnaryFunc.Cot,
+    "Crc32Bytes": UnaryFunc.Crc32Bytes,
+    "Crc32String": UnaryFunc.Crc32String,
+    "DatePartInterval": UnaryFunc.DatePartInterval,
+    "DatePartTime": UnaryFunc.DatePartTime,
+    "DatePartTimestamp": UnaryFunc.DatePartTimestamp,
+    "DatePartTimestampTz": UnaryFunc.DatePartTimestampTz,
+    "DateTruncTimestamp": UnaryFunc.DateTruncTimestamp,
+    "DateTruncTimestampTz": UnaryFunc.DateTruncTimestampTz,
+    "Degrees": UnaryFunc.Degrees,
+    "Exp": UnaryFunc.Exp,
+    "ExpNumeric": UnaryFunc.ExpNumeric,
+    "ExtractDate": UnaryFunc.ExtractDate,
+    "ExtractInterval": UnaryFunc.ExtractInterval,
+    "ExtractTime": UnaryFunc.ExtractTime,
+    "ExtractTimestamp": UnaryFunc.ExtractTimestamp,
+    "ExtractTimestampTz": UnaryFunc.ExtractTimestampTz,
+    "FloorFloat32": UnaryFunc.FloorFloat32,
+    "FloorFloat64": UnaryFunc.FloorFloat64,
+    "FloorNumeric": UnaryFunc.FloorNumeric,
+    "Initcap": UnaryFunc.Initcap,
+    "IsFalse": UnaryFunc.IsFalse,
+    "IsLikeMatch": UnaryFunc.IsLikeMatch,
+    "IsNull": UnaryFunc.IsNull,
+    "IsRegexpMatch": UnaryFunc.IsRegexpMatch,
+    "IsTrue": UnaryFunc.IsTrue,
+    "Jq": UnaryFunc.Jq,
+    "JsonbArrayLength": UnaryFunc.JsonbArrayLength,
+    "JsonbPretty": UnaryFunc.JsonbPretty,
+    "JsonbStripNulls": UnaryFunc.JsonbStripNulls,
+    "JsonbTypeof": UnaryFunc.JsonbTypeof,
+    "JustifyDays": UnaryFunc.JustifyDays,
+    "JustifyHours": UnaryFunc.JustifyHours,
+    "JustifyInterval": UnaryFunc.JustifyInterval,
+    "KafkaMurmur2Bytes": UnaryFunc.KafkaMurmur2Bytes,
+    "KafkaMurmur2String": UnaryFunc.KafkaMurmur2String,
+    "ListLength": UnaryFunc.ListLength,
+    "Ln": UnaryFunc.Ln,
+    "LnNumeric": UnaryFunc.LnNumeric,
+    "Log10": UnaryFunc.Log10,
+    "Log10Numeric": UnaryFunc.Log10Numeric,
+    "Lower": UnaryFunc.Lower,
+    "MapBuildFromRecordList": UnaryFunc.MapBuildFromRecordList,
+    "MapLength": UnaryFunc.MapLength,
+    "MzAclItemGrantee": UnaryFunc.MzAclItemGrantee,
+    "MzAclItemGrantor": UnaryFunc.MzAclItemGrantor,
+    "MzAclItemPrivileges": UnaryFunc.MzAclItemPrivileges,
+    "MzFormatPrivileges": UnaryFunc.MzFormatPrivileges,
+    "MzRowSize": UnaryFunc.MzRowSize,
+    "MzTypeName": UnaryFunc.MzTypeName,
+    "MzValidatePrivileges": UnaryFunc.MzValidatePrivileges,
+    "MzValidateRolePrivilege": UnaryFunc.MzValidateRolePrivilege,
+    "NegFloat32": UnaryFunc.NegFloat32,
+    "NegFloat64": UnaryFunc.NegFloat64,
+    "NegInt16": UnaryFunc.NegInt16,
+    "NegInt32": UnaryFunc.NegInt32,
+    "NegInt64": UnaryFunc.NegInt64,
+    "NegInterval": UnaryFunc.NegInterval,
+    "NegNumeric": UnaryFunc.NegNumeric,
+    "Not": UnaryFunc.Not,
+    "PadChar": UnaryFunc.PadChar,
+    "Panic": UnaryFunc.Panic,
+    "ParseCatalogAclMode": UnaryFunc.ParseCatalogAclMode,
+    "ParseCatalogAuditLogDetails": UnaryFunc.ParseCatalogAuditLogDetails,
+    "ParseCatalogCreateSql": UnaryFunc.ParseCatalogCreateSql,
+    "ParseCatalogId": UnaryFunc.ParseCatalogId,
+    "ParseCatalogItemReferences": UnaryFunc.ParseCatalogItemReferences,
+    "ParseCatalogPrivileges": UnaryFunc.ParseCatalogPrivileges,
+    "ParseConnectionDetails": UnaryFunc.ParseConnectionDetails,
+    "ParseKafkaSourceDetails": UnaryFunc.ParseKafkaSourceDetails,
+    "ParsePostgresSourceDetails": UnaryFunc.ParsePostgresSourceDetails,
+    "ParseSourceExportDetails": UnaryFunc.ParseSourceExportDetails,
+    "PgColumnSize": UnaryFunc.PgColumnSize,
+    "PgSizePretty": UnaryFunc.PgSizePretty,
+    "QuoteIdent": UnaryFunc.QuoteIdent,
+    "Radians": UnaryFunc.Radians,
+    "RangeEmpty": UnaryFunc.RangeEmpty,
+    "RangeLower": UnaryFunc.RangeLower,
+    "RangeLowerInc": UnaryFunc.RangeLowerInc,
+    "RangeLowerInf": UnaryFunc.RangeLowerInf,
+    "RangeUpper": UnaryFunc.RangeUpper,
+    "RangeUpperInc": UnaryFunc.RangeUpperInc,
+    "RangeUpperInf": UnaryFunc.RangeUpperInf,
+    "RecordGet": UnaryFunc.RecordGet,
+    "RedactSql": UnaryFunc.RedactSql,
+    "RegexpMatch": UnaryFunc.RegexpMatch,
+    "RegexpSplitToArray": UnaryFunc.RegexpSplitToArray,
+    "Reverse": UnaryFunc.Reverse,
+    "RoundFloat32": UnaryFunc.RoundFloat32,
+    "RoundFloat64": UnaryFunc.RoundFloat64,
+    "RoundNumeric": UnaryFunc.RoundNumeric,
+    "SeahashBytes": UnaryFunc.SeahashBytes,
+    "SeahashString": UnaryFunc.SeahashString,
+    "Sin": UnaryFunc.Sin,
+    "Sinh": UnaryFunc.Sinh,
+    "Sleep": UnaryFunc.Sleep,
+    "SqrtFloat64": UnaryFunc.SqrtFloat64,
+    "SqrtNumeric": UnaryFunc.SqrtNumeric,
+    "StepMzTimestamp": UnaryFunc.StepMzTimestamp,
+    "Tan": UnaryFunc.Tan,
+    "Tanh": UnaryFunc.Tanh,
+    "TimezoneTime": UnaryFunc.TimezoneTime,
+    "TimezoneTimestamp": UnaryFunc.TimezoneTimestamp,
+    "TimezoneTimestampTz": UnaryFunc.TimezoneTimestampTz,
+    "ToCharTimestamp": UnaryFunc.ToCharTimestamp,
+    "ToCharTimestampTz": UnaryFunc.ToCharTimestampTz,
+    "ToTimestamp": UnaryFunc.ToTimestamp,
+    "TrimLeadingWhitespace": UnaryFunc.TrimLeadingWhitespace,
+    "TrimTrailingWhitespace": UnaryFunc.TrimTrailingWhitespace,
+    "TrimWhitespace": UnaryFunc.TrimWhitespace,
+    "TruncFloat32": UnaryFunc.TruncFloat32,
+    "TruncFloat64": UnaryFunc.TruncFloat64,
+    "TruncNumeric": UnaryFunc.TruncNumeric,
+    "TryCast": UnaryFunc.TryCast,
+    "TryParseMonotonicIso8601Timestamp": UnaryFunc.TryParseMonotonicIso8601Timestamp,
+    "Upper": UnaryFunc.Upper,
+}
 
 
 @_dc.dataclass
@@ -10418,352 +16035,653 @@ class VarCharMaxLength(_Newtype):
 
 
 class VariadicFunc(_Enum):
-    @_dc.dataclass
-    class And(_Variant):
-        value: And
-        _NAME = "And"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "And"}
+    And: _ClassVar[type[_VariadicFunc_And]]
+    ArrayCreate: _ClassVar[type[_VariadicFunc_ArrayCreate]]
+    ArrayFill: _ClassVar[type[_VariadicFunc_ArrayFill]]
+    ArrayIndex: _ClassVar[type[_VariadicFunc_ArrayIndex]]
+    ArrayPosition: _ClassVar[type[_VariadicFunc_ArrayPosition]]
+    ArrayToString: _ClassVar[type[_VariadicFunc_ArrayToString]]
+    CaseLiteral: _ClassVar[type[_VariadicFunc_CaseLiteral]]
+    Coalesce: _ClassVar[type[_VariadicFunc_Coalesce]]
+    Concat: _ClassVar[type[_VariadicFunc_Concat]]
+    ConcatWs: _ClassVar[type[_VariadicFunc_ConcatWs]]
+    DateBinTimestamp: _ClassVar[type[_VariadicFunc_DateBinTimestamp]]
+    DateBinTimestampTz: _ClassVar[type[_VariadicFunc_DateBinTimestampTz]]
+    DateDiffDate: _ClassVar[type[_VariadicFunc_DateDiffDate]]
+    DateDiffTime: _ClassVar[type[_VariadicFunc_DateDiffTime]]
+    DateDiffTimestamp: _ClassVar[type[_VariadicFunc_DateDiffTimestamp]]
+    DateDiffTimestampTz: _ClassVar[type[_VariadicFunc_DateDiffTimestampTz]]
+    ErrorIfNull: _ClassVar[type[_VariadicFunc_ErrorIfNull]]
+    Greatest: _ClassVar[type[_VariadicFunc_Greatest]]
+    HmacBytes: _ClassVar[type[_VariadicFunc_HmacBytes]]
+    HmacString: _ClassVar[type[_VariadicFunc_HmacString]]
+    JsonbBuildArray: _ClassVar[type[_VariadicFunc_JsonbBuildArray]]
+    JsonbBuildObject: _ClassVar[type[_VariadicFunc_JsonbBuildObject]]
+    Least: _ClassVar[type[_VariadicFunc_Least]]
+    ListCreate: _ClassVar[type[_VariadicFunc_ListCreate]]
+    ListIndex: _ClassVar[type[_VariadicFunc_ListIndex]]
+    ListSliceLinear: _ClassVar[type[_VariadicFunc_ListSliceLinear]]
+    MakeAclItem: _ClassVar[type[_VariadicFunc_MakeAclItem]]
+    MakeMzAclItem: _ClassVar[type[_VariadicFunc_MakeMzAclItem]]
+    MakeTimestamp: _ClassVar[type[_VariadicFunc_MakeTimestamp]]
+    MapBuild: _ClassVar[type[_VariadicFunc_MapBuild]]
+    Or: _ClassVar[type[_VariadicFunc_Or]]
+    PadLeading: _ClassVar[type[_VariadicFunc_PadLeading]]
+    RangeCreate: _ClassVar[type[_VariadicFunc_RangeCreate]]
+    RecordCreate: _ClassVar[type[_VariadicFunc_RecordCreate]]
+    RegexpMatch: _ClassVar[type[_VariadicFunc_RegexpMatch]]
+    RegexpReplace: _ClassVar[type[_VariadicFunc_RegexpReplace]]
+    RegexpSplitToArray: _ClassVar[type[_VariadicFunc_RegexpSplitToArray]]
+    Replace: _ClassVar[type[_VariadicFunc_Replace]]
+    SplitPart: _ClassVar[type[_VariadicFunc_SplitPart]]
+    StringToArray: _ClassVar[type[_VariadicFunc_StringToArray]]
+    Substr: _ClassVar[type[_VariadicFunc_Substr]]
+    TimezoneTimeVariadic: _ClassVar[type[_VariadicFunc_TimezoneTimeVariadic]]
+    Translate: _ClassVar[type[_VariadicFunc_Translate]]
 
-    @_dc.dataclass
-    class ArrayCreate(_Variant):
-        value: ArrayCreate
-        _NAME = "ArrayCreate"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ArrayCreate"}
 
-    @_dc.dataclass
-    class ArrayFill(_Variant):
-        value: ArrayFill
-        _NAME = "ArrayFill"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ArrayFill"}
+@_dc.dataclass
+class _VariadicFunc_And(_Variant, VariadicFunc):
+    value: And
+    _NAME = "And"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "And"}
 
-    @_dc.dataclass
-    class ArrayIndex(_Variant):
-        value: ArrayIndex
-        _NAME = "ArrayIndex"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ArrayIndex"}
 
-    @_dc.dataclass
-    class ArrayPosition(_Variant):
-        value: ArrayPosition
-        _NAME = "ArrayPosition"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ArrayPosition"}
+_VariadicFunc_And.__name__ = "And"
+_VariadicFunc_And.__qualname__ = "VariadicFunc.And"
+VariadicFunc.And = _VariadicFunc_And
 
-    @_dc.dataclass
-    class ArrayToString(_Variant):
-        value: ArrayToString
-        _NAME = "ArrayToString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ArrayToString"}
 
-    @_dc.dataclass
-    class CaseLiteral(_Variant):
-        value: CaseLiteral
-        _NAME = "CaseLiteral"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "CaseLiteral"}
+@_dc.dataclass
+class _VariadicFunc_ArrayCreate(_Variant, VariadicFunc):
+    value: ArrayCreate
+    _NAME = "ArrayCreate"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ArrayCreate"}
 
-    @_dc.dataclass
-    class Coalesce(_Variant):
-        value: Coalesce
-        _NAME = "Coalesce"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Coalesce"}
 
-    @_dc.dataclass
-    class Concat(_Variant):
-        value: Concat
-        _NAME = "Concat"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Concat"}
+_VariadicFunc_ArrayCreate.__name__ = "ArrayCreate"
+_VariadicFunc_ArrayCreate.__qualname__ = "VariadicFunc.ArrayCreate"
+VariadicFunc.ArrayCreate = _VariadicFunc_ArrayCreate
 
-    @_dc.dataclass
-    class ConcatWs(_Variant):
-        value: ConcatWs
-        _NAME = "ConcatWs"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ConcatWs"}
 
-    @_dc.dataclass
-    class DateBinTimestamp(_Variant):
-        value: DateBinTimestamp
-        _NAME = "DateBinTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DateBinTimestamp"}
+@_dc.dataclass
+class _VariadicFunc_ArrayFill(_Variant, VariadicFunc):
+    value: ArrayFill
+    _NAME = "ArrayFill"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ArrayFill"}
 
-    @_dc.dataclass
-    class DateBinTimestampTz(_Variant):
-        value: DateBinTimestampTz
-        _NAME = "DateBinTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DateBinTimestampTz"}
 
-    @_dc.dataclass
-    class DateDiffDate(_Variant):
-        value: DateDiffDate
-        _NAME = "DateDiffDate"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DateDiffDate"}
+_VariadicFunc_ArrayFill.__name__ = "ArrayFill"
+_VariadicFunc_ArrayFill.__qualname__ = "VariadicFunc.ArrayFill"
+VariadicFunc.ArrayFill = _VariadicFunc_ArrayFill
 
-    @_dc.dataclass
-    class DateDiffTime(_Variant):
-        value: DateDiffTime
-        _NAME = "DateDiffTime"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DateDiffTime"}
 
-    @_dc.dataclass
-    class DateDiffTimestamp(_Variant):
-        value: DateDiffTimestamp
-        _NAME = "DateDiffTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DateDiffTimestamp"}
+@_dc.dataclass
+class _VariadicFunc_ArrayIndex(_Variant, VariadicFunc):
+    value: ArrayIndex
+    _NAME = "ArrayIndex"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ArrayIndex"}
 
-    @_dc.dataclass
-    class DateDiffTimestampTz(_Variant):
-        value: DateDiffTimestampTz
-        _NAME = "DateDiffTimestampTz"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "DateDiffTimestampTz"}
 
-    @_dc.dataclass
-    class ErrorIfNull(_Variant):
-        value: ErrorIfNull
-        _NAME = "ErrorIfNull"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ErrorIfNull"}
+_VariadicFunc_ArrayIndex.__name__ = "ArrayIndex"
+_VariadicFunc_ArrayIndex.__qualname__ = "VariadicFunc.ArrayIndex"
+VariadicFunc.ArrayIndex = _VariadicFunc_ArrayIndex
 
-    @_dc.dataclass
-    class Greatest(_Variant):
-        value: Greatest
-        _NAME = "Greatest"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Greatest"}
 
-    @_dc.dataclass
-    class HmacBytes(_Variant):
-        value: HmacBytes
-        _NAME = "HmacBytes"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "HmacBytes"}
+@_dc.dataclass
+class _VariadicFunc_ArrayPosition(_Variant, VariadicFunc):
+    value: ArrayPosition
+    _NAME = "ArrayPosition"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ArrayPosition"}
 
-    @_dc.dataclass
-    class HmacString(_Variant):
-        value: HmacString
-        _NAME = "HmacString"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "HmacString"}
 
-    @_dc.dataclass
-    class JsonbBuildArray(_Variant):
-        value: JsonbBuildArray
-        _NAME = "JsonbBuildArray"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbBuildArray"}
+_VariadicFunc_ArrayPosition.__name__ = "ArrayPosition"
+_VariadicFunc_ArrayPosition.__qualname__ = "VariadicFunc.ArrayPosition"
+VariadicFunc.ArrayPosition = _VariadicFunc_ArrayPosition
 
-    @_dc.dataclass
-    class JsonbBuildObject(_Variant):
-        value: JsonbBuildObject
-        _NAME = "JsonbBuildObject"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "JsonbBuildObject"}
 
-    @_dc.dataclass
-    class Least(_Variant):
-        value: Least
-        _NAME = "Least"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Least"}
+@_dc.dataclass
+class _VariadicFunc_ArrayToString(_Variant, VariadicFunc):
+    value: ArrayToString
+    _NAME = "ArrayToString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ArrayToString"}
 
-    @_dc.dataclass
-    class ListCreate(_Variant):
-        value: ListCreate
-        _NAME = "ListCreate"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ListCreate"}
 
-    @_dc.dataclass
-    class ListIndex(_Variant):
-        value: ListIndex
-        _NAME = "ListIndex"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ListIndex"}
+_VariadicFunc_ArrayToString.__name__ = "ArrayToString"
+_VariadicFunc_ArrayToString.__qualname__ = "VariadicFunc.ArrayToString"
+VariadicFunc.ArrayToString = _VariadicFunc_ArrayToString
 
-    @_dc.dataclass
-    class ListSliceLinear(_Variant):
-        value: ListSliceLinear
-        _NAME = "ListSliceLinear"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "ListSliceLinear"}
 
-    @_dc.dataclass
-    class MakeAclItem(_Variant):
-        value: MakeAclItem
-        _NAME = "MakeAclItem"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MakeAclItem"}
+@_dc.dataclass
+class _VariadicFunc_CaseLiteral(_Variant, VariadicFunc):
+    value: CaseLiteral
+    _NAME = "CaseLiteral"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "CaseLiteral"}
 
-    @_dc.dataclass
-    class MakeMzAclItem(_Variant):
-        value: MakeMzAclItem
-        _NAME = "MakeMzAclItem"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MakeMzAclItem"}
 
-    @_dc.dataclass
-    class MakeTimestamp(_Variant):
-        value: MakeTimestamp
-        _NAME = "MakeTimestamp"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MakeTimestamp"}
+_VariadicFunc_CaseLiteral.__name__ = "CaseLiteral"
+_VariadicFunc_CaseLiteral.__qualname__ = "VariadicFunc.CaseLiteral"
+VariadicFunc.CaseLiteral = _VariadicFunc_CaseLiteral
 
-    @_dc.dataclass
-    class MapBuild(_Variant):
-        value: MapBuild
-        _NAME = "MapBuild"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "MapBuild"}
 
-    @_dc.dataclass
-    class Or(_Variant):
-        value: Or
-        _NAME = "Or"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Or"}
+@_dc.dataclass
+class _VariadicFunc_Coalesce(_Variant, VariadicFunc):
+    value: Coalesce
+    _NAME = "Coalesce"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Coalesce"}
 
-    @_dc.dataclass
-    class PadLeading(_Variant):
-        value: PadLeading
-        _NAME = "PadLeading"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "PadLeading"}
 
-    @_dc.dataclass
-    class RangeCreate(_Variant):
-        value: RangeCreate
-        _NAME = "RangeCreate"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RangeCreate"}
+_VariadicFunc_Coalesce.__name__ = "Coalesce"
+_VariadicFunc_Coalesce.__qualname__ = "VariadicFunc.Coalesce"
+VariadicFunc.Coalesce = _VariadicFunc_Coalesce
 
-    @_dc.dataclass
-    class RecordCreate(_Variant):
-        value: RecordCreate
-        _NAME = "RecordCreate"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RecordCreate"}
 
-    @_dc.dataclass
-    class RegexpMatch(_Variant):
-        value: RegexpMatch
-        _NAME = "RegexpMatch"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RegexpMatch"}
+@_dc.dataclass
+class _VariadicFunc_Concat(_Variant, VariadicFunc):
+    value: Concat
+    _NAME = "Concat"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Concat"}
 
-    @_dc.dataclass
-    class RegexpReplace(_Variant):
-        value: RegexpReplace
-        _NAME = "RegexpReplace"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RegexpReplace"}
 
-    @_dc.dataclass
-    class RegexpSplitToArray(_Variant):
-        value: RegexpSplitToArray
-        _NAME = "RegexpSplitToArray"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "RegexpSplitToArray"}
+_VariadicFunc_Concat.__name__ = "Concat"
+_VariadicFunc_Concat.__qualname__ = "VariadicFunc.Concat"
+VariadicFunc.Concat = _VariadicFunc_Concat
 
-    @_dc.dataclass
-    class Replace(_Variant):
-        value: Replace
-        _NAME = "Replace"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Replace"}
 
-    @_dc.dataclass
-    class SplitPart(_Variant):
-        value: SplitPart
-        _NAME = "SplitPart"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "SplitPart"}
+@_dc.dataclass
+class _VariadicFunc_ConcatWs(_Variant, VariadicFunc):
+    value: ConcatWs
+    _NAME = "ConcatWs"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ConcatWs"}
 
-    @_dc.dataclass
-    class StringToArray(_Variant):
-        value: StringToArray
-        _NAME = "StringToArray"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "StringToArray"}
 
-    @_dc.dataclass
-    class Substr(_Variant):
-        value: Substr
-        _NAME = "Substr"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Substr"}
+_VariadicFunc_ConcatWs.__name__ = "ConcatWs"
+_VariadicFunc_ConcatWs.__qualname__ = "VariadicFunc.ConcatWs"
+VariadicFunc.ConcatWs = _VariadicFunc_ConcatWs
 
-    @_dc.dataclass
-    class TimezoneTimeVariadic(_Variant):
-        value: TimezoneTimeVariadic
-        _NAME = "TimezoneTimeVariadic"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "TimezoneTimeVariadic"}
 
-    @_dc.dataclass
-    class Translate(_Variant):
-        value: Translate
-        _NAME = "Translate"
-        _KIND = "NEWTYPE"
-        _INNER = {"TYPENAME": "Translate"}
+@_dc.dataclass
+class _VariadicFunc_DateBinTimestamp(_Variant, VariadicFunc):
+    value: DateBinTimestamp
+    _NAME = "DateBinTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DateBinTimestamp"}
 
-    _VARIANTS = {
-        "And": And,
-        "ArrayCreate": ArrayCreate,
-        "ArrayFill": ArrayFill,
-        "ArrayIndex": ArrayIndex,
-        "ArrayPosition": ArrayPosition,
-        "ArrayToString": ArrayToString,
-        "CaseLiteral": CaseLiteral,
-        "Coalesce": Coalesce,
-        "Concat": Concat,
-        "ConcatWs": ConcatWs,
-        "DateBinTimestamp": DateBinTimestamp,
-        "DateBinTimestampTz": DateBinTimestampTz,
-        "DateDiffDate": DateDiffDate,
-        "DateDiffTime": DateDiffTime,
-        "DateDiffTimestamp": DateDiffTimestamp,
-        "DateDiffTimestampTz": DateDiffTimestampTz,
-        "ErrorIfNull": ErrorIfNull,
-        "Greatest": Greatest,
-        "HmacBytes": HmacBytes,
-        "HmacString": HmacString,
-        "JsonbBuildArray": JsonbBuildArray,
-        "JsonbBuildObject": JsonbBuildObject,
-        "Least": Least,
-        "ListCreate": ListCreate,
-        "ListIndex": ListIndex,
-        "ListSliceLinear": ListSliceLinear,
-        "MakeAclItem": MakeAclItem,
-        "MakeMzAclItem": MakeMzAclItem,
-        "MakeTimestamp": MakeTimestamp,
-        "MapBuild": MapBuild,
-        "Or": Or,
-        "PadLeading": PadLeading,
-        "RangeCreate": RangeCreate,
-        "RecordCreate": RecordCreate,
-        "RegexpMatch": RegexpMatch,
-        "RegexpReplace": RegexpReplace,
-        "RegexpSplitToArray": RegexpSplitToArray,
-        "Replace": Replace,
-        "SplitPart": SplitPart,
-        "StringToArray": StringToArray,
-        "Substr": Substr,
-        "TimezoneTimeVariadic": TimezoneTimeVariadic,
-        "Translate": Translate,
-    }
+
+_VariadicFunc_DateBinTimestamp.__name__ = "DateBinTimestamp"
+_VariadicFunc_DateBinTimestamp.__qualname__ = "VariadicFunc.DateBinTimestamp"
+VariadicFunc.DateBinTimestamp = _VariadicFunc_DateBinTimestamp
+
+
+@_dc.dataclass
+class _VariadicFunc_DateBinTimestampTz(_Variant, VariadicFunc):
+    value: DateBinTimestampTz
+    _NAME = "DateBinTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DateBinTimestampTz"}
+
+
+_VariadicFunc_DateBinTimestampTz.__name__ = "DateBinTimestampTz"
+_VariadicFunc_DateBinTimestampTz.__qualname__ = "VariadicFunc.DateBinTimestampTz"
+VariadicFunc.DateBinTimestampTz = _VariadicFunc_DateBinTimestampTz
+
+
+@_dc.dataclass
+class _VariadicFunc_DateDiffDate(_Variant, VariadicFunc):
+    value: DateDiffDate
+    _NAME = "DateDiffDate"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DateDiffDate"}
+
+
+_VariadicFunc_DateDiffDate.__name__ = "DateDiffDate"
+_VariadicFunc_DateDiffDate.__qualname__ = "VariadicFunc.DateDiffDate"
+VariadicFunc.DateDiffDate = _VariadicFunc_DateDiffDate
+
+
+@_dc.dataclass
+class _VariadicFunc_DateDiffTime(_Variant, VariadicFunc):
+    value: DateDiffTime
+    _NAME = "DateDiffTime"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DateDiffTime"}
+
+
+_VariadicFunc_DateDiffTime.__name__ = "DateDiffTime"
+_VariadicFunc_DateDiffTime.__qualname__ = "VariadicFunc.DateDiffTime"
+VariadicFunc.DateDiffTime = _VariadicFunc_DateDiffTime
+
+
+@_dc.dataclass
+class _VariadicFunc_DateDiffTimestamp(_Variant, VariadicFunc):
+    value: DateDiffTimestamp
+    _NAME = "DateDiffTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DateDiffTimestamp"}
+
+
+_VariadicFunc_DateDiffTimestamp.__name__ = "DateDiffTimestamp"
+_VariadicFunc_DateDiffTimestamp.__qualname__ = "VariadicFunc.DateDiffTimestamp"
+VariadicFunc.DateDiffTimestamp = _VariadicFunc_DateDiffTimestamp
+
+
+@_dc.dataclass
+class _VariadicFunc_DateDiffTimestampTz(_Variant, VariadicFunc):
+    value: DateDiffTimestampTz
+    _NAME = "DateDiffTimestampTz"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "DateDiffTimestampTz"}
+
+
+_VariadicFunc_DateDiffTimestampTz.__name__ = "DateDiffTimestampTz"
+_VariadicFunc_DateDiffTimestampTz.__qualname__ = "VariadicFunc.DateDiffTimestampTz"
+VariadicFunc.DateDiffTimestampTz = _VariadicFunc_DateDiffTimestampTz
+
+
+@_dc.dataclass
+class _VariadicFunc_ErrorIfNull(_Variant, VariadicFunc):
+    value: ErrorIfNull
+    _NAME = "ErrorIfNull"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ErrorIfNull"}
+
+
+_VariadicFunc_ErrorIfNull.__name__ = "ErrorIfNull"
+_VariadicFunc_ErrorIfNull.__qualname__ = "VariadicFunc.ErrorIfNull"
+VariadicFunc.ErrorIfNull = _VariadicFunc_ErrorIfNull
+
+
+@_dc.dataclass
+class _VariadicFunc_Greatest(_Variant, VariadicFunc):
+    value: Greatest
+    _NAME = "Greatest"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Greatest"}
+
+
+_VariadicFunc_Greatest.__name__ = "Greatest"
+_VariadicFunc_Greatest.__qualname__ = "VariadicFunc.Greatest"
+VariadicFunc.Greatest = _VariadicFunc_Greatest
+
+
+@_dc.dataclass
+class _VariadicFunc_HmacBytes(_Variant, VariadicFunc):
+    value: HmacBytes
+    _NAME = "HmacBytes"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "HmacBytes"}
+
+
+_VariadicFunc_HmacBytes.__name__ = "HmacBytes"
+_VariadicFunc_HmacBytes.__qualname__ = "VariadicFunc.HmacBytes"
+VariadicFunc.HmacBytes = _VariadicFunc_HmacBytes
+
+
+@_dc.dataclass
+class _VariadicFunc_HmacString(_Variant, VariadicFunc):
+    value: HmacString
+    _NAME = "HmacString"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "HmacString"}
+
+
+_VariadicFunc_HmacString.__name__ = "HmacString"
+_VariadicFunc_HmacString.__qualname__ = "VariadicFunc.HmacString"
+VariadicFunc.HmacString = _VariadicFunc_HmacString
+
+
+@_dc.dataclass
+class _VariadicFunc_JsonbBuildArray(_Variant, VariadicFunc):
+    value: JsonbBuildArray
+    _NAME = "JsonbBuildArray"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbBuildArray"}
+
+
+_VariadicFunc_JsonbBuildArray.__name__ = "JsonbBuildArray"
+_VariadicFunc_JsonbBuildArray.__qualname__ = "VariadicFunc.JsonbBuildArray"
+VariadicFunc.JsonbBuildArray = _VariadicFunc_JsonbBuildArray
+
+
+@_dc.dataclass
+class _VariadicFunc_JsonbBuildObject(_Variant, VariadicFunc):
+    value: JsonbBuildObject
+    _NAME = "JsonbBuildObject"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "JsonbBuildObject"}
+
+
+_VariadicFunc_JsonbBuildObject.__name__ = "JsonbBuildObject"
+_VariadicFunc_JsonbBuildObject.__qualname__ = "VariadicFunc.JsonbBuildObject"
+VariadicFunc.JsonbBuildObject = _VariadicFunc_JsonbBuildObject
+
+
+@_dc.dataclass
+class _VariadicFunc_Least(_Variant, VariadicFunc):
+    value: Least
+    _NAME = "Least"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Least"}
+
+
+_VariadicFunc_Least.__name__ = "Least"
+_VariadicFunc_Least.__qualname__ = "VariadicFunc.Least"
+VariadicFunc.Least = _VariadicFunc_Least
+
+
+@_dc.dataclass
+class _VariadicFunc_ListCreate(_Variant, VariadicFunc):
+    value: ListCreate
+    _NAME = "ListCreate"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ListCreate"}
+
+
+_VariadicFunc_ListCreate.__name__ = "ListCreate"
+_VariadicFunc_ListCreate.__qualname__ = "VariadicFunc.ListCreate"
+VariadicFunc.ListCreate = _VariadicFunc_ListCreate
+
+
+@_dc.dataclass
+class _VariadicFunc_ListIndex(_Variant, VariadicFunc):
+    value: ListIndex
+    _NAME = "ListIndex"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ListIndex"}
+
+
+_VariadicFunc_ListIndex.__name__ = "ListIndex"
+_VariadicFunc_ListIndex.__qualname__ = "VariadicFunc.ListIndex"
+VariadicFunc.ListIndex = _VariadicFunc_ListIndex
+
+
+@_dc.dataclass
+class _VariadicFunc_ListSliceLinear(_Variant, VariadicFunc):
+    value: ListSliceLinear
+    _NAME = "ListSliceLinear"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "ListSliceLinear"}
+
+
+_VariadicFunc_ListSliceLinear.__name__ = "ListSliceLinear"
+_VariadicFunc_ListSliceLinear.__qualname__ = "VariadicFunc.ListSliceLinear"
+VariadicFunc.ListSliceLinear = _VariadicFunc_ListSliceLinear
+
+
+@_dc.dataclass
+class _VariadicFunc_MakeAclItem(_Variant, VariadicFunc):
+    value: MakeAclItem
+    _NAME = "MakeAclItem"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MakeAclItem"}
+
+
+_VariadicFunc_MakeAclItem.__name__ = "MakeAclItem"
+_VariadicFunc_MakeAclItem.__qualname__ = "VariadicFunc.MakeAclItem"
+VariadicFunc.MakeAclItem = _VariadicFunc_MakeAclItem
+
+
+@_dc.dataclass
+class _VariadicFunc_MakeMzAclItem(_Variant, VariadicFunc):
+    value: MakeMzAclItem
+    _NAME = "MakeMzAclItem"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MakeMzAclItem"}
+
+
+_VariadicFunc_MakeMzAclItem.__name__ = "MakeMzAclItem"
+_VariadicFunc_MakeMzAclItem.__qualname__ = "VariadicFunc.MakeMzAclItem"
+VariadicFunc.MakeMzAclItem = _VariadicFunc_MakeMzAclItem
+
+
+@_dc.dataclass
+class _VariadicFunc_MakeTimestamp(_Variant, VariadicFunc):
+    value: MakeTimestamp
+    _NAME = "MakeTimestamp"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MakeTimestamp"}
+
+
+_VariadicFunc_MakeTimestamp.__name__ = "MakeTimestamp"
+_VariadicFunc_MakeTimestamp.__qualname__ = "VariadicFunc.MakeTimestamp"
+VariadicFunc.MakeTimestamp = _VariadicFunc_MakeTimestamp
+
+
+@_dc.dataclass
+class _VariadicFunc_MapBuild(_Variant, VariadicFunc):
+    value: MapBuild
+    _NAME = "MapBuild"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "MapBuild"}
+
+
+_VariadicFunc_MapBuild.__name__ = "MapBuild"
+_VariadicFunc_MapBuild.__qualname__ = "VariadicFunc.MapBuild"
+VariadicFunc.MapBuild = _VariadicFunc_MapBuild
+
+
+@_dc.dataclass
+class _VariadicFunc_Or(_Variant, VariadicFunc):
+    value: Or
+    _NAME = "Or"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Or"}
+
+
+_VariadicFunc_Or.__name__ = "Or"
+_VariadicFunc_Or.__qualname__ = "VariadicFunc.Or"
+VariadicFunc.Or = _VariadicFunc_Or
+
+
+@_dc.dataclass
+class _VariadicFunc_PadLeading(_Variant, VariadicFunc):
+    value: PadLeading
+    _NAME = "PadLeading"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "PadLeading"}
+
+
+_VariadicFunc_PadLeading.__name__ = "PadLeading"
+_VariadicFunc_PadLeading.__qualname__ = "VariadicFunc.PadLeading"
+VariadicFunc.PadLeading = _VariadicFunc_PadLeading
+
+
+@_dc.dataclass
+class _VariadicFunc_RangeCreate(_Variant, VariadicFunc):
+    value: RangeCreate
+    _NAME = "RangeCreate"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RangeCreate"}
+
+
+_VariadicFunc_RangeCreate.__name__ = "RangeCreate"
+_VariadicFunc_RangeCreate.__qualname__ = "VariadicFunc.RangeCreate"
+VariadicFunc.RangeCreate = _VariadicFunc_RangeCreate
+
+
+@_dc.dataclass
+class _VariadicFunc_RecordCreate(_Variant, VariadicFunc):
+    value: RecordCreate
+    _NAME = "RecordCreate"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RecordCreate"}
+
+
+_VariadicFunc_RecordCreate.__name__ = "RecordCreate"
+_VariadicFunc_RecordCreate.__qualname__ = "VariadicFunc.RecordCreate"
+VariadicFunc.RecordCreate = _VariadicFunc_RecordCreate
+
+
+@_dc.dataclass
+class _VariadicFunc_RegexpMatch(_Variant, VariadicFunc):
+    value: RegexpMatch
+    _NAME = "RegexpMatch"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RegexpMatch"}
+
+
+_VariadicFunc_RegexpMatch.__name__ = "RegexpMatch"
+_VariadicFunc_RegexpMatch.__qualname__ = "VariadicFunc.RegexpMatch"
+VariadicFunc.RegexpMatch = _VariadicFunc_RegexpMatch
+
+
+@_dc.dataclass
+class _VariadicFunc_RegexpReplace(_Variant, VariadicFunc):
+    value: RegexpReplace
+    _NAME = "RegexpReplace"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RegexpReplace"}
+
+
+_VariadicFunc_RegexpReplace.__name__ = "RegexpReplace"
+_VariadicFunc_RegexpReplace.__qualname__ = "VariadicFunc.RegexpReplace"
+VariadicFunc.RegexpReplace = _VariadicFunc_RegexpReplace
+
+
+@_dc.dataclass
+class _VariadicFunc_RegexpSplitToArray(_Variant, VariadicFunc):
+    value: RegexpSplitToArray
+    _NAME = "RegexpSplitToArray"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "RegexpSplitToArray"}
+
+
+_VariadicFunc_RegexpSplitToArray.__name__ = "RegexpSplitToArray"
+_VariadicFunc_RegexpSplitToArray.__qualname__ = "VariadicFunc.RegexpSplitToArray"
+VariadicFunc.RegexpSplitToArray = _VariadicFunc_RegexpSplitToArray
+
+
+@_dc.dataclass
+class _VariadicFunc_Replace(_Variant, VariadicFunc):
+    value: Replace
+    _NAME = "Replace"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Replace"}
+
+
+_VariadicFunc_Replace.__name__ = "Replace"
+_VariadicFunc_Replace.__qualname__ = "VariadicFunc.Replace"
+VariadicFunc.Replace = _VariadicFunc_Replace
+
+
+@_dc.dataclass
+class _VariadicFunc_SplitPart(_Variant, VariadicFunc):
+    value: SplitPart
+    _NAME = "SplitPart"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "SplitPart"}
+
+
+_VariadicFunc_SplitPart.__name__ = "SplitPart"
+_VariadicFunc_SplitPart.__qualname__ = "VariadicFunc.SplitPart"
+VariadicFunc.SplitPart = _VariadicFunc_SplitPart
+
+
+@_dc.dataclass
+class _VariadicFunc_StringToArray(_Variant, VariadicFunc):
+    value: StringToArray
+    _NAME = "StringToArray"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "StringToArray"}
+
+
+_VariadicFunc_StringToArray.__name__ = "StringToArray"
+_VariadicFunc_StringToArray.__qualname__ = "VariadicFunc.StringToArray"
+VariadicFunc.StringToArray = _VariadicFunc_StringToArray
+
+
+@_dc.dataclass
+class _VariadicFunc_Substr(_Variant, VariadicFunc):
+    value: Substr
+    _NAME = "Substr"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Substr"}
+
+
+_VariadicFunc_Substr.__name__ = "Substr"
+_VariadicFunc_Substr.__qualname__ = "VariadicFunc.Substr"
+VariadicFunc.Substr = _VariadicFunc_Substr
+
+
+@_dc.dataclass
+class _VariadicFunc_TimezoneTimeVariadic(_Variant, VariadicFunc):
+    value: TimezoneTimeVariadic
+    _NAME = "TimezoneTimeVariadic"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "TimezoneTimeVariadic"}
+
+
+_VariadicFunc_TimezoneTimeVariadic.__name__ = "TimezoneTimeVariadic"
+_VariadicFunc_TimezoneTimeVariadic.__qualname__ = "VariadicFunc.TimezoneTimeVariadic"
+VariadicFunc.TimezoneTimeVariadic = _VariadicFunc_TimezoneTimeVariadic
+
+
+@_dc.dataclass
+class _VariadicFunc_Translate(_Variant, VariadicFunc):
+    value: Translate
+    _NAME = "Translate"
+    _KIND = "NEWTYPE"
+    _INNER = {"TYPENAME": "Translate"}
+
+
+_VariadicFunc_Translate.__name__ = "Translate"
+_VariadicFunc_Translate.__qualname__ = "VariadicFunc.Translate"
+VariadicFunc.Translate = _VariadicFunc_Translate
+VariadicFunc._VARIANTS = {
+    "And": VariadicFunc.And,
+    "ArrayCreate": VariadicFunc.ArrayCreate,
+    "ArrayFill": VariadicFunc.ArrayFill,
+    "ArrayIndex": VariadicFunc.ArrayIndex,
+    "ArrayPosition": VariadicFunc.ArrayPosition,
+    "ArrayToString": VariadicFunc.ArrayToString,
+    "CaseLiteral": VariadicFunc.CaseLiteral,
+    "Coalesce": VariadicFunc.Coalesce,
+    "Concat": VariadicFunc.Concat,
+    "ConcatWs": VariadicFunc.ConcatWs,
+    "DateBinTimestamp": VariadicFunc.DateBinTimestamp,
+    "DateBinTimestampTz": VariadicFunc.DateBinTimestampTz,
+    "DateDiffDate": VariadicFunc.DateDiffDate,
+    "DateDiffTime": VariadicFunc.DateDiffTime,
+    "DateDiffTimestamp": VariadicFunc.DateDiffTimestamp,
+    "DateDiffTimestampTz": VariadicFunc.DateDiffTimestampTz,
+    "ErrorIfNull": VariadicFunc.ErrorIfNull,
+    "Greatest": VariadicFunc.Greatest,
+    "HmacBytes": VariadicFunc.HmacBytes,
+    "HmacString": VariadicFunc.HmacString,
+    "JsonbBuildArray": VariadicFunc.JsonbBuildArray,
+    "JsonbBuildObject": VariadicFunc.JsonbBuildObject,
+    "Least": VariadicFunc.Least,
+    "ListCreate": VariadicFunc.ListCreate,
+    "ListIndex": VariadicFunc.ListIndex,
+    "ListSliceLinear": VariadicFunc.ListSliceLinear,
+    "MakeAclItem": VariadicFunc.MakeAclItem,
+    "MakeMzAclItem": VariadicFunc.MakeMzAclItem,
+    "MakeTimestamp": VariadicFunc.MakeTimestamp,
+    "MapBuild": VariadicFunc.MapBuild,
+    "Or": VariadicFunc.Or,
+    "PadLeading": VariadicFunc.PadLeading,
+    "RangeCreate": VariadicFunc.RangeCreate,
+    "RecordCreate": VariadicFunc.RecordCreate,
+    "RegexpMatch": VariadicFunc.RegexpMatch,
+    "RegexpReplace": VariadicFunc.RegexpReplace,
+    "RegexpSplitToArray": VariadicFunc.RegexpSplitToArray,
+    "Replace": VariadicFunc.Replace,
+    "SplitPart": VariadicFunc.SplitPart,
+    "StringToArray": VariadicFunc.StringToArray,
+    "Substr": VariadicFunc.Substr,
+    "TimezoneTimeVariadic": VariadicFunc.TimezoneTimeVariadic,
+    "Translate": VariadicFunc.Translate,
+}
 
 
 @_dc.dataclass(kw_only=True)
@@ -10779,61 +16697,125 @@ class WindowFrame(_Struct):
 
 
 class WindowFrameBound(_Enum):
-    @_dc.dataclass
-    class CurrentRow(_Variant):
-        _NAME = "CurrentRow"
-        _KIND = "UNIT"
+    CurrentRow: _ClassVar[type[_WindowFrameBound_CurrentRow]]
+    OffsetFollowing: _ClassVar[type[_WindowFrameBound_OffsetFollowing]]
+    OffsetPreceding: _ClassVar[type[_WindowFrameBound_OffsetPreceding]]
+    UnboundedFollowing: _ClassVar[type[_WindowFrameBound_UnboundedFollowing]]
+    UnboundedPreceding: _ClassVar[type[_WindowFrameBound_UnboundedPreceding]]
 
-    @_dc.dataclass
-    class OffsetFollowing(_Variant):
-        value: int
-        _NAME = "OffsetFollowing"
-        _KIND = "NEWTYPE"
-        _INNER = "U64"
 
-    @_dc.dataclass
-    class OffsetPreceding(_Variant):
-        value: int
-        _NAME = "OffsetPreceding"
-        _KIND = "NEWTYPE"
-        _INNER = "U64"
+@_dc.dataclass
+class _WindowFrameBound_CurrentRow(_Variant, WindowFrameBound):
+    _NAME = "CurrentRow"
+    _KIND = "UNIT"
 
-    @_dc.dataclass
-    class UnboundedFollowing(_Variant):
-        _NAME = "UnboundedFollowing"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class UnboundedPreceding(_Variant):
-        _NAME = "UnboundedPreceding"
-        _KIND = "UNIT"
+_WindowFrameBound_CurrentRow.__name__ = "CurrentRow"
+_WindowFrameBound_CurrentRow.__qualname__ = "WindowFrameBound.CurrentRow"
+WindowFrameBound.CurrentRow = _WindowFrameBound_CurrentRow
 
-    _VARIANTS = {
-        "CurrentRow": CurrentRow,
-        "OffsetFollowing": OffsetFollowing,
-        "OffsetPreceding": OffsetPreceding,
-        "UnboundedFollowing": UnboundedFollowing,
-        "UnboundedPreceding": UnboundedPreceding,
-    }
+
+@_dc.dataclass
+class _WindowFrameBound_OffsetFollowing(_Variant, WindowFrameBound):
+    value: int
+    _NAME = "OffsetFollowing"
+    _KIND = "NEWTYPE"
+    _INNER = "U64"
+
+
+_WindowFrameBound_OffsetFollowing.__name__ = "OffsetFollowing"
+_WindowFrameBound_OffsetFollowing.__qualname__ = "WindowFrameBound.OffsetFollowing"
+WindowFrameBound.OffsetFollowing = _WindowFrameBound_OffsetFollowing
+
+
+@_dc.dataclass
+class _WindowFrameBound_OffsetPreceding(_Variant, WindowFrameBound):
+    value: int
+    _NAME = "OffsetPreceding"
+    _KIND = "NEWTYPE"
+    _INNER = "U64"
+
+
+_WindowFrameBound_OffsetPreceding.__name__ = "OffsetPreceding"
+_WindowFrameBound_OffsetPreceding.__qualname__ = "WindowFrameBound.OffsetPreceding"
+WindowFrameBound.OffsetPreceding = _WindowFrameBound_OffsetPreceding
+
+
+@_dc.dataclass
+class _WindowFrameBound_UnboundedFollowing(_Variant, WindowFrameBound):
+    _NAME = "UnboundedFollowing"
+    _KIND = "UNIT"
+
+
+_WindowFrameBound_UnboundedFollowing.__name__ = "UnboundedFollowing"
+_WindowFrameBound_UnboundedFollowing.__qualname__ = (
+    "WindowFrameBound.UnboundedFollowing"
+)
+WindowFrameBound.UnboundedFollowing = _WindowFrameBound_UnboundedFollowing
+
+
+@_dc.dataclass
+class _WindowFrameBound_UnboundedPreceding(_Variant, WindowFrameBound):
+    _NAME = "UnboundedPreceding"
+    _KIND = "UNIT"
+
+
+_WindowFrameBound_UnboundedPreceding.__name__ = "UnboundedPreceding"
+_WindowFrameBound_UnboundedPreceding.__qualname__ = (
+    "WindowFrameBound.UnboundedPreceding"
+)
+WindowFrameBound.UnboundedPreceding = _WindowFrameBound_UnboundedPreceding
+WindowFrameBound._VARIANTS = {
+    "CurrentRow": WindowFrameBound.CurrentRow,
+    "OffsetFollowing": WindowFrameBound.OffsetFollowing,
+    "OffsetPreceding": WindowFrameBound.OffsetPreceding,
+    "UnboundedFollowing": WindowFrameBound.UnboundedFollowing,
+    "UnboundedPreceding": WindowFrameBound.UnboundedPreceding,
+}
 
 
 class WindowFrameUnits(_Enum):
-    @_dc.dataclass
-    class Groups(_Variant):
-        _NAME = "Groups"
-        _KIND = "UNIT"
+    Groups: _ClassVar[type[_WindowFrameUnits_Groups]]
+    Range: _ClassVar[type[_WindowFrameUnits_Range]]
+    Rows: _ClassVar[type[_WindowFrameUnits_Rows]]
 
-    @_dc.dataclass
-    class Range(_Variant):
-        _NAME = "Range"
-        _KIND = "UNIT"
 
-    @_dc.dataclass
-    class Rows(_Variant):
-        _NAME = "Rows"
-        _KIND = "UNIT"
+@_dc.dataclass
+class _WindowFrameUnits_Groups(_Variant, WindowFrameUnits):
+    _NAME = "Groups"
+    _KIND = "UNIT"
 
-    _VARIANTS = {"Groups": Groups, "Range": Range, "Rows": Rows}
+
+_WindowFrameUnits_Groups.__name__ = "Groups"
+_WindowFrameUnits_Groups.__qualname__ = "WindowFrameUnits.Groups"
+WindowFrameUnits.Groups = _WindowFrameUnits_Groups
+
+
+@_dc.dataclass
+class _WindowFrameUnits_Range(_Variant, WindowFrameUnits):
+    _NAME = "Range"
+    _KIND = "UNIT"
+
+
+_WindowFrameUnits_Range.__name__ = "Range"
+_WindowFrameUnits_Range.__qualname__ = "WindowFrameUnits.Range"
+WindowFrameUnits.Range = _WindowFrameUnits_Range
+
+
+@_dc.dataclass
+class _WindowFrameUnits_Rows(_Variant, WindowFrameUnits):
+    _NAME = "Rows"
+    _KIND = "UNIT"
+
+
+_WindowFrameUnits_Rows.__name__ = "Rows"
+_WindowFrameUnits_Rows.__qualname__ = "WindowFrameUnits.Rows"
+WindowFrameUnits.Rows = _WindowFrameUnits_Rows
+WindowFrameUnits._VARIANTS = {
+    "Groups": WindowFrameUnits.Groups,
+    "Range": WindowFrameUnits.Range,
+    "Rows": WindowFrameUnits.Rows,
+}
 
 
 @_dc.dataclass(kw_only=True)

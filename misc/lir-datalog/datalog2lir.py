@@ -529,7 +529,7 @@ def main(
     argv: list[str], read: Callable[[str], str] = lambda p: Path(p).read_text()
 ) -> str:
     """Runs the command line, returning the envelope as JSON text."""
-    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     parser.add_argument("program", help="the Datalog program")
     parser.add_argument("--output", required=True, help="the relation to compute")
     parser.add_argument(

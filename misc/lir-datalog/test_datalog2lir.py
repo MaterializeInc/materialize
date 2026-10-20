@@ -126,7 +126,9 @@ class CompileTest(unittest.TestCase):
             return_at_limit=return_at_limit,
         )
         self.assertIsInstance(envelope, lt.LirPlanEnvelope)
-        return lt.to_json(envelope)
+        encoded = lt.to_json(envelope)
+        assert isinstance(encoded, dict)
+        return encoded
 
     def test_nonrecursive_join_emits_join_with_arrangements(self):
         env = self.compile(
@@ -366,11 +368,11 @@ class GeneratedTypesTest(unittest.TestCase):
 
     def test_encoder_rejects_ill_typed_values(self):
         with self.assertRaises(TypeError):
-            lt.to_json(lt.LirId("1"))
+            lt.to_json(lt.LirId("1"))  # type: ignore[arg-type]
         with self.assertRaises(TypeError):
             lt.to_json(lt.GlobalId.Transient(True))
         with self.assertRaises(TypeError):
-            lt.to_json(lt.Id.Global(lt.LocalId(1)))
+            lt.to_json(lt.Id.Global(lt.LocalId(1)))  # type: ignore[arg-type]
         with self.assertRaisesRegex(ValueError, "out of range for U64"):
             lt.to_json(lt.LirId(-1))
         with self.assertRaisesRegex(ValueError, "out of range for U64"):
