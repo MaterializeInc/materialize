@@ -8,12 +8,16 @@
 // by the Apache License, Version 2.0.
 
 import { QueryKey } from "@tanstack/react-query";
+import { sql } from "kysely";
 
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
 
 import { buildObjectCreationTimesQuery } from "./objectCreationTimes";
 
-/** First version with `mz_internal.mz_cluster_auto_scaling_strategies`. */
+/**
+ * First version with `mz_internal.mz_cluster_auto_scaling_strategies` and
+ * `mz_internal.mz_cluster_reconfigurations`.
+ */
 export const AUTO_SCALING_MIN_VERSION = "26.34.0";
 
 /** A cluster's autoscaling strategy and any in-flight burst, as JSON. */
@@ -22,6 +26,44 @@ export function buildClusterAutoScalingQuery(clusterId: string) {
     .selectFrom("mz_cluster_auto_scaling_strategies")
     .select(["strategy", "state"])
     .where("cluster_id", "=", clusterId);
+}
+
+/** The size an in-progress resize of the cluster is heading to. */
+export function buildClusterResizeTargetQuery(clusterId: string) {
+  return queryBuilder
+    .selectFrom("mz_cluster_reconfigurations")
+    .select(sql<string | null>`target->>'size'`.as("size"))
+    .where("cluster_id", "=", clusterId)
+    .where("status", "=", "in-progress");
+}
+
+/**
+ * A cluster's autoscaling strategy row, null for a cluster without one, and
+ * the size its in-progress resize is heading to, undefined for none.
+ */
+export async function fetchClusterAutoScaling({
+  clusterId,
+  queryKey,
+  requestOptions,
+}: {
+  clusterId: string;
+  queryKey: QueryKey;
+  requestOptions?: RequestInit;
+}) {
+  // Strict serializable, as in `fetchClusterConfiguration`: the form reads
+  // this right after an ALTER.
+  const [autoScalingRes, resizeTargetRes] = await executeSqlV2({
+    queries: [
+      buildClusterAutoScalingQuery(clusterId).compile(),
+      buildClusterResizeTargetQuery(clusterId).compile(),
+    ] as const,
+    queryKey,
+    requestOptions,
+  });
+  return {
+    autoScaling: autoScalingRes.rows.at(0) ?? null,
+    resizeTargetSize: resizeTargetRes.rows.at(0)?.size ?? undefined,
+  };
 }
 
 /** The configuration the cluster list doesn't carry, read in one request. */
