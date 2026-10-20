@@ -123,7 +123,7 @@ def composition_module():
     return module
 
 
-def test_staging_recreation_enables_qps_fast_paths(monkeypatch):
+def test_staging_recreation_disables_prepared_optimization(monkeypatch):
     module = composition_module()
     calls = []
     monkeypatch.setattr(module, "staging_version", lambda: "test-version")
@@ -134,13 +134,13 @@ def test_staging_recreation_enables_qps_fast_paths(monkeypatch):
     for cpus in (8, 32):
         module.enable_region(target, cpus)
     for call in calls:
-        for name in (
-            "enable_prepared_query_reuse",
-            "enable_prepared_query_templates",
-            "enable_frontend_transaction_completion",
+        for name, value in (
+            ("enable_prepared_query_reuse", "false"),
+            ("enable_prepared_query_templates", "false"),
+            ("enable_frontend_transaction_completion", "true"),
         ):
             assert (
-                f"--environmentd-extra-arg=--system-parameter-default={name}=true"
+                f"--environmentd-extra-arg=--system-parameter-default={name}={value}"
                 in call
             )
 
