@@ -25,10 +25,9 @@ RUN chmod +x /usr/local/bin/protoc
 ENV PROTOC=/usr/local/bin/protoc
 ENV PROTOC_INCLUDE=/usr/local/include
 # Install libduckdb.so that was downloaded. The cache contains
-# `<arch>-unknown-linux-gnu/<version>/libduckdb.so` for every architecture
-# we've built against; copy them all in and then pick the one matching this
-# image's arch. (A glob COPY collapses both files onto the same destination
-# path and silently picks whichever sorts last, which is wrong on aarch64.)
+# `<arch>-unknown-linux-gnu/<version>/libduckdb.so`; copy it in and then pick
+# the one matching this image's arch. (A glob COPY collapses multiple files
+# onto the same destination path and silently picks whichever sorts last.)
 COPY duckdb-download /tmp/duckdb-download
 RUN cp /tmp/duckdb-download/$(uname -m)-unknown-linux-gnu/*/libduckdb.so /usr/local/lib/ \
     && rm -rf /tmp/duckdb-download \

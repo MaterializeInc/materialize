@@ -356,7 +356,7 @@ differential-dataflow = "0.25.0"
 differential-dogs3 = "0.25.0"
 digest = "0.11.3"
 dirs = "7.0.0"
-duckdb = { version = "1.4.3", default-features = false, features = ["native-tls"] }
+duckdb = { version = "1.10506.1", default-features = false }
 dynfmt = { version = "0.2.0", features = ["curly"] }
 either = "1.18.0"
 encoding = "0.2.0"
@@ -704,13 +704,6 @@ async-compression = { git = "https://github.com/MaterializeInc/async-compression
 iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
 iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
 iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "9e252ad09e27950d2f3cbc7e2da0d1f5255731a0" }
-
-# Custom duckdb crate to support mz needs
-# All changes should go to the `mz_changes` branch.
-# The main change is allowing the TLS implementation to be selected via features.
-# Hopefully we can upstream these changes eventually.
-# Additionally we keep the apache crates updated to latest versions.
-duckdb = { git = "https://github.com/MaterializeInc/duckdb-rs.git", rev = "752c7efe2582" }
 
 
 # BEGIN LINT CONFIG
