@@ -103,6 +103,12 @@ fn except_all() {
         &union(vec![get(KNOWN), get(OTHER).negate(), get(OTHER).negate()]).threshold()
     ));
     assert!(proven(&get(TARGET).threshold()));
+    // The optimizer pushes `Negate` below `Map` and `Project`.
+    let one = MirScalarExpr::literal_ok(Datum::Int64(1), ReprScalarType::Int64);
+    let pushed = get(OTHER).project(vec![0]).negate().map(vec![one.clone()]);
+    assert!(proven(&union(vec![get(TARGET), pushed]).threshold()));
+    let positive = get(OTHER).project(vec![0]).map(vec![one]);
+    assert!(!proven(&union(vec![get(TARGET), positive]).threshold()));
     // A doubly negated input adds rows.
     assert!(!proven(
         &union(vec![get(TARGET), raw_negate(raw_negate(get(OTHER)))]).threshold()
@@ -135,6 +141,19 @@ fn intersect_all_is_contained_in_either_input() {
         get(TARGET),
     ]);
     assert!(proven(&swapped));
+
+    // With `A` proven, the subtracted input can be anything.
+    let any_y = union(vec![
+        get(TARGET),
+        union(vec![get(TARGET), get(OTHER)]).threshold().negate(),
+    ]);
+    assert!(proven(&any_y));
+    // With only `B` proven, it has to be subtracted.
+    let added_b = union(vec![
+        get(OTHER),
+        union(vec![get(OTHER), get(TARGET)]).threshold().negate(),
+    ]);
+    assert!(!proven(&added_b));
 
     // The two copies of `A` must be the same expression.
     let mismatched = union(vec![

@@ -116,24 +116,48 @@ impl Analysis for SubMultiset {
                 if results[index - 1] {
                     return true;
                 }
-                // `max(0, p - b1 - b2 ...)` is at most `max(0, p)` when every
-                // `bi` is non-negative.
+                // `max(0, p + n1 + n2 ...)` is at most `max(0, p)` when every
+                // `ni` is non-positive.
                 let MirRelationExpr::Union { .. } = &**input else {
                     return false;
                 };
                 let children = children(input, index - 1, depends);
                 let mut proven = 0;
                 for (child, offset) in children {
-                    match child {
-                        MirRelationExpr::Negate { .. } if non_negative[offset - 1] => {}
-                        _ if results[offset] => proven += 1,
-                        _ => return false,
+                    if is_non_positive(child, offset, non_negative) {
+                        continue;
                     }
+                    if !results[offset] {
+                        return false;
+                    }
+                    proven += 1;
                 }
                 proven == 1
             }
             MirRelationExpr::Union { .. } => is_proven_intersection(expr, index, results, depends),
             _ => false,
+        }
+    }
+}
+
+/// Whether `expr`, at post-order `index`, is the negation of a non-negative
+/// collection, possibly below operators that keep each accumulation's sign.
+///
+/// The optimizer pushes `Negate` below `Map`, `Filter` and `Project`, so the
+/// subtracted input of an `EXCEPT ALL` need not have `Negate` at its root.
+fn is_non_positive(mut expr: &MirRelationExpr, mut index: usize, non_negative: &[bool]) -> bool {
+    loop {
+        match expr {
+            MirRelationExpr::Negate { .. } => return non_negative[index - 1],
+            // `Project` sums accumulations, which keeps them non-positive.
+            MirRelationExpr::Map { input, .. }
+            | MirRelationExpr::Filter { input, .. }
+            | MirRelationExpr::Project { input, .. }
+            | MirRelationExpr::ArrangeBy { input, .. } => {
+                expr = &**input;
+                index -= 1;
+            }
+            _ => return false,
         }
     }
 }
@@ -158,13 +182,14 @@ fn children<'a>(
 }
 
 /// Recognizes `A INTERSECT ALL B` as planned,
-/// `Union(A, Negate(Threshold(Union(A, Negate(B)))))` with either union's
-/// inputs in either order, and proves it if `A` or `B` is proven.
+/// `Union(A, Negate(Threshold(Union(A, Y))))` with either union's inputs in
+/// either order, and proves it if `A` is proven, or if `Y` is `Negate(B)` and
+/// `B` is proven.
 ///
-/// The expression accumulates to `a - max(0, a - b)`, which is `min(a, b)`
-/// for every `a` and `b`, so it is at most whichever input is proven. This
-/// relies on both occurrences of `A` being structurally equal, and so
-/// evaluating to the same collection.
+/// The expression accumulates to `a - max(0, a + y)`, which is at most `a` for
+/// every `y`. With `y = -b` it is `min(a, b)`, so also at most `b`. Both rely on
+/// the two occurrences of `A` being structurally equal, and so evaluating to
+/// the same collection.
 fn is_proven_intersection(
     expr: &MirRelationExpr,
     index: usize,
@@ -191,13 +216,14 @@ fn is_proven_intersection(
         let [inner_first, inner_second] = inner.as_slice() else {
             continue;
         };
-        for ((a_copy, _), (negated_b, negated_b_offset)) in
+        for ((a_copy, _), (y, y_offset)) in
             [(inner_first, inner_second), (inner_second, inner_first)]
         {
-            let MirRelationExpr::Negate { .. } = negated_b else {
+            if a_copy != a {
                 continue;
-            };
-            if a_copy == a && (results[*a_offset] || results[negated_b_offset - 1]) {
+            }
+            let b_proven = matches!(y, MirRelationExpr::Negate { .. }) && results[y_offset - 1];
+            if results[*a_offset] || b_proven {
                 return true;
             }
         }
