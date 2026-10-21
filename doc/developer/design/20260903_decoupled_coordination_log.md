@@ -43,7 +43,7 @@ identifies unnecessary protection-index reconstruction during empty storage
 cleanup. The correction is in `0286e789`. Formatting, catalog Clippy and all
 35 catalog transaction tests pass on scratch.
 
-The active slice is publication scheduling and atomic maintenance. On-demand
+Publication scheduling and atomic maintenance are implemented. On-demand
 replica grants must not postpone pending advancement. Regression revision
 `9627cb68` pins an already-due maintenance deadline across acquisition, and
 `7a227491` preserves that deadline. The regression fails before the fix and
@@ -68,6 +68,15 @@ comparison verifies progress without isolating each change's traffic contributio
 Evidence and limitations are in `scratch/combined-publication/report.md`.
 Production defaults remain unchanged. This is not the original-budget CI
 contention workload and does not close its outstanding SQL timeouts.
+
+CI140090 at `bd7efcbf` is incomplete as verification: widespread GitHub/GHCR
+connectivity failures prevent tests or post-test annotation. Checks parallel 2
+passes on an 8-CPU/16-GiB host, but with a different seed from the controlled
+comparison. Shard 1 runs SQL, then stops reporting SQL progress for about 18
+minutes before its job timeout. Watchdog warnings, publication conflicts and
+late Persist delays do not identify the blocking owner. No logged OOM or process
+exit establishes a cause. Keep that runtime failure separate from CI connectivity.
+Evidence is under `scratch/combined-publication/ci140090-parallel{1,2}/`.
 
 Further [asynchronous adapter catalog ownership](20260903_decoupled_coordination.md#adapter-catalog-ownership)
 work is on hold at Aljoscha's request. The owner is not implemented. The bounded
