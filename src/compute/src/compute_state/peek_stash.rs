@@ -19,7 +19,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::error::InvalidUsage;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{PersistLocation, ShardId};
-use mz_repr::{RelationDesc, Timestamp};
+use mz_repr::{Diff, RelationDesc, Row, Timestamp};
 use mz_storage_types::sources::SourceData;
 use timely::progress::Antichain;
 use tokio::runtime::Handle;
@@ -63,15 +63,18 @@ pub(super) enum StashError {
 pub(super) struct StashUpload {
     /// The description the stashed response reports, and the schema the batch is written under.
     relation_desc: RelationDesc,
-    /// The shard the batch belongs to, derived from the peek's uuid so that a reader holding the
-    /// response can find it.
+    /// The shard the batch belongs to. A peek derives it from its uuid with [`stash_shard_id`] so
+    /// that a reader holding the response can find it.
     shard_id: ShardId,
     /// The parts persist has taken so far. Taken by whichever of [`StashUpload::finish`] and
     /// [`StashUpload::abandon`] gets there first, and a `None` says the parts are accounted for
     /// and nothing is left to delete.
     batch_builder: Option<BatchBuilder<SourceData, (), Timestamp, i64>>,
-    /// The upper the batch is finished at, one step beyond the timestamp every row is written at.
+    /// The upper the batch is finished at.
     upper: Antichain<Timestamp>,
+    /// Whether any update has been written, which tells [`StashUpload::finish_stashed`] there is
+    /// no batch to hand back.
+    wrote_updates: bool,
     /// Rows written so far, counting a row with a diff of `n` as `n` rows, which is how the
     /// finishing counts them.
     num_rows: u64,
@@ -89,6 +92,12 @@ pub(super) struct StashUpload {
 /// takes it, and neither runs twice.
 const BUILDER_TAKEN: &str = "an upload holds its builder until it is finished or abandoned";
 
+/// The shard a peek's stashed batch belongs to.
+pub(crate) fn stash_shard_id(uuid: Uuid) -> ShardId {
+    let shard_id = format!("s{}", uuid);
+    ShardId::try_from(shard_id).expect("can parse")
+}
+
 impl StashUpload {
     /// Opens an upload for the peek `peek_uuid` identifies.
     ///
@@ -100,22 +109,45 @@ impl StashUpload {
         peek_uuid: Uuid,
         relation_desc: RelationDesc,
     ) -> Result<Self, StashError> {
+        let result_ts = Timestamp::default();
+        Self::open_range(
+            persist_clients,
+            persist_location,
+            batch_max_runs,
+            stash_shard_id(peek_uuid),
+            relation_desc,
+            Antichain::from_elem(result_ts),
+            Antichain::from_elem(result_ts.step_forward()),
+        )
+        .await
+    }
+
+    /// Opens an upload that writes to `shard_id` a batch over `[lower, upper)`.
+    ///
+    /// Updates may carry any time in the range and any nonzero diff. The bounds are enforced by
+    /// persist: [`StashUpload::push_update`] refuses a time before `lower` and
+    /// [`StashUpload::finish_stashed`] refuses a batch holding a time at or beyond `upper`.
+    ///
+    /// Fails when the stash location does not open, in which case nothing has been written.
+    pub(crate) async fn open_range(
+        persist_clients: &PersistClientCache,
+        persist_location: PersistLocation,
+        batch_max_runs: usize,
+        shard_id: ShardId,
+        relation_desc: RelationDesc,
+        lower: Antichain<Timestamp>,
+        upper: Antichain<Timestamp>,
+    ) -> Result<Self, StashError> {
         let client = persist_clients
             .open(persist_location)
             .await
             .map_err(StashError::OpenLocation)?;
 
-        let shard_id = format!("s{}", peek_uuid);
-        let shard_id = ShardId::try_from(shard_id).expect("can parse");
         let write_schemas: Schemas<SourceData, ()> = Schemas {
             id: None,
             key: Arc::new(relation_desc.clone()),
             val: Arc::new(UnitSchema),
         };
-
-        let result_ts = Timestamp::default();
-        let lower = Antichain::from_elem(result_ts);
-        let upper = Antichain::from_elem(result_ts.step_forward());
 
         // We have to use SourceData, which is a wrapper around a Result<Row,
         // DataflowError>, because the bare columnar Row encoder doesn't support
@@ -136,10 +168,41 @@ impl StashUpload {
             shard_id,
             batch_builder: Some(batch_builder),
             upper,
+            wrote_updates: false,
             num_rows: 0,
             wrote_parts: false,
             runtime: Handle::current(),
         })
+    }
+
+    /// Writes one update to the stash.
+    ///
+    /// Fails where persist rejects the write, which leaves the upload unusable.
+    #[cfg_attr(not(test), expect(dead_code, reason = "no caller outside tests"))]
+    pub(crate) async fn push_update(
+        &mut self,
+        row: &Row,
+        time: Timestamp,
+        diff: Diff,
+    ) -> Result<(), StashError> {
+        self.write(&SourceData(Ok(row.clone())), time, diff.into_inner())
+            .await
+    }
+
+    async fn write(
+        &mut self,
+        data: &SourceData,
+        time: Timestamp,
+        diff: i64,
+    ) -> Result<(), StashError> {
+        let batch_builder = self.batch_builder.as_mut().expect(BUILDER_TAKEN);
+        let added = batch_builder
+            .add(data, &(), &time, &diff)
+            .await
+            .map_err(StashError::WriteRow)?;
+        self.wrote_updates = true;
+        self.wrote_parts |= matches!(added, Added::RecordAndParts);
+        Ok(())
     }
 
     /// Writes `rows` to the stash.
@@ -150,17 +213,10 @@ impl StashUpload {
     /// Fails where persist rejects the write, which leaves the upload unusable and the rows it
     /// holds unanswerable.
     pub(super) async fn push(&mut self, rows: RowBatch) -> Result<(), StashError> {
-        let batch_builder = self.batch_builder.as_mut().expect(BUILDER_TAKEN);
-
         for (row, diff) in rows {
             self.num_rows += u64::from(NonZeroU64::try_from(diff).expect("diff fits into u64"));
-            let diff: i64 = diff.into();
-
-            let added = batch_builder
-                .add(&SourceData(Ok(row)), &(), &Timestamp::default(), &diff)
-                .await
-                .map_err(StashError::WriteRow)?;
-            self.wrote_parts |= matches!(added, Added::RecordAndParts);
+            self.write(&SourceData(Ok(row)), Timestamp::default(), diff.into())
+                .await?;
         }
 
         Ok(())
@@ -173,7 +229,7 @@ impl StashUpload {
     ///
     /// Fails where persist rejects the batch, which takes the parts with it: persist keeps the
     /// builder and hands back no handle to what it holds. Only a batch whose bounds do not admit
-    /// its own updates is refused, which this upload's fixed lower, upper and timestamp cannot
+    /// its own updates is refused, which an upload opened by [`StashUpload::open`] cannot
     /// produce.
     pub(super) async fn finish(mut self) -> Result<PeekResponse, StashError> {
         let delivered = self.finish_batch().await?;
@@ -188,6 +244,25 @@ impl StashUpload {
             inline_rows: Vec::new(),
         };
         Ok(PeekResponse::Stashed(Box::new(stashed_response)))
+    }
+
+    /// Finishes the batch and hands it to the caller, or returns `None` when no update was pushed.
+    ///
+    /// The caller owns the batch and must transmit or delete it, since a batch dropped without
+    /// either leaves its blobs behind.
+    ///
+    /// Fails where persist rejects the batch, which takes the parts with it, as for
+    /// [`StashUpload::finish`]. That includes a batch holding a time at or beyond the upper.
+    #[cfg_attr(not(test), expect(dead_code, reason = "no caller outside tests"))]
+    pub(crate) async fn finish_stashed(
+        mut self,
+    ) -> Result<Option<Batch<SourceData, (), Timestamp, i64>>, StashError> {
+        if !self.wrote_updates {
+            // Nothing was written, so the builder holds no part and dropping it reclaims all.
+            drop(self.batch_builder.take());
+            return Ok(None);
+        }
+        Ok(Some(self.finish_batch().await?.take()))
     }
 
     /// Finishes the batch as work of its own, and leaves the upload holding no parts.
