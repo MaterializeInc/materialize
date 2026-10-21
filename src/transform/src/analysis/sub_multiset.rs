@@ -11,6 +11,8 @@
 
 use std::collections::BTreeSet;
 
+use itertools::Itertools;
+
 use mz_expr::{Id, MirRelationExpr};
 use mz_repr::GlobalId;
 use mz_repr::optimize::OptimizerFeatures;
@@ -178,7 +180,7 @@ fn children<'a>(
         .children_of_rev(index, expr.children().count())
         .collect();
     offsets.reverse();
-    expr.children().zip(offsets).collect()
+    expr.children().zip_eq(offsets).collect()
 }
 
 /// Recognizes `A INTERSECT ALL B` as planned,
