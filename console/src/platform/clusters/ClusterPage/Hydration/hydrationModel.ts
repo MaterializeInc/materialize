@@ -395,8 +395,10 @@ export function transformObjectHydrationSpans(
 }
 
 /** The object that worked longest, and how much objects waited for a slot. */
-export function summarizeObjectSpans(spans: ObjectHydrationSpan[]) {
-  const slowest = spans.reduce<ObjectHydrationSpan | undefined>(
+export function summarizeObjectSpans<Span extends ObjectHydrationSpan>(
+  spans: Span[],
+) {
+  const slowest = spans.reduce<Span | undefined>(
     (longest, span) =>
       (span.workingMs ?? 0) > (longest?.workingMs ?? -1) ? span : longest,
     undefined,
