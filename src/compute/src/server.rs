@@ -742,6 +742,7 @@ impl<'w> Worker<'w> {
             if let Some(mut compute_state) = self.activate_compute() {
                 compute_state.process_peeks();
                 compute_state.process_subscribes();
+                compute_state.process_batched_subscribes();
                 compute_state.process_copy_tos();
             }
         }
@@ -1244,18 +1245,12 @@ impl<'w> Worker<'w> {
                 //
                 // Dropping the tokens of active subscribe and copy-tos makes them place
                 // `DroppedAt` responses into the respective response buffer. We drop those buffers
-                // in the next step, which ensures that we don't send out `DroppedAt` responses for
+                // below, which ensures that we don't send out `DroppedAt` responses for
                 // subscribe/copy-tos dropped during reconciliation.
                 if !retained {
                     collection.sink_token = None;
                 }
             }
-
-            // We must drop the response buffers as they are global across all subscribe/copy-tos.
-            // If they were broken out by `GlobalId` then we could drop only the response buffers
-            // of dataflows we drop.
-            compute_state.subscribe_response_buffer = Rc::new(RefCell::new(Vec::new()));
-            compute_state.copy_to_response_buffer = Rc::new(RefCell::new(Vec::new()));
 
             // The controller expects the logging collections to be readable from the minimum time
             // initially. We cannot recreate the logging arrangements without restarting the
@@ -1275,6 +1270,11 @@ impl<'w> Worker<'w> {
                     compute_state.traces.set(*id, padded);
                 }
             }
+
+            // We must drop the response buffers as they are global across all subscribe/copy-tos.
+            // If they were broken out by `GlobalId` then we could drop only the response buffers
+            // of dataflows we drop.
+            compute_state.discard_queued_sink_responses();
         } else {
             todo_commands.clone_from(&new_commands);
         }

@@ -670,7 +670,7 @@ fn augment(
     // Splice the storage metadata into each sink export, mirroring how
     // `compute-client`'s `Instance::create_dataflow` fills the materialized-view
     // sink's `storage_metadata` from the storage controller. A subscribe carries no
-    // metadata; copy-to is not built by this driver.
+    // metadata; copy-to and batched subscribes are not built by this driver.
     let mut sink_exports = BTreeMap::new();
     for (id, sink) in lowered.sink_exports {
         let connection = match sink.connection {
@@ -689,6 +689,9 @@ fn augment(
             ComputeSinkConnection::MetricSink(conn) => ComputeSinkConnection::MetricSink(conn),
             ComputeSinkConnection::CopyToS3Oneshot(_) => {
                 anyhow::bail!("copy-to-s3 sink {id} is not implemented")
+            }
+            ComputeSinkConnection::BatchedSubscribe(_) => {
+                anyhow::bail!("batched subscribe sink {id} is not implemented")
             }
         };
         sink_exports.insert(

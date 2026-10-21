@@ -16,6 +16,7 @@ use mz_storage_types::connections::aws::AwsConnection;
 use mz_storage_types::sinks::S3UploadInfo;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
+use uuid::Uuid;
 
 use crate::plan::scalar::LirScalarExpr;
 
@@ -52,6 +53,8 @@ pub struct ComputeSinkDesc<S: 'static = ()> {
 pub enum ComputeSinkConnection<S: 'static = ()> {
     /// TODO(database-issues#7533): Add documentation.
     Subscribe(SubscribeSinkConnection),
+    /// A subscribe that reports its output as batches of descriptions.
+    BatchedSubscribe(BatchedSubscribeSinkConnection),
     /// TODO(database-issues#7533): Add documentation.
     MaterializedView(MaterializedViewSinkConnection<S>),
     /// A compute sink to do a oneshot copy to s3.
@@ -65,6 +68,7 @@ impl<S> ComputeSinkConnection<S> {
     pub fn name(&self) -> &'static str {
         match self {
             ComputeSinkConnection::Subscribe(_) => "subscribe",
+            ComputeSinkConnection::BatchedSubscribe(_) => "batched_subscribe",
             ComputeSinkConnection::MaterializedView(_) => "materialized_view",
             ComputeSinkConnection::CopyToS3Oneshot(_) => "copy_to_s3_oneshot",
             ComputeSinkConnection::MetricSink(_) => "metric_sink",
@@ -86,6 +90,17 @@ impl<S> ComputeSinkConnection<S> {
 pub struct SubscribeSinkConnection {
     /// An ordering for the data in the subscribe.
     pub output: Vec<ColumnOrder>,
+}
+
+/// Connection attributes of a subscribe that reports its output as batches of descriptions.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct BatchedSubscribeSinkConnection {
+    /// Names the stash shard that the subscribe's stashed shares are written to.
+    pub stash_id: Uuid,
+    /// The earliest time the subscribe reports updates at.
+    pub start: Timestamp,
+    /// The description of the subscribed relation.
+    pub output_desc: RelationDesc,
 }
 
 /// Connection for a sink that publishes rows into the in-process Prometheus metrics registry.

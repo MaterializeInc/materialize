@@ -26,6 +26,7 @@ serde.workspace = true
 serde_json.workspace = true
 timely.workspace = true
 tracing.workspace = true
+uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 chrono.workspace = true
