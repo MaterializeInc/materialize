@@ -1577,6 +1577,39 @@ def workflow_pg_snapshot_freshness_release(c: Composition) -> None:
         c.run_testdrive_files("pg-snapshot-freshness/04-release.td")
 
 
+def workflow_pg_seal_on_replay(c: Composition) -> None:
+    """Test that a PostgreSQL table whose incompatible schema change is found
+    while the replication slot replays changes the table already committed is
+    sealed with its error. A held snapshot of another table keeps the slot
+    behind the committed changes across a restart."""
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(t_paused)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "postgres", "clusterd1")
+
+        # The validation that runs when the stream starts precedes the schema
+        # change, and no other one runs before the restart.
+        c.sql(
+            "ALTER SYSTEM SET pg_schema_validation_interval = '1h'",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.run_testdrive_files("pg-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files("pg-snapshot-freshness/02-add-tables.td")
+        c.run_testdrive_files("pg-seal-on-replay/01-alter-schema.td")
+
+        c.kill("clusterd1")
+        c.up("clusterd1")
+        c.run_testdrive_files("pg-seal-on-replay/02-verify.td")
+
+
 def workflow_sink_failure(c: Composition) -> None:
     """Test specific sink failure scenarios"""
 
