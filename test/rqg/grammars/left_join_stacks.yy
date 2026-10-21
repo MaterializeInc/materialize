@@ -24,7 +24,7 @@ query:
     dim_alias.dx_col AS c09,
     dim_alias.dx_col AS c10
   FROM
-    star.ft as ft
+    fact_table as ft
     left_join1
     left_join2
     left_join3
@@ -81,6 +81,13 @@ pk_col:
   | k2
 ;
 
+fact_table:
+    star.ft
+  | star.ft
+  | star.ft
+  | star.ft_pk
+;
+
 dim_table:
     star.d1
   | star.d2
@@ -90,126 +97,136 @@ dim_table:
   | star.d3_pk
 ;
 
+# Mostly pure LEFT JOIN stacks (the variadic-outer-join lowering target), but
+# occasionally an INNER JOIN in the middle, which splits the stack and
+# exercises reassociation across the lowering boundary.
+
+join_kw:
+    LEFT JOIN | LEFT JOIN | LEFT JOIN | LEFT JOIN
+  | LEFT JOIN | LEFT JOIN | LEFT JOIN
+  | JOIN
+;
+
 left_join1:
   # Join against ft:
-    LEFT JOIN dim_table AS d1 ON( ft.fk1 = d1.pk1 )
-  | LEFT JOIN dim_table AS d1 ON( ft.fk1 = d1.pk1 AND ft.fk2 = d1.pk2 )
-  | LEFT JOIN dim_table AS d1 ON( ft.fk1 = d1.pk2 AND ft.fk2 = d1.pk1 )
-  | LEFT JOIN dim_table AS d1 ON( ft.fk1 = d1.pk1 AND ft.fk1 = d1.pk2 )
+    join_kw dim_table AS d1 ON( ft.fk1 = d1.pk1 )
+  | join_kw dim_table AS d1 ON( ft.fk1 = d1.pk1 AND ft.fk2 = d1.pk2 )
+  | join_kw dim_table AS d1 ON( ft.fk1 = d1.pk2 AND ft.fk2 = d1.pk1 )
+  | join_kw dim_table AS d1 ON( ft.fk1 = d1.pk1 AND ft.fk1 = d1.pk2 )
 ;
 
 left_join2:
   # Join against ft:
-    LEFT JOIN dim_table AS d2 ON( ft.fk1 = d2.pk1 )
-  | LEFT JOIN dim_table AS d2 ON( ft.fk1 = d2.pk1 AND ft.fk2 = d2.pk2 )
-  | LEFT JOIN dim_table AS d2 ON( ft.fk1 = d2.pk2 AND ft.fk2 = d2.pk1 )
-  | LEFT JOIN dim_table AS d2 ON( ft.fk1 = d2.pk1 AND ft.fk1 = d2.pk2 )
+    join_kw dim_table AS d2 ON( ft.fk1 = d2.pk1 )
+  | join_kw dim_table AS d2 ON( ft.fk1 = d2.pk1 AND ft.fk2 = d2.pk2 )
+  | join_kw dim_table AS d2 ON( ft.fk1 = d2.pk2 AND ft.fk2 = d2.pk1 )
+  | join_kw dim_table AS d2 ON( ft.fk1 = d2.pk1 AND ft.fk1 = d2.pk2 )
   # Join against d1:
-  | LEFT JOIN dim_table AS d2 ON( d1.pk1 = d2.pk1 )
-  | LEFT JOIN dim_table AS d2 ON( d1.pk1 = d2.pk1 AND d1.pk2 = d2.pk2 )
-  | LEFT JOIN dim_table AS d2 ON( d1.pk1 = d2.pk2 AND d1.pk2 = d2.pk1 )
-  | LEFT JOIN dim_table AS d2 ON( d1.pk1 = d2.pk1 AND d1.pk1 = d2.pk2 )
+  | join_kw dim_table AS d2 ON( d1.pk1 = d2.pk1 )
+  | join_kw dim_table AS d2 ON( d1.pk1 = d2.pk1 AND d1.pk2 = d2.pk2 )
+  | join_kw dim_table AS d2 ON( d1.pk1 = d2.pk2 AND d1.pk2 = d2.pk1 )
+  | join_kw dim_table AS d2 ON( d1.pk1 = d2.pk1 AND d1.pk1 = d2.pk2 )
 ;
 
 left_join3:
   # Join against ft:
-    LEFT JOIN dim_table AS d3 ON( ft.fk1 = d3.pk1 )
-  | LEFT JOIN dim_table AS d3 ON( ft.fk1 = d3.pk1 AND ft.fk2 = d3.pk2 )
-  | LEFT JOIN dim_table AS d3 ON( ft.fk1 = d3.pk2 AND ft.fk2 = d3.pk1 )
-  | LEFT JOIN dim_table AS d3 ON( ft.fk1 = d3.pk1 AND ft.fk1 = d3.pk2 )
-  | LEFT JOIN dim_table AS d3 ON( ft.fk1 = d3.pk1 AND ft.fk2 = d3.pk1 ) # VOJ lowering for this is excluded in materialize#26709
+    join_kw dim_table AS d3 ON( ft.fk1 = d3.pk1 )
+  | join_kw dim_table AS d3 ON( ft.fk1 = d3.pk1 AND ft.fk2 = d3.pk2 )
+  | join_kw dim_table AS d3 ON( ft.fk1 = d3.pk2 AND ft.fk2 = d3.pk1 )
+  | join_kw dim_table AS d3 ON( ft.fk1 = d3.pk1 AND ft.fk1 = d3.pk2 )
+  | join_kw dim_table AS d3 ON( ft.fk1 = d3.pk1 AND ft.fk2 = d3.pk1 ) # VOJ lowering for this is excluded in materialize#26709
   # Join against d1:
-  | LEFT JOIN dim_table AS d3 ON( d1.pk1 = d3.pk1 )
-  | LEFT JOIN dim_table AS d3 ON( d1.pk1 = d3.pk1 AND d1.pk2 = d3.pk2 )
-  | LEFT JOIN dim_table AS d3 ON( d1.pk1 = d3.pk2 AND d1.pk2 = d3.pk1 )
-  | LEFT JOIN dim_table AS d3 ON( d1.pk1 = d3.pk1 AND d1.pk1 = d3.pk2 )
+  | join_kw dim_table AS d3 ON( d1.pk1 = d3.pk1 )
+  | join_kw dim_table AS d3 ON( d1.pk1 = d3.pk1 AND d1.pk2 = d3.pk2 )
+  | join_kw dim_table AS d3 ON( d1.pk1 = d3.pk2 AND d1.pk2 = d3.pk1 )
+  | join_kw dim_table AS d3 ON( d1.pk1 = d3.pk1 AND d1.pk1 = d3.pk2 )
   # Join against d2:
-  | LEFT JOIN dim_table AS d3 ON( d2.pk1 = d3.pk1 )
-  | LEFT JOIN dim_table AS d3 ON( d2.pk1 = d3.pk1 AND d2.pk2 = d3.pk2 )
-  | LEFT JOIN dim_table AS d3 ON( d2.pk1 = d3.pk2 AND d2.pk2 = d3.pk1 )
-  | LEFT JOIN dim_table AS d3 ON( d2.pk1 = d3.pk1 AND d2.pk1 = d3.pk2 )
+  | join_kw dim_table AS d3 ON( d2.pk1 = d3.pk1 )
+  | join_kw dim_table AS d3 ON( d2.pk1 = d3.pk1 AND d2.pk2 = d3.pk2 )
+  | join_kw dim_table AS d3 ON( d2.pk1 = d3.pk2 AND d2.pk2 = d3.pk1 )
+  | join_kw dim_table AS d3 ON( d2.pk1 = d3.pk1 AND d2.pk1 = d3.pk2 )
 ;
 
 left_join4:
   # Join against ft:
-    LEFT JOIN dim_table AS d4 ON( ft.fk1 = d4.pk1 )
-  | LEFT JOIN dim_table AS d4 ON( ft.fk1 = d4.pk1 AND ft.fk2 = d4.pk2 )
-  | LEFT JOIN dim_table AS d4 ON( ft.fk1 = d4.pk2 AND ft.fk2 = d4.pk1 )
-  | LEFT JOIN dim_table AS d4 ON( ft.fk1 = d4.pk1 AND ft.fk1 = d4.pk2 )
+    join_kw dim_table AS d4 ON( ft.fk1 = d4.pk1 )
+  | join_kw dim_table AS d4 ON( ft.fk1 = d4.pk1 AND ft.fk2 = d4.pk2 )
+  | join_kw dim_table AS d4 ON( ft.fk1 = d4.pk2 AND ft.fk2 = d4.pk1 )
+  | join_kw dim_table AS d4 ON( ft.fk1 = d4.pk1 AND ft.fk1 = d4.pk2 )
   # Join against d1:
-  | LEFT JOIN dim_table AS d4 ON( d1.pk1 = d4.pk1 )
-  | LEFT JOIN dim_table AS d4 ON( d1.pk1 = d4.pk1 AND d1.pk2 = d4.pk2 )
-  | LEFT JOIN dim_table AS d4 ON( d1.pk1 = d4.pk2 AND d1.pk2 = d4.pk1 )
-  | LEFT JOIN dim_table AS d4 ON( d1.pk1 = d4.pk1 AND d1.pk1 = d4.pk2 )
+  | join_kw dim_table AS d4 ON( d1.pk1 = d4.pk1 )
+  | join_kw dim_table AS d4 ON( d1.pk1 = d4.pk1 AND d1.pk2 = d4.pk2 )
+  | join_kw dim_table AS d4 ON( d1.pk1 = d4.pk2 AND d1.pk2 = d4.pk1 )
+  | join_kw dim_table AS d4 ON( d1.pk1 = d4.pk1 AND d1.pk1 = d4.pk2 )
   # Join against d2:
-  | LEFT JOIN dim_table AS d4 ON( d2.pk1 = d4.pk1 )
-  | LEFT JOIN dim_table AS d4 ON( d2.pk1 = d4.pk1 AND d2.pk2 = d4.pk2 )
-  | LEFT JOIN dim_table AS d4 ON( d2.pk1 = d4.pk2 AND d2.pk2 = d4.pk1 )
-  | LEFT JOIN dim_table AS d4 ON( d2.pk1 = d4.pk1 AND d2.pk1 = d4.pk2 )
+  | join_kw dim_table AS d4 ON( d2.pk1 = d4.pk1 )
+  | join_kw dim_table AS d4 ON( d2.pk1 = d4.pk1 AND d2.pk2 = d4.pk2 )
+  | join_kw dim_table AS d4 ON( d2.pk1 = d4.pk2 AND d2.pk2 = d4.pk1 )
+  | join_kw dim_table AS d4 ON( d2.pk1 = d4.pk1 AND d2.pk1 = d4.pk2 )
   # Join against d3:
-  | LEFT JOIN dim_table AS d4 ON( d3.pk1 = d4.pk1 )
-  | LEFT JOIN dim_table AS d4 ON( d3.pk1 = d4.pk1 AND d3.pk2 = d4.pk2 )
-  | LEFT JOIN dim_table AS d4 ON( d3.pk1 = d4.pk2 AND d3.pk2 = d4.pk1 )
-  | LEFT JOIN dim_table AS d4 ON( d3.pk1 = d4.pk1 AND d3.pk1 = d4.pk2 )
+  | join_kw dim_table AS d4 ON( d3.pk1 = d4.pk1 )
+  | join_kw dim_table AS d4 ON( d3.pk1 = d4.pk1 AND d3.pk2 = d4.pk2 )
+  | join_kw dim_table AS d4 ON( d3.pk1 = d4.pk2 AND d3.pk2 = d4.pk1 )
+  | join_kw dim_table AS d4 ON( d3.pk1 = d4.pk1 AND d3.pk1 = d4.pk2 )
 ;
 
 left_join5:
   # Join against ft:
-    LEFT JOIN dim_table AS d5 ON( ft.fk1 = d5.pk1 )
-  | LEFT JOIN dim_table AS d5 ON( ft.fk1 = d5.pk1 AND ft.fk2 = d5.pk2 )
-  | LEFT JOIN dim_table AS d5 ON( ft.fk1 = d5.pk2 AND ft.fk2 = d5.pk1 )
-  | LEFT JOIN dim_table AS d5 ON( ft.fk1 = d5.pk1 AND ft.fk1 = d5.pk2 )
+    join_kw dim_table AS d5 ON( ft.fk1 = d5.pk1 )
+  | join_kw dim_table AS d5 ON( ft.fk1 = d5.pk1 AND ft.fk2 = d5.pk2 )
+  | join_kw dim_table AS d5 ON( ft.fk1 = d5.pk2 AND ft.fk2 = d5.pk1 )
+  | join_kw dim_table AS d5 ON( ft.fk1 = d5.pk1 AND ft.fk1 = d5.pk2 )
   # Join against d1:
-  | LEFT JOIN dim_table AS d5 ON( d1.pk1 = d5.pk1 )
-  | LEFT JOIN dim_table AS d5 ON( d1.pk1 = d5.pk1 AND d1.pk2 = d5.pk2 )
-  | LEFT JOIN dim_table AS d5 ON( d1.pk1 = d5.pk2 AND d1.pk2 = d5.pk1 )
-  | LEFT JOIN dim_table AS d5 ON( d1.pk1 = d5.pk1 AND d1.pk1 = d5.pk2 )
+  | join_kw dim_table AS d5 ON( d1.pk1 = d5.pk1 )
+  | join_kw dim_table AS d5 ON( d1.pk1 = d5.pk1 AND d1.pk2 = d5.pk2 )
+  | join_kw dim_table AS d5 ON( d1.pk1 = d5.pk2 AND d1.pk2 = d5.pk1 )
+  | join_kw dim_table AS d5 ON( d1.pk1 = d5.pk1 AND d1.pk1 = d5.pk2 )
   # Join against d2:
-  | LEFT JOIN dim_table AS d5 ON( d2.pk1 = d5.pk1 )
-  | LEFT JOIN dim_table AS d5 ON( d2.pk1 = d5.pk1 AND d2.pk2 = d5.pk2 )
-  | LEFT JOIN dim_table AS d5 ON( d2.pk1 = d5.pk2 AND d2.pk2 = d5.pk1 )
-  | LEFT JOIN dim_table AS d5 ON( d2.pk1 = d5.pk1 AND d2.pk1 = d5.pk2 )
+  | join_kw dim_table AS d5 ON( d2.pk1 = d5.pk1 )
+  | join_kw dim_table AS d5 ON( d2.pk1 = d5.pk1 AND d2.pk2 = d5.pk2 )
+  | join_kw dim_table AS d5 ON( d2.pk1 = d5.pk2 AND d2.pk2 = d5.pk1 )
+  | join_kw dim_table AS d5 ON( d2.pk1 = d5.pk1 AND d2.pk1 = d5.pk2 )
   # Join against d3:
-  | LEFT JOIN dim_table AS d5 ON( d3.pk1 = d5.pk1 )
-  | LEFT JOIN dim_table AS d5 ON( d3.pk1 = d5.pk1 AND d3.pk2 = d5.pk2 )
-  | LEFT JOIN dim_table AS d5 ON( d3.pk1 = d5.pk2 AND d3.pk2 = d5.pk1 )
-  | LEFT JOIN dim_table AS d5 ON( d3.pk1 = d5.pk1 AND d3.pk1 = d5.pk2 )
+  | join_kw dim_table AS d5 ON( d3.pk1 = d5.pk1 )
+  | join_kw dim_table AS d5 ON( d3.pk1 = d5.pk1 AND d3.pk2 = d5.pk2 )
+  | join_kw dim_table AS d5 ON( d3.pk1 = d5.pk2 AND d3.pk2 = d5.pk1 )
+  | join_kw dim_table AS d5 ON( d3.pk1 = d5.pk1 AND d3.pk1 = d5.pk2 )
   # Join against d4:
-  | LEFT JOIN dim_table AS d5 ON( d4.pk1 = d5.pk1 )
-  | LEFT JOIN dim_table AS d5 ON( d4.pk1 = d5.pk1 AND d4.pk2 = d5.pk2 )
-  | LEFT JOIN dim_table AS d5 ON( d4.pk1 = d5.pk2 AND d4.pk2 = d5.pk1 )
-  | LEFT JOIN dim_table AS d5 ON( d4.pk1 = d5.pk1 AND d4.pk1 = d5.pk2 )
+  | join_kw dim_table AS d5 ON( d4.pk1 = d5.pk1 )
+  | join_kw dim_table AS d5 ON( d4.pk1 = d5.pk1 AND d4.pk2 = d5.pk2 )
+  | join_kw dim_table AS d5 ON( d4.pk1 = d5.pk2 AND d4.pk2 = d5.pk1 )
+  | join_kw dim_table AS d5 ON( d4.pk1 = d5.pk1 AND d4.pk1 = d5.pk2 )
 ;
 
 left_join6:
   # Join against ft:
-    LEFT JOIN dim_table AS d6 ON( ft.fk1 = d6.pk1 )
-  | LEFT JOIN dim_table AS d6 ON( ft.fk1 = d6.pk1 AND ft.fk2 = d6.pk2 )
-  | LEFT JOIN dim_table AS d6 ON( ft.fk1 = d6.pk2 AND ft.fk2 = d6.pk1 )
-  | LEFT JOIN dim_table AS d6 ON( ft.fk1 = d6.pk1 AND ft.fk1 = d6.pk2 )
+    join_kw dim_table AS d6 ON( ft.fk1 = d6.pk1 )
+  | join_kw dim_table AS d6 ON( ft.fk1 = d6.pk1 AND ft.fk2 = d6.pk2 )
+  | join_kw dim_table AS d6 ON( ft.fk1 = d6.pk2 AND ft.fk2 = d6.pk1 )
+  | join_kw dim_table AS d6 ON( ft.fk1 = d6.pk1 AND ft.fk1 = d6.pk2 )
   # Join against d1:
-  | LEFT JOIN dim_table AS d6 ON( d1.pk1 = d6.pk1 )
-  | LEFT JOIN dim_table AS d6 ON( d1.pk1 = d6.pk1 AND d1.pk2 = d6.pk2 )
-  | LEFT JOIN dim_table AS d6 ON( d1.pk1 = d6.pk2 AND d1.pk2 = d6.pk1 )
-  | LEFT JOIN dim_table AS d6 ON( d1.pk1 = d6.pk1 AND d1.pk1 = d6.pk2 )
+  | join_kw dim_table AS d6 ON( d1.pk1 = d6.pk1 )
+  | join_kw dim_table AS d6 ON( d1.pk1 = d6.pk1 AND d1.pk2 = d6.pk2 )
+  | join_kw dim_table AS d6 ON( d1.pk1 = d6.pk2 AND d1.pk2 = d6.pk1 )
+  | join_kw dim_table AS d6 ON( d1.pk1 = d6.pk1 AND d1.pk1 = d6.pk2 )
   # Join against d2:
-  | LEFT JOIN dim_table AS d6 ON( d2.pk1 = d6.pk1 )
-  | LEFT JOIN dim_table AS d6 ON( d2.pk1 = d6.pk1 AND d2.pk2 = d6.pk2 )
-  | LEFT JOIN dim_table AS d6 ON( d2.pk1 = d6.pk2 AND d2.pk2 = d6.pk1 )
-  | LEFT JOIN dim_table AS d6 ON( d2.pk1 = d6.pk1 AND d2.pk1 = d6.pk2 )
+  | join_kw dim_table AS d6 ON( d2.pk1 = d6.pk1 )
+  | join_kw dim_table AS d6 ON( d2.pk1 = d6.pk1 AND d2.pk2 = d6.pk2 )
+  | join_kw dim_table AS d6 ON( d2.pk1 = d6.pk2 AND d2.pk2 = d6.pk1 )
+  | join_kw dim_table AS d6 ON( d2.pk1 = d6.pk1 AND d2.pk1 = d6.pk2 )
   # Join against d3:
-  | LEFT JOIN dim_table AS d6 ON( d3.pk1 = d6.pk1 )
-  | LEFT JOIN dim_table AS d6 ON( d3.pk1 = d6.pk1 AND d3.pk2 = d6.pk2 )
-  | LEFT JOIN dim_table AS d6 ON( d3.pk1 = d6.pk2 AND d3.pk2 = d6.pk1 )
-  | LEFT JOIN dim_table AS d6 ON( d3.pk1 = d6.pk1 AND d3.pk1 = d6.pk2 )
+  | join_kw dim_table AS d6 ON( d3.pk1 = d6.pk1 )
+  | join_kw dim_table AS d6 ON( d3.pk1 = d6.pk1 AND d3.pk2 = d6.pk2 )
+  | join_kw dim_table AS d6 ON( d3.pk1 = d6.pk2 AND d3.pk2 = d6.pk1 )
+  | join_kw dim_table AS d6 ON( d3.pk1 = d6.pk1 AND d3.pk1 = d6.pk2 )
   # Join against d4:
-  | LEFT JOIN dim_table AS d6 ON( d4.pk1 = d6.pk1 )
-  | LEFT JOIN dim_table AS d6 ON( d4.pk1 = d6.pk1 AND d4.pk2 = d6.pk2 )
-  | LEFT JOIN dim_table AS d6 ON( d4.pk1 = d6.pk2 AND d4.pk2 = d6.pk1 )
-  | LEFT JOIN dim_table AS d6 ON( d4.pk1 = d6.pk1 AND d4.pk1 = d6.pk2 )
+  | join_kw dim_table AS d6 ON( d4.pk1 = d6.pk1 )
+  | join_kw dim_table AS d6 ON( d4.pk1 = d6.pk1 AND d4.pk2 = d6.pk2 )
+  | join_kw dim_table AS d6 ON( d4.pk1 = d6.pk2 AND d4.pk2 = d6.pk1 )
+  | join_kw dim_table AS d6 ON( d4.pk1 = d6.pk1 AND d4.pk1 = d6.pk2 )
   # Join against d5:
-  | LEFT JOIN dim_table AS d6 ON( d5.pk1 = d6.pk1 )
-  | LEFT JOIN dim_table AS d6 ON( d5.pk1 = d6.pk1 AND d5.pk2 = d6.pk2 )
-  | LEFT JOIN dim_table AS d6 ON( d5.pk1 = d6.pk2 AND d5.pk2 = d6.pk1 )
-  | LEFT JOIN dim_table AS d6 ON( d5.pk1 = d6.pk1 AND d5.pk1 = d6.pk2 )
+  | join_kw dim_table AS d6 ON( d5.pk1 = d6.pk1 )
+  | join_kw dim_table AS d6 ON( d5.pk1 = d6.pk1 AND d5.pk2 = d6.pk2 )
+  | join_kw dim_table AS d6 ON( d5.pk1 = d6.pk2 AND d5.pk2 = d6.pk1 )
+  | join_kw dim_table AS d6 ON( d5.pk1 = d6.pk1 AND d5.pk1 = d6.pk2 )
 ;
