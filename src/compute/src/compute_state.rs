@@ -79,6 +79,7 @@ use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
 
+mod description_iterator;
 mod error_scan;
 mod peek_budget;
 mod peek_metrics;

@@ -14,7 +14,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use mz_compute_client::protocol::response::PeekError;
 use mz_repr::fixed_length::ExtendDatums;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena};
 use timely::order::PartialOrder;
 
 use crate::compute_state::PeekRowIterationTracker;
@@ -445,10 +445,8 @@ where
         // before the borrow to ensure correct drop order.
         let maybe_literal;
         let mut borrow = self.datum_vec.borrow();
-        key_item.extend_datums(&arena, &mut borrow, None);
-        row_item.extend_datums(&arena, &mut borrow, None);
 
-        if let Some(literals) = &mut self.literals {
+        let literal = if let Some(literals) = &self.literals {
             // The peek was created from an IndexedFilter join. We have to add those columns
             // here that the join would add in a dataflow.
             //
@@ -458,14 +456,19 @@ where
             maybe_literal = literals
                 .peek()
                 .expect("literal position must be at a matching literal during row extraction");
-            maybe_literal.extend_datums(&arena, &mut borrow, None);
-        }
-        if let Some(result) = self
-            .map_filter_project
-            .evaluate_into(&mut borrow, &arena, &mut self.row_builder)
-            .map(|row| row.cloned())
-            .map_err(PeekError::from)?
-        {
+            Some(&maybe_literal)
+        } else {
+            None
+        };
+        if let Some(result) = evaluate_position(
+            &key_item,
+            &row_item,
+            literal,
+            &self.map_filter_project,
+            &arena,
+            &mut borrow,
+            &mut self.row_builder,
+        )? {
             let mut copies = Diff::ZERO;
             self.cursor.map_times(&self.storage, |time, diff| {
                 if time.less_equal(&self.peek_timestamp) {
@@ -530,6 +533,37 @@ where
 
         KeyStep::Advanced
     }
+}
+
+/// Evaluates `map_filter_project` on one cursor position.
+///
+/// The plan's input columns are the datums of `key`, then `val`, then `literal` if present. They
+/// are appended to `datums`, which must be empty on entry because the plan addresses columns from
+/// its start. On return `datums` also holds the columns the plan's maps appended. Returns
+/// `Ok(None)` if the plan filters the position out.
+pub(super) fn evaluate_position<'a, K, V, L>(
+    key: &'a K,
+    val: &'a V,
+    literal: Option<&'a L>,
+    map_filter_project: &'a mz_expr::SafeMfpPlan,
+    arena: &'a RowArena,
+    datums: &mut Vec<Datum<'a>>,
+    row_builder: &mut Row,
+) -> Result<Option<Row>, PeekError>
+where
+    K: ExtendDatums,
+    V: ExtendDatums,
+    L: ExtendDatums,
+{
+    key.extend_datums(arena, datums, None);
+    val.extend_datums(arena, datums, None);
+    if let Some(literal) = literal {
+        literal.extend_datums(arena, datums, None);
+    }
+    map_filter_project
+        .evaluate_into(datums, arena, row_builder)
+        .map(|row| row.cloned())
+        .map_err(PeekError::from)
 }
 
 #[cfg(test)]
