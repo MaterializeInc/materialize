@@ -8,27 +8,49 @@
 
 use std::time::{Duration, Instant};
 
-use differential_dataflow::trace::{Cursor, TraceReader};
+use differential_dataflow::trace::cursor::{CursorList, cursor_list};
+use differential_dataflow::trace::{BatchReader, Cursor, Navigable, TraceReader};
 use mz_compute_client::protocol::response::PeekError;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use timely::order::PartialOrder;
 use tracing::error;
 
 use crate::arrangement::manager::PaddedTrace;
+use crate::compute_state::description_iterator::DescriptionRange;
 use crate::compute_state::{PeekRowIterationTracker, peek_result_iterator};
+use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::ErrAgent;
 
 /// The error trace of an index, as
 /// [`TraceBundle::errs_mut`](crate::arrangement::manager::TraceBundle::errs_mut) hands it out.
 pub(super) type ErrsHandle = PaddedTrace<ErrAgent<Timestamp, Diff>>;
 
+/// The batch type of an index's error trace.
+pub(super) type ErrsBatch = <ErrsHandle as TraceReader>::Batch;
+
+/// Which error updates make a walk answer with an error.
+#[derive(Clone, Debug)]
+pub(super) enum ErrorFilter {
+    /// Updates at times less than or equal to the timestamp. A key accumulating to a negative
+    /// multiplicity is a defect of the trace.
+    AtOrBefore(Timestamp),
+    /// Updates at times the description range emits. Any nonzero accumulation of a key poisons
+    /// the description, negative ones included, because a description may begin after the
+    /// insertion that a retraction inside it cancels.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the batched subscribe sink is not wired up")
+    )]
+    Description(DescriptionRange),
+}
+
 /// A walk over an index peek's error trace, suspendable between cursor positions.
 ///
 /// Holds nothing of the ok trace or of the rows a peek returns. A peek reaches those only once
 /// this walk reports [`ErrorScanStep::Finished`] with an `Ok`.
-pub(super) struct ErrorScan {
-    cursor: peek_result_iterator::TraceCursor<ErrsHandle>,
-    storage: peek_result_iterator::TraceStorage<ErrsHandle>,
+pub(super) struct ErrorScan<B: Navigable = ErrsBatch> {
+    cursor: CursorList<B::Cursor>,
+    storage: Vec<B>,
     /// The limit spans this walk and the ok scan after it, so the count accrued here is handed
     /// on with [`ErrorScanStep::Finished`].
     row_iteration_tracker: PeekRowIterationTracker,
@@ -73,6 +95,33 @@ impl ErrorScan {
             scan_time: Duration::ZERO,
         }
     }
+}
+
+impl<B> ErrorScan<B>
+where
+    B: BatchReader<Time = Timestamp> + Navigable,
+    for<'a> B::Cursor: Cursor<
+            Key<'a> = &'a DataflowErrorSer,
+            Time = Timestamp,
+            TimeGat<'a>: PartialOrder<Timestamp>,
+            DiffGat<'a> = &'a Diff,
+        >,
+{
+    /// Opens a walk over held `batches`, which must include every held batch that overlaps the
+    /// filter.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the batched subscribe sink is not wired up")
+    )]
+    pub(super) fn from_batches(batches: Vec<B>) -> Self {
+        let (cursor, storage) = cursor_list(batches);
+        Self {
+            cursor,
+            storage,
+            row_iteration_tracker: PeekRowIterationTracker::new(None, 0),
+            scan_time: Duration::ZERO,
+        }
+    }
 
     /// Adopts the row-iteration limit that is in effect, without forgetting the rows the walk has
     /// already examined.
@@ -94,7 +143,7 @@ impl ErrorScan {
     /// outcome and drops the walk, so a finished peek stops pinning error batches.
     pub(super) fn step(
         &mut self,
-        peek_timestamp: Timestamp,
+        filter: &ErrorFilter,
         target_id: GlobalId,
         fuel: &mut usize,
     ) -> ErrorScanStep {
@@ -118,11 +167,17 @@ impl ErrorScan {
 
             let mut copies = Diff::ZERO;
             self.cursor.map_times(&self.storage, |time, diff| {
-                if time.less_equal(&peek_timestamp) {
+                let included = match filter {
+                    ErrorFilter::AtOrBefore(peek_timestamp) => time.less_equal(peek_timestamp),
+                    ErrorFilter::Description(range) => {
+                        range.contains(<B::Cursor as Cursor>::owned_time(time))
+                    }
+                };
+                if included {
                     copies += diff;
                 }
             });
-            if copies.is_negative() {
+            if copies.is_negative() && matches!(filter, ErrorFilter::AtOrBefore(_)) {
                 let error = self.cursor.key(&self.storage);
                 error!(
                     target = %target_id, diff = %copies, %error,
@@ -134,7 +189,7 @@ impl ErrorScan {
                     -copies, error,
                 ))));
             }
-            if copies.is_positive() {
+            if !copies.is_zero() {
                 let error = self.cursor.key(&self.storage).deserialize();
                 break ErrorScanStep::Finished(Err(error.into()));
             }

@@ -20,9 +20,13 @@ use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine};
 
 use super::*;
+use crate::compute_state::description_iterator::DescriptionRange;
 
 /// The time at which the peeks in these tests read.
 pub(crate) const PEEK_TIMESTAMP: Timestamp = Timestamp::new(1);
+
+/// The filter of a peek reading at [`PEEK_TIMESTAMP`].
+const AT_PEEK: ErrorFilter = ErrorFilter::AtOrBefore(PEEK_TIMESTAMP);
 
 /// The updates that make up an error trace, in the form its batcher takes them.
 pub(crate) type ErrorUpdates = Vec<((DataflowErrorSer, ()), Timestamp, Diff)>;
@@ -85,7 +89,7 @@ fn run_sliced(scan: &mut ErrorScan, fuel_per_step: usize) -> (ErrorScanStep, usi
     // test instead of hanging it.
     for calls in 1..=100 {
         let mut fuel = fuel_per_step;
-        let outcome = scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel);
+        let outcome = scan.step(&AT_PEEK, GlobalId::User(1), &mut fuel);
         consumed += fuel_per_step - fuel;
         if !matches!(outcome, ErrorScanStep::OutOfFuel) {
             return (outcome, consumed, calls);
@@ -113,7 +117,7 @@ fn error_scan_is_fueled_and_resumable() {
 
     let mut scan = error_scan(updates.clone(), None);
     let mut fuel = usize::MAX;
-    let unbudgeted = scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel);
+    let unbudgeted = scan.step(&AT_PEEK, GlobalId::User(1), &mut fuel);
     assert_eq!(unbudgeted, expected());
     assert_eq!(usize::MAX - fuel, expected_fuel);
 
@@ -140,7 +144,7 @@ fn error_scan_threads_row_count_across_suspensions() {
 
     let mut scan = error_scan(updates.clone(), None);
     let mut fuel = usize::MAX;
-    let unbudgeted = scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel);
+    let unbudgeted = scan.step(&AT_PEEK, GlobalId::User(1), &mut fuel);
     assert_eq!(unbudgeted, ErrorScanStep::Finished(Ok(errors.len())));
     assert_eq!(usize::MAX - fuel, expected_fuel);
 
@@ -172,7 +176,7 @@ fn error_scan_row_iteration_limit_trips_at_the_same_key_when_sliced() {
 
     let mut scan = error_scan(updates.clone(), Some(limit));
     let mut fuel = usize::MAX;
-    let unbudgeted = scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel);
+    let unbudgeted = scan.step(&AT_PEEK, GlobalId::User(1), &mut fuel);
     assert_eq!(unbudgeted, expected());
     assert_eq!(usize::MAX - fuel, expected_fuel);
 
@@ -201,7 +205,7 @@ fn a_limit_adopted_mid_walk_counts_the_keys_already_examined() {
     let mut scan = error_scan(updates.clone(), None);
     let mut fuel = examined;
     assert_eq!(
-        scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel),
+        scan.step(&AT_PEEK, GlobalId::User(1), &mut fuel),
         ErrorScanStep::OutOfFuel
     );
     assert_eq!(fuel, 0);
@@ -212,7 +216,7 @@ fn a_limit_adopted_mid_walk_counts_the_keys_already_examined() {
     scan.set_row_iteration_limit(Some(limit));
     let mut fuel = usize::MAX;
     assert_eq!(
-        scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel),
+        scan.step(&AT_PEEK, GlobalId::User(1), &mut fuel),
         ErrorScanStep::Finished(Err(PeekError::RowIterationLimitExceeded { limit }))
     );
     assert_eq!(usize::MAX - fuel, 1);
@@ -223,13 +227,86 @@ fn a_limit_adopted_mid_walk_counts_the_keys_already_examined() {
     let mut scan = error_scan(updates, Some(limit));
     let mut fuel = limit;
     assert_eq!(
-        scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel),
+        scan.step(&AT_PEEK, GlobalId::User(1), &mut fuel),
         ErrorScanStep::OutOfFuel
     );
     scan.set_row_iteration_limit(None);
     let mut fuel = usize::MAX;
     assert_eq!(
-        scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel),
+        scan.step(&AT_PEEK, GlobalId::User(1), &mut fuel),
         ErrorScanStep::Finished(Ok(errors.len()))
+    );
+}
+
+fn frontier(time: u64) -> Antichain<Timestamp> {
+    Antichain::from_elem(Timestamp::new(time))
+}
+
+/// Walks a single-batch error trace holding `updates` under a description filter.
+fn scan_description(updates: ErrorUpdates, range: DescriptionRange) -> ErrorScanStep {
+    let mut scan = ErrorScan::from_batches(vec![error_batch(updates)]);
+    let mut fuel = usize::MAX;
+    scan.step(
+        &ErrorFilter::Description(range),
+        GlobalId::User(1),
+        &mut fuel,
+    )
+}
+
+#[mz_ore::test]
+fn a_description_with_an_error_inside_it_is_poisoned() {
+    let err = error(0);
+    let updates = vec![((err.clone(), ()), Timestamp::new(4), Diff::ONE)];
+    let later = DescriptionRange::Later {
+        lower: frontier(3),
+        upper: frontier(6),
+    };
+    assert_eq!(
+        scan_description(updates.clone(), later),
+        ErrorScanStep::Finished(Err(err.deserialize().into()))
+    );
+    // The first description sums everything before its upper, whatever the as-of.
+    let first = DescriptionRange::First {
+        as_of: frontier(5),
+        upper: frontier(6),
+    };
+    assert_eq!(
+        scan_description(updates, first),
+        ErrorScanStep::Finished(Err(err.deserialize().into()))
+    );
+}
+
+#[mz_ore::test]
+fn an_error_outside_the_description_is_ignored() {
+    let err = error(0);
+    let updates = vec![
+        ((err.clone(), ()), Timestamp::new(1), Diff::ONE),
+        ((err.clone(), ()), Timestamp::new(8), Diff::ONE),
+    ];
+    let later = DescriptionRange::Later {
+        lower: frontier(3),
+        upper: frontier(6),
+    };
+    assert_eq!(
+        scan_description(updates, later),
+        ErrorScanStep::Finished(Ok(1))
+    );
+}
+
+#[mz_ore::test]
+fn a_retracted_error_inside_a_later_description_poisons_it() {
+    let err = error(0);
+    // The insertion precedes the description, so inside it only the retraction accumulates.
+    let updates = vec![
+        ((err.clone(), ()), Timestamp::new(1), Diff::ONE),
+        ((err.clone(), ()), Timestamp::new(4), Diff::MINUS_ONE),
+    ];
+    let later = DescriptionRange::Later {
+        lower: frontier(3),
+        upper: frontier(6),
+    };
+    assert_eq!(
+        scan_description(updates, later),
+        ErrorScanStep::Finished(Err(err.deserialize().into()))
     );
 }

@@ -44,6 +44,11 @@ pub(super) enum DescriptionRange {
 }
 
 impl DescriptionRange {
+    /// Whether the range emits updates at `time`.
+    pub(super) fn contains(&self, time: Timestamp) -> bool {
+        self.place(time).is_some()
+    }
+
     /// Returns the time an update at `time` is emitted at, or `None` if the range excludes it.
     fn place(&self, mut time: Timestamp) -> Option<Timestamp> {
         match self {

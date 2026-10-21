@@ -27,7 +27,7 @@ use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use timely::order::PartialOrder;
 
-use crate::compute_state::error_scan::{ErrorScan, ErrorScanStep, ErrsHandle};
+use crate::compute_state::error_scan::{ErrorFilter, ErrorScan, ErrorScanStep, ErrsHandle};
 use crate::compute_state::peek_result_iterator::{PeekResultIterator, Step};
 
 /// The scan an index peek builds, over the ok trace of the arrangement that answers it.
@@ -398,7 +398,11 @@ where
         // The limit bounds the peek, not the call, so a walk already under way adopts the limit
         // that is in effect now rather than the one that was in effect when it started.
         scan.set_row_iteration_limit(row_iteration_limit);
-        let outcome = scan.step(self.peek_timestamp, self.target_id, fuel);
+        let outcome = scan.step(
+            &ErrorFilter::AtOrBefore(self.peek_timestamp),
+            self.target_id,
+            fuel,
+        );
         self.error_scan_time = scan.scan_time;
 
         match outcome {
