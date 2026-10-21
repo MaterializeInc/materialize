@@ -1238,37 +1238,40 @@ impl<D: Data> Chain<D> {
 
     /// Count the distinct times of updates at times before `time`, up to the given cap.
     ///
-    /// The scan uses one binary search per distinct time, so its cost is bounded by
-    /// O(cap log chunks).
+    /// Leaves every chunk where it is. The caller counts to choose how to consolidate, and a
+    /// chunk paged in here would stay on the heap until that consolidation consumes it.
     fn distinct_times_before(&self, time: Timestamp, cap: usize) -> usize {
         let mut count = 0;
-        let mut chunk_idx = 0;
-        let mut offset = 0;
-        while count < cap && chunk_idx < self.chunks.len() {
-            let chunk = &self.chunks[chunk_idx];
-            let current = chunk.index(offset).1;
-            if current >= time {
+        // The latest time counted. Its updates can continue into the following chunks.
+        let mut last = None;
+        for chunk in &self.chunks {
+            if count >= cap || chunk.first_time() >= time {
                 break;
             }
-            count += 1;
-            // Skip to the first update at a time greater than `current`.
-            match chunk.find_time_greater_than(current) {
-                Some(idx) => offset = idx,
-                None => {
-                    // All later updates at `current` are in subsequent chunks.
-                    chunk_idx += 1;
-                    offset = 0;
-                    while chunk_idx < self.chunks.len() {
-                        match self.chunks[chunk_idx].find_time_greater_than(current) {
-                            Some(idx) => {
-                                offset = idx;
-                                break;
-                            }
-                            None => chunk_idx += 1,
-                        }
-                    }
-                }
+            // The cached bounds settle chunks that hold a single time without reading them.
+            if last == Some(chunk.last_time()) {
+                continue;
             }
+            if chunk.first_time() == chunk.last_time() {
+                count += 1;
+                last = Some(chunk.first_time());
+                continue;
+            }
+            chunk.with_view(|view| {
+                let mut offset = 0;
+                if last == Some(chunk.first_time()) {
+                    offset = first_time_after::<D>(&view, 0, chunk.first_time());
+                }
+                while offset < view.len() && count < cap {
+                    let current = view.get(offset).1;
+                    if current >= time {
+                        break;
+                    }
+                    count += 1;
+                    last = Some(current);
+                    offset = first_time_after::<D>(&view, offset, current);
+                }
+            });
         }
         count
     }
@@ -1736,6 +1739,15 @@ struct Chunk<D: Data> {
     depth: u8,
 }
 
+#[cfg(test)]
+impl<D: Data> Drop for Chunk<D> {
+    fn drop(&mut self) {
+        if self.resident.get().is_some() {
+            heap_bodies::remove();
+        }
+    }
+}
+
 impl<D: Data> fmt::Debug for Chunk<D> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Chunk(<{}>)", self.len())
@@ -1782,6 +1794,8 @@ impl<D: Data> Chunk<D> {
                 if cell.set(ColumnBody::Words(words)).is_err() {
                     unreachable!("cell is fresh");
                 }
+                #[cfg(test)]
+                heap_bodies::add();
                 (Mutex::new(None), cell)
             }
         };
@@ -1814,6 +1828,8 @@ impl<D: Data> Chunk<D> {
                 .expect("a chunk the pool declined is materialized at construction");
             let mut words = Vec::new();
             handle.take(&mut words);
+            #[cfg(test)]
+            heap_bodies::add();
             ColumnBody::Words(words)
         })
     }
@@ -1890,19 +1906,7 @@ impl<D: Data> Chunk<D> {
             return None;
         }
 
-        let view = self.view();
-        let mut lower = 0;
-        let mut upper = self.len;
-        while lower < upper {
-            let idx = (lower + upper) / 2;
-            if view.get(idx).1 > time {
-                upper = idx;
-            } else {
-                lower = idx + 1;
-            }
-        }
-
-        Some(lower)
+        Some(first_time_after::<D>(&self.view(), 0, time))
     }
 
     /// Return the serialized size of the chunk's body in bytes, for use in metrics.
@@ -2146,6 +2150,56 @@ fn refs_cmp<D: Data>(a: (Timestamp, Ref<'_, D>), b: (Timestamp, Ref<'_, D>)) -> 
         a.cmp(&b)
     }
     cmp::<D>((a.0, D::reborrow(a.1)), (b.0, D::reborrow(b.1)))
+}
+
+/// Return the index of the first update at or after `from` whose time is greater than `time`,
+/// or the view's length if there is none.
+///
+/// The view must be time-sorted from `from` on, as a chunk's updates are.
+fn first_time_after<D: Data>(view: &ChunkView<'_, D>, from: usize, time: Timestamp) -> usize {
+    let mut lower = from;
+    let mut upper = view.len();
+    while lower < upper {
+        let idx = (lower + upper) / 2;
+        if view.get(idx).1 > time {
+            upper = idx;
+        } else {
+            lower = idx + 1;
+        }
+    }
+    lower
+}
+
+/// The number of chunk bodies this thread holds on the heap, and its high-water mark.
+///
+/// Lets tests bound how many chunks an operation pages in at once, which the buffer pool's
+/// spilling relies on staying small.
+#[cfg(test)]
+mod heap_bodies {
+    use std::cell::Cell;
+
+    thread_local! {
+        static LIVE: Cell<usize> = const { Cell::new(0) };
+        static PEAK: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) fn add() {
+        let live = LIVE.get() + 1;
+        LIVE.set(live);
+        PEAK.set(PEAK.get().max(live));
+    }
+
+    pub(super) fn remove() {
+        LIVE.set(LIVE.get() - 1);
+    }
+
+    /// Run `f` and return its result with the most bodies held at once while it ran, counting
+    /// those held when it started.
+    pub(super) fn peak_during<R>(f: impl FnOnce() -> R) -> (R, usize) {
+        PEAK.set(LIVE.get());
+        let result = f();
+        (result, PEAK.get())
+    }
 }
 
 #[cfg(test)]

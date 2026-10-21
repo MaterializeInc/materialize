@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeSet;
+
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::metrics::Metrics;
@@ -343,6 +345,48 @@ fn sort_advanced_matches_one_sort_through_pool() {
     });
 }
 
+/// The merges of `sort_advanced` must stream their runs from the pool, holding about one chunk
+/// per run being merged, not the runs themselves.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // the pool's mapped regions are unsupported under miri
+fn sort_advanced_pages_in_a_bounded_front() {
+    // Distinct keys keep every run full. The input spans many more chunks than the merge stack
+    // has runs, so a merge that held its inputs pages in far more chunks than it has cursors.
+    let num_ts = 300_u64;
+    let per_ts = 1_000_u64;
+    let run_len = 1 << 14;
+    let since_ts = Timestamp::from(num_ts);
+    let payload = "x".repeat(200);
+    let total = usize::try_from(num_ts * per_ts).expect("fits");
+
+    with_spill_pool(|| {
+        let chains: Vec<_> = (0..num_ts)
+            .map(|t| {
+                let mut updates: Vec<_> = (0..per_ts)
+                    .map(|i| {
+                        let key = format!("{:09}{payload}", t * per_ts + i);
+                        (key, Timestamp::from(t), Diff::ONE)
+                    })
+                    .collect();
+                mint_run(&mut updates)
+            })
+            .collect();
+        // The binary merge stack holds a number of runs logarithmic in the input, and its
+        // final merge reads one chunk of each.
+        let runs = total.div_ceil(run_len);
+        let bound = usize::try_from(runs.ilog2()).expect("fits") + 2;
+        let input_chunks: usize = chains.iter().map(|c| c.chunks.len()).sum();
+        assert!(input_chunks > 4 * bound, "the input must dwarf the bound");
+
+        let (merged, peak) = heap_bodies::peak_during(|| sort_advanced(chains, since_ts, run_len));
+        assert_eq!(merged.update_count, total);
+        assert!(
+            peak <= bound,
+            "sorting held {peak} chunk bodies at once, bound {bound}"
+        );
+    });
+}
+
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // slow under Miri, and the sort and merge it checks have no unsafe code
 fn sort_advanced_cancels_to_nothing() {
@@ -358,6 +402,103 @@ fn sort_advanced_cancels_to_nothing() {
         .collect();
     let merged = sort_advanced(chains_of(&updates, 13), since_ts, 8);
     assert!(merged.is_empty(), "every insertion meets its retraction");
+}
+
+/// A sorted chain over times `0..200`. Most times hold a few updates, times 100 and 101 fill
+/// whole chunks on their own, and time 102 spans a chunk boundary, so counting crosses chunks
+/// both within a time and between times.
+fn skewed_chain() -> Chain<i64> {
+    let mut updates = Vec::new();
+    for t in 0..200_u64 {
+        let n = match t {
+            100 | 101 => 200_000,
+            102 => 80_000,
+            _ => 10,
+        };
+        for i in 0..n {
+            updates.push((i, Timestamp::from(t), Diff::ONE));
+        }
+    }
+    consolidate(&mut updates);
+    mint_run(&mut updates)
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // slow under Miri, and the count it checks has no unsafe code
+fn distinct_times_before_matches_a_scan() {
+    let chain = skewed_chain();
+    assert!(
+        chain.chunks.iter().any(|c| c.first_time() == c.last_time()),
+        "some chunk holds a single time"
+    );
+    let times: BTreeSet<_> = chain.iter().map(|(_, t, _)| t).collect();
+    for time in [0, 1, 50, 100, 101, 102, 103, 150, 200, 1_000] {
+        let time = Timestamp::from(time);
+        for cap in [1, 32, 100, 101, 102, 103, usize::MAX] {
+            let expected = times.range(..time).count().min(cap);
+            assert_eq!(
+                chain.distinct_times_before(time, cap),
+                expected,
+                "time {time}, cap {cap}"
+            );
+        }
+    }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // the pool's mapped regions are unsupported under miri
+fn distinct_times_before_leaves_chunks_pooled() {
+    with_spill_pool(|| {
+        let chain = skewed_chain();
+        assert_all_spilled(&chain);
+        let (count, peak) =
+            heap_bodies::peak_during(|| chain.distinct_times_before(Timestamp::from(200), 1_000));
+        assert_eq!(count, 200);
+        assert_eq!(peak, 0, "counting paged chunks onto the heap");
+        assert_all_spilled(&chain);
+    });
+}
+
+/// A since jump across many buffered times must consolidate without paging the buffer onto the
+/// heap: the pool can only bound the buffer's footprint if reads keep few chunks resident.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // the pool's mapped regions are unsupported under miri
+fn since_jump_pages_in_a_bounded_front() {
+    // Each time fills about one chunk, so a read that pages in one chunk per time pages in the
+    // whole buffer. The updates fit one `sort_advanced` run, so no merge runs here.
+    // `sort_advanced_pages_in_a_bounded_front` covers the merges.
+    let num_ts = 40;
+    let per_ts = 1_100;
+    let payload = "x".repeat(2_000);
+    with_spill_pool(|| {
+        let sink_metrics = sink_metrics();
+        let mut v2 = CorrectionV2::<String>::new(
+            sink_metrics.clone(),
+            sink_metrics.for_worker(0),
+            None,
+            3.0,
+            8 * 1024,
+        );
+        for t in 0..num_ts {
+            let mut updates = (0..per_ts)
+                .map(|i| (format!("{i:06}{payload}"), Timestamp::from(t), Diff::ONE))
+                .collect();
+            v2.insert(&mut updates);
+        }
+
+        v2.advance_since(Antichain::from_elem(Timestamp::from(num_ts)));
+        let ((), peak) = heap_bodies::peak_during(|| v2.consolidate_at_since());
+        // A merge holds about one chunk per input cursor. Eight leaves room for that while
+        // staying well below one chunk per time.
+        assert!(peak <= 8, "consolidation held {peak} chunk bodies at once");
+
+        let upper = Antichain::from_elem(Timestamp::from(num_ts + 1));
+        assert_eq!(
+            v2.updates_before(&upper).count(),
+            usize::try_from(per_ts).expect("fits"),
+            "each payload consolidates across all times"
+        );
+    });
 }
 
 /// A since jump across many distinct buffered timestamps must collapse them onto the since.
