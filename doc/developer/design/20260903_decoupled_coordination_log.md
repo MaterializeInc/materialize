@@ -46,6 +46,16 @@ frontier. The scoped correction in `d1ed7559` has scratch red/green evidence.
 Testdrive 3 passes this build. Its earlier inter-file slowdown remains unexplained
 and did not reproduce in the short scratch comparison.
 
+CI140154 at `57c5fd56` passes all testdrive and both parallel shards, with 87 passed
+jobs overall. Three additional failures remain: explicit-DDL revision conflicts
+in MySQL/Postgres RTR and the restart fixture's initial unchanged-permission
+assertion. All three full workflows pass unchanged on scratch. RTR's rejecting
+revision update is not identified. The restart fixture assumes that a 1h interval
+pauses publication, but startup/reconfiguration stagger from zero. Independent
+review identifies this as a pre-existing probabilistic assumption, not evidence
+against the 60s default. Keep its assertions and production scheduling unchanged
+pending a fixture decision. One unchanged CI retry is in flight.
+
 The exact CI140146 seed still needs resolution. Its 60s parallel shard 2 OOM
 repeats, killing quickstart at about 10.7GiB anonymous RSS. CI140148's 1s control
 passes shard 2 but times out in shard 1. Equal parent-cgroup limits were not
@@ -55,9 +65,18 @@ retained history. A bounded scratch initialization at the aggregate CI memory
 limit and 8-CPU quota completes without OOM, with quickstart below 2GiB RSS.
 It has no swap and different hardware, so it does not clear the CI failure.
 Evidence is under `scratch/cadence60-default/ci140146/parallel2-retry/` and
-`scratch/cadence60-memory/`. Use existing CI heap capture on the failing seed,
-not another tuning campaign. The prompt's restriction against changing the 1s
-default is superseded by approval.
+`scratch/cadence60-memory/`.
+
+Do not repeat `CI_HEAP_PROFILES` on the constrained fixture. CI140156's collector
+materially perturbs it: the first OOM task table has 189 Python processes with
+8.84GB aggregate anonymous RSS, versus one in the unprofiled retry. Detached,
+overlapping collectors launch per-request mzcompose processes without timeouts.
+The saved quickstart heap has 3.28GB sampled live bytes, including 2.13GB on upsert
+allocation stacks, but establishes neither original RSS ownership nor a causal
+retention regression. Evidence and limits are in
+`scratch/cadence60-default/ci140156/`. A further capture requires bounded direct
+requests and observer accounting, not allocator/cache tuning. The prompt's
+restriction against changing the 1s default is superseded by approval.
 
 CI140105 at `2bde8879` finishes with 94 passed jobs. Cargo, cluster frontier
 checks, Kafka RTR, both parallel shards and the closed native recovery/handover
