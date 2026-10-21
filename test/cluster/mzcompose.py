@@ -4304,6 +4304,99 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
         ), "environmentd unreachable after char-param test"
 
 
+def workflow_statement_logging_throttled_count(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Executions dropped by throttling between two logged executions of the
+    same prepared statement must be reported by the later one, in
+    `mz_recent_activity_log.throttled_count`."""
+
+    application_name = "throttled_count_repro"
+    num_throttled_executions = 20
+
+    def logged_executions(cur: Cursor) -> list[tuple[str, int]]:
+        cur.execute(f"""
+            SELECT params[1], throttled_count
+            FROM mz_internal.mz_recent_activity_log
+            WHERE application_name = '{application_name}'
+              AND sql = 'SELECT $1::text'
+            ORDER BY began_at
+            """)
+        return [(row[0], int(row[1])) for row in cur.fetchall()]
+
+    def wait_for_logged(cur: Cursor, param: str) -> list[tuple[str, int]]:
+        # Statement logging flushes asynchronously; wait for the execution to land.
+        deadline = time.time() + 30
+        while True:
+            logs = logged_executions(cur)
+            if any(p == param for p, _ in logs):
+                return logs
+            assert time.time() < deadline, f"execution {param!r} never logged: {logs}"
+            time.sleep(0.5)
+
+    with c.override(Materialized()):
+        c.up("materialized")
+
+        c.sql(
+            """
+            ALTER SYSTEM SET statement_logging_max_sample_rate = 1.0;
+            ALTER SYSTEM SET statement_logging_default_sample_rate = 1.0;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        conn = c.sql_connection(startup_params={"application_name": application_name})
+        cur = conn.cursor()
+        sys_cur = c.sql_cursor(port=6877, user="mz_system")
+
+        # The first execution logs the prepared statement itself.
+        cur.execute("SELECT %s::text", ("first",), prepare=True)
+        assert cur.fetchone() == ("first",)
+        assert len(wait_for_logged(sys_cur, "first")) == 1
+
+        # Cap the credit at a single byte so that every execution is throttled.
+        c.sql(
+            """
+            ALTER SYSTEM SET statement_logging_target_data_rate = 1;
+            ALTER SYSTEM SET statement_logging_max_data_credit = 1;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        for _ in range(num_throttled_executions):
+            cur.execute("SELECT %s::text", ("throttled",), prepare=True)
+            assert cur.fetchone() == ("throttled",)
+
+        # Lift the throttle. The next execution is logged and reports the
+        # throttled ones.
+        c.sql(
+            """
+            ALTER SYSTEM RESET statement_logging_target_data_rate;
+            ALTER SYSTEM RESET statement_logging_max_data_credit;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+        cur.execute("SELECT %s::text", ("last",), prepare=True)
+        assert cur.fetchone() == ("last",)
+        logs = wait_for_logged(sys_cur, "last")
+
+        # Every execution is either logged or counted by the next logged one.
+        throttled_total = sum(count for _, count in logs)
+        assert (
+            len(logs) + throttled_total == num_throttled_executions + 2
+        ), f"logged executions: {logs}"
+        assert logs[-1][0] == "last", f"logged executions: {logs}"
+        assert (
+            logs[-1][1] > 0
+        ), f"the last execution must report the throttled ones: {logs}"
+
+        cur.close()
+        conn.close()
+        sys_cur.close()
+
+
 def workflow_blue_green_deployment(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
