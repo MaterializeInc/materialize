@@ -24,10 +24,8 @@ import { getAllowedRedirectOrigins } from "~/utils/redirectUrl";
 
 const buildFronteggProviderProps = (
   appConfig: Readonly<CloudAppConfig>,
+  allowedRedirectOrigins: string[],
 ): FronteggProviderProps => {
-  const allowedRedirectOrigins = getAllowedRedirectOrigins(
-    appConfig.currentStack,
-  );
   return {
     localizations: {
       en: {
@@ -63,14 +61,23 @@ export const FronteggProviderWrapper = ({
   children,
 }: React.PropsWithChildren) => {
   const appConfig = useAppConfig();
+  const currentStack =
+    appConfig.mode === "cloud" ? appConfig.currentStack : undefined;
+  // One stable array for both Frontegg and the sanitizer, so the sanitizer's
+  // effect doesn't rerun on every render.
+  const allowedRedirectOrigins = React.useMemo(
+    () => (currentStack ? getAllowedRedirectOrigins(currentStack) : []),
+    [currentStack],
+  );
   if (appConfig.mode === "self-managed" || appConfig.isImpersonating) {
     return children;
   }
-  const fronteggProviderProps = buildFronteggProviderProps(appConfig);
+  const fronteggProviderProps = buildFronteggProviderProps(
+    appConfig,
+    allowedRedirectOrigins,
+  );
   return (
-    <RedirectUrlSanitizer
-      allowedOrigins={getAllowedRedirectOrigins(appConfig.currentStack)}
-    >
+    <RedirectUrlSanitizer allowedOrigins={allowedRedirectOrigins}>
       <FronteggProvider {...fronteggProviderProps}>{children}</FronteggProvider>
     </RedirectUrlSanitizer>
   );

@@ -20,6 +20,12 @@ import {
   isSafeRedirectUrl,
 } from "~/utils/redirectUrl";
 
+export interface RedirectUrlSanitizerProps {
+  /** External origins (the marketing site) that `redirectUrl` may point at. */
+  allowedOrigins: readonly string[];
+  children?: React.ReactNode;
+}
+
 /**
  * Sanitizes the redirectUrl query parameter on the login page to prevent open redirect attacks.
  *
@@ -34,9 +40,9 @@ import {
  * - javascript:alert(1) (javascript URLs)
  */
 export const RedirectUrlSanitizer = ({
-  allowedOrigins = [],
+  allowedOrigins,
   children,
-}: React.PropsWithChildren<{ allowedOrigins?: readonly string[] }>) => {
+}: RedirectUrlSanitizerProps) => {
   const { pathname } = useLocation();
   const [searchParams] = useSearchParams();
 
@@ -51,15 +57,13 @@ export const RedirectUrlSanitizer = ({
     redirectUrl &&
     isAllowedExternalRedirectUrl(redirectUrl, allowedOrigins)
       ? redirectUrl.trim()
-      : null;
+      : undefined;
 
   React.useEffect(() => {
     if (!isLoginPage) return;
     if (externalRedirectUrl) {
       rememberExternalRedirect(externalRedirectUrl);
     } else {
-      // Any other sign-in, including the Console's own `?redirectUrl=/`
-      // entry for signed-out visitors, must not inherit an abandoned one.
       forgetExternalRedirect(allowedOrigins);
     }
   }, [isLoginPage, redirectUrl, externalRedirectUrl, allowedOrigins]);
