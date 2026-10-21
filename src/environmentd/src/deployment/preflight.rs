@@ -22,6 +22,7 @@ use mz_controller_types::ReplicaId;
 use mz_ore::channel::trigger;
 use mz_ore::exit;
 use mz_ore::halt;
+use mz_ore::restart_in_place;
 use mz_ore::str::separated;
 use mz_persist_client::PersistClient;
 use mz_repr::{CatalogItemId, Timestamp};
@@ -196,24 +197,40 @@ pub fn spawn_catchup(
         // notice this and give us the promote signal again, once we're
         // ready again.
 
-        let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
+        let openable_adapter_storage = openable_catalog(
             persist_client.clone(),
-            environment_id.organization_id(),
-            BUILD_INFO.semver_version(),
-            Some(deploy_generation),
+            &environment_id,
+            deploy_generation,
             Arc::clone(&catalog_metrics),
         )
-        .await
-        .expect("incompatible catalog/persist version");
+        .await;
 
         let _catalog = openable_adapter_storage
             .open(boot_ts, &bootstrap_args)
             .await
             .unwrap_or_terminate("unexpected error while fencing out old deployment");
 
-        // Reboot as the leader.
+        // Reboot as the leader. This process now holds the catalog, so leave
+        // the restart to Kubernetes rather than restarting in place.
         halt!("fenced out old deployment; rebooting as leader")
     });
+}
+
+async fn openable_catalog(
+    persist_client: PersistClient,
+    environment_id: &EnvironmentId,
+    deploy_generation: u64,
+    catalog_metrics: Arc<Metrics>,
+) -> Box<dyn OpenableDurableCatalogState> {
+    mz_catalog::durable::persist_backed_catalog_state(
+        persist_client,
+        environment_id.organization_id(),
+        BUILD_INFO.semver_version(),
+        Some(deploy_generation),
+        catalog_metrics,
+    )
+    .await
+    .expect("incompatible catalog/persist version")
 }
 
 /// Restart in read-only mode when user items or replicas have been created or
@@ -228,15 +245,13 @@ async fn check_ddl_changes(
     initial_user_items: &BTreeSet<CatalogItemId>,
     initial_user_replicas: &BTreeSet<ReplicaId>,
 ) {
-    let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
-        persist_client,
-        environment_id.organization_id(),
-        BUILD_INFO.semver_version(),
-        Some(deploy_generation),
-        catalog_metrics,
+    let openable_adapter_storage = openable_catalog(
+        persist_client.clone(),
+        &environment_id,
+        deploy_generation,
+        Arc::clone(&catalog_metrics),
     )
-    .await
-    .expect("incompatible catalog/persist version");
+    .await;
 
     let mut catalog = openable_adapter_storage
         .open_savepoint(boot_ts, &bootstrap_args)
@@ -325,10 +340,35 @@ async fn check_ddl_changes(
 
     let extra_info = separated(". ", info_parts);
 
-    halt!(
-        "there have been DDL that we need to react to; rebooting in read-only mode. {}",
-        extra_info
+    // A restart in place boots a new process even if Kubernetes has replaced
+    // this pod in the meantime. That is safe while this generation is still
+    // read-only: the new process opens the catalog in savepoint mode again and
+    // does not fence anyone. Once a process of this generation has been
+    // promoted, a new process would boot as the leader and fence the live one,
+    // so leave the restart to Kubernetes.
+    let catalog_generation = openable_catalog(
+        persist_client,
+        &environment_id,
+        deploy_generation,
+        catalog_metrics,
     )
+    .await
+    .get_deployment_generation()
+    .await
+    .unwrap_or_terminate("unexpected error while reading the deployment generation");
+    if catalog_generation < deploy_generation {
+        restart_in_place!(
+            "there have been DDL that we need to react to; rebooting in read-only mode. {}",
+            extra_info
+        )
+    } else {
+        halt!(
+            "there have been DDL that we need to react to, and generation {} has been \
+             promoted; halting. {}",
+            catalog_generation,
+            extra_info
+        )
+    }
 }
 
 /// Snapshot committed user IDs, not allocator counters: IDs can be allocated in

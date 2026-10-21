@@ -15,10 +15,16 @@
 
 //! Process utilities.
 
+/// The exit code of [`halt!`](crate::halt).
+pub const HALT_EXIT_CODE: i32 = 166;
+
+/// The exit code of [`restart_in_place!`](crate::restart_in_place).
+pub const RESTART_IN_PLACE_EXIT_CODE: i32 = 168;
+
 /// Halts the process.
 ///
 /// `halt` forwards the provided arguments to the [`tracing::warn`] macro, then
-/// terminates the process with exit code 166.
+/// terminates the process with [`HALT_EXIT_CODE`].
 ///
 /// Halting a process is a middle ground between a graceful shutdown and a
 /// panic. Use halts for errors that are severe enough to require shutting down
@@ -42,7 +48,30 @@
 macro_rules! halt {
     ($($arg:expr),* $(,)?) => {{
         $crate::__private::tracing::warn!("halting process: {}", format!($($arg),*));
-        $crate::process::exit_thread_safe(166);
+        $crate::process::exit_thread_safe($crate::process::HALT_EXIT_CODE);
+    }}
+}
+
+/// Halts the process and asks its supervisor to restart it in place.
+///
+/// `restart_in_place` behaves like [`halt!`](crate::halt), but terminates the
+/// process with [`RESTART_IN_PLACE_EXIT_CODE`]. The environmentd container
+/// entrypoint restarts the process right away on this exit code instead of
+/// exiting the container, which avoids Kubernetes crash backoff when a process
+/// halts repeatedly.
+///
+/// The restarted process runs even if Kubernetes has replaced the process's pod
+/// in the meantime, for example after a node failure. Only use this macro where
+/// booting a second process next to the replacement cannot take over from it,
+/// e.g., a deployment that reboots in read-only mode. Use [`halt!`](crate::halt)
+/// everywhere else, in particular after the process has been fenced out.
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
+#[cfg(feature = "tracing")]
+#[macro_export]
+macro_rules! restart_in_place {
+    ($($arg:expr),* $(,)?) => {{
+        $crate::__private::tracing::warn!("halting process for restart in place: {}", format!($($arg),*));
+        $crate::process::exit_thread_safe($crate::process::RESTART_IN_PLACE_EXIT_CODE);
     }}
 }
 
