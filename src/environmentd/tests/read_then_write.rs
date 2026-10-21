@@ -2171,3 +2171,205 @@ fn test_serializable_read_sees_own_refresh_mv_write() {
         "a serializable read must see the session's own write"
     );
 }
+
+/// How many `DELETE ... ROWS` statements read the given selection so far.
+fn delete_rows_selections(server: &test_util::TestServerWithRuntime, selection: &str) -> u64 {
+    test_util::get_counter_value(
+        server.metrics_registry(),
+        "mz_delete_rows_selection_total",
+        &[("selection", selection)],
+    )
+}
+
+/// `DELETE ... ROWS (q)` retracts `q` directly exactly when `q` is proven
+/// contained in the table, and otherwise intersects it with the table. The
+/// counts are those of the intersection either way.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_delete_rows_selection() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default("enable_delete_rows".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_refresh_every_mvs".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "enable_alter_table_add_column".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute(
+            "CREATE TABLE intents (id INT, done BOOL);
+             CREATE TABLE store (id INT);
+             CREATE TABLE other (id INT, done BOOL);
+             INSERT INTO store VALUES (1);
+             INSERT INTO other VALUES (2, false);
+             CREATE MATERIALIZED VIEW garbage AS
+               SELECT * FROM intents EXCEPT ALL SELECT id, false FROM store;
+             CREATE VIEW garbage_view AS
+               SELECT * FROM intents EXCEPT ALL SELECT id, false FROM store;
+             CREATE VIEW garbage_indexed AS
+               SELECT * FROM intents EXCEPT ALL SELECT id, false FROM store;
+             CREATE INDEX garbage_indexed_idx ON garbage_indexed (id);
+             CREATE VIEW over_garbage AS SELECT * FROM garbage WHERE id > 0;
+             CREATE MATERIALIZED VIEW stale WITH (REFRESH EVERY '1000 hours') AS
+               SELECT * FROM intents;",
+        )
+        .unwrap();
+
+    // Each case resets `intents` to `(1, false)` once and `(2, false)` twice,
+    // so the garbage is `(2, false)` twice.
+    let cases = [
+        (
+            "SELECT * FROM intents EXCEPT ALL SELECT id, false FROM store",
+            "rows",
+            2,
+        ),
+        ("SELECT * FROM garbage", "rows", 2),
+        ("SELECT * FROM garbage_view", "rows", 2),
+        ("SELECT * FROM garbage_indexed", "rows", 2),
+        ("SELECT * FROM over_garbage WHERE done = false", "rows", 2),
+        (
+            "SELECT * FROM garbage INTERSECT ALL SELECT * FROM other",
+            "rows",
+            1,
+        ),
+        (
+            "SELECT * FROM intents UNION ALL SELECT * FROM intents",
+            "intersection",
+            3,
+        ),
+        ("SELECT * FROM other", "intersection", 1),
+        ("SELECT id, NOT done FROM garbage", "intersection", 0),
+        ("SELECT * FROM stale", "intersection", 0),
+    ];
+    for (query, selection, expected) in cases {
+        client
+            .batch_execute(
+                "DELETE FROM intents;
+                 INSERT INTO intents VALUES (1, false), (2, false), (2, false);",
+            )
+            .unwrap();
+        let rows_before = delete_rows_selections(&server, "rows");
+        let intersection_before = delete_rows_selections(&server, "intersection");
+        let deleted = client
+            .execute(&format!("DELETE FROM intents ROWS ({query})"), &[])
+            .unwrap();
+        assert_eq!(deleted, expected, "rows deleted by `{query}`");
+        let expected_counts = match selection {
+            "rows" => (1, 0),
+            _ => (0, 1),
+        };
+        assert_eq!(
+            (
+                delete_rows_selections(&server, "rows") - rows_before,
+                delete_rows_selections(&server, "intersection") - intersection_before,
+            ),
+            expected_counts,
+            "`{query}` should read the {selection} selection",
+        );
+        let remaining: i64 = client
+            .query_one("SELECT count(*) FROM intents", &[])
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            remaining,
+            3 - i64::try_from(expected).unwrap(),
+            "rows left after `{query}`"
+        );
+    }
+
+    // A view over an earlier version of the table is not the table.
+    client
+        .batch_execute(
+            "CREATE VIEW intents_v0 AS SELECT * FROM intents;
+             ALTER TABLE intents ADD COLUMN extra INT;",
+        )
+        .unwrap();
+    let intersection_before = delete_rows_selections(&server, "intersection");
+    let deleted = client
+        .execute(
+            "DELETE FROM intents ROWS (SELECT *, NULL::int FROM intents_v0)",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(deleted, 3);
+    assert_eq!(
+        delete_rows_selections(&server, "intersection") - intersection_before,
+        1
+    );
+}
+
+/// Concurrent `DELETE ... ROWS` reading a materialized view of the table, not
+/// the table itself, must not retract a row more often than the table holds it.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_concurrent_delete_rows_from_view_does_not_over_delete() {
+    const MULTIPLICITY: i32 = 7;
+    const NUM_WORKERS: usize = 6;
+    const ROUNDS: usize = 5;
+
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .with_system_parameter_default("enable_delete_rows".to_string(), "true".to_string())
+        .start_blocking();
+    let mut setup = server.connect(postgres::NoTls).unwrap();
+    setup
+        .batch_execute(
+            "CREATE TABLE t (id INT);
+             CREATE MATERIALIZED VIEW garbage AS SELECT * FROM t WHERE id = 1;",
+        )
+        .unwrap();
+
+    for _round in 0..ROUNDS {
+        setup.batch_execute("DELETE FROM t").unwrap();
+        setup
+            .execute(
+                "INSERT INTO t SELECT 1 FROM generate_series(1, $1)",
+                &[&MULTIPLICITY],
+            )
+            .unwrap();
+        setup.batch_execute("INSERT INTO t VALUES (2)").unwrap();
+
+        // Connecting inside the spawn loop would let the first worker finish
+        // its DELETE before the last client even exists.
+        let clients: Vec<_> = (0..NUM_WORKERS)
+            .map(|_| server.connect(postgres::NoTls).unwrap())
+            .collect();
+        let barrier = Arc::new(Barrier::new(NUM_WORKERS));
+        let total_deleted = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for mut client in clients {
+            let barrier = Arc::clone(&barrier);
+            let total_deleted = Arc::clone(&total_deleted);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                let n = client
+                    .execute("DELETE FROM t ROWS (SELECT * FROM garbage)", &[])
+                    .expect("DELETE ... ROWS under contention should succeed via OCC");
+                total_deleted.fetch_add(usize::try_from(n).unwrap(), Ordering::SeqCst);
+            }));
+        }
+        for h in handles {
+            h.join().expect("worker panicked");
+        }
+
+        let remaining: Vec<i32> = setup
+            .query("SELECT id FROM t", &[])
+            .unwrap()
+            .iter()
+            .map(|r| r.get(0))
+            .collect();
+        assert_eq!(remaining, vec![2], "only the row outside `garbage` is left");
+        assert_eq!(
+            total_deleted.load(Ordering::SeqCst),
+            usize::try_from(MULTIPLICITY).unwrap(),
+            "sum of reported deletes must equal the initial multiplicity",
+        );
+    }
+    assert_eq!(
+        delete_rows_selections(&server, "rows"),
+        u64::try_from(ROUNDS * NUM_WORKERS).unwrap(),
+        "every DELETE ... ROWS should retract the view's rows directly",
+    );
+}
