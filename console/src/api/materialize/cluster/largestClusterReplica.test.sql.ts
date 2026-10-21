@@ -89,20 +89,6 @@ describe("buildLargestClusterReplicaQuery", () => {
     expect(result.size).toBe("scale=1,workers=1,mem=8GiB");
     expect(result.heapLimit).toBe("8589934592");
 
-    const {
-      rows: [named],
-    } = await executeSqlHttp(
-      buildLargestClusterReplicaQuery(cluster.id, "r1").compile(),
-      {
-        sessionVariables: {
-          search_path: mockedSearchPath,
-          cluster: QUICKSTART_CLUSTER,
-        },
-      },
-    );
-    expect(named.name).toBe("r1");
-    expect(named.heapLimit).toBe("4294967296");
-
     // Object sizes cover every process of a replica, so its heap limit does
     // too. Four 4GiB processes outrank one 8GiB process.
     await client.query(`

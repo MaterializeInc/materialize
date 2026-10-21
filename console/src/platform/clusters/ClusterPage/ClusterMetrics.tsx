@@ -78,11 +78,7 @@ const ClusterMetricsContent = ({ cluster }: { cluster: Cluster }) => {
           timePeriodMinutes={timePeriodMinutes}
           selectedReplicaId={selectedReplica?.id}
         />
-        <MemoryByObject
-          clusterId={cluster.id}
-          clusterName={cluster.name}
-          replicaName={selectedReplica?.name}
-        />
+        <MemoryByObject cluster={cluster} replica={selectedReplica} />
       </VStack>
     </MainContentContainer>
   );

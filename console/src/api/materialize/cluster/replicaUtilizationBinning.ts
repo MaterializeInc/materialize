@@ -477,3 +477,17 @@ export const hasUtilizationReading = (point: DataPoint) =>
 export const hasNoUtilizationMetrics = (graphData: ReplicaData[]) =>
   graphData.length > 0 &&
   graphData.every(({ data }) => !data.some(hasUtilizationReading));
+
+/**
+ * Server-binned rows inside a window that starts at `startDate`, in time order.
+ * Held rows from a wider window would otherwise stretch the chart past the
+ * selected range, and ENVELOPE UPSERT yields them unordered.
+ */
+export function clipBinnedRowsToWindow<T extends { bucketStart: Date }>(
+  rows: T[],
+  startDate: Date,
+): T[] {
+  return rows
+    .filter((row) => row.bucketStart.getTime() >= startDate.getTime())
+    .sort((a, b) => a.bucketStart.getTime() - b.bucketStart.getTime());
+}

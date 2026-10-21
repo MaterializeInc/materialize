@@ -12,6 +12,39 @@ import { clamp } from "~/util";
 /** How many of the largest objects the card shows. */
 export const TOP_OBJECT_COUNT = 10;
 
+/** One object on the card, from the polled or the streamed sizes. */
+export interface LargestObject {
+  id: string | null;
+  name: string | null;
+  /** Bytes: a bigint when polled, a number when streamed. */
+  size: bigint | number | null;
+  memoryPercentage: number | null;
+  type: string | null;
+  schemaName: string | null;
+  databaseName: string | null;
+  dataflowId: string | null;
+  dataflowName: string | null;
+  isOrphanedDataflow: boolean;
+}
+
+/**
+ * Heap in use beyond the listed objects' sizes, with its share of the heap
+ * limit. Undefined if their sizes add up to at least `heapUsedBytes`.
+ */
+export const otherMemory = (
+  heapUsedBytes: number,
+  heapLimit: number,
+  objects: Array<Pick<LargestObject, "size">>,
+) => {
+  const size = objects.reduce(
+    (rest, object) => rest - Number(object.size ?? 0),
+    heapUsedBytes,
+  );
+  return size > 0
+    ? { size, memoryPercentage: (size / heapLimit) * 100 }
+    : undefined;
+};
+
 /**
  * Bar segment widths for objects' shares of the heap limit, in order. The bar
  * stops at the heap limit even if the shares add up to more.
