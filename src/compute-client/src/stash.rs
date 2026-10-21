@@ -81,7 +81,7 @@ impl Drop for OwnedStash {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -103,13 +103,13 @@ mod tests {
     const BLOB_TURNS: usize = 1_000;
 
     /// A persist client whose blob traffic is counted through the metrics registry.
-    struct CountedClient {
+    pub(crate) struct CountedClient {
         registry: MetricsRegistry,
-        client: PersistClient,
+        pub(crate) client: PersistClient,
     }
 
     impl CountedClient {
-        async fn new() -> Self {
+        pub(crate) async fn new() -> Self {
             let cfg = PersistConfig::new_for_tests();
             let mut updates = ConfigUpdates::default();
             // Without these persist inlines small parts into shard state, where no blob counter
@@ -133,7 +133,7 @@ mod tests {
             Self { registry, client }
         }
 
-        fn succeeded(&self, op: &str) -> u64 {
+        pub(crate) fn succeeded(&self, op: &str) -> u64 {
             let Some(family) = self
                 .registry
                 .gather()
@@ -156,7 +156,7 @@ mod tests {
         }
 
         /// Writes one batch holding a few rows and returns its wire form.
-        async fn write_batch(&self, shard_id: ShardId) -> ProtoBatch {
+        pub(crate) async fn write_batch(&self, shard_id: ShardId) -> ProtoBatch {
             let desc = RelationDesc::builder()
                 .with_column("value", SqlScalarType::UInt64.nullable(false))
                 .finish();
@@ -186,7 +186,7 @@ mod tests {
                 .into_transmittable_batch()
         }
 
-        async fn wait_until_nothing_is_left(&self) {
+        pub(crate) async fn wait_until_nothing_is_left(&self) {
             for _ in 0..BLOB_TURNS {
                 let written = self.succeeded("blob_set");
                 if written > 0 && self.succeeded("blob_delete") == written {

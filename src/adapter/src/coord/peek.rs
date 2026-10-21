@@ -24,7 +24,8 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_cluster_client::ReplicaId;
 use mz_compute_client::controller::PeekNotification;
 use mz_compute_client::protocol::command::PeekTarget;
-use mz_compute_client::protocol::response::PeekResponse;
+use mz_compute_client::protocol::response::{PeekResponse, StashedPeekResponse};
+use mz_compute_client::stash::OwnedStash;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
 use mz_controller_types::ClusterId;
@@ -1065,8 +1066,14 @@ impl crate::coord::Coordinator {
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
     ) -> impl futures::Stream<Item = PeekResponseUnary> {
+        // Built outside the lazy stream, so that a stream dropped before its first poll still
+        // deletes a stashed response waiting in the channel.
+        let mut rows_rx = PeekResponseReceiver {
+            rx: rows_rx,
+            persist_client: persist_client.clone(),
+        };
         async_stream::stream!({
-            let result = rows_rx.await;
+            let result = rows_rx.recv().await;
 
             let rows = match result {
                 Ok(rows) => rows,
@@ -1094,37 +1101,29 @@ impl crate::coord::Coordinator {
                     }
                 }
                 PeekResponse::Stashed(response) => {
-                    let response = *response;
+                    let StashedPeekResponse {
+                        relation_desc,
+                        shard_id,
+                        batches,
+                        inline_rows,
+                        ..
+                    } = *response;
 
-                    let shard_id = response.shard_id;
+                    // Owned before anything that can fail, so that a panic below or a stream
+                    // dropped before the read task takes over deletes the batches.
+                    let stash = OwnedStash::from_proto(&persist_client, shard_id, batches);
+                    tracing::trace!(
+                        %shard_id,
+                        encoded_size_bytes = stash.encoded_size_bytes(),
+                        "stashed peek response"
+                    );
 
-                    let mut batches = Vec::new();
-                    for proto_batch in response.batches.into_iter() {
-                        let batch =
-                            persist_client.batch_from_transmittable_batch(&shard_id, proto_batch);
+                    assert!(
+                        finishing.is_streamable(relation_desc.arity()),
+                        "can only get stashed responses when the finishing is streamable"
+                    );
 
-                        batches.push(batch);
-                    }
-                    tracing::trace!(?batches, "stashed peek response");
-
-                    let as_of = Antichain::from_elem(mz_repr::Timestamp::default());
-                    let read_schemas: Schemas<SourceData, ()> = Schemas {
-                        id: None,
-                        key: Arc::new(response.relation_desc.clone()),
-                        val: Arc::new(UnitSchema),
-                    };
-
-                    let mut row_cursor = persist_client
-                        .read_batches_consolidated::<_, _, _, i64>(
-                            response.shard_id,
-                            as_of,
-                            read_schemas,
-                            batches,
-                            |_stats| true,
-                            peek_stash_read_memory_budget_bytes,
-                        )
-                        .await
-                        .expect("invalid usage");
+                    tracing::trace!("query result is streamable!");
 
                     // NOTE: Using the cursor creates Futures that are not Sync,
                     // so we can't drive them on the main Coordinator loop.
@@ -1132,20 +1131,41 @@ impl crate::coord::Coordinator {
                     // delete batches once we're done.
                     //
                     // Batch deletion is best-effort, though, and there are
-                    // multiple known ways in which they can leak, among them:
+                    // known ways in which they can leak, among them:
                     //
                     // - ProtoBatch is lost in flight
                     // - ProtoBatch is lost because when combining PeekResponse
                     // from workers a cancellation or error "overrides" other
                     // results, meaning we drop them
-                    // - This task here is not run to completion before it can
-                    // delete all batches
+                    // - This task here is not run to completion after it has
+                    // handed the batches to the cursor
                     //
                     // This is semi-ok, because persist needs a reaper of leaked
                     // batches already, and so we piggy-back on that, even if it
                     // might not exist as of today.
                     let (tx, mut rx) = tokio::sync::mpsc::channel(1);
                     mz_ore::task::spawn(|| "read_peek_batches", async move {
+                        let as_of = Antichain::from_elem(mz_repr::Timestamp::default());
+                        let read_schemas: Schemas<SourceData, ()> = Schemas {
+                            id: None,
+                            key: Arc::new(relation_desc),
+                            val: Arc::new(UnitSchema),
+                        };
+
+                        // The cursor hands the batches back once it is drained, and they are
+                        // deleted below.
+                        let mut row_cursor = persist_client
+                            .read_batches_consolidated::<_, _, _, i64>(
+                                shard_id,
+                                as_of,
+                                read_schemas,
+                                stash.take(),
+                                |_stats| true,
+                                peek_stash_read_memory_budget_bytes,
+                            )
+                            .await
+                            .expect("invalid usage");
+
                         // We always send our inline rows first. Ordering
                         // doesn't matter because we can only be in this case
                         // when there is no ORDER BY.
@@ -1155,7 +1175,7 @@ impl crate::coord::Coordinator {
                         // wanted to get a consistent ordering. That's not
                         // needed for correctness! But might be nice for more
                         // aesthetic reasons.
-                        for rows in response.inline_rows {
+                        for rows in inline_rows {
                             let result = tx.send(rows).await;
                             if result.is_err() {
                                 tracing::debug!("receiver went away");
@@ -1214,20 +1234,12 @@ impl crate::coord::Coordinator {
                         }
 
                         let batches = row_cursor.into_lease();
-                        tracing::trace!(?response.shard_id, "cleaning up batches of peek result");
+                        tracing::trace!(%shard_id, "cleaning up batches of peek result");
                         for batch in batches {
                             batch.delete().await;
                         }
                     });
 
-                    assert!(
-                        finishing.is_streamable(response.relation_desc.arity()),
-                        "can only get stashed responses when the finishing is streamable"
-                    );
-
-                    tracing::trace!("query result is streamable!");
-
-                    assert!(finishing.is_streamable(response.relation_desc.arity()));
                     let mut incremental_finishing = RowSetFinishingIncremental::new(
                         finishing.offset,
                         finishing.limit,
@@ -1541,6 +1553,46 @@ impl crate::coord::Coordinator {
     {
         let rows = Box::new(rows.into_row_iter());
         ExecuteResponse::SendingRowsImmediate { rows }
+    }
+}
+
+/// The receiving end of a peek's response channel, which deletes the batches of a stashed response
+/// it is dropped without receiving.
+struct PeekResponseReceiver {
+    rx: oneshot::Receiver<PeekResponse>,
+    persist_client: mz_persist_client::PersistClient,
+}
+
+impl PeekResponseReceiver {
+    async fn recv(&mut self) -> Result<PeekResponse, oneshot::error::RecvError> {
+        (&mut self.rx).await
+    }
+}
+
+impl Drop for PeekResponseReceiver {
+    fn drop(&mut self) {
+        // Closed before the check, so that a response sent after it fails to send, and the sender
+        // deletes it instead.
+        self.rx.close();
+        let Ok(PeekResponse::Stashed(stashed)) = self.rx.try_recv() else {
+            return;
+        };
+        let StashedPeekResponse {
+            shard_id, batches, ..
+        } = *stashed;
+        // `OwnedStash` deletes on the runtime it is built in.
+        if tokio::runtime::Handle::try_current().is_err() {
+            tracing::warn!(
+                %shard_id,
+                "dropping a stashed peek response outside a runtime leaves its batches behind"
+            );
+            return;
+        }
+        drop(OwnedStash::from_proto(
+            &self.persist_client,
+            shard_id,
+            batches,
+        ));
     }
 }
 

@@ -815,7 +815,7 @@ async fn a_walk_cancelled_while_uploading_deletes_what_it_wrote() {
         let (_state, response) = OffloadedPeek::walk(
             state,
             Uuid::nil(),
-            Some(stash),
+            Some(&stash),
             &config,
             &walk_metrics,
             order_by,
@@ -846,6 +846,58 @@ async fn a_walk_cancelled_while_uploading_deletes_what_it_wrote() {
         permits.available_permits(),
         1,
         "a cancelled walk releases the permit that admitted it"
+    );
+}
+
+/// A stashed answer that finds its peek cancelled is deleted, because its receiver was the only
+/// reader that would have.
+///
+/// The walk finishes before the cancellation, so the upload has handed its batch to the response
+/// and its own cleanup no longer reaches it.
+#[mz_ore::test(tokio::test)]
+async fn a_cancelled_offloaded_peek_deletes_its_stashed_batches() {
+    let keys = wide_ok_rows(8);
+    let peek = index_peek(trivial_finishing(), None);
+    let mut bundle = trace_bundle(&keys, cancelling_errors(0));
+    let scan = open(&mut bundle, &peek, Some(2 * widest_row_size(&keys)));
+
+    let metrics = worker_metrics();
+    let permits = Arc::new(PeekPermits::new(1));
+    let blob = CountedBlob::new();
+    let mut offloaded = OffloadedPeek::start(
+        peek.clone(),
+        scan,
+        Some(stash_target(&peek, blob.clients())),
+        Arc::clone(&permits),
+        counted_blob_config(1),
+        PeekWalkMetrics::new(&metrics),
+        std::thread::current(),
+    );
+    let response = answer(&mut offloaded).await;
+    assert!(
+        matches!(response, PeekResponse::Stashed(_)),
+        "the walk must reach the stash, not answer with {response:?}"
+    );
+    assert!(blob.written() > 0, "the stashed answer wrote parts");
+    assert_eq!(blob.deleted(), 0, "a finished answer keeps its parts");
+
+    let (result_tx, result_rx) = oneshot::channel();
+    drop(result_rx);
+    deliver(
+        result_tx,
+        response,
+        Duration::ZERO,
+        Some(&stash_target(&peek, blob.clients())),
+        peek.uuid,
+    );
+
+    blob.wait_until_nothing_is_left("a cancelled stashed answer")
+        .await;
+    assert_eq!(blob.deleted(), blob.written());
+    assert_eq!(
+        blob.deletes_of_nothing(),
+        0,
+        "the deletes must name the keys the answer wrote"
     );
 }
 

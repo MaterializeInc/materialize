@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use mz_compute_client::protocol::command::Peek;
 use mz_compute_client::protocol::response::{PeekResponse, StashedPeekResponse};
+use mz_compute_client::stash::OwnedStash;
 use mz_ore::task::RuntimeExt;
 use mz_persist::location::ExternalError;
 use mz_persist_client::Schemas;
@@ -451,6 +452,32 @@ impl StashTarget {
             self.relation_desc.clone(),
         )
         .await
+    }
+
+    /// Deletes the batches `response` names if it is stashed, and drops anything else.
+    ///
+    /// Returns at once. The deletion runs as a task of its own, so it completes even when the
+    /// caller's task is aborted right after, which is how a cancelled peek's walk ends.
+    pub(super) fn discard(&self, response: PeekResponse) {
+        let PeekResponse::Stashed(stashed) = response else {
+            return;
+        };
+        let StashedPeekResponse {
+            shard_id, batches, ..
+        } = *stashed;
+        let persist_clients = Arc::clone(&self.persist_clients);
+        let persist_location = self.persist_location.clone();
+        let _handle = mz_ore::task::spawn(
+            || format!("peek_stash::discard_response({shard_id})"),
+            async move {
+                match persist_clients.open(persist_location).await {
+                    Ok(client) => drop(OwnedStash::from_proto(&client, shard_id, batches)),
+                    Err(error) => {
+                        warn!(%shard_id, %error, "peek stash cannot delete a discarded response")
+                    }
+                }
+            },
+        );
     }
 }
 
