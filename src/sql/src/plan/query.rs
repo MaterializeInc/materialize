@@ -219,10 +219,12 @@ fn try_push_projection_order_by(
 /// `target_types`.
 ///
 /// The result is not yet cast to `target_types`, see [`cast_to_table_columns`]. `statement`
-/// names the statement in error messages.
+/// names the statement in error messages. `ccx` is the context for casting a simple `VALUES`
+/// list to `target_types`.
 fn plan_table_rows_query(
     qcx: &mut QueryContext,
     statement: &str,
+    ccx: CastContext,
     desc: &RelationDesc,
     ordering: &[usize],
     target_types: &[&SqlScalarType],
@@ -238,7 +240,7 @@ fn plan_table_rows_query(
             offset: None,
         } if ctes.is_empty() && order_by.is_empty() => {
             let names: Vec<_> = ordering.iter().map(|i| desc.get_name(*i)).collect();
-            plan_values_insert(qcx, statement, &names, target_types, &values)
+            plan_values_insert(qcx, statement, ccx, &names, target_types, &values)
         }
         _ => {
             let (expr, _scope) = plan_nested_query(qcx, &query)?;
@@ -248,23 +250,18 @@ fn plan_table_rows_query(
 }
 
 /// Casts each column of `expr` to the type of the column of `desc` at the same position in
-/// `ordering`, given as `target_types`, in assignment context.
+/// `ordering`, given as `target_types`, in context `ccx`.
 fn cast_to_table_columns(
     qcx: &QueryContext,
+    ccx: CastContext,
     desc: &RelationDesc,
     ordering: &[usize],
     target_types: &[&SqlScalarType],
     expr: HirRelationExpr,
 ) -> Result<HirRelationExpr, PlanError> {
     // Ensure the types of the source query match the types of the target table,
-    // installing assignment casts where necessary and possible.
-    cast_relation(
-        qcx,
-        CastContext::Assignment,
-        expr,
-        target_types.iter().copied(),
-    )
-    .map_err(|e| {
+    // installing casts where necessary and possible.
+    cast_relation(qcx, ccx, expr, target_types.iter().copied()).map_err(|e| {
         sql_err!(
             "column {} is of type {} but expression is of type {}",
             desc.get_name(ordering[e.column]).quoted(),
@@ -362,7 +359,15 @@ pub fn plan_insert_query(
     let expr = match source {
         InsertSource::Query(mut query) => {
             transform_ast::transform(scx, &mut query)?;
-            plan_table_rows_query(&mut qcx, "INSERT", &desc, &ordering, &source_types, query)?
+            plan_table_rows_query(
+                &mut qcx,
+                "INSERT",
+                CastContext::Assignment,
+                &desc,
+                &ordering,
+                &source_types,
+                query,
+            )?
         }
         InsertSource::DefaultValues => {
             HirRelationExpr::constant(vec![vec![]], SqlRelationType::empty())
@@ -390,7 +395,14 @@ pub fn plan_insert_query(
     source_types.truncate(expr_arity);
     ordering.truncate(expr_arity);
 
-    let expr = cast_to_table_columns(&qcx, &desc, &ordering, &source_types, expr)?;
+    let expr = cast_to_table_columns(
+        &qcx,
+        CastContext::Assignment,
+        &desc,
+        &ordering,
+        &source_types,
+        expr,
+    )?;
 
     // Fill in any omitted columns and rearrange into correct order
     let mut map_exprs = vec![];
@@ -821,8 +833,21 @@ pub fn plan_mutation_query_inner(
         }
         let ordering: Vec<_> = (0..desc.arity()).collect();
         let target_types: Vec<_> = desc.iter_types().map(|typ| &typ.scalar_type).collect();
-        let rows =
-            plan_table_rows_query(&mut qcx, "DELETE", &desc, &ordering, &target_types, rows)?;
+        // Implicit casts are the ones `INTERSECT ALL` applies when unifying `q` with the
+        // table's types, so the statement deletes exactly `t INTERSECT ALL q` whenever it
+        // plans. Assignment casts round or truncate (`numeric` to `int`, scale and
+        // precision changes), which would let a row of `q` match and delete a table row
+        // that `q` does not contain.
+        let ccx = CastContext::Implicit;
+        let rows = plan_table_rows_query(
+            &mut qcx,
+            "DELETE",
+            ccx,
+            &desc,
+            &ordering,
+            &target_types,
+            rows,
+        )?;
         if rows.arity() != desc.arity() {
             sql_bail!(
                 "DELETE ... ROWS query has {} columns but table {} has {}",
@@ -831,7 +856,7 @@ pub fn plan_mutation_query_inner(
                 desc.arity()
             );
         }
-        let rows = cast_to_table_columns(&qcx, &desc, &ordering, &target_types, rows)?;
+        let rows = cast_to_table_columns(&qcx, ccx, &desc, &ordering, &target_types, rows)?;
         // `get` is the left input, so every row the selection retracts is a row of the
         // table, at most as often as the table holds it.
         get = get.intersect_all(rows);
@@ -2233,12 +2258,13 @@ fn plan_values(
 /// This is special-cased in PostgreSQL and different enough from `plan_values`
 /// that it is easier to use a separate function entirely. Unlike a normal
 /// `VALUES` clause, each value is coerced to the type of the target table
-/// via an assignment cast.
+/// via a cast in context `ccx`.
 ///
 /// See: <https://github.com/postgres/postgres/blob/ad77039fa/src/backend/parser/analyze.c#L504-L518>
 fn plan_values_insert(
     qcx: &QueryContext,
     statement: &str,
+    ccx: CastContext,
     target_names: &[&ColumnName],
     target_types: &[&SqlScalarType],
     values: &[Vec<Expr<Aug>>],
@@ -2271,7 +2297,7 @@ fn plan_values_insert(
             let val = plan_expr(ecx, val)?;
             let val = typeconv::plan_coerce(ecx, val, target_type)?;
             let source_type = &ecx.scalar_type(&val);
-            let val = match typeconv::plan_cast(ecx, CastContext::Assignment, val, target_type) {
+            let val = match typeconv::plan_cast(ecx, ccx, val, target_type) {
                 Ok(val) => val,
                 Err(_) => sql_bail!(
                     "column {} is of type {} but expression is of type {}",

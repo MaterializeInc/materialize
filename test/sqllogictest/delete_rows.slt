@@ -190,7 +190,33 @@ DELETE FROM intents ROWS (SELECT * FROM excess)
 ----
 COMPLETE 0
 
-# Columns are cast to the table's types in assignment context, as for INSERT.
+# Columns are cast to the table's types with implicit casts only, the casts
+# INTERSECT ALL would apply. Assignment casts round, so they could match a row
+# the query does not contain.
+
+statement ok
+CREATE TABLE r (a int)
+
+statement ok
+INSERT INTO r VALUES (1)
+
+query I
+SELECT a FROM r INTERSECT ALL SELECT 1.4
+----
+
+statement error column "a" is of type integer but expression is of type numeric
+DELETE FROM r ROWS (SELECT 1.4)
+
+statement error column "a" is of type integer but expression is of type numeric
+DELETE FROM r ROWS (VALUES (1.4))
+
+statement error column "a" is of type integer but expression is of type bigint
+DELETE FROM r ROWS (SELECT 3000000000::bigint)
+
+query I
+SELECT * FROM r
+----
+1
 
 statement ok
 CREATE TABLE c (a bigint, b numeric(10, 2), d text)
@@ -203,8 +229,18 @@ DELETE FROM c ROWS (VALUES (1, 1.5, 'one'))
 ----
 COMPLETE 1
 
-simple
+statement error column "b" is of type numeric but expression is of type double precision
 DELETE FROM c ROWS (SELECT 2::int, 2.25::float8, 'two'::varchar)
+
+# A value with more scale than the column does not round onto a stored row.
+
+simple
+DELETE FROM c ROWS (SELECT 2::int, 2.254::numeric, 'two'::varchar)
+----
+COMPLETE 0
+
+simple
+DELETE FROM c ROWS (SELECT 2::int, 2.25::numeric, 'two'::varchar)
 ----
 COMPLETE 1
 
