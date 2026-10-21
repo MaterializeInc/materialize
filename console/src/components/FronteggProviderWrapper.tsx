@@ -9,7 +9,7 @@
 
 import React from "react";
 
-import { trackSignUpInHubspotActions } from "~/analytics/hubspot";
+import { buildFronteggEvents } from "~/components/fronteggEvents";
 import LoadingScreen from "~/components/LoadingScreen";
 import { RedirectUrlSanitizer } from "~/components/RedirectUrlSanitizer";
 import { CloudAppConfig } from "~/config/AppConfig";
@@ -25,6 +25,9 @@ import { getAllowedRedirectOrigins } from "~/utils/redirectUrl";
 const buildFronteggProviderProps = (
   appConfig: Readonly<CloudAppConfig>,
 ): FronteggProviderProps => {
+  const allowedRedirectOrigins = getAllowedRedirectOrigins(
+    appConfig.currentStack,
+  );
   return {
     localizations: {
       en: {
@@ -36,10 +39,7 @@ const buildFronteggProviderProps = (
       },
     },
     contextOptions: { baseUrl: appConfig.fronteggUrl ?? "" },
-    events: {
-      signUpComplete: trackSignUpInHubspotActions.signUpComplete,
-      userVerified: trackSignUpInHubspotActions.userVerified,
-    },
+    events: buildFronteggEvents(allowedRedirectOrigins),
     backgroundImage: fronteggAuthPageBackground,
     themeOptions: getFronteggTheme({
       requiresExternalRegistration: appConfig.requiresExternalRegistration,
@@ -53,7 +53,7 @@ const buildFronteggProviderProps = (
       keepSessionAlive: true,
       enforceRedirectToSameSite: true,
       // Lets sign-in from the marketing site return to the page it started on.
-      allowedRedirectOrigins: getAllowedRedirectOrigins(appConfig.currentStack),
+      allowedRedirectOrigins,
     },
     customLoader: () => <LoadingScreen />,
   };

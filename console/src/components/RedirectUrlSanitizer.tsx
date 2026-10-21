@@ -12,40 +12,13 @@ import { Navigate, useLocation, useSearchParams } from "react-router-dom";
 
 import { AUTH_ROUTES } from "~/fronteggRoutes";
 import {
+  forgetExternalRedirect,
+  rememberExternalRedirect,
+} from "~/utils/externalRedirect";
+import {
   isAllowedExternalRedirectUrl,
   isSafeRedirectUrl,
 } from "~/utils/redirectUrl";
-import storageAvailable from "~/utils/storageAvailable";
-
-// Frontegg's own localStorage key (FRONTEGG_AFTER_AUTH_REDIRECT_URL in
-// @frontegg/redux-store). Frontegg reads it after sign-in when the URL no longer
-// has a `redirectUrl` param, then clears it.
-const FRONTEGG_AFTER_AUTH_REDIRECT_URL = "FRONTEGG_AFTER_AUTH_REDIRECT_URL";
-
-/**
- * Social and SSO sign-in leave the Console for the identity provider and come
- * back on a callback URL without our `redirectUrl` param. Stash an allowed
- * external redirect where Frontegg looks for it so those flows return to the
- * marketing site too.
- */
-const rememberExternalRedirect = (redirectUrl: string) => {
-  if (!storageAvailable("localStorage")) return;
-  window.localStorage.setItem(FRONTEGG_AFTER_AUTH_REDIRECT_URL, redirectUrl);
-};
-
-/**
- * A visitor who starts signing in from the marketing site and gives up would
- * otherwise be sent there the next time they sign in to the Console directly
- * (which arrives as `/account/login?redirectUrl=/`, or another internal path).
- * Only our external redirects are cleared; Frontegg's own internal paths stay.
- */
-const forgetExternalRedirect = (allowedOrigins: readonly string[]) => {
-  if (!storageAvailable("localStorage")) return;
-  const stored = window.localStorage.getItem(FRONTEGG_AFTER_AUTH_REDIRECT_URL);
-  if (stored && isAllowedExternalRedirectUrl(stored, allowedOrigins)) {
-    window.localStorage.removeItem(FRONTEGG_AFTER_AUTH_REDIRECT_URL);
-  }
-};
 
 /**
  * Sanitizes the redirectUrl query parameter on the login page to prevent open redirect attacks.
