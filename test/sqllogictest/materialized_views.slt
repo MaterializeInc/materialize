@@ -858,6 +858,13 @@ NULL  -1  -2
 
 ## If there is no creation refresh, then a query should block until the first refresh.
 
+# The 10s schedules below require input history younger than their previous
+# refresh point, seven seconds before creation. Publish compaction accordingly.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s'
+----
+COMPLETE 0
+
 # Save the current time.
 statement ok
 CREATE TABLE start_time(t timestamp);
@@ -956,6 +963,11 @@ query B
 SELECT now() - (SELECT * from start_time) >= INTERVAL '3 sec';
 ----
 true
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET catalog_read_protection_publish_interval
+----
+COMPLETE 0
 
 ## Constant query in an MV with REFRESH options
 statement ok

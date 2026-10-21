@@ -238,6 +238,13 @@ SELECT count(*) FROM rt WHERE lower(r) IS NULL
 
 # EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW is also supported
 
+# MV explanations sample the earliest readable input snapshot. Publish
+# compaction within the three-second wait so that snapshot includes the inserts.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s'
+----
+COMPLETE 0
+
 statement ok
 CREATE MATERIALIZED VIEW big_numbers AS SELECT * FROM numbers WHERE value > 10000;
 
@@ -266,6 +273,11 @@ query TIIII
 EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW indexed_numbers
 ----
 materialize.public.numbers  1313  0  1  0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET catalog_read_protection_publish_interval
+----
+COMPLETE 0
 
 # EXPLAIN FILTER PUSHDOWN should work even if there are no replicas.
 statement ok

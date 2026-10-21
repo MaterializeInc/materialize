@@ -18,9 +18,9 @@ runtime evidence. Keep their proof scopes closed and their regular regressions
 enabled. Incremental protection publication, removal of the whole-map API,
 prepared-MV admission and the replacement-MV replay correction are implemented.
 
-M2 verification and history consolidation are complete within the approved scope.
-No further implementation is currently identified as necessary. The asynchronous
-catalog-owner refactor is not part of M2 and must not resume.
+M2 verification at the 1s default and history consolidation are complete within
+the approved scope. Verification of the approved 60s default remains open.
+The asynchronous catalog-owner refactor is not part of M2 and must not resume.
 
 ## Verification and closeout
 
@@ -31,11 +31,14 @@ statistics and table-finalization failures, plus a clusterd OOM in parallel
 shard 2. Separate short-window fixture assumptions from product regressions.
 The webhook build superseded manual CI140145 without its seed override, so it
 is not the matched comparison requested there. Evidence is under
-`scratch/cadence60-default/ci140146/`. Scratch access is restored. The unchanged paused-cluster failure reproduces
-locally at 60s. Aljoscha approved short publication intervals only in the
-interval-sensitive correctness fixtures, preserving their assertions and deadlines. The prompt's restriction against changing the 1s
-default is superseded by this approval. Keep deadlines and assertions unchanged
-while diagnosing this follow-up.
+`scratch/cadence60-default/`. Scratch access is restored. The paused-cluster and
+testdrive failures reproduce at 60s. The failed table shard later tombstones
+without intervention, so cleanup is delayed rather than permanently stuck.
+Revisions `9d765d0a` and `888009e6` scope 1s publication to interval-sensitive
+fixtures, as approved, without changing assertions or deadlines. All three targeted cluster workflows and the three reproduced testdrive files
+pass on scratch. REFRESH semantics, native unit fixtures and the parallel OOM
+still require separate resolution. The prompt's restriction against changing
+the 1s default is superseded by Aljoscha's approval.
 
 CI140105 at `2bde8879` finishes with 94 passed jobs. Cargo, cluster frontier
 checks, Kafka RTR, both parallel shards and the closed native recovery/handover
