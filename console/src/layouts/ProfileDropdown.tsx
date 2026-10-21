@@ -38,6 +38,7 @@ import { logout, logoutAndRedirectOrThrow } from "~/api/materialize/auth";
 import ThemeSwitcher from "~/components/ThemeSwitcher";
 import UiPreviewSwitcher from "~/components/UiPreviewSwitcher";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
+import { useAppConfig } from "~/config/useAppConfig";
 import {
   AdminPortal,
   AuthActions,
@@ -47,9 +48,11 @@ import {
 import { type AuthContextProps } from "~/external-library-wrappers/oidc";
 import { SUPPORT_CHAT_URL, SUPPORT_URL } from "~/externalUrls";
 import { AUTH_ROUTES } from "~/fronteggRoutes";
+import { useFlags } from "~/hooks/useFlags";
 import { useSelfManagedProfile } from "~/hooks/useSelfManagedProfile";
 import { NAV_HORIZONTAL_SPACING, NAV_HOVER_STYLES } from "~/layouts/constants";
 import docUrls from "~/mz-doc-urls.json";
+import { SUPPORT_PAGE_PATH } from "~/platform/routeHelpers";
 import { MaterializeTheme } from "~/theme";
 
 const UserInfoHeaderBlock = ({
@@ -492,7 +495,12 @@ const useSupportUrl = () => {
 
 const CommunityMenuItems = () => {
   const { track } = useSegment();
-  const supportUrl = useSupportUrl();
+  const flags = useFlags();
+  const externalSupportUrl = useSupportUrl();
+  const appConfig = useAppConfig();
+  // The in-console support page is Cloud only.
+  const isSupportPageEnabled =
+    appConfig.mode === "cloud" && flags["support-page-cns-147"];
 
   return (
     <VStack spacing={0} width="100%">
@@ -519,14 +527,20 @@ const CommunityMenuItems = () => {
       >
         Join us on Slack
       </MenuItem>
-      <MenuItem
-        as={RouterLink}
-        to={supportUrl}
-        fontWeight="medium"
-        target="_blank"
-      >
-        Support
-      </MenuItem>
+      {isSupportPageEnabled ? (
+        <MenuItem as={RouterLink} to={SUPPORT_PAGE_PATH} fontWeight="medium">
+          Help and support
+        </MenuItem>
+      ) : (
+        <MenuItem
+          as={RouterLink}
+          to={externalSupportUrl}
+          fontWeight="medium"
+          target="_blank"
+        >
+          Support
+        </MenuItem>
+      )}
     </VStack>
   );
 };

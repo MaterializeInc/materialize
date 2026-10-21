@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { Flex, FlexProps, Tooltip, useTheme } from "@chakra-ui/react";
-import { Box, HStack, VStack } from "@chakra-ui/react";
+import { Box, BoxProps, HStack, VStack } from "@chakra-ui/react";
 import { useAtom, useAtomValue } from "jotai";
 import React from "react";
 import { Link as RouterLink, useLocation } from "react-router-dom";
@@ -75,15 +75,31 @@ export const NavItem = (props: NavItemProps) => {
           }
         >
           {props.isCollapsed ? (
-            <Tooltip label={props.label}>{props.icon}</Tooltip>
+            <Tooltip label={props.label}>
+              <Box position="relative">
+                {props.icon}
+                {props.indicatorLabel && (
+                  <NavIndicator
+                    label={props.indicatorLabel}
+                    position="absolute"
+                    top="-1px"
+                    right="-1px"
+                  />
+                )}
+              </Box>
+            </Tooltip>
           ) : (
             <>
               {props.icon}
               <Box
+                flex={props.indicatorLabel ? "1" : undefined}
                 textStyle={props.nested ? "text-small-heavy" : "text-ui-med"}
               >
                 {props.label}
               </Box>
+              {props.indicatorLabel && (
+                <NavIndicator label={props.indicatorLabel} />
+              )}
             </>
           )}
         </HStack>
@@ -103,6 +119,25 @@ export const NavItem = (props: NavItemProps) => {
           </HideIfEnvironmentDisabled>
         ))}
     </VStack>
+  );
+};
+
+/** A small attention dot, e.g. for unread support replies. */
+const NavIndicator = ({ label, ...props }: BoxProps & { label: string }) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  return (
+    <Box
+      role="status"
+      aria-label={label}
+      title={label}
+      data-testid="nav-indicator"
+      width="2"
+      height="2"
+      borderRadius="full"
+      bg={colors.accent.red}
+      flexShrink={0}
+      {...props}
+    />
   );
 };
 

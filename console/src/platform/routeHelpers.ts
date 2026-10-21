@@ -176,3 +176,6 @@ export const relativeQueryHistoryPath = (executionId: string) =>
 export const newConnectionPath = (regionSlug: string) => {
   return `${regionPath(regionSlug)}/sources/new/connection`;
 };
+
+/** The account-level support page. */
+export const SUPPORT_PAGE_PATH = "/support";
