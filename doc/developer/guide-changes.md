@@ -746,11 +746,12 @@ Two rules:
 
 When you post AI findings on someone else's PR, the comments are yours. Have
 the agent leave a pending review rather than submit one, then delete false
-positives and noise, rewrite what remains in your own words, and submit it
-yourself. Post only findings you have checked and would defend. A short list of
-correctness issues helps the author more than a long list of mixed quality, so
-leave style nits to `bin/lint` and to your own judgment. Mention AI assistance
-once in the review body rather than on each comment. The same rule covers
+positives and noise, and submit it yourself. Post only findings you have
+checked and would defend. A short list of correctness issues helps the author
+more than a long list of mixed quality, so leave style nits to `bin/lint` and to
+your own judgment. Open each comment with your own position. Quoting the agent's
+analysis below it is fine when it is marked as agent text. Without such quotes,
+mention AI assistance once in the review body. The same rule covers
 replies on your own PRs: an agent may draft a reply, but you read it before it
 is posted. Automated reviewers that run without a human in the loop belong in
 CI under a bot account, never under a person's name.
