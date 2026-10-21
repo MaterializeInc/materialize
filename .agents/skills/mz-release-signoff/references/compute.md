@@ -32,6 +32,7 @@ System clusters are `s` followed by digits in either family, and `.*cluster-s[0-
 | `container_memory_rss` | gauge | Tracks working set closely; a divergence between them is itself a finding. |
 | `container_memory_swap` | gauge | Limit is `container_spec_memory_swap_limit_bytes`. Grows with process age on swap-enabled nodes, and trades against working set at a restart. |
 | `mz_memory_limiter_memory_usage_bytes` | gauge | Memory plus swap, the quantity the limiter enforces, and the tightest memory reading across a boundary. Present only on replicas that run the limiter, see hazards. Divide by `mz_memory_limiter_memory_limit_bytes`. |
+| `jemalloc_active`, `jemalloc_allocated`, `jemalloc_resident` | gauge | Allocator state, per process; select with `app="clusterd"`, there is no `container` label. `active - allocated` is allocator overhead and is the direct reading for an allocator regression. |
 | `mz_metrics_libc_ru_maxrss_bytes` | gauge, monotone per process | Peak resident set. Resets to zero on restart, so it measures the current generation only. |
 | `kubelet_volume_stats_used_bytes` | gauge | Scratch disk. Limit is `kubelet_volume_stats_capacity_bytes`. |
 | `container_start_time_seconds` | gauge | Source of the uptime panel, and the cheapest way to establish restart age. |
