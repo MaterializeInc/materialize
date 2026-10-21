@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Box, HStack, Text, VStack } from "@chakra-ui/react";
+import { HStack, Text, VStack } from "@chakra-ui/react";
 import { sort } from "d3";
 import React from "react";
 import { useParams } from "react-router-dom";
@@ -22,10 +22,10 @@ import { MainContentContainer } from "~/layouts/BaseLayout";
 import { ClusterInfoBox } from "~/platform/clusters/ClusterOverview";
 import { ClusterParams } from "~/platform/clusters/ClusterRoutes";
 import { CLUSTERS_FETCH_ERROR_MESSAGE } from "~/platform/clusters/constants";
-import LargestMaintainedQueries from "~/platform/clusters/LargestMaintainedQueries";
 import { useAllClusters } from "~/store/allClusters";
 import { assert } from "~/util";
 
+import { MemoryByObject } from "./MemoryByObject";
 import { ResourceUsage } from "./ResourceUsage/ResourceUsage";
 import { useSelectedReplica } from "./useSelectedReplica";
 
@@ -78,12 +78,11 @@ const ClusterMetricsContent = ({ cluster }: { cluster: Cluster }) => {
           timePeriodMinutes={timePeriodMinutes}
           selectedReplicaId={selectedReplica?.id}
         />
-        <Box width="100%">
-          <LargestMaintainedQueries
-            clusterId={cluster.id}
-            clusterName={cluster.name}
-          />
-        </Box>
+        <MemoryByObject
+          clusterId={cluster.id}
+          clusterName={cluster.name}
+          replicaName={selectedReplica?.name}
+        />
       </VStack>
     </MainContentContainer>
   );
