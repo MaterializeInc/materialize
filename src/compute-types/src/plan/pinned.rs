@@ -38,17 +38,21 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use mz_expr::MfpPlan;
-use mz_repr::{GlobalId, ReprRelationType, SqlRelationType};
+use mz_expr::{Id, MfpPlan, MirScalarExpr};
+use mz_repr::refresh_schedule::RefreshSchedule;
+use mz_repr::{GlobalId, RelationDesc, ReprRelationType, SqlRelationType};
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use timely::progress::Antichain;
 
 use crate::dataflows::{
     BuildDesc, DataflowDescription, IndexDesc, IndexImport, LirDataflowDescription, SourceImport,
 };
-use crate::plan::LirRelationExpr;
 use crate::plan::scalar::LirScalarExpr;
-use crate::sinks::{ComputeSinkConnection, ComputeSinkDesc};
+use crate::plan::{LirRelationExpr, LirRelationNode};
+use crate::sinks::{
+    ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection, MetricSinkConnection,
+};
 use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
 /// A pinned LIR plan: the optimizer's decisions for one dataflow.
@@ -323,22 +327,358 @@ impl TryFrom<LirDataflowDescription> for PinnedDataflow {
     }
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// INSTANTIATION
+///////////////////////////////////////////////////////////////////////////////
+
+/// What [`PinnedDataflow::instantiate`] needs from its environment: catalog
+/// facts looked up by export id, and fresh transient ids. Each lookup returns
+/// `None` when no item of that kind exists.
+pub trait InstantiationContext {
+    /// The index exported under `id`.
+    fn index(&self, id: GlobalId) -> Option<IndexInfo>;
+    /// The materialized view whose sink is exported under `id`.
+    fn materialized_view(&self, id: GlobalId) -> Option<MaterializedViewInfo>;
+    /// The metric sink exported under `id`.
+    fn metric_sink(&self, id: GlobalId) -> Option<MetricSinkInfo>;
+    /// A transient id no other dataflow in this process uses.
+    fn allocate_transient_id(&self) -> GlobalId;
+}
+
+/// The catalog facts an exported index descriptor is rebuilt from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexInfo {
+    /// The object the index is on.
+    pub on: GlobalId,
+    /// The key the index arranges by.
+    pub keys: Vec<MirScalarExpr>,
+    /// The relation type of the object the index is on.
+    pub typ: ReprRelationType,
+}
+
+/// The catalog facts an exported materialized view sink is rebuilt from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaterializedViewInfo {
+    /// The view's description. Instantiation makes the asserted columns
+    /// non-nullable itself, so a description that already reflects the
+    /// assertions, as the catalog's does, is fine.
+    pub desc: RelationDesc,
+    /// Columns asserted non-null.
+    pub non_null_assertions: Vec<usize>,
+    /// The view's refresh schedule.
+    pub refresh_schedule: Option<RefreshSchedule>,
+}
+
+/// The catalog facts an exported metric sink is rebuilt from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MetricSinkInfo {
+    /// The `sink` label on the sink's health gauges.
+    pub label: String,
+    /// The description of the shaped object the sink reads. This is what the
+    /// metric sink optimizer derives from the source description and prefix,
+    /// not the source description itself.
+    pub from_desc: RelationDesc,
+}
+
+/// Why a [`PinnedDataflow`] could not be instantiated.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum InstantiateError {
+    /// The catalog no longer has an item of the expected kind under this id.
+    MissingCatalogItem {
+        /// The export's id.
+        id: GlobalId,
+        /// The kind of item the plan was compiled for.
+        kind: &'static str,
+    },
+    /// The catalog item and the pinned plan disagree about the export.
+    ExportDrift {
+        /// The export's id.
+        id: GlobalId,
+        /// What disagrees.
+        detail: String,
+    },
+}
+
+impl fmt::Display for InstantiateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InstantiateError::MissingCatalogItem { id, kind } => {
+                write!(f, "no {kind} catalog item for export {id}")
+            }
+            InstantiateError::ExportDrift { id, detail } => {
+                write!(f, "export {id} drifted from its pinned plan: {detail}")
+            }
+        }
+    }
+}
+impl std::error::Error for InstantiateError {}
+
+impl PinnedDataflow {
+    /// Rebuilds the description the compute controller expects.
+    ///
+    /// The result has no `as_of`, `until`, `initial_storage_as_of`, or
+    /// `time_dependence`, and its source imports carry no upper frontier or
+    /// storage metadata. The caller supplies those the same way it does for a
+    /// freshly optimized dataflow. The dataflow-level refresh schedule is the
+    /// exported materialized view's, if there is one.
+    ///
+    /// The result equals the description that was pinned, up to transient
+    /// build ids, which are reallocated from `ctx`.
+    ///
+    /// Fails if a catalog item an export was compiled for is gone, or if the
+    /// catalog disagrees with the plan about what the export is.
+    pub fn instantiate(
+        self,
+        ctx: &dyn InstantiationContext,
+        debug_name: String,
+    ) -> Result<LirDataflowDescription, InstantiateError> {
+        let PinnedDataflow {
+            source_imports,
+            index_imports,
+            mut objects_to_build,
+            index_exports,
+            sink_exports,
+        } = self;
+
+        // Transient ids come from a per-process counter, so the internal
+        // build ids of a plan pinned elsewhere can collide with a dataflow
+        // built in this process. Compute keys its LIR introspection by build
+        // id, and a collision merges two dataflows' operators there.
+        let mut renamed = BTreeMap::new();
+        for object in &mut objects_to_build {
+            if object.id.is_transient() {
+                let fresh = ctx.allocate_transient_id();
+                renamed.insert(object.id, fresh);
+                object.id = fresh;
+            }
+        }
+        let rename = |id: GlobalId| renamed.get(&id).copied().unwrap_or(id);
+        for object in &mut objects_to_build {
+            replace_global_ids(&mut object.plan, &rename);
+        }
+
+        let source_imports = source_imports
+            .into_iter()
+            .map(|(id, import)| {
+                let PinnedSourceImport {
+                    operators,
+                    typ,
+                    monotonic,
+                    with_snapshot,
+                } = import;
+                let import = SourceImport {
+                    desc: SourceInstanceDesc {
+                        arguments: SourceInstanceArguments { operators },
+                        storage_metadata: (),
+                        typ,
+                    },
+                    monotonic,
+                    with_snapshot,
+                    upper: Antichain::new(),
+                };
+                (id, import)
+            })
+            .collect();
+
+        let index_imports = index_imports
+            .into_iter()
+            .map(|(id, import)| {
+                let PinnedIndexImport {
+                    desc: IndexDesc { on_id, key },
+                    typ,
+                    monotonic,
+                    with_snapshot,
+                } = import;
+                let import = IndexImport {
+                    desc: IndexDesc {
+                        on_id,
+                        key: key.iter().map(MirScalarExpr::from).collect(),
+                    },
+                    typ,
+                    monotonic,
+                    with_snapshot,
+                };
+                (id, import)
+            })
+            .collect();
+
+        let is_built = |id: GlobalId| objects_to_build.iter().any(|object| object.id == id);
+
+        let mut rebuilt_index_exports = BTreeMap::new();
+        for (id, on) in index_exports {
+            let info = ctx
+                .index(id)
+                .ok_or(InstantiateError::MissingCatalogItem { id, kind: "index" })?;
+            if info.on != on {
+                return Err(InstantiateError::ExportDrift {
+                    id,
+                    detail: format!("pinned on {on}, catalog says {}", info.on),
+                });
+            }
+            let Some(build) = objects_to_build.iter().find(|object| object.id == id) else {
+                return Err(InstantiateError::ExportDrift {
+                    id,
+                    detail: "the plan builds no object for the index".to_string(),
+                });
+            };
+            // The index's build arranges by the catalog key, either with an
+            // explicit `ArrangeBy` or, when lowering found the key already
+            // available on the object it reads, with a bare `Get` whose
+            // `keys` lists it.
+            let arranged = match &build.plan.node {
+                LirRelationNode::ArrangeBy { forms, .. } => &forms.arranged,
+                LirRelationNode::Get { keys, .. } => &keys.arranged,
+                node => {
+                    return Err(InstantiateError::ExportDrift {
+                        id,
+                        detail: format!(
+                            "the index's build is neither an arrangement nor a read: {node:?}"
+                        ),
+                    });
+                }
+            };
+            let lir_key: Vec<LirScalarExpr> = info
+                .keys
+                .iter()
+                .map(|expr| {
+                    LirScalarExpr::try_from(expr).expect("catalog index keys are materializable")
+                })
+                .collect();
+            if !arranged.iter().any(|(key, _, _)| *key == lir_key) {
+                return Err(InstantiateError::ExportDrift {
+                    id,
+                    detail: format!("catalog key {lir_key:?} is not among the plan's arrangements"),
+                });
+            }
+            rebuilt_index_exports.insert(
+                id,
+                (
+                    IndexDesc {
+                        on_id: on,
+                        key: info.keys,
+                    },
+                    info.typ,
+                ),
+            );
+        }
+
+        let mut refresh_schedule = None;
+        let mut rebuilt_sink_exports = BTreeMap::new();
+        for (
+            id,
+            PinnedSink {
+                from,
+                kind,
+                from_arrangement,
+            },
+        ) in sink_exports
+        {
+            let from = rename(from);
+            if !is_built(from) {
+                return Err(InstantiateError::ExportDrift {
+                    id,
+                    detail: format!("the plan builds no object {from} for the sink to read"),
+                });
+            }
+            let desc = match kind {
+                PinnedSinkKind::MaterializedView => {
+                    let info =
+                        ctx.materialized_view(id)
+                            .ok_or(InstantiateError::MissingCatalogItem {
+                                id,
+                                kind: "materialized view",
+                            })?;
+                    // Mirrors the materialized view optimizer: the sink's
+                    // description is the catalog description with the
+                    // asserted columns made non-nullable.
+                    let mut typ = info.desc.typ().clone();
+                    for &column in &info.non_null_assertions {
+                        typ.column_types[column].nullable = false;
+                    }
+                    let rel_desc = RelationDesc::new(typ, info.desc.iter_names().cloned());
+                    refresh_schedule.clone_from(&info.refresh_schedule);
+                    ComputeSinkDesc {
+                        from,
+                        from_desc: rel_desc.clone(),
+                        connection: ComputeSinkConnection::MaterializedView(
+                            MaterializedViewSinkConnection {
+                                value_desc: rel_desc,
+                                storage_metadata: (),
+                            },
+                        ),
+                        with_snapshot: true,
+                        up_to: Antichain::new(),
+                        non_null_assertions: info.non_null_assertions,
+                        refresh_schedule: info.refresh_schedule,
+                        from_arrangement,
+                    }
+                }
+                PinnedSinkKind::MetricSink => {
+                    let info = ctx
+                        .metric_sink(id)
+                        .ok_or(InstantiateError::MissingCatalogItem {
+                            id,
+                            kind: "metric sink",
+                        })?;
+                    ComputeSinkDesc {
+                        from,
+                        from_desc: info.from_desc,
+                        connection: ComputeSinkConnection::MetricSink(MetricSinkConnection {
+                            label: info.label,
+                        }),
+                        with_snapshot: true,
+                        up_to: Antichain::new(),
+                        non_null_assertions: Vec::new(),
+                        refresh_schedule: None,
+                        from_arrangement,
+                    }
+                }
+            };
+            rebuilt_sink_exports.insert(id, desc);
+        }
+
+        Ok(DataflowDescription {
+            source_imports,
+            index_imports,
+            objects_to_build,
+            index_exports: rebuilt_index_exports,
+            sink_exports: rebuilt_sink_exports,
+            as_of: None,
+            until: Antichain::new(),
+            initial_storage_as_of: None,
+            refresh_schedule,
+            debug_name,
+            time_dependence: None,
+        })
+    }
+}
+
+fn replace_global_ids(expr: &mut LirRelationExpr, rename: &impl Fn(GlobalId) -> GlobalId) {
+    let mut todo = vec![expr];
+    while let Some(expr) = todo.pop() {
+        if let LirRelationNode::Get {
+            id: Id::Global(id), ..
+        } = &mut expr.node
+        {
+            *id = rename(*id);
+        }
+        todo.extend(expr.node.children_mut());
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::time::Duration;
 
-    use mz_expr::{Id, MapFilterProject, MirScalarExpr, UnmaterializableFunc, func};
-    use mz_repr::RelationDesc;
+    use mz_expr::{MapFilterProject, UnmaterializableFunc, func};
     use mz_repr::refresh_schedule::RefreshEvery;
-    use mz_repr::refresh_schedule::RefreshSchedule;
     use mz_repr::{Datum, ReprScalarType, SqlScalarType, Timestamp};
-    use timely::progress::Antichain;
 
     use super::*;
-    use crate::plan::LirRelationNode;
     use crate::plan::scalar::mfp_plan_mir_to_lir;
     use crate::plan::{ArrangementStrategy, AvailableCollections, GetPlan, LirId};
-    use crate::sinks::{MaterializedViewSinkConnection, SubscribeSinkConnection};
+    use crate::sinks::SubscribeSinkConnection;
 
     const SOURCE: GlobalId = GlobalId::User(1);
     const IMPORTED_INDEX: GlobalId = GlobalId::User(2);
@@ -452,6 +792,14 @@ mod tests {
         }
     }
 
+    fn mv_info() -> MaterializedViewInfo {
+        MaterializedViewInfo {
+            desc: mv_desc(),
+            non_null_assertions: vec![0],
+            refresh_schedule: Some(schedule()),
+        }
+    }
+
     /// The sink the materialized view optimizer emits for `mv_info()`.
     fn mv_sink(from: GlobalId) -> ComputeSinkDesc {
         let asserted = RelationDesc::new(
@@ -471,6 +819,49 @@ mod tests {
             refresh_schedule: Some(schedule()),
             from_arrangement: Some((lir_key(), identity_mfp())),
         }
+    }
+
+    /// Transient ids are handed out from `next_transient` upward. The
+    /// fixtures number their builds from 1, so a context starting at 1
+    /// reproduces them.
+    struct Ctx {
+        index: Option<IndexInfo>,
+        mv: Option<MaterializedViewInfo>,
+        next_transient: Cell<u64>,
+    }
+
+    impl Ctx {
+        fn new(index: Option<IndexInfo>, mv: Option<MaterializedViewInfo>) -> Self {
+            Ctx {
+                index,
+                mv,
+                next_transient: Cell::new(1),
+            }
+        }
+    }
+
+    impl InstantiationContext for Ctx {
+        fn index(&self, _id: GlobalId) -> Option<IndexInfo> {
+            self.index.clone()
+        }
+        fn materialized_view(&self, _id: GlobalId) -> Option<MaterializedViewInfo> {
+            self.mv.clone()
+        }
+        fn metric_sink(&self, _id: GlobalId) -> Option<MetricSinkInfo> {
+            None
+        }
+        fn allocate_transient_id(&self) -> GlobalId {
+            let id = self.next_transient.get();
+            self.next_transient.set(id + 1);
+            GlobalId::Transient(id)
+        }
+    }
+
+    fn instantiate(df: &LirDataflowDescription, ctx: &Ctx) -> LirDataflowDescription {
+        PinnedDataflow::try_from(df.clone())
+            .expect("pinnable")
+            .instantiate(ctx, df.debug_name.clone())
+            .expect("instantiates")
     }
 
     #[mz_ore::test]
@@ -505,11 +896,212 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn materialized_view_round_trips() {
+        let df = materialized_view_dataflow();
+
+        let pinned = PinnedDataflow::try_from(df.clone()).unwrap();
+        let (_, lower, upper) = pinned.source_imports[&SOURCE]
+            .operators
+            .clone()
+            .expect("pushed-down operators")
+            .into_parts();
+        assert_eq!(
+            (lower.len(), upper.len()),
+            (1, 0),
+            "temporal bound is pinned as a bound"
+        );
+        let ctx = Ctx::new(None, Some(mv_info()));
+        let rebuilt = pinned.instantiate(&ctx, "test".to_string()).unwrap();
+        assert_eq!(rebuilt, df);
+    }
+
+    #[mz_ore::test]
     fn pinned_dataflow_round_trips_through_json() {
         let pinned = PinnedDataflow::try_from(materialized_view_dataflow()).unwrap();
         let json = serde_json::to_string(&pinned).expect("serializes as JSON");
         assert!(json.contains("\"u1\":"), "map keys are id strings: {json}");
         let parsed: PinnedDataflow = serde_json::from_str(&json).expect("parses back");
         assert_eq!(parsed, pinned);
+    }
+
+    #[mz_ore::test]
+    fn instantiate_reallocates_transient_build_ids() {
+        let mut df = materialized_view_dataflow();
+        // A second build reading the first, and the sink reading the second,
+        // so both a `Get` and a sink `from` must follow the renaming.
+        let inner = GlobalId::Transient(2);
+        df.objects_to_build.push(BuildDesc {
+            id: inner,
+            plan: get(2, VIEW),
+        });
+        df.sink_exports.insert(MV_SINK, mv_sink(inner));
+
+        let ctx = Ctx::new(None, Some(mv_info()));
+        ctx.next_transient.set(7);
+        let rebuilt = instantiate(&df, &ctx);
+
+        let ids: Vec<_> = rebuilt.objects_to_build.iter().map(|o| o.id).collect();
+        assert_eq!(ids, [GlobalId::Transient(7), GlobalId::Transient(8)]);
+        assert!(
+            matches!(
+                &rebuilt.objects_to_build[1].plan.node,
+                LirRelationNode::Get {
+                    id: Id::Global(GlobalId::Transient(7)),
+                    ..
+                }
+            ),
+            "the Get follows the renamed build"
+        );
+        assert_eq!(rebuilt.sink_exports[&MV_SINK].from, GlobalId::Transient(8));
+        assert_eq!(
+            rebuilt.source_imports.keys().copied().collect::<Vec<_>>(),
+            [SOURCE]
+        );
+    }
+
+    fn index_dataflow() -> LirDataflowDescription {
+        let mut df = imports_only();
+        df.objects_to_build.push(BuildDesc {
+            id: ON,
+            plan: get(2, SOURCE),
+        });
+        df.objects_to_build.push(BuildDesc {
+            id: INDEX,
+            plan: LirRelationExpr {
+                lir_id: LirId(3),
+                node: LirRelationNode::ArrangeBy {
+                    input_key: None,
+                    input: Box::new(get(4, ON)),
+                    input_mfp: identity_mfp(),
+                    forms: AvailableCollections::new_arranged(vec![(lir_key(), vec![0], vec![])]),
+                    strategy: ArrangementStrategy::Direct,
+                },
+            },
+        });
+        df.index_exports.insert(
+            INDEX,
+            (
+                IndexDesc {
+                    on_id: ON,
+                    key: key(),
+                },
+                repr_typ(),
+            ),
+        );
+        df
+    }
+
+    #[mz_ore::test]
+    fn index_round_trips() {
+        let df = index_dataflow();
+        let pinned = PinnedDataflow::try_from(df.clone()).unwrap();
+        assert_eq!(pinned.index_exports, BTreeMap::from([(INDEX, ON)]));
+        let ctx = Ctx::new(
+            Some(IndexInfo {
+                on: ON,
+                keys: key(),
+                typ: repr_typ(),
+            }),
+            None,
+        );
+        let rebuilt = pinned.instantiate(&ctx, "test".to_string()).unwrap();
+        assert_eq!(rebuilt, df);
+    }
+
+    /// The shape lowering produces when `ON` already arranges by the key: the
+    /// index's build is a bare `Get` of `ON` carrying that arrangement.
+    fn index_dataflow_with_elided_arrange_by() -> LirDataflowDescription {
+        let mut df = index_dataflow();
+        let build = df
+            .objects_to_build
+            .iter_mut()
+            .find(|object| object.id == INDEX)
+            .unwrap();
+        build.plan = LirRelationExpr {
+            lir_id: LirId(3),
+            node: LirRelationNode::Get {
+                id: Id::Global(ON),
+                keys: AvailableCollections::new_arranged(vec![(lir_key(), vec![0], vec![])]),
+                plan: GetPlan::PassArrangements,
+            },
+        };
+        df
+    }
+
+    #[mz_ore::test]
+    fn index_with_elided_arrange_by_round_trips() {
+        let df = index_dataflow_with_elided_arrange_by();
+        let ctx = Ctx::new(
+            Some(IndexInfo {
+                on: ON,
+                keys: key(),
+                typ: repr_typ(),
+            }),
+            None,
+        );
+        assert_eq!(instantiate(&df, &ctx), df);
+    }
+
+    #[mz_ore::test]
+    fn index_key_drift_is_detected() {
+        let ctx = || {
+            Ctx::new(
+                Some(IndexInfo {
+                    on: ON,
+                    keys: vec![MirScalarExpr::column(0).call_is_null()],
+                    typ: repr_typ(),
+                }),
+                None,
+            )
+        };
+        for df in [index_dataflow(), index_dataflow_with_elided_arrange_by()] {
+            let pinned = PinnedDataflow::try_from(df).unwrap();
+            assert!(matches!(
+                pinned.instantiate(&ctx(), "test".to_string()),
+                Err(InstantiateError::ExportDrift { id: INDEX, .. })
+            ));
+        }
+    }
+
+    #[mz_ore::test]
+    fn index_built_from_an_unverifiable_shape_is_drift() {
+        let mut df = index_dataflow();
+        let build = df
+            .objects_to_build
+            .iter_mut()
+            .find(|object| object.id == INDEX)
+            .unwrap();
+        build.plan = LirRelationExpr {
+            lir_id: LirId(3),
+            node: LirRelationNode::Negate {
+                input: Box::new(get(4, ON)),
+            },
+        };
+        let pinned = PinnedDataflow::try_from(df).unwrap();
+        let ctx = Ctx::new(
+            Some(IndexInfo {
+                on: ON,
+                keys: key(),
+                typ: repr_typ(),
+            }),
+            None,
+        );
+        assert!(matches!(
+            pinned.instantiate(&ctx, "test".to_string()),
+            Err(InstantiateError::ExportDrift { id: INDEX, .. })
+        ));
+    }
+
+    #[mz_ore::test]
+    fn missing_catalog_item_is_detected() {
+        let pinned = PinnedDataflow::try_from(index_dataflow()).unwrap();
+        let ctx = Ctx::new(None, None);
+        assert_eq!(
+            pinned.instantiate(&ctx, "test".to_string()),
+            Err(InstantiateError::MissingCatalogItem {
+                id: INDEX,
+                kind: "index"
+            })
+        );
     }
 }
