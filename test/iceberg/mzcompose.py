@@ -128,6 +128,7 @@ def workflow_smoke(c: Composition) -> None:
         "nested-records.td",
         "uuid-column.td",
         "key-validation.td",
+        "duckdb-value-format.td",
     )
 
 

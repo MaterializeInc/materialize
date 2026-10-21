@@ -136,7 +136,7 @@ fn format_value(val: &ValueRef) -> String {
         ValueRef::Float(f) => f.to_string(),
         ValueRef::Double(f) => f.to_string(),
         ValueRef::Text(bytes) => String::from_utf8_lossy(bytes).to_string(),
-        ValueRef::Blob(bytes) => format!("{:?}", bytes),
+        ValueRef::Blob(bytes) | ValueRef::Geometry(bytes) => format!("{:?}", bytes),
         _ => format!("{:?}", val),
     }
 }
