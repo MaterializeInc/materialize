@@ -35,7 +35,8 @@ const rememberExternalRedirect = (redirectUrl: string) => {
 
 /**
  * A visitor who starts signing in from the marketing site and gives up would
- * otherwise be sent there the next time they sign in to the Console directly.
+ * otherwise be sent there the next time they sign in to the Console directly
+ * (which arrives as `/account/login?redirectUrl=/`, or another internal path).
  * Only our external redirects are cleared; Frontegg's own internal paths stay.
  */
 const forgetExternalRedirect = (allowedOrigins: readonly string[]) => {
@@ -83,7 +84,9 @@ export const RedirectUrlSanitizer = ({
     if (!isLoginPage) return;
     if (externalRedirectUrl) {
       rememberExternalRedirect(externalRedirectUrl);
-    } else if (!redirectUrl) {
+    } else {
+      // Any other sign-in, including the Console's own `?redirectUrl=/`
+      // entry for signed-out visitors, must not inherit an abandoned one.
       forgetExternalRedirect(allowedOrigins);
     }
   }, [isLoginPage, redirectUrl, externalRedirectUrl, allowedOrigins]);
