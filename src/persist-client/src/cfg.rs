@@ -774,10 +774,10 @@ pub enum ShardMetricsExport {
 impl ShardMetricsExport {
     pub const ALL: [Self; 4] = [Self::None, Self::Summary, Self::PerShard, Self::Both];
 
-    /// The value [`SHARD_METRICS`] defaults to, which exports everything this
-    /// setting can turn off.
+    /// The value [`SHARD_METRICS`] defaults to, whose series count is bounded
+    /// by the per-version aggregates rather than the shard count.
     pub const fn default() -> Self {
-        Self::Both
+        Self::Summary
     }
 
     pub const fn as_str(self) -> &'static str {

@@ -3809,8 +3809,10 @@ mod tests {
 
     #[mz_ore::test]
     fn per_shard_families_match_registrations() {
+        let cfg = PersistConfig::new_for_tests();
+        set_shard_metrics(&cfg, ShardMetricsExport::Both);
         let registry = MetricsRegistry::new();
-        let metrics = Metrics::new(&PersistConfig::new_for_tests(), &registry);
+        let metrics = Metrics::new(&cfg, &registry);
         let shard = metrics.shards.shard(&ShardId::new(), "s");
         shard.set_batch_part_versions(["v1"].into_iter());
         let gathered = registry.gather();
@@ -3960,7 +3962,7 @@ mod tests {
     #[mz_ore::test]
     fn unknown_shard_metrics_mode_exports_the_default() {
         let (cfg, registry, _shards) = metrics_with_shards(3);
-        let both = family_names(&registry.gather());
+        let summary = family_names(&registry.gather());
         let invalid =
             |families: &[MetricFamily]| scalar(families, "mz_persist_shard_metrics_mode_invalid");
 
@@ -3968,16 +3970,15 @@ mod tests {
         updates.add(&SHARD_METRICS, "summry");
         cfg.apply_from(&updates);
 
-        // The default is `Both`, so a typo keeps exporting everything.
         let gathered = registry.gather();
-        assert_eq!(family_names(&gathered), both);
+        assert_eq!(family_names(&gathered), summary);
         // Counted on every scrape while it stays unrecognized, one scrape late.
         assert_eq!(invalid(&gathered), 0.0);
         assert_eq!(invalid(&registry.gather()), 1.0);
 
-        set_shard_metrics(&cfg, ShardMetricsExport::Summary);
+        set_shard_metrics(&cfg, ShardMetricsExport::Both);
         let gathered = registry.gather();
-        assert!(family_names(&gathered).is_subset(&both));
+        assert!(summary.is_subset(&family_names(&gathered)));
         assert_eq!(invalid(&gathered), 2.0);
         assert_eq!(invalid(&registry.gather()), 2.0);
     }
@@ -4012,6 +4013,7 @@ mod tests {
     #[mz_ore::test]
     fn each_shard_metrics_mode_exports_its_families() {
         let (cfg, registry, _shards) = metrics_with_shards(3);
+        set_shard_metrics(&cfg, ShardMetricsExport::Both);
         let both = family_names(&registry.gather());
         let per_shard: BTreeSet<_> = PER_SHARD_FAMILIES
             .iter()
@@ -4140,6 +4142,7 @@ mod tests {
     #[mz_ore::test]
     fn enable_regex_keeps_matching_shards_unchanged() {
         let (cfg, registry, shards) = metrics_with_shards(5);
+        set_shard_metrics(&cfg, ShardMetricsExport::Both);
         let both = registry.gather();
         set_shard_metrics(&cfg, ShardMetricsExport::Summary);
         let summary = registry.gather();
@@ -4329,8 +4332,10 @@ mod tests {
 
     #[mz_ore::test]
     fn process_counters_survive_shard_drop() {
+        let cfg = PersistConfig::new_for_tests();
+        set_shard_metrics(&cfg, ShardMetricsExport::Both);
         let registry = MetricsRegistry::new();
-        let metrics = Metrics::new(&PersistConfig::new_for_tests(), &registry);
+        let metrics = Metrics::new(&cfg, &registry);
         let a = metrics.shards.shard(&ShardId::new(), "a");
         let b = metrics.shards.shard(&ShardId::new(), "b");
         a.blob_gets.inc_by(5);
