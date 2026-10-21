@@ -961,10 +961,14 @@ impl ReplicaEnactment {
                 .system_config()
                 .catalog_read_protection_publish_interval(),
         );
-        self.publication_clock
-            .as_mut()
-            .expect("configured")
-            .completed();
+        // Acquisition only adds or strengthens grants. It does not flush pending
+        // downgrades, so it must not postpone the maintenance that publishes them.
+        if !granting {
+            self.publication_clock
+                .as_mut()
+                .expect("configured")
+                .completed();
+        }
         Ok(())
     }
 

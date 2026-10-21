@@ -280,7 +280,8 @@ async fn exercise_liveness() {
             .system_config()
             .catalog_read_protection_publish_interval(),
     );
-    driver.publication_clock.as_mut().unwrap().due = deferred;
+    let acquisition_due = Instant::now();
+    driver.publication_clock.as_mut().unwrap().due = acquisition_due;
     let mut holds = driver
         .acquire(
             &mut catalog,
@@ -293,6 +294,11 @@ async fn exercise_liveness() {
         )
         .await
         .unwrap();
+    assert_eq!(
+        driver.publication_clock.as_ref().unwrap().due,
+        acquisition_due,
+        "an immediate grant must not postpone due maintenance"
+    );
     let requirement = (incarnation, fixture.source);
     assert_eq!(
         catalog.state().client_read_requirements()[&requirement],
