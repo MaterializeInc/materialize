@@ -235,6 +235,67 @@ export async function executeSqlV2<
 }): Promise<ExecuteSqlReturnType<Q>> {
   const sqlRequest = buildExtendedSqlRequest(request.queries);
   const httpAddress = await getHttpAddress(request);
+  // The span starts only under an existing one, such as a page load, so a
+  // query that polls in the background never starts a trace of its own.
+  // NOTE: `Sentry.startSpan` with an async callback keeps its scope pushed
+  // until the request settles, so parallel requests would nest under each other.
+  const span = Sentry.startInactiveSpan({
+    name: queryKeyLabel(request.queryKey),
+    op: "db.sql.query",
+    onlyIfParent: true,
+    attributes: { "db.system": "materialize" },
+  });
+  try {
+    return await fetchSqlResults(request, sqlRequest, httpAddress);
+  } catch (error) {
+    span.setStatus({
+      code: SPAN_STATUS_ERROR,
+      message: spanErrorStatus(error),
+    });
+    throw error;
+  } finally {
+    span.end();
+  }
+}
+
+/** `SPAN_STATUS_ERROR` from `@sentry/core`, which `@sentry/react` does not re-export. */
+const SPAN_STATUS_ERROR = 2;
+
+/**
+ * Names a request by the `scope` of each query key part, e.g. `clusters.list`.
+ * Other parts are left out because they can hold IDs and object names.
+ */
+export function queryKeyLabel(queryKey: QueryKey): string {
+  const scopes = queryKey.flatMap((part) =>
+    typeof part === "object" &&
+    part !== null &&
+    "scope" in part &&
+    typeof part.scope === "string"
+      ? [part.scope]
+      : [],
+  );
+  return scopes.length > 0 ? scopes.join(".") : "unscoped query";
+}
+
+/**
+ * Sentry's status for a failed request, so that an abort the caller started
+ * (`cancelled`) and a timeout (`deadline_exceeded`) read apart from database errors.
+ */
+export function spanErrorStatus(error: unknown): string {
+  const name =
+    typeof error === "object" && error !== null && "name" in error
+      ? error.name
+      : undefined;
+  if (name === "AbortError") return "cancelled";
+  if (name === "TimeoutError") return "deadline_exceeded";
+  return "internal_error";
+}
+
+async function fetchSqlResults<Q extends CompiledQuery | CompiledQueryList>(
+  request: ExecuteSqlRequest<Q>,
+  sqlRequest: ReturnType<typeof buildExtendedSqlRequest>,
+  httpAddress: string,
+): Promise<ExecuteSqlReturnType<Q>> {
   const url = buildExecuteSqlUrl(httpAddress);
 
   url.searchParams.append(
