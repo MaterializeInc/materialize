@@ -67,10 +67,6 @@ impl DescriptionRange {
 }
 
 /// The outcome of a single fueled [`DescriptionIterator::step`].
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the batched subscribe sink is not wired up")
-)]
 #[derive(Debug, PartialEq)]
 pub(super) enum DescriptionStep {
     /// The updates of one cursor position, consolidated per time and never empty. Diffs may be
@@ -245,4 +241,4 @@ where
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

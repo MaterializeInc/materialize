@@ -20,28 +20,31 @@ use timely::container::PushInto;
 
 use super::*;
 
-type ArcOrdValBatch = <ArcOrdValSpine<Row, Row, Timestamp, Diff> as TraceReader>::Batch;
+pub(crate) type ArcOrdValBatch = <ArcOrdValSpine<Row, Row, Timestamp, Diff> as TraceReader>::Batch;
 
-fn row(value: u8) -> Row {
+pub(crate) fn row(value: u8) -> Row {
     Row::pack_slice(&[Datum::UInt8(value)])
 }
 
-fn ts(time: u64) -> Timestamp {
+pub(crate) fn ts(time: u64) -> Timestamp {
     Timestamp::from(time)
 }
 
-fn frontier(time: u64) -> Antichain<Timestamp> {
+pub(crate) fn frontier(time: u64) -> Antichain<Timestamp> {
     Antichain::from_elem(ts(time))
 }
 
 /// An update of key `key` with an empty value.
-fn update(key: u8, time: u64, diff: i64) -> ((Row, Row), Timestamp, Diff) {
+pub(crate) fn update(key: u8, time: u64, diff: i64) -> ((Row, Row), Timestamp, Diff) {
     ((row(key), Row::default()), ts(time), Diff::from(diff))
 }
 
 /// Seals `updates` into one batch per entry of `uppers`, in order, starting at
 /// [`Timestamp::MIN`]. Each batch holds the updates between the previous upper and its own.
-fn batches(updates: &[((Row, Row), Timestamp, Diff)], uppers: &[Timestamp]) -> Vec<ArcOrdValBatch> {
+pub(crate) fn batches(
+    updates: &[((Row, Row), Timestamp, Diff)],
+    uppers: &[Timestamp],
+) -> Vec<ArcOrdValBatch> {
     let mut batcher = OrdValBatcher::<Row, Row, Timestamp, Diff>::new(None, 0);
     batcher.push_into(updates.to_vec());
     uppers
