@@ -310,7 +310,10 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::ShowVariable(plan) => {
-                    let result = self.sequence_show_variable(ctx.session(), plan);
+                    let (name, written_name) = (plan.name.clone(), plan.written_name.clone());
+                    let result = self
+                        .sequence_show_variable(ctx.session(), plan)
+                        .map_err(|e| e.with_written_variable_name(&name, &written_name));
                     ctx.retire(result);
                 }
                 Plan::InspectShard(plan) => {
@@ -319,11 +322,17 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::SetVariable(plan) => {
-                    let result = self.sequence_set_variable(ctx.session_mut(), plan);
+                    let (name, written_name) = (plan.name.clone(), plan.written_name.clone());
+                    let result = self
+                        .sequence_set_variable(ctx.session_mut(), plan)
+                        .map_err(|e| e.with_written_variable_name(&name, &written_name));
                     ctx.retire(result);
                 }
                 Plan::ResetVariable(plan) => {
-                    let result = self.sequence_reset_variable(ctx.session_mut(), plan);
+                    let (name, written_name) = (plan.name.clone(), plan.written_name.clone());
+                    let result = self
+                        .sequence_reset_variable(ctx.session_mut(), plan)
+                        .map_err(|e| e.with_written_variable_name(&name, &written_name));
                     ctx.retire(result);
                 }
                 Plan::SetTransaction(plan) => {
@@ -499,11 +508,19 @@ impl Coordinator {
                     ctx.retire(result);
                 }
                 Plan::AlterSystemSet(plan) => {
-                    let result = self.sequence_alter_system_set(ctx.session(), plan).await;
+                    let (name, written_name) = (plan.name.clone(), plan.written_name.clone());
+                    let result = self
+                        .sequence_alter_system_set(ctx.session(), plan)
+                        .await
+                        .map_err(|e| e.with_written_variable_name(&name, &written_name));
                     ctx.retire(result);
                 }
                 Plan::AlterSystemReset(plan) => {
-                    let result = self.sequence_alter_system_reset(ctx.session(), plan).await;
+                    let (name, written_name) = (plan.name.clone(), plan.written_name.clone());
+                    let result = self
+                        .sequence_alter_system_reset(ctx.session(), plan)
+                        .await
+                        .map_err(|e| e.with_written_variable_name(&name, &written_name));
                     ctx.retire(result);
                 }
                 Plan::AlterSystemResetAll(plan) => {
