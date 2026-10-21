@@ -34,18 +34,30 @@ is not the matched comparison requested there. Evidence is under
 `scratch/cadence60-default/`. Scratch access is restored. The paused-cluster and
 testdrive failures reproduce at 60s. The failed table shard later tombstones
 without intervention, so cleanup is delayed rather than permanently stuck.
-Through `bafd0949`, scoped 1s fixture settings preserve all assertions and
-deadlines. Three cluster workflows, three testdrive files, both SQL logic files
-and all 22 native library tests pass on scratch. The SQL failures depended on
-input compaction, not a REFRESH correctness violation. The native adapter-loss
-retention-phase setting still needs combined verification.
+Scoped 1s fixture settings preserve all assertions and deadlines. Three cluster
+workflows, four testdrive files, both SQL logic files, all 22 native library tests
+and full adapter-loss recovery pass on scratch. The SQL failures depended on
+input compaction, not a REFRESH correctness violation.
 
-CI140148 runs the exact CI140146 seed at 1s on the same code and normal CI
-resources, using a CI-only label. OOM attribution remains open. Testdrive 3
-exhausted its step budget, with inter-file gaps growing from roughly 5–6s to
-30–37s versus CI140105. A short existing-file comparison is checking that cost,
-not assuming a stalled final query or changing global fixture timing. The
-prompt's restriction against changing the 1s default is superseded by approval.
+CI140149 at `b3555da7` finishes with 93 passed jobs, including both parallel
+shards and native recovery/handover. Besides the two deferred exclusions, only
+Testdrive 4 fails: introspection's AS OF 0 rejection assumes an advanced read
+frontier. The scoped correction in `d1ed7559` has scratch red/green evidence.
+Testdrive 3 passes this build. Its earlier inter-file slowdown remains unexplained
+and did not reproduce in the short scratch comparison.
+
+The exact CI140146 seed still needs resolution. Its 60s parallel shard 2 OOM
+repeats, killing quickstart at about 10.7GiB anonymous RSS. CI140148's 1s control
+passes shard 2 but times out in shard 1. Equal parent-cgroup limits were not
+directly captured for the control. Existing logs show publication conflicts and
+an unchanged ManyRows index bound through recovery, not attribution of memory to
+retained history. A bounded scratch initialization at the aggregate CI memory
+limit and 8-CPU quota completes without OOM, with quickstart below 2GiB RSS.
+It has no swap and different hardware, so it does not clear the CI failure.
+Evidence is under `scratch/cadence60-default/ci140146/parallel2-retry/` and
+`scratch/cadence60-memory/`. Use existing CI heap capture on the failing seed,
+not another tuning campaign. The prompt's restriction against changing the 1s
+default is superseded by approval.
 
 CI140105 at `2bde8879` finishes with 94 passed jobs. Cargo, cluster frontier
 checks, Kafka RTR, both parallel shards and the closed native recovery/handover
@@ -78,7 +90,7 @@ scratch resources. All three continuously observed user read frontiers advance
 during sustained work. Peak active-work write-minus-read lag falls from 463s to
 111s. Persist write payload is 0.286 versus 0.276 MB/s, with 131 versus 108
 successful catalog commits. The comparison does not isolate each change's traffic
-contribution. Production defaults remain unchanged. Evidence and limits are in
+contribution. Evidence and limits are in
 `scratch/combined-publication/report.md`, not a claim of resolved CI contention.
 
 The publisher refreshes and enacts the catalog prefix before sampling, preserving
