@@ -128,6 +128,18 @@ pub enum ComputeResponse {
     /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     CopyToResponse(GlobalId, CopyToResponse),
 
+    /// `BatchedSubscribeResponse` reports the output of a batched subscribe, one description at a
+    /// time.
+    ///
+    /// Each part of a replica reports every description in order, so the k-th [`Batch`] of
+    /// every part covers the same description. A [`Batch`] with an empty upper or a
+    /// [`DroppedAt`] ends the part's output, and the part must not send further responses for
+    /// that subscribe.
+    ///
+    /// [`Batch`]: BatchedSubscribeResponse::Batch
+    /// [`DroppedAt`]: BatchedSubscribeResponse::DroppedAt
+    BatchedSubscribeResponse(GlobalId, Box<BatchedSubscribeResponse>),
+
     /// `Status` reports status updates from replicas to the controller.
     ///
     /// `Status` responses are a way for replicas to stream back introspection data that the
@@ -388,6 +400,67 @@ impl SubscribeBatch {
     }
 }
 
+/// Responses that report the output of a batched subscribe.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum BatchedSubscribeResponse {
+    /// The output for one description.
+    Batch(BatchedSubscribeBatch),
+    /// The subscribe was dropped, leaving output from `frontier` onward unspecified.
+    DroppedAt {
+        /// The upper of the last description reported.
+        frontier: Antichain<Timestamp>,
+        /// Shares of descriptions that were not reported, so that the receiver can delete their
+        /// stashed batches.
+        orphans: Vec<Share>,
+    },
+}
+
+/// The output of a batched subscribe for the description `[lower, upper)`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BatchedSubscribeBatch {
+    /// The lower frontier of the description.
+    pub lower: Antichain<Timestamp>,
+    /// The upper frontier of the description. An empty upper completes the subscribe.
+    pub upper: Antichain<Timestamp>,
+    /// The updates of the description, in no particular order across shares.
+    pub shares: Vec<Share>,
+    /// The error that poisons the description, if any.
+    ///
+    /// A poisoned batch still carries its shares, so that the receiver can delete their stashed
+    /// batches.
+    pub error: Option<String>,
+}
+
+/// Part of the output of a batched subscribe for one description.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Share {
+    /// Updates carried in the response.
+    Inline(UpdateCollection),
+    /// Updates written to persist batches in the stash.
+    Stashed(StashedShare),
+}
+
+impl Share {
+    /// Returns the size of the row bytes carried in the response.
+    pub fn inline_byte_len(&self) -> usize {
+        match self {
+            Self::Inline(updates) => updates.byte_len(),
+            Self::Stashed(_) => 0,
+        }
+    }
+}
+
+/// Updates of a [`Share`] that were written to persist batches in the stash.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct StashedShare {
+    /// The stash shard the batches were written to.
+    pub shard_id: ShardId,
+    /// The batches holding the updates.
+    pub batches: Vec<ProtoBatch>,
+    /// The sum of the encoded sizes of `batches`.
+    pub encoded_size_bytes: usize,
+}
+
 /// Status updates replicas can report to the controller.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum StatusResponse {
@@ -404,5 +477,46 @@ mod tests {
     #[mz_ore::test]
     fn test_compute_response_size() {
         assert_eq!(std::mem::size_of::<ComputeResponse>(), 112);
+    }
+
+    #[mz_ore::test]
+    fn batched_subscribe_responses_round_trip() {
+        use mz_repr::{Datum, Diff, Row};
+
+        let row = Row::pack_slice(&[Datum::Int64(7)]);
+        let inline =
+            Share::Inline(std::iter::once((&*row, &Timestamp::from(3), Diff::ONE)).collect());
+        let stashed = Share::Stashed(StashedShare {
+            shard_id: ShardId::new(),
+            batches: vec![ProtoBatch::default()],
+            encoded_size_bytes: 42,
+        });
+        let responses = [
+            BatchedSubscribeResponse::Batch(BatchedSubscribeBatch {
+                lower: Antichain::from_elem(Timestamp::from(1)),
+                upper: Antichain::from_elem(Timestamp::from(5)),
+                shares: vec![inline.clone(), stashed.clone()],
+                error: None,
+            }),
+            BatchedSubscribeResponse::Batch(BatchedSubscribeBatch {
+                lower: Antichain::from_elem(Timestamp::from(5)),
+                upper: Antichain::new(),
+                shares: vec![],
+                error: Some("poisoned".into()),
+            }),
+            BatchedSubscribeResponse::DroppedAt {
+                frontier: Antichain::from_elem(Timestamp::from(5)),
+                orphans: vec![stashed, inline],
+            },
+        ];
+
+        let options = bincode::DefaultOptions::new();
+        for response in responses {
+            let response =
+                ComputeResponse::BatchedSubscribeResponse(GlobalId::User(1), Box::new(response));
+            let bytes = bincode::Options::serialize(options, &response).unwrap();
+            let decoded: ComputeResponse = bincode::Options::deserialize(options, &bytes).unwrap();
+            assert_eq!(decoded, response);
+        }
     }
 }
