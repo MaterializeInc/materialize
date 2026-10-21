@@ -13,6 +13,10 @@
 # These tests rely on testdrive's retry feature, as they query introspection
 # sources whose data might not be immediately available.
 
+# Observe advancement within the existing introspection retry budget.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s'
+
 > DROP CLUSTER IF EXISTS test
 > DROP CLUSTER IF EXISTS test_source
 
@@ -341,3 +345,6 @@ r3 <null>
   FROM mz_internal.mz_frontiers
   JOIN mz_indexes ON (id = object_id)
   WHERE name = 'idx2'
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET catalog_read_protection_publish_interval

@@ -24,6 +24,19 @@ catalog-owner refactor is not part of M2 and must not resume.
 
 ## Verification and closeout
 
+Aljoscha approved a 60s publication default after M2 closeout. Revision `e8084213`
+changes that default and the publication-measurement workflow's explicit interval,
+without changing deadlines or assertions. CI140146 has new frontier, pushdown
+statistics and table-finalization failures, plus a clusterd OOM in parallel
+shard 2. Separate short-window fixture assumptions from product regressions.
+The webhook build superseded manual CI140145 without its seed override, so it
+is not the matched comparison requested there. Evidence is under
+`scratch/cadence60-default/ci140146/`. Scratch access is restored. The unchanged paused-cluster failure reproduces
+locally at 60s. Aljoscha approved short publication intervals only in the
+interval-sensitive correctness fixtures, preserving their assertions and deadlines. The prompt's restriction against changing the 1s
+default is superseded by this approval. Keep deadlines and assertions unchanged
+while diagnosing this follow-up.
+
 CI140105 at `2bde8879` finishes with 94 passed jobs. Cargo, cluster frontier
 checks, Kafka RTR, both parallel shards and the closed native recovery/handover
 regressions pass. The only failed jobs are deferred upstream merge skew and

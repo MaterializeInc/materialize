@@ -15,6 +15,10 @@ ALTER SYSTEM SET enable_index_options = true
 ALTER SYSTEM SET enable_logical_compaction_window = true
 ALTER SYSTEM SET enable_unlimited_retain_history = true
 
+# Exercise exact compaction frontiers within the existing retry budget.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s'
+
 # Test consolidation and compaction behavior.
 #
 # The various tests in this file use the following Debezium-formatted Kafka
@@ -280,3 +284,6 @@ $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.p
 $ kafka-verify-data headers=materialize-timestamp format=avro sink=materialize.public.nums_sink sort-messages=true
 6	{"before": null, "after": {"row": {"num": 8}}}
 6	{"before": {"row": {"num": 7}}, "after": null}
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET catalog_read_protection_publish_interval

@@ -6038,6 +6038,8 @@ def workflow_test_github_8734(c: Composition) -> None:
         Materialized(
             additional_system_parameter_defaults={
                 "enable_refresh_every_mvs": "true",
+                # Progress is measured over three seconds.
+                "catalog_read_protection_publish_interval": "1s",
             },
             support_external_clusterd=True,
         ),
@@ -6329,80 +6331,93 @@ def workflow_test_read_frontier_advancement(
     regressions in downgrading read holds.
     """
 
-    c.up("materialized")
+    # Keep the publication period within the three-second progress samples.
+    with c.override(
+        Materialized(
+            propagate_crashes=False,
+            external_metadata_store=True,
+            additional_system_parameter_defaults={
+                "unsafe_enable_unsafe_functions": "true",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+                "catalog_read_protection_publish_interval": "1s",
+            },
+            support_external_clusterd=True,
+        )
+    ):
+        c.up("materialized")
 
-    # Create various dataflows on a cluster with multiple replicas, to also
-    # test tracking of per-replica read holds.
-    c.sql(
-        """
-        CREATE CLUSTER test SIZE 'scale=2,workers=2', REPLICATION FACTOR 4;
-        SET cluster = test;
+        # Create various dataflows on a cluster with multiple replicas, to also
+        # test tracking of per-replica read holds.
+        c.sql(
+            """
+            CREATE CLUSTER test SIZE 'scale=2,workers=2', REPLICATION FACTOR 4;
+            SET cluster = test;
 
-        CREATE TABLE t1 (x int);
-        CREATE TABLE t2 (y int);
+            CREATE TABLE t1 (x int);
+            CREATE TABLE t2 (y int);
 
-        CREATE VIEW v1 AS SELECT * FROM t1 JOIN t2 ON (x = y);
-        CREATE DEFAULT INDEX ON v1;
+            CREATE VIEW v1 AS SELECT * FROM t1 JOIN t2 ON (x = y);
+            CREATE DEFAULT INDEX ON v1;
 
-        CREATE VIEW v2 AS SELECT x + 1 AS a, y + 2 AS b FROM v1;
-        CREATE DEFAULT INDEX ON v2;
+            CREATE VIEW v2 AS SELECT x + 1 AS a, y + 2 AS b FROM v1;
+            CREATE DEFAULT INDEX ON v2;
 
-        CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM v2;
-        CREATE DEFAULT INDEX ON mv1;
+            CREATE MATERIALIZED VIEW mv1 AS SELECT * FROM v2;
+            CREATE DEFAULT INDEX ON mv1;
 
-        CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM mv1, t1;
+            CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM mv1, t1;
 
-        -- wait for dataflows to hydrate
-        SELECT 1 FROM v1, v2, mv1, mv2;
-        """,
-    )
+            -- wait for dataflows to hydrate
+            SELECT 1 FROM v1, v2, mv1, mv2;
+            """,
+        )
 
-    # Run a subscribe in a different thread.
-    def subscribe():
-        cursor = c.sql_cursor()
-        cursor.execute("SET cluster = test")
-        cursor.execute("BEGIN")
-        cursor.execute("DECLARE sub CURSOR FOR SUBSCRIBE (SELECT * FROM mv2)")
-        try:
-            # This should hang until the cluster is dropped. The timeout is
-            # only a failsafe.
-            cursor.execute("FETCH ALL sub WITH (timeout = '30s')")
-        except DatabaseError as exc:
-            assert (
-                exc.diag.message_primary
-                == 'query could not complete because relation "materialize.public.mv2" was dropped'
-            )
+        # Run a subscribe in a different thread.
+        def subscribe():
+            cursor = c.sql_cursor()
+            cursor.execute("SET cluster = test")
+            cursor.execute("BEGIN")
+            cursor.execute("DECLARE sub CURSOR FOR SUBSCRIBE (SELECT * FROM mv2)")
+            try:
+                # This should hang until the cluster is dropped. The timeout is
+                # only a failsafe.
+                cursor.execute("FETCH ALL sub WITH (timeout = '30s')")
+            except DatabaseError as exc:
+                assert (
+                    exc.diag.message_primary
+                    == 'query could not complete because relation "materialize.public.mv2" was dropped'
+                )
 
-    subscribe_thread = Thread(target=subscribe)
-    subscribe_thread.start()
+        subscribe_thread = Thread(target=subscribe)
+        subscribe_thread.start()
 
-    # Wait for the subscribe to start and frontier introspection to be refreshed.
-    time.sleep(3)
+        # Wait for the subscribe to start and frontier introspection to be refreshed.
+        time.sleep(3)
 
-    # Check that read frontiers advance.
-    def collect_read_frontiers() -> dict[str, int]:
-        output = c.sql_query("""
-            SELECT object_id, read_frontier
-            FROM mz_internal.mz_frontiers
-            WHERE object_id LIKE 'u%'
-            """)
-        frontiers = {}
-        for row in output:
-            name, frontier = row
-            frontiers[name] = int(frontier)
-        return frontiers
+        # Check that read frontiers advance.
+        def collect_read_frontiers() -> dict[str, int]:
+            output = c.sql_query("""
+                SELECT object_id, read_frontier
+                FROM mz_internal.mz_frontiers
+                WHERE object_id LIKE 'u%'
+                """)
+            frontiers = {}
+            for row in output:
+                name, frontier = row
+                frontiers[name] = int(frontier)
+            return frontiers
 
-    frontiers1 = collect_read_frontiers()
-    time.sleep(3)
-    frontiers2 = collect_read_frontiers()
+        frontiers1 = collect_read_frontiers()
+        time.sleep(3)
+        frontiers2 = collect_read_frontiers()
 
-    for id_ in frontiers1:
-        a, b = frontiers1[id_], frontiers2[id_]
-        assert a < b, f"read frontier of {id_} has not advanced: {a} -> {b}"
+        for id_ in frontiers1:
+            a, b = frontiers1[id_], frontiers2[id_]
+            assert a < b, f"read frontier of {id_} has not advanced: {a} -> {b}"
 
-    # Drop the cluster to cancel the subscribe.
-    c.sql("DROP CLUSTER test CASCADE")
-    subscribe_thread.join()
+        # Drop the cluster to cancel the subscribe.
+        c.sql("DROP CLUSTER test CASCADE")
+        subscribe_thread.join()
 
 
 def workflow_test_adhoc_system_indexes(
@@ -7627,6 +7642,8 @@ def workflow_test_paused_cluster_readhold_downgrade(c: Composition):
             additional_system_parameter_defaults={
                 "unsafe_enable_unsafe_functions": "true",
                 "unsafe_enable_unorchestrated_cluster_replicas": "true",
+                # Progress is measured over three seconds.
+                "catalog_read_protection_publish_interval": "1s",
             },
             support_external_clusterd=True,
         )
@@ -9869,6 +9886,15 @@ def workflow_adapter_loss(c: Composition) -> None:
         index_id = history_ids["al_history_idx"]
         assert input_id.startswith("u"), input_id
         input_json_id = {"User": int(input_id[1:])}
+        # This phase distinguishes the 30s index policy from outstanding grants.
+        # Publish advances well within that window. Outage/recovery phases use
+        # the default cadence.
+        c.sql(
+            "ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s'",
+            service=adapter.name,
+            port=6877,
+            user="mz_system",
+        )
         deadline = time.monotonic() + timeout
         previous_unmasked = None
         unmasked_advances = 0
@@ -9947,6 +9973,12 @@ def workflow_adapter_loss(c: Composition) -> None:
             expected.add(n * 10)
             time.sleep(0.25)
 
+        c.sql(
+            "ALTER SYSTEM RESET catalog_read_protection_publish_interval",
+            service=adapter.name,
+            port=6877,
+            user="mz_system",
+        )
         # The two unmasked advances prove the 30s policy without a reader or
         # executor. Only now extend this index's window to cover the reference
         # read, hydration, and indexed read, each with its existing 420s budget.
