@@ -1408,11 +1408,11 @@ impl Coordinator {
                         // Always safe.
                     }
 
-                    Statement::Insert(InsertStatement {
-                        source, returning, ..
-                    }) if returning.is_empty() && ConstantVisitor::insert_source(source) => {
-                        // Inserting from constant values statements that do not need to execute on
-                        // any cluster (no RETURNING) is always safe.
+                    Statement::Insert(InsertStatement { source, .. })
+                        if ConstantVisitor::insert_source(source) =>
+                    {
+                        // Inserting constant values reads nothing and needs no cluster, also with
+                        // RETURNING, which is evaluated over those values. So it is always safe.
                     }
 
                     // These statements must be kept in-sync with `must_serialize_ddl()`.
