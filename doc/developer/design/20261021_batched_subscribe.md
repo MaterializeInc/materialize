@@ -34,7 +34,7 @@ The limits follow from the contract. Every batch is a collection sorted by time 
 
 BatchedSubscribe is a new subscribe mode, selected by a `SUBSCRIBE` option, built as its own path through planning, the sink, the compute protocol, the controller, and the adapter. Its output is a sequence of batches. Each batch has a description `[lower, upper)`, carries consolidated updates in no particular order, and is followed by a progress row at `upper`.
 
-The mode treats the subscribe's output as a sequence of appends rather than a stream of messages. Each replica writes down batches as time advances, and each batch's lower is the previous batch's upper. Replicas run the same deterministic dataflow, so any replica's batch for a description has the same contents. The controller keeps one accepted upper and accepts exactly the batch that starts there, from whichever replica delivers it first.
+The mode treats the subscribe's output as a sequence of appends rather than a stream of messages. Each replica writes down batches as time advances, and each batch's lower is the previous batch's upper. Replicas run the same deterministic dataflow, so any replica's batch for a description has the same contents. Replicas keep no state about what the controller accepted. The controller keeps one accepted upper, forwards whatever part of a batch lies beyond it, and drops the rest, so replicas can disagree about where batches end.
 
 ```mermaid
 flowchart LR
@@ -46,7 +46,6 @@ flowchart LR
     end
     report -- shares --> merge[Partitioned merge]
     merge -- batches --> cutover[Instance controller]
-    cutover -- accepted upper --> mint
     cutover -- accepted batches --> forwarder[Adapter forwarder]
     forwarder -- rows and progress --> client[Client]
     scan -. stashed shares .-> blob[(Blob storage)]
@@ -65,20 +64,24 @@ This section is the specification the rest of the design implements. `20261021_b
 
 **Replica obligations.**
 
-* R1. A replica sends batches whose descriptions are contiguous: the first lower is the replica's start lower, each later lower is the previous upper, and every upper is beyond its lower. A batch for `d` carries exactly `C(d)`.
-* R2. A replica learns the accepted upper `U` through feedback. On learning a `U` that differs from its next lower, it sets its next lower to `U`. When the replica is behind, this skips work another replica already delivered. When it is ahead with batches that the controller rejected, this rewinds it, which is what keeps the subscribe live when the replica that set `U` fails.
-* R3. A replica keeps the data needed to compute `C(d)` for every `d` whose lower is at or after the last `U` it learned. Data in a rejected batch is not gone, it is reissued from `U`. Discarding data below its own last minted upper instead would leave it unable to mint from `U`.
-* R4. A replica that renders the dataflow anew, after a restart or a reconfiguration, starts at the later of the subscribe's start and one step past its replayed as-of, and without a snapshot when that is past `S`.
+* R1. A replica sends batches whose descriptions are contiguous: the first lower is the replica's start, each later lower is the previous upper, and every upper is beyond its lower. A batch for `d` carries exactly `C(d)`.
+* R2. A replica that renders the dataflow anew, after a restart or a reconfiguration, starts at the later of the subscribe's start and one step past its replayed as-of, and without a snapshot when that is past `S`. The replayed as-of is at most the collection's since, which the read holds keep at or below `U - 1` (C2), so the new start is at or before `U`.
+* R3. A replica keeps no state once it has sent a batch. It learns nothing from the controller, and it drops the data a batch covered as soon as it has sent the batch.
 
 **Controller obligations.**
 
-* C1. The controller keeps `U`, initially `S`. It accepts a batch iff its lower equals `U`. On acceptance it sets `U` to the batch's upper and forwards the batch. It drops every other batch and deletes its stashed shares.
-* C2. The controller tells every replica `U` whenever it advances.
-* C3. The subscribe's write frontier is `U`, so its input read holds follow `U` through the existing write-only collection logic and never pass it.
+* C1. The controller keeps `U`, initially `S`, and processes each replica's batches in the order the replica sent them. A batch with `upper <= U` is dropped, and its stashed shares are deleted. A batch with `lower <= U < upper` is accepted with the effective description `[U, upper)`: the controller forwards it with a trim at `U`, so the client receives only its updates at times at or after `U`, and sets `U` to `upper`. A batch with `lower > U` cannot arrive: each replica's chain starts at or before `U` (R2) and is processed in order, so its next lower is always at or before `U`.
+* C2. The subscribe's write frontier is `U`, so its input read holds follow `U` through the existing write-only collection logic and never pass it.
 
-**Guarantees.** Under these obligations the forwarded batches form one chain of descriptions from `S` to `U` with no gaps and no overlaps, and each forwarded batch carries `C(d)` for its description. As long as one replica stays alive, keeps up with its inputs, and keeps receiving feedback, `U` advances. The client sees each forwarded batch's updates followed by a progress row at its upper.
+Restricting `C([l, u))` to times at or after `U` gives `C([U, u))` for `l <= U`, so a trimmed batch carries the content of its effective description. When `l = S` and the subscribe has a snapshot, the trim also removes the snapshot accumulated at `S`, which is correct once `U` is past `S`.
 
-The model shows which obligations are load-bearing. Accepting a batch with `lower <= U < upper` forwards overlapping batches. A replica that discards data at its own last upper cannot mint from `U`. A replica that only jumps forward on feedback, and never rewinds, never mints a batch starting at `U` once its own boundaries straddle `U`, so the subscribe stalls when the replica that set `U` fails.
+**Guarantees.** Under these obligations the forwarded batches form one chain of descriptions from `S` to `U` with no gaps and no overlaps, and each forwarded batch carries `C(d)` for its effective description. As long as one replica stays alive and keeps up with its inputs, `U` advances: every batch the controller processes either moves `U` or is dropped, and the replica's next batch again starts at or before `U`. The client sees each forwarded batch's updates followed by a progress row at its upper.
+
+The model shows which obligations are load-bearing. Accepting only a batch with `lower = U` drops a straddling batch, after which a replica whose boundaries differ from those of the replica that set `U` never sends a batch starting at `U`, and the subscribe stalls when that replica fails. Forwarding a straddling batch untrimmed forwards overlapping batches. Processing a replica's batches out of order breaks the content of forwarded batches. A replica rehydrated beyond `U` leaves a gap.
+
+The protocol needs no atomicity across a replica's responses, because the controller acts on each batch independently.
+
+**Cost.** Every replica writes every large batch. With `n` replicas that keep pace, the stash holds up to `n` copies of a batch until the controller drops all but one, and the duplicates are written and deleted. This is accepted.
 
 ### Contract
 
@@ -102,11 +105,9 @@ The sink holds arrangement batches and computes each description's content with 
 
 **Input.** On the arranged path, `export_sink` hands the sink the arrangement named by `from_arrangement` instead of flattening it (`sinks.rs:75`), and the sink reads its batch stream, including the batches an import replays for the snapshot. The range scan applies the connection's MFP after rebuilding rows with the `from_arrangement` MFP. Otherwise the sink arranges its input by hash of row. Either way it holds `ArcBatch` references (`src/row-spine/src/arc_batch.rs`), which are `Send + Sync`, so a scan can move off the worker. On the arranged path the batches are shared with the index's trace and cost no copy. Identical rows land on the worker that owns their key, so each worker's share is disjoint from the others'.
 
-**Minting.** One worker, chosen by hashing the sink id as the materialized view sink does (`src/compute/src/sink/materialized_view.rs:520`), mints descriptions and broadcasts them. Its next lower follows R1 and R2. Its next upper is the sink's input frontier, the meet of the ok and error frontiers. Receivers skip a description whose lower is not the next one they expect, as the materialized view sink's `write` does (`materialized_view.rs:1146`).
+**Minting.** One worker, chosen by hashing the sink id as the materialized view sink does (`src/compute/src/sink/materialized_view.rs:520`), mints descriptions and broadcasts them. Its next lower follows R1 and R2, so it depends only on the replica's own history. Its next upper is the sink's input frontier, the meet of the ok and error frontiers. Receivers skip a description whose lower is not the next one they expect, as the materialized view sink's `write` does (`materialized_view.rs:1146`).
 
-**Feedback.** The controller sends `U` as a new compute command. Commands reach every worker: the controller sends them to worker 0 of process 0 (`PartitionedComputeState::split_command`, `src/compute-client/src/service.rs:363`), which broadcasts them over the command channel (`src/compute/src/server.rs:558`). The command history keeps the latest `U` per subscribe, so a replayed dataflow learns it. Feedback is not `AllowCompaction`: compaction moves a reader's since, while `U` is the writer's progress.
-
-**Retention.** A worker drops held batches whose upper is at or before the last `U` it learned (R3). It does not drop batches at its own last minted upper.
+**Release.** A worker drops the held batches a description covered once it has written that description's share (R3). On the arranged path this releases references the index's trace still holds. On the general path it releases the sink's own arrangement batches, and the sink keeps no trace.
 
 **Range scan.** For each description a worker scans the held batches whose bounds overlap `[l, u)` and emits the updates with times in the description, consolidated per `(row, time)`, retractions kept. For the first description of a subscribe with a snapshot, it also accumulates the updates before `S` into `S`. The scan reuses `PeekResultIterator::from_cursor` over a `CursorList` of the chosen batches (`src/compute/src/compute_state/peek_result_iterator.rs:210`) with its literal handling, MFP evaluation, and per-position fuel. It changes the time predicate from "at or before the peek time, summed" (`peek_result_iterator.rs:469`) to "inside the description, per time", drops the negative-diff check (`:475`), and yields several updates per position. For the current `(key, val)`, `CursorList::map_times` visits that pair's updates in every held batch (differential's `cursor_list.rs:154`). Each batch is consolidated, and held batches have disjoint bounds, so a time repeats across batches only where the scan advances times into `S` for the snapshot. The scan therefore consolidates the times of each position before emitting them. `ErrorScan` changes the same way, and any error in the range poisons the subscribe.
 
@@ -164,7 +165,7 @@ pub enum Share {
 
 ### Instance controller
 
-The controller implements C1 to C3. It processes each replica's batches in the order the replica sends them, although the model shows the protocol does not depend on that order.
+The controller implements C1 and C2. It trims inline shares itself, as today's controller trims subscribe updates below its frontier (`src/compute-client/src/controller/instance.rs:2278`), and attaches the trim to stashed shares for the adapter to apply when it reads them.
 
 Deletion needs a persist client in the controller, which it lacks today. The instance gets one opened on the stash location. A stashed share is held as an owned handle that deletes its batch when dropped unless the controller forwards it, mirroring `DeliveredBatch` in `peek_stash.rs`.
 
@@ -175,7 +176,7 @@ A replica-targeted BatchedSubscribe fails with the same error as today when its 
 * The coordinator registers an `ActiveComputeSink::BatchedSubscribe` next to `ActiveComputeSink::Subscribe` in `implement_subscribe` (`src/adapter/src/coord/sequencer/inner/subscribe.rs:541`), which both the coordinator and the frontend paths reach. The client channel stays `mpsc::UnboundedSender<PeekResponseUnary>`, so pgwire and the WebSocket API need no change.
 * `message_controller` (`src/adapter/src/coord/message_handler.rs:716`) hands each accepted batch to a forwarder task per subscribe. The coordinator loop touches only batch descriptors.
 * The forwarder processes batches in order. It formats inline shares into rows. It reads stashed shares through the coordinator's `PersistClient` (`src/adapter/src/coord.rs:1867`), formats rows in chunks of `compute_peek_response_stash_read_batch_size_bytes`, and deletes the batches when done. It then emits the progress row at `upper`.
-* The stashed read needs a persist API that keeps times. `read_batches_consolidated` reads with `FetchBatchFilter::Snapshot { as_of }`, which drops every update beyond the as-of and advances the rest to it (`src/persist-client/src/fetch.rs:387`). Read at `lower`, it would lose every time after `lower`. `FetchBatchFilter::Compaction { since }` advances only times before `since` and keeps the rest (`fetch.rs:413`), so a consolidated read of batches with filter `Compaction { since: lower }` returns their updates with times intact, since every update of a batch for `[lower, upper)` is at or after `lower`. Persist exposes it as a variant of `read_batches_consolidated` that takes the filter.
+* The stashed read needs a persist API that keeps times. `read_batches_consolidated` reads with `FetchBatchFilter::Snapshot { as_of }`, which drops every update beyond the as-of and advances the rest to it (`src/persist-client/src/fetch.rs:387`). Read at `lower`, it would lose every time after `lower`. `FetchBatchFilter::Compaction { since }` advances only times before `since` and keeps the rest (`fetch.rs:413`), so a consolidated read of batches with filter `Compaction { since: lower }` returns their updates with times intact, since every update of a batch for `[lower, upper)` is at or after `lower`. Persist exposes it as a variant of `read_batches_consolidated` that takes the filter. A stashed share trimmed at `U` reads with `FetchBatchFilter::Listen { as_of: U - 1, lower: U }` instead, which drops times before `U` and advances nothing (`fetch.rs:395`).
 * Shares are disjoint by row across workers, so the forwarder needs no merge across shares.
 * Row format reuses `ActiveSubscribe`'s packing for `Diffs` with progress (`active_compute_sink.rs:234` and the `push_row` closure in `process_response`).
 * The forwarder waits on `SubscribeBacklogAccounting` before reading the next chunk, which bounds environmentd memory by the read buffer and the backlog limit. The coordinator retires a subscribe whose queue of unread stashed bytes passes a new limit, reusing `SubscribeFellBehind`.
@@ -183,7 +184,7 @@ A replica-targeted BatchedSubscribe fails with the same error as today when its 
 
 ### Observability
 
-* Counters of accepted and dropped batches per subscribe and replica show how often replicas race and rewind.
+* Counters of accepted, trimmed, and dropped batches per subscribe and replica show how often replicas race and how often a cutover trims.
 * Counters of inline and stashed share bytes show how often the stash carries a batch.
 * The new subscribe appears in `mz_subscriptions` like any other.
 
@@ -195,12 +196,12 @@ Each stage is a pull request. The stack branches from `upstream/main` independen
 2. Stash ownership in the controllers: a persist client in the instance, an owned handle that deletes on drop, and deletion at the existing peek leak points.
 3. Range scan: `PeekResultIterator` and `ErrorScan` with a description mode, and the offload driver made generic over the scan.
 4. SQL surface and planning behind the feature flag, with user docs.
-5. Protocol: the new response type, the feedback command and its history handling, the partitioned merge, and delivery through the controller crate.
-6. Sink: held arrangement batches on the general path, minting, retention, the range scan, shares with `SharedBatches`, poison, `up_to`, and the replay start (R4).
-7. Instance controller: acceptance, feedback, and deletion of dropped shares.
+5. Protocol: the new response type, the partitioned merge, and delivery through the controller crate.
+6. Sink: held arrangement batches on the general path, minting, release after each share, the range scan, shares with `SharedBatches`, poison, `up_to`, and the replay start (R2).
+7. Instance controller: in-order processing, dropping, trimming, and deletion of dropped shares.
 8. Adapter: the forwarder, the stashed read, progress rows, backpressure, retirement, and cancellation.
 9. Arranged input path: the optimizer rewrite, the MFP in the connection, and `export_sink` handing the arrangement to the sink.
-10. Coverage: several workers and replicas, a catch-up range spanning many timestamps, retractions, a replica killed mid-range, a rewind after a rejected batch, and a scaled-down large result.
+10. Coverage: several workers and replicas, a catch-up range spanning many timestamps, retractions, a replica killed mid-range, a cutover that trims a straddling batch, and a scaled-down large result.
 
 ## Alternatives
 
@@ -208,8 +209,7 @@ Each stage is a pull request. The stack branches from `upstream/main` independen
 * **Raise `max_result_size` and `subscribe_max_buffered_bytes`.** environmentd would hold the batch.
 * **Chunk subscribe batches at timestamp boundaries.** A batch legitimately spans many timestamps, and a catch-up range is many small ones that each stay inline.
 * **One stashed batch per timestamp.** It leaves a catch-up range inline for the same reason.
-* **Accept a batch that straddles `U` with a read filter.** `lower = U` is simpler and, with rewinding, keeps the subscribe live.
-* **Feedback through `AllowCompaction`.** Compaction is the reader's progress, not the writer's.
+* **Accept only a batch with `lower = U`, and feed `U` back to replicas.** Feedback acts like a since that the writer would have to track, and replicas would have to retain data from the last `U` they learned and rewind to it. Trimming in the controller needs neither.
 * **Buffer rows in the sink.** Holding arrangement batches shares memory with an index and lets the peek scan, offload, and stash serve the write.
 * **Serve each subscribe from one replica.** Batch boundaries are natural cutover points, so any replica can serve any batch.
 * **Read a materialized view's shard from environmentd.** It reads physical contents, so its merge fan-in is the shard's run count, and it covers only subscribes to materialized views.
@@ -217,5 +217,4 @@ Each stage is a pull request. The stack branches from `upstream/main` independen
 
 ## Open questions
 
-* How large does a held batch set grow on a busy input before feedback lets a worker drop it, and does the general path's own arrangement need a trace at all?
-* How much duplicate stash writing happens on multi-replica clusters before feedback reaches a slower replica, and should a replica delay stashing while it is behind?
+* How large does a description grow on a busy input before the minting worker cuts it, and should minting cut early when a worker's held bytes pass a threshold?
