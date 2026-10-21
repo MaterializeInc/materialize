@@ -28,7 +28,8 @@ use mz_catalog::memory::objects::{
 };
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::LirDataflowDescription;
-use mz_expr::{MapFilterProject, ResultSpec};
+use mz_compute_types::plan::scalar::LirScalarExpr;
+use mz_expr::{MfpPlan, ResultSpec};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::future::OreFutureExt;
@@ -2649,7 +2650,7 @@ impl Coordinator {
         as_of: Antichain<Timestamp>,
         mz_now: ResultSpec<'static>,
         read_holds: Option<ReadHolds>,
-        imports: impl IntoIterator<Item = (GlobalId, MapFilterProject)> + 'static,
+        imports: impl IntoIterator<Item = (GlobalId, MfpPlan<LirScalarExpr>)> + 'static,
     ) {
         let fut = self
             .explain_pushdown_future(ctx.session(), as_of, mz_now, imports)
@@ -2663,7 +2664,7 @@ impl Coordinator {
     }
 
     /// Returns a future that will execute EXPLAIN FILTER PUSHDOWN.
-    async fn explain_pushdown_future<I: IntoIterator<Item = (GlobalId, MapFilterProject)>>(
+    async fn explain_pushdown_future<I: IntoIterator<Item = (GlobalId, MfpPlan<LirScalarExpr>)>>(
         &self,
         session: &Session,
         as_of: Antichain<Timestamp>,
