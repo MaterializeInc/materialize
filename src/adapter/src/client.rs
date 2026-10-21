@@ -1902,6 +1902,7 @@ impl SessionClient {
                     assignments: BTreeMap::new(),
                     kind: MutationKind::Insert,
                     returning: insert_plan.returning,
+                    delete_rows: None,
                 }
             }
             _ => {

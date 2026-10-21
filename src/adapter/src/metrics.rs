@@ -77,6 +77,7 @@ pub struct Metrics {
     pub apply_catalog_implications_seconds: Histogram,
     pub group_commit_catalog_upper_seconds: Histogram,
     pub occ_retry_count: HistogramVec,
+    pub delete_rows_selection: IntCounterVec,
     pub by_cluster: ClusterLabeledMetrics,
 }
 
@@ -315,6 +316,13 @@ impl Metrics {
                 buckets: vec![
                     0., 1., 2., 3., 5., 10., 25., 50., 100., 200., 300., 500., 750., 1000.,
                 ],
+            )),
+            delete_rows_selection: registry.register(metric!(
+                name: "mz_delete_rows_selection_total",
+                help: "The number of `DELETE ... ROWS` statements by the selection they read: \
+                       `rows` when the rows are proven contained in the table, `intersection` \
+                       otherwise.",
+                var_labels: ["selection"],
             )),
             by_cluster: ClusterLabeledMetrics::register_into(registry),
         }

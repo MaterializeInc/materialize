@@ -1135,6 +1135,12 @@ metrics:
   - replica_id
   source: src/cluster-client/src/metrics.rs
   visibility: internal
+- name: mz_delete_rows_selection_total
+  help: "The number of `DELETE ... ROWS` statements by the selection they read: `rows` when the rows are proven contained in the table, `intersection` otherwise."
+  labels:
+  - selection
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_determine_timestamp
   help: The total number of calls to determine_timestamp.
   labels:
