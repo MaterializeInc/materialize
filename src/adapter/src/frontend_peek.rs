@@ -1121,9 +1121,11 @@ impl PeekClient {
                                             .source_imports
                                             .into_iter()
                                             .filter_map(|(id, import)| {
-                                                import.desc.arguments.operators.map(|plan| {
-                                                    (id, plan.into_map_filter_project())
-                                                })
+                                                import
+                                                    .desc
+                                                    .arguments
+                                                    .operators
+                                                    .map(|plan| (id, plan))
                                             })
                                             .collect(),
                                         PeekPlan::FastPath(_) => {
@@ -1817,7 +1819,8 @@ enum Execution {
         insights_ctx: Option<Box<PlanInsightsContext>>,
     },
     ExplainPushdown {
-        imports: BTreeMap<GlobalId, mz_expr::MapFilterProject>,
+        imports:
+            BTreeMap<GlobalId, mz_expr::MfpPlan<mz_compute_types::plan::scalar::LirScalarExpr>>,
         determination: TimestampDetermination,
     },
 }

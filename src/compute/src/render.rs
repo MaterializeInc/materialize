@@ -297,6 +297,7 @@ pub fn build_compute_dataflow(
                     let (mut ok_stream, err_stream, token) = persist_source::persist_source::<
                         DataflowErrorSer,
                         ConsolidatingColumnBuilder<Row, mz_repr::Timestamp, Diff>,
+                        _,
                     >(
                         inner,
                         *source_id,

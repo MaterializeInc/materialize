@@ -16,6 +16,7 @@ use std::iter;
 use std::sync::Arc;
 
 use differential_dataflow::{AsCollection, VecCollection};
+use mz_expr::MfpPlan;
 use mz_ore::cast::CastLossy;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
@@ -319,7 +320,7 @@ where
                             Some(as_of),
                             SnapshotMode::Include,
                             Antichain::new(),
-                            None,
+                            None::<&mut MfpPlan>,
                             flow_control,
                             false.then_some(|| unreachable!()),
                             async {},

@@ -23,9 +23,10 @@ use http::Uri;
 use inner::return_if_err;
 use maplit::btreemap;
 use mz_catalog::memory::objects::Cluster;
+use mz_compute_types::plan::scalar::LirScalarExpr;
 use mz_controller_types::ReplicaId;
 use mz_expr::row::RowCollection;
-use mz_expr::{Eval, MapFilterProject, MirRelationExpr, ResultSpec, RowSetFinishing};
+use mz_expr::{Eval, MfpPlan, MirRelationExpr, ResultSpec, RowSetFinishing};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -1085,7 +1086,7 @@ pub fn eval_copy_to_uri(
 /// parameter, but instead just the specifically necessary things are passed in, so that the
 /// frontend peek sequencing can also call it.)
 pub(crate) async fn explain_pushdown_future_inner<
-    I: IntoIterator<Item = (GlobalId, MapFilterProject)>,
+    I: IntoIterator<Item = (GlobalId, MfpPlan<LirScalarExpr>)>,
 >(
     session: &Session,
     catalog: &Catalog,
@@ -1100,7 +1101,7 @@ pub(crate) async fn explain_pushdown_future_inner<
         explain_timeout = Duration::MAX;
     }
     let mut futures = FuturesOrdered::new();
-    for (id, mfp) in imports {
+    for (id, plan) in imports {
         let catalog_entry = catalog.get_entry_by_global_id(&id);
         let full_name = catalog
             .for_session(session)
@@ -1148,7 +1149,7 @@ pub(crate) async fn explain_pushdown_future_inner<
                             &relation_desc,
                             &stats,
                         );
-                        stats.may_match_mfp(mz_now.clone(), &mfp)
+                        stats.may_match_mfp_plan(mz_now.clone(), &plan)
                     }
                 };
 

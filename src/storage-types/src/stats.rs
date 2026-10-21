@@ -9,7 +9,10 @@
 
 //! Types and traits that connect up our mz-repr types with the stats that persist maintains.
 
-use mz_expr::{ColumnSpecs, Interpreter, MapFilterProject, ResultSpec, UnmaterializableFunc};
+use mz_expr::{
+    ColumnSpecs, Interpretable, Interpreter, MapFilterProject, MfpPlan, OptimizableExpr,
+    ResultSpec, UnmaterializableFunc,
+};
 use mz_persist_types::stats::{
     BytesStats, ColumnStatKinds, JsonStats, PartStats, PartStatsMetrics,
 };
@@ -44,7 +47,29 @@ impl<'a> RelationPartStats<'a> {
 }
 
 impl RelationPartStats<'_> {
-    pub fn may_match_mfp<'a>(&'a self, time_range: ResultSpec<'a>, mfp: &MapFilterProject) -> bool {
+    pub fn may_match_mfp<'a, X: Interpretable + OptimizableExpr>(
+        &'a self,
+        time_range: ResultSpec<'a>,
+        mfp: &MapFilterProject<X>,
+    ) -> bool {
+        self.may_match(time_range, |ranges| ranges.mfp_filter(mfp))
+    }
+
+    /// Like [`Self::may_match_mfp`], for operators already planned, with the
+    /// temporal bounds broken out.
+    pub fn may_match_mfp_plan<'a, X: Interpretable + OptimizableExpr>(
+        &'a self,
+        time_range: ResultSpec<'a>,
+        plan: &MfpPlan<X>,
+    ) -> bool {
+        self.may_match(time_range, |ranges| ranges.mfp_plan_filter(plan))
+    }
+
+    fn may_match<'a>(
+        &'a self,
+        time_range: ResultSpec<'a>,
+        filter: impl for<'b> FnOnce(&ColumnSpecs<'b>) -> mz_expr::ColumnSpec<'b>,
+    ) -> bool {
         let arena = RowArena::new();
         let relation = ReprRelationType::from(self.desc.typ());
         let mut ranges = ColumnSpecs::new(&relation, &arena);
@@ -61,7 +86,7 @@ impl RelationPartStats<'_> {
             let result_spec = self.col_stats(idx, &arena);
             ranges.push_column(pos, result_spec);
         }
-        let result = ranges.mfp_filter(mfp).range;
+        let result = filter(&ranges).range;
         result.may_contain(Datum::True) || result.may_fail()
     }
 
