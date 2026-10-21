@@ -23,6 +23,10 @@ $ set-sql-timeout duration=60s
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_introspection_subscribes = false
 
+# Advance read frontiers before the AS OF 0 rejection below.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s'
+
 # In case the environment has other replicas
 > CREATE CLUSTER test SIZE 'scale=4,workers=4'
 > SET cluster = test
@@ -116,6 +120,9 @@ ALTER SYSTEM SET enable_introspection_subscribes = false
 # (The error msg's details are tested in `test_subscribe_basic`.)
 ! SELECT * FROM mz_introspection.mz_active_peeks AS OF 0
 contains:imestamp
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET catalog_read_protection_publish_interval
 
 # Test that logged subscribe frontiers advance beyond 0.
 
