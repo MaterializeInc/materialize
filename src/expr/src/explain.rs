@@ -24,10 +24,12 @@ use mz_repr::explain::{
 };
 use mz_repr::optimize::OptimizerFeatures;
 
-use crate::interpret::{Interpreter, MfpEval, Trace};
+use crate::interpret::{Interpretable, Interpreter, MfpEval, Trace};
+use crate::scalar::optimizable::OptimizableExpr;
 use crate::visit::Visit;
 use crate::{
-    AccessStrategy, Id, LocalId, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
+    AccessStrategy, BinaryFunc, Id, LocalId, MapFilterProject, MfpPlan, MirRelationExpr,
+    MirScalarExpr, RowSetFinishing, UnmaterializableFunc, func,
 };
 
 pub use crate::explain::text::{
@@ -71,54 +73,211 @@ pub struct ExplainSinglePlan<'a, T> {
 
 /// Carries metadata about the possibility of MFP pushdown for a source.
 /// (Likely to change, and only emitted when a context flag is enabled.)
+/// The operators of a source import that persist filter pushdown can apply,
+/// as `EXPLAIN ... WITH (filter pushdown)` reports them.
 #[allow(missing_debug_implementations)]
-pub struct PushdownInfo {
+pub struct PushdownInfo<E = MirScalarExpr> {
     /// Pushdown-able filters in the source, by index.
-    pub pushdown: Vec<MirScalarExpr>,
+    pub pushdown: Vec<E>,
+    /// Pushdown-able lower temporal bounds, each a `bound <= mz_now()`.
+    pub lower_bounds: Vec<E>,
+    /// Pushdown-able upper temporal bounds, each a `mz_now() < bound`.
+    pub upper_bounds: Vec<E>,
 }
 
-impl<'a, C, M> DisplayText<C> for HumanizedExpr<'a, PushdownInfo, M>
+impl<'a, C, M, E> DisplayText<C> for HumanizedExpr<'a, PushdownInfo<E>, M>
 where
     C: AsMut<Indent>,
     M: HumanizerMode,
+    E: HumanizeDisplay,
 {
     fn fmt_text(&self, f: &mut Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
-        let PushdownInfo { pushdown } = self.expr;
+        let PushdownInfo {
+            pushdown,
+            lower_bounds,
+            upper_bounds,
+        } = self.expr;
 
         if !pushdown.is_empty() {
             let pushdown = pushdown.iter().map(|e| self.mode.expr(e, self.cols));
             let pushdown = separated(" AND ", pushdown);
             writeln!(f, "{}pushdown=({})", ctx.as_mut(), pushdown)?;
         }
+        if !lower_bounds.is_empty() || !upper_bounds.is_empty() {
+            write!(f, "{}pushdown ", ctx.as_mut())?;
+            fmt_temporal_filter(lower_bounds, upper_bounds, self, f)?;
+        }
 
         Ok(())
     }
 }
 
-#[allow(missing_debug_implementations)]
-pub struct ExplainSource<'a> {
-    pub id: GlobalId,
-    pub op: Option<Cow<'a, MapFilterProject>>,
-    pub pushdown_info: Option<PushdownInfo>,
+/// Renders `TemporalFilter: <lowers> <= mz_now() < <uppers>`, omitting the
+/// `<lowers> <=` or `< <uppers>` part when the corresponding list is empty,
+/// and ends the line.
+pub fn fmt_temporal_filter<'a, T, M, E>(
+    lower_bounds: &[E],
+    upper_bounds: &[E],
+    humanizer: &HumanizedExpr<'a, T, M>,
+    f: &mut Formatter<'_>,
+) -> std::fmt::Result
+where
+    M: HumanizerMode,
+    E: HumanizeDisplay,
+{
+    write!(f, "TemporalFilter: ")?;
+    if !lower_bounds.is_empty() {
+        let lowers = lower_bounds.iter().map(|b| humanizer.child(b));
+        write!(f, "{} <= ", separated(", ", lowers))?;
+    }
+    write!(f, "mz_now()")?;
+    if !upper_bounds.is_empty() {
+        let uppers = upper_bounds.iter().map(|b| humanizer.child(b));
+        write!(f, " < {}", separated(", ", uppers))?;
+    }
+    writeln!(f)
 }
 
-impl<'a> ExplainSource<'a> {
+/// The operators pushed down onto a source import, in either form a
+/// `DataflowDescription` carries them: the `MapFilterProject` the MIR
+/// optimizer rewrites, or the `MfpPlan` lowering leaves.
+pub trait SourceOperators: Clone + serde::Serialize {
+    /// The scalar expression type of the operators.
+    type Expr: HumanizeDisplay + serde::Serialize;
+
+    /// Whether the operators pass rows through unchanged.
+    fn is_identity(&self) -> bool;
+
+    /// How many columns the map stage appends to the source's rows.
+    fn appended_columns(&self) -> usize;
+
+    /// Which of the operators persist filter pushdown can apply.
+    fn pushdown_info(&self) -> PushdownInfo<Self::Expr>;
+
+    /// Renders the operators, one `key=(...)` line each.
+    fn fmt_text<M: HumanizerMode, C: AsMut<Indent>>(
+        humanized: &HumanizedExpr<'_, Self, M>,
+        f: &mut Formatter<'_>,
+        ctx: &mut C,
+    ) -> std::fmt::Result;
+}
+
+impl<E> SourceOperators for MapFilterProject<E>
+where
+    E: OptimizableExpr + HumanizeDisplay + Interpretable + serde::Serialize,
+{
+    type Expr = E;
+
+    fn is_identity(&self) -> bool {
+        MapFilterProject::is_identity(self)
+    }
+
+    fn appended_columns(&self) -> usize {
+        self.expressions.len()
+    }
+
+    fn pushdown_info(&self) -> PushdownInfo<E> {
+        let mfp_mapped = MfpEval::new(&Trace, self.input_arity, &self.expressions);
+        let pushdown = self
+            .predicates
+            .iter()
+            .filter(|(_, e)| mfp_mapped.expr(e).pushdownable())
+            .map(|(_, e)| e.clone())
+            .collect();
+        PushdownInfo {
+            pushdown,
+            lower_bounds: Vec::new(),
+            upper_bounds: Vec::new(),
+        }
+    }
+
+    fn fmt_text<M: HumanizerMode, C: AsMut<Indent>>(
+        humanized: &HumanizedExpr<'_, Self, M>,
+        f: &mut Formatter<'_>,
+        ctx: &mut C,
+    ) -> std::fmt::Result {
+        DisplayText::fmt_text(humanized, f, ctx)
+    }
+}
+
+impl<E> SourceOperators for MfpPlan<E>
+where
+    E: OptimizableExpr + HumanizeDisplay + Interpretable + serde::Serialize,
+{
+    type Expr = E;
+
+    fn is_identity(&self) -> bool {
+        MfpPlan::is_identity(self)
+    }
+
+    fn appended_columns(&self) -> usize {
+        self.safe_mfp().expressions.len()
+    }
+
+    fn pushdown_info(&self) -> PushdownInfo<E> {
+        let (safe, lower_bounds, upper_bounds) = self.as_parts();
+        let mfp_mapped = MfpEval::new(&Trace, safe.input_arity, &safe.expressions);
+        let pushdown = safe
+            .predicates
+            .iter()
+            .filter(|(_, e)| mfp_mapped.expr(e).pushdownable())
+            .map(|(_, e)| e.clone())
+            .collect();
+        // A bound is pushed down as the comparison `mfp_plan_filter`
+        // evaluates it against the part's `mz_now()` range.
+        let mz_now = mfp_mapped.unmaterializable(&UnmaterializableFunc::MzNow);
+        let pushdownable = |bound: &E, func: BinaryFunc| {
+            mfp_mapped
+                .binary(&func, mfp_mapped.expr(bound), mz_now.clone())
+                .pushdownable()
+        };
+        let lower_bounds = lower_bounds
+            .iter()
+            .filter(|b| pushdownable(b, BinaryFunc::Lte(func::Lte)))
+            .cloned()
+            .collect();
+        let upper_bounds = upper_bounds
+            .iter()
+            .filter(|b| pushdownable(b, BinaryFunc::Gte(func::Gte)))
+            .cloned()
+            .collect();
+        PushdownInfo {
+            pushdown,
+            lower_bounds,
+            upper_bounds,
+        }
+    }
+
+    fn fmt_text<M: HumanizerMode, C: AsMut<Indent>>(
+        humanized: &HumanizedExpr<'_, Self, M>,
+        f: &mut Formatter<'_>,
+        ctx: &mut C,
+    ) -> std::fmt::Result {
+        let (safe, lower_bounds, upper_bounds) = humanized.expr.as_parts();
+        DisplayText::fmt_text(&humanized.child(&**safe), f, ctx)?;
+        if !lower_bounds.is_empty() || !upper_bounds.is_empty() {
+            write!(f, "{}", ctx.as_mut())?;
+            fmt_temporal_filter(lower_bounds, upper_bounds, humanized, f)?;
+        }
+        Ok(())
+    }
+}
+
+#[allow(missing_debug_implementations)]
+pub struct ExplainSource<'a, O: SourceOperators = MapFilterProject> {
+    pub id: GlobalId,
+    pub op: Option<Cow<'a, O>>,
+    pub pushdown_info: Option<PushdownInfo<O::Expr>>,
+}
+
+impl<'a, O: SourceOperators> ExplainSource<'a, O> {
     pub fn new(
         id: GlobalId,
-        op: Option<Cow<'a, MapFilterProject>>,
+        op: Option<Cow<'a, O>>,
         filter_pushdown: bool,
-    ) -> ExplainSource<'a> {
+    ) -> ExplainSource<'a, O> {
         let pushdown_info = if filter_pushdown {
-            op.as_deref().map(|op| {
-                let mfp_mapped = MfpEval::new(&Trace, op.input_arity, &op.expressions);
-                let pushdown = op
-                    .predicates
-                    .iter()
-                    .filter(|(_, e)| mfp_mapped.expr(e).pushdownable())
-                    .map(|(_, e)| e.clone())
-                    .collect();
-                PushdownInfo { pushdown }
-            })
+            op.as_deref().map(SourceOperators::pushdown_info)
         } else {
             None
         };
@@ -139,10 +298,11 @@ impl<'a> ExplainSource<'a> {
     }
 }
 
-impl<'a, 'h, C, M> DisplayText<C> for HumanizedExpr<'a, ExplainSource<'a>, M>
+impl<'a, 'h, C, M, O> DisplayText<C> for HumanizedExpr<'a, ExplainSource<'a, O>, M>
 where
     C: AsMut<Indent> + AsRef<&'h dyn ExprHumanizer>,
     M: HumanizerMode,
+    O: SourceOperators,
 {
     fn fmt_text(&self, f: &mut std::fmt::Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
         let id = ctx
@@ -152,7 +312,7 @@ where
         writeln!(f, "{}Source {}", ctx.as_mut(), id)?;
         ctx.indented(|ctx| {
             if let Some(op) = self.expr.op.as_deref() {
-                self.child(op).fmt_text(f, ctx)?;
+                O::fmt_text(&self.child(op), f, ctx)?;
             }
             if let Some(pushdown_info) = &self.expr.pushdown_info {
                 self.child(pushdown_info).fmt_text(f, ctx)?;
@@ -167,11 +327,11 @@ where
 /// in the optimization pipeline identified with a
 /// `DataflowDescription` instance with plans of type `T`.
 #[allow(missing_debug_implementations)]
-pub struct ExplainMultiPlan<'a, T> {
+pub struct ExplainMultiPlan<'a, T, O: SourceOperators = MapFilterProject> {
     pub context: &'a ExplainContext<'a>,
     // Maps the names of the sources to the linear operators that will be
     // on them.
-    pub sources: Vec<ExplainSource<'a>>,
+    pub sources: Vec<ExplainSource<'a, O>>,
     // elements of the vector are in topological order
     pub plans: Vec<(String, AnnotatedPlan<'a, T>)>,
 }
