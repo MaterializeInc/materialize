@@ -2197,25 +2197,21 @@ fn test_delete_rows_selection() {
         )
         .start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
-    client
-        .batch_execute(
-            "CREATE TABLE intents (id INT, done BOOL);
-             CREATE TABLE store (id INT);
-             CREATE TABLE other (id INT, done BOOL);
-             INSERT INTO store VALUES (1);
-             INSERT INTO other VALUES (2, false);
-             CREATE MATERIALIZED VIEW garbage AS
-               SELECT * FROM intents EXCEPT ALL SELECT id, false FROM store;
-             CREATE VIEW garbage_view AS
-               SELECT * FROM intents EXCEPT ALL SELECT id, false FROM store;
-             CREATE VIEW garbage_indexed AS
-               SELECT * FROM intents EXCEPT ALL SELECT id, false FROM store;
-             CREATE INDEX garbage_indexed_idx ON garbage_indexed (id);
-             CREATE VIEW over_garbage AS SELECT * FROM garbage WHERE id > 0;
-             CREATE MATERIALIZED VIEW stale WITH (REFRESH EVERY '1000 hours') AS
-               SELECT * FROM intents;",
-        )
-        .unwrap();
+    for statement in [
+        "CREATE TABLE intents (id INT, done BOOL)",
+        "CREATE TABLE store (id INT)",
+        "CREATE TABLE other (id INT, done BOOL)",
+        "INSERT INTO store VALUES (1)",
+        "INSERT INTO other VALUES (2, false)",
+        "CREATE MATERIALIZED VIEW garbage AS SELECT * FROM intents EXCEPT ALL SELECT id, false FROM store",
+        "CREATE VIEW garbage_view AS SELECT * FROM intents EXCEPT ALL SELECT id, false FROM store",
+        "CREATE VIEW garbage_indexed AS SELECT * FROM intents EXCEPT ALL SELECT id, false FROM store",
+        "CREATE INDEX garbage_indexed_idx ON garbage_indexed (id)",
+        "CREATE VIEW over_garbage AS SELECT * FROM garbage WHERE id > 0",
+        "CREATE MATERIALIZED VIEW stale WITH (REFRESH EVERY '1000 hours') AS SELECT * FROM intents",
+    ] {
+        client.batch_execute(statement).unwrap();
+    }
 
     // Each case resets `intents` to `(1, false)` once and `(2, false)` twice,
     // so the garbage is `(2, false)` twice.
@@ -2244,12 +2240,12 @@ fn test_delete_rows_selection() {
         ("SELECT * FROM stale", "intersection", 0),
     ];
     for (query, selection, expected) in cases {
-        client
-            .batch_execute(
-                "DELETE FROM intents;
-                 INSERT INTO intents VALUES (1, false), (2, false), (2, false);",
-            )
-            .unwrap();
+        for statement in [
+            "DELETE FROM intents",
+            "INSERT INTO intents VALUES (1, false), (2, false), (2, false)",
+        ] {
+            client.batch_execute(statement).unwrap();
+        }
         let rows_before = delete_rows_selections(&server, "rows");
         let intersection_before = delete_rows_selections(&server, "intersection");
         let deleted = client
@@ -2280,12 +2276,12 @@ fn test_delete_rows_selection() {
     }
 
     // A view over an earlier version of the table is not the table.
-    client
-        .batch_execute(
-            "CREATE VIEW intents_v0 AS SELECT * FROM intents;
-             ALTER TABLE intents ADD COLUMN extra INT;",
-        )
-        .unwrap();
+    for statement in [
+        "CREATE VIEW intents_v0 AS SELECT * FROM intents",
+        "ALTER TABLE intents ADD COLUMN extra INT",
+    ] {
+        client.batch_execute(statement).unwrap();
+    }
     let intersection_before = delete_rows_selections(&server, "intersection");
     let deleted = client
         .execute(
@@ -2314,12 +2310,12 @@ fn test_concurrent_delete_rows_from_view_does_not_over_delete() {
         .with_system_parameter_default("enable_delete_rows".to_string(), "true".to_string())
         .start_blocking();
     let mut setup = server.connect(postgres::NoTls).unwrap();
-    setup
-        .batch_execute(
-            "CREATE TABLE t (id INT);
-             CREATE MATERIALIZED VIEW garbage AS SELECT * FROM t WHERE id = 1;",
-        )
-        .unwrap();
+    for statement in [
+        "CREATE TABLE t (id INT)",
+        "CREATE MATERIALIZED VIEW garbage AS SELECT * FROM t WHERE id = 1",
+    ] {
+        setup.batch_execute(statement).unwrap();
+    }
 
     for _round in 0..ROUNDS {
         setup.batch_execute("DELETE FROM t").unwrap();
