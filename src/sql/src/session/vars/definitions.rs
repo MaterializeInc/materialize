@@ -2159,6 +2159,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_delete_rows,
+        desc: "DELETE FROM <table> ROWS (<query>) syntax",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_try_cast,
         desc: "TRY_CAST(<expr> AS <type>) syntax",
         default: true,

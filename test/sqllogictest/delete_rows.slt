@@ -1,0 +1,297 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for `DELETE FROM <table> ROWS (<query>)`, which deletes
+# `<table> INTERSECT ALL <query>`.
+
+mode cockroach
+
+statement ok
+CREATE TABLE t (a int, b text)
+
+statement ok
+INSERT INTO t VALUES (1, 'x'), (1, 'x'), (1, 'x'), (2, 'y'), (3, NULL)
+
+# The feature flag gates the syntax.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_delete_rows = false
+----
+COMPLETE 0
+
+statement error DELETE FROM <table> ROWS \(<query>\) syntax is not available
+DELETE FROM t ROWS (VALUES (1, 'x'))
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_delete_rows = true
+----
+COMPLETE 0
+
+# A row present three times in the table and once in the query loses exactly
+# one copy.
+
+simple
+DELETE FROM t ROWS (VALUES (1, 'x'))
+----
+COMPLETE 1
+
+query ITI rowsort
+SELECT a, b, count(*) FROM t GROUP BY a, b
+----
+1  x  2
+2  y  1
+3  NULL  1
+
+# A row present more often in the query than in the table loses only the
+# table's copies. The multiplicity never goes negative.
+
+simple
+DELETE FROM t ROWS (SELECT 2, 'y' FROM generate_series(1, 5))
+----
+COMPLETE 1
+
+query ITI rowsort
+SELECT a, b, count(*) FROM t GROUP BY a, b
+----
+1  x  2
+3  NULL  1
+
+statement ok
+INSERT INTO t VALUES (2, 'y')
+
+query ITI rowsort
+SELECT a, b, count(*) FROM t GROUP BY a, b
+----
+1  x  2
+2  y  1
+3  NULL  1
+
+# Rows of the query that are absent from the table are ignored, and the
+# reported count is the number of deleted rows.
+
+simple
+DELETE FROM t ROWS (VALUES (1, 'x'), (4, 'z'), (1, 'nope'), (2, 'y'), (2, 'y'))
+----
+COMPLETE 2
+
+query ITI rowsort
+SELECT a, b, count(*) FROM t GROUP BY a, b
+----
+1  x  1
+3  NULL  1
+
+# NULLs match NULLs, as in INTERSECT ALL.
+
+simple
+DELETE FROM t ROWS (SELECT 3, NULL::text)
+----
+COMPLETE 1
+
+query IT rowsort
+SELECT * FROM t
+----
+1  x
+
+# An empty query deletes nothing.
+
+simple
+DELETE FROM t ROWS (SELECT * FROM t WHERE false)
+----
+COMPLETE 0
+
+# The query can read the target table.
+
+simple
+DELETE FROM t ROWS (TABLE t)
+----
+COMPLETE 1
+
+query IT
+SELECT * FROM t
+----
+
+# The motivating example: delete the intents that are not reflected in the
+# store, accounting for duplicates.
+
+statement ok
+CREATE TABLE intents (id int, key text, val text, flag bool)
+
+statement ok
+CREATE TABLE store (id int, key text, val text)
+
+statement ok
+INSERT INTO intents VALUES
+  (1, 'a', 'v1', false),
+  (1, 'a', 'v1', false),
+  (1, 'a', 'v1', false),
+  (2, 'b', 'v2', false),
+  (3, 'c', 'v3', true),
+  (4, 'd', 'v4', false)
+
+statement ok
+INSERT INTO store VALUES (1, 'a', 'v1'), (2, 'b', 'v2'), (3, 'c', 'v3')
+
+# `WHERE (...) IN (subquery)` cannot express this: it deletes all copies of a
+# duplicated row. With `ROWS`, two of the three `(1, 'a', 'v1', false)` copies,
+# the flagged `(3, 'c', 'v3', true)`, and the unmatched `(4, 'd', 'v4', false)`
+# go.
+
+simple
+DELETE FROM intents ROWS (SELECT * FROM intents EXCEPT ALL SELECT id, key, val, false FROM store)
+----
+COMPLETE 4
+
+query ITTTI rowsort
+SELECT id, key, val, flag, count(*) FROM intents GROUP BY id, key, val, flag
+----
+1  a  v1  false  1
+2  b  v2  false  1
+
+# The same through a materialized view.
+
+statement ok
+INSERT INTO intents VALUES (1, 'a', 'v1', false), (5, 'e', 'v5', false)
+
+statement ok
+CREATE MATERIALIZED VIEW excess AS
+  SELECT * FROM intents EXCEPT ALL SELECT id, key, val, false FROM store
+
+query ITTT rowsort
+SELECT * FROM excess
+----
+1  a  v1  false
+5  e  v5  false
+
+simple
+DELETE FROM intents ROWS (SELECT * FROM excess)
+----
+COMPLETE 2
+
+query ITTTI rowsort
+SELECT id, key, val, flag, count(*) FROM intents GROUP BY id, key, val, flag
+----
+1  a  v1  false  1
+2  b  v2  false  1
+
+query ITTT
+SELECT * FROM excess
+----
+
+# Repeating the delete is a no-op.
+
+simple
+DELETE FROM intents ROWS (SELECT * FROM excess)
+----
+COMPLETE 0
+
+# Columns are cast to the table's types in assignment context, as for INSERT.
+
+statement ok
+CREATE TABLE c (a bigint, b numeric(10, 2), d text)
+
+statement ok
+INSERT INTO c VALUES (1, 1.5, 'one'), (2, 2.25, 'two')
+
+simple
+DELETE FROM c ROWS (VALUES (1, 1.5, 'one'))
+----
+COMPLETE 1
+
+simple
+DELETE FROM c ROWS (SELECT 2::int, 2.25::float8, 'two'::varchar)
+----
+COMPLETE 1
+
+query ITT
+SELECT * FROM c
+----
+
+statement ok
+INSERT INTO c VALUES (3, 3, 'three')
+
+# A bare VALUES list is typed against the table's columns, as for INSERT.
+
+simple
+DELETE FROM c ROWS (VALUES ('3', '3', 'three'))
+----
+COMPLETE 1
+
+statement error column "a" is of type bigint but expression is of type boolean
+DELETE FROM c ROWS (SELECT true, 1, 'x')
+
+statement error column "a" is of type bigint but expression is of type boolean
+DELETE FROM c ROWS (VALUES (true, 1, 'x'))
+
+statement error DELETE \.\.\. ROWS query has 2 columns but table "materialize\.public\.c" has 3
+DELETE FROM c ROWS (SELECT 1, 2)
+
+statement error DELETE \.\.\. ROWS query has 4 columns but table "materialize\.public\.c" has 3
+DELETE FROM c ROWS (SELECT 1, 2, 'x', 4)
+
+statement error DELETE has more expressions than target columns
+DELETE FROM c ROWS (VALUES (1, 2, 'x', 4))
+
+# `ROWS` excludes `WHERE`, `USING`, and a table alias. `DELETE` has no
+# `RETURNING`.
+
+statement error DELETE \.\.\. ROWS cannot be combined with USING or WHERE
+DELETE FROM c ROWS (SELECT 1, 2, 'x') WHERE a = 1
+
+statement error DELETE \.\.\. ROWS cannot be combined with USING or WHERE
+DELETE FROM c ROWS (SELECT 1, 2, 'x') USING t
+
+statement error DELETE \.\.\. ROWS does not support a table alias
+DELETE FROM c AS cc ROWS (SELECT 1, 2, 'x')
+
+statement error Expected end of statement, found RETURNING
+DELETE FROM c ROWS (SELECT 1, 2, 'x') RETURNING *
+
+# A bare alias named `rows` keeps working.
+
+statement ok
+INSERT INTO c VALUES (4, 4, 'four')
+
+simple
+DELETE FROM c rows WHERE rows.a = 4
+----
+COMPLETE 1
+
+# Only tables can be the target.
+
+statement error cannot mutate materialized view 'materialize\.public\.excess'
+DELETE FROM excess ROWS (SELECT * FROM excess)
+
+# Inside an explicit transaction, a query that reads a table is rejected as for
+# `DELETE ... WHERE` with a subquery.
+
+statement ok
+INSERT INTO t VALUES (1, 'x')
+
+simple
+BEGIN;
+DELETE FROM t WHERE a IN (SELECT a FROM t);
+COMMIT;
+----
+db error: ERROR: DELETE FROM t WHERE a IN (SELECT a FROM t) cannot be run inside a transaction block
+
+simple
+ROLLBACK;
+BEGIN;
+DELETE FROM t ROWS (TABLE t);
+COMMIT;
+----
+db error: ERROR: DELETE FROM t ROWS (TABLE t) cannot be run inside a transaction block
+
+statement ok
+ROLLBACK
+
+query IT
+SELECT * FROM t
+----
+1  x

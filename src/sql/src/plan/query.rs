@@ -215,6 +215,65 @@ fn try_push_projection_order_by(
     }
 }
 
+/// Plans `query` as rows for the columns of `desc` at `ordering`, whose types are
+/// `target_types`.
+///
+/// The result is not yet cast to `target_types`, see [`cast_to_table_columns`]. `statement`
+/// names the statement in error messages.
+fn plan_table_rows_query(
+    qcx: &mut QueryContext,
+    statement: &str,
+    desc: &RelationDesc,
+    ordering: &[usize],
+    target_types: &[&SqlScalarType],
+    query: Query<Aug>,
+) -> Result<HirRelationExpr, PlanError> {
+    match query {
+        // Special-case simple VALUES clauses as PostgreSQL does.
+        Query {
+            body: SetExpr::Values(Values(values)),
+            ctes,
+            order_by,
+            limit: None,
+            offset: None,
+        } if ctes.is_empty() && order_by.is_empty() => {
+            let names: Vec<_> = ordering.iter().map(|i| desc.get_name(*i)).collect();
+            plan_values_insert(qcx, statement, &names, target_types, &values)
+        }
+        _ => {
+            let (expr, _scope) = plan_nested_query(qcx, &query)?;
+            Ok(expr)
+        }
+    }
+}
+
+/// Casts each column of `expr` to the type of the column of `desc` at the same position in
+/// `ordering`, given as `target_types`, in assignment context.
+fn cast_to_table_columns(
+    qcx: &QueryContext,
+    desc: &RelationDesc,
+    ordering: &[usize],
+    target_types: &[&SqlScalarType],
+    expr: HirRelationExpr,
+) -> Result<HirRelationExpr, PlanError> {
+    // Ensure the types of the source query match the types of the target table,
+    // installing assignment casts where necessary and possible.
+    cast_relation(
+        qcx,
+        CastContext::Assignment,
+        expr,
+        target_types.iter().copied(),
+    )
+    .map_err(|e| {
+        sql_err!(
+            "column {} is of type {} but expression is of type {}",
+            desc.get_name(ordering[e.column]).quoted(),
+            qcx.humanize_sql_scalar_type(&e.target_type, false),
+            qcx.humanize_sql_scalar_type(&e.source_type, false),
+        )
+    })
+}
+
 pub fn plan_insert_query(
     scx: &StatementContext,
     table_name: ResolvedItemName,
@@ -303,24 +362,7 @@ pub fn plan_insert_query(
     let expr = match source {
         InsertSource::Query(mut query) => {
             transform_ast::transform(scx, &mut query)?;
-
-            match query {
-                // Special-case simple VALUES clauses as PostgreSQL does.
-                Query {
-                    body: SetExpr::Values(Values(values)),
-                    ctes,
-                    order_by,
-                    limit: None,
-                    offset: None,
-                } if ctes.is_empty() && order_by.is_empty() => {
-                    let names: Vec<_> = ordering.iter().map(|i| desc.get_name(*i)).collect();
-                    plan_values_insert(&qcx, &names, &source_types, &values)?
-                }
-                _ => {
-                    let (expr, _scope) = plan_nested_query(&mut qcx, &query)?;
-                    expr
-                }
-            }
+            plan_table_rows_query(&mut qcx, "INSERT", &desc, &ordering, &source_types, query)?
         }
         InsertSource::DefaultValues => {
             HirRelationExpr::constant(vec![vec![]], SqlRelationType::empty())
@@ -348,16 +390,7 @@ pub fn plan_insert_query(
     source_types.truncate(expr_arity);
     ordering.truncate(expr_arity);
 
-    // Ensure the types of the source query match the types of the target table,
-    // installing assignment casts where necessary and possible.
-    let expr = cast_relation(&qcx, CastContext::Assignment, expr, source_types).map_err(|e| {
-        sql_err!(
-            "column {} is of type {} but expression is of type {}",
-            desc.get_name(ordering[e.column]).quoted(),
-            qcx.humanize_sql_scalar_type(&e.target_type, false),
-            qcx.humanize_sql_scalar_type(&e.source_type, false),
-        )
-    })?;
+    let expr = cast_to_table_columns(&qcx, &desc, &ordering, &source_types, expr)?;
 
     // Fill in any omitted columns and rearrange into correct order
     let mut map_exprs = vec![];
@@ -703,6 +736,10 @@ pub fn plan_delete_query(
 ) -> Result<ReadThenWritePlan, PlanError> {
     transform_ast::transform(scx, &mut delete_stmt)?;
 
+    if delete_stmt.rows.is_some() {
+        scx.require_feature_flag(&vars::ENABLE_DELETE_ROWS)?;
+    }
+
     let qcx = QueryContext::root(scx, QueryLifetime::OneShot);
     plan_mutation_query_inner(
         qcx,
@@ -711,6 +748,7 @@ pub fn plan_delete_query(
         delete_stmt.using,
         vec![],
         delete_stmt.selection,
+        delete_stmt.rows,
     )
 }
 
@@ -729,16 +767,18 @@ pub fn plan_update_query(
         vec![],
         update_stmt.assignments,
         update_stmt.selection,
+        None,
     )
 }
 
 pub fn plan_mutation_query_inner(
-    qcx: QueryContext,
+    mut qcx: QueryContext,
     table_name: ResolvedItemName,
     alias: Option<TableAlias>,
     using: Vec<TableWithJoins<Aug>>,
     assignments: Vec<Assignment<Aug>>,
     selection: Option<Expr<Aug>>,
+    rows: Option<Query<Aug>>,
 ) -> Result<ReadThenWritePlan, PlanError> {
     // Get ID and version of the relation desc.
     let (id, version) = match table_name {
@@ -769,12 +809,33 @@ pub fn plan_mutation_query_inner(
     }
 
     // Derive structs for operation from validated table
+    let table_full_name = table_name.full_name_str();
     let (mut get, scope) = qcx.resolve_table_name(table_name)?;
     let scope = plan_table_alias(scope, alias.as_ref())?;
     let desc = item.relation_desc().expect("table has desc");
     let relation_type = qcx.relation_type(&get);
 
-    if using.is_empty() {
+    if let Some(rows) = rows {
+        if !using.is_empty() || selection.is_some() || alias.is_some() {
+            sql_bail!("DELETE ... ROWS cannot be combined with USING, WHERE, or a table alias");
+        }
+        let ordering: Vec<_> = (0..desc.arity()).collect();
+        let target_types: Vec<_> = desc.iter_types().map(|typ| &typ.scalar_type).collect();
+        let rows =
+            plan_table_rows_query(&mut qcx, "DELETE", &desc, &ordering, &target_types, rows)?;
+        if rows.arity() != desc.arity() {
+            sql_bail!(
+                "DELETE ... ROWS query has {} columns but table {} has {}",
+                rows.arity(),
+                table_full_name.quoted(),
+                desc.arity()
+            );
+        }
+        let rows = cast_to_table_columns(&qcx, &desc, &ordering, &target_types, rows)?;
+        // `get` is the left input, so every row the selection retracts is a row of the
+        // table, at most as often as the table holds it.
+        get = get.intersect_all(rows);
+    } else if using.is_empty() {
         if let Some(expr) = selection {
             let ecx = &ExprContext {
                 qcx: &qcx,
@@ -1980,19 +2041,10 @@ fn plan_set_expr(
                     } else {
                         (lhs, rhs)
                     };
-                    // TODO: Let's not duplicate the left-hand expression into TWO dataflows!
-                    // The optimizer de-duplicates at some point, but it would be good to already
-                    // not duplicate here.
-                    //
-                    // Also note that we do *not* need another threshold() at the end of the method chain
-                    // because the right-hand side of the outer union only produces existing records,
-                    // i.e., the record counts for differential data flow definitely remain non-negative.
-                    let left_clone = lhs.clone();
                     if *all {
-                        lhs.union(left_clone.union(rhs.negate()).threshold().negate())
+                        lhs.intersect_all(rhs)
                     } else {
-                        lhs.union(left_clone.union(rhs.negate()).threshold().negate())
-                            .distinct()
+                        lhs.intersect_all(rhs).distinct()
                     }
                 }
             };
@@ -2186,6 +2238,7 @@ fn plan_values(
 /// See: <https://github.com/postgres/postgres/blob/ad77039fa/src/backend/parser/analyze.c#L504-L518>
 fn plan_values_insert(
     qcx: &QueryContext,
+    statement: &str,
     target_names: &[&ColumnName],
     target_types: &[&SqlScalarType],
     values: &[Vec<Expr<Aug>>],
@@ -2211,7 +2264,7 @@ fn plan_values_insert(
     let mut types = vec![];
     for row in values {
         if row.len() > target_names.len() {
-            sql_bail!("INSERT has more expressions than target columns");
+            sql_bail!("{statement} has more expressions than target columns");
         }
         for (column, val) in row.into_iter().enumerate() {
             let target_type = &target_types[column];
