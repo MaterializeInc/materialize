@@ -26,22 +26,26 @@ The asynchronous catalog-owner refactor is not part of M2 and must not resume.
 
 Aljoscha approved a 60s publication default after M2 closeout. Revision `e8084213`
 changes that default and the publication-measurement workflow's explicit interval,
-without changing deadlines or assertions. CI140146 has new frontier, pushdown
-statistics and table-finalization failures, plus a clusterd OOM in parallel
-shard 2. Separate short-window fixture assumptions from product regressions.
+without changing deadlines or assertions. CI140146 finishes with 83 passed,
+12 failed and one timed-out job, including a clusterd OOM in parallel shard 2.
+Separate short-window fixture assumptions from product regressions.
 The webhook build superseded manual CI140145 without its seed override, so it
 is not the matched comparison requested there. Evidence is under
 `scratch/cadence60-default/`. Scratch access is restored. The paused-cluster and
 testdrive failures reproduce at 60s. The failed table shard later tombstones
 without intervention, so cleanup is delayed rather than permanently stuck.
-Revisions `9d765d0a` and `888009e6` scope 1s publication to interval-sensitive
-fixtures, as approved, without changing assertions or deadlines. All three targeted cluster workflows, three testdrive files and both SQL logic
-files pass on scratch. The SQL failures depended on input compaction, not a
-REFRESH correctness violation. Native unit fixtures and the parallel OOM remain
-open. CI140148 runs the exact CI140146 seed at 1s on the same code and normal CI
-resources, using a CI-only label to avoid superseding the broad build. The
-remaining testdrive timeout is being classified separately. The prompt's restriction against changing
-the 1s default is superseded by Aljoscha's approval.
+Through `bafd0949`, scoped 1s fixture settings preserve all assertions and
+deadlines. Three cluster workflows, three testdrive files, both SQL logic files
+and all 22 native library tests pass on scratch. The SQL failures depended on
+input compaction, not a REFRESH correctness violation. The native adapter-loss
+retention-phase setting still needs combined verification.
+
+CI140148 runs the exact CI140146 seed at 1s on the same code and normal CI
+resources, using a CI-only label. OOM attribution remains open. Testdrive 3
+exhausted its step budget, with inter-file gaps growing from roughly 5–6s to
+30–37s versus CI140105. A short existing-file comparison is checking that cost,
+not assuming a stalled final query or changing global fixture timing. The
+prompt's restriction against changing the 1s default is superseded by approval.
 
 CI140105 at `2bde8879` finishes with 94 passed jobs. Cargo, cluster frontier
 checks, Kafka RTR, both parallel shards and the closed native recovery/handover
