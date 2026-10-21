@@ -18,7 +18,7 @@ runtime evidence. Keep their proof scopes closed and their regular regressions
 enabled. Incremental protection publication, removal of the whole-map API,
 prepared-MV admission and the replacement-MV replay correction are implemented.
 
-M2 is at verification closeout, pending analysis of the controlled comparison.
+M2 verification and history consolidation are complete within the approved scope.
 No further implementation is currently identified as necessary. The asynchronous
 catalog-owner refactor is not part of M2 and must not resume.
 
@@ -30,8 +30,18 @@ regressions pass. The only failed jobs are deferred upstream merge skew and
 existing-environment source-to-view conversion. The build is not green.
 CI140108 passes both shards of the original fixed-seed parallel comparison,
 with the same workload, diagnostic settings and normal CI resource budget.
-Capture analysis of foreground commits and committed-bound progress is pending
-under `scratch/combined-publication/ci140108-parallel{1,2}/`.
+Both captures independently witness successful foreground commits, SQL completion
+and advancing committed user bounds. Shard 1 has 310 → 412 logged content commits
+in matched 300s windows. Shard 2's previously timed-out MV completes in 20.636s,
+with one durable commit. Boot records confirm 8 CPUs and 16,350,281,728 bytes RAM
+for both runs, with unchanged workload, backends and deadlines.
+
+This is not uniformly faster: shard 1's JSONB statement takes 22.623s versus
+3.879s. Publication-open rejections increase and adapter maintenance wins remain
+scarce. The comparison proves observed progress, not starvation freedom or an
+isolated causal attribution. Detailed accounting and limits are in
+`scratch/combined-publication/ci140108-parallel1/report.md` and
+`scratch/ci140108-parallel2/report.md`.
 
 Publication scheduling and atomic maintenance are implemented. Immediate replica
 grants preserve the maintenance deadline. Combined client/recovery requirements
@@ -67,9 +77,9 @@ bootstrap/builtin-migration regressions pass unchanged on rerun, with two initia
 timeouts still unexplained. Evidence is under `scratch/table-lifecycle-verification/`.
 These fixes are not demonstrated repairs for the original contention.
 
-Finish the two capture analyses, then close out the evidence, PR summary and
-implementation history. Distinguish successful foreground commits, SQL completion
-and committed-bound advancement. Do not infer physical reclamation or a scheduling
+The consolidated history preserves the verified implementation tree and all other
+branch/tag tips. Keep successful foreground commits, SQL completion and
+committed-bound advancement distinct. Do not infer physical reclamation or a scheduling
 guarantee from those results, or reopen closed proof scopes. Shared content-priority
 signals and arbitration changes remain unapproved.
 
