@@ -45,7 +45,7 @@ materialize.public.mv_firing:
 
 Source materialize.public.events
   project=(#0)
-  filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+  TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))
 
 Target cluster: quickstart
 
@@ -120,7 +120,7 @@ materialize.public.mv_rearm:
         raw=true
 
 Source materialize.public.events
-  filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+  TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))
 
 Target cluster: quickstart
 
@@ -152,7 +152,7 @@ materialize.public.mv_topk_firing:
       raw=true
 
 Source materialize.public.events
-  filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+  TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))
 
 Target cluster: quickstart
 
@@ -367,7 +367,7 @@ materialize.public.rt_union:
 
 Source materialize.public.rt_events
   project=(#0)
-  filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+  TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))
 Source materialize.public.rt_other
 
 Target cluster: quickstart
@@ -415,7 +415,7 @@ materialize.public.rt_indexed:
 
 Source materialize.public.rt_events
   project=(#0)
-  filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+  TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))
 
 Target cluster: quickstart
 

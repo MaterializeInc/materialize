@@ -2183,7 +2183,7 @@ materialize.public.mv_default_reduce:
 
 Source materialize.public.events
   project=(#0)
-  filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+  TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))
 
 Target cluster: no_replicas
 
@@ -2204,7 +2204,7 @@ materialize.public.mv_default_topk:
     →Read materialize.public.events
 
 Source materialize.public.events
-  filter=((mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))))
+  TemporalFilter: mz_now() < timestamp_to_mz_timestamp((#1{event_time} + 45 days))
 
 Target cluster: no_replicas
 
