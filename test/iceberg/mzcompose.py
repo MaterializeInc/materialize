@@ -53,7 +53,7 @@ SERVICES = [
         depends_on=["minio"],
         sanity_restart=False,
         additional_system_parameter_defaults={
-            "log_filter": "mz_storage::sink::iceberg=debug",
+            "log_filter": "info,warn,mz_storage::sink::iceberg=debug,mz_storage_types=debug",
         },
     ),
     Testdrive(),

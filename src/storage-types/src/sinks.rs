@@ -739,6 +739,11 @@ impl<C: ConnectionAccess> IcebergSinkConnection<C> {
     /// valid series of transformations (e.g. no transformation or `ALTER
     /// CONNECTION`).
     pub fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        tracing::debug!(
+            "IcebergSinkConnection::alter_compatible self: {:#?}, other: {:#?}",
+            self,
+            other
+        );
         if self == other {
             return Ok(());
         }
