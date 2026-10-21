@@ -15,9 +15,10 @@ import {
   useQueryClient,
   useSuspenseQuery,
 } from "@tanstack/react-query";
-import { flatGroup, group } from "d3";
+import { flatGroup, group, sort } from "d3";
 import { subMinutes } from "date-fns";
-import { useCallback, useMemo } from "react";
+import { millisecondsInMinute } from "date-fns/constants";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   buildQueryKeyPart,
@@ -43,6 +44,7 @@ import {
   fetchClusterDeploymentLineage,
 } from "~/api/materialize/cluster/clusterDeploymentLineage";
 import {
+  Cluster,
   ClusterListFilters,
   fetchClusters,
 } from "~/api/materialize/cluster/clusterList";
@@ -65,11 +67,23 @@ import {
   MaterializationLagParams,
 } from "~/api/materialize/cluster/materializationLag";
 import fetchMaxReplicasPerCluster from "~/api/materialize/cluster/maxReplicasPerCluster";
+import { fetchObjectCreationTimes } from "~/api/materialize/cluster/objectCreationTimes";
+import { fetchReplicaHeapLimits } from "~/api/materialize/cluster/replicaHeapLimits";
 import { fetchReplicaHydration } from "~/api/materialize/cluster/replicaHydration";
+import {
+  fetchReplicaSizeAllocations,
+  SizeAllocation,
+} from "~/api/materialize/cluster/replicaProcessMetrics";
 import {
   ClusterReplicasParams,
   fetchClusterReplicas,
 } from "~/api/materialize/cluster/replicas";
+import {
+  fetchObjectHydrationTimes,
+  fetchReplicaHydrationEpisodes,
+  fetchReplicaStatusHistory,
+  fetchUnhydratedComputeObjects,
+} from "~/api/materialize/cluster/replicaStatusTimeline";
 import {
   ClusterReplicasWithUtilizationParams,
   fetchClusterReplicasWithUtilization,
@@ -115,6 +129,7 @@ type ReplicaUtilizationHistoryFilters = {
   replicaId: ReplicaUtilizationHistoryParameters["replicaId"];
   timePeriodMinutes: number;
   bucketSizeMs: ReplicaUtilizationHistoryParameters["bucketSizeMs"];
+  includeMemoryBreakdown?: ReplicaUtilizationHistoryParameters["includeMemoryBreakdown"];
 };
 
 type ClusterFreshnessParams = {
@@ -221,6 +236,53 @@ export const clusterQueryKeys = {
     ] as const,
   replicaHydration: () =>
     [...clusterQueryKeys.all(), buildQueryKeyPart("replicaHydration")] as const,
+  replicaStatusHistory: (params: {
+    replicaIds: string[];
+    statusesUpdatedAt: number | undefined;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("replicaStatusHistory", params),
+    ] as const,
+  replicaHydrationEpisodes: (params: {
+    replicaIds: string[];
+    timePeriodMinutes: number;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("replicaHydrationEpisodes", params),
+    ] as const,
+  unhydratedComputeObjects: (params: { replicaIds: string[] }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("unhydratedComputeObjects", params),
+    ] as const,
+  objectHydrationTimes: (params: {
+    replicaIds: string[];
+    objects: Array<{ id: string; createdAtMs: number }>;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("objectHydrationTimes", params),
+    ] as const,
+  replicaHeapLimits: (params: { replicaIds: string[] }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("replicaHeapLimits", params),
+    ] as const,
+  replicaSizeAllocations: (params: { sizes: string[] }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("replicaSizeAllocations", params),
+    ] as const,
+  objectCreationTimes: (params: {
+    objectIds: string[];
+    timePeriodMinutes: number;
+  }) =>
+    [
+      ...clusterQueryKeys.all(),
+      buildQueryKeyPart("objectCreationTimes", params),
+    ] as const,
   maintainedObjectNames: (objectIds: string[]) =>
     [
       ...clusterQueryKeys.all(),
@@ -770,6 +832,30 @@ export function useReplicaOfflineEvents(
   return data;
 }
 
+// TODO: remove these gates once all environments are past them.
+const UTILIZATION_INDEXED_VIEWS_MIN_VERSION = "26.32.0";
+const REPLICA_MEMORY_BREAKDOWN_MIN_VERSION = "26.44.0";
+const REPLICA_HYDRATION_HISTORY_MIN_VERSION = "26.43.0";
+
+/**
+ * Which source serves a utilization window: a live SUBSCRIBE to the un-binned
+ * 3h view, a live SUBSCRIBE to the binned 24h view, or a poll.
+ */
+export function useUtilizationTier(timePeriodMinutes: number) {
+  // The un-binned 3h and 24h indexed views (and their SUBSCRIBEs) only exist on
+  // mz >= 26.32. On older environments (e.g. mid-rollout) these paths are gated
+  // off and everything falls back to the poll. The 14d `overview` view predates
+  // this, so its poll path is not gated.
+  const hasIndexedViews =
+    useEnvironmentGate(UTILIZATION_INDEXED_VIEWS_MIN_VERSION) === true;
+  if (!hasIndexedViews || timePeriodMinutes > SUBSCRIBE_BINNED_MAX_MINUTES) {
+    return "poll" as const;
+  }
+  return timePeriodMinutes <= SUBSCRIBE_UNBINNED_MAX_MINUTES
+    ? ("unbinned3h" as const)
+    : ("binned24h" as const);
+}
+
 /**
  * SUBSCRIBE variant for the live (≤3h) window: streams the un-binned 3h base
  * (lineage resolved by `useClusterLineageIds`), bins client-side, shapes like
@@ -782,8 +868,10 @@ export function useReplicaOfflineEvents(
 function useReplicaUtilizationHistorySubscribe(
   params: ReplicaUtilizationHistoryFilters,
   enabled: boolean,
+  includeOfflineEvents: boolean,
 ) {
-  const { replicaId, timePeriodMinutes, bucketSizeMs } = params;
+  const { replicaId, timePeriodMinutes, bucketSizeMs, includeMemoryBreakdown } =
+    params;
   const lineage = useClusterLineageIds(params.clusterIds, enabled);
   const lineageIdsKey = lineage.data?.join(",") ?? "";
 
@@ -798,8 +886,9 @@ function useReplicaUtilizationHistorySubscribe(
     return buildConsoleClusterUtilizationUnbinned3hSubscribe<UtilizationSample>(
       clusterIds,
       minDate,
+      includeMemoryBreakdown,
     );
-  }, [enabled, lineageIdsKey, timePeriodMinutes]);
+  }, [enabled, lineageIdsKey, timePeriodMinutes, includeMemoryBreakdown]);
 
   const { data, isError, snapshotComplete, resubscribing } = useSubscribe({
     subscribe,
@@ -816,7 +905,7 @@ function useReplicaUtilizationHistorySubscribe(
   const offlineEvents = useReplicaOfflineEvents(
     data,
     timePeriodMinutes,
-    enabled,
+    enabled && includeOfflineEvents,
   );
 
   const result = useMemo(() => {
@@ -857,7 +946,7 @@ function useReplicaUtilizationHistoryBinnedSubscribe(
   params: ReplicaUtilizationHistoryFilters,
   enabled: boolean,
 ) {
-  const { replicaId, timePeriodMinutes } = params;
+  const { replicaId, timePeriodMinutes, includeMemoryBreakdown } = params;
   const lineage = useClusterLineageIds(params.clusterIds, enabled);
   const lineageIdsKey = lineage.data?.join(",") ?? "";
 
@@ -870,8 +959,9 @@ function useReplicaUtilizationHistoryBinnedSubscribe(
     return buildConsoleClusterUtilizationOverview24hSubscribe<BinnedSubscribeRow>(
       clusterIds,
       minDate,
+      includeMemoryBreakdown,
     );
-  }, [enabled, lineageIdsKey, timePeriodMinutes]);
+  }, [enabled, lineageIdsKey, timePeriodMinutes, includeMemoryBreakdown]);
 
   const { data, isError, snapshotComplete, resubscribing } = useSubscribe({
     subscribe,
@@ -910,35 +1000,39 @@ function useReplicaUtilizationHistoryBinnedSubscribe(
 
 export function useReplicaUtilizationHistory(
   params: ReplicaUtilizationHistoryFilters,
-  queryOptions?: { enabled?: boolean },
+  queryOptions?: {
+    enabled?: boolean;
+    // `false` skips the <=3h windows' offline-events poll, for callers that
+    // read replica status from elsewhere. Their buckets carry no events then.
+    includeOfflineEvents?: boolean;
+  },
 ) {
   const enabled = queryOptions?.enabled ?? true;
-  const minutes = params.timePeriodMinutes;
-  // The un-binned 3h and 24h indexed views (and their SUBSCRIBEs) only exist on
-  // mz >= 26.32. On older environments (e.g. mid-rollout) these paths are gated
-  // off and everything falls back to the poll. The 14d `overview` view predates
-  // this, so its poll path is not gated.
-  // TODO: remove the gate once all environments are >= 26.32.
-  const hasIndexedViews = useEnvironmentGate("26.32.0") === true;
+  const tier = useUtilizationTier(params.timePeriodMinutes);
+  const hasMemoryBreakdown =
+    useEnvironmentGate(REPLICA_MEMORY_BREAKDOWN_MIN_VERSION) === true;
+  const filters = {
+    ...params,
+    // `false` would change the query key for callers that don't pass this.
+    includeMemoryBreakdown:
+      (params.includeMemoryBreakdown && hasMemoryBreakdown) || undefined,
+  };
 
-  const useUnbinnedSubscribe =
-    hasIndexedViews && minutes <= SUBSCRIBE_UNBINNED_MAX_MINUTES;
-  const useBinnedSubscribe =
-    hasIndexedViews &&
-    minutes > SUBSCRIBE_UNBINNED_MAX_MINUTES &&
-    minutes <= SUBSCRIBE_BINNED_MAX_MINUTES;
+  const useUnbinnedSubscribe = tier === "unbinned3h";
+  const useBinnedSubscribe = tier === "binned24h";
 
   const unbinnedResult = useReplicaUtilizationHistorySubscribe(
-    params,
+    filters,
     enabled && useUnbinnedSubscribe,
+    queryOptions?.includeOfflineEvents ?? true,
   );
   const binnedResult = useReplicaUtilizationHistoryBinnedSubscribe(
-    params,
+    filters,
     enabled && useBinnedSubscribe,
   );
 
   const queryResult = useQuery({
-    queryKey: clusterQueryKeys.replicaUtilizationHistory(params),
+    queryKey: clusterQueryKeys.replicaUtilizationHistory(filters),
     refetchInterval: 20_000,
     // Poll whatever a subscribe isn't serving: >24h on new mz, and every window
     // on old mz (where the subscribes are gated off).
@@ -982,6 +1076,343 @@ export function useReplicaUtilizationHistory(
         ? binnedResult.isRefreshing
         : false,
   };
+}
+
+/**
+ * When any of the replicas' processes last changed status, in ms. It covers
+ * system clusters, unlike a cluster's `latestStatusUpdate`, which comes from
+ * `mz_cluster_replica_history` and so is always null for them.
+ */
+export function replicaStatusesUpdatedAt(replicas: Cluster["replicas"]) {
+  const times = replicas.flatMap(({ statuses }) =>
+    statuses.map(({ updated_at }) => new Date(updated_at).getTime()),
+  );
+  return times.length > 0 ? Math.max(...times) : undefined;
+}
+
+/**
+ * Status transitions and OOM kills of the given replicas, fetched again only
+ * when `statusesUpdatedAt` changes. Pass `replicaStatusesUpdatedAt` of the
+ * cluster's replicas. Idle while `replicaIds` is empty.
+ */
+export function useReplicaStatusHistory(
+  replicaIds: string[],
+  statusesUpdatedAt: number | undefined,
+) {
+  return useQuery({
+    queryKey: clusterQueryKeys.replicaStatusHistory({
+      replicaIds,
+      statusesUpdatedAt,
+    }),
+    enabled: replicaIds.length > 0,
+    staleTime: Infinity,
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchReplicaStatusHistory({
+        params: { replicaIds: queryKeyParams.replicaIds },
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+    // A new transition changes the key. The same replicas' history stays up
+    // meanwhile, but never other replicas'. After `queryFn`, so the data type
+    // is inferred from it.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1].replicaIds.join(",") === replicaIds.join(",")
+        ? previous
+        : undefined,
+  });
+}
+
+/**
+ * Hydration episodes of the given replicas over the window. Idle while
+ * `replicaIds` is empty or the environment predates the history.
+ */
+export function useReplicaHydrationEpisodes(params: {
+  replicaIds: string[];
+  timePeriodMinutes: number;
+}) {
+  const hasHydrationHistory =
+    useEnvironmentGate(REPLICA_HYDRATION_HISTORY_MIN_VERSION) === true;
+  return useQuery({
+    queryKey: clusterQueryKeys.replicaHydrationEpisodes(params),
+    enabled: hasHydrationHistory && params.replicaIds.length > 0,
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchReplicaHydrationEpisodes({
+        params: {
+          replicaIds: queryKeyParams.replicaIds,
+          startDate: subMinutes(
+            new Date(),
+            queryKeyParams.timePeriodMinutes,
+          ).toISOString(),
+        },
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+  });
+}
+
+// Module-level so react-query reuses the result while the rows are unchanged.
+// An inline function reruns on every render, and a Set or Map skips
+// structural sharing, so each render would get a new identity.
+const toUnhydratedCountByReplicaId = (
+  rows: Array<{ replicaId: string; objectId: string }>,
+) => {
+  const objectIds = new Map<string, Set<string>>();
+  for (const { replicaId, objectId } of rows) {
+    const ids = objectIds.get(replicaId) ?? new Set<string>();
+    ids.add(objectId);
+    objectIds.set(replicaId, ids);
+  }
+  return new Map(
+    [...objectIds].map(([replicaId, ids]) => [replicaId, ids.size]),
+  );
+};
+
+const toHeapLimitBytesByReplicaId = (
+  rows: Awaited<ReturnType<typeof fetchReplicaHeapLimits>>,
+) => {
+  const limits = new Map<string, number>();
+  for (const { replicaId, heapLimit } of rows) {
+    if (heapLimit === null) continue;
+    limits.set(
+      replicaId,
+      Math.max(limits.get(replicaId) ?? 0, Number(heapLimit)),
+    );
+  }
+  return limits;
+};
+
+/**
+ * How many objects each of the given replicas has yet to hydrate, for replicas
+ * that are hydrating. Idle while `replicaIds` is empty.
+ */
+export function useUnhydratedObjectCounts(replicaIds: string[]) {
+  return useQuery({
+    queryKey: clusterQueryKeys.unhydratedComputeObjects({ replicaIds }),
+    enabled: replicaIds.length > 0,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchUnhydratedComputeObjects({
+        params: queryKeyParams,
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+    select: toUnhydratedCountByReplicaId,
+  });
+}
+
+type ObjectHydrationRow = {
+  replicaId: string;
+  objectId: string;
+  createdAtMs: number;
+  hydrationMs: number | null;
+};
+
+const toObjectHydrationsByReplicaId = (rows: ObjectHydrationRow[]) => {
+  const hydrationsByReplicaId = new Map<
+    string,
+    Array<Omit<ObjectHydrationRow, "replicaId">>
+  >();
+  for (const { replicaId, ...hydration } of rows) {
+    const hydrations = hydrationsByReplicaId.get(replicaId) ?? [];
+    hydrations.push(hydration);
+    hydrationsByReplicaId.set(replicaId, hydrations);
+  }
+  return hydrationsByReplicaId;
+};
+
+/**
+ * Each replica's hydration of the given objects, keyed by replica id, for
+ * `paintObjectHydration`. Pass the objects created inside the window with
+ * their creation times. Leaves out objects created before environmentd last
+ * started. Idle while either list is empty.
+ */
+export function useObjectHydrationStretches({
+  replicaIds,
+  objects,
+}: {
+  replicaIds: string[];
+  objects: Array<{ id: string; createdAt: Date }>;
+}) {
+  return useQuery({
+    // Sorted so the key tracks set membership. A creation time never changes,
+    // so keying on it costs no fetches and hands it to `queryFn`.
+    queryKey: clusterQueryKeys.objectHydrationTimes({
+      replicaIds: [...replicaIds].sort(),
+      objects: sort(
+        objects.map(({ id, createdAt }) => ({
+          id,
+          createdAtMs: createdAt.getTime(),
+        })),
+        ({ id }) => id,
+      ),
+    }),
+    enabled: replicaIds.length > 0 && objects.length > 0,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    queryFn: async ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      const { hydrations, environmentStartedAt } =
+        await fetchObjectHydrationTimes({
+          params: {
+            replicaIds: queryKeyParams.replicaIds,
+            objectIds: queryKeyParams.objects.map(({ id }) => id),
+          },
+          queryKey,
+          requestOptions: { signal },
+        });
+      const createdAtMsById = new Map(
+        queryKeyParams.objects.map(({ id, createdAtMs }) => [id, createdAtMs]),
+      );
+      return hydrations.flatMap(
+        ({ replicaId, objectId, hydrationMs }): ObjectHydrationRow[] => {
+          const createdAtMs = createdAtMsById.get(objectId);
+          // An upgrade, or a restart under the process orchestrator, starts
+          // every replica on new processes that rehydrate every object, and
+          // status history records no restart. So an object created before
+          // then reports the rehydration, which the timeline can't place.
+          return createdAtMs === undefined ||
+            createdAtMs < environmentStartedAt.getTime()
+            ? []
+            : [{ replicaId, objectId, createdAtMs, hydrationMs }];
+        },
+      );
+    },
+    select: toObjectHydrationsByReplicaId,
+  });
+}
+
+const toAllocationsBySize = (rows: Array<SizeAllocation & { size: string }>) =>
+  new Map(rows.map(({ size, ...allocation }) => [size, allocation]));
+
+/**
+ * Each size's process count and per-process allocations. Sizes don't change,
+ * so this is fetched once. Idle while `sizes` is empty.
+ */
+export function useReplicaSizeAllocations(sizes: string[]) {
+  return useQuery({
+    queryKey: clusterQueryKeys.replicaSizeAllocations({ sizes }),
+    enabled: sizes.length > 0,
+    staleTime: Infinity,
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchReplicaSizeAllocations({
+        params: queryKeyParams,
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+    select: toAllocationsBySize,
+  });
+}
+
+const windowStartFor = (windowMs: number | undefined) =>
+  windowMs === undefined
+    ? undefined
+    : { windowMs, startMs: Date.now() - windowMs };
+
+/**
+ * The start of a live subscribe that must cover the last `windowMinutes`. It
+ * begins one window back and moves forward once per window, so the subscribe
+ * restarts that often and holds at most two windows of rows. Undefined while
+ * `windowMinutes` is.
+ */
+export function useRollingWindowStartMs(windowMinutes: number | undefined) {
+  const windowMs =
+    windowMinutes === undefined
+      ? undefined
+      : windowMinutes * millisecondsInMinute;
+  const [start, setStart] = useState(() => windowStartFor(windowMs));
+  useEffect(() => {
+    if (windowMs === undefined) {
+      // Cleared, or a return to this window would keep the old start below.
+      setStart(undefined);
+      return;
+    }
+    // Keeps a start already taken for this window, such as the initializer's.
+    // Taking another restarts the subscribe built on it.
+    setStart((current) =>
+      current?.windowMs === windowMs ? current : windowStartFor(windowMs),
+    );
+    let timeout: ReturnType<typeof setTimeout>;
+    const roll = () => {
+      setStart(windowStartFor(windowMs));
+      timeout = setTimeout(roll, windowMs);
+    };
+    timeout = setTimeout(roll, windowMs);
+    return () => clearTimeout(timeout);
+  }, [windowMs]);
+  // A start kept from another window covers the wrong span until the effect
+  // replaces it.
+  return start?.windowMs === windowMs ? start?.startMs : undefined;
+}
+
+/**
+ * Each replica's per-process heap limit in bytes, for replicas reporting one.
+ * Idle while `replicaIds` is empty.
+ */
+export function useReplicaHeapLimits(replicaIds: string[]) {
+  return useQuery({
+    queryKey: clusterQueryKeys.replicaHeapLimits({ replicaIds }),
+    enabled: replicaIds.length > 0,
+    // A replica's heap limit is fixed by its size, so polling stops once each
+    // replica has a row with one, or with memory but none (an orchestrator
+    // without heap limits, or a failed usage fetch on Kubernetes). A failed
+    // metrics fetch leaves both null, which keeps polling.
+    staleTime: Infinity,
+    refetchInterval: (query) => {
+      const settled = new Set(
+        query.state.data
+          ?.filter((row) => row.heapLimit !== null || row.memoryBytes !== null)
+          .map((row) => row.replicaId) ?? [],
+      );
+      return replicaIds.every((id) => settled.has(id)) ? false : 60_000;
+    },
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchReplicaHeapLimits({
+        params: queryKeyParams,
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+    select: toHeapLimitBytesByReplicaId,
+  });
+}
+
+/** Creation times of the given objects over the window. Idle while `objectIds` is empty. */
+export function useObjectCreationTimes(params: {
+  objectIds: string[];
+  timePeriodMinutes: number;
+}) {
+  return useQuery({
+    queryKey: clusterQueryKeys.objectCreationTimes(params),
+    enabled: params.objectIds.length > 0,
+    // A creation time never changes, and a new object changes the key.
+    staleTime: Infinity,
+    queryFn: ({ queryKey, signal }) => {
+      const [, queryKeyParams] = queryKey;
+      return fetchObjectCreationTimes({
+        params: {
+          objectIds: queryKeyParams.objectIds,
+          startDate: subMinutes(
+            new Date(),
+            queryKeyParams.timePeriodMinutes,
+          ).toISOString(),
+        },
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+  });
 }
 
 export const LINE_MAX_COUNT = 10;
