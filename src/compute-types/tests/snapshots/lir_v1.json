@@ -1574,6 +1574,16 @@
       }
     }
   },
+  "BuildDesc": {
+    "STRUCT": {
+      "id": {
+        "TYPENAME": "GlobalId"
+      },
+      "plan": {
+        "TYPENAME": "LirRelationExpr"
+      }
+    }
+  },
   "ByteLengthBytes": "UNITSTRUCT",
   "ByteLengthString": "UNITSTRUCT",
   "CaptureGroupDesc": {
@@ -2344,6 +2354,9 @@
       }
     }
   },
+  "GlobalIdKey": {
+    "NEWTYPESTRUCT": "STR"
+  },
   "Greatest": "UNITSTRUCT",
   "Gt": "UNITSTRUCT",
   "Gte": "UNITSTRUCT",
@@ -2374,6 +2387,18 @@
         "NEWTYPE": {
           "TYPENAME": "LocalId"
         }
+      }
+    }
+  },
+  "IndexDesc": {
+    "STRUCT": {
+      "key": {
+        "SEQ": {
+          "TYPENAME": "LirScalarExpr"
+        }
+      },
+      "on_id": {
+        "TYPENAME": "GlobalId"
       }
     }
   },
@@ -3084,6 +3109,111 @@
   "ParseSourceExportDetails": "UNITSTRUCT",
   "PgColumnSize": "UNITSTRUCT",
   "PgSizePretty": "UNITSTRUCT",
+  "PinnedDataflow": {
+    "STRUCT": {
+      "index_exports": {
+        "MAP": {
+          "KEY": {
+            "TYPENAME": "GlobalIdKey"
+          },
+          "VALUE": {
+            "TYPENAME": "GlobalId"
+          }
+        }
+      },
+      "index_imports": {
+        "MAP": {
+          "KEY": {
+            "TYPENAME": "GlobalIdKey"
+          },
+          "VALUE": {
+            "TYPENAME": "PinnedIndexImport"
+          }
+        }
+      },
+      "objects_to_build": {
+        "SEQ": {
+          "TYPENAME": "BuildDesc"
+        }
+      },
+      "sink_exports": {
+        "MAP": {
+          "KEY": {
+            "TYPENAME": "GlobalIdKey"
+          },
+          "VALUE": {
+            "TYPENAME": "PinnedSink"
+          }
+        }
+      },
+      "source_imports": {
+        "MAP": {
+          "KEY": {
+            "TYPENAME": "GlobalIdKey"
+          },
+          "VALUE": {
+            "TYPENAME": "PinnedSourceImport"
+          }
+        }
+      }
+    }
+  },
+  "PinnedIndexImport": {
+    "STRUCT": {
+      "desc": {
+        "TYPENAME": "IndexDesc"
+      },
+      "monotonic": "BOOL",
+      "typ": {
+        "TYPENAME": "ReprRelationType"
+      },
+      "with_snapshot": "BOOL"
+    }
+  },
+  "PinnedSink": {
+    "STRUCT": {
+      "from": {
+        "TYPENAME": "GlobalId"
+      },
+      "from_arrangement": {
+        "OPTION": {
+          "TUPLE": [
+            {
+              "SEQ": {
+                "TYPENAME": "LirScalarExpr"
+              }
+            },
+            {
+              "TYPENAME": "MfpPlan"
+            }
+          ]
+        }
+      },
+      "kind": {
+        "TYPENAME": "PinnedSinkKind"
+      }
+    }
+  },
+  "PinnedSinkKind": {
+    "ENUM": {
+      "MaterializedView": "UNIT",
+      "MetricSink": "UNIT"
+    }
+  },
+  "PinnedSourceImport": {
+    "STRUCT": {
+      "monotonic": "BOOL",
+      "operators": {
+        "OPTION": {
+          "TYPENAME": "MfpPlan"
+        }
+      },
+      "typ": {
+        "TYPENAME": "SqlRelationType"
+      },
+      "with_snapshot": "BOOL"
+    }
+  },
   "Position": "UNITSTRUCT",
   "Power": "UNITSTRUCT",
   "PowerNumeric": "UNITSTRUCT",
@@ -3195,6 +3325,20 @@
       "nullable": "BOOL",
       "scalar_type": {
         "TYPENAME": "ReprScalarType"
+      }
+    }
+  },
+  "ReprRelationType": {
+    "STRUCT": {
+      "column_types": {
+        "SEQ": {
+          "TYPENAME": "ReprColumnType"
+        }
+      },
+      "keys": {
+        "SEQ": {
+          "SEQ": "U64"
+        }
       }
     }
   },
