@@ -16,9 +16,7 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use mz_catalog::durable::objects::{CollectionCompactionBound, MaintainedReadRequirement};
 use mz_catalog::memory::objects::CatalogItem;
-#[cfg(test)]
-use mz_catalog::read_protection::publication::PublicationCandidates;
-use mz_catalog::read_protection::publication::publication_candidates;
+use mz_catalog::read_protection::publication::{PublicationCandidates, publication_candidates};
 use mz_expr::CollectionPlan;
 use mz_repr::{GlobalId, Timestamp};
 #[cfg(test)]
@@ -996,7 +994,7 @@ impl Coordinator {
     }
 
     /// Attempts one publication of the changed client aggregate.
-    pub(super) async fn publish_client_read_protection(&mut self) -> Result<(), AdapterError> {
+    async fn publish_client_read_protection(&mut self) -> Result<(), AdapterError> {
         let Some(client) = self.query_client.clone() else {
             return Ok(());
         };
@@ -1078,16 +1076,108 @@ impl Coordinator {
         Ok(())
     }
 
-    /// Publishes recovery progress and compatible bounds in enabled, writable environments.
+    /// Publishes changed client protection, recovery progress and permitted bounds atomically.
     pub(super) async fn publish_read_protection(&mut self) -> Result<(), AdapterError> {
+        // A prewarming adapter can have a separate protection catalog, while its
+        // main catalog cannot publish shared bounds.
+        if self.client_protection_catalog.is_some() {
+            return self.publish_client_read_protection().await;
+        }
+        let start = Instant::now();
+        let client = self.query_client.clone();
+        let requirements = client
+            .as_ref()
+            .and_then(|client| client.protection.prepare_updates_if_needed());
+        let prepared = requirements.is_some();
+        if let Some(requirements) = &requirements {
+            // Reconsider collections released by this publication even if their
+            // controller frontiers have not changed since the previous sample.
+            self.read_protection_pending
+                .extend(requirements.keys().copied());
+        }
+        let candidates = self.read_protection_publication_candidates(requirements.as_ref().map(
+            |requirements| {
+                (
+                    client
+                        .as_ref()
+                        .expect("prepared client")
+                        .protection
+                        .incarnation(),
+                    requirements,
+                )
+            },
+        ));
+        let mut ops = Vec::new();
+        if let Some(requirements) = requirements {
+            ops.push(Op::UpdateClientReadRequirements {
+                incarnation: client
+                    .as_ref()
+                    .expect("prepared client")
+                    .protection
+                    .incarnation(),
+                requirements,
+            });
+        }
+        let sampled_bounds = candidates.is_some();
+        let requirement_updates = candidates.as_ref().map_or(0, |c| c.requirements.len());
+        let bound_updates = candidates.as_ref().map_or(0, |c| c.bounds.len());
+        let max_policy_lag_ts = candidates.as_ref().map_or(0, |c| c.max_policy_lag_ts);
+        let unbounded_policy_lag = candidates.as_ref().map_or(0, |c| c.unbounded_policy_lag);
+        if let Some(candidates) = candidates {
+            if !candidates.requirements.is_empty() || !candidates.bounds.is_empty() {
+                ops.push(Op::SetReadProtection {
+                    requirements: candidates.requirements,
+                    bounds: candidates.bounds,
+                });
+            }
+        }
+        if ops.is_empty() {
+            if sampled_bounds {
+                self.read_protection_pending.clear();
+            }
+            return Ok(());
+        }
+        let result = self.catalog_transact_once(ops).await;
+        if prepared {
+            let client = client.as_ref().expect("prepared client");
+            // The pending barrier covers the complete combined transaction. A
+            // definitive failure retains committed protection for the next sample.
+            client.protection.finish_publication(result.is_ok());
+            if !self
+                .client_read_catalog()
+                .state()
+                .client_incarnations()
+                .contains_key(&client.protection.incarnation())
+            {
+                mz_ore::halt!("adapter execution was superseded or retired");
+            }
+        }
+        result?;
+        if sampled_bounds {
+            self.read_protection_pending.clear();
+        }
+        tracing::info!(
+            requirement_updates,
+            bound_updates,
+            max_policy_lag_ts,
+            unbounded_policy_lag,
+            duration_seconds = start.elapsed().as_secs_f64(),
+            "published catalog read protection"
+        );
+        Ok(())
+    }
+
+    fn read_protection_publication_candidates(
+        &mut self,
+        client_update: Option<(u64, &BTreeMap<GlobalId, Option<Timestamp>>)>,
+    ) -> Option<PublicationCandidates> {
         if self.controller.read_only()
             || !self.catalog().state().catalog_read_protection_enabled()
             || !self.pending_compute_installations.is_empty()
         {
-            return Ok(());
+            return None;
         }
 
-        let start = Instant::now();
         let catalog_changes = self.catalog_mut().take_read_protection_changes();
         self.read_protection_pending.extend(catalog_changes);
         let mut storage = self
@@ -1175,36 +1265,15 @@ impl Coordinator {
                     .state()
                     .maintained_read_frontier(id, excluding)
                     .into_iter()
-                    .chain(self.catalog().state().client_read_frontier(id))
+                    .chain(
+                        self.catalog()
+                            .state()
+                            .client_read_frontier_after_update(id, client_update),
+                    )
                     .min()
             },
         );
-        let requirement_updates = candidates.requirements.len();
-        let bound_updates = candidates.bounds.len();
-        if requirement_updates == 0 && bound_updates == 0 {
-            self.read_protection_pending.clear();
-            return Ok(());
-        }
-
-        // Applying each record as a separate op would rescan accumulated pending
-        // catalog updates for every record on the coordinator loop.
-        let ops = vec![Op::SetReadProtection {
-            requirements: candidates.requirements,
-            bounds: candidates.bounds,
-        }];
-        self.catalog_transact_once(ops).await?;
-        self.read_protection_pending.clear();
-
-        tracing::info!(
-            changed_storage_collections = frontiers.len(),
-            requirement_updates,
-            bound_updates,
-            duration_seconds = start.elapsed().as_secs_f64(),
-            max_policy_lag_ts = candidates.max_policy_lag_ts,
-            unbounded_policy_lag = candidates.unbounded_policy_lag,
-            "published catalog read protection"
-        );
-        Ok(())
+        Some(candidates)
     }
 }
 

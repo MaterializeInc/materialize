@@ -279,6 +279,8 @@ pub(super) struct ReplicaEnactment {
     pending_imports: BTreeMap<(GlobalId, uuid::Uuid), BTreeMap<GlobalId, ReadHold>>,
     storage_state: storage::StorageState,
     publication_clock: Option<PublicationClock>,
+    /// Due bounds survive gated ticks without keeping the periodic clock overdue.
+    publication_bounds_pending: bool,
     // Notifications can wake the follower, but cannot bypass this write gate.
     publication_retry_after: Option<Instant>,
     publication_needs_refresh: bool,
@@ -329,6 +331,7 @@ impl ReplicaEnactment {
             pending_imports: BTreeMap::new(),
             storage_state: storage::StorageState::default(),
             publication_clock: None,
+            publication_bounds_pending: false,
             publication_retry_after: None,
             publication_needs_refresh: false,
             publication_seconds: registry.register(mz_ore::metric! {
@@ -891,18 +894,11 @@ impl ReplicaEnactment {
             .configure(interval);
     }
 
-    /// Pending metadata/installations cannot make an overdue bounds clock spin.
-    /// Other elapsed deadlines get a short nonzero poll.
-    pub fn wake_delay(
-        &self,
-        poll: Duration,
-        bounds: &PublicationClock,
-        bounds_ready: bool,
-    ) -> Duration {
+    /// Wakes for the shared publication cadence without bypassing conflict backoff.
+    pub fn wake_delay(&self, poll: Duration) -> Duration {
         let now = Instant::now();
         let gate = self.publication_retry_after.unwrap_or(now);
         [
-            (bounds_ready || bounds.due > now).then_some(bounds.due.max(gate)),
             self.publication_clock
                 .as_ref()
                 .map(|clock| clock.due.max(gate)),
@@ -928,6 +924,7 @@ impl ReplicaEnactment {
         self.publication_needs_refresh = true;
     }
 
+    /// Commits immediate grants without completing advancement's maintenance deadline.
     async fn commit_grants(
         &mut self,
         catalog: &mut Catalog,
@@ -938,7 +935,7 @@ impl ReplicaEnactment {
         purpose: &'static str,
     ) -> anyhow::Result<()> {
         let incarnation = self.protection.incarnation();
-        let granting = matches!(&op, Op::GrantClientReadRequirements { .. });
+        assert!(matches!(&op, Op::GrantClientReadRequirements { .. }));
         let result = self
             .transact(catalog, effects, cluster, build, vec![op])
             .instrument(tracing::debug_span!(
@@ -949,8 +946,7 @@ impl ReplicaEnactment {
             ))
             .await;
         match result {
-            Ok(grants) if granting => self.protection.finish_grant_publication(grants),
-            Ok(_) => self.protection.finish_publication(true),
+            Ok(grants) => self.protection.finish_grant_publication(grants),
             Err(error) => {
                 self.protection.finish_publication(false);
                 return Err(error);
@@ -961,14 +957,6 @@ impl ReplicaEnactment {
                 .system_config()
                 .catalog_read_protection_publish_interval(),
         );
-        // Acquisition only adds or strengthens grants. It does not flush pending
-        // downgrades, so it must not postpone the maintenance that publishes them.
-        if !granting {
-            self.publication_clock
-                .as_mut()
-                .expect("configured")
-                .completed();
-        }
         Ok(())
     }
 
@@ -1174,6 +1162,11 @@ impl ReplicaEnactment {
             absorb_updates(effects, catalog, cluster, build, updates);
             self.ensure_live(catalog)?;
             self.publication_needs_refresh = false;
+            if !pending && metadata.is_some() {
+                // Let the follower rebuild execution metadata against this prefix
+                // before sampling bounds. Keep the combined maintenance due.
+                return Ok(PublicationOutcome::Deferred);
+            }
         }
         // Acquisitions commit independently before use. Maintenance coalesces
         // advances and releases while retaining committed protection until publication.
@@ -1184,43 +1177,13 @@ impl ReplicaEnactment {
             self.recovery_holds.take();
         }
         let publish_requirements = self.publication_clock.as_ref().expect("configured").due();
-        if publish_requirements
-            && let Some(requirements) = self.protection.prepare_updates_if_needed()
-        {
-            match self
-                .commit_grants(
-                    catalog,
-                    effects,
-                    cluster,
-                    build,
-                    Op::UpdateClientReadRequirements {
-                        incarnation: self.protection.incarnation(),
-                        requirements,
-                    },
-                    "aggregate_publication",
-                )
-                .await
-            {
-                Ok(()) => (),
-                Err(error) if is_catalog_conflict(&error) => {
-                    self.defer_publication();
-                    return Err(error);
-                }
-                Err(error) => return Err(error),
-            }
-        } else if publish_requirements {
-            self.publication_clock
-                .as_mut()
-                .expect("configured")
-                .completed();
-        }
-        // A pending install may still need a committed prefix's earlier history.
-        // Aggregate publication and acquisitions continue, but bounds wait.
-        if pending || refreshed {
-            return Ok(PublicationOutcome::Deferred);
-        }
-        let mut ops = Vec::new();
-        if let Some(metadata) = metadata {
+        self.publication_bounds_pending |= publish_requirements && metadata.is_some();
+        // Installation can defer bounds without preventing safe client advances.
+        // Keep deferred bounds eligible on the first ungated iteration rather
+        // than postponing them for another full publication interval.
+        let metadata = metadata.filter(|_| !pending && self.publication_bounds_pending);
+        let sampled_bounds = metadata.is_some();
+        let (requirements, publication) = if let Some(metadata) = metadata {
             let mut compute_proposals = BTreeMap::new();
             for (id, collection) in &self.installed {
                 if collection.retired || !collection.index {
@@ -1281,6 +1244,7 @@ impl ReplicaEnactment {
                 // paths propose a bound, retain the history required by either.
                 compute_proposals.entry(id).or_default().extend(proposal);
             }
+            let requirements = self.protection.prepare_updates_if_needed();
             let candidates = publication_candidates(
                 catalog.state().maintained_read_requirements(),
                 catalog.state().collection_compaction_bounds(),
@@ -1305,11 +1269,36 @@ impl ReplicaEnactment {
                         .state()
                         .maintained_read_frontier(id, excluding)
                         .into_iter()
-                        .chain(catalog.state().client_read_frontier(id))
+                        .chain(
+                            catalog.state().client_read_frontier_after_update(
+                                id,
+                                requirements
+                                    .as_ref()
+                                    .map(|updates| (self.protection.incarnation(), updates)),
+                            ),
+                        )
                         .min()
                 },
             );
-            if !candidates.bounds.is_empty() || !candidates.requirements.is_empty() {
+            (requirements, Some(candidates))
+        } else {
+            (
+                publish_requirements
+                    .then(|| self.protection.prepare_updates_if_needed())
+                    .flatten(),
+                None,
+            )
+        };
+        let prepared = requirements.is_some();
+        let mut ops = Vec::new();
+        if let Some(requirements) = requirements {
+            ops.push(Op::UpdateClientReadRequirements {
+                incarnation: self.protection.incarnation(),
+                requirements,
+            });
+        }
+        if let Some(candidates) = publication {
+            if !candidates.requirements.is_empty() || !candidates.bounds.is_empty() {
                 ops.push(Op::SetReadProtection {
                     requirements: candidates.requirements,
                     bounds: candidates.bounds,
@@ -1317,7 +1306,11 @@ impl ReplicaEnactment {
             }
         }
         if !ops.is_empty() {
-            match self.transact(catalog, effects, cluster, build, ops).await {
+            let result = self.transact(catalog, effects, cluster, build, ops).await;
+            if prepared {
+                self.protection.finish_publication(result.is_ok());
+            }
+            match result {
                 Ok(_) => (),
                 Err(error) if is_catalog_conflict(&error) => {
                     self.defer_publication();
@@ -1325,6 +1318,18 @@ impl ReplicaEnactment {
                 }
                 Err(error) => return Err(error),
             }
+        }
+        if publish_requirements {
+            self.publication_clock
+                .as_mut()
+                .expect("configured")
+                .completed();
+        }
+        if sampled_bounds {
+            self.publication_bounds_pending = false;
+        }
+        if pending || refreshed {
+            return Ok(PublicationOutcome::Deferred);
         }
         Ok(PublicationOutcome::Completed)
     }

@@ -409,11 +409,6 @@ pub(crate) async fn run(
     let mut delay = Duration::from_secs(1);
     let mut pending_metadata = true;
     let mut compaction = compaction::Compaction::default();
-    let mut publication_clock = execution::PublicationClock::new(
-        catalog
-            .system_config()
-            .catalog_read_protection_publish_interval(),
-    );
     loop {
         // Native application owns parsing, ordering and in-memory catalog state.
         // It halts on unapplicable committed changes and returns fencing errors.
@@ -424,7 +419,6 @@ pub(crate) async fn run(
             let interval = catalog
                 .system_config()
                 .catalog_read_protection_publish_interval();
-            publication_clock.configure(interval);
             execution.configure_publication(interval);
             execution.ensure_live(&catalog)?;
             execution.apply_progress(&catalog);
@@ -532,7 +526,6 @@ pub(crate) async fn run(
             Ok((catalog.transient_revision(), metadata))
         }
         .await;
-        let mut bounds_ready = false;
         match result {
             Ok((metadata_revision, metadata)) => {
                 pending_metadata = !metadata.pending.is_empty();
@@ -596,7 +589,6 @@ pub(crate) async fn run(
                     pending |= catalog.transient_revision() != metadata_revision;
                     pending |= execution.pending_installations(&effects) > 0;
                     execution.ensure_live(&catalog)?;
-                    bounds_ready = !pending;
                     execution.apply_progress(&catalog);
                     execution.apply_catalog(
                         &catalog,
@@ -604,12 +596,6 @@ pub(crate) async fn run(
                         &metadata,
                         effects.pending.is_empty(),
                     );
-                    publication_clock.configure(
-                        catalog
-                            .system_config()
-                            .catalog_read_protection_publish_interval(),
-                    );
-                    let publish_bounds = publication_clock.due();
                     match execution
                         .publish(
                             &mut catalog,
@@ -617,16 +603,13 @@ pub(crate) async fn run(
                             config.cluster_id,
                             &build,
                             pending,
-                            publish_bounds.then_some(&metadata),
+                            Some(&metadata),
                         )
                         .await
                     {
                         Err(error) => {
                             failures["publication"].inc();
                             tracing::warn!(%error, "replica protection publication pending");
-                        }
-                        Ok(execution::PublicationOutcome::Completed) if publish_bounds => {
-                            publication_clock.completed();
                         }
                         Ok(_) => (),
                     }
@@ -707,7 +690,7 @@ pub(crate) async fn run(
         match &mut *execution {
             Some(execution) => {
                 execution.ensure_live(&catalog)?;
-                let delay = execution.wake_delay(delay, &publication_clock, bounds_ready);
+                let delay = execution.wake_delay(delay);
                 execution.io.idle(delay).await;
             }
             None => tokio::time::sleep(delay).await,

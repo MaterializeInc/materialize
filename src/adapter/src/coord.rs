@@ -5176,12 +5176,7 @@ impl Coordinator {
                             || (self.catalog().state().catalog_read_protection_enabled()
                                 && !self.controller.read_only()) => {
                         if let Err(error) = trace_maintenance(
-                            "publication_client", self.publish_client_read_protection()
-                        ).await {
-                            warn!(%error, "unable to publish query client protection");
-                        }
-                        if let Err(error) = trace_maintenance(
-                            "publication_bounds", self.publish_read_protection()
+                            "publication", self.publish_read_protection()
                         ).await {
                             warn!(%error, "unable to publish catalog read protection");
                         }

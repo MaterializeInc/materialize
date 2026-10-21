@@ -205,19 +205,17 @@ async fn exercise_liveness() {
         &registry,
         None,
     );
-    // Outer polling honors sub-second phases, even when bounds
-    // are blocked on installation. An elapsed bounds clock alone cannot spin.
+    // Outer polling honors sub-second publication phases and returns to the
+    // normal poll interval when maintenance is not due.
     driver.configure_publication(Duration::from_secs(3600));
-    let mut bounds = PublicationClock::new(Duration::from_secs(3600));
     let now = Instant::now();
     driver.publication_clock.as_mut().unwrap().due = now + Duration::from_millis(20);
-    bounds.due = now + Duration::from_millis(40);
-    assert!(driver.wake_delay(Duration::from_secs(10), &bounds, true) <= Duration::from_millis(20));
+    assert!(driver.wake_delay(Duration::from_secs(10)) <= Duration::from_millis(20));
     driver.publication_clock.as_mut().unwrap().due = now + Duration::from_secs(3600);
-    assert!(driver.wake_delay(Duration::from_secs(10), &bounds, true) <= Duration::from_millis(40));
-    bounds.due = now;
-    let delay = driver.wake_delay(Duration::from_secs(10), &bounds, false);
-    assert_eq!(delay, Duration::from_secs(10));
+    assert_eq!(
+        driver.wake_delay(Duration::from_secs(10)),
+        Duration::from_secs(10)
+    );
     driver.configure(mz_catalog::compute_config::replica_compute_config(
         &catalog,
         cluster,
@@ -520,8 +518,8 @@ async fn exercise_liveness() {
         ))
         .await;
 
-    // Publish the installed reader's advancement before testing bounds. A
-    // deferred aggregate would itself retain the old bound and require no write.
+    // Publish the installed reader's advancement while installation gates bounds.
+    // A deferred aggregate would itself retain the old bound and require no write.
     driver.configure_publication(
         catalog
             .system_config()
@@ -529,11 +527,19 @@ async fn exercise_liveness() {
     );
     driver.publication_clock.as_mut().unwrap().due = Instant::now();
     driver
-        .publish(&mut catalog, &mut effects, cluster, &build, true, None)
+        .publish(
+            &mut catalog,
+            &mut effects,
+            cluster,
+            &build,
+            true,
+            Some(&metadata),
+        )
         .await
         .unwrap();
-    // Bounds conflicts yield too. A peer adds historical protection between
-    // attempts, so retry must derive new proposals instead of resubmitting ops.
+    // Bounds stay due across the installation gate, even though the aggregate
+    // deadline moved forward. A peer adds historical protection between attempts,
+    // so conflict retry must derive new proposals instead of resubmitting ops.
     driver.publication_clock.as_mut().unwrap().due = deferred;
     fixture.writer.sync_to_current_updates().await.unwrap();
     let ts = fixture.writer.current_upper().await;

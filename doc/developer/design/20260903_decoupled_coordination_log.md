@@ -43,6 +43,32 @@ identifies unnecessary protection-index reconstruction during empty storage
 cleanup. The correction is in `0286e789`. Formatting, catalog Clippy and all
 35 catalog transaction tests pass on scratch.
 
+The active slice is publication scheduling and atomic maintenance. On-demand
+replica grants must not postpone pending advancement. Regression revision
+`9627cb68` pins an already-due maintenance deadline across acquisition, and
+`7a227491` preserves that deadline. The regression fails before the fix and
+passes after it on `i-069b0283acccc3174`, using the repository's 8-MiB debug
+test stack. Evidence is under `m2-evidence/combined-publication`.
+
+Combined publication through `d0ddcaec` passes three-crate Clippy and 39 focused
+boundary tests on scratch. Sparse client projection and existing requirement/bound
+operations retain validation, CAS and definitive completion. Replica maintenance
+shares one staggered clock, retaining due bounds across installation gates.
+The gate regression also has red/green evidence. Review and checks are under
+`scratch/combined-publication/`.
+
+The matched 60s comparison of `a02f782b` and `d0ddcaec` completes all 180 rounds
+in both arms with the same pinned driver, backends and uncapped scratch resources.
+All three observed user read frontiers advance during sustained work after the
+correction. Before it, one stays fixed and two advance only once. Peak active-work
+write-minus-read lag falls from 463s to 170s. Persist write payload is
+0.286 versus 0.270 MB/s, with 131 versus 102 successful catalog commits.
+The deadline regression establishes the scheduling defect, while this combined
+comparison verifies progress without isolating each change's traffic contribution.
+Evidence and limitations are in `scratch/combined-publication/report.md`.
+Production defaults remain unchanged. This is not the original-budget CI
+contention workload and does not close its outstanding SQL timeouts.
+
 Further [asynchronous adapter catalog ownership](20260903_decoupled_coordination.md#adapter-catalog-ownership)
 work is on hold at Aljoscha's request. The owner is not implemented. The bounded
 table-lifecycle corrections are implemented and reviewed, with verification below.
@@ -100,7 +126,8 @@ Aljoscha authorized a second worker for bounded lifecycle verification:
 500 GiB disk, expiry 2026-10-22 07:40:25 UTC. Verification covers adapter,
 storage-client, storage-controller and compute-client libraries and tests.
 Clippy and boundary tests pass on `45a37509`. Runtime results and the initial
-failures are preserved off-worker. No build or test process remains running.
+failures are preserved off-worker. The lifecycle fixture is stopped. This worker
+is now used for the publication slice above.
 Use `bin/ci-builder run stable <command>` for pinned tooling.
 Saved evidence: `~/.local/share/aj/m2-evidence/scratch/`.
 Lifecycle verification evidence: `scratch/table-lifecycle-verification/`.

@@ -3165,6 +3165,33 @@ impl CatalogState {
             .and_then(|(collection, frontier, _)| (*collection == id).then_some(*frontier))
     }
 
+    /// Returns the candidate client frontier after one realization's sparse update.
+    ///
+    /// Bounds derived from this projection must commit with the update against
+    /// this catalog prefix. Transaction validation and CAS enforce that boundary.
+    /// Unmentioned grants and every other realization's protection remain intact.
+    pub fn client_read_frontier_after_update(
+        &self,
+        id: GlobalId,
+        update: Option<(u64, &BTreeMap<GlobalId, Option<Timestamp>>)>,
+    ) -> Option<Timestamp> {
+        let Some((incarnation, updates)) = update else {
+            return self.client_read_frontier(id);
+        };
+        let Some(proposed) = updates.get(&id) else {
+            return self.client_read_frontier(id);
+        };
+        // There is at most one entry for this realization and collection, so
+        // finding the first peer examines at most two indexed requirements.
+        self.client_collection_requirements
+            .range((id, Timestamp::MIN, 0)..)
+            .take_while(|(collection, _, _)| *collection == id)
+            .find_map(|(_, frontier, owner)| (*owner != incarnation).then_some(*frontier))
+            .into_iter()
+            .chain(*proposed)
+            .min()
+    }
+
     /// Iterates over distinct collections with committed client requirements.
     pub fn client_required_collections(&self) -> impl Iterator<Item = GlobalId> + '_ {
         self.client_collection_requirements
@@ -3944,6 +3971,35 @@ mod tests {
                 state.client_read_frontier(id),
                 expected.map(Timestamp::from)
             );
+            // Sparse projection must agree with applying the update to the
+            // logical requirements, including tied peers and unmentioned grants.
+            for incarnation in state.client_incarnations().keys() {
+                for frontier in [None, Some(Timestamp::from(40))] {
+                    let updates = BTreeMap::from([(id, frontier)]);
+                    let mut candidate = state.client_read_requirements().clone();
+                    match frontier {
+                        Some(frontier) => {
+                            candidate.insert((*incarnation, id), frontier);
+                        }
+                        None => {
+                            candidate.remove(&(*incarnation, id));
+                        }
+                    }
+                    for collection in [id, other, GlobalId::User(3)] {
+                        let expected = candidate
+                            .iter()
+                            .filter_map(|((_, id), time)| (*id == collection).then_some(*time))
+                            .min();
+                        assert_eq!(
+                            state.client_read_frontier_after_update(
+                                collection,
+                                Some((*incarnation, &updates)),
+                            ),
+                            expected,
+                        );
+                    }
+                }
+            }
             assert_eq!(state.client_read_frontier(GlobalId::User(1)), None);
             assert_eq!(state.client_read_frontier(GlobalId::User(3)), None);
             assert_eq!(state.client_read_frontier(GlobalId::User(5)), None);

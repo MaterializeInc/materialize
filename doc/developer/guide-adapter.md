@@ -136,6 +136,12 @@ advancement or release restricts acquisition immediately, but committed protecti
 remains until a definitive successful write. New dependency routes require fresh
 grant admission, including builtin reconstruction under a retained index identity.
 
+Periodic client advances, maintained recovery requirements and permitted bounds
+commit together. Sample bounds with the sparse client changes overlaid on the
+indexed frontier, not the preceding committed minimum. Sampled batches retain
+their prefix check and must be recomputed after conflict. Acquisition only adds
+or strengthens grants and must not postpone the maintenance deadline.
+
 Ordinary CREATE MATERIALIZED VIEW admits its automatic birth in the content
 transaction, joining logical-input and selected-import permission. The definition,
 timestamp, selected plan and protection commit together. A metadata conflict

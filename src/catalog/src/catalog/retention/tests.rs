@@ -226,6 +226,107 @@ async fn transaction_open_applies_only_compatible_peer_grants() {
     }
 }
 
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn combined_publication_commits_projected_clients_recovery_and_bounds() {
+    let mut f = Fixture::new().await;
+    let input = f.source("combined_input").await;
+    let retained = f.source("unmentioned_input").await;
+    let incarnation = f.catch_up().await.incarnation;
+    let initial = [input, retained]
+        .into_iter()
+        .map(|id| {
+            *f.catalog.state().collection_compaction_bounds()[&id]
+                .as_option()
+                .expect("readable source")
+        })
+        .max()
+        .expect("two inputs");
+    f.transact(vec![Op::GrantClientReadRequirements {
+        incarnation,
+        requirements: BTreeMap::from([(input, initial), (retained, initial)]),
+    }])
+    .await;
+
+    let advanced = initial.step_forward();
+    for id in [input, retained] {
+        f.append(
+            id,
+            advanced.step_forward().step_forward().into(),
+            Vec::new(),
+        )
+        .await;
+    }
+    for (client_frontier, recovery_frontier) in
+        [(Some(advanced), advanced), (None, advanced.step_forward())]
+    {
+        let updates = BTreeMap::from([(input, client_frontier)]);
+        let requirements: Vec<_> = [input, retained]
+            .into_iter()
+            .map(|id| MaintainedReadRequirement {
+                frontier: Some(recovery_frontier),
+                ..f.catalog.state().maintained_read_requirements()[&id].clone()
+            })
+            .collect();
+        let bounds = [input, retained]
+            .into_iter()
+            .map(|id| {
+                let frontier = f
+                    .catalog
+                    .state()
+                    .client_read_frontier_after_update(id, Some((incarnation, &updates)))
+                    .map_or(recovery_frontier, |held| recovery_frontier.min(held));
+                CollectionCompactionBound {
+                    id,
+                    frontier: Some(frontier),
+                }
+            })
+            .collect();
+
+        // Neither the committed client grant nor the recovery requirement permits
+        // this input bound alone. The unmentioned grant must still limit its input.
+        assert!(f.catalog.state().client_read_frontier(input) < Some(recovery_frontier));
+        f.transact(vec![
+            Op::UpdateClientReadRequirements {
+                incarnation,
+                requirements: updates,
+            },
+            Op::SetReadProtection {
+                requirements: requirements.clone(),
+                bounds,
+            },
+        ])
+        .await;
+
+        // Reconstruct from durable storage rather than only checking candidate state.
+        f = f.reopen().await;
+        let state = f.catalog.state();
+        assert_eq!(
+            state.client_read_requirements().get(&(incarnation, input)),
+            client_frontier.as_ref(),
+        );
+        assert_eq!(
+            state.client_read_requirements()[&(incarnation, retained)],
+            initial,
+        );
+        for requirement in requirements {
+            assert_eq!(
+                state.maintained_read_requirements()[&requirement.id],
+                requirement,
+            );
+        }
+        assert_eq!(
+            state.collection_compaction_bounds()[&input],
+            Antichain::from_elem(recovery_frontier),
+        );
+        assert_eq!(
+            state.collection_compaction_bounds()[&retained],
+            Antichain::from_elem(initial),
+        );
+    }
+    f.catalog.expire().await;
+}
+
 async fn publish_frontier(
     peer: &mut dyn crate::durable::DurableCatalogState,
     id: GlobalId,
