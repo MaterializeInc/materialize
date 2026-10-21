@@ -252,6 +252,7 @@ impl From<&OptimizerConfig> for mz_sql::plan::HirToMirConfig {
             enable_simplify_from_less_existence: config
                 .features
                 .enable_simplify_from_less_existence,
+            enable_rowwise_subquery_lowering: config.features.enable_rowwise_subquery_lowering,
         }
     }
 }
