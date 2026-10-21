@@ -418,6 +418,7 @@ impl Drop for DeliveredBatch {
 /// A driver holds a target, not an open upload: a walk that never crosses the stash threshold opens
 /// no shard and writes no byte, and most walks never do. A driver gets one exactly when its scan was
 /// opened stash-eligible, so a walk with no target has a scan that offers no batch.
+#[derive(Clone)]
 pub(super) struct StashTarget {
     persist_clients: Arc<PersistClientCache>,
     persist_location: PersistLocation,

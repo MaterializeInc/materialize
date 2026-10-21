@@ -209,6 +209,24 @@ pub struct OffloadedPeek {
     /// stops at its next cancellation check, and the scan, the cursors it holds, and the permit
     /// that admitted it drop there.
     _abort_handle: AbortOnDropHandle<()>,
+    /// Where an answer left unread in `result` is deleted from.
+    stash: Option<StashTarget>,
+}
+
+impl Drop for OffloadedPeek {
+    fn drop(&mut self) {
+        // Closed before the check, so that an answer sent after it fails to send, and the walk
+        // deletes it instead, see `deliver`.
+        self.result.close();
+        let Ok((response, _elapsed)) = self.result.try_recv() else {
+            return;
+        };
+        match &self.stash {
+            Some(stash) => stash.discard(response),
+            // Only a walk with a target can answer with a stashed response.
+            None => drop(response),
+        }
+    }
 }
 
 impl OffloadedPeek {
@@ -231,6 +249,7 @@ impl OffloadedPeek {
         worker: Thread,
     ) -> Self {
         let (mut result_tx, result_rx) = oneshot::channel();
+        let own_stash = stash.clone();
         permits.resize(config.permit_fraction.get());
 
         let peek_uuid = peek.uuid;
@@ -300,6 +319,7 @@ impl OffloadedPeek {
             result: result_rx,
             span: tracing::Span::current(),
             _abort_handle: task_handle.abort_on_drop(),
+            stash: own_stash,
         }
     }
 

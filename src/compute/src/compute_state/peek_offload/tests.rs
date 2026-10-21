@@ -473,7 +473,7 @@ async fn a_walk_cancelled_while_queued_never_takes_a_permit() {
     permits.resize(1.0);
     let held = permits.try_acquire().expect("a permit is free");
 
-    let offloaded = OffloadedPeek::start(
+    let mut offloaded = OffloadedPeek::start(
         peek.clone(),
         scan,
         None,
@@ -489,11 +489,11 @@ async fn a_walk_cancelled_while_queued_never_takes_a_permit() {
     )
     .await;
 
-    // Only the receiving end of the result channel is dropped, which is the signal a queued
+    // Only the receiving end of the result channel is closed, which is the signal a queued
     // walk has to observe on its own. Dropping the whole entry would abort the task as well,
     // and an aborted task returns the queue depth to zero whether or not the walk ever looks
     // at the cancellation.
-    drop(offloaded.result);
+    offloaded.result.close();
 
     wait_until(
         || metrics.index_peek_permit_queue_depth.get() == 0,
@@ -846,6 +846,55 @@ async fn a_walk_cancelled_while_uploading_deletes_what_it_wrote() {
         permits.available_permits(),
         1,
         "a cancelled walk releases the permit that admitted it"
+    );
+}
+
+/// A peek cancelled after its walk sent a stashed answer, and before the worker swept it, deletes
+/// the answer's batches.
+///
+/// Cancelling drops the pending entry, and with it the receiver the answer waits in.
+#[mz_ore::test(tokio::test)]
+async fn a_peek_cancelled_with_its_stashed_answer_unread_deletes_the_batches() {
+    let keys = wide_ok_rows(8);
+    let peek = index_peek(trivial_finishing(), None);
+    let mut bundle = trace_bundle(&keys, cancelling_errors(0));
+    let scan = open(&mut bundle, &peek, Some(2 * widest_row_size(&keys)));
+
+    let metrics = worker_metrics();
+    let permits = Arc::new(PeekPermits::new(1));
+    let blob = CountedBlob::new();
+    let offloaded = OffloadedPeek::start(
+        peek.clone(),
+        scan,
+        Some(stash_target(&peek, blob.clients())),
+        Arc::clone(&permits),
+        counted_blob_config(1),
+        PeekWalkMetrics::new(&metrics),
+        std::thread::current(),
+    );
+
+    wait_until(
+        || !offloaded.result.is_empty(),
+        "the walk sending its answer",
+    )
+    .await;
+    assert_eq!(
+        metrics.index_peek_stashed_total.get(),
+        1,
+        "the walk must answer from the stash"
+    );
+    assert!(blob.written() > 0, "the stashed answer wrote parts");
+    assert_eq!(blob.deleted(), 0, "a sent answer keeps its parts");
+
+    drop(offloaded);
+
+    blob.wait_until_nothing_is_left("a cancelled peek's unread stashed answer")
+        .await;
+    assert_eq!(blob.deleted(), blob.written());
+    assert_eq!(
+        blob.deletes_of_nothing(),
+        0,
+        "the deletes must name the keys the answer wrote"
     );
 }
 
