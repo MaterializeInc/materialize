@@ -9,7 +9,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use bytes::BytesMut;
@@ -65,6 +65,8 @@ pub struct StatementBeganExecutionRecord {
     pub id: Uuid,
     pub prepared_statement_id: Uuid,
     pub sample_rate: f64,
+    /// The number of executions dropped by throttling since the previously logged execution.
+    pub throttled_count: u64,
     pub params: Vec<Option<String>>,
     pub began_at: EpochMillis,
     pub cluster_id: Option<ClusterId>,
@@ -381,10 +383,10 @@ pub struct ThrottlingState {
     /// with some contention. If this ever becomes an issue, then we could redesign throttling to be
     /// per-session/per-tokio-worker-thread.
     inner: Mutex<ThrottlingStateInner>,
-    /// The number of statements that have been throttled since the last successfully logged
-    /// statement. This is not needed for the throttling decision itself, so it can be a separate
-    /// atomic to allow reading/writing without acquiring the inner mutex.
-    throttled_count: std::sync::atomic::AtomicUsize,
+    /// The number of executions dropped by throttling since the previously logged execution.
+    /// Not needed for the throttling decision itself, so it is a separate atomic that is read and
+    /// written without acquiring the inner mutex.
+    throttled_count: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -405,7 +407,7 @@ impl ThrottlingState {
                 tokens: 0,
                 last_logged_ts_seconds: now() / 1000,
             }),
-            throttled_count: std::sync::atomic::AtomicUsize::new(0),
+            throttled_count: AtomicU64::new(0),
         }
     }
 
@@ -413,8 +415,7 @@ impl ThrottlingState {
     /// tokens appropriately.
     ///
     /// Returns `false` if we must throttle this statement, and `true` otherwise.
-    /// Note: `throttled_count` is NOT modified by this method - callers are responsible
-    /// for incrementing it on throttle failure and resetting it when appropriate.
+    /// Does not touch `throttled_count`, see [`Self::take_throttled_count`].
     pub fn throttling_check(
         &self,
         cost: u64,
@@ -447,16 +448,15 @@ impl ThrottlingState {
         }
     }
 
-    pub fn get_throttled_count(&self) -> usize {
-        self.throttled_count.load(Ordering::Relaxed)
+    /// Takes the number of executions dropped by throttling since the previously logged
+    /// execution and leaves zero behind.
+    pub fn take_throttled_count(&self) -> u64 {
+        self.throttled_count.swap(0, Ordering::Relaxed)
     }
 
-    pub fn increment_throttled_count(&self) {
-        self.throttled_count.fetch_add(1, Ordering::Relaxed);
-    }
-
-    pub fn reset_throttled_count(&self) {
-        self.throttled_count.store(0, Ordering::Relaxed);
+    /// Adds `count` throttled executions.
+    pub fn add_throttled_count(&self, count: u64) {
+        self.throttled_count.fetch_add(count, Ordering::Relaxed);
     }
 }
 
@@ -529,14 +529,7 @@ impl StatementLoggingFrontend {
                     kind: *kind,
                 };
 
-                // `mz_prepared_statement_history`
-                let mut mpsh_row = Row::default();
-                let mut mpsh_packer = mpsh_row.packer();
-                pack_statement_prepared_update(&record, &mut mpsh_packer);
-
-                // Read throttled_count from shared state
-                let throttled_count = self.throttling_state.get_throttled_count();
-                mpsh_packer.push(Datum::UInt64(CastFrom::cast_from(throttled_count)));
+                let mpsh_row = pack_statement_prepared_update(&record);
 
                 let sql_row = Row::pack([
                     Datum::TimestampTz(
@@ -646,13 +639,12 @@ impl StatementLoggingFrontend {
         let actual_bytes_metric = session.metrics().statement_logging_actual_bytes().clone();
 
         // Handle the accounted flag and record byte metrics
-        let is_new_prepared_statement = if let Some((sql, accounted)) =
-            match session.qcell_rw(logging) {
-                PreparedStatementLoggingInfo::AlreadyLogged { .. } => None,
-                PreparedStatementLoggingInfo::StillToLog { sql, accounted, .. } => {
-                    Some((sql, accounted))
-                }
-            } {
+        if let Some((sql, accounted)) = match session.qcell_rw(logging) {
+            PreparedStatementLoggingInfo::AlreadyLogged { .. } => None,
+            PreparedStatementLoggingInfo::StillToLog { sql, accounted, .. } => {
+                Some((sql, accounted))
+            }
+        } {
             if !*accounted {
                 unsampled_bytes_metric.inc_by(u64::cast_from(sql.len()));
                 if sample {
@@ -660,10 +652,7 @@ impl StatementLoggingFrontend {
                 }
                 *accounted = true;
             }
-            true
-        } else {
-            false
-        };
+        }
 
         if !sample {
             return None;
@@ -687,11 +676,16 @@ impl StatementLoggingFrontend {
         let current_time = (self.now)();
         let execution_uuid = epoch_to_uuid_v7(&current_time);
 
+        // Taken before the throttling check because the row it is logged in feeds the check's
+        // cost. Handed back below if we fail the throttling check.
+        let throttled_count = self.throttling_state.take_throttled_count();
+
         // Create the execution record
         let began_execution = create_began_execution_record(
             execution_uuid,
             ps_uuid,
             sample_rate,
+            throttled_count,
             params,
             session,
             began_at,
@@ -729,20 +723,15 @@ impl StatementLoggingFrontend {
         };
 
         if !passed {
-            // Increment throttled_count in shared state
-            self.throttling_state.increment_throttled_count();
+            // The taken count, plus this execution.
+            self.throttling_state
+                .add_throttled_count(throttled_count + 1);
             return None;
         }
 
         // Throttling passed, so we are now committed to mark the
         // prepared statement as logged.
         self.record_prepared_statement_as_logged(ps_uuid, session, logging);
-
-        // When we successfully log the first instance of a prepared statement
-        // (i.e., it is not throttled), reset the throttled count for future tracking.
-        if is_new_prepared_statement {
-            self.throttling_state.reset_throttled_count();
-        }
 
         Some((
             StatementLoggingId(execution_uuid),
@@ -825,6 +814,7 @@ pub(crate) fn create_began_execution_record(
     execution_uuid: Uuid,
     prepared_statement_uuid: Uuid,
     sample_rate: f64,
+    throttled_count: u64,
     params: &Params,
     session: &Session,
     began_at: EpochMillis,
@@ -836,6 +826,7 @@ pub(crate) fn create_began_execution_record(
         id: execution_uuid,
         prepared_statement_id: prepared_statement_uuid,
         sample_rate,
+        throttled_count,
         params,
         began_at,
         application_name: session.application_name().to_string(),
@@ -915,6 +906,8 @@ pub(crate) fn pack_statement_execution_inner(
         id,
         prepared_statement_id,
         sample_rate,
+        // Packed last, after the end-of-execution columns.
+        throttled_count: _,
         params,
         began_at,
         cluster_id,
@@ -987,16 +980,15 @@ pub(crate) fn pack_statement_began_execution_update(record: &StatementBeganExecu
         Datum::Null,
         // rows_returned
         Datum::Null,
-        // execution_status
+        // execution_strategy
         Datum::Null,
+        // throttled_count
+        Datum::UInt64(record.throttled_count),
     ]);
     row
 }
 
-pub(crate) fn pack_statement_prepared_update(
-    record: &StatementPreparedRecord,
-    packer: &mut RowPacker,
-) {
+pub(crate) fn pack_statement_prepared_update(record: &StatementPreparedRecord) -> Row {
     let StatementPreparedRecord {
         id,
         session_id,
@@ -1005,14 +997,17 @@ pub(crate) fn pack_statement_prepared_update(
         prepared_at,
         kind,
     } = record;
-    packer.extend([
+    Row::pack_slice(&[
         Datum::Uuid(*id),
         Datum::Uuid(*session_id),
         Datum::String(name.as_str()),
         Datum::Bytes(sql_hash.as_slice()),
         Datum::TimestampTz(to_datetime(*prepared_at).try_into().expect("must fit")),
         kind.map(statement_kind_label_value).into(),
-    ]);
+        // throttled_count used to be recorded per prepared statement, but because
+        // of (sql-227), we record it per execution and record it here as Null.
+        Datum::Null,
+    ])
 }
 
 /// Bundles all information needed to install watch sets for statement lifecycle logging.
