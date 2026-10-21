@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import {
+  Box,
   HStack,
   Spacer,
   StackProps,
@@ -25,14 +26,16 @@ import ConnectDrawer from "~/components/connect/ConnectDrawer";
 import FreeTrialNotice from "~/components/FreeTrialNotice";
 import { AppConfigSwitch, CloudRuntimeConfig } from "~/config/AppConfigSwitch";
 import { useFlags } from "~/hooks/useFlags";
+import { useIntercomUnreadCount } from "~/hooks/useIntercom";
 import { useIsSuperUser } from "~/hooks/useIsSuperUser";
-import { shellPath } from "~/platform/routeHelpers";
+import { shellPath, SUPPORT_PAGE_PATH } from "~/platform/routeHelpers";
 import { useRegionSlug } from "~/store/environments";
 import { MonitorIcon } from "~/svg/Monitor";
 import AdminIcon from "~/svg/nav/AdminIcon";
 import { ClustersIcon } from "~/svg/nav/ClustersIcon";
 import { DataIcon } from "~/svg/nav/DataIcon";
 import GalleryIcon from "~/svg/nav/GalleryIcon";
+import HelpIcon from "~/svg/nav/HelpIcon";
 import { MonitoringIcon } from "~/svg/nav/MonitoringIcon";
 import { ShellIcon } from "~/svg/nav/ShellIcon";
 import { MaterializeTheme } from "~/theme";
@@ -48,6 +51,8 @@ export type NavItemType = {
   navItems?: NavItemType[];
   onClick?: () => void;
   forceShow?: boolean;
+  /** Accessible label for an attention dot after the label, e.g. "New reply". */
+  indicatorLabel?: string;
 };
 
 const getNavItems = ({
@@ -248,6 +253,56 @@ const useSelfManagedNavMenuItems = () => {
   });
 };
 
+/**
+ * Persistent entry point to the support page. Cloud only, since the page
+ * relies on the Cloud organization and the Intercom identity.
+ */
+export const SupportNavItem = ({
+  isCollapsed,
+  closeMenu,
+}: {
+  isCollapsed?: boolean;
+  closeMenu?: () => void;
+}) => {
+  const flags = useFlags();
+  if (!flags["support-page-cns-147"]) return null;
+
+  return (
+    <AppConfigSwitch
+      cloudConfigElement={
+        <CloudSupportNavItem isCollapsed={isCollapsed} closeMenu={closeMenu} />
+      }
+    />
+  );
+};
+
+const CloudSupportNavItem = ({
+  isCollapsed,
+  closeMenu,
+}: {
+  isCollapsed?: boolean;
+  closeMenu?: () => void;
+}) => {
+  const unreadCount = useIntercomUnreadCount();
+
+  return (
+    <Box mx="2" width={isCollapsed ? undefined : "calc(100% - 16px)"}>
+      <NavItem
+        href={SUPPORT_PAGE_PATH}
+        icon={<HelpIcon />}
+        label="Help and support"
+        indicatorLabel={
+          unreadCount > 0
+            ? `${unreadCount} unread support ${unreadCount === 1 ? "reply" : "replies"}`
+            : undefined
+        }
+        isCollapsed={isCollapsed}
+        closeMenu={closeMenu}
+      />
+    </Box>
+  );
+};
+
 const NavMenu = (props: { isCollapsed?: boolean; items: NavItemType[] }) => {
   return (
     <NavMenuContainer>
@@ -292,6 +347,7 @@ const NavMenuMobile = (props: {
       </VStack>
       <Spacer />
       <VStack align="stretch">
+        <SupportNavItem closeMenu={props.closeMenu} />
         <FreeTrialNotice />
         <VStack>
           <AppConfigSwitch
