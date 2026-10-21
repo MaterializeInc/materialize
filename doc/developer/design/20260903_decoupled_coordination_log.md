@@ -19,10 +19,12 @@ enabled. Incremental protection publication, removal of the whole-map API,
 prepared-MV admission and the replacement-MV replay correction are implemented.
 Cheaper preparation has not resolved foreground catalog-write stalls.
 
-M2 remains open on progress under contention and remaining integration failures.
-Replica publications can keep committing while foreground statements lose their
-attempts and time out. Long inline retries also occupy coordinator dispatch.
-Keep commit conflicts, queueing and coordinator occupancy distinct.
+M2 is at verification closeout, pending analysis of the controlled comparison.
+The async-owner change is abandoned at Aljoscha's request and is not part of M2.
+Earlier traces show replica publications committing
+while foreground statements lose their attempts and time out. Long inline retries
+also occupy dispatch. Keep commit conflicts, queueing and dispatch availability
+distinct from a passing workload.
 
 ## Current comparison and decision point
 
@@ -43,47 +45,49 @@ identifies unnecessary protection-index reconstruction during empty storage
 cleanup. The correction is in `0286e789`. Formatting, catalog Clippy and all
 35 catalog transaction tests pass on scratch.
 
-Publication scheduling and atomic maintenance are implemented. On-demand
-replica grants must not postpone pending advancement. Regression revision
-`9627cb68` pins an already-due maintenance deadline across acquisition, and
-`7a227491` preserves that deadline. The regression fails before the fix and
-passes after it on `i-069b0283acccc3174`, using the repository's 8-MiB debug
-test stack. Evidence is under `m2-evidence/combined-publication`.
+Publication scheduling and atomic maintenance are implemented. Immediate replica
+grants preserve the maintenance deadline. Combined client/recovery requirements
+and bounds retain validation, CAS and definitive completion, including due bounds
+across installation gates. Affected-crate Clippy and 39 focused boundary tests
+pass. Review and red/green evidence are under `scratch/combined-publication/`.
 
-Combined publication through `d0ddcaec` passes three-crate Clippy and 39 focused
-boundary tests on scratch. Sparse client projection and existing requirement/bound
-operations retain validation, CAS and definitive completion. Replica maintenance
-shares one staggered clock, retaining due bounds across installation gates.
-The gate regression also has red/green evidence. Review and checks are under
-`scratch/combined-publication/`.
+The matched 60s comparison of `a02f782b` and corrected revision `2bde8879` completes
+all 180 rounds in both arms with the same pinned driver, backends and uncapped
+scratch resources. All three continuously observed user read frontiers advance
+during sustained work. Peak active-work write-minus-read lag falls from 463s to
+111s. Persist write payload is 0.286 versus 0.276 MB/s, with 131 versus 108
+successful catalog commits. The comparison does not isolate each change's traffic
+contribution. Production defaults remain unchanged. Evidence and limits are in
+`scratch/combined-publication/report.md`, not a claim of resolved CI contention.
 
-The matched 60s comparison of `a02f782b` and `d0ddcaec` completes all 180 rounds
-in both arms with the same pinned driver, backends and uncapped scratch resources.
-All three observed user read frontiers advance during sustained work after the
-correction. Before it, one stays fixed and two advance only once. Peak active-work
-write-minus-read lag falls from 463s to 170s. Persist write payload is
-0.286 versus 0.270 MB/s, with 131 versus 102 successful catalog commits.
-The deadline regression establishes the scheduling defect, while this combined
-comparison verifies progress without isolating each change's traffic contribution.
-Evidence and limitations are in `scratch/combined-publication/report.md`.
-Production defaults remain unchanged. This is not the original-budget CI
-contention workload and does not close its outstanding SQL timeouts.
+Combining writes removed the client-only write's refresh before bound sampling.
+The paused-index regression reproduces twice without that refresh and passes on
+the pre-combination revision. The correction refreshes and enacts the catalog
+prefix before sampling, preserving fencing and conflict checks. All three
+unchanged cluster frontier regressions pass on scratch. Only the paused-index
+failure reproduced locally before the correction. The oracle-allocation race
+remains, so this is not a starvation-freedom guarantee.
 
-CI140090 at `bd7efcbf` is incomplete as verification: widespread GitHub/GHCR
-connectivity failures prevent tests or post-test annotation. Checks parallel 2
-passes on an 8-CPU/16-GiB host, but with a different seed from the controlled
-comparison. Shard 1 runs SQL, then stops reporting SQL progress for about 18
-minutes before its job timeout. Watchdog warnings, publication conflicts and
-late Persist delays do not identify the blocking owner. No logged OOM or process
-exit establishes a cause. Keep that runtime failure separate from CI connectivity.
-Evidence is under `scratch/combined-publication/ci140090-parallel{1,2}/`.
+CI140105 at `2bde8879` finishes with 94 passed jobs. Cargo, cluster frontier
+checks, Kafka RTR, both parallel shards and the closed native recovery/handover
+regressions pass. The only failed jobs are deferred upstream merge skew and
+existing-environment source-to-view conversion. The build is not green.
+CI140108 passes both shards of the original fixed-seed parallel comparison,
+with the same workload, diagnostic settings and normal CI resource budget.
+Capture analysis of foreground commits and committed-bound progress is pending.
 
-Further [asynchronous adapter catalog ownership](20260903_decoupled_coordination.md#adapter-catalog-ownership)
-work is on hold at Aljoscha's request. The owner is not implemented. The bounded
-table-lifecycle corrections are implemented and reviewed, with verification below.
-Do not resume owner work. These correctness fixes are not demonstrated
-repairs for the original contention. The Persist-traffic investigation is separately
-owned and retains its worker.
+CI140090's parallel-shard timeout remains unexplained rather than attributed to
+the publisher correction: SQL progress stopped for about 18 minutes, while
+watchdog warnings, publication conflicts and late Persist delays did not identify
+the blocking owner. No logged OOM or process exit established a cause. Evidence
+is under `scratch/combined-publication/ci140090-parallel{1,2}/`.
+
+The [asynchronous adapter catalog ownership](20260903_decoupled_coordination.md#adapter-catalog-ownership)
+proposal and its M2 requirement are superseded by Aljoscha's abandonment decision.
+Flag these passages for removal by the design owner. Do not resume the refactor.
+The bounded table-lifecycle corrections remain implemented and reviewed, with
+verification below. They are not demonstrated repairs for the original contention.
+The Persist-traffic investigation is separately owned and retains its worker.
 
 The caller inventory and reviews are under `scratch/async-catalog-ownership/`.
 Prerequisites through `c984bee8` pass formatting, scratch adapter Clippy, five
