@@ -128,6 +128,13 @@ user curates them, see [AI-assisted review](/doc/developer/guide-changes.md#ai-a
   request changes. The user edits and submits.
 - Post only Blocking and Strong-suggestion findings you are confident in, at
   most 5. Leave nits in the local report.
-- Keep each comment to a few plain sentences that state the problem and why it
-  matters, so the user can adopt it in their own voice.
+- Structure each comment as a one-line claim followed by the supporting analysis
+  in a blockquote headed `Agent analysis:`. The user turns the claim into their
+  own position and keeps, trims, or drops the quote.
+- Never write in the user's voice ("I think", "I'd prefer"). The claim states
+  the issue, and the user adds their own stance.
+- Keep the analysis short: the failing input or state, the wrong outcome, and
+  the line that causes it.
+- Put one disclosure line in the review body. The user removes it when every
+  comment that survives carries a marked quote.
 - Do not reply to existing review threads on the user's behalf.
