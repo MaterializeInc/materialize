@@ -17,7 +17,6 @@ import {
   IconButton,
   Image,
   Input,
-  keyframes,
   ModalBody,
   ModalCloseButton,
   ModalContent,
@@ -31,6 +30,7 @@ import {
   useDisclosure,
   useTheme,
 } from "@chakra-ui/react";
+import { keyframes } from "@emotion/react";
 import React, { useState } from "react";
 import { useController, useForm } from "react-hook-form";
 

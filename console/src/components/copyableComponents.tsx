@@ -8,12 +8,16 @@
 // by the Apache License, Version 2.0.
 
 import { IconProps } from "@chakra-ui/icons";
-import { Box, BoxProps, Flex, HStack, Spacer } from "@chakra-ui/layout";
 import {
+  Box,
+  BoxProps,
   chakra,
+  Flex,
+  HStack,
   HTMLChakraProps,
   IconButton,
   IconButtonProps,
+  Spacer,
   StackProps,
   Text,
   Tooltip,
