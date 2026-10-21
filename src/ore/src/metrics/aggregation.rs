@@ -24,11 +24,13 @@
 //!
 //! * `<name>_percentile`: one gauge per entry of [`PERCENTILES`], labeled
 //!   `percentile`.
+//! * `<name>_sum`: one gauge, the sum of all values, if [`AggregatedFamily::sum`]
+//!   is set.
 //! * `<name>_topk`: one gauge for each of the `k` objects with the largest
 //!   non-zero value, labeled by [`AggregationKey`]. An object that leaves the
 //!   top `k` is simply not emitted on the next scrape.
 //!
-//! Both are exact over the snapshot. Percentiles of different processes cannot
+//! All are exact over the snapshot. Percentiles of different processes cannot
 //! be combined into a percentile over all their objects, so these describe one
 //! process's objects.
 //!
@@ -44,6 +46,7 @@ use prometheus::core::{Collector, Desc};
 use prometheus::proto::MetricFamily;
 
 use crate::cast::CastLossy;
+use crate::metrics::UIntGauge;
 use crate::metrics::raw::UIntGaugeVec;
 
 /// The `percentile` label values of a `_percentile` family and the
@@ -82,6 +85,9 @@ pub struct AggregatedFamily {
     pub name: String,
     /// The help text of the per-object metric.
     pub help: String,
+    /// Whether to emit `<name>_sum`. Unset for values whose sum means nothing,
+    /// such as a per-object maximum.
+    pub sum: bool,
     /// If set, also emit the `k` largest objects as `<name>_topk`.
     pub top_k: Option<usize>,
 }
@@ -93,6 +99,17 @@ impl AggregatedFamily {
             format!("{} (percentiles over this process's objects)", self.help),
         );
         UIntGaugeVec::new(opts, &["percentile"]).expect("valid percentile family")
+    }
+
+    fn sum_gauge(&self) -> UIntGauge {
+        let opts = Opts::new(
+            format!("{}_sum", self.name),
+            format!(
+                "{} (sum over this process's objects, which other processes may also count)",
+                self.help
+            ),
+        );
+        UIntGauge::with_opts(opts).expect("valid sum family")
     }
 
     fn top_k_vec<K: AggregationKey>(&self, k: usize) -> UIntGaugeVec {
@@ -119,6 +136,9 @@ impl<K: AggregationKey> AggregatedFamilies<K> {
         let mut descs = Vec::new();
         for f in &families {
             descs.extend(f.percentile_vec().desc().into_iter().cloned());
+            if f.sum {
+                descs.extend(f.sum_gauge().desc().into_iter().cloned());
+            }
             if let Some(k) = f.top_k {
                 descs.extend(f.top_k_vec::<K>(k).desc().into_iter().cloned());
             }
@@ -186,6 +206,12 @@ impl<K: AggregationKey> AggregationSnapshot<'_, K> {
             }
             out.extend(percentiles.collect());
 
+            if f.sum {
+                let sum = f.sum_gauge();
+                sum.set(column.iter().map(|(v, _)| v).sum());
+                out.extend(sum.collect());
+            }
+
             if let Some(k) = f.top_k {
                 let top_k = f.top_k_vec::<K>(k);
                 // An object with nothing to report is not a heavy hitter.
@@ -216,12 +242,17 @@ mod tests {
         }
     }
 
-    /// Aggregates one family `m` with top-10 over objects with the given
-    /// values, keyed by the value itself.
+    /// Aggregates one family `m` with a sum and top-10 over objects with the
+    /// given values, keyed by the value itself.
     fn aggregate(values: impl IntoIterator<Item = u64>) -> Vec<MetricFamily> {
+        aggregate_with_sum(values, true)
+    }
+
+    fn aggregate_with_sum(values: impl IntoIterator<Item = u64>, sum: bool) -> Vec<MetricFamily> {
         let families = AggregatedFamilies::<Obj>::new(vec![AggregatedFamily {
             name: "m".into(),
             help: "help".into(),
+            sum,
             top_k: Some(10),
         }]);
         let mut snapshot = families.snapshot();
@@ -275,6 +306,24 @@ mod tests {
     }
 
     #[crate::test]
+    fn sum_is_exact() {
+        let sum = |values: Vec<u64>| {
+            let families = aggregate(values);
+            let family = families.iter().find(|f| f.name() == "m_sum").expect("sum");
+            u64::cast_lossy(family.get_metric()[0].get_gauge().value())
+        };
+        assert_eq!(sum((1..=100).collect()), 5050);
+        assert_eq!(sum(vec![]), 0);
+    }
+
+    #[crate::test]
+    fn sum_is_omitted_when_unset() {
+        let families = aggregate_with_sum(1..=10, false);
+        assert!(families.iter().all(|f| f.name() != "m_sum"));
+        assert!(families.iter().any(|f| f.name() == "m_percentile"));
+    }
+
+    #[crate::test]
     fn topk_is_the_largest_non_zero_values() {
         assert_eq!(series(&aggregate(1..=100), "m_topk"), objs(91..=100));
         assert_eq!(series(&aggregate([0, 7, 0]), "m_topk"), objs([7]));
@@ -286,7 +335,7 @@ mod tests {
     fn cardinality_is_flat_in_object_count() {
         let series_count =
             |n| -> usize { aggregate(1..=n).iter().map(|f| f.get_metric().len()).sum() };
-        assert_eq!(series_count(10), PERCENTILES.len() + 10);
+        assert_eq!(series_count(10), PERCENTILES.len() + 1 + 10);
         assert_eq!(series_count(10), series_count(10_000));
     }
 }

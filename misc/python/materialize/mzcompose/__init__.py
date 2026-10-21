@@ -506,6 +506,7 @@ def get_variable_system_parameters(
             "",
             ["", "^u1", ".*"],
         ),
+        VariableSystemParameter("persist_shard_info_metric", "true", ["true", "false"]),
         VariableSystemParameter(
             "persist_encoding_enable_dictionary", "true", ["true", "false"]
         ),

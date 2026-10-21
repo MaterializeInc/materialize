@@ -46,7 +46,9 @@ use timely::progress::Antichain;
 use tokio_metrics::TaskMonitor;
 use tracing::{Instrument, debug, info, info_span, warn};
 
-use crate::cfg::{PER_SHARD_METRICS_ENABLE_REGEX, SHARD_METRICS, ShardMetricsExport};
+use crate::cfg::{
+    PER_SHARD_METRICS_ENABLE_REGEX, SHARD_INFO_METRIC, SHARD_METRICS, ShardMetricsExport,
+};
 use crate::fetch::{FETCH_SEMAPHORE_COST_ADJUSTMENT, FETCH_SEMAPHORE_PERMIT_ADJUSTMENT};
 use crate::internal::paths::BlobKey;
 use crate::{PersistConfig, ShardId};
@@ -1331,7 +1333,8 @@ pub struct ShardsMetrics {
 ///
 /// It matches the names in `PER_SHARD_FAMILIES`, not a name prefix, because
 /// `mz_persist_shard_count`, `mz_persist_stale_shard_count` and the
-/// `mz_persist_shard_*_percentile` / `_topk` aggregates share the prefix.
+/// `mz_persist_shard_*_percentile` / `_sum` / `_topk` aggregates and
+/// `mz_persist_shard_info` share the prefix.
 ///
 /// NOTE: Postprocessors run after collection, so the `invalid_*` counters land
 /// in the scrape after the one that bumped them.
@@ -1657,6 +1660,8 @@ struct ShardGauge {
     help: &'static str,
     /// How many of the largest shards `<name>_topk` names.
     top_k: usize,
+    /// Whether to emit `<name>_sum`. See [`AggregatedFamily::sum`].
+    sum: bool,
     get: fn(&ShardMetrics) -> u64,
 }
 
@@ -1671,6 +1676,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "total encoded rollup size by shard",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.latest_rollup_size.get(),
         }),
     },
@@ -1685,6 +1691,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "count of hollow batches by shard",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.hollow_batch_count.get(),
         }),
     },
@@ -1693,6 +1700,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "count of spine batches by shard",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.spine_batch_count.get(),
         }),
     },
@@ -1701,6 +1709,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "count of batch parts by shard",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.batch_part_count.get(),
         }),
     },
@@ -1713,6 +1722,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "count of updates by shard",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.update_count.get(),
         }),
     },
@@ -1721,6 +1731,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "count of rollups by shard",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.rollup_count.get(),
         }),
     },
@@ -1729,6 +1740,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "largest encoded batch size by shard",
             top_k: SHARD_TOP_K,
+            sum: false,
             get: |m| m.largest_batch_size.get(),
         }),
     },
@@ -1737,6 +1749,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "maximum count of gc-ineligible states by shard",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.seqnos_held.get(),
         }),
     },
@@ -1745,6 +1758,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "count of seqnos since last rollup",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.seqnos_since_last_rollup.get(),
         }),
     },
@@ -1753,6 +1767,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "count of parts referenced by some live state but not the current state (ie. parts kept only to satisfy seqno holds) at GC time",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.gc_seqno_held_parts.get(),
         }),
     },
@@ -1761,6 +1776,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "the number of diffs (or, alternatively, the number of seqnos) present in consensus state at GC time",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.gc_live_diffs.get(),
         }),
     },
@@ -1787,6 +1803,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "data in batches/parts referenced by current version of state",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.usage_current_state_batches_bytes.get(),
         }),
     },
@@ -1795,6 +1812,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "data in rollups referenced by current version of state",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.usage_current_state_rollups_bytes.get(),
         }),
     },
@@ -1803,6 +1821,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "data referenced only by a previous version of state",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.usage_referenced_not_current_state_bytes.get(),
         }),
     },
@@ -1811,6 +1830,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "data written by an active writer but not referenced by any version of state",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.usage_not_leaked_not_referenced_bytes.get(),
         }),
     },
@@ -1819,6 +1839,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "data reclaimable by a leaked blob detector",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.usage_leaked_bytes.get(),
         }),
     },
@@ -1845,6 +1866,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "count of parts inline in shard metadata",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.inline_part_count.get(),
         }),
     },
@@ -1853,6 +1875,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "number of fully compact batches in the shard",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.compact_batches.get(),
         }),
     },
@@ -1861,6 +1884,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "number of batches in the shard with compactions in progress",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.compacting_batches.get(),
         }),
     },
@@ -1869,6 +1893,7 @@ const PER_SHARD_FAMILIES: &[PerShardFamily] = &[
         aggregate: ShardAggregate::Gauge(ShardGauge {
             help: "number of batches in the shard that aren't compact and have no ongoing compaction",
             top_k: SHARD_TOP_K,
+            sum: true,
             get: |m| m.noncompact_batches.get(),
         }),
     },
@@ -1884,6 +1909,7 @@ fn shard_gauges() -> impl Iterator<Item = (&'static str, &'static ShardGauge)> {
         })
 }
 
+const SHARD_INFO_NAME: &str = "mz_persist_shard_info";
 const BATCH_PART_VERSION_COUNT_NAME: &str = "mz_persist_batch_part_version_count";
 const BATCH_PART_VERSION_COUNT_HELP: &str = "count of batch parts by version, over all shards";
 
@@ -1901,10 +1927,12 @@ impl AggregationKey for ShardKey {
 }
 
 /// Process-level metrics derived from the shards map, collected in a single
-/// walk: the shard counts, percentiles and a top-K per per-shard gauge, and
-/// the per-version batch part count summed over shards.
+/// walk: the shard counts, percentiles, a top-K and (where meaningful) a sum
+/// per per-shard gauge, the per-version batch part count summed over shards,
+/// and, if [`SHARD_INFO_METRIC`] is set, `mz_persist_shard_info`.
 ///
-/// Their cardinality is independent of the number of shards.
+/// All but `mz_persist_shard_info` have a cardinality independent of the
+/// number of shards.
 #[derive(Debug)]
 struct ShardsAggregateMetrics {
     shards: Arc<Mutex<BTreeMap<ShardId, Weak<ShardMetrics>>>>,
@@ -1918,6 +1946,8 @@ struct ShardsAggregateMetrics {
     // Only used for `desc`. `collect` builds a fresh vec each scrape so that
     // versions no shard has anymore are not exported.
     batch_part_version_count: raw::UIntGaugeVec,
+    // Only used for `desc`, like `batch_part_version_count`.
+    shard_info: raw::UIntGaugeVec,
 }
 
 impl ShardsAggregateMetrics {
@@ -1929,6 +1959,7 @@ impl ShardsAggregateMetrics {
             .map(|(name, g)| AggregatedFamily {
                 name: name.to_string(),
                 help: g.help.to_string(),
+                sum: g.sum,
                 top_k: Some(g.top_k),
             })
             .collect();
@@ -1948,6 +1979,7 @@ impl ShardsAggregateMetrics {
             gauges: AggregatedFamilies::new(gauges),
             gauge_gets: shard_gauges().map(|(_, g)| g.get).collect(),
             batch_part_version_count: new_batch_part_version_count(),
+            shard_info: new_shard_info(),
         }
     }
 
@@ -1991,6 +2023,16 @@ impl ShardsAggregateMetrics {
     }
 }
 
+/// Lists the shards, which the `_topk` families name only the largest of. One
+/// series per shard, so unlike the summaries it grows with the shard count.
+fn new_shard_info() -> raw::UIntGaugeVec {
+    raw::UIntGaugeVec::new(
+        PrometheusOpts::new(SHARD_INFO_NAME, "1 for each active shard on this process"),
+        ShardKey::LABEL_NAMES,
+    )
+    .expect("valid gauge vec")
+}
+
 fn new_batch_part_version_count() -> raw::UIntGaugeVec {
     raw::UIntGaugeVec::new(
         PrometheusOpts::new(BATCH_PART_VERSION_COUNT_NAME, BATCH_PART_VERSION_COUNT_HELP),
@@ -2005,6 +2047,7 @@ impl Collector for ShardsAggregateMetrics {
         descs.extend(self.stale_count.desc());
         descs.extend(self.gauges.descs());
         descs.extend(self.batch_part_version_count.desc());
+        descs.extend(self.shard_info.desc());
         descs
     }
 
@@ -2021,11 +2064,19 @@ impl Collector for ShardsAggregateMetrics {
         self.count.set(count);
         self.stale_count.set(stale_count);
 
-        let mut families = if ShardMetricsExport::get(&self.configs).summary() {
-            self.summaries(live)
-        } else {
-            Vec::new()
-        };
+        let mut families = Vec::new();
+        if SHARD_INFO_METRIC.get(&self.configs) {
+            let shard_info = new_shard_info();
+            for m in &live {
+                shard_info
+                    .with_label_values(&[m.shard_id.to_string(), m.name.clone()])
+                    .set(1);
+            }
+            families.extend(shard_info.collect());
+        }
+        if ShardMetricsExport::get(&self.configs).summary() {
+            families.extend(self.summaries(live));
+        }
         families.extend(self.count.collect());
         families.extend(self.stale_count.collect());
         families
@@ -3795,17 +3846,19 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn every_shard_gauge_has_percentile_and_topk() {
+    fn every_shard_gauge_has_its_aggregates() {
         let registry = MetricsRegistry::new();
         let configs = Arc::clone(&PersistConfig::new_for_tests().configs);
         let shards = ShardsMetrics::new(&registry, Arc::clone(&configs));
         let agg = ShardsAggregateMetrics::new(Arc::clone(&shards.shards), configs);
         let declared: BTreeSet<_> = agg.desc().iter().map(|d| d.fq_name.clone()).collect();
-        for (gauge, _) in shard_gauges() {
+        for (gauge, g) in shard_gauges() {
             for suffix in ["_percentile", "_topk"] {
                 let name = format!("{gauge}{suffix}");
                 assert!(declared.contains(&name), "{name} not declared");
             }
+            let sum = format!("{gauge}_sum");
+            assert_eq!(declared.contains(&sum), g.sum, "{sum}");
         }
     }
 
@@ -3968,6 +4021,7 @@ mod tests {
             .iter()
             .filter(|n| {
                 n.ends_with("_percentile")
+                    || n.ends_with("_sum")
                     || n.ends_with("_topk")
                     || *n == "mz_persist_batch_part_version_count"
             })
@@ -4022,6 +4076,25 @@ mod tests {
             both_bytes > 100 * many_bytes,
             "{both_bytes} vs {many_bytes}"
         );
+    }
+
+    #[mz_ore::test]
+    fn shard_info_lists_live_shards_when_enabled() {
+        let (cfg, registry, mut shards) = metrics_with_shards(3);
+        let info =
+            |registry: &MetricsRegistry| gauge_set(&registry.gather(), SHARD_INFO_NAME, "name");
+        let mut updates = ConfigUpdates::default();
+        updates.add(&SHARD_INFO_METRIC, true);
+        cfg.apply_from(&updates);
+        // Independent of the mode, including the one that drops everything else.
+        for mode in ShardMetricsExport::ALL {
+            set_shard_metrics(&cfg, mode);
+            let expected = ["s1", "s2", "s3"].map(|n| (n.to_string(), 1)).into();
+            assert_eq!(info(&registry), expected, "{mode:?}");
+        }
+
+        shards.pop();
+        assert_eq!(info(&registry).len(), 2);
     }
 
     fn set_enable_regex(cfg: &PersistConfig, regex: &str) {
