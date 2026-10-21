@@ -1513,7 +1513,7 @@ impl Coordinator {
             .await
     }
 
-    async fn refresh_catalog_for_write(&mut self) -> Result<(), AdapterError> {
+    pub(super) async fn refresh_catalog_for_write(&mut self) -> Result<(), AdapterError> {
         if let Err(error) = self.refresh_catalog(None).await {
             if matches!(&error, AdapterError::Catalog(error) if matches!(
                 &error.kind,

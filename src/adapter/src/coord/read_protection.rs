@@ -1084,6 +1084,12 @@ impl Coordinator {
             return self.publish_client_read_protection().await;
         }
         let start = Instant::now();
+        if !self.controller.read_only() && self.catalog().state().catalog_read_protection_enabled()
+        {
+            // Sample against a freshly applied prefix, not the previous tick's
+            // state. Sampled bounds cannot absorb catch-up at transaction open.
+            self.refresh_catalog_for_write().await?;
+        }
         let client = self.query_client.clone();
         let requirements = client
             .as_ref()
