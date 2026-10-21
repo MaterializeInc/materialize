@@ -305,6 +305,7 @@ wrappers = [
 [[bans.deny]]
 name = "unicase"
 wrappers = [
+    "mime_guess",
     "pulldown-cmark",
 ]
 
