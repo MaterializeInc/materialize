@@ -15,3 +15,5 @@ pre-image:
       protobuf-src:
         bin: protobuf-bin
         include: protobuf-include
+    builder-files:
+      /usr/local/lib/libduckdb.so: libduckdb.so

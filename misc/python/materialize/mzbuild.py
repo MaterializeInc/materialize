@@ -255,6 +255,24 @@ class RepositoryDetails:
         # run without the ci-builder.
         return [name]
 
+    def builder(self, args: list[str]) -> list[str]:
+        """Start an invocation of `args` inside the ci-builder for the
+        configured architecture, from the repository root.
+
+        Unlike `build`, this enters the ci-builder on macOS too, so `args` can
+        rely on files that only the ci-builder image provides.
+        """
+        if "MZ_DEV_CI_BUILDER" in os.environ:
+            return args
+        return [
+            "env",
+            f"MZ_DEV_CI_BUILDER_ARCH={self.arch}",
+            "bin/ci-builder",
+            "run",
+            "stable",
+            *args,
+        ]
+
     def cargo_target_dir(self) -> Path:
         """Determine the path to the target directory for Cargo."""
         return self.root / "target-xcompile" / xcompile.target(self.arch)
@@ -669,6 +687,7 @@ class CargoBuild(CargoPreImage):
         self.examples = example if isinstance(example, list) else [example]
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
+        self.builder_files = config.pop("builder-files", {})
         features = config.pop("features", [])
         self.features = features if isinstance(features, list) else [features]
 
@@ -869,6 +888,14 @@ class CargoBuild(CargoPreImage):
                 self.rd.cargo_target_dir() / cargo_profile / Path("examples") / example
             )
             copy(src_path, Path("examples") / example)
+
+        for src, dst in self.builder_files.items():
+            dst_path = self.path / dst
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+            spawn.runv(
+                self.rd.builder(["cp", src, str(dst_path.relative_to(self.rd.root))]),
+                cwd=self.rd.root,
+            )
 
         if self.extract:
             cargo_build_json_output = build_output["cargo"]

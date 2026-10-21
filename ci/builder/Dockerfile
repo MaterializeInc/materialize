@@ -400,11 +400,12 @@ RUN arch_zizmor=$(echo "$ARCH_GCC" | sed -e "s/amd64/x86_64/") \
     && rm zizmor.tar.gz
 
 # Install a pinned libduckdb for libduckdb-sys to link against via
-# `DUCKDB_LIB_DIR`, so builds don't download it. The version must match the
-# libduckdb-sys crate (1.MAJOR_MINOR_PATCH.x encodes DuckDB MAJOR.MINOR.PATCH),
-# which bin/lint-versions checks. ldconfig makes it loadable by test binaries,
-# since Cargo only adds library paths inside the target dir to their search
-# path.
+# `DUCKDB_LIB_DIR`, so builds don't download it. The testdrive image copies it
+# from here (`builder-files` in src/testdrive/ci/mzbuild.yml). The version must
+# match the libduckdb-sys crate (1.MAJOR_MINOR_PATCH.x encodes DuckDB
+# MAJOR.MINOR.PATCH), which bin/lint-versions checks. ldconfig makes it
+# loadable by test binaries, since Cargo only adds library paths inside the
+# target dir to their search path.
 RUN curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.5.6/libduckdb-linux-$ARCH_GO.zip > libduckdb.zip \
     && if [ $ARCH_GO = amd64 ]; then echo 'b845005f5132a7d8180057c35e14a7626632258782f871a90861b19c1c03841b libduckdb.zip' | sha256sum --check; fi \
     && if [ $ARCH_GO = arm64 ]; then echo 'b72ed9f05003f5e9d2015f7ceada6416b377d9dd33169cdde3c9e33897856eee libduckdb.zip' | sha256sum --check; fi \
