@@ -700,6 +700,7 @@ impl Coordinator {
             execution_uuid,
             ps_uuid,
             sample_rate,
+            0,
             params,
             session,
             began_at,
