@@ -236,6 +236,12 @@ impl AdapterNotice {
     pub fn detail(&self) -> Option<String> {
         match self {
             AdapterNotice::PlanNotice(notice) => notice.detail(),
+            AdapterNotice::DroppedInUseIndex(..) => Some(
+                "The index no longer appears in the catalog, but it is still maintained, using \
+                 memory and CPU, until those objects are dropped or recreated, or replanned at \
+                 the next restart. The drop was allowed because enable_drop_in_use_index is set."
+                    .into(),
+            ),
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Some(
                 "Adding replicas to the cluster does not make these sources more fault tolerant \
                  and does not increase their ingestion throughput."
@@ -282,7 +288,7 @@ impl AdapterNotice {
                     .into(),
             ),
             AdapterNotice::OptimizerNotice { notice: _, hint } => Some(hint.clone()),
-            AdapterNotice::DroppedInUseIndex(..) => Some("Drop and recreate the listed objects to free the index's resources and give them plans that survive a restart.".into()),
+            AdapterNotice::DroppedInUseIndex(..) => Some("Drop and recreate those objects to free the index's resources.".into()),
             AdapterNotice::IntrospectionClusterUsage => Some("Use the new name instead.".into()),
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => Some("Use the new name instead.".into()),
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Some(
@@ -508,7 +514,7 @@ impl fmt::Display for AdapterNotice {
             }) => {
                 write!(
                     f,
-                    "index {} was dropped while the following objects read from it: {}. The index is gone from the catalog but continues to be maintained and take up resources until those objects are dropped or recreated, and their plans cannot be reloaded after a restart. The drop was allowed because enable_unsafe_drop_index is set.",
+                    "index {} was dropped, but these objects still read from it: {}",
                     index_name.quoted(),
                     separated(", ", dependant_objects)
                 )

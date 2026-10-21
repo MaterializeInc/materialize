@@ -17,7 +17,7 @@ ReadyForQuery {"status":"I"}
 # Dropping an index that a materialized view or another index reads from is
 # refused and names the readers. Once the readers are gone, the drop succeeds
 # without a notice. The flag-on warning is covered by
-# test_drop_in_use_index_unsafe_flag_warns in src/environmentd/tests/sql.rs.
+# test_drop_in_use_index_flag_warns in src/environmentd/tests/sql.rs.
 send
 Query {"query": "create table t(a int, b int)"}
 Query {"query": "create index t_idx_a on t(a)"}

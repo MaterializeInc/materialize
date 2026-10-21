@@ -2,6 +2,9 @@
 
 - Associated: [Pinned LIR design](./20260826_pinned_lir.md)
 
+This is a Claude-generated design doc that serves as a summary/plan
+for the implementation.
+
 ## The Problem
 
 An index's arrangement can be imported by other dataflows on the same cluster:
@@ -27,7 +30,8 @@ be refused.
 
 ## Success Criteria
 
-- `DROP INDEX` fails when a materialized view or index reads from the index,
+- `DROP INDEX` fails when a materialized view, index, or metric sink reads from
+  the index,
   with an error that names the dependents and explains the dependency, since it
   is not visible in the dependent's SQL definition.
 - No statement leaves an orphaned dataflow behind. The rule applies uniformly to
@@ -37,16 +41,20 @@ be refused.
   Users drop the dependents themselves, or replace them with a blue/green
   deployment in production.
 - A per-environment escape hatch restores the old behavior for customers whose
-  workflows depend on it, and every use of the escape hatch is visible to us.
+  workflows depend on it. In Materialize Cloud every use of the escape hatch is
+  visible to us. Self-managed deployments see only the user-facing warning and
+  their own logs and metrics.
 - One-shot `SUBSCRIBE` and `SELECT` dataflows never block DDL.
 
 ## Out of Scope
 
 - Making index imports first-class catalog dependencies. See Alternatives.
-- Blocking `DROP INDEX` on in-flight `SUBSCRIBE` or `SELECT` statements. Those
-  dataflows are not pinned (the pinned LIR design excludes one-shot sinks), they
-  finish on their own, and holding DDL hostage to a long-running client is a
-  worse failure mode than the transient orphan they cause today.
+- Blocking `DROP INDEX` on in-flight `SUBSCRIBE`, `COPY TO`, or `SELECT`
+  statements. Those dataflows are not pinned (the pinned LIR design excludes
+  one-shot sinks), they finish on their own, and holding DDL hostage to a
+  long-running client is a worse failure mode than the transient orphan they
+  cause today. They are reported in a `NOTICE` instead, see the in-flight
+  statements notice below.
 - The existing race where a `CREATE MATERIALIZED VIEW` that has been optimized
   against an index, but whose dataflow has not yet been created, races a
   `DROP INDEX`. The new check cannot see that dataflow. The creation then fails
@@ -55,9 +63,10 @@ be refused.
 
 ## Solution Proposal
 
-The sequencer, not the planner, decides whether a drop that includes an index is allowed. It asks the compute
-controller who reads from each index in the drop set, and either refuses the
-drop or (with the escape hatch) proceeds loudly. It never expands the drop set.
+The sequencer, not the planner, decides whether a drop that includes an index
+is allowed. It asks the compute controller who reads from each index in the drop
+set, and either refuses the drop or (with the escape hatch) proceeds loudly. It
+never expands the drop set.
 
 ### Vocabulary
 
@@ -66,16 +75,17 @@ The **compute dependents** of index `i` are the compute collections whose
 `ComputeController::collection_reverse_dependencies`. They split into:
 
 - **Durable dependents**: non-transient ids that resolve to catalog items. These
-  are materialized views and indexes.
-- **Transient dependents**: one-shot dataflows. Materialized view and index
-  dataflows export only under their durable `GlobalId`s (the transient view id
-  the materialized view optimizer allocates is a build, not an export), so
-  every transient id here is a `SUBSCRIBE` or `COPY TO` sink, a slow-path peek
-  dataflow, or a system-internal introspection subscribe or metric sink.
+  are materialized views, indexes, and user metric sinks (`CREATE METRIC SINK`).
+- **Transient dependents**: dataflows without a catalog item. Materialized view
+  and index dataflows export only under their durable `GlobalId`s (the transient
+  view id the materialized view optimizer allocates is a build, not an export),
+  so every transient id here is a `SUBSCRIBE` or `COPY TO` sink, a slow-path
+  peek dataflow, or a system-internal introspection subscribe or curated metric
+  sink.
 
 ### Semantics
 
-| Statement | `enable_unsafe_drop_index = false` (default) | `enable_unsafe_drop_index = true` |
+| Statement | `enable_drop_in_use_index = false` (default) | `enable_drop_in_use_index = true` |
 | --- | --- | --- |
 | Any drop of an index with a durable dependent outside the drop set | Error with SQLSTATE `2BP01` (`DEPENDENT_OBJECTS_STILL_EXIST`) | Drop and orphan, as today, plus a `WARNING` notice, an error-level log event, and a metric increment |
 | Any drop where the only dependents are transient | Drop. A `NOTICE` reports how many in-flight `SUBSCRIBE`, `COPY TO`, and `SELECT` statements still read the index. | Same |
@@ -130,35 +140,45 @@ for each index in drop_ids:
   durable, transient = compute dependents of index
   durable = durable minus set
   if durable is not empty:
-    if not enable_unsafe_drop_index: return Err(IndexInUse { index, durable })
-    record a DroppedInUseIndex notice
+    if enable_drop_in_use_index: record a DroppedInUseIndex notice
+    else: record (index, durable) as blocked
   record transient for the in-flight notice
+if anything is blocked: return Err(IndexInUse { blocked })
 ```
+
+Every blocked index is collected before returning, so a statement that drops
+many indexes reports all of them in one error instead of one per retry.
 
 Transient dependents are classified for the notice: ids in
 `active_compute_sinks` are `SUBSCRIBE` or `COPY TO`, ids in
-`introspection_subscribes` are system-internal, and anything else is a
-slow-path `SELECT`.
+`introspection_subscribes` or of an installed curated metric sink are
+system-internal, and anything else is a slow-path `SELECT`.
 
 ### User-facing surfaces
 
-**In-use error.** `AdapterError::IndexInUse { index_name, dependents }` renders
-as `cannot drop index "i": still depended upon by materialized view "mv"`,
+**In-use error.** `AdapterError::IndexInUse { blocked }` renders as
+`cannot drop index "i": still depended upon by materialized view "mv"`,
 matching the planner's `DependentObjectsStillExist` wording so clients and test
 matchers treat both the same. SQLSTATE is `2BP01`. The detail says the
 dependents are live dataflows that read from the index, so it cannot be dropped
-while they exist. The hint says to drop the dependents first, then the index,
+while they exist. When several indexes are blocked, the message names all of
+them (`cannot drop indexes "a", "b": ...`) with the union of their readers, and
+the detail lists each index's readers. The hint says to drop the dependents first, then the index,
 and to recreate the dependents, using a blue/green deployment in production. It
 names no specific statement because `DROP OWNED` and other multi-object drops
 reach the same error.
 
 **`DroppedInUseIndex` notice.** Only reachable with the flag on. Severity is
-raised to `WARNING`, the message names the flag, and the sequencer also emits a
+raised to `WARNING`. The message names the readers, and the detail says the
+index is still maintained until they are dropped, recreated, or replanned at the
+next restart, and that the flag allowed the drop. Without pinned plans, a
+restart replans the readers against what exists, so the orphan only lasts until
+then. The sequencer also emits a
 `tracing::error!` event and increments
 `mz_optimization_notices{notice_type="DroppedInUseIndex"}`. Only error-level
 events reach Sentry as issues, and the flag is opt-in per environment, so the
-volume is bounded and every orphaning is visible to us. `DROP OWNED` now bumps
-the metric too.
+volume is bounded and every orphaning in Materialize Cloud is visible to us.
+`DROP OWNED` now bumps the metric too.
 
 **In-flight statements notice.** A new `NOTICE` reports the counts of
 `SUBSCRIBE`, `COPY TO`, `SELECT`, and system-internal dataflows still reading
@@ -168,11 +188,12 @@ the long-standing TODO about peeks in the drop path.
 
 ### Feature flag
 
-`enable_unsafe_drop_index` is a `feature_flags!` entry with `default: false` and
-`enable_for_item_parsing: false`. It is deliberately not `unsafe_`-prefixed, so
-it can be set per environment through the usual system-parameter channels
-without unsafe mode. The coordinator reads it from the system configuration at
-drop time.
+`enable_drop_in_use_index` is a `feature_flags!` entry with `default: false` and
+`enable_for_item_parsing: false`. It is deliberately not `unsafe_`-prefixed:
+that prefix marks test-only parameters gated behind unsafe mode, while this flag
+is a production escape hatch set per environment through the usual
+system-parameter channels. Unlike most `enable_*` flags, `false` is the safe
+setting. The coordinator reads it from the system configuration at drop time.
 
 The CI default is also `false`. The flag-off path is the new behavior and is
 what the test suite should exercise by default. The flag-on path is covered by

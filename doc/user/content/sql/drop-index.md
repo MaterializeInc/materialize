@@ -23,25 +23,25 @@ Syntax element | Description
 
 ## Dependent objects
 
-When Materialize creates a materialized view or another index, its optimizer
-may plan the new object to read from an existing index rather than from the
-underlying relation. The object then depends on that index, even though the
-index does not appear in the object's definition.
+When Materialize creates a materialized view, another index, or a metric sink,
+its optimizer may plan the new object to read from an existing index rather than
+from the underlying relation. The object then depends on that index, even though
+the index does not appear in the object's definition.
 
-`DROP INDEX` fails if any materialized view or index reads from the index, and
-the error names the dependent objects. This holds with `CASCADE` too: because
-the dependency is invisible in the dependents' definitions, `DROP INDEX` never
-drops them. To drop the index, first drop the dependent
-objects yourself, then drop the index and recreate the dependents. In
-production, use a [blue/green deployment](/developer-tools/dbt/blue-green-deployments/)
-to replace them without downtime.
+`DROP INDEX` fails if any materialized view, index, or metric sink reads from the
+index, and the error names the dependent objects. This holds with `CASCADE` too:
+because the dependency is invisible in the dependents' definitions, `DROP INDEX`
+never drops them. To drop the index, first drop the dependent objects yourself,
+then drop the index and recreate the dependents. In production, use a
+[blue/green deployment](/developer-tools/dbt/blue-green-deployments/) to replace
+them without downtime.
 
 A newer index on a relation can read from an older index on the same relation,
 so drop indexes on the same relation newest first.
 
-In-progress `SELECT` and `SUBSCRIBE` statements that read from the index do not
-block the drop. The index continues to be maintained until they finish, and the
-`DROP INDEX` statement returns a notice saying so.
+In-progress `SELECT`, `SUBSCRIBE`, and `COPY TO` statements that read from the
+index do not block the drop. The index continues to be maintained until they
+finish, and the `DROP INDEX` statement returns a notice saying so.
 
 You can inspect which objects read from an index with
 [`mz_internal.mz_compute_dependencies`](/sql/system-catalog/mz_internal/#mz_compute_dependencies).

@@ -113,6 +113,39 @@ DROP INDEX v_idx;
 statement ok
 DROP INDEX t_idx;
 
+# One error names every blocked index, with the union of their readers in the
+# message and each index's readers in the detail.
+statement ok
+CREATE TABLE u (a int);
+
+statement ok
+CREATE INDEX t_idx ON t (a);
+
+statement ok
+CREATE INDEX u_idx ON u (a);
+
+statement ok
+CREATE MATERIALIZED VIEW mv_t AS SELECT a FROM t WHERE a > 0;
+
+statement ok
+CREATE MATERIALIZED VIEW mv_u AS SELECT a FROM u WHERE a > 0;
+
+simple
+DROP INDEX t_idx, u_idx;
+----
+db error: ERROR: cannot drop indexes "t_idx", "u_idx": still depended upon by materialized view "mv_t", materialized view "mv_u"
+DETAIL: Index "t_idx" is read by materialized view "mv_t". Index "u_idx" is read by materialized view "mv_u". The dependent objects are live dataflows that read from these indexes, so the indexes cannot be dropped while they exist.
+HINT: Drop the dependent objects first, then drop the index and recreate the dependents. To replace them in production without downtime, use a blue/green deployment.
+
+statement ok
+DROP MATERIALIZED VIEW mv_t, mv_u;
+
+statement ok
+DROP INDEX t_idx, u_idx;
+
+statement ok
+DROP TABLE u;
+
 # Readers of an index also depend on its relation in the catalog, so CASCADE
 # drops of the relation, its schema, or its cluster take the readers along.
 statement ok
@@ -146,7 +179,7 @@ query T rowsort
 SELECT name FROM mz_objects WHERE name IN ('t2', 't2_idx', 'mv2')
 ----
 
-# enable_unsafe_drop_index lets the plain drop through, leaving the dependent
+# enable_drop_in_use_index lets the plain drop through, leaving the dependent
 # running on the orphaned index.
 statement ok
 CREATE INDEX t_idx ON t (a);
@@ -155,7 +188,7 @@ statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t WHERE a > 0;
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unsafe_drop_index = true
+ALTER SYSTEM SET enable_drop_in_use_index = true
 ----
 COMPLETE 0
 
@@ -163,7 +196,7 @@ statement ok
 DROP INDEX t_idx;
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM RESET enable_unsafe_drop_index
+ALTER SYSTEM RESET enable_drop_in_use_index
 ----
 COMPLETE 0
 
@@ -189,7 +222,7 @@ statement ok
 CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t WHERE a > 0;
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unsafe_drop_index = true
+ALTER SYSTEM SET enable_drop_in_use_index = true
 ----
 COMPLETE 0
 
@@ -197,7 +230,7 @@ statement ok
 DROP INDEX t_idx CASCADE;
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM RESET enable_unsafe_drop_index
+ALTER SYSTEM RESET enable_drop_in_use_index
 ----
 COMPLETE 0
 
