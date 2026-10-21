@@ -2456,7 +2456,7 @@ def workflow_catalog_publication_measurement(
         help="Total generated objects per step, tables plus filler views or indexes",
     )
     parser.add_argument("--publication-rounds", type=int, default=3)
-    parser.add_argument("--publication-interval-ms", type=int, default=1000)
+    parser.add_argument("--publication-interval-ms", type=int, default=60000)
     parser.add_argument("--timeout-seconds", type=int, default=120)
     parser.add_argument(
         "--active-collections",

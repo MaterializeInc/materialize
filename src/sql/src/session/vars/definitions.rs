@@ -971,7 +971,7 @@ pub static COORD_SLOW_MESSAGE_WARN_THRESHOLD: VarDefinition = VarDefinition::new
 
 pub static CATALOG_READ_PROTECTION_PUBLISH_INTERVAL: VarDefinition = VarDefinition::new(
     "catalog_read_protection_publish_interval",
-    value!(Duration; Duration::from_secs(1)),
+    value!(Duration; Duration::from_secs(60)),
     "Sets the minimum delay after a catalog read protection publication completes before \
      starting the next publication. Longer intervals retain additional history.",
     false,

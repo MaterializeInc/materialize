@@ -383,7 +383,7 @@ steps:
             - --filler-replicas=2
             - --publication-rounds=3
             - --observation-seconds=30
-            - --publication-interval-ms=1000
+            - --publication-interval-ms=60000
             - --timeout-seconds=300
             - --observer=none
             - --ddl-rate-hz=2
