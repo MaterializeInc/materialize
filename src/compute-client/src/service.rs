@@ -152,6 +152,9 @@ pub struct PartitionedComputeState {
     /// dropped again. The compute protocol forbids responses after a shard's end, so tracking is
     /// not re-initialized for a subscribe that has shut down.
     pending_batched_subscribes: BTreeMap<GlobalId, PendingBatchedSubscribe>,
+    /// The most recently finished batched subscribes, so that a response arriving after a
+    /// subscribe finished does not re-initialize its tracking.
+    finished_batched_subscribes: FinishedSet,
 }
 
 impl Partitionable<ComputeCommand, ComputeResponse> for (ComputeCommand, ComputeResponse) {
@@ -165,6 +168,7 @@ impl Partitionable<ComputeCommand, ComputeResponse> for (ComputeCommand, Compute
             peek_responses: BTreeMap::new(),
             pending_subscribes: BTreeMap::new(),
             pending_batched_subscribes: BTreeMap::new(),
+            finished_batched_subscribes: FinishedSet::default(),
             copy_to_responses: BTreeMap::new(),
         }
     }
@@ -281,25 +285,6 @@ impl PartitionedComputeState {
     }
 
     /// Absorb a [`ComputeResponse::SubscribeResponse`].
-    fn absorb_batched_subscribe_response(
-        &mut self,
-        shard_id: usize,
-        subscribe_id: GlobalId,
-        response: BatchedSubscribeResponse,
-    ) -> Option<ComputeResponse> {
-        let tracked = self
-            .pending_batched_subscribes
-            .entry(subscribe_id)
-            .or_insert_with(|| PendingBatchedSubscribe::new(self.parts));
-        let emitted = tracked.absorb(shard_id, response, self.max_result_size);
-        if tracked.is_done() {
-            self.pending_batched_subscribes.remove(&subscribe_id);
-        }
-        emitted.map(|response| {
-            ComputeResponse::BatchedSubscribeResponse(subscribe_id, Box::new(response))
-        })
-    }
-
     fn absorb_subscribe_response(
         &mut self,
         subscribe_id: GlobalId,
@@ -383,6 +368,39 @@ impl PartitionedComputeState {
         }
 
         emit_response
+    }
+
+    /// Absorb a [`ComputeResponse::BatchedSubscribeResponse`].
+    fn absorb_batched_subscribe_response(
+        &mut self,
+        shard_id: usize,
+        subscribe_id: GlobalId,
+        response: BatchedSubscribeResponse,
+    ) -> Option<ComputeResponse> {
+        let emitted = if self.finished_batched_subscribes.contains(&subscribe_id) {
+            // Every part has ended already. Tracking it again would hold the shares forever,
+            // because no part ends a second time.
+            tracing::error!(
+                %subscribe_id,
+                shard_id,
+                "batched subscribe response after the subscribe finished"
+            );
+            Some(orphan_late_response(response))
+        } else {
+            let tracked = self
+                .pending_batched_subscribes
+                .entry(subscribe_id)
+                .or_insert_with(|| PendingBatchedSubscribe::new(self.parts));
+            let emitted = tracked.absorb(shard_id, response, self.max_result_size);
+            if tracked.is_done() {
+                self.pending_batched_subscribes.remove(&subscribe_id);
+                self.finished_batched_subscribes.insert(subscribe_id);
+            }
+            emitted
+        };
+        emitted.map(|response| {
+            ComputeResponse::BatchedSubscribeResponse(subscribe_id, Box::new(response))
+        })
     }
 }
 
@@ -657,8 +675,8 @@ impl PendingBatchedSubscribe {
         max_result_size: u64,
     ) -> Option<BatchedSubscribeResponse> {
         if self.ended.contains(&part) {
-            soft_panic_or_log!("batched subscribe response from part {part} after its end");
-            return None;
+            tracing::error!(part, "batched subscribe response after the part ended");
+            return Some(orphan_late_response(response));
         }
 
         let reported_frontier = match response {
@@ -783,6 +801,48 @@ impl PendingBatchedSubscribe {
     /// Whether every part has ended and the merged end was emitted.
     fn is_done(&self) -> bool {
         self.ended.len() == self.parts && self.descriptions.is_empty()
+    }
+}
+
+/// Converts a response that arrived after its part ended into a `DroppedAt` that orphans its
+/// shares, so that the receiver deletes their stashed batches.
+fn orphan_late_response(response: BatchedSubscribeResponse) -> BatchedSubscribeResponse {
+    match response {
+        BatchedSubscribeResponse::Batch(batch) => BatchedSubscribeResponse::DroppedAt {
+            frontier: batch.lower,
+            orphans: batch.shares,
+        },
+        dropped @ BatchedSubscribeResponse::DroppedAt { .. } => dropped,
+    }
+}
+
+/// A set of the [`FinishedSet::CAPACITY`] most recently inserted ids.
+#[derive(Debug, Default)]
+struct FinishedSet {
+    ids: BTreeSet<GlobalId>,
+    order: VecDeque<GlobalId>,
+}
+
+impl FinishedSet {
+    /// The number of ids the set retains.
+    ///
+    /// A response for a finished subscribe is a protocol violation, so the set only has to
+    /// cover responses that trail shortly behind the end. Once evicted, a late response
+    /// re-initializes tracking and its shares are held until the state machine is dropped.
+    const CAPACITY: usize = 1024;
+
+    fn insert(&mut self, id: GlobalId) {
+        if self.ids.insert(id) {
+            self.order.push_back(id);
+            if self.order.len() > Self::CAPACITY {
+                let evicted = self.order.pop_front().expect("over capacity");
+                self.ids.remove(&evicted);
+            }
+        }
+    }
+
+    fn contains(&self, id: &GlobalId) -> bool {
+        self.ids.contains(id)
     }
 }
 

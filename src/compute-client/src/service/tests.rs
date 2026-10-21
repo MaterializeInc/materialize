@@ -252,6 +252,102 @@ fn dropped_at_carries_the_shares_of_incomplete_descriptions() {
     );
 }
 
+/// Collects every share in `responses`, emitted or orphaned.
+fn all_shares(responses: impl IntoIterator<Item = Option<BatchedSubscribeResponse>>) -> Vec<Share> {
+    responses
+        .into_iter()
+        .flatten()
+        .flat_map(|response| match response {
+            BatchedSubscribeResponse::Batch(batch) => batch.shares,
+            BatchedSubscribeResponse::DroppedAt { orphans, .. } => orphans,
+        })
+        .collect()
+}
+
+#[mz_ore::test]
+fn mixed_ends_after_a_disagreement_emit_or_orphan_every_share() {
+    let mut state = partitioned_state(2);
+
+    let first = absorb(
+        &mut state,
+        0,
+        batch(frontier(0), Antichain::new(), vec![inline_share(1)]),
+    );
+    assert_eq!(first, None);
+    let second = absorb(
+        &mut state,
+        1,
+        batch(frontier(0), frontier(5), vec![inline_share(2)]),
+    );
+    match &second {
+        Some(BatchedSubscribeResponse::Batch(batch)) => assert_eq!(
+            batch.error.as_deref(),
+            Some("replica processes disagree on batch descriptions"),
+        ),
+        other => panic!("expected a poisoned batch, got {other:?}"),
+    }
+    let third = absorb(
+        &mut state,
+        1,
+        batch(frontier(5), Antichain::new(), vec![inline_share(3)]),
+    );
+    assert_eq!(third, Some(dropped_at(5, vec![inline_share(3)])));
+
+    assert_eq!(
+        all_shares([first, second, third]),
+        vec![inline_share(1), inline_share(2), inline_share(3)],
+    );
+    assert!(state.pending_batched_subscribes.is_empty());
+}
+
+#[mz_ore::test]
+fn a_drop_and_a_completion_orphan_the_completed_shares() {
+    let completion = || batch(frontier(0), Antichain::new(), vec![inline_share(1)]);
+    let drop = || dropped_at(0, vec![]);
+
+    let mut state = partitioned_state(2);
+    assert_eq!(absorb(&mut state, 0, completion()), None);
+    assert_eq!(
+        absorb(&mut state, 1, drop()),
+        Some(dropped_at(0, vec![inline_share(1)])),
+    );
+    assert!(state.pending_batched_subscribes.is_empty());
+
+    let mut state = partitioned_state(2);
+    assert_eq!(absorb(&mut state, 1, drop()), None);
+    assert_eq!(
+        absorb(&mut state, 0, completion()),
+        Some(dropped_at(0, vec![inline_share(1)])),
+    );
+    assert!(state.pending_batched_subscribes.is_empty());
+}
+
+#[mz_ore::test]
+fn late_responses_orphan_their_shares() {
+    let completion = || batch(frontier(0), Antichain::new(), vec![]);
+    let late = || batch(frontier(0), frontier(5), vec![inline_share(1)]);
+
+    // While the other part is still running.
+    let mut state = partitioned_state(2);
+    assert_eq!(absorb(&mut state, 0, completion()), None);
+    assert_eq!(
+        absorb(&mut state, 0, late()),
+        Some(dropped_at(0, vec![inline_share(1)])),
+    );
+
+    // After the subscribe finished.
+    assert_eq!(absorb(&mut state, 1, completion()), Some(completion()));
+    assert!(state.pending_batched_subscribes.is_empty());
+    assert_eq!(
+        absorb(&mut state, 1, late()),
+        Some(dropped_at(0, vec![inline_share(1)])),
+    );
+    assert!(
+        state.pending_batched_subscribes.is_empty(),
+        "a late response does not re-initialize tracking"
+    );
+}
+
 #[mz_ore::test]
 fn held_inline_bytes_past_the_limit_poison_the_batch() {
     // Rows pack small integers compactly, so the shares used below all have the same length.
