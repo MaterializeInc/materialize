@@ -24,14 +24,20 @@ COPY protobuf-include /usr/local/include
 RUN chmod +x /usr/local/bin/protoc
 ENV PROTOC=/usr/local/bin/protoc
 ENV PROTOC_INCLUDE=/usr/local/include
-# Install libduckdb.so that was downloaded. The cache contains
-# `<arch>-unknown-linux-gnu/<version>/libduckdb.so`; copy it in and then pick
-# the one matching this image's arch. (A glob COPY collapses multiple files
-# onto the same destination path and silently picks whichever sorts last.)
-COPY duckdb-download /tmp/duckdb-download
-RUN cp /tmp/duckdb-download/$(uname -m)-unknown-linux-gnu/*/libduckdb.so /usr/local/lib/ \
-    && rm -rf /tmp/duckdb-download \
-    && ldconfig
+# Install the libduckdb that ci/builder/Dockerfile links testdrive against.
+# bin/lint-versions checks that both pin the same version.
+RUN apt-get update \
+    && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends curl unzip \
+    && arch=$(dpkg --print-architecture) \
+    && curl -fsSL https://github.com/duckdb/duckdb/releases/download/v1.5.6/libduckdb-linux-$arch.zip > libduckdb.zip \
+    && if [ $arch = amd64 ]; then echo 'b845005f5132a7d8180057c35e14a7626632258782f871a90861b19c1c03841b libduckdb.zip' | sha256sum --check; fi \
+    && if [ $arch = arm64 ]; then echo 'b72ed9f05003f5e9d2015f7ceada6416b377d9dd33169cdde3c9e33897856eee libduckdb.zip' | sha256sum --check; fi \
+    && unzip libduckdb.zip libduckdb.so -d /usr/local/lib \
+    && ldconfig \
+    && rm libduckdb.zip \
+    && apt-get -y purge --auto-remove curl unzip \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 ENV LD_LIBRARY_PATH=/usr/local/lib
 
 WORKDIR /workdir

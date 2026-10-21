@@ -15,5 +15,3 @@ pre-image:
       protobuf-src:
         bin: protobuf-bin
         include: protobuf-include
-      libduckdb-sys:
-        $CARGO_TARGET_TRIPLE_DIR/duckdb-download: duckdb-download
