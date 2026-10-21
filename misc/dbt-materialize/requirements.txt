@@ -45,7 +45,7 @@ pytest==9.0.3
 pytest-split==0.11.0
 python-dateutil==2.9.0.post0
 python-slugify==9.1.3
-pytimeparse==1.1.9
+pytimeparse==1.1.10
 pytz==2026.5
 PyYAML==6.0.3
 referencing==0.37.0
