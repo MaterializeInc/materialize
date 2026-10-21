@@ -11,7 +11,7 @@ Use `ALTER MATERIALIZED VIEW` to:
 - Rename a materialized view.
 - Change owner of a materialized view.
 - Change retain history configuration for the materialized view.
-- Replace a materialized view. (*Public preview*)
+- Replace a materialized view.
 
 
 ## Syntax
@@ -44,8 +44,6 @@ To reset the retention history to the default for a materialized view:
 {{< /tab >}}
 {{< tab "Replace materialized view" >}}
 
-{{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
-
 To replace an existing materialized view in-place with a replacement
 materialized view:
 
@@ -58,8 +56,6 @@ materialized view:
 ## Details
 
 ### Replacing a materialized view
-
-{{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
 
 {{% include-headless "/headless/replacement-views/associated-commands-blurb/"
 %}}
@@ -95,8 +91,6 @@ The privileges required to execute this statement are:
 ## Examples
 
 ### Replace a materialized view
-
-{{% include-headless "/headless/replacement-views/public-preview-annotation" %}}
 
 {{% include-headless
 "headless/replacement-views/replacement-view-target-restrictions" %}}

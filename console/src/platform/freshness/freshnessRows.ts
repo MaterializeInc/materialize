@@ -52,11 +52,25 @@ export function describeThreshold(
   return `${threshold} ${PREDICATE_LABELS[predicate].sentence}${suffix}`;
 }
 
+/**
+ * A schema named with its database, because every database has its own
+ * `public` and the bare names are indistinguishable.
+ */
+export function qualifiedSchemaName(
+  databaseName: string | null,
+  schemaName: string,
+) {
+  return databaseName ? `${databaseName}.${schemaName}` : schemaName;
+}
+
 export interface FreshnessRow {
   key: string;
   objectName: string;
-  /** Qualified prefix, shown under the name. */
-  namespace: string;
+  databaseName: string | null;
+  schemaId: string | null;
+  schemaName: string | null;
+  clusterId: string | null;
+  clusterName: string | null;
   objectType: string;
   hydratedReplicas: number;
   totalReplicas: number;
@@ -231,9 +245,11 @@ export function buildFreshnessRows({
       return {
         key: line.key,
         objectName: object?.objectName ?? line.label ?? line.key,
-        namespace: [object?.databaseName, object?.schemaName]
-          .filter(Boolean)
-          .join("."),
+        databaseName: object?.databaseName ?? null,
+        schemaId: object?.schemaId ?? null,
+        schemaName: object?.schemaName ?? null,
+        clusterId: object?.clusterId ?? null,
+        clusterName: object?.clusterName ?? null,
         objectType: object?.objectType ?? "",
         hydratedReplicas: hydration?.hydratedReplicas ?? 0,
         totalReplicas: hydration?.totalReplicas ?? 0,

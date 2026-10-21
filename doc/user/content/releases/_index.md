@@ -20,6 +20,58 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.46.1
+*Released to Materialize Cloud: 2026-10-20* <br>
+*Released to Materialize Self-Managed: 2026-10-20* <br>
+
+### Bug Fixes {#v26.46.1-bug-fixes}
+- Fixed Iceberg sinks over a relation with a nested column, such as an array, stalling with `Iceberg table '...' schema does not match expected schema` when resuming against a table the catalog created, which happens after a Materialize restart; Materialize no longer requires the catalog's field IDs to match its own, and assigns field IDs to nested types in the breadth-first order most catalogs use.
+- Fixed reduced persist read throughput in Self-Managed deployments that use Google Cloud Storage, which since v26.45.0 have sent all concurrent persist reads over a single HTTP/2 connection. To spread these reads across multiple connections, run `ALTER SYSTEM SET persist_blob_http_pool = 'gcs';` as the `mz_system` user, or add the setting to your [system parameters ConfigMap](https://materialize.com/docs/self-managed-deployments/configuration-system-parameters/); it takes effect without a restart.
+
+## v26.46.0
+*Released to Materialize Cloud: 2026-10-15* <br>
+*Released to Materialize Self-Managed: 2026-10-16* <br>
+
+### Kafka sink message attribution {#v26.46-kafka-sink-id-header}
+
+{{< private-preview />}}
+
+Kafka sinks can now attach a `materialize-sink-id` header carrying the sink's ID to every message they produce, so a consumer of a topic that several sinks write to can tell which sink produced each message. For more information, see [`CREATE SINK`: Headers](/sql/create-sink/kafka/#headers).
+
+### Exclude upstream constraints from MySQL source tables {#v26.46-mysql-exclude-constraints}
+
+{{< public-preview />}}
+
+`CREATE TABLE ... FROM SOURCE` now accepts `EXCLUDE CONSTRAINTS` and `EXCLUDE ALL CONSTRAINTS` for MySQL sources, as it already did for PostgreSQL sources. This lets you drop a `PRIMARY KEY`, `UNIQUE`, or `NOT NULL` constraint upstream without stalling ingestion:
+
+- `EXCLUDE CONSTRAINTS` excludes the `PRIMARY KEY` and `UNIQUE` constraints you name.
+- `EXCLUDE ALL CONSTRAINTS` excludes every constraint, including `NOT NULL`, so the table has no keys and every column is nullable.
+
+For more information, see [Handle upstream constraint drop](/ingest-data/mysql/source-versioning/#handle-upstream-constraint-drop).
+
+### Advisory {#v26.46-advisory}
+
+- **Self-Managed: Potential performance regression for upsert sources**: This release may regress the performance of [upsert sources](/ingest-data/#upsert-sources), such as Kafka sources that use `ENVELOPE UPSERT`, in Materialize Self-Managed deployments.
+
+  **Upgrade impact**: If you run Materialize Self-Managed with upsert sources, hold off on upgrading to v26.46.0. Self-Managed deployments without upsert sources require no action.
+
+### Improvements {#v26.46-improvements}
+- **Replication-factor changes during a cluster reconfiguration**: `ALTER CLUSTER ... SET (REPLICATION FACTOR ...)` is now accepted while a graceful reconfiguration is in flight, preserving the dimensions and the deadline you did not name, so you can scale a stuck reconfiguration down to zero or cancel it by restoring the original configuration instead of waiting it out.
+- **Zero-downtime deployment readiness follows replica hydration**: Zero-downtime deployments no longer restart their stability period when the new deployment restarts to pick up DDL changes, and now wait for every replica of a cluster to hydrate before cutting over.
+- **Read-then-write statements no longer take a table write lock**: `DELETE`, `UPDATE`, and `INSERT` statements that read before writing no longer hold a per-table write lock between the read and the write.
+- **Lower memory when ingesting wide schemas**: Sources with wide schemas now need less memory to write their data.
+- **Kafka broker addresses are checked against private IP ranges**: In Materialize Cloud, Kafka connections that reach brokers directly (not through PrivateLink or an SSH tunnel) now fail with `Broker address resolved to a private IP` if a broker resolves to a private address. Existing sources and sinks using such brokers stall the next time they reconnect.
+- **Creating and altering network policies is disabled by default in Self-Managed**: The operator Helm chart now disables `CREATE NETWORK POLICY` and `ALTER NETWORK POLICY`, because self-managed access paths such as port-forwards don't preserve the client IP. Existing policies are still enforced. To manage network policies, set `operator.args.enableDatabaseNetworkPolicies: true`.
+- **Lower `mz_catalog_server` load from open cluster pages**: Open cluster detail pages in the Console put much less load on the `mz_catalog_server` cluster.
+
+### Bug Fixes {#v26.46-bug-fixes}
+- Fixed casts from `"char"` to numbers and other non-string types, which panicked the optimizer during constant folding or crashed the replica running an operator over a `"char"` column; `"char"` to `int4` now yields the byte value, and every other target goes through the text representation.
+- Fixed `EXPLAIN ANALYZE CPU` and `EXPLAIN ANALYZE CLUSTER CPU` counting operators nested inside regions more than once, which reported 1.5x to 3x the real CPU time for joins, reduces, and `TopK`.
+- Fixed `offset_committed` in `mz_source_statistics` reporting the progress of a source's slowest export for every one of its exports, so a subsource or table that is still snapshotting no longer inflates the ingestion lag reported for the others.
+- Fixed `COPY FROM` a URL decoding the response body into the target table when the server answered with a 4xx or 5xx status, which now fails with `server returned HTTP <code>`.
+- Fixed the MCP server returning an HTTP 422 error for a `tools/call` request without the optional `arguments` field.
+- Fixed the MCP server returning an HTTP 422 error, rather than a JSON-RPC "method not found" error, for unsupported methods that include `params`.
+
 ## v26.45.1
 *Released to Materialize Cloud: 2026-10-08* <br>
 *Released to Materialize Self-Managed: 2026-10-09* <br>
@@ -2122,7 +2174,7 @@ v26.5.1 enhances our SQL Server source, improves performance, and strengthens Ma
 - **Faster authentication for connection poolers**: We've added an index to the `pg_authid` system catalog. This should significantly improve the performance of default authentication queries made by connection poolers like pgbouncer.
 - **Faster Kafka sink startup**: We've updated the default Kafka progress topic configuration to reduce the amount of progress data processed when creating new [Kafka sinks](/export-data/kafka/).
 - **dbt strict mode**: We've introduced `strict_mode` to dbt-materialize, our dbt adapter. `strict_mode` enforces production-ready isolation rules and improves cluster health monitoring. It does so by validating source idempotency, schema isolation, cluster isolation and index restrictions.
-- **SQL Server Always On HA failover support** (<red>*Materialize Self-Managed only*</red>): Materialize Self-Managed now offers better support for handling failovers, without downtime, in SQL Server Always On sources. [Contact our support team](/support/) to enable this in your environment.
+- **SQL Server Always On HA failover support** (<red>*Materialize Self-Managed only*</red>): Materialize Self-Managed now offers better support for handling failovers, without downtime, in SQL Server Always On sources. [Contact our support team](https://materialize.com/support/) to enable this in your environment.
 - **Auto-repair accidental changes** (<red>*Materialize Self-Managed only*</red>): Improvements to the controller logic allow Materialize to auto-repair changes such as deleting a StatefulSet. This means that your production setups should be more robust in the face of accidental changes.
 - **Track deployment status after upgrades** (<red>*Materialize Self-Managed only*</red>): The Materialize custom resource now displays both active and desired `environmentd` versions. This makes it easier to track deployment status after upgrades.
 
@@ -2143,7 +2195,7 @@ v26.4.0 introduces several performance improvements and bugfixes.
 - **Over 2x higher connections per second (CPS)**: We've optimized how Materialize handles inbound connection requests. In our tests, we've observed 2x - 4x improvements to the rate at which new client connections can be established. This is especially beneficial when spinning up new environments, warming up connection pools, or scaling client instances.
 - **Up to 3x faster hydration times for large PostgreSQL tables**: We've reduced the overhead incurred by communication between multiple *workers* on a large cluster. We've observed up to 3x throughput improvement when ingesting 1 TB PostgreSQL tables on large clusters.
 - **More efficient source ingestion batching**: Sources now batch writes more effectively. This can result in improved freshness and lower resource utilization, especially when a source is doing a large number of writes.
-- **CloudSQL HA failover support** (<red>*Materialize Self-Managed only*</red>): Materialize Self-Managed now offers better support for handling failovers in CloudSQL HA sources, without downtime. [Contact our support team](/support/) to enable this in your environment.
+- **CloudSQL HA failover support** (<red>*Materialize Self-Managed only*</red>): Materialize Self-Managed now offers better support for handling failovers in CloudSQL HA sources, without downtime. [Contact our support team](https://materialize.com/support/) to enable this in your environment.
 - **Manual Promotion** (<red>*Materialize Self-Managed only*</red>): [Rollout strategies](/self-managed-deployments/upgrading/#rollout-strategies) allow you control how Materialize transitions from the current generation to a new generation during an upgrade. We've added a new rollout strategy called `ManuallyPromote` which allows you to choose when to promote the new generation. This means that you can minimize the impact of potential downtime.
 
 ### Bug Fixes {#v26.4-bug-fixes}

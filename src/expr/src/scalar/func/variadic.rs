@@ -34,8 +34,8 @@ use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    ColumnName, Datum, DatumList, FromDatum, InputDatumType, OptionalArg, OutputDatumType, Row,
-    RowArena, SqlColumnType, SqlScalarType, Variadic,
+    ColumnName, Datum, DatumList, DatumMap, FromDatum, InputDatumType, OptionalArg,
+    OutputDatumType, Row, RowArena, SqlColumnType, SqlScalarType, Variadic,
 };
 use serde::{Deserialize, Serialize};
 
@@ -158,14 +158,13 @@ pub struct ArrayCreate {
 /// Null elements are allowed and considered to be zero-dimensional arrays.
 #[sqlfunc(
     ArrayCreate,
-    output_type_expr = "match &self.elem_type { SqlScalarType::Array(_) => self.elem_type.clone().nullable(false), _ => SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false) }",
-    introduces_nulls = false
+    output_type_expr = "match &self.elem_type { SqlScalarType::Array(_) => self.elem_type.clone().nullable(false), _ => SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false) }"
 )]
 fn array_create<'a>(
     &self,
     datums: Variadic<Datum<'a>>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<Array<'a>, EvalError> {
     match &self.elem_type {
         SqlScalarType::Array(_) => array_create_multidim(&datums, temp_storage),
         _ => array_create_scalar(&datums, temp_storage),
@@ -174,7 +173,7 @@ fn array_create<'a>(
 fn array_create_multidim<'a>(
     datums: &[Datum<'a>],
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<Array<'a>, EvalError> {
     let mut dim: Option<ArrayDimensions> = None;
     for datum in datums {
         let actual_dims = match datum {
@@ -204,7 +203,8 @@ fn array_create_multidim<'a>(
     }
     // Per PostgreSQL, if all input arrays are zero dimensional, so is the output.
     if dim.as_ref().map_or(true, ArrayDimensions::is_empty) {
-        return Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&[], &[]))?);
+        let datum = temp_storage.try_make_datum(|packer| packer.try_push_array(&[], &[]))?;
+        return Ok(datum.unwrap_array());
     }
 
     let mut dims = vec![ArrayDimension {
@@ -220,7 +220,7 @@ fn array_create_multidim<'a>(
         .flat_map(|d| d.unwrap_array().elements().iter());
     let datum =
         temp_storage.try_make_datum(move |packer| packer.try_push_array(&dims, elements))?;
-    Ok(datum)
+    Ok(datum.unwrap_array())
 }
 
 #[derive(
@@ -240,8 +240,7 @@ pub struct ArrayFill {
 
 #[sqlfunc(
     ArrayFill,
-    output_type_expr = "SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false)",
-    introduces_nulls = false
+    output_type_expr = "SqlScalarType::Array(Box::new(self.elem_type.clone())).nullable(false)"
 )]
 fn array_fill<'a>(
     &self,
@@ -249,7 +248,7 @@ fn array_fill<'a>(
     dims: Option<Array<'a>>,
     lower_bounds: OptionalArg<Option<Array<'a>>>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<Array<'a>, EvalError> {
     const MAX_SIZE: usize = (1 << 28) - 1;
     const NULL_ARR_ERR: &str = "dimension array or low bound array";
     const NULL_ELEM_ERR: &str = "dimension values";
@@ -354,9 +353,10 @@ fn array_fill<'a>(
             .collect()
     };
 
-    Ok(temp_storage.try_make_datum(|packer| {
+    let datum = temp_storage.try_make_datum(|packer| {
         packer.try_push_array(&array_dimensions, vec![fill; fill_count])
-    })?)
+    })?;
+    Ok(datum.unwrap_array())
 }
 
 #[derive(
@@ -373,7 +373,7 @@ fn array_fill<'a>(
 pub struct ArrayIndex {
     pub offset: i64,
 }
-#[sqlfunc(ArrayIndex, sqlname = "array_index", introduces_nulls = true)]
+#[sqlfunc(ArrayIndex, sqlname = "array_index")]
 fn array_index<'a, T: FromDatum<'a>>(
     &self,
     array: Array<'a, T>,
@@ -598,48 +598,36 @@ impl fmt::Display for RangeCreate {
     }
 }
 
-impl EagerVariadicFunc for RangeCreate {
-    type Input<'a> = (Datum<'a>, Datum<'a>, Datum<'a>);
-    type Output<'a> = Result<Datum<'a>, EvalError>;
-
-    fn call<'a>(
-        &self,
-        (lower, upper, flags_datum): Self::Input<'a>,
-        temp_storage: &'a RowArena,
-    ) -> Self::Output<'a> {
-        let flags = match flags_datum {
-            Datum::Null => {
-                return Err(EvalError::InvalidRange(
-                    InvalidRangeError::NullRangeBoundFlags,
-                ));
-            }
-            o => o.unwrap_str(),
-        };
-
-        let (lower_inclusive, upper_inclusive) = parse_range_bound_flags(flags)?;
-
-        let mut range = Range::new(Some((
-            RangeBound::new(lower, lower_inclusive),
-            RangeBound::new(upper, upper_inclusive),
-        )));
-
-        range.canonicalize()?;
-
-        Ok(temp_storage.make_datum(|row| {
-            row.push_range(range).expect("errors already handled");
-        }))
-    }
-
-    fn output_type(&self, _input_types: &[SqlColumnType]) -> SqlColumnType {
-        SqlScalarType::Range {
-            element_type: Box::new(self.elem_type.clone()),
+#[sqlfunc(
+    RangeCreate,
+    skip_display = true,
+    output_type_expr = "SqlScalarType::Range { element_type: Box::new(self.elem_type.clone()) }.nullable(false)"
+)]
+fn range_create<'a>(
+    &self,
+    lower: Datum<'a>,
+    upper: Datum<'a>,
+    flags_datum: Datum<'a>,
+) -> Result<Range<Datum<'a>>, EvalError> {
+    let flags = match flags_datum {
+        Datum::Null => {
+            return Err(EvalError::InvalidRange(
+                InvalidRangeError::NullRangeBoundFlags,
+            ));
         }
-        .nullable(false)
-    }
+        o => o.unwrap_str(),
+    };
 
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
+    let (lower_inclusive, upper_inclusive) = parse_range_bound_flags(flags)?;
+
+    let mut range = Range::new(Some((
+        RangeBound::new(lower, lower_inclusive),
+        RangeBound::new(upper, upper_inclusive),
+    )));
+
+    range.canonicalize()?;
+
+    Ok(range)
 }
 
 #[sqlfunc(sqlname = "datediff")]
@@ -972,16 +960,17 @@ pub struct ListCreate {
 }
 
 #[sqlfunc(
-    output_type_expr = "SqlScalarType::List { element_type: Box::new(self.elem_type.clone()), custom_id: None }.nullable(false)",
-    introduces_nulls = false
+    output_type_expr = "SqlScalarType::List { element_type: Box::new(self.elem_type.clone()), custom_id: None }.nullable(false)"
 )]
 fn list_create<'a>(
     &self,
     datums: Variadic<Datum<'a>>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<DatumList<'a>, EvalError> {
     check_datums_fit_budget(datums.iter().copied(), temp_storage)?;
-    Ok(temp_storage.make_datum(|packer| packer.push_list(datums)))
+    Ok(temp_storage
+        .make_datum(|packer| packer.push_list(datums))
+        .unwrap_list())
 }
 
 #[derive(
@@ -1000,21 +989,21 @@ pub struct RecordCreate {
 }
 
 #[sqlfunc(
-    output_type_expr = "SqlScalarType::Record { fields: self.field_names.clone().into_iter().zip_eq(input_types.iter().cloned()).collect(), custom_id: None }.nullable(false)",
-    introduces_nulls = false
+    output_type_expr = "SqlScalarType::Record { fields: self.field_names.clone().into_iter().zip_eq(input_types.iter().cloned()).collect(), custom_id: None }.nullable(false)"
 )]
 fn record_create<'a>(
     &self,
     datums: Variadic<Datum<'a>>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<DatumList<'a>, EvalError> {
     check_datums_fit_budget(datums.iter().copied(), temp_storage)?;
-    Ok(temp_storage.make_datum(|packer| packer.push_list(datums.iter().copied())))
+    Ok(temp_storage
+        .make_datum(|packer| packer.push_list(datums.iter().copied()))
+        .unwrap_list())
 }
 
 #[sqlfunc(
-    output_type_expr = "input_types[0].scalar_type.unwrap_list_nth_layer_type(input_types.len() - 1).clone().nullable(true)",
-    introduces_nulls = true
+    output_type_expr = "input_types[0].scalar_type.unwrap_list_nth_layer_type(input_types.len() - 1).clone().nullable(true)"
 )]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
@@ -1148,14 +1137,13 @@ pub struct MapBuild {
 }
 
 #[sqlfunc(
-    output_type_expr = "SqlScalarType::Map { value_type: Box::new(self.value_type.clone()), custom_id: None }.nullable(false)",
-    introduces_nulls = false
+    output_type_expr = "SqlScalarType::Map { value_type: Box::new(self.value_type.clone()), custom_id: None }.nullable(false)"
 )]
 fn map_build<'a>(
     &self,
     datums: Variadic<(Option<&str>, Datum<'a>)>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<DatumMap<'a>, EvalError> {
     // Collect into a `BTreeMap` to provide the same semantics as it.
     let map: std::collections::BTreeMap<&str, _> = datums
         .into_iter()
@@ -1169,7 +1157,9 @@ fn map_build<'a>(
         map.iter().flat_map(|(k, v)| [Datum::String(k), *v]),
         temp_storage,
     )?;
-    Ok(temp_storage.make_datum(|packer| packer.push_dict(map)))
+    Ok(temp_storage
+        .make_datum(|packer| packer.push_dict(map))
+        .unwrap_map())
 }
 
 #[derive(
@@ -1304,30 +1294,28 @@ fn pad_leading(
 }
 
 #[sqlfunc(
-    output_type_expr = "SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)",
-    introduces_nulls = true
+    output_type_expr = "SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(true)"
 )]
 fn regexp_match<'a>(
     haystack: &'a str,
     needle: &str,
     flags: OptionalArg<&str>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<Option<Array<'a>>, EvalError> {
     let flags = flags.unwrap_or("");
     let needle = build_regex(needle, flags)?;
-    regexp_match_static(Datum::String(haystack), temp_storage, &needle)
+    regexp_match_static(haystack, temp_storage, &needle)
 }
 
 #[sqlfunc(
-    output_type_expr = "SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)",
-    introduces_nulls = false
+    output_type_expr = "SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)"
 )]
 fn regexp_split_to_array<'a>(
     text: &str,
     regexp_str: &str,
     flags: OptionalArg<&str>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<Array<'a>, EvalError> {
     let flags = flags.unwrap_or("");
     let regexp = build_regex(regexp_str, flags)?;
     regexp_split_to_array_re(text, &regexp, temp_storage)
@@ -1400,7 +1388,6 @@ fn replace(text: &str, from: &str, to: &str, temp_storage: &RowArena) -> Result<
 
 #[sqlfunc(
     output_type_expr = "SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)",
-    introduces_nulls = false,
     propagates_nulls = false
 )]
 fn string_to_array<'a>(
@@ -1408,13 +1395,13 @@ fn string_to_array<'a>(
     delimiter: Option<&'a str>,
     null_string: OptionalArg<Option<&'a str>>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<Array<'a>, EvalError> {
     if string.is_empty() {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer.try_push_array(&[], std::iter::empty::<Datum>())?;
 
-        return Ok(temp_storage.push_unary_row(row));
+        return Ok(temp_storage.push_unary_row(row).unwrap_array());
     }
 
     let Some(delimiter) = delimiter else {
@@ -1442,7 +1429,7 @@ fn string_to_array<'a>(
                 packer.try_push_array(dims, vec![string].into_iter().map(Datum::String))?;
             }
         }
-        Ok(temp_storage.push_unary_row(row))
+        Ok(temp_storage.push_unary_row(row).unwrap_array())
     } else {
         string_to_array_impl(string, delimiter, null_string.flatten(), temp_storage)
     }
@@ -1453,7 +1440,7 @@ fn string_to_array_impl<'a>(
     delimiter: &str,
     null_string: Option<&'a str>,
     temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<Array<'a>, EvalError> {
     // Bound the transient `Vec<&str>` before it is collected. The count walks the same iterator the
     // collect does, so the two agree.
     check_build_fits_budget(
@@ -1501,7 +1488,7 @@ fn string_to_array_impl<'a>(
         packer.try_push_array(&array_dimensions, found.into_iter().map(Datum::String))?;
     }
 
-    Ok(temp_storage.push_unary_row(row))
+    Ok(temp_storage.push_unary_row(row).unwrap_array())
 }
 
 #[sqlfunc]
@@ -1664,10 +1651,7 @@ fn translate(
         .collect())
 }
 
-#[sqlfunc(
-    output_type_expr = "input_types[0].scalar_type.clone().nullable(false)",
-    introduces_nulls = false
-)]
+#[sqlfunc(output_type_expr = "input_types[0].scalar_type.clone().nullable(false)")]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn list_slice_linear<'a>(
@@ -1675,7 +1659,7 @@ fn list_slice_linear<'a>(
     first: (i64, i64),
     remainder: Variadic<(i64, i64)>,
     temp_storage: &'a RowArena,
-) -> Datum<'a> {
+) -> DatumList<'a> {
     let mut start_idx = 0;
     let mut total_length = usize::MAX;
 
@@ -1700,14 +1684,16 @@ fn list_slice_linear<'a>(
 
     let iter = list.iter().skip(start_idx).take(total_length);
 
-    temp_storage.make_datum(|row| {
-        row.push_list_with(|row| {
-            // if iter is empty, will get the appropriate empty list.
-            for d in iter {
-                row.push(d);
-            }
-        });
-    })
+    temp_storage
+        .make_datum(|row| {
+            row.push_list_with(|row| {
+                // if iter is empty, will get the appropriate empty list.
+                for d in iter {
+                    row.push(d);
+                }
+            });
+        })
+        .unwrap_list()
 }
 
 #[sqlfunc(sqlname = "timestamp_bin")]

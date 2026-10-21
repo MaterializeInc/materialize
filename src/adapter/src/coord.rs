@@ -111,8 +111,7 @@ use mz_compute_client::controller::error::{
     CollectionLookupError, CollectionMissing, DataflowCreationError, InstanceMissing,
 };
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::plan::LirRelationExpr;
+use mz_compute_types::dataflows::LirDataflowDescription;
 use mz_controller::clusters::{
     ClusterConfig, ClusterEvent, ClusterStatus, ManagedReplicaLocation, ProcessId, ReplicaLocation,
 };
@@ -4388,7 +4387,7 @@ impl Coordinator {
     /// Panics if dataflow creation fails.
     pub(crate) async fn ship_dataflow(
         &mut self,
-        dataflow: DataflowDescription<LirRelationExpr>,
+        dataflow: LirDataflowDescription,
         instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
     ) {
@@ -4401,7 +4400,7 @@ impl Coordinator {
     /// initialize the read policies for its exported readable objects.
     pub(crate) async fn try_ship_dataflow(
         &mut self,
-        dataflow: DataflowDescription<LirRelationExpr>,
+        dataflow: LirDataflowDescription,
         instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
@@ -4432,7 +4431,7 @@ impl Coordinator {
     /// Like `ship_dataflow`, but also await on builtin table updates.
     pub(crate) async fn ship_dataflow_and_notice_builtin_table_updates(
         &mut self,
-        dataflow: DataflowDescription<LirRelationExpr>,
+        dataflow: LirDataflowDescription,
         instance: ComputeInstanceId,
         notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
         target_replica: Option<ReplicaId>,
@@ -4727,10 +4726,7 @@ fn arrangement_sizes_expired_retractions(
 #[cfg(test)]
 impl Coordinator {
     #[allow(dead_code)]
-    async fn verify_ship_dataflow_no_error(
-        &mut self,
-        dataflow: DataflowDescription<LirRelationExpr>,
-    ) {
+    async fn verify_ship_dataflow_no_error(&mut self, dataflow: LirDataflowDescription) {
         // `ship_dataflow_new` is not allowed to have a `Result` return because this function is
         // called after `catalog_transact`, after which no errors are allowed. This test exists to
         // prevent us from incorrectly teaching those functions how to return errors (which has
@@ -5386,7 +5382,7 @@ pub async fn load_remote_system_parameters(
     storage: &mut Box<dyn OpenableDurableCatalogState>,
     system_parameter_sync_config: Option<SystemParameterSyncConfig>,
     system_parameter_sync_timeout: Duration,
-) -> Result<Option<BTreeMap<String, String>>, AdapterError> {
+) -> Result<RemoteSystemParameters, AdapterError> {
     if let Some(system_parameter_sync_config) = system_parameter_sync_config {
         tracing::info!("parameter sync on boot: start sync");
 
@@ -5431,7 +5427,8 @@ pub async fn load_remote_system_parameters(
         //    6. Reboot environmentd.
         let mut params = SynchronizedParameters::new(SystemVars::default());
         let frontend_sync = async {
-            let frontend = SystemParameterFrontend::from(&system_parameter_sync_config).await?;
+            let frontend =
+                Arc::new(SystemParameterFrontend::from(&system_parameter_sync_config).await?);
             frontend.pull(&mut params);
             let ops = params
                 .modified()
@@ -5444,7 +5441,10 @@ pub async fn load_remote_system_parameters(
                 })
                 .collect();
             tracing::info!("parameter sync on boot: end sync");
-            Ok(Some(ops))
+            Ok(RemoteSystemParameters {
+                params: Some(ops),
+                frontend: Some(frontend),
+            })
         };
         if !storage.has_system_config_synced_once().await? {
             frontend_sync.await
@@ -5454,13 +5454,23 @@ pub async fn load_remote_system_parameters(
                 Err(TimeoutError::Inner(e)) => Err(e),
                 Err(TimeoutError::DeadlineElapsed) => {
                     tracing::info!("parameter sync on boot: sync has timed out");
-                    Ok(None)
+                    Ok(RemoteSystemParameters::default())
                 }
             }
         }
     } else {
-        Ok(None)
+        Ok(RemoteSystemParameters::default())
     }
+}
+
+/// The result of [`load_remote_system_parameters`].
+#[derive(Debug, Default)]
+pub struct RemoteSystemParameters {
+    /// The parameter values that differ from their defaults, or `None` if
+    /// syncing is not configured or timed out.
+    pub params: Option<BTreeMap<String, String>>,
+    /// The frontend the values were pulled from, for the sync loop to reuse.
+    pub frontend: Option<Arc<SystemParameterFrontend>>,
 }
 
 #[derive(Debug)]

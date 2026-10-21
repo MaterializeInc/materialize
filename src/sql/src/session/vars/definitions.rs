@@ -1880,6 +1880,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_jq,
+        desc: "the jq function",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_envelope_debezium_in_subscribe,
         desc: "`ENVELOPE DEBEZIUM (KEY (..))`",
         default: false,
@@ -2153,6 +2159,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_try_cast,
+        desc: "TRY_CAST(<expr> AS <type>) syntax",
+        default: true,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_mz_notices,
         desc: "Populate the contents of `mz_internal.mz_notices`",
         default: true,
@@ -2231,7 +2243,7 @@ feature_flags!(
     {
         name: enable_kafka_sink_headers,
         desc: "Enable the HEADERS option for Kafka sinks",
-        default: false,
+        default: true,
         enable_for_item_parsing: true,
     },
     {

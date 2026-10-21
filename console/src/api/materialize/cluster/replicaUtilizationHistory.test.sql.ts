@@ -556,6 +556,9 @@ describe("console cluster utilization indexed views", () => {
       ('${replica.id}', 0, TIMESTAMP '${ts}', 'offline', 'oom-killed')`);
     await client.query(`INSERT INTO internal_test.mz_console_cluster_utilization_overview_3h VALUES
       ('${replica.id}', '${cluster.id}', 'scale=1,workers=1', '${replica.name}', '${ts}', 0.1, 0.2, 0.3, 0.4, 0.5)`);
+    // An OOM on a replica outside the charted set.
+    await client.query(`INSERT INTO internal_test.mz_cluster_replica_status_history VALUES
+      ('u999', 0, TIMESTAMP '${ts}', 'offline', 'oom-killed')`);
 
     // The ad-hoc path surfaces the OOM in SQL.
     const adHoc = (
@@ -592,6 +595,7 @@ describe("console cluster utilization indexed views", () => {
         }).compile(),
       )
     ).rows;
+    expect(offlineEvents.map((e) => e.replicaId)).toEqual([replica.id]);
     const rows = attachOfflineEvents(
       rebucketUtilizationSamples(
         samples,

@@ -235,7 +235,7 @@ pub const KAFKA_SINK_BATCH_NUM_MESSAGES: Config<usize> = Config::new(
 /// Environment-scoped because it changes the messages the sink produces.
 pub const KAFKA_SINK_EMIT_SINK_ID_HEADER: Config<bool> = Config::new(
     "kafka_sink_emit_sink_id_header",
-    false,
+    true,
     "Whether Kafka sinks attach a `materialize-sink-id` header to every message they produce.",
     ParameterScope::Environment,
 );
@@ -298,6 +298,18 @@ pub const PG_FETCH_SLOT_RESUME_LSN_INTERVAL: Config<Duration> = Config::new(
     "postgres_fetch_slot_resume_lsn_interval",
     Duration::from_millis(500),
     "Interval to poll `confirmed_flush_lsn` to get a resumption lsn.",
+    ParameterScope::Replica,
+);
+
+/// Timeout for `CREATE_REPLICATION_SLOT` on the upstream server. Applied as the session's
+/// `lock_timeout`, which bounds the wait for in-progress upstream transactions to end. This has
+/// no effect when the upsteam is a physical standby.
+pub const PG_SOURCE_REPLICATION_SLOT_CREATION_TIMEOUT: Config<Duration> = Config::new(
+    "pg_source_replication_slot_creation_timeout",
+    Duration::from_secs(60),
+    "Timeout for creating a replication slot on the upstream PostgreSQL server. Applied as \
+     `lock_timeout`, which bounds the wait for in-progress upstream transactions to end. \
+     Has no effect with physical standbys.",
     ParameterScope::Replica,
 );
 
@@ -610,6 +622,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ORE_OVERFLOWING_BEHAVIOR)
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
         .add(&PG_SCHEMA_VALIDATION_INTERVAL)
+        .add(&PG_SOURCE_REPLICATION_SLOT_CREATION_TIMEOUT)
         .add(&PG_SOURCE_VALIDATE_TIMELINE)
         .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
         .add(&SINK_ENSURE_TOPIC_CONFIG)

@@ -25,12 +25,11 @@ use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
     ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse, SubscribeResponse,
 };
-use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::dataflows::RenderDataflowDescription;
 use mz_compute_types::dyncfgs::{
     ENABLE_PEEK_RESPONSE_STASH, ENABLE_PEEK_ROW_ITERATION_LIMIT, PEEK_RESPONSE_STASH_BATCH_BYTES,
     PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_ROW_ITERATION_LIMIT,
 };
-use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_expr::SafeMfpPlan;
 use mz_expr::row::RowCollection;
@@ -48,6 +47,7 @@ use mz_persist_client::read::ReadHandle;
 use mz_persist_types::PersistLocation;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{DatumVec, GlobalId, Row, RowArena, Timestamp};
+use mz_storage_operators::persist::SharedBatches;
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
@@ -214,6 +214,9 @@ pub struct ComputeState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<PersistClientCache>,
+    /// A process-global cache of shared persist batch writers. This allows
+    /// coalescing writes across local workers without explicit exchanges.
+    pub persist_batches: SharedBatches,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// History of commands received by this workers and all its peers.
@@ -306,6 +309,7 @@ impl ComputeState {
     /// Construct a new `ComputeState`.
     pub fn new(
         persist_clients: Arc<PersistClientCache>,
+        persist_batches: SharedBatches,
         txns_ctx: TxnsContext,
         metrics: WorkerMetrics,
         tracing_handle: Arc<TracingHandle>,
@@ -330,6 +334,7 @@ impl ComputeState {
             peek_stash_persist_location: None,
             compute_logger: None,
             persist_clients,
+            persist_batches,
             txns_ctx,
             command_history,
             max_result_size: u64::MAX,
@@ -761,10 +766,7 @@ impl<'a> ActiveComputeState<'a> {
         self.compute_state.apply_worker_config();
     }
 
-    fn handle_create_dataflow(
-        &mut self,
-        dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
-    ) {
+    fn handle_create_dataflow(&mut self, dataflow: RenderDataflowDescription<CollectionMetadata>) {
         let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
         let as_of = dataflow.as_of.clone().unwrap();
 

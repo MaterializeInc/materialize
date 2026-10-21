@@ -9,6 +9,7 @@
 
 import {
   keepPreviousData,
+  QueryFunctionContext,
   useMutation,
   useQuery,
   useQueryClient,
@@ -99,6 +100,7 @@ import {
   LATEST_READING_INTERVAL_MS,
 } from "~/api/materialize/freshness/lagHistory";
 import { assertNoMoreThanOneRow } from "~/api/materialize/MoreThanOneRowError";
+import { DatabaseObject } from "~/api/materialize/objects";
 import { fetchOwners } from "~/api/materialize/owners";
 import { useSubscribe } from "~/api/materialize/useSubscribe";
 import { DataPoint, GraphLineSeries } from "~/components/FreshnessGraph/types";
@@ -552,17 +554,16 @@ export function useLargestMaintainedQueries(
   });
 }
 
-export function useAvailableClusterSizes() {
-  return useSuspenseQuery({
-    queryKey: clusterQueryKeys.availableClusterSizes(),
-    queryFn: ({ queryKey, signal }) => {
-      return fetchAvailableClusterSizes({
-        queryKey,
-        requestOptions: { signal },
-      });
-    },
-  });
-}
+/** Query options for the replica sizes the environment offers. */
+export const availableClusterSizesQuery = () => ({
+  queryKey: clusterQueryKeys.availableClusterSizes(),
+  queryFn: ({ queryKey, signal }: QueryFunctionContext) => {
+    return fetchAvailableClusterSizes({
+      queryKey,
+      requestOptions: { signal },
+    });
+  },
+});
 
 export function useMaxReplicasPerCluster() {
   return useQuery({
@@ -985,8 +986,21 @@ export function useReplicaUtilizationHistory(
 
 export const LINE_MAX_COUNT = 10;
 
+/** Whether an object is one of a cluster's, as the freshness views count them. */
+export function isOnCluster(object: DatabaseObject, clusterId: string) {
+  return (
+    object.clusterId === clusterId &&
+    (isSystemCluster(clusterId) || !isSystemId(object.id))
+  );
+}
+
+/** The objects on a cluster that the freshness views report on. */
+export function useFreshnessObjects(clusterId: string): FreshnessObject[] {
+  return useFreshnessObjectsWhere((object) => isOnCluster(object, clusterId));
+}
+
 /**
- * The objects on a cluster that the freshness views report on, from the
+ * The objects matching `include` that the freshness views report on, from the
  * `useAllObjects` subscribe rather than a query.
  *
  * Subsources and progress collections are excluded to match the rest of the
@@ -994,29 +1008,33 @@ export const LINE_MAX_COUNT = 10;
  * often several subsources, so including them would multiply the line count
  * without adding anything a reader recognises.
  */
-export function useFreshnessObjects(clusterId: string): FreshnessObject[] {
+export function useFreshnessObjectsWhere(
+  include: (object: DatabaseObject) => boolean,
+): FreshnessObject[] {
   const { data: allObjects } = useAllObjects();
 
   // Keyed on content rather than on `allObjects`'s identity. That subscribe
   // emits a new array for any change anywhere in the environment, so keying on
-  // it would hand this cluster a new `objects` array because some other
-  // cluster changed, rebuilding the whole stats and rows chain behind it.
+  // it would hand this scope a new `objects` array because something outside
+  // it changed, rebuilding the whole stats and rows chain behind it.
   //
   // Only the fields read downstream are in the key. A rename has to invalidate
   // it; a column nothing reads must not.
   const objects = allObjects
     .filter(
       (object) =>
-        object.clusterId === clusterId &&
-        (isSystemCluster(clusterId) || !isSystemId(object.id)) &&
+        include(object) &&
         object.sourceType !== "subsource" &&
         object.sourceType !== "progress",
     )
     .map((object): FreshnessObject => ({
       objectId: object.id,
       objectName: object.name,
+      schemaId: object.schemaId,
       schemaName: object.schemaName,
       databaseName: object.databaseName,
+      clusterId: object.clusterId,
+      clusterName: object.clusterName,
       objectType: object.objectType,
     }));
   // JSON keeps a null name apart from an empty one, and no name can break it.
@@ -1034,8 +1052,12 @@ export function useFreshnessObjects(clusterId: string): FreshnessObject[] {
 export interface FreshnessObject {
   objectId: string;
   objectName: string | null;
+  schemaId: string | null;
   schemaName: string | null;
   databaseName: string | null;
+  /** Null for an object that runs on no cluster, such as a table. */
+  clusterId: string | null;
+  clusterName: string | null;
   objectType: string;
 }
 

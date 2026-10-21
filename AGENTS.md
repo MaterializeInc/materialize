@@ -69,6 +69,14 @@ Never regenerate full Cargo.lock. When changing deps:
 
 Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].allow`) and `about.toml` (`accepted`). New dep with new license not already allowed: add SPDX identifier to both.
 
+## Merging
+
+The repository allows only squash merges. Merge commits and rebase merges are
+disabled in the GitHub settings. Every PR lands on `main` as one commit, with
+the PR title as subject and the PR body as message. Intermediate commits on a
+PR branch never reach `main`, so `git bisect` never visits them. Do not ask
+authors to squash on merge or to keep every intermediate commit green.
+
 ## Guidance
 
 * When designing specs or implementing features, preserve the full scope and

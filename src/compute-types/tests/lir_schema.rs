@@ -52,7 +52,7 @@ use mz_compute_types::plan::{
     ArrangementStrategy, ConstantRows, GetPlan, LIR_VERSION, LIR_VERSION_POLICY, LirRelationExpr,
     LirRelationNode,
 };
-use mz_expr::func::{TimezoneTime, ToCharTimestamp};
+use mz_expr::func::{Jq, JqProgram, TimezoneTime, ToCharTimestamp};
 use mz_expr::like_pattern::Matcher;
 use mz_expr::{
     AggregateFunc, BinaryFunc, EvalError, Id, LagLeadType, LetRecLimit, StableEvalError, TableFunc,
@@ -347,6 +347,13 @@ fn run_traces(
     tracer
         .trace_value(samples, &StableEvalError(EvalError::DivisionByZero))
         .map_err(|err| ("StableEvalError sample".to_string(), err))?;
+
+    // Jq compiles its program on deserialization, and the synthesized
+    // default string is not a valid jq program.
+    let jq = Jq(JqProgram::new(".").expect("valid program"));
+    tracer
+        .trace_value(samples, &jq)
+        .map_err(|err| ("Jq sample".to_string(), err))?;
 
     tracer
         .trace_type::<LirRelationExpr>(samples)

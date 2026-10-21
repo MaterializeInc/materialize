@@ -1,0 +1,97 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Score materialize.com/docs with afdocs (https://afdocs.dev), which checks a
+# docs site against the Agent-Friendly Documentation Spec, and post the result
+# to the #docs Slack channel: a one-line summary, with the failing checks and
+# the full report as a reply in its thread.
+#
+# afdocs and its npm dependencies run only in the `score` job, which holds no
+# secrets. The `post` job runs on a fresh runner, holds SLACK_TOKEN, and runs
+# only ci/test/afdocs-report.py, which uses the Python standard library.
+#
+# A dry run prints the message and the thread reply in the "Score the docs"
+# step's log and skips the `post` job. Pull requests that change this workflow,
+# its script or its pinned dependencies always dry-run.
+
+name: Agent-friendly docs report
+
+on:
+  schedule:
+    # Daily at 06:00 UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print the report in the log instead of posting it to #docs
+        type: boolean
+        default: true
+  pull_request:
+    paths:
+      - .github/workflows/afdocs_report.yml
+      - ci/test/afdocs-report.py
+      - ci/test/afdocs/**
+
+permissions:
+  contents: read
+
+jobs:
+  score:
+    name: Score the docs
+    if: github.repository == 'MaterializeInc/materialize'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Install afdocs from its lockfile
+        run: npm ci --ignore-scripts --prefix ci/test/afdocs
+
+      - name: Score the docs
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: ci/test/afdocs-report.py score https://materialize.com/docs --out afdocs-report --run-url "$RUN_URL"
+
+      - name: Upload the report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: afdocs-report
+          path: afdocs-report/
+          retention-days: 7
+
+  post:
+    name: Post to #docs
+    needs: score
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download the report
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: afdocs-report
+          path: afdocs-report
+
+      - name: Post to #docs
+        env:
+          SLACK_TOKEN: ${{ secrets.SLACK_TOKEN }}
+        run: ci/test/afdocs-report.py post afdocs-report --slack-channel docs

@@ -579,6 +579,33 @@ fn unary_samples() -> Vec<Sample<UnaryFunc>> {
             record_type(),
         ),
         unary(RecordGet(1), record_type()),
+        // The null-fallback wrapper around a cast. Its properties derive from
+        // the wrapped function, so the samples cover the branches that differ:
+        // a fallible parse, a narrowing cast with an inverse (which the wrapper
+        // must not inherit), a nullable output the wrapper only forces nullable,
+        // and a container cast whose element cast lives inside the wrapper.
+        unary(
+            UnaryFunc::try_cast_if_fallible(CastStringToInt32),
+            SqlScalarType::String,
+        ),
+        unary(
+            UnaryFunc::try_cast_if_fallible(CastInt64ToInt32),
+            SqlScalarType::Int64,
+        )
+        .labeled("narrowing"),
+        unary(
+            UnaryFunc::try_cast_if_fallible(CastJsonbToNumeric(None)),
+            SqlScalarType::Jsonb,
+        )
+        .labeled("jsonb"),
+        unary(
+            UnaryFunc::try_cast_if_fallible(CastList1ToList2 {
+                return_ty: list_type(SqlScalarType::Int32),
+                cast_expr: column(0),
+            }),
+            list_type(SqlScalarType::Int64),
+        )
+        .labeled("list"),
         unary(
             CastStringToArray {
                 return_ty: array_type(SqlScalarType::Int32),
@@ -668,6 +695,10 @@ fn unary_samples() -> Vec<Sample<UnaryFunc>> {
         ),
         unary(IsRegexpMatch(regex()), SqlScalarType::String),
         unary(RegexpMatch(regex()), SqlScalarType::String),
+        unary(
+            Jq(JqProgram::new(".a").expect("valid program")),
+            SqlScalarType::Jsonb,
+        ),
         unary(RegexpSplitToArray(regex()), SqlScalarType::String),
         // Date and time functions carrying units, time zones and formats.
         unary(

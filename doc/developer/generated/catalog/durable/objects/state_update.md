@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/durable/objects/state_update.rs
-revision: a60edac7f1
+revision: 70b83779a4
 ---
 
 # catalog::durable::objects::state_update

@@ -84,8 +84,11 @@ const objectsById = new Map<string, FreshnessObject>(
     {
       objectId: key,
       objectName: key,
+      schemaId: "u3",
       schemaName: "public",
       databaseName: "materialize",
+      clusterId: "u1",
+      clusterName: "quickstart",
       objectType: key === "spiky" ? "index" : "materialized-view",
     },
   ]),
@@ -269,7 +272,11 @@ describe("buildFreshnessRows", () => {
     const spiky = rowsFor("peak", 2_000).find((r) => r.key === "spiky");
     expect(spiky).toMatchObject({
       objectName: "spiky",
-      namespace: "materialize.public",
+      databaseName: "materialize",
+      schemaId: "u3",
+      schemaName: "public",
+      clusterId: "u1",
+      clusterName: "quickstart",
       objectType: "index",
       hydratedReplicas: 2,
       totalReplicas: 2,

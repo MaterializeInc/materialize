@@ -21,7 +21,6 @@ use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_auth::password::Password;
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
-use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::ClusterId;
 use mz_expr::RowSetFinishing;
 use mz_ore::collections::CollectionExt;
@@ -297,7 +296,7 @@ pub enum Command {
     },
 
     ExecuteSubscribe {
-        df_desc: DataflowDescription<mz_compute_types::plan::LirRelationExpr>,
+        df_desc: mz_compute_types::dataflows::LirDataflowDescription,
         dependency_ids: BTreeSet<GlobalId>,
         cluster_id: ComputeInstanceId,
         replica_id: Option<ReplicaId>,
@@ -322,7 +321,7 @@ pub enum Command {
     },
 
     ExecuteCopyTo {
-        df_desc: Box<DataflowDescription<mz_compute_types::plan::LirRelationExpr>>,
+        df_desc: Box<mz_compute_types::dataflows::LirDataflowDescription>,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
         source_ids: BTreeSet<GlobalId>,

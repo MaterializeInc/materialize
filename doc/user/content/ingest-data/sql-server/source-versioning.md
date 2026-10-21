@@ -10,7 +10,6 @@ menu:
 
 ---
 
-{{< public-preview />}}
 {{< note >}}
 Changing column types is currently unsupported.
 {{< /note >}}

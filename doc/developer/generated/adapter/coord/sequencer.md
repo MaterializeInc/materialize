@@ -1,10 +1,10 @@
 ---
 source: src/adapter/src/coord/sequencer.rs
-revision: dd5350d2ae
+revision: d9a2c5dc40
 ---
 
 # adapter::coord::sequencer
 
-Top-level sequencer module: implements `Coordinator::sequence_plan`, which matches on each `Plan` variant and dispatches to the appropriate `sequence_*` method.
+Top-level sequencer module: implements `Coordinator::sequence_plan`, which matches on each `Plan` variant and dispatches to the appropriate `sequence_*` method. `Plan::Insert` and `Plan::ReadThenWrite` are handled entirely by the frontend OCC path; `sequence_plan` returns `AdapterError::Internal` if either reaches the coordinator. The `sequence_insert_constant` helper (called from the sequencer when an INSERT folds to a constant before the OCC path) includes a test-only failpoint `insert_after_pack_before_commit` that parks the commit after packing rows.
 The module also contains shared utilities used across statement types: `statistics_oracle` (builds a cardinality-estimate oracle for query optimization), `eval_copy_to_uri` (validates the COPY TO URI, accepting `s3://` and `gs://` schemes), `check_log_reads` (validates introspection-source reads and enforces replica targeting on multi-replica clusters), `emit_optimizer_notices` (forwards optimizer notices to the session), `explain_pushdown_future_inner` (computes filter-pushdown statistics for EXPLAIN FILTER PUSHDOWN), `explain_plan_inner` (generates EXPLAIN PLAN output), and the `return_if_err!` macro (short-circuits on error, sending a response to the client).
 The `inner` sub-module holds most per-statement implementations; this file ties them together and handles generic concerns like RBAC checks and transaction validation.

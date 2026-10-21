@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/frontend_read_then_write.rs
-revision: d1834c1394
+revision: d9a2c5dc40
 ---
 
 # adapter::frontend_read_then_write
@@ -43,7 +43,8 @@ A subscribe channel that closes on its own exits via `OccOutcome::Blind`, return
 - `validate_read_then_write`: enforces the `mz_now()` ban, the dependency cap (with the policy supplied by the caller's `RtwCaller`), timeline compatibility (EpochMilliseconds only), cluster liveness, and replica pin; returns a `ValidationResult` carrying cluster, replica, timeline, and table descriptor.
 - `optimize_mir_read_then_write`: applies the mutation to the MIR selection via `apply_mutation_to_mir`, prepares unmaterializable functions one-shot, and runs the subscribe optimizer to produce a `GlobalMirPlan`.
 - `apply_mutation_to_mir`: DELETE negates the expression; UPDATE wraps it in a `Let` binding and unions negated old rows with mapped new rows; INSERT passes through unchanged.
-- `build_success_response`: builds the `ExecuteResponse` before writing, enforcing result-size caps row-by-row for RETURNING expressions to bound temporary allocation.
+- `build_success_response`: builds the `ExecuteResponse` before writing, enforcing result-size caps row-by-row for RETURNING expressions to bound temporary allocation, and caps the row-set-finishing duration histogram.
 - `submit_blind_write`: sends `Command::AttemptWrite` with `WriteAttemptKind::Session { write_ts: None }`, letting group commit choose the timestamp (session callers only; background callers always supply a timestamp).
 - `classify_write_result`: maps `WriteResult` to `WriteOutcome`, translating `TargetChanged` to `ConcurrentDependencyMutation` and `TimestampTooFarAhead` to `ReadThenWriteTimestampTooFarAhead` for consistent client-visible error codes.
+The `build_no_rows_response` helper currently returns a plain row count for zero-row `INSERT ... RETURNING` statements rather than an empty result set; a `TODO` records the intent to match PostgreSQL's behavior here.
 The top-level row-set finishing (`plan.finishing`) must be trivial before the OCC path runs; a non-trivial finishing (LIMIT, OFFSET, projection, ordering) would silently change the written rows, so `soft_panic_or_log!` fires and an `AdapterError::Internal` is returned instead.

@@ -122,7 +122,9 @@ use std::sync::Arc;
 
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
-use mz_compute_types::dyncfgs::MV_SINK_ADVANCE_PERSIST_FRONTIERS;
+use mz_compute_types::dyncfgs::{
+    MV_SINK_ADVANCE_PERSIST_FRONTIERS, MV_SINK_SHARED_BATCH_MAX_BYTES,
+};
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
@@ -134,6 +136,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_operators::persist::{SharedBatchId, SharedBatches};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::SourceData;
@@ -158,6 +161,7 @@ use crate::render::sinks::SinkRender;
 use crate::sink::correction::{ChannelLogging, Correction, CorrectionLogger};
 use crate::sink::materialized_view_v2;
 use crate::sink::refresh::apply_refresh;
+use crate::sink::shared_batch::SharedBatchWriter;
 
 impl<'scope> SinkRender<'scope> for MaterializedViewSinkConnection<CollectionMetadata> {
     fn render_sink(
@@ -267,6 +271,7 @@ where
 
     let persist_api = PersistApi {
         persist_clients: Arc::clone(&compute_state.persist_clients),
+        persist_batches: compute_state.persist_batches.clone(),
         collection: target.clone(),
         shard_name: sink_id.to_string(),
         purpose: format!("MV sink {sink_id}"),
@@ -351,6 +356,7 @@ pub(super) fn advance(
 #[derive(Clone)]
 pub(super) struct PersistApi {
     pub(super) persist_clients: Arc<PersistClientCache>,
+    pub(super) persist_batches: SharedBatches,
     pub(super) collection: CollectionMetadata,
     pub(super) shard_name: String,
     pub(super) purpose: String,
@@ -444,6 +450,8 @@ pub(super) struct BatchDescription {
     pub(super) lower: Antichain<Timestamp>,
     pub(super) upper: Antichain<Timestamp>,
     pub(super) append_worker: usize,
+    /// Identifies the shared batch all workers building this description contribute to.
+    pub(super) shared_id: SharedBatchId,
 }
 
 impl BatchDescription {
@@ -457,6 +465,7 @@ impl BatchDescription {
             lower,
             upper,
             append_worker,
+            shared_id: SharedBatchId::new(),
         }
     }
 }
@@ -465,10 +474,11 @@ impl std::fmt::Debug for BatchDescription {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "({:?}, {:?})@{}",
+            "({:?}, {:?})@{} {:?}",
             self.lower.elements(),
             self.upper.elements(),
             self.append_worker,
+            self.shared_id,
         )
     }
 }
@@ -835,12 +845,20 @@ mod write {
             drop(capabilities);
 
             let writer = persist_api.open_writer().await;
+            let shared_batch_writer = SharedBatchWriter::new(
+                &persist_api,
+                &writer,
+                MV_SINK_SHARED_BATCH_MAX_BYTES.handle(&worker_config),
+            )
+            .await;
+            // The write operator needs the writer only for its schema id.
+            drop(writer);
             let sink_metrics = persist_api.open_metrics().await;
             let read_only = *read_only_rx.borrow_and_update();
             let mut state = State::new(
                 sink_id,
                 worker_id,
-                writer,
+                shared_batch_writer,
                 sink_metrics,
                 channel_logging,
                 as_of,
@@ -931,8 +949,10 @@ mod write {
                     else => return,
                 };
 
-                if let Some((index, batch, cap)) = maybe_batch {
-                    batches_output.give(&cap, (index, batch));
+                if let Some((desc, batches, cap)) = maybe_batch {
+                    for batch in batches {
+                        batches_output.give(&cap, (desc.clone(), batch));
+                    }
                 }
             }
         });
@@ -944,7 +964,8 @@ mod write {
     struct State {
         sink_id: GlobalId,
         worker_id: usize,
-        persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+        /// Coalesces batches across the workers in this process.
+        shared_batch_writer: SharedBatchWriter,
         /// Contains `desired - persist`, reflecting the updates we would like to commit to
         /// `persist` in order to "correct" it to track `desired`. This collection is only modified
         /// by updates received from either the `desired` or `persist` inputs.
@@ -980,7 +1001,7 @@ mod write {
         fn new(
             sink_id: GlobalId,
             worker_id: usize,
-            persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+            shared_batch_writer: SharedBatchWriter,
             metrics: SinkMetrics,
             logging: Option<ChannelLogging>,
             as_of: Antichain<Timestamp>,
@@ -996,7 +1017,7 @@ mod write {
             let mut state = Self {
                 sink_id,
                 worker_id,
-                persist_writer,
+                shared_batch_writer,
                 corrections: OkErr::new(
                     Correction::new(
                         metrics.clone(),
@@ -1143,7 +1164,7 @@ mod write {
 
         async fn maybe_write_batch(
             &mut self,
-        ) -> Option<(BatchDescription, ProtoBatch, Capability<Timestamp>)> {
+        ) -> Option<(BatchDescription, Vec<ProtoBatch>, Capability<Timestamp>)> {
             let (desc, _cap) = self.batch_description.as_ref()?;
 
             // We can write a new batch if we have seen all `persist` updates before `lower` and
@@ -1173,15 +1194,18 @@ mod write {
                 return None;
             }
 
-            let batch = self
-                .persist_writer
-                .batch(updates, desc.lower.clone(), desc.upper.clone())
-                .await
-                .expect("valid usage")
-                .into_transmittable_batch();
+            let mut write = self.shared_batch_writer.start(&desc);
+            for (kv, t, d) in updates {
+                write.push(&kv, t, d).await;
+            }
+            let batches = write.finish().await;
+            if batches.is_empty() {
+                self.trace("contributed to a shared batch");
+                return None;
+            }
 
-            self.trace("wrote a batch");
-            Some((desc, batch, cap))
+            self.trace(format!("wrote {} batches", batches.len()));
+            Some((desc, batches, cap))
         }
     }
 }

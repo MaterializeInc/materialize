@@ -65,4 +65,4 @@ Name                                        | Default value             |  Descr
 `statement_timeout`                         | `10s`                     | The maximum allowed duration of the read portion of write operations; i.e., the `SELECT` portion of `INSERT INTO ... (SELECT ...)`; the `WHERE` portion of `UPDATE ... WHERE ...` and `DELETE FROM ... WHERE ...`. If this value is specified without units, it is taken as milliseconds (`ms`). | Yes
 `timezone`                                  | `UTC`                     | The time zone for displaying and interpreting timestamps. The only supported value is `UTC`.                                                                           | Yes
 
-[Contact support]: /support
+[Contact support]: https://materialize.com/support/

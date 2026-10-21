@@ -2703,6 +2703,60 @@ async fn test_leader_promotion_mixed_code_version() {
     client_this.simple_query("SELECT 1").await.unwrap();
 }
 
+#[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+#[cfg_attr(miri, ignore)]
+#[allow(clippy::disallowed_methods)]
+async fn test_caught_up_reads_do_not_block_coordinator() {
+    let tmpdir = TempDir::new().unwrap();
+    let harness = test_util::TestHarness::default()
+        .unsafe_mode()
+        .data_directory(tmpdir.path())
+        .with_deploy_generation(1);
+    let _leader = harness.clone().start().await;
+
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let entered_tx = Mutex::new(Some(entered_tx));
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel::<()>();
+    let resume_rx = Mutex::new(resume_rx);
+    fail::cfg_callback("0dt_caught_up_read", move || {
+        let tx = entered_tx.lock().unwrap().take();
+        if let Some(tx) = tx {
+            // Leave runtime workers available while the catch-up read is held.
+            tokio::task::block_in_place(|| {
+                let _ = tx.send(());
+                let _ = resume_rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(120));
+            });
+        }
+    })
+    .unwrap();
+    let follower = harness.with_deploy_generation(2).start().await;
+    tokio::time::timeout(Duration::from_secs(60), entered_rx)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let query = tokio::time::timeout(Duration::from_secs(10), async {
+        let client = follower.connect().await.unwrap();
+        client
+            .query_one("SELECT 1", &[])
+            .await
+            .unwrap()
+            .get::<_, i32>(0)
+    })
+    .await;
+    // Release the read before asserting, including on a timeout, so teardown
+    // never leaves a runtime worker parked at the rendezvous.
+    fail::remove("0dt_caught_up_read");
+    let _ = resume_tx.send(());
+    assert_eq!(
+        query.expect("coordinator blocked behind the caught-up read"),
+        1
+    );
+}
+
 /// The migrated builtin MVs that the 0dt hydration tests read.
 ///
 /// `mz_clusters` is the interesting one: it joins the `mz_cluster_replica_size_internal` builtin
@@ -5415,6 +5469,54 @@ fn test_mcp_agent_disabled() {
         .with_mcp_routes(true, false)
         .with_system_parameter_default("enable_mcp_agent".to_string(), "false".to_string());
     run_mcp_datadriven("tests/testdata/mcp/agent_disabled", harness);
+}
+
+/// A browser on an allowed origin may send the MCP transport headers.
+#[mz_ore::test]
+fn test_mcp_cors_allows_transport_headers() {
+    let origin = "https://browser-client.example";
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, true)
+        .with_cors_allowed_origin(origin)
+        .start_blocking();
+    let headers = ["mcp-protocol-version", "mcp-method", "mcp-name"];
+    for route in ["agent", "developer"] {
+        let response = Client::new()
+            .request(
+                reqwest::Method::OPTIONS,
+                format!("http://{}/api/mcp/{route}", server.http_local_addr()),
+            )
+            .header(ORIGIN, origin)
+            .header("access-control-request-method", "POST")
+            .header("access-control-request-headers", headers.join(","))
+            .send()
+            .unwrap();
+        let allowed = response
+            .headers()
+            .get("access-control-allow-headers")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        for header in headers {
+            assert!(
+                allowed.contains(header),
+                "{route} preflight does not allow {header}: {allowed}"
+            );
+        }
+    }
+}
+
+/// Tests the MCP agent endpoint on protocol 2026-07-28.
+#[mz_ore::test]
+fn test_mcp_agent_protocol_2026_07_28() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default(
+            "enable_mcp_protocol_2026_07_28".to_string(),
+            "true".to_string(),
+        );
+    run_mcp_datadriven("tests/testdata/mcp/agent_2026_07_28", harness);
 }
 
 /// Tests the 2026-07-28 request headers on the MCP developer endpoint.

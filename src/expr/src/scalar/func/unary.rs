@@ -21,6 +21,7 @@ use crate::Eval;
 use crate::EvalError;
 use crate::scalar::func::RedactSql;
 use crate::scalar::func::impls::*;
+use crate::scalar::func::jq::Jq;
 
 /// A description of an SQL unary function that has the ability to lazy evaluate its arguments
 // This trait will eventually be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum
@@ -111,7 +112,7 @@ pub trait EagerUnaryFunc {
     type Input<'a>: InputDatumType<'a, EvalError>;
     type Output<'a>: OutputDatumType<'a, EvalError>;
 
-    fn call<'a>(&self, input: Self::Input<'a>) -> Self::Output<'a>;
+    fn call<'a>(&self, input: Self::Input<'a>, temp_storage: &'a RowArena) -> Self::Output<'a>;
 
     /// The output SqlColumnType of this function
     fn output_sql_type(&self, input_type: SqlColumnType) -> SqlColumnType;
@@ -165,7 +166,7 @@ impl<T: EagerUnaryFunc> LazyUnaryFunc for T {
     ) -> Result<Datum<'a>, EvalError> {
         match T::Input::<'_>::try_from_result(a.eval(datums, temp_storage)) {
             // If we can convert to the input type then we call the function
-            Ok(input) => self.call(input).into_result(temp_storage),
+            Ok(input) => self.call(input, temp_storage).into_result(temp_storage),
             // If we can't and we got a non-null datum something went wrong in the planner
             Err(Ok(datum)) if !datum.is_null() => {
                 Err(EvalError::Internal("invalid input type".into()))
@@ -422,6 +423,7 @@ derive_unary!(
     CastMapToString,
     CastInt2VectorToString,
     CastRangeToString,
+    TryCast(E),
     CeilFloat32,
     CeilFloat64,
     CeilNumeric,
@@ -439,6 +441,7 @@ derive_unary!(
     IsLikeMatch,
     IsRegexpMatch,
     RegexpMatch,
+    Jq,
     ExtractInterval,
     ExtractTime,
     ExtractTimestamp,
@@ -572,11 +575,12 @@ mod test {
 
     #[mz_ore::test]
     fn test_could_error() {
-        let funcs: [UnaryFunc; 4] = [
+        let funcs: [UnaryFunc; 5] = [
             UnaryFunc::IsNull(IsNull),
             UnaryFunc::CastVarCharToString(CastVarCharToString),
             UnaryFunc::Not(Not),
             UnaryFunc::IsLikeMatch(IsLikeMatch(like_pattern::compile("%hi%", false).unwrap())),
+            UnaryFunc::try_cast_if_fallible(CastStringToInt32),
         ];
         for func in funcs {
             assert!(!func.could_error())

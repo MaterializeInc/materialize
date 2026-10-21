@@ -1,11 +1,11 @@
 ---
 source: src/adapter/src/peek_client.rs
-revision: a1bcaebfe6
+revision: d9a2c5dc40
 ---
 
 # adapter::peek_client
 
-Provides `PeekClient`, which bundles a `CoordinatorClient` handle (either a session `Client` or a background sender) with a session-side catalog snapshot cache (`catalog_cache: Weak<Catalog>`), lazily-populated direct channels to each compute instance (`compute_instances`), lazily-populated per-timeline timestamp oracles (`oracles`), a `PersistClient`, storage-collection frontier access, a transient ID generator, optimizer metrics, and a `StatementLoggingFrontend`.
+Provides `PeekClient` (which implements `Clone`), which bundles a `CoordinatorClient` handle (either a session `Client` or a background sender) with a session-side catalog snapshot cache (`catalog_cache: Weak<Catalog>`), lazily-populated direct channels to each compute instance (`compute_instances`), lazily-populated per-timeline timestamp oracles (`oracles`), a `PersistClient`, storage-collection frontier access, a transient ID generator, optimizer metrics, and a `StatementLoggingFrontend`.
 This allows the frontend peek sequencing path (and other callers) to issue peeks directly to compute instances and check persist fast-path conditions without serialising through the coordinator's main event loop.
 `CoordinatorClient` is an enum with two variants: `Session(Client)` for session-bound clients (panics if the coordinator drops a response, since the coordinator's loop only exits once every client is dropped); and `Background { tx, metrics }` for coordinator-owned background work (logs a debug message and drops the command if the coordinator is gone, because losing the race with shutdown is normal for background tasks). `CoordinatorClient::send` dispatches a `Command`; `try_send` returns a bool; `metrics` vends the metrics handle regardless of variant. `call_coordinator` returns `Result<T, AdapterError>` so that a dropped response channel propagates as an error rather than panicking.
 `PeekClient::catalog_snapshot` serves the catalog from the session-side `catalog_cache` when the catalog's transient revision is unchanged (verified via `Catalog::transient_revision_is_current`), avoiding a coordinator round-trip on cache hits. On a miss it sends `Command::CatalogSnapshot`, re-populates `catalog_cache` with a `Weak` downgrade of the returned `Arc`, and records the round-trip latency in `mz_catalog_snapshot_seconds` (labeled by `context`). Both hits and misses increment `mz_catalog_snapshot_cache` (labeled `context` and `result`). The `catalog_cache` holds a `Weak` so that an idle session does not prevent an old catalog version from being freed.

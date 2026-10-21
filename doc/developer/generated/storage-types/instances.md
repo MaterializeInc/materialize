@@ -1,10 +1,9 @@
 ---
 source: src/storage-types/src/instances.rs
-revision: d434a9e3de
+revision: bbb56d46f3
 ---
 
 # storage-types::instances
 
-Defines `StorageInstanceId`, the identifier for a storage instance, with `System` and `User` variants.
-IDs are restricted to 48 bits so they can be packed into `GlobalId::IntrospectionSourceIndex`.
-Implements `Display` (`s<id>` / `u<id>`) and `FromStr` for serialization.
+Re-exports `StorageInstanceId` from `mz_cluster_client::instances`.
+The type definition and all associated logic live in `mz-cluster-client`.

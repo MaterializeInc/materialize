@@ -30,6 +30,7 @@ import React from "react";
 import { GroupBase, mergeStyles, StylesConfig } from "react-select";
 
 import { type FronteggThemeOptions } from "~/external-library-wrappers/frontegg";
+import { SUPPORT_URL } from "~/externalUrls";
 import materializeLogo from "~/img/materialize-logo-white.svg";
 import { SELECT_MENU_Z_INDEX } from "~/layouts/zIndex";
 import colors, { gradients } from "~/theme/colors";
@@ -309,7 +310,7 @@ const buildFronteggTheme: ({
         <a
           target="_blank"
           rel="noreferrer"
-          href="https://materialize.com/support/"
+          href={SUPPORT_URL}
           style={{ color: colors.purple[400], fontWeight: "600" }}
         >
           Contact support

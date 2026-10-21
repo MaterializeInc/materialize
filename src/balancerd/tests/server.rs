@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::pin::pin;
+use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -45,11 +45,12 @@ use mz_pgwire_common::{
     MAX_STARTUP_FRAME_SIZE, REJECT_ENCRYPTION, VERSION_3,
 };
 use mz_server_core::TlsCertConfig;
-use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
+use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
+use tokio_openssl::SslStream;
 use uuid::Uuid;
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
@@ -261,6 +262,21 @@ async fn test_balancer() {
                 &tokio_postgres::error::SqlState::INVALID_PASSWORD
             );
             assert_eq!(db_err.message(), "invalid password");
+
+            // A query sent in the same write as the password reaches environmentd, although
+            // balancerd reads the password itself.
+            let rows = tokio::time::timeout(
+                Duration::from_secs(30),
+                query_pipelined_behind_password(
+                    balancer_pgwire_listen,
+                    frontegg_user,
+                    &frontegg_password,
+                    "SELECT 3",
+                ),
+            )
+            .await
+            .expect("the pipelined query was never answered");
+            assert_eq!(rows, vec!["3".to_string()]);
         }
 
         // Assert cancellation is propagated.
@@ -415,6 +431,86 @@ async fn test_balancer() {
             .await
             .unwrap();
     }
+}
+
+/// Connects over TLS without SNI, so that balancerd asks for a password, and sends the
+/// password and a simple query in a single write. Returns the first column of each row.
+async fn query_pipelined_behind_password(
+    addr: SocketAddr,
+    user: &str,
+    password: &str,
+    query: &str,
+) -> Vec<String> {
+    let mut tcp = TcpStream::connect(addr).await.unwrap();
+    let mut buf = BytesMut::new();
+    FrontendStartupMessage::SslRequest.encode(&mut buf).unwrap();
+    tcp.write_all(&buf).await.unwrap();
+    let mut answer = [0u8; 1];
+    tcp.read_exact(&mut answer).await.unwrap();
+    assert_eq!(answer, [ACCEPT_SSL_ENCRYPTION]);
+
+    let mut connector = SslConnector::builder(SslMethod::tls()).unwrap();
+    connector.set_verify(SslVerifyMode::NONE);
+    let mut config = connector.build().configure().unwrap();
+    config.set_use_server_name_indication(false);
+    config.set_verify_hostname(false);
+    let ssl = config.into_ssl("localhost").unwrap();
+    let mut stream = SslStream::new(ssl, tcp).unwrap();
+    Pin::new(&mut stream).connect().await.unwrap();
+
+    buf.clear();
+    FrontendStartupMessage::Startup {
+        version: VERSION_3,
+        params: BTreeMap::from([("user".to_string(), user.to_string())]),
+    }
+    .encode(&mut buf)
+    .unwrap();
+    stream.write_all(&buf).await.unwrap();
+    let (tag, body) = read_backend_message(&mut stream).await;
+    assert_eq!(
+        (tag, &body[..]),
+        (b'R', &3i32.to_be_bytes()[..]),
+        "expected a password request"
+    );
+
+    let mut pipelined = Vec::new();
+    for (tag, payload) in [(b'p', password), (b'Q', query)] {
+        pipelined.push(tag);
+        let len = i32::try_from(4 + payload.len() + 1).unwrap();
+        pipelined.extend_from_slice(&len.to_be_bytes());
+        pipelined.extend_from_slice(payload.as_bytes());
+        pipelined.push(0);
+    }
+    stream.write_all(&pipelined).await.unwrap();
+
+    // The first ReadyForQuery ends the startup sequence and the second ends the query.
+    let mut rows = Vec::new();
+    let mut ready_for_query = 0;
+    while ready_for_query < 2 {
+        let (tag, body) = read_backend_message(&mut stream).await;
+        match tag {
+            b'E' => panic!("error response: {}", String::from_utf8_lossy(&body)),
+            b'Z' => ready_for_query += 1,
+            b'D' => {
+                // Column count, then the first column's length and value.
+                let len =
+                    usize::try_from(i32::from_be_bytes(body[2..6].try_into().unwrap())).unwrap();
+                rows.push(String::from_utf8(body[6..6 + len].to_vec()).unwrap());
+            }
+            _ => {}
+        }
+    }
+    rows
+}
+
+/// Reads one backend message, returning its tag and body.
+async fn read_backend_message<S: AsyncReadExt + Unpin>(stream: &mut S) -> (u8, Vec<u8>) {
+    let mut header = [0u8; 5];
+    stream.read_exact(&mut header).await.unwrap();
+    let len = i32::from_be_bytes(header[1..].try_into().unwrap());
+    let mut body = vec![0u8; usize::try_from(len - 4).unwrap()];
+    stream.read_exact(&mut body).await.unwrap();
+    (header[0], body)
 }
 
 /// Starts a balancerd whose pgwire listener is reachable but whose upstream is

@@ -257,7 +257,7 @@ A reference that names a metric the build no longer exports is worse than no ref
 `doc/user/data/metrics.yml` is the generated catalog of `metric!` invocations in the Rust tree. It is checked in, so it is tagged along with each release, and the working tree's copy describes `main`, which is ahead of whatever you are verifying. Reading that copy during a sign-off answers a question you did not ask. Read the catalog at the two release tags instead and diff them:
 
 ```
-scripts/catalog-diff.sh v26.38.0 v26.39.0-rc.3
+bin/pyactivate .agents/skills/mz-release-signoff/scripts/catalog_diff.py v26.38.0 v26.39.0-rc.3
 ```
 
 That turns "is this empty panel a regression or a rename?" into a lookup. A name in the removed list explains an after-window that went empty, and it is a documentation fix rather than a finding. A name in the added list explains an empty before-window, and comparing across the boundary on it is meaningless.

@@ -18,11 +18,28 @@ import {
   fetchLatestLag,
   LATEST_READING_INTERVAL_MS,
 } from "~/api/materialize/freshness/lagHistory";
+import { DatabaseObject } from "~/api/materialize/objects";
+import { isOnCluster } from "~/platform/clusters/queries";
 import { sumPostgresIntervalMs } from "~/util";
+
+import { FreshnessScope, OBJECT_TYPE_FILTERS } from "./constants";
 
 export interface HydrationCounts {
   hydratedReplicas: number;
   totalReplicas: number;
+}
+
+const SCHEMA_OBJECT_TYPES = OBJECT_TYPE_FILTERS.schema.map(
+  (filter) => filter.value,
+);
+
+/** Whether an object belongs to the selected cluster or schema. */
+export function inFreshnessScope(scope: FreshnessScope, scopeId: string) {
+  return (object: DatabaseObject) =>
+    scope === "cluster"
+      ? isOnCluster(object, scopeId)
+      : object.schemaId === scopeId &&
+        SCHEMA_OBJECT_TYPES.includes(object.objectType);
 }
 
 export const freshnessQueryKeys = {

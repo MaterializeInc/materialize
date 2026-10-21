@@ -7,22 +7,19 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt;
-
 use mz_expr_derive::sqlfunc;
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::{Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::{Datum, Row, RowPacker, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
-use crate::scalar::func::EagerUnaryFunc;
 use crate::scalar::func::impls::numeric::*;
 
 #[sqlfunc(
     sqlname = "jsonb_to_text",
     preserves_uniqueness = false,
-    inverse = to_unary!(super::CastStringToJsonb)
+    inverse = super::CastStringToJsonb
 )]
 pub fn cast_jsonb_to_string<'a>(a: JsonbRef<'a>) -> String {
     let mut buf = String::new();
@@ -98,40 +95,28 @@ fn cast_jsonb_to_float64<'a>(a: JsonbRef<'a>) -> Result<f64, EvalError> {
 )]
 pub struct CastJsonbToNumeric(pub Option<NumericMaxScale>);
 
-impl EagerUnaryFunc for CastJsonbToNumeric {
-    type Input<'a> = JsonbRef<'a>;
-    type Output<'a> = Result<Numeric, EvalError>;
-
-    fn call<'a>(&self, a: Self::Input<'a>) -> Self::Output<'a> {
-        match a.into_datum() {
-            Datum::Numeric(mut num) => match self.0 {
-                None => Ok(num.into_inner()),
-                Some(scale) => {
-                    if numeric::rescale(&mut num.0, scale.into_u8()).is_err() {
-                        return Err(EvalError::NumericFieldOverflow);
-                    };
-                    Ok(num.into_inner())
-                }
-            },
-            datum => Err(EvalError::InvalidJsonbCast {
-                from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
-                to: "numeric".into(),
-            }),
-        }
-    }
-
-    fn output_sql_type(&self, input: SqlColumnType) -> SqlColumnType {
-        SqlScalarType::Numeric { max_scale: self.0 }.nullable(input.nullable)
-    }
-
-    fn is_monotone(&self) -> bool {
-        true
-    }
-}
-
-impl fmt::Display for CastJsonbToNumeric {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("jsonb_to_numeric")
+#[sqlfunc(
+    CastJsonbToNumeric,
+    sqlname = "jsonb_to_numeric",
+    is_monotone = true,
+    output_type_expr = SqlScalarType::Numeric { max_scale: self.0 }
+        .nullable(input_type.nullable)
+)]
+fn cast_jsonb_to_numeric<'a>(&self, a: JsonbRef<'a>) -> Result<Numeric, EvalError> {
+    match a.into_datum() {
+        Datum::Numeric(mut num) => match self.0 {
+            None => Ok(num.into_inner()),
+            Some(scale) => {
+                if numeric::rescale(&mut num.0, scale.into_u8()).is_err() {
+                    return Err(EvalError::NumericFieldOverflow);
+                };
+                Ok(num.into_inner())
+            }
+        },
+        datum => Err(EvalError::InvalidJsonbCast {
+            from: jsonb_typeof(JsonbRef::from_datum(datum)).into(),
+            to: "numeric".into(),
+        }),
     }
 }
 

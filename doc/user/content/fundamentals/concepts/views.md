@@ -148,8 +148,6 @@ See also:
 
 ### Updating the materialized view definition
 
-{{< public-preview />}}
-
 {{% include-headless "/headless/replacement-views/associated-commands-blurb/"
 %}}
 

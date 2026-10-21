@@ -317,6 +317,9 @@ RUN arch_gcloud=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm/" -e "s/amd64/x86_64/
 # Install docs site dependencies. These are towards the end for the same reason
 # as the Python dependencies. These are only supported on x86_64 at the moment.
 # See: https://discourse.gohugo.io/t/how-to-install-hugo-extended-on-linux-arm/28098/4
+#
+# On every Hugo version bump, compare doc/user/layouts/sitemap.xml with the new
+# version's built-in sitemap template, which it copies, and port any changes.
 
 RUN if [ $ARCH_GCC = x86_64 ]; then \
     curl -fsSL https://github.com/wjdp/htmltest/releases/download/v0.17.0/htmltest_0.17.0_linux_amd64.tar.gz > htmltest.tar.gz \

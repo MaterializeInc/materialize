@@ -12,7 +12,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_expr::{
+    CollectionPlan, MapFilterProject, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr,
+};
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
@@ -29,9 +31,9 @@ use crate::sources::{SourceInstanceArguments, SourceInstanceDesc};
 
 /// A description of a dataflow to construct and results to surface.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct DataflowDescription<P, S: 'static = ()> {
+pub struct DataflowDescription<P, S: 'static = (), O = MapFilterProject> {
     /// Sources instantiations made available to the dataflow pair with monotonicity information.
-    pub source_imports: BTreeMap<GlobalId, SourceImport<S>>,
+    pub source_imports: BTreeMap<GlobalId, SourceImport<S, O>>,
     /// Indexes made available to the dataflow.
     /// (id of index, import)
     pub index_imports: BTreeMap<GlobalId, IndexImport>,
@@ -69,7 +71,7 @@ pub struct DataflowDescription<P, S: 'static = ()> {
     pub time_dependence: Option<TimeDependence>,
 }
 
-impl<P, S> DataflowDescription<P, S> {
+impl<P, S, O> DataflowDescription<P, S, O> {
     /// Tests if the dataflow refers to a single timestamp, namely
     /// that `as_of` has a single coordinate and that the `until`
     /// value corresponds to the `as_of` value plus one, or `as_of`
@@ -105,7 +107,7 @@ impl<P, S> DataflowDescription<P, S> {
     }
 }
 
-impl DataflowDescription<LirRelationExpr, ()> {
+impl LirDataflowDescription {
     /// Check invariants expected to be true about `DataflowDescription`s.
     pub fn check_invariants(&self) -> Result<(), String> {
         let mut plans: Vec<_> = self.objects_to_build.iter().map(|o| &o.plan).collect();
@@ -229,7 +231,7 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
                 return desc.plan.arity();
             }
         }
-        panic!("GlobalId {} not found in DataflowDesc", id);
+        panic!("GlobalId {} not found in MirDataflowDescription", id);
     }
 
     /// Calls r and s on any sub-members of those types in self. Halts at the first error return.
@@ -256,7 +258,7 @@ impl DataflowDescription<OptimizedMirRelationExpr, ()> {
     }
 }
 
-impl<P, S> DataflowDescription<P, S> {
+impl<P, S, O> DataflowDescription<P, S, O> {
     /// Creates a new dataflow description with a human-readable name.
     pub fn new(name: String) -> Self {
         Self {
@@ -415,7 +417,7 @@ impl<P, S> DataflowDescription<P, S> {
     }
 }
 
-impl<P, S> DataflowDescription<P, S>
+impl<P, S, O> DataflowDescription<P, S, O>
 where
     P: CollectionPlan,
 {
@@ -508,7 +510,7 @@ where
     }
 }
 
-impl<S> DataflowDescription<RenderPlan, S>
+impl<S> RenderDataflowDescription<S>
 where
     S: Clone + PartialEq,
 {
@@ -602,8 +604,14 @@ where
     }
 }
 
-/// A commonly used name for dataflows contain MIR expressions.
-pub type DataflowDesc = DataflowDescription<OptimizedMirRelationExpr, ()>;
+/// A dataflow of optimized MIR, as the optimizer builds and rewrites it.
+pub type MirDataflowDescription = DataflowDescription<OptimizedMirRelationExpr>;
+
+/// A dataflow lowered to LIR.
+pub type LirDataflowDescription<S = ()> = DataflowDescription<LirRelationExpr, S>;
+
+/// A dataflow ready to render.
+pub type RenderDataflowDescription<S> = DataflowDescription<RenderPlan, S>;
 
 /// An index storing processed updates so they can be queried
 /// or reused in other computations
@@ -640,9 +648,9 @@ pub struct IndexImport {
 
 /// Information about an imported source, and how it will be used by the dataflow.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct SourceImport<S: 'static = ()> {
+pub struct SourceImport<S: 'static = (), O = MapFilterProject> {
     /// Description of the source instance to import.
-    pub desc: SourceInstanceDesc<S>,
+    pub desc: SourceInstanceDesc<S, O>,
     /// Whether the source will supply monotonic data.
     pub monotonic: bool,
     /// Whether this import must include the snapshot data.
@@ -682,7 +690,7 @@ mod tests {
 
     /// A dataflow importing `READ` and `UNREAD`, building `VIEW` from `plan`, and exporting a
     /// subscribe sink over it.
-    fn dataflow(plan: MirRelationExpr) -> DataflowDesc {
+    fn dataflow(plan: MirRelationExpr) -> MirDataflowDescription {
         let source_import = || SourceImport {
             desc: SourceInstanceDesc {
                 arguments: SourceInstanceArguments { operators: None },
@@ -694,7 +702,7 @@ mod tests {
             upper: Antichain::from_elem(Timestamp::MIN),
         };
 
-        let mut df = DataflowDesc::new("test".to_string());
+        let mut df = MirDataflowDescription::new("test".to_string());
         df.source_imports.insert(READ, source_import());
         df.source_imports.insert(UNREAD, source_import());
         df.objects_to_build.push(BuildDesc {

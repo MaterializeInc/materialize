@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner.rs
-revision: f17e93f6be
+revision: d9a2c5dc40
 ---
 
 # adapter::coord::sequencer::inner
@@ -9,6 +9,7 @@ Houses the per-statement sequencing implementations split into child files for t
 `inner.rs` itself handles the majority of DDL and DML statements; the child modules (`peek`, `subscribe`, `cluster`, `copy_from`, `create_index`, `create_materialized_view`, `create_metric_sink`, `create_view`, `secret`, `explain_timestamp`) each own one focused area of the sequencing logic.
 Together they implement the full `sequence_plan` dispatch surface for every SQL plan kind.
 The generic `sequence_staged` driver and the `Staged` / `StagedContext` / `StageResult` traits live in `inner.rs`, providing the common loop that advances multi-stage plans either immediately or by spawning background tasks and re-queuing via the coordinator's message channel.
+`inner.rs` no longer implements `sequence_insert` or `sequence_read_then_write`; both `Plan::Insert` and `Plan::ReadThenWrite` are handled entirely by the frontend session task via the OCC path, and reaching the coordinator's sequencer with either plan returns `AdapterError::Internal`.
 `validate_role_attributes` permits the `LOGIN` attribute even when password auth is disabled, restricting the unavailable-feature gate to `SUPERUSER` and `PASSWORD` attributes.
 `await_real_time_recent_timestamp` (public to the crate) and the private `real_time_recent_timestamp_error` helper convert `StorageError::RtrTimeout` and `StorageError::RtrDropFailure` to the dedicated `AdapterError::RtrTimeout` / `AdapterError::RtrDropFailure` variants with humanized collection names; callers in the `peek`, `explain_timestamp`, and `command_handler` modules use these helpers when awaiting real-time recency futures.
 `sequence_side_effecting_func` handles `PgCancelBackend` with a `NULL` connection-id argument by returning `NULL` immediately (matching PostgreSQL semantics), before attempting to look up or cancel any connection.

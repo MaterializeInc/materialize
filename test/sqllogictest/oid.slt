@@ -1264,3 +1264,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17130  mz_builtin_log_indexes
 17131  max
 17132  min
+17138  jq

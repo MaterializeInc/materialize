@@ -29,7 +29,11 @@ import { Link as RouterLink } from "react-router-dom";
 
 import { useSegment } from "~/analytics/segment";
 import { apiClient } from "~/api/apiClient";
-import { getCurrentTenant, useCurrentOrganization } from "~/api/auth";
+import {
+  getCurrentTenant,
+  useCurrentOrganization,
+  useMaybeCurrentOrganizationId,
+} from "~/api/auth";
 import { logout, logoutAndRedirectOrThrow } from "~/api/materialize/auth";
 import ThemeSwitcher from "~/components/ThemeSwitcher";
 import UiPreviewSwitcher from "~/components/UiPreviewSwitcher";
@@ -41,7 +45,7 @@ import {
   type User,
 } from "~/external-library-wrappers/frontegg";
 import { type AuthContextProps } from "~/external-library-wrappers/oidc";
-import { SUPPORT_CHAT_URL } from "~/externalUrls";
+import { SUPPORT_CHAT_URL, SUPPORT_URL } from "~/externalUrls";
 import { AUTH_ROUTES } from "~/fronteggRoutes";
 import { useSelfManagedProfile } from "~/hooks/useSelfManagedProfile";
 import { NAV_HORIZONTAL_SPACING, NAV_HOVER_STYLES } from "~/layouts/constants";
@@ -473,8 +477,22 @@ export const ProfileMenuItems = () => {
   );
 };
 
+/**
+ * Support page URL, with the current organization ID attached so the page can
+ * link to the organization's ticket portal. Falls back to the bare URL when
+ * there is no organization, e.g. in self-managed deployments.
+ */
+const useSupportUrl = () => {
+  const organizationId = useMaybeCurrentOrganizationId()?.data;
+  if (!organizationId) return SUPPORT_URL;
+  const url = new URL(SUPPORT_URL);
+  url.searchParams.set("org_id", organizationId);
+  return url.toString();
+};
+
 const CommunityMenuItems = () => {
   const { track } = useSegment();
+  const supportUrl = useSupportUrl();
 
   return (
     <VStack spacing={0} width="100%">
@@ -503,11 +521,11 @@ const CommunityMenuItems = () => {
       </MenuItem>
       <MenuItem
         as={RouterLink}
-        to={docUrls["/docs/support/"]}
+        to={supportUrl}
         fontWeight="medium"
         target="_blank"
       >
-        Help Center
+        Support
       </MenuItem>
     </VStack>
   );

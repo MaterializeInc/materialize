@@ -38,18 +38,18 @@ use mz_sql_parser::ast::visit::{Visit, visit_function};
 use mz_sql_parser::ast::visit_mut::{VisitMut, visit_expr_mut};
 use mz_sql_parser::ast::{
     AlterSourceAction, AlterSourceAddSubsourceOptionName, AlterSourceStatement, AvroDocOn,
-    ColumnName, CreateMaterializedViewStatement, CreateSinkConnection, CreateSinkOptionName,
-    CreateSinkStatement, CreateSourceOptionName, CreateSubsourceOption, CreateSubsourceOptionName,
-    CreateTableFromSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
-    CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema, DeferredItemName, DocOnIdentifier,
-    DocOnSchema, Expr, Function, FunctionArgs, GlueAvroOption, GlueAvroSeed, Ident,
-    KafkaSourceConfigOption, KafkaSourceConfigOptionName, LoadGenerator, LoadGeneratorOption,
-    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
-    MySqlConfigOptionName, PgConfigOption, PgConfigOptionName, RawItemName,
-    ReaderSchemaSelectionStrategy, RefreshAtOptionValue, RefreshEveryOptionValue,
-    RefreshOptionValue, SourceEnvelope, SqlServerConfigOption, SqlServerConfigOptionName,
-    Statement, TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName,
-    UnresolvedItemName,
+    CastFailureMode, ColumnName, CreateMaterializedViewStatement, CreateSinkConnection,
+    CreateSinkOptionName, CreateSinkStatement, CreateSourceOptionName, CreateSubsourceOption,
+    CreateSubsourceOptionName, CreateTableFromSourceStatement, CsrConfigOption,
+    CsrConfigOptionName, CsrConnection, CsrSeedAvro, CsrSeedProtobuf, CsrSeedProtobufSchema,
+    DeferredItemName, DocOnIdentifier, DocOnSchema, Expr, Function, FunctionArgs, GlueAvroOption,
+    GlueAvroSeed, Ident, KafkaSourceConfigOption, KafkaSourceConfigOptionName, LoadGenerator,
+    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
+    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, PgConfigOption,
+    PgConfigOptionName, RawItemName, ReaderSchemaSelectionStrategy, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, SourceEnvelope, SqlServerConfigOption,
+    SqlServerConfigOptionName, Statement, TableFromSourceColumns, TableFromSourceOption,
+    TableFromSourceOptionName, UnresolvedItemName,
 };
 use mz_sql_server_util::desc::SqlServerTableDesc;
 use mz_storage_types::configuration::StorageConfiguration;
@@ -1043,6 +1043,7 @@ async fn purify_create_source(
                 text_columns,
                 exclude_columns,
                 &FilterConstraints::none(),
+                false,
                 source_name,
                 &reference_policy,
                 initial_lsn,
@@ -1228,6 +1229,7 @@ async fn purify_create_source(
                 text_columns,
                 exclude_columns,
                 &FilterConstraints::none(),
+                false,
                 source_name,
                 initial_gtid_set.clone(),
                 &reference_policy,
@@ -1614,6 +1616,7 @@ async fn purify_alter_source_add_subsources(
                 text_columns,
                 exclude_columns,
                 &FilterConstraints::none(),
+                false,
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
                 initial_lsn,
@@ -1672,6 +1675,7 @@ async fn purify_alter_source_add_subsources(
                 text_columns,
                 exclude_columns,
                 &FilterConstraints::none(),
+                false,
                 &unresolved_source_name,
                 initial_gtid_set,
                 &SourceReferencePolicy::Required,
@@ -1911,6 +1915,7 @@ async fn purify_create_table_from_source(
         exclude_columns,
         exclude_constraints,
         exclude_all_constraints,
+        exclude_all_not_null_constraints,
         retain_history: _,
         details,
         partition_by: _,
@@ -1922,7 +1927,7 @@ async fn purify_create_table_from_source(
 
     let filter_constraints =
         FilterConstraints::from_options(exclude_constraints, exclude_all_constraints)?;
-    if filter_constraints.excludes_any() {
+    if filter_constraints.excludes_any() || exclude_all_not_null_constraints {
         scx.require_feature_flag(&crate::session::vars::ENABLE_EXCLUDE_CONSTRAINTS_OPTION)?;
     }
 
@@ -1964,7 +1969,7 @@ async fn purify_create_table_from_source(
         }])
     });
 
-    if filter_constraints.excludes_any()
+    if (filter_constraints.excludes_any() || exclude_all_not_null_constraints)
         && !matches!(
             desc.connection,
             GenericSourceConnection::Postgres(_) | GenericSourceConnection::MySql(_)
@@ -2018,6 +2023,7 @@ async fn purify_create_table_from_source(
                 qualified_text_columns,
                 qualified_exclude_columns,
                 &filter_constraints,
+                exclude_all_not_null_constraints,
                 &unresolved_source_name,
                 &SourceReferencePolicy::Required,
                 initial_lsn,
@@ -2072,6 +2078,7 @@ async fn purify_create_table_from_source(
                 qualified_text_columns,
                 qualified_exclude_columns,
                 &filter_constraints,
+                exclude_all_not_null_constraints,
                 &unresolved_source_name,
                 initial_gtid_set,
                 &SourceReferencePolicy::Required,
@@ -3174,6 +3181,7 @@ impl VisitMut<'_, Aug> for MzNowPurifierVisitor {
                 *expr = Expr::Cast {
                     expr: Box::new(Expr::Value(Value::Number(mz_now.to_string()))),
                     data_type: self.mz_timestamp_type.clone(),
+                    failure_mode: CastFailureMode::Error,
                 };
                 self.introduced_mz_timestamp = true;
             }

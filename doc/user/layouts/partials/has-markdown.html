@@ -1,0 +1,9 @@
+{{- /*
+  Returns whether a page has a Markdown rendition on the website. The 404 page
+  has none, and neither does any page of a build without a Markdown tree (see
+  site-has-markdown.html).
+
+  Usage:
+    {{ if partial "has-markdown.html" . }}...{{ end }}
+*/ -}}
+{{- return and (ne .Kind "404") (partial "site-has-markdown.html" .) -}}

@@ -9,7 +9,6 @@ menu:
 
 ---
 
-{{< public-preview />}}
 {{< note >}}
 - Changing column types is currently unsupported.
 {{% include-example file="examples/create_table/example_postgres_table"
