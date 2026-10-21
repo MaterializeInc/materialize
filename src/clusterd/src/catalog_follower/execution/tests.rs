@@ -392,10 +392,18 @@ impl Fixture {
         // interval rather than waiting for the production 15-minute lease.
         transact(
             &mut writer,
-            vec![Op::UpdateSystemConfiguration {
-                name: "persist_reader_lease_duration".into(),
-                value: mz_sql::session::vars::OwnedVarInput::Flat("1s".into()),
-            }],
+            vec![
+                Op::UpdateSystemConfiguration {
+                    name: "persist_reader_lease_duration".into(),
+                    value: mz_sql::session::vars::OwnedVarInput::Flat("1s".into()),
+                },
+                // Publication and conflict retries must fit the fixture's
+                // bounded progress checks.
+                Op::UpdateSystemConfiguration {
+                    name: "catalog_read_protection_publish_interval".into(),
+                    value: mz_sql::session::vars::OwnedVarInput::Flat("1s".into()),
+                },
+            ],
         )
         .await;
         let cluster = writer.user_clusters().next().unwrap();

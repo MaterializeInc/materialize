@@ -35,9 +35,12 @@ is not the matched comparison requested there. Evidence is under
 testdrive failures reproduce at 60s. The failed table shard later tombstones
 without intervention, so cleanup is delayed rather than permanently stuck.
 Revisions `9d765d0a` and `888009e6` scope 1s publication to interval-sensitive
-fixtures, as approved, without changing assertions or deadlines. All three targeted cluster workflows and the three reproduced testdrive files
-pass on scratch. REFRESH semantics, native unit fixtures and the parallel OOM
-still require separate resolution. The prompt's restriction against changing
+fixtures, as approved, without changing assertions or deadlines. All three targeted cluster workflows, three testdrive files and both SQL logic
+files pass on scratch. The SQL failures depended on input compaction, not a
+REFRESH correctness violation. Native unit fixtures and the parallel OOM remain
+open. CI140148 runs the exact CI140146 seed at 1s on the same code and normal CI
+resources, using a CI-only label to avoid superseding the broad build. The
+remaining testdrive timeout is being classified separately. The prompt's restriction against changing
 the 1s default is superseded by Aljoscha's approval.
 
 CI140105 at `2bde8879` finishes with 94 passed jobs. Cargo, cluster frontier
