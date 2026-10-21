@@ -898,20 +898,7 @@ class CargoBuild(CargoPreImage):
                 else:
                     package = message["package_id"].split("#")[0].split("/")[-1]
                 for src, dst in self.extract.get(package, {}).items():
-                    # Sources are relative to the build script's `out` dir.
-                    # `$CARGO_TARGET_TRIPLE_DIR` instead names the per-target
-                    # directory that holds the profile directories
-                    # (`<target-dir>/<triple>`), for artifacts a build script
-                    # caches outside of `out`. Reaching it with `..` does not
-                    # work: how deep `out` sits below it differs between
-                    # Cargo versions.
-                    if src.startswith("$CARGO_TARGET_TRIPLE_DIR/"):
-                        src_path = target_dir / src.removeprefix(
-                            "$CARGO_TARGET_TRIPLE_DIR/"
-                        )
-                    else:
-                        src_path = out_dir / src
-                    spawn.runv(["cp", "-R", src_path, self.path / dst])
+                    spawn.runv(["cp", "-R", out_dir / src, self.path / dst])
 
         self.acquired = True
 
