@@ -92,14 +92,15 @@ The model shows which obligations are load-bearing. Accepting a batch with `lowe
 * The parser gains a `SubscribeOptionName` variant (`src/sql-parser/src/ast/defs/statement.rs:4048`), and `plan_subscribe` extracts it through `generate_extracted_config!` (`dml.rs:1542`).
 * `SubscribePlan` gains a `batched: bool`. Planning sets `emit_progress` when `batched` is set and requires `SubscribeOutput::Diffs`.
 * A feature flag gates the option through `require_feature_flag`, declared in `feature_flags!` (`src/sql/src/session/vars/definitions.rs`). It is on in CI through `misc/python/materialize/mzcompose/__init__.py`. The production default needs a human decision.
-* The optimizer builds the dataflow as today (`src/adapter/src/optimize/subscribe.rs`) with a new sink connection, `ComputeSinkConnection::BatchedSubscribe`. The connection carries a `stash_id: Uuid`, from which every share of the subscribe derives its stash shard, and the subscribe's start `S`. The adapter generates `stash_id`, because transient ids repeat across environmentd restarts.
-* When the subscribed relation is a non-temporal map, filter, and project over a collection with an index on the cluster, the optimizer points the sink at the indexed collection, with `from_arrangement` set to the index key and the MFP permuted around the index. `export_sink` already has that branch (`src/compute/src/render/sinks.rs:75`). The detection mirrors the peek fast path, `create_fast_path_plan` and `permute_oneshot_mfp_around_index` in `src/adapter/src/coord/peek.rs`. Without this, the sink receives the flattened output of the view it is built over (`sinks.rs:74`).
+* The optimizer builds the dataflow as today (`src/adapter/src/optimize/subscribe.rs`) with a new sink connection, `ComputeSinkConnection::BatchedSubscribe`. The connection carries a `stash_id: Uuid`, from which every share of the subscribe derives its stash shard, the subscribe's start `S`, and an optional non-temporal MFP. The adapter generates `stash_id`, because transient ids repeat across environmentd restarts.
+* When the subscribed relation is a non-temporal map, filter, and project over a collection with an index on the cluster, the optimizer sets the sink's `from` to the indexed collection and `from_desc` to that collection's schema, and moves the MFP into the connection. The detection mirrors the peek fast path, `create_fast_path_plan` in `src/adapter/src/coord/peek.rs`. Lowering then sets `from_arrangement` to the index arrangement, as it does for any sink whose source is only arranged (`src/compute-types/src/plan/lowering.rs:208`). The optimizer must not set `from_arrangement` itself: lowering overwrites it, and its MFP is defined to rebuild full rows of `from_desc` (`src/compute-types/src/sinks.rs:40`), which leaves no room for the query's MFP. Without this rewrite, the sink receives the flattened output of the view it is built over (`src/compute/src/render/sinks.rs:74`).
+* The index import keeps its arrangement only when the import reads a snapshot. With `SNAPSHOT = false`, `import_index` imports a flattened collection instead (`src/compute/src/render.rs:710`), so such a subscribe takes the general path.
 
 ### Replica: the sink
 
 The sink holds arrangement batches and computes each description's content with a range scan over them. It reuses the peek infrastructure for the scan, the offload, and the stash.
 
-**Input.** On the arranged path the sink reads the index's batch stream, including the batches an import replays for the snapshot. Otherwise it arranges its input by hash of row. Either way it holds `ArcBatch` references (`src/row-spine/src/arc_batch.rs`), which are `Send + Sync`, so a scan can move off the worker. On the arranged path the batches are shared with the index's trace and cost no copy. Identical rows land on the worker that owns their key, so each worker's share is disjoint from the others'.
+**Input.** On the arranged path, `export_sink` hands the sink the arrangement named by `from_arrangement` instead of flattening it (`sinks.rs:75`), and the sink reads its batch stream, including the batches an import replays for the snapshot. The range scan applies the connection's MFP after rebuilding rows with the `from_arrangement` MFP. Otherwise the sink arranges its input by hash of row. Either way it holds `ArcBatch` references (`src/row-spine/src/arc_batch.rs`), which are `Send + Sync`, so a scan can move off the worker. On the arranged path the batches are shared with the index's trace and cost no copy. Identical rows land on the worker that owns their key, so each worker's share is disjoint from the others'.
 
 **Minting.** One worker, chosen by hashing the sink id as the materialized view sink does (`src/compute/src/sink/materialized_view.rs:520`), mints descriptions and broadcasts them. Its next lower follows R1 and R2. Its next upper is the sink's input frontier, the meet of the ok and error frontiers. Receivers skip a description whose lower is not the next one they expect, as the materialized view sink's `write` does (`materialized_view.rs:1146`).
 
@@ -107,7 +108,7 @@ The sink holds arrangement batches and computes each description's content with 
 
 **Retention.** A worker drops held batches whose upper is at or before the last `U` it learned (R3). It does not drop batches at its own last minted upper.
 
-**Range scan.** For each description a worker scans the held batches whose bounds overlap `[l, u)` and emits the updates with times in the description, consolidated per `(row, time)`, retractions kept. For the first description of a subscribe with a snapshot, it also accumulates the updates before `S` into `S`. The scan reuses `PeekResultIterator::from_cursor` over a `CursorList` of the chosen batches (`src/compute/src/compute_state/peek_result_iterator.rs:210`) with its literal handling, MFP evaluation, and per-position fuel. It changes the time predicate from "at or before the peek time, summed" (`peek_result_iterator.rs:469`) to "inside the description, per time", drops the negative-diff check (`:475`), and yields several updates per position. `ErrorScan` changes the same way, and any error in the range poisons the subscribe.
+**Range scan.** For each description a worker scans the held batches whose bounds overlap `[l, u)` and emits the updates with times in the description, consolidated per `(row, time)`, retractions kept. For the first description of a subscribe with a snapshot, it also accumulates the updates before `S` into `S`. The scan reuses `PeekResultIterator::from_cursor` over a `CursorList` of the chosen batches (`src/compute/src/compute_state/peek_result_iterator.rs:210`) with its literal handling, MFP evaluation, and per-position fuel. It changes the time predicate from "at or before the peek time, summed" (`peek_result_iterator.rs:469`) to "inside the description, per time", drops the negative-diff check (`:475`), and yields several updates per position. For the current `(key, val)`, `CursorList::map_times` visits that pair's updates in every held batch (differential's `cursor_list.rs:154`). Each batch is consolidated, and held batches have disjoint bounds, so a time repeats across batches only where the scan advances times into `S` for the snapshot. The scan therefore consolidates the times of each position before emitting them. `ErrorScan` changes the same way, and any error in the range poisons the subscribe.
 
 **Offload.** A large scan runs off the worker through the offload driver (`peek_offload.rs`), made generic over the scan and its result channel, and takes a permit from the process-wide `PeekPermits`. A small scan runs inline under the fuel budget.
 
@@ -173,7 +174,8 @@ A replica-targeted BatchedSubscribe fails with the same error as today when its 
 
 * The coordinator registers an `ActiveComputeSink::BatchedSubscribe` next to `ActiveComputeSink::Subscribe` in `implement_subscribe` (`src/adapter/src/coord/sequencer/inner/subscribe.rs:541`), which both the coordinator and the frontend paths reach. The client channel stays `mpsc::UnboundedSender<PeekResponseUnary>`, so pgwire and the WebSocket API need no change.
 * `message_controller` (`src/adapter/src/coord/message_handler.rs:716`) hands each accepted batch to a forwarder task per subscribe. The coordinator loop touches only batch descriptors.
-* The forwarder processes batches in order. It formats inline shares into rows. It reads stashed shares with `read_batches_consolidated` at as-of `lower` through the coordinator's `PersistClient` (`src/adapter/src/coord.rs:1867`), formats rows in chunks of `compute_peek_response_stash_read_batch_size_bytes`, and deletes the batches when done. It then emits the progress row at `upper`.
+* The forwarder processes batches in order. It formats inline shares into rows. It reads stashed shares through the coordinator's `PersistClient` (`src/adapter/src/coord.rs:1867`), formats rows in chunks of `compute_peek_response_stash_read_batch_size_bytes`, and deletes the batches when done. It then emits the progress row at `upper`.
+* The stashed read needs a persist API that keeps times. `read_batches_consolidated` reads with `FetchBatchFilter::Snapshot { as_of }`, which drops every update beyond the as-of and advances the rest to it (`src/persist-client/src/fetch.rs:387`). Read at `lower`, it would lose every time after `lower`. `FetchBatchFilter::Compaction { since }` advances only times before `since` and keeps the rest (`fetch.rs:413`), so a consolidated read of batches with filter `Compaction { since: lower }` returns their updates with times intact, since every update of a batch for `[lower, upper)` is at or after `lower`. Persist exposes it as a variant of `read_batches_consolidated` that takes the filter.
 * Shares are disjoint by row across workers, so the forwarder needs no merge across shares.
 * Row format reuses `ActiveSubscribe`'s packing for `Diffs` with progress (`active_compute_sink.rs:234` and the `push_row` closure in `process_response`).
 * The forwarder waits on `SubscribeBacklogAccounting` before reading the next chunk, which bounds environmentd memory by the read buffer and the backlog limit. The coordinator retires a subscribe whose queue of unread stashed bytes passes a new limit, reusing `SubscribeFellBehind`.
@@ -189,7 +191,7 @@ A replica-targeted BatchedSubscribe fails with the same error as today when its 
 
 Each stage is a pull request. The stack branches from `upstream/main` independently of this design document.
 
-1. Generalized stash core: `StashUpload` and `StashTarget` with a caller-supplied shard id, bounds, real times, and retractions. Peek behavior is unchanged.
+1. Generalized stash core: `StashUpload` and `StashTarget` with a caller-supplied shard id, bounds, real times, and retractions, and a persist read of stashed batches that keeps times. Peek behavior is unchanged.
 2. Stash ownership in the controllers: a persist client in the instance, an owned handle that deletes on drop, and deletion at the existing peek leak points.
 3. Range scan: `PeekResultIterator` and `ErrorScan` with a description mode, and the offload driver made generic over the scan.
 4. SQL surface and planning behind the feature flag, with user docs.
@@ -197,7 +199,7 @@ Each stage is a pull request. The stack branches from `upstream/main` independen
 6. Sink: held arrangement batches on the general path, minting, retention, the range scan, shares with `SharedBatches`, poison, `up_to`, and the replay start (R4).
 7. Instance controller: acceptance, feedback, and deletion of dropped shares.
 8. Adapter: the forwarder, the stashed read, progress rows, backpressure, retirement, and cancellation.
-9. Arranged input path in the optimizer and the sink.
+9. Arranged input path: the optimizer rewrite, the MFP in the connection, and `export_sink` handing the arrangement to the sink.
 10. Coverage: several workers and replicas, a catch-up range spanning many timestamps, retractions, a replica killed mid-range, a rewind after a rejected batch, and a scaled-down large result.
 
 ## Alternatives
@@ -215,8 +217,5 @@ Each stage is a pull request. The stack branches from `upstream/main` independen
 
 ## Open questions
 
-* Does `read_batches_consolidated` at as-of `lower` return every time in `[lower, upper)` unchanged? An as-of only advances earlier times, so it should, but stage 1 needs a test.
-* Does `CursorList::map_times` visit the same time once per batch, so that the range scan must consolidate per time itself?
 * How large does a held batch set grow on a busy input before feedback lets a worker drop it, and does the general path's own arrangement need a trace at all?
 * How much duplicate stash writing happens on multi-replica clusters before feedback reaches a slower replica, and should a replica delay stashing while it is behind?
-* Does `ComputeSinkDesc::from_desc` need to describe the MFP output on the arranged path, given that `from` names the indexed collection?
