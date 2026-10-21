@@ -54,6 +54,7 @@ use mz_ore::now::NowFn;
 use mz_ore::soft_assert_or_log;
 use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::PersistLocation;
 use mz_repr::{GlobalId, RelationDesc, Row, Timestamp, frontier_within_lag};
 use mz_storage_client::controller::StorageController;
@@ -246,6 +247,8 @@ pub struct ComputeController {
     config: ComputeParameters,
     /// The persist location where we can stash large peek results.
     peek_stash_persist_location: PersistLocation,
+    /// The persist clients that instances open their stash client from.
+    persist_clients: Arc<PersistClientCache>,
     /// A controller response to be returned on the next call to [`ComputeController::process`].
     stashed_response: Option<ComputeControllerResponse>,
     /// The compute controller metrics.
@@ -292,6 +295,7 @@ impl ComputeController {
         read_only: bool,
         metrics_registry: &MetricsRegistry,
         peek_stash_persist_location: PersistLocation,
+        persist_clients: Arc<PersistClientCache>,
         controller_metrics: ControllerMetrics,
         now: NowFn,
         wallclock_lag: WallclockLagFn<Timestamp>,
@@ -355,6 +359,7 @@ impl ComputeController {
             read_only,
             config: Default::default(),
             peek_stash_persist_location,
+            persist_clients,
             stashed_response: None,
             metrics,
             now,
@@ -538,6 +543,7 @@ impl ComputeController {
             read_only,
             config: _,
             peek_stash_persist_location: _,
+            persist_clients: _,
             stashed_response,
             metrics: _,
             now: _,
@@ -602,6 +608,7 @@ impl ComputeController {
             self.build_info,
             Arc::clone(&self.storage_collections),
             self.peek_stash_persist_location.clone(),
+            Arc::clone(&self.persist_clients),
             logs,
             self.metrics.for_instance(id),
             self.now.clone(),

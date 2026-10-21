@@ -34,6 +34,8 @@ use mz_ore::channel::instrumented_unbounded_channel;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{soft_assert_or_log, soft_panic_or_log};
+use mz_persist_client::PersistClient;
+use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::PersistLocation;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
@@ -197,6 +199,12 @@ pub(super) struct Instance {
 
     /// The persist location where we can stash large peek results.
     peek_stash_persist_location: PersistLocation,
+    /// The persist clients `stash_client` is opened from.
+    persist_clients: Arc<PersistClientCache>,
+    /// A client on `peek_stash_persist_location`, opened when the instance starts running.
+    ///
+    /// `None` if opening failed, in which case stashed batches cannot be deleted.
+    stash_client: Option<PersistClient>,
 
     /// A function that produces the current wallclock time.
     now: NowFn,
@@ -873,6 +881,8 @@ impl Instance {
             build_info: _,
             storage_collections: _,
             peek_stash_persist_location: _,
+            persist_clients: _,
+            stash_client: _,
             initialized,
             read_only,
             workload_class,
@@ -942,6 +952,7 @@ impl Instance {
         build_info: &'static BuildInfo,
         storage: StorageCollections,
         peek_stash_persist_location: PersistLocation,
+        persist_clients: Arc<PersistClientCache>,
         arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState)>,
         metrics: InstanceMetrics,
         now: NowFn,
@@ -978,6 +989,8 @@ impl Instance {
             build_info,
             storage_collections: storage,
             peek_stash_persist_location,
+            persist_clients,
+            stash_client: None,
             initialized: false,
             read_only,
             workload_class: None,
@@ -1003,6 +1016,18 @@ impl Instance {
     }
 
     pub(super) async fn run(mut self) {
+        self.stash_client = match self
+            .persist_clients
+            .open(self.peek_stash_persist_location.clone())
+            .await
+        {
+            Ok(client) => Some(client),
+            Err(error) => {
+                tracing::error!(%error, "cannot open a persist client for stashed batches, deleting them is skipped");
+                None
+            }
+        };
+
         self.send(ComputeCommand::Hello {
             // The nonce is protocol iteration-specific and will be set in
             // `ReplicaTask::specialize_command`.
