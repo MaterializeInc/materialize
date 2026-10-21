@@ -52,7 +52,8 @@ Obligations the model shows the protocol needs:
 * The controller accepts a batch with `lower <= U < upper` and trims it to `[U, upper)`. Accepting
   only `lower = U` stalls the subscribe once the replica that set `U` fails.
 * The controller processes a replica's batches in the order they were sent.
-* A replica that loses batches in flight re-renders at the since.
+* A replica that loses batches in flight re-renders at the since, and discards the batches it
+  queued before.
 * The since stays one step behind `U`. A replica rendering at `U` itself after the first accepted
   batch sends a snapshot where the client expects a delta.
 
@@ -67,6 +68,8 @@ is 216 checks. Each mutant below breaks one obligation and was confirmed to fail
 * Letting the since reach `U` fails `since_behind` and `since_behind_no_snapshot`, the invariants
   that state the read-hold obligation.
 * Losing batches in flight without re-rendering fails `chain_from_head`.
+* Re-rendering while keeping batches queued before the reconnect fails `chain_contiguous`,
+  `sent_after_head`, `sent_after_rendered`, `sent_first`, and `sent_later`.
 * Rehydrating one step past the since without the snapshot fails `can_progress`.
 
 An earlier version stated "one step behind" with a successor function on time. The solver could

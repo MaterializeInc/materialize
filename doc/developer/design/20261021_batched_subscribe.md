@@ -67,7 +67,7 @@ This section is the specification the rest of the design implements. `20261021_b
 
 * R1. A replica renders the dataflow at an as-of `a` and always with the snapshot. Its first batch has lower `a` and carries `C*([a, u))`. Each later batch's lower is the previous upper and carries `C([l, u))`. Every upper is beyond its lower.
 * R2. A replica that renders anew, after a restart, a reconfiguration, or a reconnect, renders at its replayed as-of. The replayed as-of is the subscribe collection's since, the frontier of its last `AllowCompaction` (`src/compute-client/src/protocol/history.rs:146`). The since is `A` until the controller accepts the first batch and at most `U - 1` afterwards (C2), so a replica's first lower is at or before `U`.
-* R3. A replica that loses batches in flight renders anew (R2) instead of continuing its chain. Today this holds for subscribes because reconciliation never retains a dataflow that exports a subscribe (`src/compute/src/server.rs:1103`, through `DataflowDescription::subscribe_ids` in `src/compute-types/src/dataflows.rs:357`). `subscribe_ids` matches only `ComputeSinkConnection::Subscribe`, so the new connection variant must be added to it, or reconciliation retains a BatchedSubscribe dataflow across a reconnect whose batches in flight the controller dropped by epoch (`src/compute-client/src/controller/instance.rs:2038`), and the replica's chain has a gap.
+* R3. A replica that loses batches in flight renders anew (R2) instead of continuing its chain. Today this holds for subscribes because reconciliation never retains a dataflow that exports a subscribe (`src/compute/src/server.rs:1103`, through `DataflowDescription::subscribe_ids` in `src/compute-types/src/dataflows.rs:357`). `subscribe_ids` matches only `ComputeSinkConnection::Subscribe`, so the new connection variant must be added to it, or reconciliation retains a BatchedSubscribe dataflow across a reconnect whose batches in flight the controller dropped by epoch (`src/compute-client/src/controller/instance.rs:2038`), and the replica's chain has a gap. Reconciliation also replaces the replica's queue of unsent subscribe responses (`src/compute/src/server.rs:1257`), and the BatchedSubscribe queue must be replaced at the same point. Otherwise batches queued before the reconnect leave under the new connection, where the controller takes them as the start of the re-rendered chain.
 * R4. A replica reports no `Frontiers` for a BatchedSubscribe, as for subscribes today (`src/compute/src/compute_state.rs:1086`). Its write frontier is the upper of its last batch. Reporting its output frontier would let the controller's write frontier, and with it the since, run ahead of `U`.
 * R5. A replica keeps no state about a batch once it has sent it and learns nothing from the controller.
 
@@ -121,7 +121,7 @@ The sink holds arrangement batches and computes each description's content with 
 
 **Offload.** A large scan runs off the worker through the offload driver (`peek_offload.rs`), made generic over the scan and its result channel, and takes a permit from the process-wide `PeekPermits`. A small scan runs inline under the fuel budget.
 
-**Shares.** A worker's share below a threshold travels inline as an `UpdateCollection`. Past it, the worker writes a persist batch through a generalized `StashUpload` (`peek_stash.rs`) opened with the stash shard, the description's bounds, and real update times, accepting negative diffs. Workers of one process coalesce their stashed parts for one description through the `SharedBatches` core (`src/storage-operators/src/persist.rs:48-68`), keyed by the description, so a description yields one stashed batch per process in the common case. Only the last worker to finish receives the coalesced batch. Every worker still reports a share for every description, empty or joined, because the partitioned merge counts shares to detect completion. A `SharedBatchBuilder` dropped before `finish` leaves its uploaded parts in blob storage, so stage 1 makes it delete them, as `StashUpload::abandon` does.
+**Shares.** A worker's share below a threshold travels inline as an `UpdateCollection`. Past it, the worker writes a persist batch through a generalized `StashUpload` (`peek_stash.rs`) opened with the stash shard, the description's bounds, and real update times, accepting negative diffs. Small shares need no coalescing, unlike the materialized view sink's small batches, because subscribe output reaches environmentd through the compute protocol anyway, so the `SharedBatches` core does not apply. Every worker reports a response for every description, possibly with no share, because the partitioned merge counts responses to detect completion.
 
 **Completion.** When `U` can reach `up_to`, the sink's last description has upper `up_to`, and the sink then reports completion with an empty upper, as today's sink does (`subscribe.rs:149-156`).
 
@@ -136,7 +136,6 @@ The sink holds arrangement batches and computes each description's content with 
 | `PeekScan` | Budget split and batch cut | A constructor not tied to `&Peek`, a batch type with time, no finishing, limit, offset, or thinning |
 | Offload driver and `PeekPermits` | Off-worker scans | Generic over the scan and the result channel, visibility of the permit API |
 | `StashUpload` and `StashTarget` | Stashed shares | Bounds and shard from the caller, real times, signed diffs, a constructor not tied to `&Peek` |
-| `SharedBatches` core | One stashed batch per description per process | A shared id per description, delivery by the last finisher, deletion of uploaded parts on abort |
 | `DeliveredBatch` and abandon cleanup | Cleanup of stashed shares | None |
 
 The answer path (`PeekResponse`, `PendingPeek::absorb`) and the finishing do not transfer, because the subscribe protocol replaces them.
@@ -205,12 +204,12 @@ A replica-targeted BatchedSubscribe fails with the same error as today when its 
 
 Each stage is a pull request. The stack branches from `upstream/main` independently of this design document.
 
-1. Generalized stash core: `StashUpload` and `StashTarget` with a caller-supplied shard id, bounds, real times, and retractions, a persist read of stashed batches over a time range, and deletion of uploaded parts when a `SharedBatchBuilder` aborts. Peek behavior is unchanged.
+1. Generalized stash core: `StashUpload` and `StashTarget` with a caller-supplied shard id, bounds, real times, and retractions, and a persist read of stashed batches over a time range. Peek behavior is unchanged.
 2. Stash ownership: a persist client in the instance, an owned handle that deletes on drop at every hop, and deletion at the existing peek leak points.
 3. Range scan: `PeekResultIterator` and `ErrorScan` with a description mode, and the offload driver made generic over the scan.
 4. SQL surface and planning behind the feature flag, with user docs.
 5. Protocol: the new response type, the partitioned merge with its completion and `DroppedAt` rules, delivery through the controller crate, the new variant in `subscribe_ids`, and no `Frontiers` for it.
-6. Sink: its own arrangement on the general path, minting, the frontier wait, release after each share, the range scan, shares with `SharedBatches`, poison, `up_to`, and rendering with the snapshot at the replayed as-of.
+6. Sink: its own arrangement on the general path, minting, the frontier wait, release after each share, the range scan, inline and stashed shares, poison, `up_to`, and rendering with the snapshot at the replayed as-of.
 7. Instance controller: in-order processing, dropping, trimming, frontiers from batch uppers, and deletion of dropped shares.
 8. Adapter: the forwarder, the stashed read, progress rows, backpressure, retirement, statement logging, and cancellation.
 9. Arranged input path: the optimizer rewrite, the MFP in the connection, and `export_sink` handing the arrangement to the sink.
