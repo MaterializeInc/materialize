@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { RouterWrapper } from "~/test/utils";
@@ -16,8 +16,10 @@ import {
   parseObjectTypes,
   parsePositiveNumber,
   parsePredicate,
+  parseScope,
   parseTimePeriod,
   useFreshnessParams,
+  withScope,
 } from "./useFreshnessParams";
 
 describe("parsePositiveNumber", () => {
@@ -84,22 +86,104 @@ describe("parsePredicate", () => {
   });
 });
 
+describe("parseScope", () => {
+  it("accepts a scope the menu offers", () => {
+    expect(parseScope("cluster")).toBe("cluster");
+    expect(parseScope("schema")).toBe("schema");
+  });
+
+  it("rejects anything else, including inherited keys", () => {
+    expect(parseScope("database")).toBeNull();
+    expect(parseScope(null)).toBeNull();
+    for (const key of PROTOTYPE_KEYS) {
+      expect(parseScope(key)).toBeNull();
+    }
+  });
+});
+
 describe("parseObjectTypes", () => {
   it("reads a comma separated list", () => {
-    expect(parseObjectTypes("source,index")).toEqual(["source", "index"]);
-    expect(parseObjectTypes(" source , sink ")).toEqual(["source", "sink"]);
+    expect(parseObjectTypes("source,index", "cluster")).toEqual([
+      "source",
+      "index",
+    ]);
+    expect(parseObjectTypes(" source , sink ", "cluster")).toEqual([
+      "source",
+      "sink",
+    ]);
   });
 
   it("is empty when the param is absent", () => {
-    expect(parseObjectTypes(null)).toEqual([]);
-    expect(parseObjectTypes("")).toEqual([]);
+    expect(parseObjectTypes(null, "cluster")).toEqual([]);
+    expect(parseObjectTypes("", "cluster")).toEqual([]);
   });
 
-  it("drops types the menu does not offer", () => {
+  it("drops types the scope's menu does not offer", () => {
     // An empty result means no filter, so a stale or hand-edited param shows
     // everything rather than an empty page.
-    expect(parseObjectTypes("source,table,nonsense")).toEqual(["source"]);
-    expect(parseObjectTypes("table")).toEqual([]);
+    expect(parseObjectTypes("source,table,nonsense", "cluster")).toEqual([
+      "source",
+    ]);
+    expect(parseObjectTypes("table", "cluster")).toEqual([]);
+    expect(parseObjectTypes("source,table,view", "schema")).toEqual([
+      "source",
+      "table",
+    ]);
+  });
+});
+
+describe("withScope", () => {
+  it("selects the given cluster or schema and keeps the other controls", () => {
+    const next = withScope(
+      new URLSearchParams("cluster=u1&threshold=5000&type=index"),
+      "schema",
+      "u3",
+    );
+
+    expect(next.toString()).toBe(
+      "threshold=5000&type=index&scope=schema&schema=u3",
+    );
+  });
+
+  it("does not modify the params it is given", () => {
+    const prev = new URLSearchParams("cluster=u1");
+    withScope(prev, "schema", "u3");
+
+    expect(prev.toString()).toBe("cluster=u1");
+  });
+});
+
+describe("useFreshnessParams scope", () => {
+  it("defaults to cluster", () => {
+    history.pushState(undefined, "", "/");
+    const { result } = renderHook(() => useFreshnessParams(), {
+      wrapper: RouterWrapper,
+    });
+
+    expect(result.current.scope).toBe("cluster");
+  });
+
+  it("clears both selections and the types the new scope lacks", () => {
+    // Clearing the selection is what makes the page fall back to the new
+    // scope's first option.
+    history.pushState(
+      undefined,
+      "",
+      "/?scope=schema&schema=u7&cluster=u1&type=table,index",
+    );
+    const { result } = renderHook(() => useFreshnessParams(), {
+      wrapper: RouterWrapper,
+    });
+
+    act(() => result.current.setScope("cluster"));
+
+    expect(result.current.scope).toBe("cluster");
+    expect(result.current.clusterId).toBeNull();
+    expect(result.current.schemaId).toBeNull();
+    expect(result.current.objectTypes).toEqual(["index"]);
+    expect(new URLSearchParams(window.location.search).get("type")).toBe(
+      "index",
+    );
   });
 });
 
