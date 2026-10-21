@@ -183,6 +183,30 @@ CREATE TABLE customers FROM SOURCE pg_source (REFERENCE public.customers);
 COMMIT;
 ```
 
+### Batches
+
+Client libraries can send several statements before one `Sync` message, for
+example JDBC's `executeBatch`, psycopg's `executemany`, or pgx's `SendBatch`.
+As in PostgreSQL, such a batch runs as one implicit transaction: it commits at
+the `Sync`, and if one statement fails, none of them commits.
+
+In a batch:
+
+- `INSERT ... VALUES` statements share the transaction, so a batch of them is
+  atomic.
+- An `UPDATE`, `DELETE`, or `INSERT ... SELECT` must be the last statement
+  before the `Sync`. Otherwise, Materialize refuses it with the error
+  `... must be the last statement before Sync`, and nothing in the batch is
+  committed. To run several of them, send each one with its own `Sync`, for
+  example by executing them one at a time instead of through a batch API.
+- If the client waits for the result of such a statement before sending the
+  `Sync`, Materialize refuses the statement with the error
+  `... must be followed by Sync, not Flush`. Send the `Sync` first.
+- A query that reads tables or views after a write in the same batch is
+  refused, as in a [write-only transaction](#write-only-transactions).
+- A DDL statement that comes first in a batch is committed on its own. A DDL
+  statement after a write in the same batch is refused.
+
 ## See also
 
 - [`COMMIT`](/sql/commit)

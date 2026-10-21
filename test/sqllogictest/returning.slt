@@ -143,3 +143,74 @@ NULL  11
 # `prep_scalar_expr` on RETURNING.
 statement ok
 INSERT INTO t VALUES (1, 1) RETURNING mz_version();
+
+# SQL-771: an INSERT of constant values with RETURNING is a blind write, like
+# one without RETURNING. It needs no cluster replica, and it can run inside a
+# transaction.
+statement ok
+CREATE CLUSTER no_replicas (SIZE 'scale=1,workers=1', REPLICATION FACTOR 0)
+
+statement ok
+CREATE TABLE ret (a int)
+
+statement ok
+SET cluster = no_replicas
+
+query I rowsort
+INSERT INTO ret VALUES (1), (2) RETURNING a * 10
+----
+10
+20
+
+statement ok
+RESET cluster
+
+simple
+BEGIN;
+INSERT INTO ret VALUES (3) RETURNING a;
+INSERT INTO ret VALUES (4) RETURNING a + 100;
+COMMIT;
+----
+COMPLETE 0
+3
+COMPLETE 1
+104
+COMPLETE 1
+COMPLETE 0
+
+query I
+SELECT a FROM ret ORDER BY a
+----
+1
+2
+3
+4
+
+# A NOT NULL violation is reported before an error in RETURNING, as in
+# PostgreSQL, which checks constraints when it inserts the row.
+statement ok
+CREATE TABLE ret_nn (a int NOT NULL)
+
+statement error null value in column "a" violates not-null constraint
+INSERT INTO ret_nn VALUES (NULL) RETURNING 1/0
+
+# An error in RETURNING fails the transaction, so neither INSERT commits.
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ret VALUES (5)
+
+statement error division by zero
+INSERT INTO ret VALUES (6) RETURNING 1/0
+
+statement ok
+COMMIT
+
+query I
+SELECT a FROM ret ORDER BY a
+----
+1
+2
+3
+4

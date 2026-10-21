@@ -1,18 +1,14 @@
 # How the frontend OCC read-then-write path behaves inside an extended-protocol
-# pipeline.
-#
-# A pipeline is an implicit transaction: the transaction stays `Started` until
-# `Sync`, so statements that follow can still fail and roll the whole thing
-# back. Two kinds of read-then-write meet that differently.
+# batch, the statements before one Sync, which form one implicit transaction.
 #
 # A write that reads no persisted state stages its rows, so it commits or rolls
-# back with everything else in the pipeline.
+# back with everything else in the batch.
 #
-# A write that reads persisted state cannot be part of a transaction at all, we
-# refuse it in an explicit one. So it commits as its own transaction and does
-# not span the pipeline, the way PostgreSQL treats statements that cannot run in
-# a transaction block. It is durable once it reports success, and a later
-# failure in the pipeline does not undo it.
+# A write that reads persisted state commits when it executes, so it cannot
+# share a transaction with other statements. It runs only as the last statement
+# before its Sync, which keeps the batch atomic, and is refused otherwise,
+# before it executes. A Sync that follows a Flush counts only if it arrived
+# together with the Flush, since after a Flush the client may wait for results.
 
 send
 Query {"query": "DROP TABLE IF EXISTS t"}
@@ -158,9 +154,9 @@ ReadyForQuery
 CommandComplete {"tag":"INSERT 0 3"}
 ReadyForQuery {"status":"I"}
 
-# A read-dependent write that opens the pipeline commits as its own
-# transaction. The later division by zero fails on its own and does not undo it,
-# because the DELETE was never part of that transaction.
+# A read-dependent write that opens the batch, followed by another statement,
+# is refused before it executes. The error rolls back the batch and the rest of
+# it is skipped up to the Sync, so the DELETE is not applied.
 send
 Parse {"query": "DELETE FROM t WHERE a = 1"}
 Bind
@@ -171,15 +167,12 @@ Execute
 Sync
 ----
 
-until err_field_typs=SC
+until err_field_typs=SCMH
 ReadyForQuery
 ----
 ParseComplete
 BindComplete
-CommandComplete {"tag":"DELETE 1"}
-ParseComplete
-BindComplete
-ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"22012"}]}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"25001"},{"typ":"M","value":"DELETE FROM t WHERE a = 1 must be the last statement before Sync"},{"typ":"H","value":"Materialize cannot run UPDATE, DELETE, or INSERT ... SELECT atomically with other statements. Send a Sync directly after it."}]}
 ReadyForQuery {"status":"I"}
 
 send
@@ -190,12 +183,11 @@ until
 ReadyForQuery
 ----
 RowDescription {"fields":[{"name":"count"}]}
-DataRow {"fields":["2"]}
+DataRow {"fields":["3"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
 
-# Because each read-dependent write ends its own transaction, a second one in
-# the same pipeline is not refused for running alongside staged ops. Both apply.
+# Two read-dependent writes in one batch: the first is refused, nothing applies.
 send
 Parse {"query": "DELETE FROM t WHERE a = 2"}
 Bind
@@ -206,15 +198,12 @@ Execute
 Sync
 ----
 
-until
+until err_field_typs=SCMH
 ReadyForQuery
 ----
 ParseComplete
 BindComplete
-CommandComplete {"tag":"DELETE 1"}
-ParseComplete
-BindComplete
-CommandComplete {"tag":"DELETE 1"}
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"25001"},{"typ":"M","value":"DELETE FROM t WHERE a = 2 must be the last statement before Sync"},{"typ":"H","value":"Materialize cannot run UPDATE, DELETE, or INSERT ... SELECT atomically with other statements. Send a Sync directly after it."}]}
 ReadyForQuery {"status":"I"}
 
 send
@@ -225,6 +214,150 @@ until
 ReadyForQuery
 ----
 RowDescription {"fields":[{"name":"count"}]}
-DataRow {"fields":["0"]}
+DataRow {"fields":["3"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# A read before the write commits on its own, so the write is still the only
+# statement of its transaction and runs.
+send
+Parse {"query": "SELECT count(*) FROM t"}
+Bind
+Execute
+Parse {"query": "DELETE FROM t WHERE a = 1"}
+Bind
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["3"]}
+CommandComplete {"tag":"SELECT 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"DELETE 1"}
+ReadyForQuery {"status":"I"}
+
+# A read after the write is another statement in its transaction.
+send
+Parse {"query": "UPDATE t SET a = a + 10"}
+Bind
+Execute
+Parse {"query": "SELECT count(*) FROM t"}
+Bind
+Execute
+Sync
+----
+
+until err_field_typs=SCMH
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"25001"},{"typ":"M","value":"UPDATE t SET a = a + '<REDACTED>' must be the last statement before Sync"},{"typ":"H","value":"Materialize cannot run UPDATE, DELETE, or INSERT ... SELECT atomically with other statements. Send a Sync directly after it."}]}
+ReadyForQuery {"status":"I"}
+
+# A Sync that arrives together with the Flush before it still counts, so the
+# write runs. This is the shape pg8000 sends for every statement with
+# parameters.
+send
+Parse {"query": "DELETE FROM t WHERE a = $1"}
+Bind {"values": ["2"]}
+Flush
+Execute
+Flush
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"DELETE 1"}
+ReadyForQuery {"status":"I"}
+
+# After a Flush the client may wait for results without sending a Sync, so a
+# Sync that has not arrived yet cannot be waited for, and the write is refused.
+send
+Parse {"query": "DELETE FROM t WHERE a = 3"}
+Bind
+Execute
+Flush
+----
+
+until err_field_typs=SCMH
+ErrorResponse
+----
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"25001"},{"typ":"M","value":"DELETE FROM t WHERE a = 3 must be followed by Sync, not Flush"},{"typ":"H","value":"Materialize cannot run UPDATE, DELETE, or INSERT ... SELECT atomically with other statements. Send a Sync directly after it."}]}
+
+send
+Sync
+----
+
+until
+ReadyForQuery
+----
+ReadyForQuery {"status":"I"}
+
+# SQL EXECUTE of a prepared read-dependent write is checked the same way.
+send
+Query {"query": "PREPARE del AS DELETE FROM t WHERE a = $1"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"PREPARE"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "EXECUTE del(3)"}
+Bind
+Execute
+Parse {"query": "SELECT 1"}
+Bind
+Execute
+Sync
+----
+
+until err_field_typs=SCM
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"25001"},{"typ":"M","value":"DELETE FROM t WHERE a = $1 must be the last statement before Sync"}]}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "EXECUTE del(4)"}
+Bind
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"DELETE 0"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "SELECT a FROM t ORDER BY a"}
+----
+
+until
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"a"}]}
+DataRow {"fields":["3"]}
 CommandComplete {"tag":"SELECT 1"}
 ReadyForQuery {"status":"I"}
