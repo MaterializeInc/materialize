@@ -1,0 +1,7 @@
+# Most recent stable Materialize release.
+#
+# Bumped by `bin/bump-version` when cutting a real (non-dev) release. The
+# `{{< version >}}` shortcode reads this value, so anything rendered from a
+# release tag advertises the version that tag corresponds to — independent
+# of frontmatter on `releases/v*.md`, which can lag the release branch.
+latest_stable: v26.22.0
