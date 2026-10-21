@@ -21,6 +21,7 @@ pub mod azure;
 pub mod cfg;
 pub mod error;
 pub mod file;
+pub mod gcs;
 pub mod generated;
 pub mod hedge;
 pub mod indexed;

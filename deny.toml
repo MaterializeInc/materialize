@@ -184,8 +184,8 @@ skip = [
     { name = "core-foundation", version = "0.10.1" },
     # aws-lc-rs (via jsonwebtoken 10) and ring pull different `untrusted`.
     { name = "untrusted", version = "0.7.1" },
-    # Held back by lazy_static 1.4.0 (used by num-bigint-dig).
-    { name = "spin", version = "0.5.2" },
+    # Held back by lazy_static 1.5.1.
+    { name = "spin", version = "0.9.9" },
     # held back by tower-lsp 0.20 (mz-deploy LSP server)
     { name = "dashmap", version = "5.5.3" },
     { name = "tower", version = "0.4.13" },
@@ -216,6 +216,7 @@ name = "env_logger"
 # Use `md-5` instead, which is part of the RustCrypto ecosystem.
 [[bans.deny]]
 name = "md5"
+wrappers = ["google-cloud-storage"]
 
 # Use `sha1` instead, which the RustCrypto ecosystem recently took control of.
 # `sha-1` is the older and now deprecated name.
@@ -298,6 +299,7 @@ name = "lazy_static"
 wrappers = [
     "dynfmt",
     "findshlibs",
+    "google-cloud-gax-internal",
     "launchdarkly-server-sdk-evaluation",
     "num-bigint-dig",
     "prometheus",
