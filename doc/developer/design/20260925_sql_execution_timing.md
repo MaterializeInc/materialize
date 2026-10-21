@@ -9,8 +9,7 @@
   implicit commit) and [#39934](https://github.com/MaterializeInc/materialize/pull/39934)
   (the notice), and [#39564](https://github.com/MaterializeInc/materialize/pull/39564)
   (the Console)
-- Status: proposed, with an implementation in review. The remaining questions
-  are listed under [Open questions](#open-questions).
+- Status: proposed, with an implementation in review.
 
 ## The problem
 
@@ -296,7 +295,7 @@ statement.
   server starts the next statement as soon as it has written the previous
   `CommandComplete`, so while the Console is still processing a large result,
   the next statement's `Returned in` can be shorter than its server-side value
-  (see [Open questions](#open-questions)).
+  (see [Decided](#decided)).
 
 ## Alternatives and tradeoffs
 
@@ -414,13 +413,17 @@ discussion of [#39150](https://github.com/MaterializeInc/materialize/pull/39150)
 
 Still to validate: slow readers, whose backpressure TTFR is meant to exclude.
 
-## Open questions
+## Decided
 
-1. For the Console: a later statement of a multi-statement input can have a
-   `Returned in` shorter than the server's value for the same statement (see
-   [Prior designs](#prior-designs-and-current-constraints)). Should the Console
-   show only the server's value for later statements?
-2. For the Console: are the labels and the tooltip clear to users?
+Product approved the Console's current display in the review of the user docs
+([#39935](https://github.com/MaterializeInc/materialize/pull/39935)):
+
+1. A later statement of a multi-statement input can have a `Returned in`
+   shorter than the server's value for the same statement (see
+   [Prior designs](#prior-designs-and-current-constraints)). The Console still
+   shows both values for later statements, and the SQL Shell documentation
+   explains why `Returned in` can be shorter.
+2. The labels and the tooltip stay as they are.
 
 ## Known gaps
 
