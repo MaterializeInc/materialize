@@ -46,15 +46,27 @@ frontier. The scoped correction in `d1ed7559` has scratch red/green evidence.
 Testdrive 3 passes this build. Its earlier inter-file slowdown remains unexplained
 and did not reproduce in the short scratch comparison.
 
-CI140154 at `57c5fd56` passes all testdrive and both parallel shards, with 87 passed
-jobs overall. Three additional failures remain: explicit-DDL revision conflicts
-in MySQL/Postgres RTR and the restart fixture's initial unchanged-permission
-assertion. All three full workflows pass unchanged on scratch. RTR's rejecting
-revision update is not identified. The restart fixture assumes that a 1h interval
+CI140154 at `57c5fd56` passes all testdrive and both parallel shards, with 88 passed
+jobs after one unchanged restart-proof retry. MySQL/Postgres RTR still fail on
+explicit-DDL revision conflicts. Both full workflows pass unchanged on scratch.
+A reduced rename transaction reproduces invalidation by six controller
+`ClusterRuntime` initialization commits, advancing its revision from 8 to 14.
+This matches the original CI startup window, without tracing its rejecting update.
+Evidence is in `scratch/cadence60-default/ci140154/runtime-boundary/`.
+
+Awaiting Aljoscha's decision: move managed-to-unmanaged lifecycle validation into
+catalog transaction admission, then exclude runtime bookkeeping from SQL planning
+invalidation, or exempt only equivalent initialization. Blanket exclusion alone
+can bypass the sequencer-only guard after catch-up. The independent boundary review
+is `ci140154/cluster-runtime-planning-boundary.md` under the same evidence root.
+No production correction is implemented.
+
+The restart fixture assumes that a 1h interval
 pauses publication, but startup/reconfiguration stagger from zero. Independent
 review identifies this as a pre-existing probabilistic assumption, not evidence
 against the 60s default. Keep its assertions and production scheduling unchanged
-pending a fixture decision. One unchanged CI retry is in flight.
+pending a fixture decision. The full scratch run and unchanged CI retry pass,
+without repairing that probabilistic assumption.
 
 The exact CI140146 seed still needs resolution. Its 60s parallel shard 2 OOM
 repeats, killing quickstart at about 10.7GiB anonymous RSS. CI140148's 1s control
