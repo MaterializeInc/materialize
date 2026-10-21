@@ -12,13 +12,14 @@ import React from "react";
 import { Navigate, Route, useParams } from "react-router-dom";
 
 import { PageHeading, PageTabStrip, Tab } from "~/layouts/BaseLayout";
-import ClusterOverview from "~/platform/clusters/ClusterOverview";
 import ClusterReplicas from "~/platform/clusters/ClusterReplicas";
 import { ClusterParams } from "~/platform/clusters/ClusterRoutes";
 import { SentryRoutes } from "~/sentry";
 import { useAllClusters } from "~/store/allClusters";
+import { useSubscribeToAllObjectsCollection } from "~/store/allObjectsCollection";
 import { assert, pluralize } from "~/util";
 
+import { ClusterMetrics } from "./ClusterMetrics";
 import { ClusterObjects } from "./ClusterObjects";
 import { CLUSTER_OBJECT_TYPES } from "./clusterObjectTypes";
 
@@ -77,12 +78,13 @@ export const ClusterPageHeader = () => {
 const ClusterPage = () => {
   const { clusterName } = useParams<ClusterParams>();
   assert(clusterName);
+  useSubscribeToAllObjectsCollection();
 
   // Keying route elements on the cluster name avoids stale state when the
   // breadcrumb menu switches clusters.
   return (
     <SentryRoutes>
-      <Route index element={<ClusterOverview key={clusterName} />} />
+      <Route index element={<ClusterMetrics key={clusterName} />} />
       <Route
         path="objects"
         element={<Navigate to={CLUSTER_OBJECT_TYPES[0].path} replace />}

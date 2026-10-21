@@ -33,7 +33,7 @@ export interface SizeAllocation {
   processes: number;
   cpuNanoCores: number;
   memoryBytes: number;
-  diskBytes: number;
+  diskBytes: number | null;
 }
 
 export const processSampleKey = (sample: ProcessMetricsSample) =>
@@ -91,7 +91,7 @@ export function buildReplicaSizeAllocationsQuery({
       sql<number>`processes::float8`.as("processes"),
       sql<number>`cpu_nano_cores::float8`.as("cpuNanoCores"),
       sql<number>`memory_bytes::float8`.as("memoryBytes"),
-      sql<number>`disk_bytes::float8`.as("diskBytes"),
+      sql<number | null>`disk_bytes::float8`.as("diskBytes"),
     ])
     .where("size", "in", sizes);
 }

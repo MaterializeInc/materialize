@@ -17,6 +17,11 @@ export type GraphDataKey =
 export interface DataPoint {
   id: string;
   name: string;
+  /**
+   * The replica's cluster, which is a past blue-green deployment's for a
+   * replica charted through the cluster's lineage.
+   */
+  clusterId?: string;
   size: string | null;
   bucketStart: number;
   bucketEnd: number;
