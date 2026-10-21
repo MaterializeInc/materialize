@@ -39,6 +39,13 @@ from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.test_analytics.config.test_analytics_db_config import (
+    create_test_analytics_config,
+)
+from materialize.test_analytics.data.console_scalability.console_scalability_result_storage import (
+    ConsoleScalabilityResultEntry,
+)
+from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 from materialize.util import PropagatingThread
 from materialize.workload_replay.catalog_server_cost import CatalogServerCost
 from materialize.workload_replay.config import (
@@ -405,7 +412,8 @@ def workflow_console_scalability(
     mz_catalog_server and environmentd CPU is measured for a baseline with
     only the replay running, the suite, the k6 ramp, and with `--viewers`
     each step of a headless viewer sweep. Results land in
-    console/test-results/catalog-server-<workload>.json.
+    console/test-results/catalog-server-<workload>.json, and in Buildkite
+    also in the console_scalability_result table of test analytics.
     """
     parser.add_argument(
         "--factor-initial-data",
@@ -509,6 +517,7 @@ def workflow_console_scalability(
     )
 
     k6_dir = MZ_ROOT / "console" / "e2e-tests" / "k6"
+    results: list[ConsoleScalabilityResultEntry] = []
 
     def run(file: pathlib.Path) -> None:
         workload = workloads[file]
@@ -563,7 +572,7 @@ def workflow_console_scalability(
                 cost.window("baseline", args.cost_window)
 
                 print(f"+++ Running console scalability suite ({file.stem})")
-                with cost.phase("playwright"):
+                with cost.phase("playwright") as phase:
                     try:
                         _console_runner_sh(
                             c,
@@ -573,6 +582,7 @@ def workflow_console_scalability(
                             env={"BASE_URL": "http://materialized:6874"},
                         )
                     except Exception as e:
+                        phase["succeeded"] = False
                         print(
                             "Console scalability suite failed. Not failing the "
                             f"workflow, the suite only collects timing data: {e}"
@@ -582,7 +592,7 @@ def workflow_console_scalability(
                 # from browser behavior.
                 if queries_json.exists():
                     print(f"+++ Running console k6 load test ({file.stem})")
-                    with cost.phase("k6"):
+                    with cost.phase("k6") as phase:
                         try:
                             c.run(
                                 "console-k6",
@@ -593,6 +603,7 @@ def workflow_console_scalability(
                                 env_extra={"MZ_HTTP_URL": "http://materialized:6876"},
                             )
                         except Exception as e:
+                            phase["succeeded"] = False
                             print(
                                 "Console k6 load test failed. Not failing the "
                                 f"workflow, it only collects timing data: {e}"
@@ -612,6 +623,7 @@ def workflow_console_scalability(
                 if args.viewers:
                     _measure_viewers(c, cost, file.stem, args)
             finally:
+                results.extend(_result_entries(cost))
                 cost.report(
                     MZ_ROOT
                     / "console"
@@ -648,7 +660,59 @@ def workflow_console_scalability(
                 pass
 
     with c.override(_materialized(args.catalog_server_size)):
-        c.test_parts(files, run)
+        successful = False
+        try:
+            c.test_parts(files, run)
+            successful = True
+        finally:
+            _upload_to_test_analytics(c, results, successful)
+
+
+# Bump when a change to the console-scalability workflow makes its uploaded
+# results incomparable with earlier runs.
+CONSOLE_SCALABILITY_FRAMEWORK_VERSION = "1.0.0"
+
+
+def _result_entries(cost: CatalogServerCost) -> list[ConsoleScalabilityResultEntry]:
+    return [
+        ConsoleScalabilityResultEntry(
+            workload=cost.workload,
+            phase=phase["name"],
+            viewers=phase.get("viewers"),
+            seconds=phase["seconds"],
+            catalog_server_size=cost.replica["size"],
+            catalog_server_cores=phase["cores"]["catalog_server"],
+            environmentd_cores=phase["cores"]["environmentd"],
+            scheduled_cores=phase["scheduled_cores"]["total"],
+            open_subscribes=phase["subscribes"]["open_at_end"],
+            succeeded=phase.get("succeeded", True),
+        )
+        for phase in cost.phases
+    ]
+
+
+def _upload_to_test_analytics(
+    c: Composition, results: list[ConsoleScalabilityResultEntry], was_successful: bool
+) -> None:
+    if not buildkite.is_in_buildkite() or not results:
+        return
+    # Runs in a `finally`: an error here must neither fail the build nor
+    # replace the error that failed the workflow.
+    try:
+        test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+    except Exception as e:
+        print(f"Uploading results to test analytics failed: {e}")
+        return
+    try:
+        test_analytics.builds.add_build_job(was_successful=was_successful)
+        test_analytics.console_scalability_results.add_result(
+            framework_version=CONSOLE_SCALABILITY_FRAMEWORK_VERSION,
+            results=results,
+        )
+        test_analytics.submit_updates()
+        print("Uploaded results.")
+    except Exception as e:
+        test_analytics.on_upload_failed(e)
 
 
 def _install_console_bundle(c: Composition, bundle: pathlib.Path) -> None:

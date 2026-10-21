@@ -46,6 +46,9 @@ Per workload, in order:
   subscribe dataflows' count and average operator count.
 * `top_dataflows`: the ten non-subscribe dataflows with the most scheduled
   time, with operator counts.
+* `succeeded`: `false` when the suite or k6 exited with an error. The phase
+  still holds what ran before the failure, so check `seconds` against a
+  normal run before reading it.
 
 With `--viewers`, `viewer_fit.<process>.mcpu_per_viewer` is a least-squares
 slope through the origin of each step's cores above the mean of the two
@@ -53,7 +56,9 @@ viewer baselines, and `above_baseline` lists the points it was fitted to.
 The log ends with the same numbers as a table.
 
 The nightly `console-scalability` step runs with `--skip-large` and no
-`--viewers`. Its artifacts carry the first three phases for every workload.
+`--viewers`. Its artifacts carry the first three phases for every workload,
+and it uploads one row per phase to the `console_scalability_result` table
+of test analytics.
 
 ## Run it locally
 

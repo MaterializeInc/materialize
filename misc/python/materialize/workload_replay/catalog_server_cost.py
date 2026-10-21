@@ -248,10 +248,11 @@ class CatalogServerCost:
         )
 
     @contextmanager
-    def phase(self, name: str, **extra: Any) -> Iterator[None]:
-        """Measure the enclosed block. `extra` is stored with the phase."""
+    def phase(self, name: str, **extra: Any) -> Iterator[dict[str, Any]]:
+        """Measure the enclosed block. `extra`, which the block may update, is
+        stored with the phase."""
         start = self._snapshot()
-        yield
+        yield extra
         self._record(name, start, self._snapshot(), extra)
 
     def window(self, name: str, seconds: float, **extra: Any) -> None:
