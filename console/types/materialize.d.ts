@@ -224,93 +224,93 @@ export interface MzAuditEvents {
   /**
    * Additional details about the event. The shape of the details varies based on `event_type` and `object_type`.
    */
-  details: Generated<Json>;
+  details: Json;
   /**
-   * The type of the event: `create`, `drop`, or `alter`.
+   * The type of the event: `create`, `drop`, `alter`, `grant`, `revoke`, or `comment`.
    */
-  event_type: Generated<string>;
+  event_type: string;
   /**
    * Materialize's unique, monotonically increasing ID for the event.
    */
-  id: Generated<string>;
+  id: string;
   /**
-   * The type of the affected object: `cluster`, `cluster-replica`, `connection`, `database`, `function`, `index`, `materialized-view`, `role`, `schema`, `secret`, `sink`, `source`, `table`, `type`, or `view`.
+   * The type of the affected object: `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `func`, `index`, `materialized-view`, `metric-sink`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `system`, `table`, `type`, or `view`.
    */
-  object_type: Generated<string>;
+  object_type: string;
   /**
    * The time at which the event occurred. Guaranteed to be in order of event creation. Events created in the same transaction will have identical values.
    */
-  occurred_at: Generated<Timestamp>;
+  occurred_at: Timestamp;
   /**
    * The user who triggered the event, or `NULL` if triggered by the system.
    */
-  user: Generated<string | null>;
+  user: string | null;
 }
 
 export interface MzAwsConnections {
   /**
    * The value of the `ACCESS KEY ID` option, if provided in line.
    */
-  access_key_id: Generated<string | null>;
+  access_key_id: string | null;
   /**
    * The ID of the secret referenced by the `ACCESS KEY ID` option, if provided via a secret.
    */
-  access_key_id_secret_id: Generated<string | null>;
+  access_key_id_secret_id: string | null;
   /**
    * The value of the `ASSUME ROLE ARN` option, if set.
    */
-  assume_role_arn: Generated<string | null>;
+  assume_role_arn: string | null;
   /**
    * The value of the `ASSUME ROLE SESSION NAME` option, if set.
    */
-  assume_role_session_name: Generated<string | null>;
+  assume_role_session_name: string | null;
   /**
    * The value of the `ENDPOINT` option, if set.
    */
-  endpoint: Generated<string | null>;
+  endpoint: string | null;
   /**
    * An example of an IAM role trust policy that allows this connection's principal and external ID to assume the role.
    */
-  example_trust_policy: Generated<Json | null>;
+  example_trust_policy: Json | null;
   /**
    * The external ID Materialize will use when assuming the provided role, if the connection is configured to use role assumption.
    */
-  external_id: Generated<string | null>;
+  external_id: string | null;
   /**
    * The ID of the connection.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The ARN of the AWS principal Materialize will use when assuming the provided role, if the connection is configured to use role assumption.
    */
-  principal: Generated<string | null>;
+  principal: string | null;
   /**
    * The value of the `REGION` option, if set.
    */
-  region: Generated<string | null>;
+  region: string | null;
   /**
    * The ID of the secret referenced by the `SECRET ACCESS KEY` option, if set.
    */
-  secret_access_key_secret_id: Generated<string | null>;
+  secret_access_key_secret_id: string | null;
   /**
    * The value of the `SESSION TOKEN` option, if provided in line.
    */
-  session_token: Generated<string | null>;
+  session_token: string | null;
   /**
    * The ID of the secret referenced by the `SESSION TOKEN` option, if provided via a secret.
    */
-  session_token_secret_id: Generated<string | null>;
+  session_token_secret_id: string | null;
 }
 
 export interface MzAwsPrivatelinkConnections {
   /**
    * The ID of the connection.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The AWS Principal that Materialize will use to connect to the VPC endpoint.
    */
-  principal: Generated<string>;
+  principal: string;
 }
 
 export interface MzAwsPrivatelinkConnectionStatuses {
@@ -326,6 +326,9 @@ export interface MzAwsPrivatelinkConnectionStatuses {
    * The name of the connection.
    */
   name: string;
+  /**
+   * The status of the connection: one of `pending-service-discovery`, `creating-endpoint`, `recreating-endpoint`, `updating-endpoint`, `available`, `deleted`, `deleting`, `expired`, `failed`, `pending`, `pending-acceptance`, `rejected`, or `unknown`.
+   */
   status: string | null;
 }
 
@@ -351,6 +354,69 @@ export interface MzBaseTypes {
   id: Generated<string>;
 }
 
+export interface MzBuiltinIndexes {
+  is_retained_metrics_object: boolean;
+  key_exprs: string;
+  name: string;
+  object_type: string;
+  oid: number;
+  on_name: string;
+  on_schema_name: string;
+  schema_name: string;
+}
+
+export interface MzBuiltinLogIndexes {
+  col_list: string;
+  name: string;
+  oid: number;
+  privileges: string[];
+  schema_name: string;
+}
+
+export interface MzBuiltinMaterializedViews {
+  cluster_name: string;
+  create_sql: string;
+  definition: string;
+  is_retained_metrics_object: boolean;
+  name: string;
+  object_type: string;
+  oid: number;
+  privileges: string[];
+  schema_name: string;
+}
+
+export interface MzBuiltinSources {
+  is_retained_metrics_object: boolean;
+  name: string;
+  object_type: string;
+  oid: number;
+  privileges: string[];
+  schema_name: string;
+  type: string;
+}
+
+export interface MzBuiltinTables {
+  is_retained_metrics_object: boolean;
+  name: string;
+  object_type: string;
+  oid: number;
+  privileges: string[];
+  schema_name: string;
+}
+
+export interface MzBuiltinViews {
+  create_sql: string;
+  definition: string;
+  name: string;
+  oid: number;
+  privileges: string[];
+  schema_name: string;
+}
+
+export interface MzCatalogRaw {
+  data: Json;
+}
+
 // TODO: hand-added for mz >= 26.34. Keep through `yarn gen:types` until every environment has it.
 export interface MzClusterAutoScalingStrategies {
   /**
@@ -358,13 +424,13 @@ export interface MzClusterAutoScalingStrategies {
    */
   cluster_id: string;
   /**
-   * **Unstable** The configured autoscaling policy, as JSON. Currently an `on_hydration` sub-policy carrying its `hydration_size` and optional `linger_duration`.
-   */
-  strategy: Json;
-  /**
    * **Unstable** The in-flight autoscaling runtime state, as JSON keyed by strategy, or `NULL` when nothing is running. Currently a `burst` key carrying the active hydration burst: its `burst_size`, `linger_duration`, and `steady_ready_at`.
    */
   state: Json | null;
+  /**
+   * **Unstable** The configured autoscaling policy, as JSON. Currently an `on_hydration` sub-policy carrying its `hydration_size` and optional `linger_duration`.
+   */
+  strategy: Json;
 }
 
 export interface MzClusterDeploymentLineage {
@@ -382,16 +448,25 @@ export interface MzClusterDeploymentLineage {
   current_deployment_cluster_id: string;
 }
 
+export interface MzClusterPrometheusMetrics {
+  help: string;
+  labels: string;
+  metric_name: string;
+  metric_type: string;
+  process_id: string;
+  value: number;
+}
+
 // TODO: hand-added for mz >= 26.34. Keep through `yarn gen:types` until every environment has it.
 export interface MzClusterReconfigurations {
+  /**
+   * The dimensions in which `target` differs from the cluster's realized configuration, as a JSON object holding the target value per changed dimension. Empty (`{}`) once a record settles with its target applied. A rolled-back record keeps the abandoned diff.
+   */
+  changes: Json;
   /**
    * The ID of the cluster. Corresponds to `mz_clusters.id`.
    */
   cluster_id: string;
-  /**
-   * The lifecycle status of the reconfiguration: `in-progress` while the controller converges on the target, then a terminal `finalized`, `timed-out`, `cancelled`, or `resource-exhausted`. The record is retained after it settles, so the latest outcome stays inspectable until a later reconfiguration overwrites it.
-   */
-  status: string;
   /**
    * The deadline by which the reconfiguration must complete. After it passes, the `on_timeout` action applies.
    */
@@ -401,13 +476,13 @@ export interface MzClusterReconfigurations {
    */
   on_timeout: string;
   /**
+   * The lifecycle status of the reconfiguration: `in-progress` while the controller converges on the target, then a terminal `finalized`, `timed-out`, `cancelled`, or `resource-exhausted`. The record is retained after it settles, so the latest outcome stays inspectable until a later reconfiguration overwrites it.
+   */
+  status: string;
+  /**
    * The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, `logging`, and `arrangement_compression`. The realized (current) shape is in `mz_clusters`.
    */
   target: Json;
-  /**
-   * The dimensions in which `target` differs from the cluster's realized configuration, as a JSON object holding the target value per changed dimension. Empty (`{}`) once a record settles with its target applied. A rolled-back record keeps the abandoned diff.
-   */
-  changes: Json;
 }
 
 export interface MzClusterReplicaFrontiers {
@@ -489,6 +564,10 @@ export interface MzClusterReplicaMetrics {
    * The ID of a cluster replica.
    */
   replica_id: string;
+  /**
+   * Approximate swap usage, in bytes.
+   */
+  swap_bytes: string | null;
 }
 
 export interface MzClusterReplicaMetricsHistory {
@@ -524,6 +603,10 @@ export interface MzClusterReplicaMetricsHistory {
    * The ID of a cluster replica.
    */
   replica_id: string;
+  /**
+   * Approximate swap usage, in bytes.
+   */
+  swap_bytes: string | null;
 }
 
 export interface MzClusterReplicaNameHistory {
@@ -545,35 +628,57 @@ export interface MzClusterReplicaNameHistory {
   previous_name: string | null;
 }
 
+export interface MzClusterReplicaResourceUsage {
+  metric: string;
+  process_id: string;
+  source: string;
+  value: string;
+}
+
 export interface MzClusterReplicas {
   /**
-   * The availability zone in which the cluster is running.
+   * The availability zones the replica is provisioned in, comma-separated. `NULL` if nothing constrains the replica's placement.
    */
-  availability_zone: Generated<string | null>;
+  availability_zone: string | null;
   /**
    * The ID of the cluster to which the replica belongs. Corresponds to `mz_clusters.id`.
    */
-  cluster_id: Generated<string>;
+  cluster_id: string;
   /**
    * If the replica has a local disk.
    */
-  disk: Generated<boolean | null>;
+  disk: boolean | null;
   /**
    * Materialize's unique ID for the cluster replica.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the cluster replica.
    */
-  name: Generated<string>;
+  name: string;
   /**
    * The role ID of the owner of the cluster replica. Corresponds to `mz_roles.id`.
    */
-  owner_id: Generated<string>;
+  owner_id: string;
   /**
    * The cluster replica's size, selected during creation.
    */
-  size: Generated<string | null>;
+  size: string | null;
+}
+
+export interface MzClusterReplicaSizeInternal {
+  /**
+   * The replica size's disk limit in bytes (0 if explicitly disabled). Used internally to compute the public `disk` column.
+   */
+  disk_bytes: Generated<string>;
+  /**
+   * The human-readable replica size.
+   */
+  size: Generated<string>;
+  /**
+   * Whether the replica size's pods are configured to allow swap. Used internally to compute the public `disk` column.
+   */
+  swap_enabled: Generated<boolean>;
 }
 
 export interface MzClusterReplicaSizes {
@@ -590,7 +695,7 @@ export interface MzClusterReplicaSizes {
    */
   disk_bytes: Generated<string | null>;
   /**
-   * The RAM allocation per process, in billionths of a vCPU core.
+   * The RAM allocation per process, in bytes.
    */
   memory_bytes: Generated<string>;
   /**
@@ -678,6 +783,10 @@ export interface MzClusterReplicaUtilization {
    * The ID of a cluster replica.
    */
   replica_id: string;
+  /**
+   * Approximate swap usage, in percent of the total heap allocation.
+   */
+  swap_percent: number | null;
 }
 
 export interface MzClusterReplicaUtilizationHistory {
@@ -709,73 +818,92 @@ export interface MzClusterReplicaUtilizationHistory {
    * The ID of a cluster replica.
    */
   replica_id: string;
+  /**
+   * Approximate swap usage, in percent of the total heap allocation.
+   */
+  swap_percent: number | null;
 }
 
 export interface MzClusters {
   /**
-   * Unstable If the cluster is managed, the list of availability zones specified in `AVAILABILITY ZONES`. `NULL` for unmanaged clusters.
+   * **Unstable** If the cluster is managed, the list of availability zones specified in `AVAILABILITY ZONES`. `NULL` for unmanaged clusters.
    */
-  availability_zones: Generated<string | null>;
+  availability_zones: string | null;
   /**
-   * Unstable If the cluster is managed, `true` if the replicas have the `DISK` option . `NULL` for unmanaged clusters.
+   * **Unstable** If the cluster is managed, `true` if the replicas have the `DISK` option . `NULL` for unmanaged clusters.
    */
-  disk: Generated<boolean | null>;
+  disk: boolean | null;
   /**
    * Materialize's unique ID for the cluster.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * Whether introspection of the gathering of the introspection data is enabled.
    */
-  introspection_debugging: Generated<boolean | null>;
+  introspection_debugging: boolean | null;
   /**
    * The interval at which to collect introspection data.
    */
-  introspection_interval: Generated<Interval | null>;
+  introspection_interval: Interval | null;
   /**
    * Whether the cluster is a managed cluster with automatically managed replicas.
    */
-  managed: Generated<boolean>;
+  managed: boolean;
   /**
    * The name of the cluster.
    */
-  name: Generated<string>;
+  name: string;
   /**
    * The role ID of the owner of the cluster. Corresponds to `mz_roles.id`.
    */
-  owner_id: Generated<string>;
+  owner_id: string;
   /**
    * The privileges belonging to the cluster.
    */
-  privileges: Generated<string[]>;
+  privileges: string[];
   /**
    * If the cluster is managed, the desired number of replicas of the cluster. `NULL` for unmanaged clusters.
    */
-  replication_factor: Generated<string | null>;
+  replication_factor: string | null;
   /**
    * If the cluster is managed, the desired size of the cluster's replicas. `NULL` for unmanaged clusters.
    */
-  size: Generated<string | null>;
+  size: string | null;
 }
 
 export interface MzClusterSchedules {
   /**
    * The ID of the cluster. Corresponds to `mz_clusters.id`.
    */
-  cluster_id: Generated<string>;
+  cluster_id: string;
   /**
    * The interval given in the `HYDRATION TIME ESTIMATE` option.
    */
-  refresh_hydration_time_estimate: Generated<Interval | null>;
+  refresh_hydration_time_estimate: Interval | null;
   /**
    * `on-refresh`, or `manual`. Default: `manual`
    */
-  type: Generated<string>;
+  type: string;
+}
+
+export interface MzClusterSystemParameters {
+  /**
+   * The ID of the cluster. Corresponds to `mz_clusters.id`.
+   */
+  cluster_id: string;
+  /**
+   * The name of the cluster-coherent system parameter.
+   */
+  name: string;
+  /**
+   * The cluster-scoped value of the system parameter.
+   */
+  value: string;
 }
 
 export interface MzClusterWorkloadClasses {
-  id: Generated<string>;
-  workload_class: Generated<string | null>;
+  id: string;
+  workload_class: string | null;
 }
 
 export interface MzColumns {
@@ -817,19 +945,19 @@ export interface MzComments {
   /**
    * The comment itself.
    */
-  comment: Generated<string>;
+  comment: string;
   /**
    * The ID of the object. Corresponds to `mz_objects.id`.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * For a comment on a column of a relation, the column number. `NULL` for other object types.
    */
-  object_sub_id: Generated<number | null>;
+  object_sub_id: number | null;
   /**
    * The type of object the comment is associated with.
    */
-  object_type: Generated<string>;
+  object_type: string;
 }
 
 export interface MzComputeDataflowGlobalIdsPerWorker {
@@ -844,7 +972,7 @@ export interface MzComputeDependencies {
    */
   dependency_id: string;
   /**
-   * The ID of a compute object. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, or `mz_internal.mz_subscriptions`.
+   * The ID of a compute object. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, or `mz_internal.mz_subscriptions.id`.
    */
   object_id: string;
 }
@@ -884,7 +1012,7 @@ export interface MzComputeExports {
    */
   dataflow_id: string;
   /**
-   * The ID of the index, materialized view, or subscription exported by the dataflow. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, or `mz_internal.mz_subscriptions`.
+   * The ID of the index, materialized view, or subscription exported by the dataflow. Corresponds to `mz_catalog.mz_indexes.id`, `mz_catalog.mz_materialized_views.id`, or `mz_internal.mz_subscriptions.id`.
    */
   export_id: string;
 }
@@ -939,6 +1067,9 @@ export interface MzComputeHydrationTimes {
 
 export interface MzComputeHydrationTimesPerWorker {
   export_id: string;
+  hydrated_at: Timestamp | null;
+  installed_at: Timestamp;
+  started_at: Timestamp | null;
   time_ns: string | null;
   worker_id: string;
 }
@@ -1034,39 +1165,39 @@ export interface MzConnections {
   /**
    * The `CREATE` SQL statement for the connection.
    */
-  create_sql: Generated<string>;
+  create_sql: string;
   /**
    * The unique ID of the connection.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the connection.
    */
-  name: Generated<string>;
+  name: string;
   /**
-   * A [PostgreSQL-compatible OID][`oid`] for the connection.
+   * A PostgreSQL-compatible OID for the connection.
    */
-  oid: Generated<number>;
+  oid: number;
   /**
    * The role ID of the owner of the connection. Corresponds to `mz_roles.id`.
    */
-  owner_id: Generated<string>;
+  owner_id: string;
   /**
    * The privileges belonging to the connection.
    */
-  privileges: Generated<string[]>;
+  privileges: string[];
   /**
    * The redacted `CREATE` SQL statement for the connection.
    */
-  redacted_create_sql: Generated<string>;
+  redacted_create_sql: string;
   /**
    * The ID of the schema to which the connection belongs. Corresponds to `mz_schemas.id`.
    */
-  schema_id: Generated<string>;
+  schema_id: string;
   /**
    * The type of the connection: `confluent-schema-registry`, `kafka`, `postgres`, or `ssh-tunnel`.
    */
-  type: Generated<string>;
+  type: string;
 }
 
 export interface MzConsoleClusterUtilizationOverview {
@@ -1074,8 +1205,6 @@ export interface MzConsoleClusterUtilizationOverview {
   bucket_start: Timestamp;
   cluster_id: string | null;
   disk_percent: number | null;
-  // TODO: heap_limit_percent, ram_percent and swap_of_ram_percent are hand-added
-  // for mz >= 26.44. Keep them through `yarn gen:types` until every environment has them.
   heap_limit_percent: number | null;
   heap_percent: number | null;
   max_cpu_at: Timestamp;
@@ -1101,8 +1230,6 @@ export interface MzConsoleClusterUtilizationOverview24h {
   bucket_start: Timestamp;
   cluster_id: string | null;
   disk_percent: number | null;
-  // TODO: heap_limit_percent, ram_percent and swap_of_ram_percent are hand-added
-  // for mz >= 26.44. Keep them through `yarn gen:types` until every environment has them.
   heap_limit_percent: number | null;
   heap_percent: number | null;
   max_cpu_at: Timestamp;
@@ -1127,8 +1254,6 @@ export interface MzConsoleClusterUtilizationOverview3h {
   cluster_id: string | null;
   cpu_percent: number | null;
   disk_percent: number | null;
-  // TODO: heap_limit_percent, ram_percent and swap_of_ram_percent are hand-added
-  // for mz >= 26.44. Keep them through `yarn gen:types` until every environment has them.
   heap_limit_percent: number | null;
   heap_percent: number | null;
   memory_and_disk_percent: number | null;
@@ -1145,23 +1270,23 @@ export interface MzDatabases {
   /**
    * Materialize's unique ID for the database.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the database.
    */
-  name: Generated<string>;
+  name: string;
   /**
-   * A [PostgreSQL-compatible OID][`oid`] for the database.
+   * A PostgreSQL-compatible OID for the database.
    */
-  oid: Generated<number>;
+  oid: number;
   /**
    * The role ID of the owner of the database. Corresponds to `mz_roles.id`.
    */
-  owner_id: Generated<string>;
+  owner_id: string;
   /**
    * The privileges belonging to the database.
    */
-  privileges: Generated<string[]>;
+  privileges: string[];
 }
 
 export interface MzDataflowAddresses {
@@ -1216,7 +1341,7 @@ export interface MzDataflowChannelOperators {
   /**
    * The address of the source of the channel. Corresponds to `mz_dataflow_addresses.address`.
    */
-  from_operator_address: string | null;
+  from_operator_address: string;
   /**
    * The ID of the source of the channel. Corresponds to `mz_dataflow_operators.id`.
    */
@@ -1228,7 +1353,7 @@ export interface MzDataflowChannelOperators {
   /**
    * The address of the target of the channel. Corresponds to `mz_dataflow_addresses.address`.
    */
-  to_operator_address: string | null;
+  to_operator_address: string;
   /**
    * The ID of the target of the channel. Corresponds to `mz_dataflow_operators.id`.
    */
@@ -1240,10 +1365,10 @@ export interface MzDataflowChannelOperators {
 }
 
 export interface MzDataflowChannelOperatorsPerWorker {
-  from_operator_address: string | null;
+  from_operator_address: string;
   from_operator_id: string | null;
   id: string;
-  to_operator_address: string | null;
+  to_operator_address: string;
   to_operator_id: string | null;
   type: string;
   worker_id: string;
@@ -1395,28 +1520,6 @@ export interface MzDataflows {
   name: string;
 }
 
-export interface MzDataflowShutdownDurationsHistogram {
-  /**
-   * The (noncumulative) count of dataflows in this bucket.
-   */
-  count: Numeric;
-  /**
-   * The upper bound of the bucket in nanoseconds.
-   */
-  duration_ns: string;
-}
-
-export interface MzDataflowShutdownDurationsHistogramPerWorker {
-  count: Int8;
-  duration_ns: string;
-  worker_id: string;
-}
-
-export interface MzDataflowShutdownDurationsHistogramRaw {
-  duration_ns: string;
-  worker_id: string;
-}
-
 export interface MzDataflowsPerWorker {
   id: string | null;
   name: string;
@@ -1427,27 +1530,27 @@ export interface MzDefaultPrivileges {
   /**
    * Privileges described in this row will be granted only on objects in the database identified by `database_id` if non-null.
    */
-  database_id: Generated<string | null>;
+  database_id: string | null;
   /**
    * Privileges described in this row will be granted to `grantee`. The role ID `p` stands for the `PUBLIC` pseudo-role and applies to all roles.
    */
-  grantee: Generated<string>;
+  grantee: string;
   /**
    * Privileges described in this row will be granted only on objects of type `object_type`.
    */
-  object_type: Generated<string>;
+  object_type: string;
   /**
    * The set of privileges that will be granted.
    */
-  privileges: Generated<string>;
+  privileges: string;
   /**
    * Privileges described in this row will be granted on objects created by `role_id`. The role ID `p` stands for the `PUBLIC` pseudo-role and applies to all roles.
    */
-  role_id: Generated<string>;
+  role_id: string;
   /**
    * Privileges described in this row will be granted only on objects in the schema identified by `schema_id` if non-null.
    */
-  schema_id: Generated<string | null>;
+  schema_id: string | null;
 }
 
 export interface MzEgressIps {
@@ -1529,7 +1632,7 @@ export interface MzFunctions {
    */
   name: Generated<string>;
   /**
-   * A [PostgreSQL-compatible OID][`oid`] for the function.
+   * A PostgreSQL-compatible OID for the function.
    */
   oid: Generated<number>;
   /**
@@ -1563,15 +1666,15 @@ export interface MzHistoryRetentionStrategies {
   /**
    * The ID of the object.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The strategy. `FOR` is the only strategy, and means the object's compaction window is the duration of the `value` field.
    */
-  strategy: Generated<string>;
+  strategy: string;
   /**
    * The value of the strategy. For `FOR`, is a number of milliseconds.
    */
-  value: Generated<Json>;
+  value: Json;
 }
 
 export interface MzHydrationStatuses {
@@ -1593,15 +1696,15 @@ export interface MzIcebergSinks {
   /**
    * The ID of the sink.
    */
-  id: Generated<string>;
+  id: string;
   /**
-   * The namespace of the sink.
+   * The namespace of the Iceberg table into which the sink is writing.
    */
-  namespace: Generated<string>;
+  namespace: string;
   /**
-   * The table the sink is writing to.
+   * The Iceberg table into which the sink is writing.
    */
-  table: Generated<string>;
+  table: string;
 }
 
 export interface MzIndexAdvice {
@@ -1650,106 +1753,106 @@ export interface MzIndexes {
   /**
    * The ID of the cluster in which the index is built.
    */
-  cluster_id: Generated<string>;
+  cluster_id: string;
   /**
    * The `CREATE` SQL statement for the index.
    */
-  create_sql: Generated<string>;
+  create_sql: string;
   /**
    * Materialize's unique ID for the index.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the index.
    */
-  name: Generated<string>;
+  name: string;
   /**
-   * A [PostgreSQL-compatible OID][`oid`] for the index.
+   * A PostgreSQL-compatible OID for the index.
    */
-  oid: Generated<number>;
+  oid: number;
   /**
    * The ID of the relation on which the index is built.
    */
-  on_id: Generated<string>;
+  on_id: string;
   /**
    * The role ID of the owner of the index. Corresponds to `mz_roles.id`.
    */
-  owner_id: Generated<string>;
+  owner_id: string;
   /**
    * The redacted `CREATE` SQL statement for the index.
    */
-  redacted_create_sql: Generated<string>;
+  redacted_create_sql: string;
 }
 
 export interface MzInternalClusterReplicas {
   /**
    * The ID of a cluster replica. Corresponds to `mz_cluster_replicas.id`.
    */
-  id: Generated<string>;
+  id: string;
 }
 
 export interface MzKafkaConnections {
   /**
    * The addresses of the Kafka brokers to connect to.
    */
-  brokers: Generated<string[]>;
+  brokers: string[];
   /**
    * The ID of the connection.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the Kafka topic where any sinks associated with this connection will track their progress information and other metadata. The contents of this topic are unspecified.
    */
-  sink_progress_topic: Generated<string>;
+  sink_progress_topic: string;
 }
 
 export interface MzKafkaSinks {
   /**
    * The ID of the sink.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the Kafka topic into which the sink is writing.
    */
-  topic: Generated<string>;
+  topic: string;
 }
 
 export interface MzKafkaSources {
   /**
    * The value of the `GROUP ID PREFIX` connection option.
    */
-  group_id_prefix: Generated<string>;
+  group_id_prefix: string;
   /**
    * The ID of the Kafka source. Corresponds to `mz_catalog.mz_sources.id`.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the Kafka topic the source is reading from.
    */
-  topic: Generated<string>;
+  topic: string;
 }
 
 export interface MzKafkaSourceTables {
   /**
-   * The envelope type: `none`, `upsert`, or `debezium`. `NULL` for other source types.
+   * The envelope type: `none`, `upsert`, or `debezium`. Defaults to `none` when the source table omits an explicit envelope.
    */
-  envelope_type: Generated<string | null>;
+  envelope_type: string;
   /**
    * The ID of the table. Corresponds to `mz_catalog.mz_tables.id`.
    */
-  id: Generated<string>;
+  id: string;
   /**
-   * The format of the Kafka message key: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.
+   * The format of the Kafka message key: `avro`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.
    */
-  key_format: Generated<string | null>;
+  key_format: string | null;
   /**
    * The topic being ingested.
    */
-  topic: Generated<string>;
+  topic: string;
   /**
-   * The format of the Kafka message value: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.
+   * The format of the Kafka message value: `avro`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.
    */
-  value_format: Generated<string | null>;
+  value_format: string | null;
 }
 
 export interface MzLicenseKeys {
@@ -1793,7 +1896,7 @@ export interface MzLirMapping {
    */
   operator: string;
   /**
-   * The first dataflow operator ID after this LIR operator (exclusive).
+   * The first dataflow operator ID _after_ this LIR operator (exclusive).
    */
   operator_id_end: string;
   /**
@@ -1827,7 +1930,7 @@ export interface MzMappableObjects {
    */
   global_id: string;
   /**
-   * The name of the object.
+   * The name of the object. This name is unquoted, and you might need to call `quote_ident` if you want to reference the name shown here.
    */
   name: string;
 }
@@ -1908,66 +2011,104 @@ export interface MzMaterializedViewRefreshStrategies {
   /**
    * The `ALIGNED TO` expression of a `REFRESH EVERY` option, as it appears in the materialized view's `create_sql`, or `NULL` if the `type` is not `every`.
    */
-  aligned_to_expression: Generated<string | null>;
+  aligned_to_expression: string | null;
   /**
    * The time expression of a `REFRESH AT` option, as it appears in the materialized view's `create_sql`, or `NULL` if the `type` is not `at`.
    */
-  at_expression: Generated<string | null>;
+  at_expression: string | null;
   /**
    * The refresh interval of a `REFRESH EVERY` option, or `NULL` if the `type` is not `every`.
    */
-  interval: Generated<Interval | null>;
+  interval: Interval | null;
   /**
    * The ID of the materialized view. Corresponds to `mz_catalog.mz_materialized_views.id`
    */
-  materialized_view_id: Generated<string>;
+  materialized_view_id: string;
   /**
    * `at`, `every`, or `on-commit`. Default: `on-commit`
    */
-  type: Generated<string>;
+  type: string;
 }
 
 export interface MzMaterializedViews {
   /**
    * The ID of the cluster maintaining the materialized view. Corresponds to `mz_clusters.id`.
    */
-  cluster_id: Generated<string>;
+  cluster_id: string;
   /**
    * The `CREATE` SQL statement for the materialized view.
    */
-  create_sql: Generated<string>;
+  create_sql: string;
   /**
    * The materialized view definition (a `SELECT` query).
    */
-  definition: Generated<string>;
+  definition: string;
   /**
    * Materialize's unique ID for the materialized view.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the materialized view.
    */
-  name: Generated<string>;
+  name: string;
   /**
-   * A [PostgreSQL-compatible OID][`oid`] for the materialized view.
+   * A PostgreSQL-compatible OID for the materialized view.
    */
-  oid: Generated<number>;
+  oid: number;
   /**
    * The role ID of the owner of the materialized view. Corresponds to `mz_roles.id`.
    */
-  owner_id: Generated<string>;
+  owner_id: string;
   /**
    * The privileges belonging to the materialized view.
    */
-  privileges: Generated<string[]>;
+  privileges: string[];
   /**
    * The redacted `CREATE` SQL statement for the materialized view.
    */
-  redacted_create_sql: Generated<string>;
+  redacted_create_sql: string;
   /**
    * The ID of the schema to which the materialized view belongs. Corresponds to `mz_schemas.id`.
    */
-  schema_id: Generated<string>;
+  schema_id: string;
+}
+
+export interface MzMcpDataProductDetails {
+  /**
+   * Cluster hosting the object's index or compute. Reads still work from any cluster you can use, but only reads on this cluster benefit from the index. Shown only when your role has USAGE on it (otherwise null).
+   */
+  cluster: string | null;
+  /**
+   * Index comment if available, otherwise object comment. Used as data product description.
+   */
+  description: string | null;
+  /**
+   * Readiness summary as a JSON object with `hydrated` (bool), `replica_count` (int), and `hydrated_replica_count` (int). `hydrated` is true only when the cluster has at least one replica and the dataflow is hydrated on every replica. Reads against a non-hydrated data product block until the dataflow catches up (they never return partial data). Check this before reading: if `hydrated` is false and `replica_count > 0`, wait and retry; if `replica_count` is 0, the cluster has no replicas and that needs operator action, not a retry.
+   */
+  hydration: Json;
+  /**
+   * Fully qualified object name (database.schema.name).
+   */
+  object_name: string;
+  /**
+   * JSON Schema describing the object's columns and types.
+   */
+  schema: Json;
+}
+
+export interface MzMcpDataProducts {
+  /**
+   * Cluster hosting the object's index or compute. Reads still work from any cluster you can use, but only reads on this cluster benefit from the index. Shown only when your role has USAGE on it (otherwise null).
+   */
+  cluster: string | null;
+  /**
+   * Index comment if available, otherwise object comment. Used as data product description.
+   */
+  description: string | null;
+  /**
+   * Fully qualified object name (database.schema.name).
+   */
+  object_name: string;
 }
 
 export interface MzMessageBatchCountsReceivedRaw {
@@ -2027,65 +2168,96 @@ export interface MzMessageCountsSentRaw {
   to_worker_id: string;
 }
 
+export interface MzMetricSinks {
+  /**
+   * The ID of the cluster maintaining the metric sink. Corresponds to `mz_clusters.id`.
+   */
+  cluster_id: string;
+  /**
+   * The ID of the relation the metric sink reads. Corresponds to `mz_objects.id`.
+   */
+  from_id: string;
+  /**
+   * Materialize's unique ID for the metric sink.
+   */
+  id: string;
+  /**
+   * The name of the metric sink.
+   */
+  name: string;
+  /**
+   * A PostgreSQL-compatible OID for the metric sink.
+   */
+  oid: number;
+  /**
+   * The role ID of the owner of the metric sink. Corresponds to `mz_roles.id`.
+   */
+  owner_id: string;
+  /**
+   * The ID of the schema to which the metric sink belongs. Corresponds to `mz_schemas.id`.
+   */
+  schema_id: string;
+}
+
 export interface MzMysqlSourceTables {
   /**
    * The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The schema (or, database) of the upstream table being ingested.
    */
-  schema_name: Generated<string>;
+  schema_name: string;
   /**
    * The name of the upstream table being ingested.
    */
-  table_name: Generated<string>;
+  table_name: string;
 }
 
 export interface MzNetworkPolicies {
   /**
    * The ID of the network policy.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the network policy.
    */
-  name: Generated<string>;
+  name: string;
   /**
-   * A [PostgreSQL-compatible OID][`oid`] for the network policy.
+   * A PostgreSQL-compatible OID for the network policy.
    */
-  oid: Generated<number>;
+  oid: number;
   /**
    * The role ID of the owner of the network policy. Corresponds to `mz_catalog.mz_roles.id`.
    */
-  owner_id: Generated<string>;
+  owner_id: string;
   /**
    * The privileges belonging to the network policy.
    */
-  privileges: Generated<string[]>;
+  privileges: string[];
 }
 
 export interface MzNetworkPolicyRules {
   /**
    * The action of the rule. `allow` is the only supported action.
    */
-  action: Generated<string>;
+  action: string;
   /**
    * The address the rule will take action on.
    */
-  address: Generated<string>;
+  address: string;
   /**
    * The direction of traffic the rule applies to. `ingress` is the only supported direction.
    */
-  direction: Generated<string>;
+  direction: string;
   /**
    * The name of the network policy rule. Can be combined with `policy_id` to form a unique identifier.
    */
-  name: Generated<string>;
+  name: string;
   /**
-   * The ID the network policy the rule is part of. Corresponds to `mz_network_policy_rules.id`.
+   * The ID the network policy the rule is part of. Corresponds to `mz_internal.mz_network_policies.id`.
    */
-  policy_id: Generated<string>;
+  policy_id: string;
 }
 
 export interface MzNotices {
@@ -2170,6 +2342,29 @@ export interface MzNoticesRedacted {
   object_id: string | null;
 }
 
+export interface MzObjectArrangementSizeHistory {
+  /**
+   * The timestamp when this snapshot was collected.
+   */
+  collection_timestamp: Generated<Timestamp>;
+  /**
+   * Whether the arrangement had finished its initial hydration on this replica when the snapshot was collected. Filter for `true` to consider only stable, post-build sizes.
+   */
+  hydration_complete: Generated<boolean>;
+  /**
+   * The ID of the compute object (index or materialized view). Corresponds to `mz_objects.id`.
+   */
+  object_id: Generated<string>;
+  /**
+   * The ID of the cluster replica. Corresponds to `mz_cluster_replicas.id`.
+   */
+  replica_id: Generated<string>;
+  /**
+   * The total arrangement heap and batcher size in bytes for this object on this replica at `collection_timestamp`, rounded to the nearest 10 MiB to reduce per-byte churn in the underlying differential collection. Objects with less than 5 MiB of arrangements are not recorded. May reflect a mid-build size if `hydration_complete` is `false`.
+   */
+  size: Generated<Int8>;
+}
+
 export interface MzObjectArrangementSizes {
   /**
    * The ID of the compute object (index or materialized view). Corresponds to `mz_objects.id`.
@@ -2189,11 +2384,22 @@ export interface MzObjectDependencies {
   /**
    * The ID of the dependent object. Corresponds to `mz_objects.id`.
    */
-  object_id: Generated<string>;
+  object_id: string;
   /**
    * The ID of the referenced object. Corresponds to `mz_objects.id`.
    */
-  referenced_object_id: Generated<string>;
+  referenced_object_id: string;
+}
+
+export interface MzObjectDependenciesRaw {
+  /**
+   * The ID of the dependent object. Corresponds to `mz_objects.id`.
+   */
+  object_id: string | null;
+  /**
+   * The ID of the referenced object. Corresponds to `mz_objects.id`.
+   */
+  referenced_object_id: string | null;
 }
 
 export interface MzObjectFullyQualifiedNames {
@@ -2218,7 +2424,7 @@ export interface MzObjectFullyQualifiedNames {
    */
   name: string;
   /**
-   * The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
+   * The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
    */
   object_type: string;
   /**
@@ -2229,6 +2435,28 @@ export interface MzObjectFullyQualifiedNames {
    * The name of the schema to which the object belongs. Corresponds to `mz_schemas.name`.
    */
   schema_name: string;
+}
+
+export interface MzObjectGlobalIds {
+  /**
+   * The global ID of the object.
+   */
+  global_id: string;
+  /**
+   * The ID of the object. Corresponds to `mz_objects.id`.
+   */
+  id: string;
+}
+
+export interface MzObjectGraphEdges {
+  /**
+   * The ID of the object it depends on. Corresponds to `mz_objects.id`.
+   */
+  dependency_id: string;
+  /**
+   * The ID of the dependent object. Corresponds to `mz_objects.id`.
+   */
+  object_id: string;
 }
 
 export interface MzObjectHistory {
@@ -2249,9 +2477,40 @@ export interface MzObjectHistory {
    */
   id: string | null;
   /**
-   * The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
+   * The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
    */
   object_type: string;
+}
+
+export interface MzObjectHydrationHistory {
+  /**
+   * The ID of the object's cluster.
+   */
+  cluster_id: Generated<string>;
+  /**
+   * When hydration finished.
+   */
+  hydrated_at: Generated<Timestamp | null>;
+  /**
+   * When the object's dataflow was installed on the replica.
+   */
+  installed_at: Generated<Timestamp>;
+  /**
+   * The ID of the object's dataflow, as reported by the replica. Join `mz_internal.mz_object_global_ids` to reach the index or materialized view while that mapping exists. Dropping the dataflow retracts the mapping, so historical IDs may no longer resolve.
+   */
+  object_id: Generated<string>;
+  /**
+   * The ID of the cluster replica. May name a replica that no longer exists.
+   */
+  replica_id: Generated<string>;
+  /**
+   * When hydration work began, or `NULL` if the replica reported none. A replica that observed no start reports the installation time instead, so a zero interval between the two does not mean the dataflow started immediately.
+   */
+  started_at: Generated<Timestamp | null>;
+  /**
+   * The terminal status. Currently always `hydrated`.
+   */
+  status: Generated<string>;
 }
 
 export interface MzObjectLifetimes {
@@ -2264,7 +2523,7 @@ export interface MzObjectLifetimes {
    */
   id: string | null;
   /**
-   * The type of the object: one of `table`, `source`, `view`, `materialized view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
+   * The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
    */
   object_type: string;
   /**
@@ -2296,7 +2555,7 @@ export interface MzObjects {
    */
   name: string;
   /**
-   * A [PostgreSQL-compatible OID][`oid`] for the object.
+   * A PostgreSQL-compatible OID for the object.
    */
   oid: number;
   /**
@@ -2312,7 +2571,7 @@ export interface MzObjects {
    */
   schema_id: string;
   /**
-   * The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`.
+   * The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `metric-sink`, `index`, `connection`, `secret`, `type`, or `function`.
    */
   type: string;
 }
@@ -2330,6 +2589,34 @@ export interface MzObjectTransitiveDependencies {
    * The ID of the (possibly transitively) referenced object. Corresponds to `mz_objects.id`.
    */
   referenced_object_id: string;
+}
+
+export interface MzOntologyEntityTypes {
+  description: string;
+  name: string;
+  properties: Json | null;
+  relation: string;
+}
+
+export interface MzOntologyLinkTypes {
+  description: string | null;
+  name: string;
+  properties: Json;
+  source_entity: string;
+  target_entity: string;
+}
+
+export interface MzOntologyProperties {
+  column_name: string;
+  description: string | null;
+  entity_type: string;
+  semantic_type: string | null;
+}
+
+export interface MzOntologySemanticTypes {
+  description: string;
+  name: string;
+  sql_type: string;
 }
 
 export interface MzOperators {
@@ -2352,6 +2639,17 @@ export interface MzOptimizerNotices {
   redacted_action: Generated<string | null>;
   redacted_hint: Generated<string | null>;
   redacted_message: Generated<string | null>;
+}
+
+export interface MzOverriddenSystemParameters {
+  /**
+   * The name of the system parameter.
+   */
+  name: string;
+  /**
+   * The environment-wide value of the system parameter.
+   */
+  value: string;
 }
 
 export interface MzPeekDurationsHistogram {
@@ -2386,37 +2684,37 @@ export interface MzPendingClusterReplicas {
   /**
    * The ID of a cluster replica. Corresponds to `mz_cluster_replicas.id`.
    */
-  id: Generated<string>;
+  id: string;
 }
 
 export interface MzPostgresSources {
   /**
    * The ID of the source. Corresponds to `mz_catalog.mz_sources.id`.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the replication slot in the PostgreSQL database that Materialize will create and stream data from.
    */
-  replication_slot: Generated<string>;
+  replication_slot: string;
   /**
    * The PostgreSQL timeline ID determined on source creation.
    */
-  timeline_id: Generated<string | null>;
+  timeline_id: string | null;
 }
 
 export interface MzPostgresSourceTables {
   /**
    * The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The schema of the upstream table being ingested.
    */
-  schema_name: Generated<string>;
+  schema_name: string;
   /**
    * The name of the upstream table being ingested.
    */
-  table_name: Generated<string>;
+  table_name: string;
 }
 
 export interface MzPreparedStatementHistory {
@@ -2542,7 +2840,7 @@ export interface MzRecentActivityLog {
    */
   sql_hash: Buffer;
   /**
-   * The type of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.
+   * The _type_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.
    */
   statement_type: string | null;
   /**
@@ -2577,7 +2875,6 @@ export interface MzRecentActivityLogRedacted {
   finished_status: string | null;
   initial_application_name: string;
   mz_version: string;
-  params: string[];
   prepared_at: Timestamp;
   prepared_statement_id: string;
   prepared_statement_name: string;
@@ -2753,7 +3050,7 @@ export interface MzRelations {
    */
   name: string;
   /**
-   * A [PostgreSQL-compatible OID][`oid`] for the relation.
+   * A PostgreSQL-compatible OID for the relation.
    */
   oid: number;
   /**
@@ -2769,27 +3066,79 @@ export interface MzRelations {
    */
   schema_id: string;
   /**
-   * The type of the relation: either `table`, `source`, `view`, or `materialized view`.
+   * The type of the relation: either `table`, `source`, `view`, or `materialized-view`.
    */
   type: string;
 }
 
-// TODO: hand-added for mz >= 26.41. Keep through `yarn gen:types` until every environment has it.
+export interface MzReplacements {
+  /**
+   * The ID of the replacement object. Corresponds to `mz_objects.id`.
+   */
+  id: string;
+  /**
+   * The ID of the replacement target. Corresponds to `mz_objects.id`.
+   */
+  target_id: string;
+}
+
 export interface MzReplicaHydrationHistory {
-  cluster_id: string;
-  finished_at: Timestamp | null;
-  object_count: string;
-  peak_disk_bytes: string | null;
-  peak_memory_bytes: string | null;
-  process_id: string | null;
+  /**
+   * The ID of the replica's cluster.
+   */
+  cluster_id: Generated<string>;
+  /**
+   * The latest maintained compute dataflow hydration in the hydration episode.
+   */
+  finished_at: Generated<Timestamp | null>;
+  /**
+   * The number of maintained compute dataflows in the hydration episode. Includes the replica's system introspection dataflows, so it exceeds the number of indexes and materialized views you created.
+   */
+  object_count: Generated<string>;
+  /**
+   * The process-lifetime scratch-filesystem or swap high-water mark when the collector recorded the episode. Filesystem peaks are sampled lower bounds. `NULL` if neither measurement is available.
+   */
+  peak_disk_bytes: Generated<string | null>;
+  /**
+   * The process-lifetime cgroup memory high-water mark when the collector recorded the episode. `NULL` if the platform reports no cgroup memory peak.
+   */
+  peak_memory_bytes: Generated<string | null>;
+  /**
+   * The ID of a process within the replica. Episode timing and object_count are replica-wide and repeated for each process.
+   */
+  process_id: Generated<string | null>;
+  /**
+   * The ID of the cluster replica. May name a replica that no longer exists.
+   */
+  replica_id: Generated<string>;
+  /**
+   * The earliest maintained compute dataflow installation in the hydration episode.
+   */
+  started_at: Generated<Timestamp>;
+  /**
+   * The hydration episode's status. Currently always `hydrated`.
+   */
+  status: Generated<string>;
+}
+
+export interface MzReplicaSystemParameters {
+  /**
+   * The name of the replica-local system parameter.
+   */
+  name: string;
+  /**
+   * The ID of the cluster replica. Corresponds to `mz_cluster_replicas.id`.
+   */
   replica_id: string;
-  started_at: Timestamp;
-  status: string;
+  /**
+   * The replica-scoped value of the system parameter.
+   */
+  value: string;
 }
 
 export interface MzRoleAuth {
   /**
-   * The hashed password for the role
+   * The hashed password for the role, if any. Uses the `SCRAM-SHA-256` algorithm.
    */
   password_hash: Generated<string | null>;
   /**
@@ -2797,11 +3146,11 @@ export interface MzRoleAuth {
    */
   role_id: Generated<string>;
   /**
-   * The OID of the role whose configuration parameter default is set. Corresponds to `mz_roles.oid`.
+   * A PostgreSQL-compatible OID for the role.
    */
   role_oid: Generated<number>;
   /**
-   * The timestamp when the password was last updated.
+   * The time at which the password was last updated.
    */
   updated_at: Generated<Timestamp>;
 }
@@ -2810,57 +3159,57 @@ export interface MzRoleMembers {
   /**
    * The ID of the role that granted membership of `member` to `role_id`. Corresponds to `mz_roles.id`.
    */
-  grantor: Generated<string>;
+  grantor: string;
   /**
    * The ID of the role that is a member of `role_id`. Corresponds to `mz_roles.id`.
    */
-  member: Generated<string>;
+  member: string;
   /**
    * The ID of the role the `member` is a member of. Corresponds to `mz_roles.id`.
    */
-  role_id: Generated<string>;
+  role_id: string;
 }
 
 export interface MzRoleParameters {
   /**
    * The configuration parameter name. One of the supported configuration parameters.
    */
-  parameter_name: Generated<string>;
+  parameter_name: string;
   /**
    * The default value of the parameter for the given role. Can be either a single value, or a comma-separated list of values for configuration parameters that accept a list.
    */
-  parameter_value: Generated<string>;
+  parameter_value: string;
   /**
    * The ID of the role whose configuration parameter default is set. Corresponds to `mz_roles.id`.
    */
-  role_id: Generated<string>;
+  role_id: string;
 }
 
 export interface MzRoles {
   /**
    * Materialize's unique ID for the role.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * Indicates whether the role has inheritance of privileges.
    */
-  inherit: Generated<boolean>;
+  inherit: boolean;
   /**
    * The name of the role.
    */
-  name: Generated<string>;
+  name: string;
   /**
-   * A [PostgreSQL-compatible OID][`oid`] for the role.
+   * A PostgreSQL-compatible OID for the role.
    */
-  oid: Generated<number>;
+  oid: number;
   /**
-   * Indicates whether the role can log in (i.e., is a user).
+   * Indicates whether the role can log in.
    */
-  rolcanlogin: Generated<boolean | null>;
+  rolcanlogin: boolean | null;
   /**
    * Indicates whether the role is a superuser.
    */
-  rolsuper: Generated<boolean | null>;
+  rolsuper: boolean | null;
 }
 
 export interface MzSchedulingElapsed {
@@ -2917,60 +3266,72 @@ export interface MzSchemas {
   /**
    * The ID of the database containing the schema. Corresponds to `mz_databases.id`.
    */
-  database_id: Generated<string | null>;
+  database_id: string | null;
   /**
    * Materialize's unique ID for the schema.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the schema.
    */
-  name: Generated<string>;
+  name: string;
   /**
-   * A [PostgreSQL-compatible oid][`oid`] for the schema.
+   * A PostgreSQL-compatible oid for the schema.
    */
-  oid: Generated<number>;
+  oid: number;
   /**
    * The role ID of the owner of the schema. Corresponds to `mz_roles.id`.
    */
-  owner_id: Generated<string>;
+  owner_id: string;
   /**
    * The privileges belonging to the schema.
    */
-  privileges: Generated<string[]>;
+  privileges: string[];
 }
 
 export interface MzSecrets {
   /**
    * The unique ID of the secret.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the secret.
    */
-  name: Generated<string>;
+  name: string;
   /**
-   * A [PostgreSQL-compatible oid][`oid`] for the secret.
+   * A PostgreSQL-compatible oid for the secret.
    */
-  oid: Generated<number>;
+  oid: number;
   /**
    * The role ID of the owner of the secret. Corresponds to `mz_roles.id`.
    */
-  owner_id: Generated<string>;
+  owner_id: string;
   /**
    * The privileges belonging to the secret.
    */
-  privileges: Generated<string[]>;
+  privileges: string[];
   /**
    * The ID of the schema to which the secret belongs. Corresponds to `mz_schemas.id`.
    */
-  schema_id: Generated<string>;
+  schema_id: string;
 }
 
 export interface MzSessionHistory {
+  /**
+   * The name of the user for which the session was established.
+   */
   authenticated_user: string;
+  /**
+   * The time at which the session was established.
+   */
   connected_at: Timestamp;
+  /**
+   * The `application_name` session metadata field.
+   */
   initial_application_name: string;
+  /**
+   * The globally unique ID of the session. Corresponds to `mz_sessions.id`.
+   */
   session_id: string;
 }
 
@@ -3095,6 +3456,7 @@ export interface MzShowClusterReplicas {
 }
 
 export interface MzShowClusters {
+  activity: string | null;
   comment: string;
   name: string;
   replicas: string | null;
@@ -3487,63 +3849,63 @@ export interface MzSinks {
   /**
    * The ID of the cluster maintaining the sink. Corresponds to `mz_clusters.id`.
    */
-  cluster_id: Generated<string>;
+  cluster_id: string;
   /**
    * The ID of the connection associated with the sink, if any. Corresponds to `mz_connections.id`.
    */
-  connection_id: Generated<string | null>;
+  connection_id: string | null;
   /**
    * The `CREATE` SQL statement for the sink.
    */
-  create_sql: Generated<string>;
+  create_sql: string;
   /**
    * The envelope of the sink: `upsert`, or `debezium`.
    */
-  envelope_type: Generated<string | null>;
+  envelope_type: string | null;
   /**
-   * Deprecated The format of the Kafka messages produced by the sink: `avro`, `json`, `text`, or `bytes`.
+   * *Deprecated* The format of the Kafka messages produced by the sink: `avro`, `json`, `text`, or `bytes`.
    */
-  format: Generated<string | null>;
+  format: string | null;
   /**
    * Materialize's unique ID for the sink.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The format of the Kafka message key for messages produced by the sink: `avro`, `json`, `bytes`, `text`, or `NULL`.
    */
-  key_format: Generated<string | null>;
+  key_format: string | null;
   /**
    * The name of the sink.
    */
-  name: Generated<string>;
+  name: string;
   /**
-   * A [PostgreSQL-compatible OID][`oid`] for the sink.
+   * A PostgreSQL-compatible OID for the sink.
    */
-  oid: Generated<number>;
+  oid: number;
   /**
    * The role ID of the owner of the sink. Corresponds to `mz_roles.id`.
    */
-  owner_id: Generated<string>;
+  owner_id: string;
   /**
    * The redacted `CREATE` SQL statement for the sink.
    */
-  redacted_create_sql: Generated<string>;
+  redacted_create_sql: string;
   /**
    * The ID of the schema to which the sink belongs. Corresponds to `mz_schemas.id`.
    */
-  schema_id: Generated<string>;
+  schema_id: string;
   /**
    * The size of the sink.
    */
-  size: Generated<string | null>;
+  size: string | null;
   /**
    * The type of the sink: `kafka`.
    */
-  type: Generated<string>;
+  type: string;
   /**
    * The format of the Kafka message value for messages produced by the sink: `avro`, `json`, `text`, or `bytes`.
    */
-  value_format: Generated<string | null>;
+  value_format: string | null;
 }
 
 export interface MzSinkStatistics {
@@ -3556,7 +3918,7 @@ export interface MzSinkStatistics {
    */
   bytes_staged: string;
   /**
-   * The ID of the sink. Corresponds to `mz_catalog.mz_sources.id`.
+   * The ID of the sink. Corresponds to `mz_catalog.mz_sinks.id`.
    */
   id: string;
   /**
@@ -3604,7 +3966,7 @@ export interface MzSinkStatuses {
    */
   name: string;
   /**
-   * The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
+   * The status of the sink: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.
    */
   status: string;
   /**
@@ -3635,80 +3997,80 @@ export interface MzSinkStatusHistory {
    */
   sink_id: string;
   /**
-   * The status of the sink: one of `created`, `starting`, `running`, `stalled`, `failed`, or `dropped`.
+   * The status of the sink: one of `starting`, `running`, `paused`, `stalled`, or `dropped`.
    */
   status: string;
 }
 
 export interface MzSourceReferences {
-  columns: Generated<string[] | null>;
-  name: Generated<string>;
-  namespace: Generated<string | null>;
-  source_id: Generated<string>;
-  updated_at: Generated<Timestamp>;
+  columns: string[] | null;
+  name: string;
+  namespace: string | null;
+  source_id: string;
+  updated_at: Timestamp;
 }
 
 export interface MzSources {
   /**
    * The ID of the cluster maintaining the source. Corresponds to `mz_clusters.id`.
    */
-  cluster_id: Generated<string | null>;
+  cluster_id: string | null;
   /**
    * The ID of the connection associated with the source, if any. Corresponds to `mz_connections.id`.
    */
-  connection_id: Generated<string | null>;
+  connection_id: string | null;
   /**
    * The `CREATE` SQL statement for the source.
    */
-  create_sql: Generated<string | null>;
+  create_sql: string | null;
   /**
-   * For Kafka sources, the envelope type: `none`, `upsert`, or `debezium`. `NULL` for other source types.
+   * For old-syntax Kafka sources, the envelope type: `none`, `upsert`, or `debezium`. `NULL` for new-syntax Kafka sources, whose envelopes are defined per source table (see `mz_kafka_source_tables`), and for other source types.
    */
-  envelope_type: Generated<string | null>;
+  envelope_type: string | null;
   /**
    * Materialize's unique ID for the source.
    */
-  id: Generated<string>;
+  id: string;
   /**
-   * For Kafka sources, the format of the Kafka message key: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.
+   * For Kafka sources, the format of the Kafka message key: `avro`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.
    */
-  key_format: Generated<string | null>;
+  key_format: string | null;
   /**
    * The name of the source.
    */
-  name: Generated<string>;
+  name: string;
   /**
-   * A [PostgreSQL-compatible OID][`oid`] for the source.
+   * A PostgreSQL-compatible OID for the source.
    */
-  oid: Generated<number>;
+  oid: number;
   /**
    * The role ID of the owner of the source. Corresponds to `mz_roles.id`.
    */
-  owner_id: Generated<string>;
+  owner_id: string;
   /**
    * The privileges granted on the source.
    */
-  privileges: Generated<string[]>;
+  privileges: string[];
   /**
    * The redacted `CREATE` SQL statement for the source.
    */
-  redacted_create_sql: Generated<string | null>;
+  redacted_create_sql: string | null;
   /**
    * The ID of the schema to which the source belongs. Corresponds to `mz_schemas.id`.
    */
-  schema_id: Generated<string>;
+  schema_id: string;
   /**
-   * Deprecated The size of the source.
+   * *Deprecated* The size of the source.
    */
-  size: Generated<string | null>;
+  size: string | null;
   /**
    * The type of the source: `kafka`, `mysql`, `postgres`, `load-generator`, `progress`, or `subsource`.
    */
-  type: Generated<string>;
+  type: string;
   /**
-   * For Kafka sources, the format of the Kafka message value: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.
+   * For Kafka sources, the format of the Kafka message value: `avro`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.
    */
-  value_format: Generated<string | null>;
+  value_format: string | null;
 }
 
 export interface MzSourceStatistics {
@@ -3826,7 +4188,7 @@ export interface MzSourceStatuses {
    */
   name: string;
   /**
-   * The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.
+   * The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, or `dropped`.
    */
   status: string;
   /**
@@ -3857,7 +4219,7 @@ export interface MzSourceStatusHistory {
    */
   source_id: string;
   /**
-   * The status of the source: one of `created`, `starting`, `running`, `paused`, `stalled`, `failed`, or `dropped`.
+   * The status of the source: one of `starting`, `running`, `paused`, `stalled`, or `dropped`.
    */
   status: string;
 }
@@ -3866,15 +4228,15 @@ export interface MzSqlServerSourceTables {
   /**
    * The ID of the subsource or table. Corresponds to `mz_catalog.mz_sources.id` or `mz_catalog.mz_tables.id`.
    */
-  id: Generated<string>;
+  id: string;
   /**
-   * The schema (or, database) of the upstream table being ingested.
+   * The schema of the upstream table being ingested.
    */
-  schema_name: Generated<string>;
+  schema_name: string;
   /**
    * The name of the upstream table being ingested.
    */
-  table_name: Generated<string>;
+  table_name: string;
 }
 
 export interface MzSqlText {
@@ -3893,15 +4255,15 @@ export interface MzSshTunnelConnections {
   /**
    * The ID of the connection.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The first public key associated with the SSH tunnel.
    */
-  public_key_1: Generated<string>;
+  public_key_1: string;
   /**
    * The second public key associated with the SSH tunnel.
    */
-  public_key_2: Generated<string>;
+  public_key_2: string;
 }
 
 export interface MzStatementExecutionHistory {
@@ -4019,46 +4381,46 @@ export interface MzSystemPrivileges {
   /**
    * The privileges belonging to the system.
    */
-  privileges: Generated<string>;
+  privileges: string;
 }
 
 export interface MzTables {
   /**
    * The `CREATE` SQL statement for the table.
    */
-  create_sql: Generated<string | null>;
+  create_sql: string | null;
   /**
    * Materialize's unique ID for the table.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the table.
    */
-  name: Generated<string>;
+  name: string;
   /**
-   * A [PostgreSQL-compatible OID][`oid`] for the table.
+   * A PostgreSQL-compatible OID for the table.
    */
-  oid: Generated<number>;
+  oid: number;
   /**
    * The role ID of the owner of the table. Corresponds to `mz_roles.id`.
    */
-  owner_id: Generated<string>;
+  owner_id: string;
   /**
    * The privileges belonging to the table.
    */
-  privileges: Generated<string[]>;
+  privileges: string[];
   /**
    * The redacted `CREATE` SQL statement for the table.
    */
-  redacted_create_sql: Generated<string | null>;
+  redacted_create_sql: string | null;
   /**
    * The ID of the schema to which the table belongs. Corresponds to `mz_schemas.id`.
    */
-  schema_id: Generated<string>;
+  schema_id: string;
   /**
    * The ID of the source associated with the table, if any. Corresponds to `mz_sources.id`.
    */
-  source_id: Generated<string | null>;
+  source_id: string | null;
 }
 
 export interface MzTimezoneAbbreviations {
@@ -4090,9 +4452,9 @@ export interface MzTimezoneNames {
 export interface MzTypePgMetadata {
   id: Generated<string>;
   typinput: Generated<number>;
+  typlen: Generated<number | null>;
   typreceive: Generated<number>;
   typsend: Generated<number>;
-  typlen: Generated<number | null>;
 }
 
 export interface MzTypes {
@@ -4113,7 +4475,7 @@ export interface MzTypes {
    */
   name: Generated<string>;
   /**
-   * A [PostgreSQL-compatible OID][`oid`] for the type.
+   * A PostgreSQL-compatible OID for the type.
    */
   oid: Generated<number>;
   /**
@@ -4138,39 +4500,39 @@ export interface MzViews {
   /**
    * The `CREATE` SQL statement for the view.
    */
-  create_sql: Generated<string>;
+  create_sql: string;
   /**
    * The view definition (a `SELECT` query).
    */
-  definition: Generated<string>;
+  definition: string;
   /**
    * Materialize's unique ID for the view.
    */
-  id: Generated<string>;
+  id: string;
   /**
    * The name of the view.
    */
-  name: Generated<string>;
+  name: string;
   /**
-   * A [PostgreSQL-compatible OID][`oid`] for the view.
+   * A PostgreSQL-compatible OID for the view.
    */
-  oid: Generated<number>;
+  oid: number;
   /**
    * The role ID of the owner of the view. Corresponds to `mz_roles.id`.
    */
-  owner_id: Generated<string>;
+  owner_id: string;
   /**
    * The privileges belonging to the view.
    */
-  privileges: Generated<string[]>;
+  privileges: string[];
   /**
    * The redacted `CREATE` SQL statement for the view.
    */
-  redacted_create_sql: Generated<string>;
+  redacted_create_sql: string;
   /**
    * The ID of the schema to which the view belongs. Corresponds to `mz_schemas.id`.
    */
-  schema_id: Generated<string>;
+  schema_id: string;
 }
 
 export interface MzWallclockGlobalLag {
@@ -4202,14 +4564,32 @@ export interface MzWallclockGlobalLagHistogramRaw {
 }
 
 export interface MzWallclockGlobalLagHistory {
+  /**
+   * The minimum wallclock lag observed for the object during the minute.
+   */
   lag: Interval | null;
+  /**
+   * The ID of the table, source, materialized view, index, or sink. Corresponds to `mz_objects.id`.
+   */
   object_id: string;
+  /**
+   * The minute-aligned timestamp of the observation.
+   */
   occurred_at: Timestamp;
 }
 
 export interface MzWallclockGlobalLagRecentHistory {
+  /**
+   * The minimum wallclock lag observed for the object during the minute.
+   */
   lag: Interval | null;
+  /**
+   * The ID of the table, source, materialized view, index, or sink. Corresponds to `mz_objects.id`.
+   */
   object_id: string;
+  /**
+   * The minute-aligned timestamp of the observation.
+   */
   occurred_at: Timestamp;
 }
 
@@ -4263,6 +4643,7 @@ export interface PgAttributeAllDatabases {
   attisdropped: boolean;
   attlen: number | null;
   attname: string;
+  attndims: number;
   attnotnull: boolean;
   attnum: number;
   attrelid: number;
@@ -4270,6 +4651,19 @@ export interface PgAttributeAllDatabases {
   atttypmod: number;
   database_name: string | null;
   pg_type_database_name: string | null;
+}
+
+export interface PgAuthidCore {
+  oid: number;
+  rolbypassrls: boolean;
+  rolcanlogin: boolean;
+  rolconnlimit: number;
+  rolinherit: boolean;
+  rolname: string;
+  rolpassword: string | null;
+  rolreplication: boolean;
+  rolsuper: boolean | null;
+  rolvaliduntil: Timestamp | null;
 }
 
 export interface PgClassAllDatabases {
@@ -4291,6 +4685,7 @@ export interface PgClassAllDatabases {
   reloftype: number;
   reloptions: string[] | null;
   relowner: number;
+  relpages: number;
   relpersistence: string;
   relreplident: string;
   relrowsecurity: boolean;
@@ -4365,14 +4760,24 @@ export interface DB {
   mz_aws_privatelink_connection_statuses: MzAwsPrivatelinkConnectionStatuses;
   mz_aws_privatelink_connections: MzAwsPrivatelinkConnections;
   mz_base_types: MzBaseTypes;
+  mz_builtin_indexes: MzBuiltinIndexes;
+  mz_builtin_log_indexes: MzBuiltinLogIndexes;
+  mz_builtin_materialized_views: MzBuiltinMaterializedViews;
+  mz_builtin_sources: MzBuiltinSources;
+  mz_builtin_tables: MzBuiltinTables;
+  mz_builtin_views: MzBuiltinViews;
+  mz_catalog_raw: MzCatalogRaw;
   mz_cluster_auto_scaling_strategies: MzClusterAutoScalingStrategies;
   mz_cluster_deployment_lineage: MzClusterDeploymentLineage;
+  mz_cluster_prometheus_metrics: MzClusterPrometheusMetrics;
   mz_cluster_reconfigurations: MzClusterReconfigurations;
   mz_cluster_replica_frontiers: MzClusterReplicaFrontiers;
   mz_cluster_replica_history: MzClusterReplicaHistory;
   mz_cluster_replica_metrics: MzClusterReplicaMetrics;
   mz_cluster_replica_metrics_history: MzClusterReplicaMetricsHistory;
   mz_cluster_replica_name_history: MzClusterReplicaNameHistory;
+  mz_cluster_replica_resource_usage: MzClusterReplicaResourceUsage;
+  mz_cluster_replica_size_internal: MzClusterReplicaSizeInternal;
   mz_cluster_replica_sizes: MzClusterReplicaSizes;
   mz_cluster_replica_status_history: MzClusterReplicaStatusHistory;
   mz_cluster_replica_statuses: MzClusterReplicaStatuses;
@@ -4380,6 +4785,7 @@ export interface DB {
   mz_cluster_replica_utilization_history: MzClusterReplicaUtilizationHistory;
   mz_cluster_replicas: MzClusterReplicas;
   mz_cluster_schedules: MzClusterSchedules;
+  mz_cluster_system_parameters: MzClusterSystemParameters;
   mz_cluster_workload_classes: MzClusterWorkloadClasses;
   mz_clusters: MzClusters;
   mz_columns: MzColumns;
@@ -4427,9 +4833,6 @@ export interface DB {
   mz_dataflow_operator_reachability_raw: MzDataflowOperatorReachabilityRaw;
   mz_dataflow_operators: MzDataflowOperators;
   mz_dataflow_operators_per_worker: MzDataflowOperatorsPerWorker;
-  mz_dataflow_shutdown_durations_histogram: MzDataflowShutdownDurationsHistogram;
-  mz_dataflow_shutdown_durations_histogram_per_worker: MzDataflowShutdownDurationsHistogramPerWorker;
-  mz_dataflow_shutdown_durations_histogram_raw: MzDataflowShutdownDurationsHistogramRaw;
   mz_dataflows: MzDataflows;
   mz_dataflows_per_worker: MzDataflowsPerWorker;
   mz_default_privileges: MzDefaultPrivileges;
@@ -4459,28 +4862,41 @@ export interface DB {
   mz_materialized_view_refresh_strategies: MzMaterializedViewRefreshStrategies;
   mz_materialized_view_refreshes: MzMaterializedViewRefreshes;
   mz_materialized_views: MzMaterializedViews;
+  mz_mcp_data_product_details: MzMcpDataProductDetails;
+  mz_mcp_data_products: MzMcpDataProducts;
   mz_message_batch_counts_received_raw: MzMessageBatchCountsReceivedRaw;
   mz_message_batch_counts_sent_raw: MzMessageBatchCountsSentRaw;
   mz_message_counts: MzMessageCounts;
   mz_message_counts_per_worker: MzMessageCountsPerWorker;
   mz_message_counts_received_raw: MzMessageCountsReceivedRaw;
   mz_message_counts_sent_raw: MzMessageCountsSentRaw;
+  mz_metric_sinks: MzMetricSinks;
   mz_mysql_source_tables: MzMysqlSourceTables;
   mz_network_policies: MzNetworkPolicies;
   mz_network_policy_rules: MzNetworkPolicyRules;
   mz_notices: MzNotices;
   mz_notices_redacted: MzNoticesRedacted;
+  mz_object_arrangement_size_history: MzObjectArrangementSizeHistory;
   mz_object_arrangement_sizes: MzObjectArrangementSizes;
   mz_object_dependencies: MzObjectDependencies;
+  mz_object_dependencies_raw: MzObjectDependenciesRaw;
   mz_object_fully_qualified_names: MzObjectFullyQualifiedNames;
+  mz_object_global_ids: MzObjectGlobalIds;
+  mz_object_graph_edges: MzObjectGraphEdges;
   mz_object_history: MzObjectHistory;
+  mz_object_hydration_history: MzObjectHydrationHistory;
   mz_object_lifetimes: MzObjectLifetimes;
   mz_object_oid_alias: MzObjectOidAlias;
   mz_object_transitive_dependencies: MzObjectTransitiveDependencies;
   mz_objects: MzObjects;
   mz_objects_id_namespace_types: MzObjectsIdNamespaceTypes;
+  mz_ontology_entity_types: MzOntologyEntityTypes;
+  mz_ontology_link_types: MzOntologyLinkTypes;
+  mz_ontology_properties: MzOntologyProperties;
+  mz_ontology_semantic_types: MzOntologySemanticTypes;
   mz_operators: MzOperators;
   mz_optimizer_notices: MzOptimizerNotices;
+  mz_overridden_system_parameters: MzOverriddenSystemParameters;
   mz_peek_durations_histogram: MzPeekDurationsHistogram;
   mz_peek_durations_histogram_per_worker: MzPeekDurationsHistogramPerWorker;
   mz_peek_durations_histogram_raw: MzPeekDurationsHistogramRaw;
@@ -4500,7 +4916,9 @@ export interface DB {
   mz_records_per_dataflow_operator_per_worker: MzRecordsPerDataflowOperatorPerWorker;
   mz_records_per_dataflow_per_worker: MzRecordsPerDataflowPerWorker;
   mz_relations: MzRelations;
+  mz_replacements: MzReplacements;
   mz_replica_hydration_history: MzReplicaHydrationHistory;
+  mz_replica_system_parameters: MzReplicaSystemParameters;
   mz_role_auth: MzRoleAuth;
   mz_role_members: MzRoleMembers;
   mz_role_parameters: MzRoleParameters;
@@ -4587,6 +5005,7 @@ export interface DB {
   mz_webhook_sources: MzWebhookSources;
   pg_attrdef_all_databases: PgAttrdefAllDatabases;
   pg_attribute_all_databases: PgAttributeAllDatabases;
+  pg_authid_core: PgAuthidCore;
   pg_class_all_databases: PgClassAllDatabases;
   pg_description_all_databases: PgDescriptionAllDatabases;
   pg_namespace_all_databases: PgNamespaceAllDatabases;

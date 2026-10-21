@@ -7,14 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { Client } from "pg";
-
-import { queryBuilder, SEARCH_PATH } from "~/api/materialize";
+import { SEARCH_PATH } from "~/api/materialize";
 import {
   executeSqlHttp,
   getMaterializeClient,
 } from "~/test/sql/materializeSqlClient";
 import { testdrive } from "~/test/sql/mzcompose";
+import { readSubscribeSnapshot } from "~/test/sql/subscribeSnapshot";
 
 import {
   buildReplicaProcessMetricsSubscribe,
@@ -22,41 +21,6 @@ import {
 } from "./replicaProcessMetrics";
 
 const MOCKED_SEARCH_PATH = "internal_test, " + SEARCH_PATH;
-// Below the suite's `testTimeout`, so a snapshot that never completes fails on
-// the error below rather than on the timeout.
-const SUBSCRIBE_SNAPSHOT_TIMEOUT_MS = 30_000;
-
-/**
- * A subscribe's snapshot, read through a cursor. The snapshot is complete at
- * the first progress message past the first message's timestamp.
- */
-async function readSnapshot(
-  client: Client,
-  subscribe: ReturnType<typeof buildReplicaProcessMetricsSubscribe>,
-) {
-  const { sql, parameters } = subscribe.compile(queryBuilder);
-  const rows: Record<string, unknown>[] = [];
-  await client.query("BEGIN");
-  try {
-    await client.query(`DECLARE c CURSOR FOR ${sql}`, [...parameters]);
-    let firstTimestamp: bigint | undefined;
-    const deadline = Date.now() + SUBSCRIBE_SNAPSHOT_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      const { rows: batch } = await client.query(
-        `FETCH ALL c WITH (timeout='1s')`,
-      );
-      for (const row of batch) {
-        const timestamp = BigInt(row.mz_timestamp);
-        firstTimestamp ??= timestamp;
-        if (!row.mz_progressed) rows.push(row);
-        else if (timestamp > firstTimestamp) return rows;
-      }
-    }
-    throw new Error("The subscribe's snapshot did not complete");
-  } finally {
-    await client.query("ROLLBACK");
-  }
-}
 
 describe("buildReplicaProcessMetricsSubscribe", () => {
   it("reads each process's samples for the given replicas from the literal start", async () => {
@@ -85,7 +49,7 @@ describe("buildReplicaProcessMetricsSubscribe", () => {
     const client = await getMaterializeClient();
     await client.query(`SET search_path TO ${MOCKED_SEARCH_PATH}`);
 
-    const rows = await readSnapshot(
+    const rows = await readSubscribeSnapshot(
       client,
       buildReplicaProcessMetricsSubscribe({
         replicaIds: ["u1", "u3"],
@@ -161,7 +125,7 @@ describe("buildReplicaProcessMetricsSubscribe", () => {
       "SELECT r.id FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'quickstart'",
     );
 
-    const rows = await readSnapshot(
+    const rows = await readSubscribeSnapshot(
       client,
       buildReplicaProcessMetricsSubscribe({
         replicaIds: [replica.id],
