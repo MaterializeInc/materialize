@@ -191,6 +191,11 @@ until after it is needed. Choose cadence and batching from measured catalog load
 DDL latency, and retention cost. Publication work scales with what changed, not
 with catalog size.
 
+Periodic publication combines changed client and maintained requirements with
+newly permitted bounds in one transaction, calculating permission from the
+resulting candidate. On-demand grants must not postpone maintenance, and
+unavailable bound proposals must not block safe requirement advancement.
+
 ### Object-owned retention
 
 A maintained object's retention policy constrains authorized compaction of its
@@ -564,32 +569,6 @@ the shared bound. Where concurrent enactment is unsafe, enforce authority at
 the affected output's write boundary rather than treating catalog membership as
 exclusive ownership.
 
-### Adapter catalog ownership
-
-In protected environments, one asynchronous owner per adapter maintains its live
-durable catalog handle and committed projection. Foreground operations and
-periodic maintenance use that owner. The coordinator consumes read-only,
-structurally shared snapshots of that projection, without a separate live follower
-for maintenance. This is in-process ownership, not another process or global write
-authority.
-
-Durable I/O, catch-up and retry waits suspend dependent operations without
-occupying coordinator dispatch, including indirect waits on the owner's lock or
-reply. Coalesce periodic work rather than accumulating publication requests.
-Reuse the existing transaction machinery for validation, fencing and timestamp
-completion.
-
-The coordinator adopts snapshots and enacts their committed diffs in catalog order.
-It completes requests after the required state and protection acknowledgements
-are installed. Existing catalog freshness checks remain binding. Adopting a
-snapshot must preserve locally owned session and runtime state.
-
-Read-protection barriers remain authoritative while writes are pending. Covered
-acquisitions may continue. Requests needing new durable grants wait asynchronously,
-and creator grants still commit with their DDL. Cancellation cannot abandon a
-submitted write. Bootstrap and prewarming retain their authority and snapshot
-semantics.
-
 ## Alternatives
 
 ### Plan-specific recovery protection
@@ -681,8 +660,6 @@ Adapter DDL and replica publication commit as cooperating catalog
 writers. The adapter reads through the query client with durable protection,
 straight to replicas. Compute is the first working slice within this milestone,
 storage follows on the same path, and neither is complete without the other.
-Adapter catalog I/O follows [adapter catalog ownership](#adapter-catalog-ownership),
-keeping coordinator dispatch available while dependent operations wait.
 
 Demonstrate: stop the adapter while maintained dataflows, sources, sinks, and
 compaction work continue, explicitly allowing table- and webhook-fed work to pause.

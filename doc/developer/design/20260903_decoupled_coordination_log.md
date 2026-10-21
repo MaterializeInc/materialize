@@ -17,33 +17,21 @@ Native adapter-loss recovery, retention and compatible-version warm handover hav
 runtime evidence. Keep their proof scopes closed and their regular regressions
 enabled. Incremental protection publication, removal of the whole-map API,
 prepared-MV admission and the replacement-MV replay correction are implemented.
-Cheaper preparation has not resolved foreground catalog-write stalls.
 
 M2 is at verification closeout, pending analysis of the controlled comparison.
-The async-owner change is abandoned at Aljoscha's request and is not part of M2.
-Earlier traces show replica publications committing
-while foreground statements lose their attempts and time out. Long inline retries
-also occupy dispatch. Keep commit conflicts, queueing and dispatch availability
-distinct from a passing workload.
+No further implementation is currently identified as necessary. The asynchronous
+catalog-owner refactor is not part of M2 and must not resume.
 
-## Current comparison and decision point
+## Verification and closeout
 
-Replica advancement/release and compaction-bound publications now reschedule
-definitive conflicts at the normal staggered cadence. Grant acquisition is
-unchanged. Focused checks pass. The matched fixed-seed comparison on actual
-8-CPU/16-GiB hosts shows fewer publication attempts and better foreground
-progress, but one shard still times out on SQL. Committed bounds advance.
-The ALTER SINK trace identifies transaction-open rejection of committed updates
-not yet applied to the owner's projection, followed by candidate conflicts.
-Its inline retry blocks dispatch even without holding DDL admission.
-
-The completed comparison is under `scratch/ci139787/parallel{1,2}/report.md`.
-The bounded repeat reproduced a 321-second append with nested blob-upload retries
-under shared memory pressure. MinIO sizing does not see the parent cgroup limit.
-This is scratch evidence, not an explanation of CI timeouts. Its CPU capture
-identifies unnecessary protection-index reconstruction during empty storage
-cleanup. The correction is in `0286e789`. Formatting, catalog Clippy and all
-35 catalog transaction tests pass on scratch.
+CI140105 at `2bde8879` finishes with 94 passed jobs. Cargo, cluster frontier
+checks, Kafka RTR, both parallel shards and the closed native recovery/handover
+regressions pass. The only failed jobs are deferred upstream merge skew and
+existing-environment source-to-view conversion. The build is not green.
+CI140108 passes both shards of the original fixed-seed parallel comparison,
+with the same workload, diagnostic settings and normal CI resource budget.
+Capture analysis of foreground commits and committed-bound progress is pending
+under `scratch/combined-publication/ci140108-parallel{1,2}/`.
 
 Publication scheduling and atomic maintenance are implemented. Immediate replica
 grants preserve the maintenance deadline. Combined client/recovery requirements
@@ -60,21 +48,10 @@ successful catalog commits. The comparison does not isolate each change's traffi
 contribution. Production defaults remain unchanged. Evidence and limits are in
 `scratch/combined-publication/report.md`, not a claim of resolved CI contention.
 
-Combining writes removed the client-only write's refresh before bound sampling.
-The paused-index regression reproduces twice without that refresh and passes on
-the pre-combination revision. The correction refreshes and enacts the catalog
-prefix before sampling, preserving fencing and conflict checks. All three
-unchanged cluster frontier regressions pass on scratch. Only the paused-index
-failure reproduced locally before the correction. The oracle-allocation race
-remains, so this is not a starvation-freedom guarantee.
-
-CI140105 at `2bde8879` finishes with 94 passed jobs. Cargo, cluster frontier
-checks, Kafka RTR, both parallel shards and the closed native recovery/handover
-regressions pass. The only failed jobs are deferred upstream merge skew and
-existing-environment source-to-view conversion. The build is not green.
-CI140108 passes both shards of the original fixed-seed parallel comparison,
-with the same workload, diagnostic settings and normal CI resource budget.
-Capture analysis of foreground commits and committed-bound progress is pending.
+The publisher refreshes and enacts the catalog prefix before sampling, preserving
+fencing and conflict checks. All three unchanged cluster frontier regressions
+pass on scratch and CI. The oracle-allocation race remains, so this is not a
+starvation-freedom guarantee.
 
 CI140090's parallel-shard timeout remains unexplained rather than attributed to
 the publisher correction: SQL progress stopped for about 18 minutes, while
@@ -82,35 +59,18 @@ watchdog warnings, publication conflicts and late Persist delays did not identif
 the blocking owner. No logged OOM or process exit established a cause. Evidence
 is under `scratch/combined-publication/ci140090-parallel{1,2}/`.
 
-The [asynchronous adapter catalog ownership](20260903_decoupled_coordination.md#adapter-catalog-ownership)
-proposal and its M2 requirement are superseded by Aljoscha's abandonment decision.
-Flag these passages for removal by the design owner. Do not resume the refactor.
-The bounded table-lifecycle corrections remain implemented and reviewed, with
-verification below. They are not demonstrated repairs for the original contention.
-The Persist-traffic investigation is separately owned and retains its worker.
+The independent table-lifecycle corrections remain implemented and reviewed.
+Finalization requires definitive, shard-addressed Forget through the existing
+committer. Local adoption/detachment is separate from shared retirement and write
+authority. Affected-crate Clippy and 44 boundary tests pass. Three existing
+bootstrap/builtin-migration regressions pass unchanged on rerun, with two initial
+timeouts still unexplained. Evidence is under `scratch/table-lifecycle-verification/`.
+These fixes are not demonstrated repairs for the original contention.
 
-The caller inventory and reviews are under `scratch/async-catalog-ownership/`.
-Prerequisites through `c984bee8` pass formatting, scratch adapter Clippy, five
-group-committer tests and two DDL-completion tests. Lifecycle revision `68a45ac0`
-and its compile cleanups through `45a37509` pass affected-crate Clippy, including
-test targets, and 44 distinct boundary tests. The reviewed correction makes finalization
-obtain definitive, shard-addressed Forget through the existing committer after
-bootstrap. SQL DROP only detaches local routes. Read-only adoption shares bootstrap
-schema descriptions and leased-read installation without writable oracle or
-user-table registration. Tests cover peer/alias detachment, lost retirement
-completion, physical closure ordering, independent finalization eligibility and
-read-only schema adoption.
-
-Three existing environmentd bootstrap/builtin-migration regressions pass on an
-unchanged rerun. The initial run timed out in independent-oracle bootstrap and
-migrated-MV readiness, while the flag-off migration test passed. Those two initial
-timeouts remain unexplained. No deadlines, correctness assertions or production
-settings were changed. This is not a contention comparison or full M2 verification.
-
-If owner work resumes, use the approved ownership contract and existing fixed-seed
-comparison. Dispatch responsiveness alone does not establish successful foreground
-commits, SQL completion or compaction-bound advancement. No owner contention
-comparison or traffic experiment is currently running here. Shared content-priority
+Finish the two capture analyses, then close out the evidence, PR summary and
+implementation history. Distinguish successful foreground commits, SQL completion
+and committed-bound advancement. Do not infer physical reclamation or a scheduling
+guarantee from those results, or reopen closed proof scopes. Shared content-priority
 signals and arbitration changes remain unapproved.
 
 ## Other work and scope
