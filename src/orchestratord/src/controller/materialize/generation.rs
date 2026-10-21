@@ -1038,13 +1038,23 @@ fn create_environmentd_statefulset_object(
     // then. balancerd and clients use the external SQL port and can fill its
     // queue, after which TCP probes against it time out and liveness kills the
     // pod mid-boot. Probing the internal port keeps client traffic out of the
-    // probes' queue.
+    // probes' queue. Some authenticator kinds have no internal SQL listener,
+    // and probing an unbound port fails every check, so fall back to the
+    // external one.
+    let listeners_config = create_v0_147_0_listeners_config(config, mz);
+    let probe_port = listeners_config
+        .sql
+        .get("internal")
+        .or_else(|| listeners_config.sql.get("external"))
+        .expect("external SQL listener is always configured")
+        .addr
+        .port();
     let probe = Probe {
         initial_delay_seconds: Some(1),
         failure_threshold: Some(12),
         tcp_socket: Some(TCPSocketAction {
             host: None,
-            port: IntOrString::Int(config.environmentd_internal_sql_port.into()),
+            port: IntOrString::Int(probe_port.into()),
         }),
         ..Default::default()
     };
