@@ -390,6 +390,10 @@ a    true     integer  ""
 
 
 # Test that the underlying Persist shard gets cleaned up on DROP.
+# Publish protection releases within the tombstone check's timeout.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s';
+
 > CREATE TABLE shard_drop_test (a int, b text);
 > INSERT INTO shard_drop_test VALUES (1, 'hello');
 
@@ -421,3 +425,6 @@ $ check-shard-tombstone shard-id=${shard-drop-test-shard-id}
 
 # TODO(parkmycar): The since and upper of the shard are empty, but the controller still has it's handle registered.
 # $ check-shard-tombstone shard-id=${shard-drop-test-empty-shard-id}
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET catalog_read_protection_publish_interval;
