@@ -100,4 +100,63 @@ describe("SubscribeManager", () => {
     expect(manager.getSnapshot().error).toBeUndefined();
     expect(queries).toHaveLength(1);
   });
+
+  it("follows a subscribe the server ends and runs again, dropping its error and old rows", async () => {
+    const rowsByRun = [[["a"], ["b"]], [["c"]]];
+    let run = 0;
+    const queries: MockSubscribeConnection[] = [];
+    server.use(
+      mockSubscribeSocket((_sql, _params, connection) => {
+        queries.push(connection);
+        return {
+          columns: buildColumns(["id"]),
+          rows: rowsByRun[Math.min(run++, rowsByRun.length - 1)],
+          timestamp: 10,
+        };
+      }),
+    );
+    const manager = connect();
+    await vi.waitFor(() =>
+      expect(manager.getSnapshot().data).toEqual([{ id: "a" }, { id: "b" }]),
+    );
+
+    queries[0].endWithError("target replica failed or was dropped");
+
+    await vi.waitFor(() =>
+      expect(manager.getSnapshot().data).toEqual([{ id: "c" }]),
+    );
+    expect(manager.getSnapshot().error).toBeUndefined();
+    expect(manager.getSnapshot().snapshotComplete).toBe(true);
+  });
+
+  it("keeps reporting the error of a subscribe that fails every time it runs", async () => {
+    const queries: MockSubscribeConnection[] = [];
+    server.use(
+      mockSubscribeSocket((_sql, _params, connection) => {
+        queries.push(connection);
+        if (queries.length > 1) {
+          connection.error("unknown catalog item");
+          return undefined;
+        }
+        return { columns: buildColumns(["id"]), rows: [["a"]], timestamp: 10 };
+      }),
+    );
+    const manager = connect();
+    const errors: Array<string | undefined> = [];
+    manager.onChange(() => errors.push(manager.getSnapshot().error?.message));
+    await vi.waitFor(() =>
+      expect(manager.getSnapshot().snapshotComplete).toBe(true),
+    );
+
+    queries[0].endWithError("unknown catalog item");
+
+    await vi.waitFor(() => expect(queries).toHaveLength(2));
+    await vi.waitFor(() =>
+      expect(manager.getSnapshot().error?.message).toBe("unknown catalog item"),
+    );
+    // No update in between drops the error.
+    expect(errors.slice(errors.indexOf("unknown catalog item"))).not.toContain(
+      undefined,
+    );
+  });
 });

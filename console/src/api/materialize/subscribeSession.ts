@@ -107,10 +107,20 @@ function createSubscribeSession<T extends object, R>(
   const unsubscribeChange = manager.onChange(() =>
     sink.apply(manager.getSnapshot()),
   );
+  // NOTE: every connect sends the variables it's given, defaults included,
+  // over those the manager was built with. Without this, each attempt would
+  // drop the session's cluster and replica. Only set variables are passed, so
+  // an unset cluster keeps the default rather than clearing it.
+  const sessionVariables = Object.fromEntries(
+    Object.entries(options.sessionVariables ?? {}).filter(
+      ([, value]) => value !== undefined,
+    ),
+  );
   const connection = new WebsocketConnectionManager(
     manager,
     store,
     reconnectionStateAtom,
+    { getSessionVariables: () => sessionVariables },
   );
 
   // The held rows belong to the previous region's catalog: reset rather than

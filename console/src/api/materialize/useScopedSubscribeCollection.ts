@@ -29,26 +29,32 @@ import { useGlobalSubscribeCollection } from "./useSubscribe";
  *
  * `subscribe` must be referentially stable, since a new builder restarts the
  * subscribe session. Its upsert key must identify a row as
- * `collections.getKey` does.
+ * `collections.getKey` does. `session` pins the session to a cluster, or to
+ * one of its replicas, for subscribes that read introspection.
  */
 export function useScopedSubscribeCollection<T extends object>(
   collections: ScopedSubscribeCollections<T>,
   key: string,
   subscribe: RawBuilder<T> | undefined,
+  session?: { clusterName: string; clusterReplicaName?: string },
 ) {
   const scope = useAtomValue(syncEngineCacheScopeLoadableAtom);
   const collection =
     scope.state === "hasData" && scope.data
       ? collections.get(scope.data, key)
       : undefined;
+  const clusterName = session?.clusterName;
+  const clusterReplicaName = session?.clusterReplicaName;
   const options = React.useMemo(
     () => ({
       target: collection,
       subscribe,
+      clusterName,
+      clusterReplicaName,
       select: (row: SubscribeRow<T>) => row.data,
       upsertKey: (row: SubscribeRow<T>) => collections.getKey(row.data),
     }),
-    [collections, collection, subscribe],
+    [collections, collection, subscribe, clusterName, clusterReplicaName],
   );
   useGlobalSubscribeCollection(options);
   const status = useAtomValue(
