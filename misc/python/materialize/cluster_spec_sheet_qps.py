@@ -43,7 +43,14 @@ class QpsSweep:
         ):
             raise ValueError("Invalid QPS sweep configuration")
 
-    def config(self, flags: list[str], concurrency: int, protocol: str) -> dict:
+    def config(
+        self,
+        flags: list[str],
+        concurrency: int,
+        protocol: str,
+        *,
+        disable_statement_logging: bool = False,
+    ) -> dict:
         options = dict(zip(flags[::2], flags[1::2]))
         params = parse_qs(options["-params"])
 
@@ -63,6 +70,11 @@ class QpsSweep:
                 common
                 | {
                     "PGOPTIONS": f"-c cluster={cluster} -c statement_timeout={int(self.query_timeout * 1000)}"
+                    + (
+                        " -c statement_logging_sample_rate=0"
+                        if disable_statement_logging
+                        else ""
+                    )
                 }
                 for cluster in clusters
             ],
