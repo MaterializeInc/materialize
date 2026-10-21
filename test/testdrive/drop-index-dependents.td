@@ -83,7 +83,7 @@ contains:cannot drop index "t_idx": still depended upon by index "t_idx2"
 > ${orphaned-dataflows}
 0
 
-# Positive control: enable_unsafe_drop_index orphans the index, which the check
+# Positive control: enable_drop_in_use_index orphans the index, which the check
 # above detects, and dropping the reader frees it.
 > CREATE INDEX t_idx ON t (a)
 > CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t WHERE a > 0
@@ -92,12 +92,12 @@ contains:cannot drop index "t_idx": still depended upon by index "t_idx2"
 1
 
 $ postgres-execute connection=mz_system
-ALTER SYSTEM SET enable_unsafe_drop_index = true
+ALTER SYSTEM SET enable_drop_in_use_index = true
 
 > DROP INDEX t_idx
 
 $ postgres-execute connection=mz_system
-ALTER SYSTEM RESET enable_unsafe_drop_index
+ALTER SYSTEM RESET enable_drop_in_use_index
 
 > ${orphaned-dataflows}
 2

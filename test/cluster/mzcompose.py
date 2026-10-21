@@ -2170,9 +2170,9 @@ def workflow_test_compute_reconciliation_replace(c: Composition) -> None:
         #
         # NOTE: This deliberately orphans `idx`'s dataflow. `mv` and `idx1` read
         # from `idx`, so their plans only change on replan if `idx` goes away
-        # while they survive, which `enable_unsafe_drop_index` allows.
+        # while they survive, which `enable_drop_in_use_index` allows.
         c.sql(
-            "ALTER SYSTEM SET enable_unsafe_drop_index = true",
+            "ALTER SYSTEM SET enable_drop_in_use_index = true",
             port=6877,
             user="mz_system",
         )

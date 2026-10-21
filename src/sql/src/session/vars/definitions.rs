@@ -2073,9 +2073,11 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: true,
     },
+    // NOTE: `false` is the safe setting, unlike most `enable_*` flags. Turning it on lets
+    // `DROP INDEX` orphan the dataflows of indexes that other dataflows still read from.
     {
-        name: enable_unsafe_drop_index,
-        desc: "dropping an index without CASCADE while other dataflows read from it, leaving them running on an orphaned arrangement",
+        name: enable_drop_in_use_index,
+        desc: "dropping an index while other dataflows read from it, leaving them running on an orphaned arrangement",
         default: false,
         enable_for_item_parsing: false,
     },

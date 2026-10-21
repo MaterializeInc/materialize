@@ -283,12 +283,13 @@ pub enum AdapterError {
     ///
     /// The map keys are role names and values are detailed error messages.
     DependentObject(BTreeMap<String, Vec<String>>),
-    /// A statement tried to drop an index while materialized views or indexes read from it.
+    /// A statement tried to drop indexes while materialized views, indexes, or metric sinks
+    /// read from them.
     ///
-    /// `dependents` holds `(object type, name)` pairs.
+    /// `blocked` is never empty. Each entry pairs a blocked index's name with its readers as
+    /// `(object type, name)` pairs.
     IndexInUse {
-        index_name: String,
-        dependents: Vec<(String, String)>,
+        blocked: Vec<(String, Vec<(String, String)>)>,
     },
     /// When performing an `ALTER` of some variety, re-planning the statement
     /// errored.
@@ -638,11 +639,29 @@ impl AdapterError {
             )),
             AdapterError::PlanError(e) => e.detail(),
             AdapterError::Unauthorized(unauthorized) => unauthorized.detail(),
-            AdapterError::IndexInUse { index_name, .. } => Some(format!(
-                "The dependent objects are live dataflows that read from index {}, so the index \
-                 cannot be dropped while they exist.",
-                index_name.quoted()
-            )),
+            AdapterError::IndexInUse { blocked } => match &blocked[..] {
+                [(index_name, _)] => Some(format!(
+                    "The dependent objects are live dataflows that read from index {}, so the \
+                     index cannot be dropped while they exist.",
+                    index_name.quoted()
+                )),
+                blocked => {
+                    let per_index = blocked
+                        .iter()
+                        .map(|(index_name, dependents)| {
+                            format!(
+                                "Index {} is read by {}.",
+                                index_name.quoted(),
+                                fmt_dependents(dependents.iter())
+                            )
+                        })
+                        .join(" ");
+                    Some(format!(
+                        "{per_index} The dependent objects are live dataflows that read from \
+                         these indexes, so the indexes cannot be dropped while they exist."
+                    ))
+                }
+            },
             AdapterError::DependentObject(dependent_objects) => Some(
                 dependent_objects
                     .iter()
@@ -1539,23 +1558,22 @@ impl fmt::Display for AdapterError {
                     dependent_objects.keys().join(", ")
                 )
             }
-            AdapterError::IndexInUse {
-                index_name,
-                dependents,
-            } => {
+            AdapterError::IndexInUse { blocked } => {
                 // Mirrors `PlanError::DependentObjectsStillExist` so clients see one shape of
                 // RESTRICT failure regardless of which layer detected the dependency.
-                let dependents = dependents
-                    .iter()
-                    .map(|(dependent_type, dependent_name)| {
-                        format!("{} {}", dependent_type, dependent_name.quoted())
-                    })
-                    .join(", ");
-                write!(
-                    f,
-                    "cannot drop index {}: still depended upon by {dependents}",
-                    index_name.quoted()
-                )
+                let dependents = fmt_dependents(blocked.iter().flat_map(|(_, deps)| deps).unique());
+                match &blocked[..] {
+                    [(index_name, _)] => write!(
+                        f,
+                        "cannot drop index {}: still depended upon by {dependents}",
+                        index_name.quoted()
+                    ),
+                    blocked => write!(
+                        f,
+                        "cannot drop indexes {}: still depended upon by {dependents}",
+                        blocked.iter().map(|(name, _)| name.quoted()).join(", ")
+                    ),
+                }
             }
             AdapterError::InvalidAlter(t, e) => {
                 write!(f, "invalid ALTER {t}: {e}")
@@ -1927,4 +1945,13 @@ mod tests {
         assert_eq!(response.code, SqlState::DIVISION_BY_ZERO);
         assert_eq!(response.message, expected_message);
     }
+}
+
+/// Renders `(object type, name)` pairs as `materialized view "mv", index "i"`.
+fn fmt_dependents<'a>(dependents: impl Iterator<Item = &'a (String, String)>) -> String {
+    dependents
+        .map(|(dependent_type, dependent_name)| {
+            format!("{} {}", dependent_type, dependent_name.quoted())
+        })
+        .join(", ")
 }

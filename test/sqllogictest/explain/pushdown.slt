@@ -254,7 +254,7 @@ materialize.public.numbers  1313  0  1  0
 # plan imported an index that was dropped after the view was created. The
 # dropped index no longer has a compute collection, but the view's dataflow
 # keeps running and reading from it. Dropping an index that a view reads from
-# is refused unless enable_unsafe_drop_index is set, so set it for the
+# is refused unless enable_drop_in_use_index is set, so set it for the
 # duration of this scenario.
 
 statement ok
@@ -267,7 +267,7 @@ statement error cannot drop index "numbers_value_idx": still depended upon by ma
 DROP INDEX numbers_value_idx;
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_unsafe_drop_index = true;
+ALTER SYSTEM SET enable_drop_in_use_index = true;
 ----
 COMPLETE 0
 
@@ -275,7 +275,7 @@ statement ok
 DROP INDEX numbers_value_idx;
 
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM RESET enable_unsafe_drop_index;
+ALTER SYSTEM RESET enable_drop_in_use_index;
 ----
 COMPLETE 0
 

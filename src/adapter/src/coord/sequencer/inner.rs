@@ -193,7 +193,7 @@ struct DropOps {
 /// The outcome of [`Coordinator::check_index_dependents`].
 struct IndexDropNotices {
     /// Indexes dropped while durable readers survive. Non-empty only when
-    /// `enable_unsafe_drop_index` let the drop through.
+    /// `enable_drop_in_use_index` let the drop through.
     orphaned: Vec<DroppedInUseIndex>,
     /// Indexes still read by one-shot dataflows, which never block a drop.
     in_flight: Vec<InFlightIndexReaders>,
@@ -1634,13 +1634,15 @@ impl Coordinator {
         Ok(ExecuteResponse::DroppedOwned)
     }
 
-    /// Refuses to drop an index that a surviving materialized view or index reads from.
+    /// Refuses to drop indexes that a surviving materialized view, index, or metric sink reads
+    /// from, naming every blocked index in one error.
     ///
-    /// A reader survives unless it is itself in `drop_ids`. With `enable_unsafe_drop_index`
+    /// A reader survives unless it is itself in `drop_ids`. With `enable_drop_in_use_index`
     /// set, the drop proceeds instead and the orphaned indexes are reported for a warning.
     ///
-    /// One-shot dataflows (`SUBSCRIBE`, `COPY TO`, slow-path `SELECT`) never block a drop.
-    /// They finish on their own and are reported only for a notice.
+    /// One-shot dataflows (`SUBSCRIBE`, `COPY TO`, slow-path `SELECT`, and system dataflows
+    /// such as curated metric sinks) never block a drop. They finish on their own or are
+    /// reinstalled, and are reported only for a notice.
     ///
     /// TODO: once pinned LIR makes a dataflow's index imports a durable property, record them
     /// as catalog dependencies so the planner can do this with its regular dependency walk.
@@ -1650,7 +1652,7 @@ impl Coordinator {
         drop_ids: &[ObjectId],
     ) -> Result<IndexDropNotices, AdapterError> {
         let humanizer = self.catalog().for_session(session);
-        let unsafe_drop_allowed = self.catalog().system_config().enable_unsafe_drop_index();
+        let drop_in_use_allowed = self.catalog().system_config().enable_drop_in_use_index();
         let humanize_index = |index: &Index, item_id: &CatalogItemId| {
             humanizer
                 .humanize_id(index.global_id())
@@ -1659,6 +1661,7 @@ impl Coordinator {
 
         let drop_set: BTreeSet<ObjectId> = drop_ids.iter().cloned().collect();
         let mut orphaned = Vec::new();
+        let mut blocked = Vec::new();
         let mut transient_by_index = Vec::new();
         for id in drop_ids {
             let ObjectId::Item(item_id) = id else {
@@ -1674,7 +1677,7 @@ impl Coordinator {
             if durable.is_empty() {
                 continue;
             }
-            if !unsafe_drop_allowed {
+            if !drop_in_use_allowed {
                 let dependents = durable
                     .into_iter()
                     .map(|dependent_id| {
@@ -1689,10 +1692,8 @@ impl Coordinator {
                 let index_name = humanizer
                     .minimal_qualification(self.catalog().get_entry(item_id).name())
                     .to_string();
-                return Err(AdapterError::IndexInUse {
-                    index_name,
-                    dependents,
-                });
+                blocked.push((index_name, dependents));
+                continue;
             }
             let dependant_objects = durable
                 .into_iter()
@@ -1707,6 +1708,10 @@ impl Coordinator {
             });
         }
 
+        if !blocked.is_empty() {
+            return Err(AdapterError::IndexInUse { blocked });
+        }
+
         let mut in_flight = Vec::new();
         for (index, item_id, transient) in transient_by_index {
             let mut readers = InFlightIndexReaders {
@@ -1717,7 +1722,11 @@ impl Coordinator {
                 match self.active_compute_sinks.get(&gid) {
                     Some(ActiveComputeSink::Subscribe(_)) => readers.subscribes += 1,
                     Some(ActiveComputeSink::CopyTo(_)) => readers.copy_tos += 1,
-                    None if self.introspection_subscribes.contains_key(&gid) => readers.system += 1,
+                    None if self.introspection_subscribes.contains_key(&gid)
+                        || self.is_metric_sink(gid) =>
+                    {
+                        readers.system += 1
+                    }
                     // Slow-path peeks are the remaining owners of transient compute
                     // collections that import user indexes.
                     None => readers.selects += 1,
@@ -1766,7 +1775,7 @@ impl Coordinator {
 
     /// Reports the outcome of [`Coordinator::check_index_dependents`] to the session.
     ///
-    /// An orphaned index is loud on purpose: it only happens under `enable_unsafe_drop_index`,
+    /// An orphaned index is loud on purpose: it only happens under `enable_drop_in_use_index`,
     /// and every occurrence should be visible to us as well as to the user.
     fn emit_index_drop_notices(
         &self,
@@ -1778,7 +1787,7 @@ impl Coordinator {
             tracing::error!(
                 index = %orphaned.index_name,
                 dependents = ?orphaned.dependant_objects,
-                "dropped an index that other dataflows read from because enable_unsafe_drop_index is set"
+                "dropped an index that other dataflows read from because enable_drop_in_use_index is set"
             );
             self.metrics
                 .optimization_notices

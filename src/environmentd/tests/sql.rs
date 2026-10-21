@@ -4622,9 +4622,9 @@ fn test_drop_in_use_index_is_refused() {
 
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
-fn test_drop_in_use_index_unsafe_flag_warns() {
+fn test_drop_in_use_index_flag_warns() {
     let server = test_util::TestHarness::default()
-        .with_system_parameter_default("enable_unsafe_drop_index".into(), "true".into())
+        .with_system_parameter_default("enable_drop_in_use_index".into(), "true".into())
         .start_blocking();
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
@@ -4649,11 +4649,12 @@ fn test_drop_in_use_index_unsafe_flag_warns() {
         .try_recv()
         .expect("expected a warning about the orphaned index");
     assert_eq!(notice.severity(), "WARNING");
-    assert_contains!(
+    assert_eq!(
         notice.message(),
-        "index \"materialize.public.t_idx\" was dropped while the following objects read from it: materialize.public.mv"
+        "index \"materialize.public.t_idx\" was dropped, but these objects still read from it: materialize.public.mv"
     );
-    assert_contains!(notice.message(), "enable_unsafe_drop_index");
+    assert_contains!(notice.detail().unwrap(), "enable_drop_in_use_index");
+    assert_contains!(notice.hint().unwrap(), "Drop and recreate those objects");
 
     // The view survives on the orphaned index.
     let count: i64 = client
