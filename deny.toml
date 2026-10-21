@@ -110,9 +110,8 @@ skip = [
     # Used by tokio-postgres (MaterializeInc/rust-postgres fork)
     { name = "phf", version = "0.13.1" },
     { name = "phf_shared", version = "0.13.1" },
-    # Used by iceberg, iceberg-catalog-rest, libduckdb-sys (build), segment, and
-    # the iceberg connection code in mz-storage-types, whose client crosses into
-    # iceberg's API.
+    # Used by iceberg, iceberg-catalog-rest, segment, and the iceberg connection
+    # code in mz-storage-types, whose client crosses into iceberg's API.
     { name = "reqwest", version = "0.12.28" },
     # Conflicts between `bon` in apache-avro and `derive_builder` in iceberg
     { name = "darling_macro", version = "0.20.11" },
@@ -174,7 +173,7 @@ skip = [
     # held back by tower-lsp 0.20 (mz-deploy LSP server)
     { name = "dashmap", version = "5.5.3" },
     { name = "tower", version = "0.4.13" },
-    # held back by duckdb 1.4 (rusqlite in mz-deploy's build cache is on 0.12)
+    # held back by duckdb 1.10506 (rusqlite in mz-deploy's build cache is on 0.12)
     { name = "hashlink", version = "0.10.0" },
     # held back by owo-colors 4.3 (mz-deploy terminal styling)
     { name = "supports-color", version = "2.1.0" },
