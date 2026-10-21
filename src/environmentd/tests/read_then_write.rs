@@ -2368,4 +2368,18 @@ fn test_concurrent_delete_rows_from_view_does_not_over_delete() {
         u64::try_from(ROUNDS * NUM_WORKERS).unwrap(),
         "every DELETE ... ROWS should retract the view's rows directly",
     );
+
+    // Without a retry, the workers did not race, and the counts above would
+    // hold for serial deletes too.
+    let metrics = server.metrics_registry().gather();
+    let histogram = session_occ_retry_histogram(&metrics);
+    let zero_retry_bucket = histogram
+        .get_bucket()
+        .iter()
+        .find(|b| b.upper_bound() == 0.0)
+        .expect("histogram should have a 0-retry bucket");
+    assert!(
+        zero_retry_bucket.cumulative_count() < histogram.get_sample_count(),
+        "expected at least one DELETE ... ROWS to retry under contention",
+    );
 }
