@@ -622,6 +622,16 @@ fn create_environmentd_statefulset_object(
         ..Default::default()
     });
 
+    // Passed as an env var so environmentd versions that predate it ignore it
+    // instead of failing on an unknown flag.
+    if let Some(terraform_module_version) = &config.terraform_module_version {
+        env.push(EnvVar {
+            name: "MZ_TERRAFORM_MODULE_VERSION".to_string(),
+            value: Some(terraform_module_version.clone()),
+            ..Default::default()
+        });
+    }
+
     env.extend(mz.spec.environmentd_extra_env.iter().flatten().cloned());
 
     let mut args = vec![];

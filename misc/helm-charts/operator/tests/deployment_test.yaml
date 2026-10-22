@@ -328,6 +328,14 @@ tests:
       path: spec.template.spec.containers[0].args
       content: "--disable-license-key-checks"
 
+- it: should pass the terraform module version when configured
+  set:
+    operator.args.terraformModuleVersion: v1.2.3
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--terraform-module-version=v1.2.3"
+
 - it: should have database network policies disabled by default
   asserts:
   - contains:

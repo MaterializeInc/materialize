@@ -969,6 +969,7 @@ impl Listeners {
                 internal_console_redirect_url: config.internal_console_redirect_url,
                 tls_reload_certs,
                 helm_chart_version: None,
+                terraform_module_version: None,
                 license_key: ValidatedLicenseKey::for_tests(),
                 external_login_password_mz_system: config.external_login_password_mz_system,
                 force_builtin_schema_migration: config.force_builtin_schema_migration,

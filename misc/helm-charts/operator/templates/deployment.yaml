@@ -72,6 +72,9 @@ spec:
         imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
         args:
         - "--helm-chart-version={{ .Chart.Version }}"
+        {{- with .Values.operator.args.terraformModuleVersion }}
+        - "--terraform-module-version={{ . }}"
+        {{- end }}
         - "--startup-log-filter={{ .Values.operator.args.startupLogFilter }}"
         - "--cloud-provider={{ .Values.operator.cloudProvider.type }}"
         - "--region={{ .Values.operator.cloudProvider.region }}"

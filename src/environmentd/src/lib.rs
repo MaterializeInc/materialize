@@ -207,6 +207,8 @@ pub struct Config {
     pub system_parameter_defaults: BTreeMap<String, String>,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
+    /// Version of the Terraform module that deployed this environment, if any.
+    pub terraform_module_version: Option<String>,
     /// Configuration managed by license keys
     pub license_key: ValidatedLicenseKey,
 
@@ -885,6 +887,7 @@ impl Listeners {
                 environment_id: config.environment_id,
                 license_key: license_key.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
+                terraform_module_version: config.terraform_module_version.clone(),
                 report_interval: Duration::from_secs(3600),
             });
         } else if config.test_only_dummy_segment_client {
@@ -901,6 +904,7 @@ impl Listeners {
                 environment_id: config.environment_id,
                 license_key: license_key.clone(),
                 helm_chart_version: config.helm_chart_version.clone(),
+                terraform_module_version: config.terraform_module_version.clone(),
                 report_interval: Duration::from_secs(180),
             });
         }

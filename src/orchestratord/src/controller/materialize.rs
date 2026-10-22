@@ -69,6 +69,7 @@ pub struct Config {
     pub create_balancers: bool,
     pub create_console: bool,
     pub helm_chart_version: Option<String>,
+    pub terraform_module_version: Option<String>,
     pub secrets_controller: String,
     pub collect_pod_metrics: bool,
     pub enable_prometheus_scrape_annotations: bool,

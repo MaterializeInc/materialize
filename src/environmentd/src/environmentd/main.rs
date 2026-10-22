@@ -366,6 +366,11 @@ pub struct Args {
     #[clap(long, env = "HELM_CHART_VERSION")]
     helm_chart_version: Option<String>,
 
+    /// Version of the Materialize Terraform module that deployed this
+    /// environment, if any. Only reported in telemetry.
+    #[clap(long, env = "TERRAFORM_MODULE_VERSION")]
+    terraform_module_version: Option<String>,
+
     // === Storage options. ===
     /// Where the persist library should store its blob data.
     #[clap(long, env = "PERSIST_BLOB_URL")]
@@ -1181,6 +1186,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .map(|kv| (kv.key, kv.value))
                     .collect(),
                 helm_chart_version: args.helm_chart_version.clone(),
+                terraform_module_version: args.terraform_module_version,
                 license_key,
                 // AWS options.
                 aws_account_id: args.aws_account_id,
