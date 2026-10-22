@@ -1586,17 +1586,18 @@ impl Instance {
                         .insert(*subscribe_id, ActiveSubscribe::default());
                 }
                 ComputeSinkConnection::BatchedSubscribe(connection) => {
-                    // The output starts at `S`, the as-of with a snapshot and one step past it
-                    // without. The as-of is read once, here. History reduction may raise the as-of
-                    // of a replica's rendering later, but never past `U - 1` (C2).
-                    let as_of = dataflow.as_of.as_ref().and_then(|as_of| as_of.as_option());
-                    let start = if connection.with_snapshot {
-                        as_of.copied()
-                    } else {
-                        as_of.and_then(|as_of| as_of.try_step_forward())
-                    };
+                    // The as-of is read once, here. History reduction may raise the as-of of a
+                    // replica's rendering later, but never past `U - 1` (C2).
+                    let as_of = dataflow.as_of.clone().unwrap_or_default();
+                    let start = connection.start(&as_of);
+                    if start.is_empty() {
+                        // The adapter retires such a subscribe before it creates its dataflow.
+                        soft_panic_or_log!(
+                            "batched subscribe {subscribe_id} at as-of {as_of:?} has no start"
+                        );
+                    }
                     self.batched_subscribes
-                        .insert(*subscribe_id, Cutover::new(start.into_iter().collect()));
+                        .insert(*subscribe_id, Cutover::new(start));
                 }
                 ComputeSinkConnection::MaterializedView(_)
                 | ComputeSinkConnection::CopyToS3Oneshot(_)

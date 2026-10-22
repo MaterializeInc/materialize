@@ -218,9 +218,9 @@ pub enum AcceptedShare {
         stash: OwnedStash,
         /// The batch's lower. Updates at earlier times are not part of the batch.
         from: Antichain<Timestamp>,
-        /// The greatest time of an error update in the batches, including those before `from`.
-        /// The batches hold an error update at or after `from` exactly when this is at or after
-        /// `from`.
+        /// An upper bound on the times of the error updates in the batches, including those
+        /// before `from`. The batches hold no error update at or after `from` if this is `None`
+        /// or before `from`.
         last_error_time: Option<Timestamp>,
     },
 }
