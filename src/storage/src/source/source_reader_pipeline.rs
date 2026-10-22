@@ -1137,17 +1137,17 @@ mod tests {
         });
     }
 
-    #[mz_ore::test]
-    fn without_exports_into_drops_unchanged_values() {
+    #[mz_ore::test(tokio::test)]
+    async fn without_exports_into_drops_unchanged_values() {
         let value = |source: u64, into: u64| ResumeUppers {
             source: Some(offset(source)),
             exports: BTreeMap::from([(A, offset(source))]),
             exports_into: BTreeMap::from([(A, Antichain::from_elem(Timestamp::from(into)))]),
         };
         let values = vec![value(10, 1), value(10, 2), value(20, 3)];
-        let stripped: Vec<_> = futures::executor::block_on(
-            without_exports_into(futures::stream::iter(values)).collect(),
-        );
+        let stripped: Vec<_> = without_exports_into(futures::stream::iter(values))
+            .collect()
+            .await;
         assert_eq!(
             stripped,
             vec![
