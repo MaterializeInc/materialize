@@ -3155,7 +3155,7 @@ class FlipFlagsAction(Action):
         # The default, a bound that offloads every nonempty description, and
         # one that scans every description this workload produces on the
         # worker.
-        self.flags_with_values["compute_batched_subscribe_offload_min_bytes"] = [
+        self.flags_with_values["compute_batched_subscribe_offload_min_updates"] = [
             "1048576",
             "0",
             "1073741824",

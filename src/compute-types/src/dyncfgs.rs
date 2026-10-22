@@ -798,12 +798,10 @@ pub const BATCHED_SUBSCRIBE_INLINE_MAX_BYTES: Config<usize> = Config::new(
     ParameterScope::Replica,
 );
 
-/// The size above which a batched subscribe description is scanned away from the timely worker.
-///
-/// Measured in updates, as the summed `len` of the held batches the description overlaps, since
-/// a batch offers no cheaper size than that.
-pub const BATCHED_SUBSCRIBE_OFFLOAD_MIN_BYTES: Config<usize> = Config::new(
-    "compute_batched_subscribe_offload_min_bytes",
+/// The number of updates above which a batched subscribe description is scanned away from the
+/// timely worker, counted as the summed `len` of the held batches the description overlaps.
+pub const BATCHED_SUBSCRIBE_OFFLOAD_MIN_UPDATES: Config<usize> = Config::new(
+    "compute_batched_subscribe_offload_min_updates",
     1 << 20,
     "The number of updates in the batches a batched subscribe description overlaps above which \
      the description is scanned away from the timely worker.",
@@ -902,7 +900,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&INDEX_PEEK_YIELD_GRANULARITY)
         .add(&INDEX_PEEK_PERMIT_FRACTION)
         .add(&BATCHED_SUBSCRIBE_INLINE_MAX_BYTES)
-        .add(&BATCHED_SUBSCRIBE_OFFLOAD_MIN_BYTES)
+        .add(&BATCHED_SUBSCRIBE_OFFLOAD_MIN_UPDATES)
         .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
         .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)

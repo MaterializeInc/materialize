@@ -11,8 +11,8 @@
 //!
 //! A worker's share travels inline in the compute protocol up to
 //! `compute_batched_subscribe_inline_max_bytes`. Past that, the worker writes it to a batch in the
-//! stash and reports a handle. A description whose held batches pass
-//! `compute_batched_subscribe_offload_min_bytes` is scanned away from the worker, under the
+//! stash and reports a handle. A description whose held batches hold more updates than
+//! `compute_batched_subscribe_offload_min_updates` is scanned away from the worker, under the
 //! permits index peeks offload under.
 //!
 //! Writing to the stash is async, so a share that crosses the inline bound on the worker moves to
@@ -23,9 +23,8 @@ use std::sync::Arc;
 use std::thread::Thread;
 
 use differential_dataflow::consolidation::consolidate_updates;
-use mz_compute_client::protocol::response::{Share, StashedShare};
 use mz_compute_types::dyncfgs::{
-    BATCHED_SUBSCRIBE_INLINE_MAX_BYTES, BATCHED_SUBSCRIBE_OFFLOAD_MIN_BYTES,
+    BATCHED_SUBSCRIBE_INLINE_MAX_BYTES, BATCHED_SUBSCRIBE_OFFLOAD_MIN_UPDATES,
     PEEK_RESPONSE_STASH_BATCH_MAX_RUNS,
 };
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
@@ -47,7 +46,7 @@ use crate::compute_state::peek_offload::{OffloadConfig, offload_description_scan
 use crate::compute_state::peek_stash::{DeliveredBatch, StashUpload};
 use crate::metrics::WorkerMetrics;
 
-use super::{Description, ErrBatch, OkBatch, inline_share};
+use super::{Description, ErrBatch, OkBatch, OwnedShare, inline_share};
 
 /// The updates one share holds.
 type Updates = Vec<(Row, Timestamp, Diff)>;
@@ -81,7 +80,7 @@ impl StashSpec {
 /// How one worker's shares and scans leave it.
 pub(super) struct Tiers {
     inline_max_bytes: ConfigValHandle<usize>,
-    offload_min_bytes: ConfigValHandle<usize>,
+    offload_min_updates: ConfigValHandle<usize>,
     batch_max_runs: ConfigValHandle<usize>,
     /// `None` keeps every share inline, whatever its size.
     stash: Option<StashSpec>,
@@ -103,7 +102,7 @@ impl Tiers {
     ) -> Self {
         Self {
             inline_max_bytes: BATCHED_SUBSCRIBE_INLINE_MAX_BYTES.handle(config),
-            offload_min_bytes: BATCHED_SUBSCRIBE_OFFLOAD_MIN_BYTES.handle(config),
+            offload_min_updates: BATCHED_SUBSCRIBE_OFFLOAD_MIN_UPDATES.handle(config),
             batch_max_runs: PEEK_RESPONSE_STASH_BATCH_MAX_RUNS.handle(config),
             stash,
             permits,
@@ -117,7 +116,7 @@ impl Tiers {
     /// Whether a description whose selected ok batches hold `held_updates` updates is scanned
     /// away from the worker.
     pub(super) fn offloads(&self, held_updates: usize) -> bool {
-        held_updates > self.offload_min_bytes.get()
+        held_updates > self.offload_min_updates.get()
     }
 
     /// The bytes above which a share leaves the inline tier, or `None` if every share stays
@@ -158,15 +157,15 @@ impl Tiers {
     }
 
     /// Records the bytes of `shares` in the tier they travel in.
-    pub(super) fn record(&self, shares: &[Share]) {
+    pub(super) fn record(&self, shares: &[OwnedShare]) {
         for share in shares {
             match share {
-                Share::Inline(_) => self
-                    .inline_bytes
-                    .inc_by(u64::cast_from(share.inline_byte_len())),
-                Share::Stashed(stashed) => self
+                OwnedShare::Inline(updates) => {
+                    self.inline_bytes.inc_by(u64::cast_from(updates.byte_len()))
+                }
+                OwnedShare::Stashed(delivered) => self
                     .stashed_bytes
-                    .inc_by(u64::cast_from(stashed.encoded_size_bytes)),
+                    .inc_by(u64::cast_from(delivered.batch().encoded_size_bytes())),
             }
         }
     }
@@ -196,8 +195,8 @@ impl Accumulator {
     /// Adds `updates` to the share, and moves the share to the stash once it passes the inline
     /// bound.
     ///
-    /// The updates of the first description are advanced to its lower, the as-of, so every
-    /// update lies within the bounds of the batch.
+    /// Every update must lie within the bounds of the description. The description scan places
+    /// them there, advancing those of the first description to its lower, the as-of.
     async fn push(&mut self, updates: Updates) -> Result<(), String> {
         match &mut self.tier {
             Tier::Inline {
@@ -270,7 +269,7 @@ impl Accumulator {
 /// A share assembled away from the worker.
 pub(super) enum Finished {
     /// The share's consolidated updates, or `None` if there are none.
-    Inline(Option<Share>),
+    Inline(Option<OwnedShare>),
     /// The stash batch holding the share's updates, deleted if it is dropped before it is
     /// reported. `None` if the upload holds no update.
     Stashed(Option<DeliveredBatch>),
@@ -278,20 +277,12 @@ pub(super) enum Finished {
 
 impl Finished {
     /// The shares to report.
-    pub(super) fn into_shares(self) -> Vec<Share> {
+    pub(super) fn into_shares(self) -> Vec<OwnedShare> {
         match self {
             Finished::Inline(share) => share.into_iter().collect(),
-            Finished::Stashed(delivered) => delivered
-                .into_iter()
-                .map(|delivered| {
-                    let batch = delivered.take();
-                    Share::Stashed(StashedShare {
-                        shard_id: batch.shard_id(),
-                        encoded_size_bytes: batch.encoded_size_bytes(),
-                        batches: vec![batch.into_transmittable_batch()],
-                    })
-                })
-                .collect(),
+            Finished::Stashed(delivered) => {
+                delivered.into_iter().map(OwnedShare::Stashed).collect()
+            }
         }
     }
 }

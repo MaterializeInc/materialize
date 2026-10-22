@@ -18,9 +18,11 @@ use differential_dataflow::Hashable;
 use differential_dataflow::input::{Input, InputSession};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::BatchReader;
-use mz_compute_client::protocol::response::{BatchedSubscribeResponse, Share, StashedShare};
+use mz_compute_client::protocol::response::{
+    BatchedSubscribeBatch, BatchedSubscribeResponse, Share, StashedShare,
+};
 use mz_compute_types::dyncfgs::{
-    BATCHED_SUBSCRIBE_INLINE_MAX_BYTES, BATCHED_SUBSCRIBE_OFFLOAD_MIN_BYTES,
+    BATCHED_SUBSCRIBE_INLINE_MAX_BYTES, BATCHED_SUBSCRIBE_OFFLOAD_MIN_UPDATES,
     INDEX_PEEK_PERMIT_FRACTION, PEEK_RESPONSE_STASH_BATCH_MAX_RUNS,
     PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES,
 };
@@ -56,7 +58,10 @@ use crate::server::ComputeRuntimeRole;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine};
 
 use super::share::{StashSpec, Tiers};
-use super::{Description, Minter, OkBatch, Protocol, ResponseBuffer, Writer, mint, write};
+use super::{
+    Description, Minter, OkBatch, OwnedShare, Protocol, QueuedResponse, ResponseBuffer, Writer,
+    mint, write,
+};
 
 fn row(value: i64) -> Row {
     Row::pack_slice(&[Datum::Int64(value)])
@@ -260,12 +265,37 @@ fn reported(buffer: &ResponseBuffer) -> Vec<Reported> {
     buffer
         .borrow()
         .iter()
-        .map(|(_, response)| {
-            reduce(response, |_, _| {
-                panic!("a stashed share where every share should be inline")
-            })
-        })
+        .map(|(_, response)| reduce(&inline_view(response), |_, _| unreachable!()))
         .collect()
+}
+
+/// The protocol response `queued` is sent as, for a response holding inline shares only.
+fn inline_view(queued: &QueuedResponse) -> BatchedSubscribeResponse {
+    match queued {
+        QueuedResponse::Batch {
+            lower,
+            upper,
+            shares,
+            error,
+        } => BatchedSubscribeResponse::Batch(BatchedSubscribeBatch {
+            lower: lower.clone(),
+            upper: upper.clone(),
+            shares: shares
+                .iter()
+                .map(|share| match share {
+                    OwnedShare::Inline(updates) => Share::Inline(updates.clone()),
+                    OwnedShare::Stashed(_) => {
+                        panic!("a stashed share where every share should be inline")
+                    }
+                })
+                .collect(),
+            error: error.clone(),
+        }),
+        QueuedResponse::DroppedAt { frontier } => BatchedSubscribeResponse::DroppedAt {
+            frontier: frontier.clone(),
+            orphans: Vec::new(),
+        },
+    }
 }
 
 /// Reduces `response`, reading the updates of a stashed share, given the lower of its
@@ -391,7 +421,7 @@ impl Setup {
     fn stashing(
         clients: &Arc<PersistClientCache>,
         inline_max_bytes: usize,
-        offload_min_bytes: usize,
+        offload_min_updates: usize,
     ) -> Self {
         let setup = Self {
             stash: Some(Arc::clone(clients)),
@@ -399,7 +429,7 @@ impl Setup {
         };
         setup.with(|updates| {
             updates.add(&BATCHED_SUBSCRIBE_INLINE_MAX_BYTES, inline_max_bytes);
-            updates.add(&BATCHED_SUBSCRIBE_OFFLOAD_MIN_BYTES, offload_min_bytes);
+            updates.add(&BATCHED_SUBSCRIBE_OFFLOAD_MIN_UPDATES, offload_min_updates);
             // Lands on the floor of one permit, so a test holding it holds every offloaded scan.
             updates.add(&INDEX_PEEK_PERMIT_FRACTION, 0.0001);
         })
@@ -846,12 +876,12 @@ fn runtime() -> Arc<tokio::runtime::Runtime> {
     )
 }
 
-/// The raw responses in `buffer`.
+/// Takes the responses in `buffer` as the protocol sends them.
 fn responses(buffer: &ResponseBuffer) -> Vec<BatchedSubscribeResponse> {
     buffer
-        .borrow()
-        .iter()
-        .map(|(_, response)| response.clone())
+        .borrow_mut()
+        .drain(..)
+        .map(|(_, response)| response.into_response())
         .collect()
 }
 
@@ -1125,4 +1155,84 @@ fn a_dropped_subscribe_leaves_no_stashed_parts_on_the_replica() {
         "every part written is deleted"
     );
     assert_eq!(blob.deletes_of_nothing(), 0);
+}
+
+#[mz_ore::test]
+fn a_poisoned_description_still_carries_its_shares() {
+    let sink_id = GlobalId::User(1);
+    let (protocol, buffer) = protocol(sink_id, 0);
+    let mut protocol = protocol.borrow_mut().take().expect("a fresh protocol");
+    protocol.poison = Some("poisoned".into());
+    let updates = vec![(row(1), Timestamp::from(1), Diff::ONE)];
+    let share = super::inline_share(&updates).expect("one update");
+    protocol.report(&description(0, Some(3), true, false), vec![share]);
+    assert_eq!(
+        reported(&buffer),
+        vec![batch(0, Some(3), &[(1, 1, 1)], true)],
+        "the receiver learns of every share, so it can delete their stash batches",
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn a_stashed_share_of_a_description_with_an_empty_upper_reads_back_intact() {
+    let runtime = runtime();
+    let _runtime = runtime.enter();
+    let clients = Arc::new(PersistClientCache::new_no_metrics());
+    let setup = Setup::stashing(&clients, 0, usize::MAX);
+    let sink_id = sink_minted_on_worker_zero();
+
+    let rt = Arc::clone(&runtime);
+    let responses = run_two_workers(move |worker, _barrier| {
+        let _runtime = rt.enter();
+        let own = i64::try_from(worker.index()).expect("two workers");
+        let rig = Rig::with_setup(worker, sink_id, 0, Antichain::new(), &setup);
+        let Rig {
+            mut oks,
+            mut errs,
+            gate,
+            buffer,
+            protocol,
+            ..
+        } = rig;
+        drop(gate);
+        oks.update_at(
+            (row(10 + own), Row::default()),
+            Timestamp::from(1),
+            Diff::ONE,
+        );
+        oks.advance_to(Timestamp::from(3));
+        oks.flush();
+        errs.advance_to(Timestamp::from(3));
+        errs.flush();
+        step_until(worker, || buffer.borrow().len() == 1);
+
+        // Closing the inputs takes their frontier to the empty antichain, so the mint cuts a
+        // last description `[3, ∅)`.
+        oks.update_at(
+            (row(20 + own), Row::default()),
+            Timestamp::from(4),
+            Diff::ONE,
+        );
+        oks.close();
+        errs.close();
+        step_until(worker, || buffer.borrow().len() == 2);
+        drop(protocol);
+        responses(&buffer)
+    });
+
+    assert_eq!(
+        responses.iter().map(|r| tiers(r)).collect::<Vec<_>>(),
+        vec![vec![vec!["stashed"], vec!["stashed"]]; 2],
+    );
+    assert_eq!(
+        reduce_all(&runtime, &clients, &responses),
+        (0..2)
+            .map(|own| vec![
+                batch(0, Some(3), &[(10 + own, 1, 1)], false),
+                batch(3, None, &[(20 + own, 4, 1)], false),
+            ])
+            .collect::<Vec<_>>(),
+        "a stash batch with an empty upper holds the updates of its description",
+    );
 }

@@ -14,10 +14,13 @@ use mz_compute_types::sinks::{
     BatchedSubscribeSinkConnection, ComputeSinkConnection, ComputeSinkDesc,
 };
 use mz_dyncfg::ConfigUpdates;
-use mz_repr::RelationDesc;
+use mz_repr::{Datum, Diff, RelationDesc, SqlScalarType};
 
+use super::peek_stash::tests::CountedBlob;
+use super::peek_stash::{DeliveredBatch, StashUpload, stash_shard_id};
 use super::peek_sweep_tests::Harness;
 use super::*;
+use crate::sink::batched_subscribe::OwnedShare;
 
 /// The sink the batched subscribe fixtures export.
 const BATCHED_SINK: GlobalId = GlobalId::User(1);
@@ -45,10 +48,9 @@ fn batched_subscribe_dataflow() -> DataflowDescription<(), ()> {
     dataflow
 }
 
-fn dropped_at(frontier: Timestamp) -> BatchedSubscribeResponse {
-    BatchedSubscribeResponse::DroppedAt {
+fn dropped_at(frontier: Timestamp) -> QueuedResponse {
+    QueuedResponse::DroppedAt {
         frontier: Antichain::from_elem(frontier),
-        orphans: Vec::new(),
     }
 }
 
@@ -105,9 +107,73 @@ async fn reconciliation_discards_queued_batched_subscribe_responses() {
         response,
         ComputeResponse::BatchedSubscribeResponse(
             BATCHED_SINK,
-            Box::new(dropped_at(Timestamp::from(3))),
+            Box::new(dropped_at(Timestamp::from(3)).into_response()),
         ),
     );
+}
+
+/// A stashed share queued on a buffer that a reconcile discards is deleted, since no response
+/// will ever name it.
+#[mz_ore::test(tokio::test)]
+async fn discarding_queued_batched_subscribe_responses_deletes_their_stash_batches() {
+    let mut harness = Harness::new(|_| {});
+    let blob = CountedBlob::new();
+    let desc = RelationDesc::builder()
+        .with_column("value", SqlScalarType::Int64.nullable(false))
+        .finish();
+    let mut upload = StashUpload::open_range(
+        blob.clients(),
+        PersistLocation::new_in_mem(),
+        // Above the runs this upload produces, so no merge writes parts of its own.
+        1024,
+        stash_shard_id(Uuid::new_v4()),
+        desc,
+        Antichain::from_elem(Timestamp::from(0)),
+        Antichain::from_elem(Timestamp::from(5)),
+    )
+    .await
+    .expect("the in-memory location opens");
+    for value in 0..4 {
+        upload
+            .push_update(
+                &Row::pack_slice(&[Datum::Int64(value)]),
+                Timestamp::from(1),
+                Diff::ONE,
+            )
+            .await
+            .expect("persist takes the update");
+    }
+    let batch = upload
+        .finish_stashed()
+        .await
+        .expect("persist finishes the batch")
+        .expect("updates were pushed");
+    let shard_id = batch.shard_id();
+    let share = OwnedShare::Stashed(DeliveredBatch::new(
+        batch,
+        tokio::runtime::Handle::current(),
+        shard_id,
+    ));
+
+    let old_buffer = Rc::clone(&harness.state.batched_subscribe_response_buffer);
+    old_buffer.borrow_mut().push((
+        BATCHED_SINK,
+        QueuedResponse::Batch {
+            lower: Antichain::from_elem(Timestamp::from(0)),
+            upper: Antichain::from_elem(Timestamp::from(5)),
+            shares: vec![share],
+            error: None,
+        },
+    ));
+    harness.state.discard_queued_sink_responses();
+    // The sink that held the old buffer goes with the dataflow the reconcile drops.
+    drop(old_buffer);
+
+    blob.wait_until_nothing_is_left("a discarded queued response")
+        .await;
+    assert_eq!(blob.deletes_of_nothing(), 0);
+    harness.active().process_batched_subscribes();
+    assert!(harness.responses.try_recv().is_err(), "nothing is sent");
 }
 
 #[mz_ore::test]

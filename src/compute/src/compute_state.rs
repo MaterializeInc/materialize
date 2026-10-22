@@ -23,8 +23,7 @@ use mz_compute_client::protocol::command::{
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
-    BatchedSubscribeResponse, ComputeResponse, CopyToResponse, FrontiersResponse, PeekError,
-    PeekResponse, SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse, SubscribeResponse,
 };
 use mz_compute_types::dataflows::{DataflowDescription, RenderDataflowDescription};
 use mz_compute_types::dyncfgs::{
@@ -79,6 +78,7 @@ use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
+use crate::sink::batched_subscribe::QueuedResponse;
 
 pub(crate) mod description_iterator;
 pub(crate) mod description_scan;
@@ -199,7 +199,10 @@ pub struct ComputeState {
     ///
     /// The entries are pairs of sink identifier (to identify the subscribe instance)
     /// and the response itself.
-    pub batched_subscribe_response_buffer: Rc<RefCell<Vec<(GlobalId, BatchedSubscribeResponse)>>>,
+    ///
+    /// The responses own the stash batches they name until they are sent, so a response dropped
+    /// with the buffer deletes them.
+    pub batched_subscribe_response_buffer: Rc<RefCell<Vec<(GlobalId, QueuedResponse)>>>,
     /// Shared buffer with S3 oneshot operator instances by which they can respond.
     ///
     /// The entries are pairs of sink identifier (to identify the s3 oneshot instance)
@@ -1481,15 +1484,15 @@ impl<'a> ActiveComputeState<'a> {
             .batched_subscribe_response_buffer
             .borrow_mut();
         for (sink_id, response) in responses.drain(..) {
-            let new_frontier = match &response {
-                BatchedSubscribeResponse::Batch(b) => b.upper.clone(),
-                BatchedSubscribeResponse::DroppedAt { .. } => Antichain::new(),
-            };
-            log_subscribe_frontier(&mut self.compute_state.collections, sink_id, new_frontier);
+            log_subscribe_frontier(
+                &mut self.compute_state.collections,
+                sink_id,
+                response.frontier(),
+            );
 
             self.send_compute_response(ComputeResponse::BatchedSubscribeResponse(
                 sink_id,
-                Box::new(response),
+                Box::new(response.into_response()),
             ));
         }
     }

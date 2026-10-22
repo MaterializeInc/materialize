@@ -384,6 +384,12 @@ impl DeliveredBatch {
         }
     }
 
+    pub(crate) fn batch(&self) -> &Batch<SourceData, (), Timestamp, i64> {
+        self.batch
+            .as_ref()
+            .expect("a delivery holds its batch until it is claimed")
+    }
+
     /// Claims the batch, consuming the delivery.
     ///
     /// The caller takes over the obligation: a batch dropped without being transmitted or deleted

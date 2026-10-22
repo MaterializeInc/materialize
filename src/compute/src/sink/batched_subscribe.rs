@@ -38,7 +38,7 @@ use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchReader, TraceReader};
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use mz_compute_client::protocol::response::{
-    BatchedSubscribeBatch, BatchedSubscribeResponse, Share,
+    BatchedSubscribeBatch, BatchedSubscribeResponse, Share, StashedShare,
 };
 use mz_compute_types::sinks::{BatchedSubscribeSinkConnection, ComputeSinkDesc};
 use mz_expr::{MapFilterProject, SafeMfpPlan};
@@ -66,7 +66,7 @@ use crate::compute_state::description_scan::{
     DescriptionScan, DescriptionScanOutcome, update_byte_len,
 };
 use crate::compute_state::peek_budget::InlineBudget;
-use crate::compute_state::peek_stash::stash_shard_id;
+use crate::compute_state::peek_stash::{DeliveredBatch, stash_shard_id};
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::StartSignal;
 use crate::render::errors::DataflowErrorSer;
@@ -83,7 +83,79 @@ type OkBatch = <RowRowSpine<Timestamp, Diff> as TraceReader>::Batch;
 type ErrBatch = <ErrSpine<Timestamp, Diff> as TraceReader>::Batch;
 
 /// The buffer the sink reports through, drained by `ComputeState::process_batched_subscribes`.
-type ResponseBuffer = Rc<RefCell<Vec<(GlobalId, BatchedSubscribeResponse)>>>;
+type ResponseBuffer = Rc<RefCell<Vec<(GlobalId, QueuedResponse)>>>;
+
+/// A worker's share of a description, on its way to the controller.
+pub(crate) enum OwnedShare {
+    Inline(UpdateCollection),
+    /// A stash batch, deleted if the share is dropped before it is sent.
+    Stashed(DeliveredBatch),
+}
+
+impl OwnedShare {
+    /// The share as the protocol carries it. A stashed batch becomes the receiver's to delete.
+    fn into_share(self) -> Share {
+        match self {
+            OwnedShare::Inline(updates) => Share::Inline(updates),
+            OwnedShare::Stashed(delivered) => {
+                let batch = delivered.take();
+                Share::Stashed(StashedShare {
+                    shard_id: batch.shard_id(),
+                    encoded_size_bytes: batch.encoded_size_bytes(),
+                    batches: vec![batch.into_transmittable_batch()],
+                })
+            }
+        }
+    }
+}
+
+/// A batched subscribe response queued on a worker, owning the stash batches it names until it
+/// is sent.
+///
+/// A response that is dropped instead of sent, by a reset of the response buffer or by a protocol
+/// that has completed, deletes its stash batches.
+pub(crate) enum QueuedResponse {
+    Batch {
+        lower: Antichain<Timestamp>,
+        upper: Antichain<Timestamp>,
+        shares: Vec<OwnedShare>,
+        error: Option<String>,
+    },
+    /// The sink was dropped after reporting descriptions up to `frontier`. A sink holds no share
+    /// of an unreported description, so the response carries no orphans.
+    DroppedAt { frontier: Antichain<Timestamp> },
+}
+
+impl QueuedResponse {
+    /// The frontier the subscribe has reported through, once this response is sent.
+    pub(crate) fn frontier(&self) -> Antichain<Timestamp> {
+        match self {
+            QueuedResponse::Batch { upper, .. } => upper.clone(),
+            QueuedResponse::DroppedAt { .. } => Antichain::new(),
+        }
+    }
+
+    /// The response as the protocol carries it, which hands the stash batches to the receiver.
+    pub(crate) fn into_response(self) -> BatchedSubscribeResponse {
+        match self {
+            QueuedResponse::Batch {
+                lower,
+                upper,
+                shares,
+                error,
+            } => BatchedSubscribeResponse::Batch(BatchedSubscribeBatch {
+                lower,
+                upper,
+                shares: shares.into_iter().map(OwnedShare::into_share).collect(),
+                error,
+            }),
+            QueuedResponse::DroppedAt { frontier } => BatchedSubscribeResponse::DroppedAt {
+                frontier,
+                orphans: Vec::new(),
+            },
+        }
+    }
+}
 
 /// The bytes a scan buffers before it hands them out. Hand-outs are consolidated, which bounds the
 /// buffer for updates that cancel within a description.
@@ -381,8 +453,8 @@ struct Protocol {
 }
 
 impl Protocol {
-    /// Reports `description` with `shares`, or with the poison and no shares once poisoned.
-    fn report(&mut self, description: &Description, shares: Vec<Share>) {
+    /// Reports `description` with `shares`, and with the poison once poisoned.
+    fn report(&mut self, description: &Description, shares: Vec<OwnedShare>) {
         // The mint operator mints nothing after the completing description.
         let Some(buffer) = self.buffer.as_ref() else {
             soft_panic_or_log!(
@@ -391,18 +463,15 @@ impl Protocol {
             );
             return;
         };
-        let (shares, error) = match &self.poison {
-            Some(error) => (Vec::new(), Some(error.clone())),
-            None => (shares, None),
-        };
+        // A poisoned batch still carries its shares, so the receiver deletes their stash batches.
         buffer.borrow_mut().push((
             self.sink_id,
-            BatchedSubscribeResponse::Batch(BatchedSubscribeBatch {
+            QueuedResponse::Batch {
                 lower: description.lower.clone(),
                 upper: description.upper.clone(),
                 shares,
-                error,
-            }),
+                error: self.poison.clone(),
+            },
         ));
         self.upper = description.upper.clone();
         if self.upper.is_empty() {
@@ -421,9 +490,8 @@ impl Drop for Protocol {
         if let Some(buffer) = self.buffer.take() {
             buffer.borrow_mut().push((
                 self.sink_id,
-                BatchedSubscribeResponse::DroppedAt {
+                QueuedResponse::DroppedAt {
                     frontier: self.upper.clone(),
-                    orphans: Vec::new(),
                 },
             ));
         }
@@ -485,6 +553,11 @@ impl Writer {
             activator: None,
             protocol,
         }
+    }
+
+    /// Whether the writer has no description left to answer and no scan under way.
+    fn idle(&self) -> bool {
+        self.pending.is_empty() && self.scan.is_none()
     }
 
     /// Whether the worker has stopped holding batches, because the subscribe completed, was
@@ -708,7 +781,7 @@ impl Writer {
 }
 
 /// Builds the inline share of consolidated `updates`, or `None` if there are none.
-fn inline_share(updates: &[(Row, Timestamp, Diff)]) -> Option<Share> {
+fn inline_share(updates: &[(Row, Timestamp, Diff)]) -> Option<OwnedShare> {
     if updates.is_empty() {
         return None;
     }
@@ -717,7 +790,7 @@ fn inline_share(updates: &[(Row, Timestamp, Diff)]) -> Option<Share> {
     for (row, time, diff) in updates {
         builder.push((row.as_row_ref(), time, *diff));
     }
-    Some(Share::Inline(builder.build()))
+    Some(OwnedShare::Inline(builder.build()))
 }
 
 /// Renders the write operator, which runs `writer` on every worker.
@@ -734,8 +807,13 @@ fn write<'scope>(
     let mut ok_input = op.new_input(ok_batches, Pipeline);
     let mut err_input = op.new_input(err_batches, Pipeline);
     let operator_info = op.operator_info();
+    // NOTE: The output carries nothing. Timely retires an operator whose inputs are complete and
+    // that holds no capability, which would drop a share still under way once every input has
+    // closed. The output's capability keeps the operator until the writer is idle.
+    let (_output, _unused): (_, Stream<'scope, Timestamp, Vec<()>>) = op.new_output();
 
-    op.build(move |_capabilities| {
+    op.build(move |capabilities| {
+        let mut capability = capabilities.into_iter().next();
         writer.activator = Some(
             scope
                 .worker()
@@ -763,6 +841,10 @@ fn write<'scope>(
             });
             if writer.work(frontiers[1].frontier(), frontiers[2].frontier()) {
                 activator.activate();
+            }
+            let inputs_complete = frontiers.iter().all(|input| input.frontier().is_empty());
+            if inputs_complete && writer.idle() {
+                drop(capability.take());
             }
         }
     });
