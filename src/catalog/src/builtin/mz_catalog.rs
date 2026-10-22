@@ -1033,27 +1033,41 @@ WITH (
     ASSERT NOT NULL nullable
 ) AS
 WITH
-    user_index_columns AS (
+    -- An index's keys are one row whose value lists them in key order.
+    index_keys AS (
         SELECT
             mz_internal.parse_catalog_id(k.data->'key'->'id') AS index_id,
-            -- Positions are stored 0-based but are reported 1-based
-            (k.data->'key'->>'position')::uint8 + 1::uint8 AS index_position,
-            (k.data->'value'->>'column')::uint8 + 1::uint8 AS on_position,
-            -- Either on_position is null or on_expression is, thus we use a case
-            CASE
-                WHEN k.data->'value'->>'column' IS NULL
-                THEN l.parsed->'key_parts'->>((k.data->'key'->>'position')::int8)
-            END AS on_expression,
-            (k.data->'value'->>'nullable')::bool AS nullable
+            k.data->'value'->'columns' AS columns,
+            mz_internal.parse_catalog_create_sql(i.data->'value'->'definition'->'V1'->>'create_sql')->'key_parts' AS key_parts
         FROM
             mz_internal.mz_catalog_raw AS k
             JOIN mz_internal.mz_catalog_raw AS i ON
                 i.data->>'kind' = 'Item' AND
                 i.data->'key'->'gid' = k.data->'key'->'id'
-            CROSS JOIN LATERAL (
-                SELECT mz_internal.parse_catalog_create_sql(i.data->'value'->'definition'->'V1'->>'create_sql')
-            ) AS l(parsed)
-        WHERE k.data->>'kind' = 'IndexColumn'
+        WHERE k.data->>'kind' = 'IndexColumns'
+    ),
+    key_parts AS (
+        SELECT k.index_id, p.ordinality, p.value AS expression
+        FROM
+            index_keys AS k,
+            jsonb_array_elements_text(k.key_parts) WITH ORDINALITY AS p(value, ordinality)
+    ),
+    user_index_columns AS (
+        SELECT
+            k.index_id,
+            -- WITH ORDINALITY numbers the list from one, which is what index_position reports
+            ik.ordinality::uint8 AS index_position,
+            (ik.value->>'column')::uint8 + 1::uint8 AS on_position,
+            -- Either on_position is null or on_expression is, thus we use a case
+            CASE
+                WHEN ik.value->>'column' IS NULL
+                THEN p.expression
+            END AS on_expression,
+            (ik.value->>'nullable')::bool AS nullable
+        FROM
+            index_keys AS k
+            CROSS JOIN LATERAL jsonb_array_elements(k.columns) WITH ORDINALITY AS ik(value, ordinality)
+            LEFT JOIN key_parts AS p ON p.index_id = k.index_id AND p.ordinality = ik.ordinality
     ),
 {BUILTIN_INDEX_GID_MAPPINGS_CTE},
     builtin_index_columns AS (
