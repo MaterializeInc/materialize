@@ -45,29 +45,8 @@ For operation flow tracing, read first:
 
 ## Dependency management
 
-### Workspace dependencies
-
-All third-party versions declared in `[workspace.dependencies]` in root
-`Cargo.toml`. Members use `dep.workspace = true` or
-`dep = { workspace = true, optional = true }`.
-
-* **Add new dep**: add to `[workspace.dependencies]` in root `Cargo.toml` first, then `dep.workspace = true` in member crate.
-* **Never inline version** in member `Cargo.toml` — `bin/lint-cargo` enforces.
-* **Update version**: change once in root `Cargo.toml`.
-* Cargo unifies features workspace-wide, so workspace declaration is union of all features across crates. Members just use `dep.workspace = true`.
-
-### Cargo.lock
-
-Never regenerate full Cargo.lock. When changing deps:
-
-* **Add dep or change features**: run `cargo check` — updates only what changed.
-* **Update specific crate**: `cargo update -p <crate>` (optional `--precise <version>`).
-* **Never bare `cargo update`** — bumps every semver-compatible dep, causes unrelated breakage from transitive changes.
-* **If lock regenerated**, diff before commit (`git diff Cargo.lock | grep '^[+-]version'`) and pin back unintended bumps with `cargo update -p <crate> --precise <old-version>`.
-
-### Licensing
-
-Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].allow`) and `about.toml` (`accepted`). New dep with new license not already allowed: add SPDX identifier to both.
+Use the `mz-dependencies` skill before changing dependencies. Never regenerate
+the full Cargo.lock and never run bare `cargo update`.
 
 ## Merging
 
@@ -141,28 +120,9 @@ authors to squash on merge or to keep every intermediate commit green.
   iteration. Hash-order iteration is a real nondeterminism source, for example
   an unstable order reaching plan output or persisted state, not a style nit.
 * Choosing whether a new feature flag defaults on or off in production is a
-  product decision that needs context an agent rarely has. When adding a flag,
-  ask a human which default to use. When reviewing a PR, do not question the
-  default it chose. However, in tests, a new flag should usually be on, so that
-  sqllogictest and testdrive exercise the new code path. If
-  its production default is off, turn it on for CI in
-  `misc/python/materialize/mzcompose/__init__.py`
-  (`get_minimal_system_parameters` if tests fail with it off, otherwise
-  `get_variable_system_parameters`), which `bin/sqllogictest` and mzcompose's
-  `Materialized` service pass to environmentd as system parameter defaults.
-  Rust integration tests use `TestHarness::with_system_parameter_default`.
-  A value listed there overrides the compiled-in default in CI, so changing a
-  default means changing both. `bin/lint-test-flags` fails unless every new
-  dyncfg is registered for parallel workload and mzcompose (see the mz-debug-ci
-  skill). A compiled-in default is not evidence of the production value: check
-  whether `test/launchdarkly-flag-consistency/mzcompose.py` lists the flag in
-  `INTENTIONAL_LD_OVERRIDES` or `KNOWN_CROSS_ENV_DIVERGENCES`. A session
-  variable takes a system default only if `SESSION_SYSTEM_VARS` in
-  `src/sql/src/session/vars.rs` lists it. Otherwise `--system-parameter-default`
-  for it only logs a warning at startup. Observed: the LaunchDarkly MCP
-  `create-flag` tool creates boolean flags that serve true in every environment,
-  including production. A human must set each environment's off variation and
-  fallthrough to false.
+  product decision. When adding a flag, ask a human which default to use, and
+  use the `mz-feature-flags` skill. When reviewing a PR, do not question the
+  default it chose.
 
 ## Code comments
 
