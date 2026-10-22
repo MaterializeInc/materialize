@@ -15,6 +15,7 @@ use mz_adapter_types::connection::ConnectionId;
 
 use mz_compute_client::controller::{AcceptedBatch, AcceptedShare};
 use mz_compute_client::stash::OwnedStash;
+use mz_compute_types::errors::DataflowErrorSer;
 use mz_controller_types::ClusterId;
 use mz_dyncfg::{ConfigUpdates, ConfigVal};
 use mz_expr::EvalError;
@@ -165,18 +166,55 @@ fn inline(updates: &[(u64, u64, i64)]) -> AcceptedShare {
             )
         })
         .collect();
-    AcceptedShare::Inline(
-        rows.iter()
+    AcceptedShare::Inline {
+        rows: rows
+            .iter()
             .map(|(row, time, diff)| (row.as_row_ref(), time, *diff))
             .collect(),
-    )
+        errors: Vec::new(),
+    }
+}
+
+/// The error `internal error: <name>`.
+fn named_error(name: &str) -> DataflowError {
+    DataflowError::from(EvalError::Internal(name.into()))
+}
+
+/// An inline share with the row updates `updates` and the error updates `errors`, each an
+/// error's name, time, and diff.
+fn inline_with_errors(updates: &[(u64, u64, i64)], errors: &[(&str, u64, i64)]) -> AcceptedShare {
+    let AcceptedShare::Inline { rows, .. } = inline(updates) else {
+        unreachable!("an inline share");
+    };
+    let errors = errors
+        .iter()
+        .map(|(name, time, diff)| {
+            (
+                DataflowErrorSer::from(named_error(name)),
+                Timestamp::from(*time),
+                Diff::from(*diff),
+            )
+        })
+        .collect();
+    AcceptedShare::Inline { rows, errors }
 }
 
 fn stashed(shard_id: ShardId, stash: OwnedStash, from: u64) -> AcceptedShare {
+    stashed_with_errors(shard_id, stash, from, None)
+}
+
+/// A stashed share whose error updates end at `last_error_time`.
+fn stashed_with_errors(
+    shard_id: ShardId,
+    stash: OwnedStash,
+    from: u64,
+    last_error_time: Option<u64>,
+) -> AcceptedShare {
     AcceptedShare::Stashed {
         shard_id,
         stash,
         from: Antichain::from_elem(Timestamp::from(from)),
+        last_error_time: last_error_time.map(Timestamp::from),
     }
 }
 
@@ -185,7 +223,7 @@ fn batch(lower: u64, upper: Option<u64>, shares: Vec<AcceptedShare>) -> Accepted
         lower: Antichain::from_elem(Timestamp::from(lower)),
         upper: upper.map_or_else(Antichain::new, |u| Antichain::from_elem(Timestamp::from(u))),
         shares,
-        error: None,
+        fatal: None,
     }
 }
 
@@ -476,53 +514,163 @@ async fn dropping_the_forwarder_deletes_unread_stashed_shares() {
 }
 
 #[mz_ore::test(tokio::test)]
-async fn an_error_ends_the_stream() {
+async fn a_fatal_error_ends_the_stream() {
     let persist = CountedClient::new().await;
     let shard_id = ShardId::new();
 
-    // A poisoned batch reports its error and nothing else, and later batches are not forwarded.
+    // A batch with a fatal error reports it and nothing else, and later batches are not
+    // forwarded.
     let mut harness = Harness::new(&persist, 1024 * 1024);
-    let poisoned_stash = persist.stash(shard_id, &[(ok(1), 1, 1)]).await;
-    let mut poisoned = batch(
+    let failed_stash = persist.stash(shard_id, &[(ok(1), 1, 1)]).await;
+    let mut failed = batch(
         0,
         Some(2),
-        vec![inline(&[(2, 1, 1)]), stashed(shard_id, poisoned_stash, 0)],
+        vec![inline(&[(2, 1, 1)]), stashed(shard_id, failed_stash, 0)],
     );
-    poisoned.error = Some("division by zero".into());
-    harness.forwarder.send(poisoned);
+    failed.fatal = Some("stash write failed".into());
+    harness.forwarder.send(failed);
     let later_stash = persist.stash(shard_id, &[(ok(3), 2, 1)]).await;
     harness
         .forwarder
         .send(batch(2, Some(3), vec![stashed(shard_id, later_stash, 2)]));
 
     let Some(PeekResponseUnary::Error(error)) = harness.recv().await else {
-        panic!("expected the batch error");
+        panic!("expected the fatal error");
     };
-    assert!(error.to_string().contains("division by zero"), "{error}");
+    assert!(error.to_string().contains("stash write failed"), "{error}");
     assert_eq!(harness.event().await, ForwarderEvent::Errored(SINK_ID));
     assert!(harness.recv().await.is_none(), "the stream continues");
 
-    // An error update in a stashed share is the subscribe's error.
-    let mut harness = Harness::new(&persist, 1024 * 1024);
-    let error = SourceData(Err(DataflowError::from(EvalError::DivisionByZero)));
-    let erroring = persist.stash(shard_id, &[(error, 1, 1)]).await;
-    harness
-        .forwarder
-        .send(batch(0, Some(2), vec![stashed(shard_id, erroring, 0)]));
+    persist.wait_until_nothing_is_left().await;
+}
 
-    let message = loop {
-        match harness.recv().await {
-            Some(PeekResponseUnary::Rows(_)) => {}
-            message => break message,
-        }
-    };
+/// Receives the next message, which must be the subscribe's error, and its text.
+async fn expect_error(harness: &mut Harness) -> String {
+    let message = harness.recv().await;
     let Some(PeekResponseUnary::Error(error)) = message else {
-        panic!("expected the stashed error, got {message:?}");
+        panic!("expected the subscribe's error before any row, got {message:?}");
     };
-    assert!(error.to_string().contains("division by zero"), "{error}");
     assert_eq!(harness.event().await, ForwarderEvent::Errored(SINK_ID));
     assert!(harness.recv().await.is_none(), "the stream continues");
+    error.to_string()
+}
 
+/// No row of a batch that holds an inline error update reaches the client, whatever the order
+/// of its shares, and the error is reported as a plain subscribe reports it.
+#[mz_ore::test(tokio::test)]
+async fn no_row_of_a_batch_with_an_inline_error_reaches_the_client() {
+    let persist = CountedClient::new().await;
+    let shard_id = ShardId::new();
+    let mut harness = Harness::new(&persist, 1);
+    let rows = persist.stash(shard_id, &[(ok(1), 1, 1)]).await;
+    harness.forwarder.send(batch(
+        0,
+        Some(2),
+        vec![
+            inline(&[(2, 1, 1)]),
+            stashed(shard_id, rows, 0),
+            inline_with_errors(&[(3, 1, 1)], &[("e", 1, -1)]),
+        ],
+    ));
+    assert_eq!(
+        expect_error(&mut harness).await,
+        AdapterError::Unstructured(anyhow::Error::msg(named_error("e").to_string())).to_string(),
+        "a retraction fails the subscribe as an insertion does"
+    );
+    persist.wait_until_nothing_is_left().await;
+}
+
+/// No row of a batch whose stashed share holds an error update reaches the client, and only the
+/// stashed shares that hold an error update are read.
+#[mz_ore::test(tokio::test)]
+async fn no_row_of_a_batch_with_a_stashed_error_reaches_the_client() {
+    let persist = CountedClient::new().await;
+    let shard_id = ShardId::new();
+    let mut harness = Harness::new(&persist, 1);
+    let error = SourceData(Err(named_error("e")));
+    let erroring = persist
+        .stash(shard_id, &[(ok(1), 1, 1), (error, 1, 1), (ok(2), 1, 1)])
+        .await;
+    let clean = persist.stash(shard_id, &[(ok(3), 1, 1)]).await;
+    harness.forwarder.send(batch(
+        0,
+        Some(2),
+        vec![
+            inline(&[(4, 1, 1)]),
+            stashed(shard_id, clean, 0),
+            stashed_with_errors(shard_id, erroring, 0, Some(1)),
+        ],
+    ));
+    assert!(
+        expect_error(&mut harness)
+            .await
+            .contains("internal error: e"),
+        "the stashed error is the subscribe's error"
+    );
+    persist.wait_until_nothing_is_left().await;
+}
+
+/// The subscribe fails on the error update with the least `(time, error)` across the batch's
+/// shares, as a plain subscribe reports the first of its consolidated error updates.
+#[mz_ore::test(tokio::test)]
+async fn the_first_error_is_the_least_time_and_error() {
+    let persist = CountedClient::new().await;
+    let shard_id = ShardId::new();
+    let mut harness = Harness::new(&persist, 1024 * 1024);
+    let stash = persist
+        .stash(
+            shard_id,
+            &[
+                (SourceData(Err(named_error("c"))), 2, 1),
+                (SourceData(Err(named_error("a"))), 3, 1),
+            ],
+        )
+        .await;
+    harness.forwarder.send(batch(
+        0,
+        Some(4),
+        vec![
+            inline_with_errors(&[], &[("b", 3, 1), ("d", 2, -1)]),
+            stashed_with_errors(shard_id, stash, 0, Some(3)),
+        ],
+    ));
+    let mut candidates: Vec<_> = [("c", 2), ("d", 2)]
+        .into_iter()
+        .map(|(name, time)| (time, DataflowErrorSer::from(named_error(name))))
+        .collect();
+    candidates.sort();
+    let expected = candidates[0].1.to_string();
+    let error = expect_error(&mut harness).await;
+    assert!(error.contains(&expected), "{error} is not {expected}");
+    persist.wait_until_nothing_is_left().await;
+}
+
+/// A stashed share whose error updates all lie before the trim is forwarded, and the read
+/// filters those errors out with the rows before the trim.
+#[mz_ore::test(tokio::test)]
+async fn errors_before_the_trim_do_not_fail_the_batch() {
+    let persist = CountedClient::new().await;
+    let shard_id = ShardId::new();
+    let mut harness = Harness::new(&persist, 1024 * 1024);
+    let stash = persist
+        .stash(
+            shard_id,
+            &[
+                (SourceData(Err(named_error("e"))), 1, 1),
+                (ok(1), 1, 1),
+                (ok(2), 3, 1),
+            ],
+        )
+        .await;
+    harness.forwarder.send(batch(
+        3,
+        Some(5),
+        vec![stashed_with_errors(shard_id, stash, 3, Some(1))],
+    ));
+    assert_eq!(
+        harness.rows_until_progress(5).await,
+        vec![data_row(2, 3, 1)]
+    );
     persist.wait_until_nothing_is_left().await;
 }
 
@@ -545,7 +693,10 @@ async fn an_empty_upper_finishes_the_stream() {
 
 fn inline_bytes(share: &AcceptedShare) -> usize {
     match share {
-        AcceptedShare::Inline(updates) => updates.byte_len(),
+        AcceptedShare::Inline { rows, errors } => {
+            assert!(errors.is_empty(), "rows only");
+            rows.byte_len()
+        }
         AcceptedShare::Stashed { .. } => panic!("not an inline share"),
     }
 }
@@ -728,10 +879,13 @@ async fn dropped_inline_shares_release_their_count() {
     let persist = CountedClient::new().await;
     let mut harness = Harness::new(&persist, 1024 * 1024);
 
-    // A poisoned batch discards its own shares and every batch queued behind it.
-    let mut poisoned = batch(0, Some(2), vec![inline(&[(1, 1, 1)])]);
-    poisoned.error = Some("division by zero".into());
-    harness.forwarder.send(poisoned);
+    // A failing batch discards its own shares and every batch queued behind it.
+    let failing = batch(
+        0,
+        Some(2),
+        vec![inline_with_errors(&[(1, 1, 1)], &[("e", 1, 1)])],
+    );
+    harness.forwarder.send(failing);
     harness
         .forwarder
         .send(batch(2, Some(3), vec![inline(&[(2, 2, 1)])]));

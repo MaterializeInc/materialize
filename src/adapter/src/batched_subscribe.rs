@@ -13,6 +13,11 @@
 //! the batch into client rows. Stashed shares are read back from persist in that task, so their
 //! size never passes through the coordinator. The task applies backpressure by waiting on the
 //! client's backlog, which the coordinator loop cannot do.
+//!
+//! The forwarder applies the subscribe's error policy. As a plain subscribe does, it fails the
+//! subscribe on any error update of an accepted batch, of either sign, and reports the error of
+//! the least `(time, error)`. The controller has trimmed every update before the start, so the
+//! policy sees only error updates at or after it.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -21,7 +26,9 @@ use std::sync::{Arc, Mutex};
 
 use mz_compute_client::controller::{AcceptedBatch, AcceptedShare};
 use mz_compute_client::stash::{OwnedStash, StashBatch};
+use mz_compute_types::errors::DataflowErrorSer;
 use mz_expr::row::{RowCollection, RowCollectionBuilder};
+use mz_ore::soft_panic_or_log;
 use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::read::Cursor;
 use mz_persist_client::{PersistClient, Schemas};
@@ -53,9 +60,6 @@ pub enum ForwarderEvent {
 ///
 /// Dropping the handle aborts the task. Every stashed share it was sent and has not finished
 /// reading is then deleted.
-///
-/// NOTE: An error update in a stashed share is found only while the share is read. Rows of the
-/// same batch can reach the client before that error, and no progress row follows it.
 pub(crate) struct Forwarder {
     batches: mpsc::UnboundedSender<QueuedBatch>,
     unread_stash_bytes: Arc<AtomicUsize>,
@@ -137,14 +141,17 @@ impl Forwarder {
             lower: _,
             upper,
             shares,
-            error,
+            fatal,
         } = batch;
         // A batch costs at least the message of its progress row, so that batches without
         // shares build backlog as plain progress messages do.
         let inline_bytes = shares
             .iter()
             .map(|share| match share {
-                AcceptedShare::Inline(updates) => updates.byte_len(),
+                AcceptedShare::Inline { rows, errors } => errors
+                    .iter()
+                    .map(|(error, _, _)| error.byte_len())
+                    .fold(rows.byte_len(), usize::saturating_add),
                 AcceptedShare::Stashed { .. } => 0,
             })
             .fold(SUBSCRIBE_MESSAGE_OVERHEAD_BYTES, usize::saturating_add);
@@ -152,11 +159,12 @@ impl Forwarder {
         let shares = shares
             .into_iter()
             .map(|share| match share {
-                AcceptedShare::Inline(updates) => QueuedShare::Inline { updates },
+                AcceptedShare::Inline { rows, errors } => QueuedShare::Inline { rows, errors },
                 AcceptedShare::Stashed {
                     shard_id,
                     stash,
                     from,
+                    last_error_time,
                 } => {
                     let unread = UnreadBytes::new(
                         stash.encoded_size_bytes(),
@@ -166,6 +174,7 @@ impl Forwarder {
                         shard_id,
                         stash,
                         from,
+                        last_error_time,
                         unread,
                     }
                 }
@@ -174,7 +183,7 @@ impl Forwarder {
         let _ = self.batches.send(QueuedBatch {
             upper,
             shares,
-            error,
+            fatal,
             inline,
         });
     }
@@ -207,22 +216,39 @@ impl Forwarder {
 struct QueuedBatch {
     upper: Antichain<Timestamp>,
     shares: Vec<QueuedShare>,
-    error: Option<String>,
+    fatal: Option<String>,
     /// Dropped once the batch is forwarded or discarded.
     inline: UnreadInlineBatch,
 }
 
 enum QueuedShare {
     Inline {
-        updates: mz_repr::UpdateCollection,
+        rows: mz_repr::UpdateCollection,
+        errors: Vec<(DataflowErrorSer, Timestamp, Diff)>,
     },
     Stashed {
         shard_id: ShardId,
         stash: OwnedStash,
         from: Antichain<Timestamp>,
+        last_error_time: Option<Timestamp>,
         /// Dropped once the share is fully read or discarded.
         unread: UnreadBytes,
     },
+}
+
+impl QueuedShare {
+    /// Whether the share holds an error update at or after the trim, which a stashed share
+    /// tells without being read.
+    fn has_errors(&self) -> bool {
+        match self {
+            QueuedShare::Inline { errors, .. } => !errors.is_empty(),
+            QueuedShare::Stashed {
+                from,
+                last_error_time,
+                ..
+            } => last_error_time.is_some_and(|time| from.less_equal(&time)),
+        }
+    }
 }
 
 /// The inline bytes of every batch sent to the forwarder and not yet forwarded or discarded.
@@ -365,18 +391,34 @@ impl ForwarderTask {
         let QueuedBatch {
             upper,
             shares,
-            error,
+            fatal,
             inline: _inline,
         } = batch;
-        if let Some(error) = error {
+        if let Some(fatal) = fatal {
+            return Err(self.error(sink_id, fatal));
+        }
+        // Decided before any row of the batch is forwarded, so the client receives no row of a
+        // failing batch, as with a plain subscribe.
+        if shares.iter().any(QueuedShare::has_errors) {
+            let error = match self.first_error(shares).await {
+                Some(error) => error.to_string(),
+                None => {
+                    soft_panic_or_log!(
+                        "batched subscribe {sink_id} found no error update a share announced"
+                    );
+                    "internal error: a batched subscribe share announced an error it does not \
+                     hold"
+                        .into()
+                }
+            };
             return Err(self.error(sink_id, error));
         }
 
         let mut chunk = Chunk::default();
         for share in shares {
             match share {
-                QueuedShare::Inline { updates } => {
-                    for (row, time, diff) in updates.iter() {
+                QueuedShare::Inline { rows, errors: _ } => {
+                    for (row, time, diff) in rows.iter() {
                         if chunk.push(&self.format, row, *time, diff) > self.chunk_bytes {
                             self.flush(&mut chunk).await?;
                         }
@@ -386,6 +428,7 @@ impl ForwarderTask {
                     shard_id,
                     stash,
                     from,
+                    last_error_time: _,
                     unread,
                 } => {
                     self.forward_stashed(sink_id, &mut chunk, shard_id, stash, from)
@@ -405,15 +448,57 @@ impl ForwarderTask {
         Ok(())
     }
 
-    /// Reads one stashed share into `chunk`, flushing as it fills.
-    async fn forward_stashed(
+    /// Returns the error update of `shares` with the least `(time, error)`, or `None` if they
+    /// hold none. Reads only the stashed shares that hold an error update, and forwards nothing.
+    async fn first_error(&mut self, shares: Vec<QueuedShare>) -> Option<DataflowErrorSer> {
+        let mut first: Option<(Timestamp, DataflowErrorSer)> = None;
+        let mut consider = |time: Timestamp, error: DataflowErrorSer| {
+            if first
+                .as_ref()
+                .map_or(true, |least| (time, &error) < (least.0, &least.1))
+            {
+                first = Some((time, error));
+            }
+        };
+        for share in shares {
+            if !share.has_errors() {
+                // Dropping the share deletes its stashed batches.
+                continue;
+            }
+            match share {
+                QueuedShare::Inline { rows: _, errors } => {
+                    for (error, time, _diff) in errors {
+                        consider(time, error);
+                    }
+                }
+                QueuedShare::Stashed {
+                    shard_id,
+                    stash,
+                    from,
+                    ..
+                } => {
+                    let mut read = self.read_stashed(shard_id, stash, from).await;
+                    while let Some(updates) = read.cursor().next().await {
+                        for ((source_data, ()), time, _diff) in updates {
+                            if let Err(error) = source_data.0 {
+                                consider(time, DataflowErrorSer::from(error));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        first.map(|(_, error)| error)
+    }
+
+    /// Opens a read of a stashed share's updates at times at or after `from`, which deletes the
+    /// share's batches when dropped.
+    async fn read_stashed(
         &mut self,
-        sink_id: GlobalId,
-        chunk: &mut Chunk,
         shard_id: ShardId,
         stash: OwnedStash,
         from: Antichain<Timestamp>,
-    ) -> Result<(), Stop> {
+    ) -> StashRead {
         let runtime = Handle::current();
         let cursor = self
             .persist_client
@@ -427,16 +512,35 @@ impl ForwarderTask {
             )
             .await
             .expect("a range read has no since to violate");
-        let mut read = StashRead {
+        StashRead {
             cursor: Some(cursor),
             runtime,
-        };
+        }
+    }
+
+    /// Reads one stashed share that holds no error update into `chunk`, flushing as it fills.
+    async fn forward_stashed(
+        &mut self,
+        sink_id: GlobalId,
+        chunk: &mut Chunk,
+        shard_id: ShardId,
+        stash: OwnedStash,
+        from: Antichain<Timestamp>,
+    ) -> Result<(), Stop> {
+        let mut read = self.read_stashed(shard_id, stash, from).await;
 
         while let Some(updates) = read.cursor().next().await {
             for ((source_data, ()), time, diff) in updates {
                 let row = match source_data.0 {
                     Ok(row) => row,
-                    Err(error) => return Err(self.error(sink_id, error.to_string())),
+                    // The share's `last_error_time` said it holds no error update here.
+                    Err(error) => {
+                        soft_panic_or_log!(
+                            "batched subscribe {sink_id} read an error update its share did not \
+                             announce"
+                        );
+                        return Err(self.error(sink_id, error.to_string()));
+                    }
                 };
                 if chunk.push(&self.format, &row, time, Diff::from(diff)) > self.chunk_bytes {
                     self.flush(chunk).await?;

@@ -199,13 +199,12 @@ impl Optimizer {
                 self.with_snapshot,
             ),
             // A batched subscribe's replicas always render with the snapshot, which a re-rendered
-            // replica needs to start its chain at its replayed as-of. The cutover at `start`
+            // replica needs to start its chain at its replayed as-of. The controller's cutover
             // removes the snapshot when the subscribe has none.
             Some(BatchedSubscribeOptions { stash_id }) => (
                 ComputeSinkConnection::BatchedSubscribe(BatchedSubscribeSinkConnection {
                     stash_id: *stash_id,
-                    // Set once the as-of is known, in the `GlobalMirPlan<Resolved>` stage.
-                    start: Timestamp::MIN,
+                    with_snapshot: self.with_snapshot,
                     output_desc: from_desc.clone(),
                 }),
                 true,
@@ -424,21 +423,6 @@ impl Optimize<GlobalMirPlan<Resolved>> for Optimizer {
         // Ensure all expressions are normalized before finalizing.
         for build in df_desc.objects_to_build.iter_mut() {
             normalize_lets(&mut build.plan.0, &self.config.features)?
-        }
-
-        let as_of = df_desc
-            .as_of
-            .as_ref()
-            .and_then(|as_of| as_of.as_option())
-            .copied()
-            .expect("set in `resolve`");
-        for sink in df_desc.sink_exports.values_mut() {
-            if let ComputeSinkConnection::BatchedSubscribe(connection) = &mut sink.connection {
-                // Without a start the dataflow is never shipped (see `implement_subscribe`), so
-                // the value does not matter.
-                connection.start =
-                    batched_subscribe_start(as_of, self.with_snapshot).unwrap_or(as_of);
-            }
         }
 
         if self.config.subscribe_snapshot_optimization {
