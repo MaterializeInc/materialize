@@ -2045,24 +2045,26 @@ def _batched_subscribe_as_of(c: Composition) -> int:
 class _BatchedSubscribeWriter:
     """Inserts into `t` and retracts some of its rows until stopped."""
 
-    def __init__(self, c: Composition) -> None:
+    def __init__(self, c: Composition, rows_per_write: int) -> None:
         self.c = c
+        self.rows_per_write = rows_per_write
         self.stop = Event()
         self.thread = PropagatingThread(target=self._run)
 
     def _run(self) -> None:
         cursor = self.c.sql_cursor(reuse_connection=False)
+        k = self.rows_per_write
         n = BATCHED_SUBSCRIBE_INITIAL_ROWS
         i = 0
         while not self.stop.is_set():
             cursor.execute(
-                f"INSERT INTO t SELECT generate_series({n + 1}, {n + 1000})".encode()
+                f"INSERT INTO t SELECT generate_series({n + 1}, {n + k})".encode()
             )
-            n += 1000
+            n += k
             i += 1
             if i % 5 == 0:
                 cursor.execute(
-                    f"DELETE FROM t WHERE a > {n - 3000} AND a <= {n - 2500}".encode()
+                    f"DELETE FROM t WHERE a > {n - 3 * k} AND a <= {n - 3 * k + k // 2}".encode()
                 )
             time.sleep(0.1)
 
@@ -2159,6 +2161,7 @@ def _check_batched_subscribe(
     c: Composition,
     actions: list[tuple[float, Callable[[], None]]],
     duration_ms: int = 40_000,
+    rows_per_write: int = 1000,
 ) -> None:
     """Runs a batched subscribe under `actions` and compares it to a plain subscribe.
 
@@ -2168,7 +2171,7 @@ def _check_batched_subscribe(
     known_shards = _stash_shards(c)
     as_of = _batched_subscribe_as_of(c)
     up_to = as_of + duration_ms
-    with _BatchedSubscribeWriter(c):
+    with _BatchedSubscribeWriter(c, rows_per_write):
         batched = _read_batched_subscribe(c, as_of, up_to, actions)
     reference = _read_reference_subscribe(c, as_of, up_to)
 
@@ -2296,62 +2299,73 @@ def workflow_test_batched_subscribe_cutover_trims(c: Composition) -> None:
         _batched_subscribe_setup(c, workers=(4, 1))
         ids = _batched_subscribe_replica_ids(c)
         services = {ids["replica1"]: "clusterd1", ids["replica2"]: "clusterd2"}
-        leader: list[str] = []
-        follower: list[str] = []
-        trimmed_at_kill: list[float] = []
 
         def extended(counts: dict[tuple[str, str], float], replica: str) -> float:
             return counts.get((replica, "accepted"), 0) + counts.get(
                 (replica, "trimmed"), 0
             )
 
-        def kill_leader() -> None:
-            before = _batched_subscribe_cutover_counts(c)
-            time.sleep(3)
-            after = _batched_subscribe_cutover_counts(c)
-            gains = {r: extended(after, r) - extended(before, r) for r in services}
-            print(f"batches that extended the subscribe in the last 3s: {gains}")
-            leader.append(max(gains, key=lambda r: gains[r]))
-            follower.append(next(r for r in services if r != leader[0]))
+        def await_extension(replica: str, by: int, within: float) -> bool:
+            start = extended(_batched_subscribe_cutover_counts(c), replica)
+            deadline = time.time() + within
+            while time.time() < deadline:
+                if (
+                    extended(_batched_subscribe_cutover_counts(c), replica)
+                    >= start + by
+                ):
+                    return True
+                time.sleep(0.1)
+            return False
+
+        def take_over(leader: str, follower: str) -> bool:
+            """Kills `leader` and returns whether `follower` takes over with a trim."""
             # Both replicas mint a description at every frontier step of `t` they observe, so
-            # their boundaries mostly coincide. Stalling the follower makes it miss the steps
-            # the leader extends the subscribe by, so its next batch starts before the
-            # accepted upper and ends beyond it. The leader extends the subscribe about once a
-            # second, so the stall lasts until it has done so twice. A stall of about four
+            # their boundaries mostly coincide, and a takeover at a shared boundary needs no
+            # trim. Stalling the follower until the leader has extended the subscribe twice
+            # makes the follower's next batch start before the accepted upper. Whether it also
+            # ends beyond it, instead of replaying the leader's boundaries, depends on how much
+            # of the backlog the follower observes as one frontier step. A stall of about four
             # seconds makes the controller drop the follower's connection, after which it
             # renders anew, which is the reconnect workflow's scenario.
-            c.pause(services[follower[0]])
-            paused_at = _batched_subscribe_cutover_counts(c)
-            deadline = time.time() + 3
-            while (
-                extended(_batched_subscribe_cutover_counts(c), leader[0])
-                < extended(paused_at, leader[0]) + 2
-            ):
-                assert time.time() < deadline, "the leader stopped extending"
-                time.sleep(0.1)
-            c.kill(services[leader[0]])
-            trimmed_at_kill.append(
-                _batched_subscribe_cutover_counts(c).get((follower[0], "trimmed"), 0)
+            c.pause(services[follower])
+            assert await_extension(leader, 2, 3), "the leader stopped extending"
+            c.kill(services[leader])
+            trimmed_at_kill = _batched_subscribe_cutover_counts(c).get(
+                (follower, "trimmed"), 0
             )
-            c.unpause(services[follower[0]])
-
-        def restart_leader() -> None:
-            trimmed = _batched_subscribe_cutover_counts(c).get(
-                (follower[0], "trimmed"), 0
-            )
+            c.unpause(services[follower])
+            assert await_extension(follower, 2, 15), "the follower did not take over"
+            trimmed = _batched_subscribe_cutover_counts(c).get((follower, "trimmed"), 0)
             print(
-                f"killed {services[leader[0]]}, batches of {services[follower[0]]} "
-                f"trimmed: {trimmed_at_kill[0]} -> {trimmed}"
+                f"killed {services[leader]}, batches of {services[follower]} "
+                f"trimmed: {trimmed_at_kill} -> {trimmed}"
             )
-            assert trimmed > trimmed_at_kill[0], "the follower took over untrimmed"
-            c.up(services[leader[0]])
+            c.up(services[leader])
+            assert await_extension(leader, 1, 60), f"{services[leader]} did not rejoin"
+            return trimmed > trimmed_at_kill
 
+        def take_over_until_trimmed() -> None:
+            for attempt in range(5):
+                before = _batched_subscribe_cutover_counts(c)
+                time.sleep(3)
+                after = _batched_subscribe_cutover_counts(c)
+                gains = {r: extended(after, r) - extended(before, r) for r in services}
+                print(
+                    f"attempt {attempt}: batches that extended in the last 3s: {gains}"
+                )
+                leader = max(gains, key=lambda r: gains[r])
+                follower = next(r for r in services if r != leader)
+                if take_over(leader, follower):
+                    return
+            raise AssertionError("no takeover in 5 attempts was trimmed")
+
+        # The subscribe lasts long enough for several takeovers, so it writes fewer rows per
+        # round.
         _check_batched_subscribe(
             c,
-            actions=[
-                (8.0, kill_leader),
-                (25.0, restart_leader),
-            ],
+            actions=[(8.0, take_over_until_trimmed)],
+            duration_ms=180_000,
+            rows_per_write=200,
         )
 
 
