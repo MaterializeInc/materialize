@@ -1308,4 +1308,229 @@ mod tests {
             false,
         );
     }
+    /// Tests against a live SQL Server, enabled by `SQL_SERVER_ADO_STRING`
+    /// holding an ADO connection string whose `Database` has CDC enabled. The
+    /// string has the shape of the `sql-server-connect` block in
+    /// `test/sql-server-cdc/21-privileges.td` plus a `Database` entry. On
+    /// macOS add `;Encrypt=DANGER_PLAINTEXT`: native-tls there rejects the
+    /// container's self-signed certificate even with the trust option.
+    ///
+    /// Each test works on tables it creates under unique names, since tests
+    /// run concurrently against one database. Enabling or disabling CDC on a
+    /// table is serialized across tests: two sessions doing so at once fail
+    /// with error 22832 from `sp_MSverboselogging`.
+    mod live {
+        use std::sync::{Arc, LazyLock};
+
+        use mz_ore::future::InTask;
+        use tokio::sync::Mutex;
+
+        use crate::config::TunnelConfig;
+        use crate::desc::SqlServerTableConstraintRaw;
+        use crate::inspect::{get_constraints_for_capture_instances, get_constraints_for_tables};
+        use crate::{Client, Config};
+
+        /// A client for `SQL_SERVER_ADO_STRING`, as its user or as `login`, or
+        /// `None` when no database is available.
+        async fn connect_test(login: Option<(&str, &str)>) -> Option<Client> {
+            let ado = std::env::var("SQL_SERVER_ADO_STRING").ok()?;
+            let mut inner = tiberius::Config::from_ado_string(&ado).expect("valid ADO string");
+            if let Some((name, password)) = login {
+                inner.authentication(tiberius::AuthMethod::sql_server(name, password));
+            }
+            let tunnel = TunnelConfig::Direct {
+                resolved_addresses: Default::default(),
+            };
+            let config = Config::new(inner, tunnel, InTask::No);
+            Some(Client::connect(config).await.expect("connect"))
+        }
+
+        fn unique(prefix: &str) -> String {
+            format!("{prefix}_{}", uuid::Uuid::new_v4().simple())
+        }
+
+        static CDC_TABLE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+        /// A CDC-enabled table under a capture instance of the same name, with
+        /// a PRIMARY KEY on `id` and a UNIQUE constraint over `(b, a)`, in key
+        /// order, when `keyed`.
+        struct Table {
+            name: String,
+        }
+
+        impl Table {
+            async fn create(client: &mut Client, keyed: bool) -> Table {
+                let name = unique("mz_test");
+                let constraints = if keyed {
+                    format!(
+                        " CONSTRAINT {name}_pk PRIMARY KEY, a INT NOT NULL, b INT NOT NULL, \
+                         CONSTRAINT {name}_uq UNIQUE (b, a)"
+                    )
+                } else {
+                    String::new()
+                };
+                client
+                    .simple_query(format!(
+                        "CREATE TABLE dbo.{name} (id INT NOT NULL{constraints})"
+                    ))
+                    .await
+                    .unwrap();
+                let _guard = CDC_TABLE_LOCK.lock().await;
+                client
+                    .simple_query(format!(
+                        "EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', \
+                         @source_name = '{name}', @role_name = NULL, \
+                         @supports_net_changes = 0, @capture_instance = '{name}'"
+                    ))
+                    .await
+                    .unwrap();
+                Table { name }
+            }
+
+            fn expected_constraints(&self) -> Vec<(String, &'static str, Vec<&'static str>)> {
+                vec![
+                    (format!("{}_pk", self.name), "PRIMARY KEY", vec!["id"]),
+                    (format!("{}_uq", self.name), "UNIQUE", vec!["b", "a"]),
+                ]
+            }
+
+            async fn drop(self, client: &mut Client) {
+                let _guard = CDC_TABLE_LOCK.lock().await;
+                let _ = client
+                    .simple_query(format!(
+                        "EXEC sys.sp_cdc_disable_table @source_schema = 'dbo', \
+                         @source_name = '{}', @capture_instance = '{}'",
+                        self.name, self.name
+                    ))
+                    .await;
+                let _ = client
+                    .simple_query(format!("DROP TABLE dbo.{}", self.name))
+                    .await;
+            }
+        }
+
+        fn as_tuples(
+            constraints: &[SqlServerTableConstraintRaw],
+        ) -> Vec<(String, &str, Vec<&str>)> {
+            constraints
+                .iter()
+                .map(|c| {
+                    (
+                        c.constraint_name.clone(),
+                        c.constraint_type.as_str(),
+                        c.columns.iter().map(String::as_str).collect(),
+                    )
+                })
+                .collect()
+        }
+
+        #[mz_ore::test(tokio::test)]
+        #[cfg_attr(miri, ignore)] // needs a database
+        async fn constraints_of_tracked_tables() {
+            let Some(mut client) = connect_test(None).await else {
+                return;
+            };
+            let keyed = Table::create(&mut client, true).await;
+            let bare = Table::create(&mut client, false).await;
+
+            let by_instance = get_constraints_for_capture_instances(
+                &mut client,
+                [keyed.name.as_str(), bare.name.as_str()],
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                as_tuples(&by_instance[keyed.name.as_str()]),
+                keyed.expected_constraints()
+            );
+            assert!(
+                by_instance[bare.name.as_str()].is_empty(),
+                "a visible table without constraints is present with none"
+            );
+
+            // The purification query agrees on the keyed table and omits the
+            // one without constraints.
+            let names = [
+                (Arc::from("dbo"), Arc::from(keyed.name.as_str())),
+                (Arc::from("dbo"), Arc::from(bare.name.as_str())),
+            ];
+            let by_table = get_constraints_for_tables(&mut client, names.iter())
+                .await
+                .unwrap();
+            assert_eq!(by_table.len(), 1);
+            assert_eq!(
+                as_tuples(&by_table[&names[0]]),
+                keyed.expected_constraints()
+            );
+
+            keyed.drop(&mut client).await;
+            bare.drop(&mut client).await;
+        }
+
+        #[mz_ore::test(tokio::test)]
+        #[cfg_attr(miri, ignore)] // needs a database
+        async fn tracked_table_hidden_from_user_without_select() {
+            let Some(mut admin) = connect_test(None).await else {
+                return;
+            };
+            let table = Table::create(&mut admin, true).await;
+            let user = unique("mz_reader");
+            let password = "Mz_Test_Pass1!";
+            for stmt in [
+                format!("CREATE LOGIN {user} WITH PASSWORD = '{password}'"),
+                format!("CREATE USER {user} FOR LOGIN {user}"),
+                format!("ALTER ROLE db_datareader ADD MEMBER {user}"),
+            ] {
+                admin.simple_query(stmt).await.unwrap();
+            }
+            let mut reader = connect_test(Some((&user, password))).await.unwrap();
+            let visible = |seen: &std::collections::BTreeMap<Arc<str>, Vec<_>>| {
+                seen.contains_key(table.name.as_str())
+            };
+
+            let seen = get_constraints_for_capture_instances(&mut reader, [table.name.as_str()])
+                .await
+                .unwrap();
+            assert!(
+                visible(&seen),
+                "SELECT through db_datareader shows the table"
+            );
+            assert_eq!(
+                as_tuples(&seen[table.name.as_str()]),
+                table.expected_constraints()
+            );
+
+            admin
+                .simple_query(format!(
+                    "DENY SELECT ON OBJECT::dbo.{} TO {user}",
+                    table.name
+                ))
+                .await
+                .unwrap();
+            let seen = get_constraints_for_capture_instances(&mut reader, [table.name.as_str()])
+                .await
+                .unwrap();
+            assert!(
+                !visible(&seen),
+                "a denied table is absent, not present without constraints"
+            );
+
+            admin
+                .simple_query(format!(
+                    "REVOKE SELECT ON OBJECT::dbo.{} TO {user}",
+                    table.name
+                ))
+                .await
+                .unwrap();
+            let seen = get_constraints_for_capture_instances(&mut reader, [table.name.as_str()])
+                .await
+                .unwrap();
+            assert!(visible(&seen), "restoring SELECT shows the table again");
+
+            drop(reader);
+            table.drop(&mut admin).await;
+            let _ = admin.simple_query(format!("DROP USER {user}")).await;
+            let _ = admin.simple_query(format!("DROP LOGIN {user}")).await;
+        }
+    }
 }
