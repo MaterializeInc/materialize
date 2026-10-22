@@ -655,31 +655,46 @@ WITH
         FROM mz_internal.mz_catalog_raw
         WHERE data->>'kind' = 'Item'
     ),
+    -- An item's columns are one row whose value lists them in position order.
+    item_columns AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'id') AS id,
+            data->'value'->'columns' AS columns
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'ItemColumns'
+    ),
+    defaults AS (
+        SELECT i.id, d.ordinality, d.value AS default
+        FROM
+            items AS i,
+            jsonb_array_elements_text(i.column_defaults) WITH ORDINALITY AS d(value, ordinality)
+    ),
     user_columns AS (
         SELECT
-            i.id,
-            c.data->'value'->>'name' AS name,
-            -- Add one since position is 0-indexed
-            (c.data->'key'->>'position')::uint8 + 1::uint8 AS position,
-            (c.data->'value'->>'nullable')::bool AS nullable,
-            coalesce(custom.name, mz_internal.mz_type_name((c.data->'value'->>'type_oid')::oid), 'unknown') AS type,
-            i.column_defaults->>((c.data->'key'->>'position')::int8) AS default,
-            coalesce(custom.oid, (c.data->'value'->>'type_oid')::oid) AS type_oid,
-            (c.data->'value'->>'type_mod')::int4 AS type_mod
+            c.id,
+            col.value->>'name' AS name,
+            -- WITH ORDINALITY numbers the list from one, which is what position reports
+            col.ordinality::uint8 AS position,
+            (col.value->>'nullable')::bool AS nullable,
+            coalesce(custom.name, mz_internal.mz_type_name((col.value->>'type_oid')::oid), 'unknown') AS type,
+            d.default,
+            coalesce(custom.oid, (col.value->>'type_oid')::oid) AS type_oid,
+            (col.value->>'type_mod')::int4 AS type_mod
         FROM
-            mz_internal.mz_catalog_raw AS c
-            JOIN items AS i ON i.id = mz_internal.parse_catalog_id(c.data->'key'->'id')
+            item_columns AS c
+            JOIN items AS i ON i.id = c.id
+            CROSS JOIN LATERAL jsonb_array_elements(c.columns) WITH ORDINALITY AS col(value, ordinality)
             -- A column may have a custom type from a `CREATE TYPE` item of a list, map or record type.
             -- We store the catalog ID of the custom type in the catalog and join on items to get its type
             -- name and OID
             CROSS JOIN LATERAL (
                 SELECT CASE
-                    WHEN jsonb_typeof(c.data->'value'->'custom_type') = 'object'
-                    THEN mz_internal.parse_catalog_id(c.data->'value'->'custom_type')
+                    WHEN jsonb_typeof(col.value->'custom_type') = 'object'
+                    THEN mz_internal.parse_catalog_id(col.value->'custom_type')
                 END
             ) AS ct(custom_type)
             LEFT JOIN items AS custom ON custom.id = ct.custom_type
-        WHERE c.data->>'kind' = 'ItemColumn'
+            LEFT JOIN defaults AS d ON d.id = c.id AND d.ordinality = col.ordinality
     ),
     builtin_relations AS (
         SELECT
