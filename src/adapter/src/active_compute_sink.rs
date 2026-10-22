@@ -119,7 +119,7 @@ pub enum ActiveComputeSinkRetireReason {
 /// those two grow without bound, so the retire check would never trip on a
 /// stalled client that only receives progress messages. The fixed charge makes
 /// the budget bound message *count* as well as payload bytes.
-const SUBSCRIBE_MESSAGE_OVERHEAD_BYTES: usize = 1024;
+pub(crate) const SUBSCRIBE_MESSAGE_OVERHEAD_BYTES: usize = 1024;
 
 /// Footprints of the subscribe messages queued to the client but not yet
 /// drained, oldest first. The producer pushes one per message sent, the

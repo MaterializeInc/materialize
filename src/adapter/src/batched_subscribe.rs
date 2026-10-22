@@ -35,7 +35,8 @@ use tokio::sync::mpsc;
 
 use crate::AdapterError;
 use crate::active_compute_sink::{
-    SubscribeBacklogAccounting, SubscribeRowFormat, send_last_to_client, send_to_client,
+    SUBSCRIBE_MESSAGE_OVERHEAD_BYTES, SubscribeBacklogAccounting, SubscribeRowFormat,
+    send_last_to_client, send_to_client,
 };
 use crate::coord::peek::PeekResponseUnary;
 
@@ -138,13 +139,15 @@ impl Forwarder {
             shares,
             error,
         } = batch;
+        // A batch costs at least the message of its progress row, so that batches without
+        // shares build backlog as plain progress messages do.
         let inline_bytes = shares
             .iter()
             .map(|share| match share {
                 AcceptedShare::Inline(updates) => updates.byte_len(),
                 AcceptedShare::Stashed { .. } => 0,
             })
-            .sum();
+            .fold(SUBSCRIBE_MESSAGE_OVERHEAD_BYTES, usize::saturating_add);
         let inline = UnreadInlineBatch::new(inline_bytes, Arc::clone(&self.unread_inline));
         let shares = shares
             .into_iter()
@@ -185,7 +188,7 @@ impl Forwarder {
     }
 
     /// The size of the inline shares of the batches queued behind the one the forwarder is
-    /// formatting.
+    /// formatting, with each batch charged `SUBSCRIBE_MESSAGE_OVERHEAD_BYTES` on top.
     ///
     /// These are held in environmentd memory. The caller retires the subscribe with
     /// `SubscribeFellBehind` once `backlog_size + unread_inline_bytes` exceeds

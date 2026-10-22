@@ -7,11 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use mz_adapter_types::connection::ConnectionId;
+
 use mz_compute_client::controller::{AcceptedBatch, AcceptedShare};
 use mz_compute_client::stash::OwnedStash;
+use mz_controller_types::ClusterId;
 use mz_dyncfg::{ConfigUpdates, ConfigVal};
 use mz_expr::EvalError;
 use mz_ore::cast::CastLossy;
@@ -30,9 +34,14 @@ use mz_storage_types::sources::SourceData;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 
-use crate::active_compute_sink::{SubscribeBacklogAccounting, SubscribeRowFormat};
+use crate::AdapterError;
+use crate::active_compute_sink::{
+    ActiveBatchedSubscribe, ActiveComputeSinkRetireReason, SUBSCRIBE_MESSAGE_OVERHEAD_BYTES,
+    SubscribeBacklogAccounting, SubscribeRowFormat,
+};
 use crate::batched_subscribe::{Forwarder, ForwarderEvent};
 use crate::coord::peek::PeekResponseUnary;
+use crate::error::SubscribeBudget;
 
 const SINK_ID: GlobalId = GlobalId::User(7);
 
@@ -217,6 +226,16 @@ impl Harness {
         read_batch_bytes: usize,
         max_buffered_bytes: usize,
     ) -> Self {
+        Self::with_client_channel(persist, read_batch_bytes, max_buffered_bytes).0
+    }
+
+    /// The same, with a sender of the client channel, which keeps the client's stream from
+    /// ending while it is held.
+    fn with_client_channel(
+        persist: &CountedClient,
+        read_batch_bytes: usize,
+        max_buffered_bytes: usize,
+    ) -> (Self, mpsc::UnboundedSender<PeekResponseUnary>) {
         let (tx, rx) = mpsc::unbounded_channel();
         let (events_tx, events) = mpsc::unbounded_channel();
         let backlog = Arc::new(Mutex::new(SubscribeBacklogAccounting::default()));
@@ -229,19 +248,20 @@ impl Harness {
             },
             desc(),
             persist.client.clone(),
-            tx,
+            tx.clone(),
             Arc::clone(&backlog),
             read_batch_bytes,
             1024 * 1024,
             max_buffered_bytes,
             events_tx,
         );
-        Harness {
+        let harness = Harness {
             forwarder,
             rx,
             backlog,
             events,
-        }
+        };
+        (harness, tx)
     }
 
     /// Receives the next message without draining it from the backlog.
@@ -546,7 +566,7 @@ async fn queued_inline_shares_count_until_formatted() {
     harness.forwarder.send(batch(3, Some(4), vec![third]));
     assert_eq!(
         harness.forwarder.unread_inline_bytes(),
-        second_bytes + third_bytes
+        second_bytes + third_bytes + 2 * SUBSCRIBE_MESSAGE_OVERHEAD_BYTES
     );
 
     // The client stops draining, so the forwarder stalls while formatting the first batch.
@@ -555,7 +575,7 @@ async fn queued_inline_shares_count_until_formatted() {
     }
     assert_eq!(
         harness.forwarder.unread_inline_bytes(),
-        second_bytes + third_bytes
+        second_bytes + third_bytes + 2 * SUBSCRIBE_MESSAGE_OVERHEAD_BYTES
     );
 
     harness.drain();
@@ -587,7 +607,66 @@ async fn a_large_head_batch_alone_does_not_count_against_the_memory_bound() {
     let queued = inline(&[(1000, 2, 1)]);
     let queued_bytes = inline_bytes(&queued);
     harness.forwarder.send(batch(2, Some(3), vec![queued]));
-    assert_eq!(harness.forwarder.unread_inline_bytes(), queued_bytes);
+    assert_eq!(
+        harness.forwarder.unread_inline_bytes(),
+        queued_bytes + SUBSCRIBE_MESSAGE_OVERHEAD_BYTES
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+async fn batches_without_shares_retire_a_client_that_does_not_read() {
+    const MAX_BUFFERED_BYTES: usize = 64 * 1024;
+    let persist = CountedClient::new().await;
+    let (mut harness, channel) =
+        Harness::with_client_channel(&persist, 1024 * 1024, MAX_BUFFERED_BYTES);
+    let subscribe = ActiveBatchedSubscribe {
+        conn_id: ConnectionId::Static(1),
+        session_uuid: uuid::Uuid::nil(),
+        cluster_id: ClusterId::user(1).expect("a valid id"),
+        depends_on: BTreeSet::new(),
+        as_of: Timestamp::MIN,
+        start_time: 0,
+        channel,
+        backlog_accounting: Arc::clone(&harness.backlog),
+        max_buffered_bytes: MAX_BUFFERED_BYTES,
+        max_unread_stash_bytes: usize::MAX,
+        forwarder: harness.forwarder,
+    };
+
+    // Each batch only advances the frontier, as over a quiet input.
+    let mut retired = None;
+    for upper in 1..=1_000 {
+        if let Some(reason) = subscribe.send(batch(upper - 1, Some(upper), Vec::new())) {
+            retired = Some(reason);
+            break;
+        }
+    }
+    let reason = retired.expect("the subscribe retires");
+    assert!(
+        matches!(
+            reason,
+            ActiveComputeSinkRetireReason::BufferExceeded {
+                budget: SubscribeBudget::BufferedBytes,
+                ..
+            }
+        ),
+        "{reason:?}"
+    );
+
+    subscribe.retire(reason);
+    let mut last = None;
+    while let Ok(message) = harness.rx.try_recv() {
+        last = Some(message);
+    }
+    assert!(
+        matches!(
+            last,
+            Some(PeekResponseUnary::Error(
+                AdapterError::SubscribeFellBehind { .. }
+            ))
+        ),
+        "{last:?}"
+    );
 }
 
 /// Returns an inline share of at least `bytes` bytes, at time `time`, with values from `first`.
