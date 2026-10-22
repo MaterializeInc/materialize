@@ -268,18 +268,6 @@ pub struct BatchedSubscribeOptions {
     pub stash_id: Uuid,
 }
 
-/// The earliest time a batched subscribe with as-of `as_of` reports updates at.
-///
-/// Returns `None` if no such time exists, which is the case for a subscribe without a snapshot at
-/// `Timestamp::MAX`. Such a subscribe reports nothing.
-pub fn batched_subscribe_start(as_of: Timestamp, with_snapshot: bool) -> Option<Timestamp> {
-    if with_snapshot {
-        Some(as_of)
-    } else {
-        as_of.try_step_forward()
-    }
-}
-
 /// What a subscribe reads from, with any HIR ⇒ MIR lowering already done.
 enum SubscribeSource {
     /// An existing collection, imported by id.

@@ -645,6 +645,122 @@ async fn the_first_error_is_the_least_time_and_error() {
     persist.wait_until_nothing_is_left().await;
 }
 
+/// A stashed share may announce an error update that cancels with another one written in a
+/// different hand-out. Read and found clean, its rows are forwarded and its batches deleted.
+#[mz_ore::test(tokio::test)]
+async fn a_share_whose_errors_cancel_is_forwarded() {
+    let persist = CountedClient::new().await;
+    let shard_id = ShardId::new();
+    let mut harness = Harness::new(&persist, 1024 * 1024);
+    let stash = persist
+        .stash(
+            shard_id,
+            &[
+                (SourceData(Err(named_error("e"))), 2, 1),
+                (ok(1), 2, 1),
+                (SourceData(Err(named_error("e"))), 2, -1),
+            ],
+        )
+        .await;
+    harness.forwarder.send(batch(
+        0,
+        Some(4),
+        vec![
+            stashed_with_errors(shard_id, stash, 0, Some(2)),
+            inline(&[(2, 3, 1)]),
+        ],
+    ));
+    assert_eq!(
+        harness.rows_until_progress(4).await,
+        sorted(vec![data_row(1, 2, 1), data_row(2, 3, 1)]),
+    );
+    assert_eq!(harness.forwarder.unread_stash_bytes(), 0);
+    persist.wait_until_nothing_is_left().await;
+}
+
+/// The batches of the subscribe as the controller accepts them, trimmed at the start 5, for an
+/// error inserted at 6 and retracted at 8, and a row at 5. `split` cuts the range at 7, between
+/// the insertion and the retraction.
+async fn insert_and_retract(
+    persist: &CountedClient,
+    shard_id: ShardId,
+    split: bool,
+) -> Vec<AcceptedBatch> {
+    let inserted = (SourceData(Err(named_error("e"))), 6, 1);
+    let retracted = (SourceData(Err(named_error("e"))), 8, -1);
+    if split {
+        let first = persist.stash(shard_id, &[(ok(1), 5, 1), inserted]).await;
+        let second = persist.stash(shard_id, &[retracted]).await;
+        vec![
+            batch(
+                5,
+                Some(7),
+                vec![stashed_with_errors(shard_id, first, 5, Some(6))],
+            ),
+            batch(
+                7,
+                Some(10),
+                vec![stashed_with_errors(shard_id, second, 7, Some(8))],
+            ),
+        ]
+    } else {
+        let only = persist
+            .stash(shard_id, &[(ok(1), 5, 1), inserted, retracted])
+            .await;
+        vec![batch(
+            5,
+            Some(10),
+            vec![stashed_with_errors(shard_id, only, 5, Some(8))],
+        )]
+    }
+}
+
+/// An error inserted and retracted after the start fails the subscribe on its insertion,
+/// whether both land in one batch or are split across two, and no row of the failing batch
+/// reaches the client.
+#[mz_ore::test(tokio::test)]
+async fn the_failure_does_not_depend_on_batch_boundaries() {
+    let persist = CountedClient::new().await;
+    let shard_id = ShardId::new();
+    let mut failures = Vec::new();
+    for split in [false, true] {
+        let mut harness = Harness::new(&persist, 1024 * 1024);
+        for batch in insert_and_retract(&persist, shard_id, split).await {
+            harness.forwarder.send(batch);
+        }
+        failures.push(expect_error(&mut harness).await);
+    }
+    assert_eq!(failures[0], failures[1]);
+    assert!(failures[0].contains("internal error: e"), "{}", failures[0]);
+    persist.wait_until_nothing_is_left().await;
+}
+
+/// A retraction alone fails the subscribe once it lies at or after the start, as a plain
+/// subscribe fails on an error update of either sign. The batches before it are forwarded.
+#[mz_ore::test(tokio::test)]
+async fn a_retraction_after_the_start_fails_the_subscribe() {
+    let persist = CountedClient::new().await;
+    let mut harness = Harness::new(&persist, 1024 * 1024);
+    // The error stands before the start 5, so the trim removed its insertion.
+    harness
+        .forwarder
+        .send(batch(5, Some(7), vec![inline(&[(1, 5, 1)])]));
+    harness.forwarder.send(batch(
+        7,
+        Some(10),
+        vec![inline_with_errors(&[(2, 8, 1)], &[("e", 8, -1)])],
+    ));
+    assert_eq!(
+        harness.rows_until_progress(7).await,
+        vec![data_row(1, 5, 1)]
+    );
+    assert!(
+        expect_error(&mut harness)
+            .await
+            .contains("internal error: e")
+    );
+}
+
 /// A stashed share whose error updates all lie before the trim is forwarded, and the read
 /// filters those errors out with the rows before the trim.
 #[mz_ore::test(tokio::test)]

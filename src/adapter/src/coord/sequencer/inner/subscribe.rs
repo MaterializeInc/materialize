@@ -56,7 +56,6 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::Optimize;
-use crate::optimize::subscribe::batched_subscribe_start;
 use crate::session::{Session, TransactionOps};
 use crate::{
     AdapterNotice, ExecuteContext, ExecuteContextGuard, ReadHolds, TimelineContext, optimize,
@@ -669,8 +668,17 @@ impl Coordinator {
         //
         // A batched subscribe without a snapshot at `MAX` covers no times either, and its
         // sink would never complete for the same reason.
-        let is_empty = PartialOrder::less_equal(&df_desc.until, &Antichain::from_elem(as_of))
-            || (plan.batched && batched_subscribe_start(as_of, plan.with_snapshot).is_none());
+        let no_start = df_desc
+            .sink_exports
+            .values()
+            .any(|sink| match &sink.connection {
+                ComputeSinkConnection::BatchedSubscribe(connection) => {
+                    connection.start(&Antichain::from_elem(as_of)).is_empty()
+                }
+                _ => false,
+            });
+        let is_empty =
+            PartialOrder::less_equal(&df_desc.until, &Antichain::from_elem(as_of)) || no_start;
         let write_notify: BuiltinTableAppendNotify = if is_empty {
             active_sink.retire(ActiveComputeSinkRetireReason::Finished);
             // No `mz_subscriptions` bookkeeping was deferred.

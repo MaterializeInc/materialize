@@ -17,7 +17,9 @@
 //! The forwarder applies the subscribe's error policy. As a plain subscribe does, it fails the
 //! subscribe on any error update of an accepted batch, of either sign, and reports the error of
 //! the least `(time, error)`. The controller has trimmed every update before the start, so the
-//! policy sees only error updates at or after it.
+//! policy sees only error updates at or after it. A stashed share's `last_error_time` only bounds
+//! its error times, so the forwarder reads the shares that may hold an error update before it
+//! forwards any row of their batch.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -237,9 +239,9 @@ enum QueuedShare {
 }
 
 impl QueuedShare {
-    /// Whether the share holds an error update at or after the trim, which a stashed share
-    /// tells without being read.
-    fn has_errors(&self) -> bool {
+    /// Whether the share may hold an error update at or after the trim. An inline share tells
+    /// exactly, a stashed share only rules it out.
+    fn may_have_errors(&self) -> bool {
         match self {
             QueuedShare::Inline { errors, .. } => !errors.is_empty(),
             QueuedShare::Stashed {
@@ -336,6 +338,12 @@ impl StashRead {
     fn cursor(&mut self) -> &mut StashCursor {
         self.cursor.as_mut().expect("present until dropped")
     }
+
+    /// Ends the read and hands back its batches, to be read again.
+    fn into_stash(mut self) -> OwnedStash {
+        let cursor = self.cursor.take().expect("present until dropped");
+        OwnedStash::from_batches(cursor.into_lease(), self.runtime.clone())
+    }
 }
 
 impl Drop for StashRead {
@@ -399,20 +407,15 @@ impl ForwarderTask {
         }
         // Decided before any row of the batch is forwarded, so the client receives no row of a
         // failing batch, as with a plain subscribe.
-        if shares.iter().any(QueuedShare::has_errors) {
-            let error = match self.first_error(shares).await {
-                Some(error) => error.to_string(),
-                None => {
-                    soft_panic_or_log!(
-                        "batched subscribe {sink_id} found no error update a share announced"
-                    );
-                    "internal error: a batched subscribe share announced an error it does not \
-                     hold"
-                        .into()
-                }
-            };
-            return Err(self.error(sink_id, error));
-        }
+        let shares = if shares.iter().any(QueuedShare::may_have_errors) {
+            let (first, shares) = self.first_error(shares).await;
+            if let Some(error) = first {
+                return Err(self.error(sink_id, error.to_string()));
+            }
+            shares
+        } else {
+            shares
+        };
 
         let mut chunk = Chunk::default();
         for share in shares {
@@ -449,8 +452,13 @@ impl ForwarderTask {
     }
 
     /// Returns the error update of `shares` with the least `(time, error)`, or `None` if they
-    /// hold none. Reads only the stashed shares that hold an error update, and forwards nothing.
-    async fn first_error(&mut self, shares: Vec<QueuedShare>) -> Option<DataflowErrorSer> {
+    /// hold none, together with `shares` for forwarding. Reads only the stashed shares that may
+    /// hold an error update, and forwards nothing. A stashed share read without finding an error
+    /// update is returned marked as holding none.
+    async fn first_error(
+        &mut self,
+        shares: Vec<QueuedShare>,
+    ) -> (Option<DataflowErrorSer>, Vec<QueuedShare>) {
         let mut first: Option<(Timestamp, DataflowErrorSer)> = None;
         let mut consider = |time: Timestamp, error: DataflowErrorSer| {
             if first
@@ -460,24 +468,27 @@ impl ForwarderTask {
                 first = Some((time, error));
             }
         };
+        let mut kept = Vec::with_capacity(shares.len());
         for share in shares {
-            if !share.has_errors() {
-                // Dropping the share deletes its stashed batches.
+            if !share.may_have_errors() {
+                kept.push(share);
                 continue;
             }
             match share {
-                QueuedShare::Inline { rows: _, errors } => {
-                    for (error, time, _diff) in errors {
-                        consider(time, error);
+                QueuedShare::Inline { rows, errors } => {
+                    for (error, time, _diff) in &errors {
+                        consider(*time, error.clone());
                     }
+                    kept.push(QueuedShare::Inline { rows, errors });
                 }
                 QueuedShare::Stashed {
                     shard_id,
                     stash,
                     from,
-                    ..
+                    last_error_time: _,
+                    unread,
                 } => {
-                    let mut read = self.read_stashed(shard_id, stash, from).await;
+                    let mut read = self.read_stashed(shard_id, stash, from.clone()).await;
                     while let Some(updates) = read.cursor().next().await {
                         for ((source_data, ()), time, _diff) in updates {
                             if let Err(error) = source_data.0 {
@@ -485,10 +496,19 @@ impl ForwarderTask {
                             }
                         }
                     }
+                    // Error updates written in different hand-outs can cancel, so a share that
+                    // may hold one can turn out to hold none.
+                    kept.push(QueuedShare::Stashed {
+                        shard_id,
+                        stash: read.into_stash(),
+                        from,
+                        last_error_time: None,
+                        unread,
+                    });
                 }
             }
         }
-        first.map(|(_, error)| error)
+        (first.map(|(_, error)| error), kept)
     }
 
     /// Opens a read of a stashed share's updates at times at or after `from`, which deletes the
@@ -518,7 +538,8 @@ impl ForwarderTask {
         }
     }
 
-    /// Reads one stashed share that holds no error update into `chunk`, flushing as it fills.
+    /// Reads one stashed share that holds no error update at or after `from` into `chunk`,
+    /// flushing as it fills.
     async fn forward_stashed(
         &mut self,
         sink_id: GlobalId,
@@ -533,7 +554,8 @@ impl ForwarderTask {
             for ((source_data, ()), time, diff) in updates {
                 let row = match source_data.0 {
                     Ok(row) => row,
-                    // The share's `last_error_time` said it holds no error update here.
+                    // The share's `last_error_time`, or a read of the share, said it holds no error
+                    // update here.
                     Err(error) => {
                         soft_panic_or_log!(
                             "batched subscribe {sink_id} read an error update its share did not \
