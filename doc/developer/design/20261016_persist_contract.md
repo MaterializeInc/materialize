@@ -35,7 +35,9 @@ Through the persist API, callers write to a shard, read from it, and supply the 
 **P3. Reads.** A reader can read the shard's contents at an `as_of` via `snapshot`, and all later updates via a `listen` call. However, the returned updates are not guaranteed to be consolidated, so a client must perform consolidation by itself as the same `(k,v,t)` may appear more than once[^snapshot-and-fetch].
 
 
-**P4. Handles.** *Handles* are what ensure that persist does not advance state that clients need to consume. `SinceHandles` hold back the advancement of `since`: A `SinceHandle` is durable and survives process restarts. By contrast a `ReadHandle` holds back `since` and stops the data it is actively reading from being deleted[^layout]. Hence `since` is the minimum over all handles that hold it back.
+**P4. Handles.** *Handles* are what ensure that persist does not advance state that clients need to consume. `SinceHandles` hold back the advancement of `since`: A `SinceHandle` is durable and survives process restarts. A `ReadHandle` holds back `since` and stops the data it is actively reading from being deleted[^layout]. Hence `since` is the minimum over all handles that hold it back.
+
+A `WriteHandle` gives the ability to append to a shard via `compare_and_append`. Unlike the other handles it does not hold back the advancement of `since`. It is not an exclusive right to write, because writers coordinate through the `compare_and_append` on upper, not the handle.
 
 <details>
 <summary>Implications and Details</summary>
@@ -167,10 +169,12 @@ Blob storage is an object store where the actual shard data is stored and manage
 
 </details>
 
-**B8. S3 compatibility.** Persist connects to blob storage through the AWS S3 client (`aws-sdk-s3`), so the store must be *S3 compatible*[^s3]. When it opens the blob store it checks the connection by issuing a `get` of a `HEALTH_CHECK` key. Hence a misconfigured endpoint, credentials or TLS setup fails when persist starts.
+**B8. Backends.** Persist connects to blob storage through an implementation chosen by the URL scheme of the blob location: `s3://` for AWS S3 and S3-compatible stores (via `aws-sdk-s3`)[^s3], `gcs://` for Google Cloud Storage, and `https://` for Azure Blob Storage.
+
+When it opens the blob store it checks the connection by issuing a `get` of a `HEALTH_CHECK` key. Hence a misconfigured endpoint, credentials or TLS setup fails when persist starts.
 
 <details>
-<summary>Implications and Details</summary>
+<summary>Implications and Details (S3)</summary>
 
 - S3 compatible means the store implements `PutObject`, `GetObject` (including by `partNumber`), `HeadObject`, `DeleteObject`, `ListObjectsV2`, `CreateMultipartUpload`, `UploadPart` and `CompleteMultipartUpload`, and accepts AWS Signature Version 4 signed requests.
 - If a custom endpoint is configured (i.e., any store that is not AWS S3) then persist uses *path-style* addressing, so the store must support it.
