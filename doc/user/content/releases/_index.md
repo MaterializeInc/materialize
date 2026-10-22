@@ -38,11 +38,11 @@ CREATE TABLE orders
 
 For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/postgres/) for PostgreSQL and the guide on [handling upstream constraint drops](/ingest-data/postgres/source-versioning/#handle-upstream-constraint-drop).
 
-### Add tables to PostgreSQL sources without pausing ingestion {#v26.47-postgres-add-table-freshness}
+### Better freshness when adding tables to PostgreSQL sources {#v26.47-postgres-add-table-freshness}
 
 {{< private-preview />}}
 
-Previously, adding a table to a running PostgreSQL source, with `CREATE TABLE ... FROM SOURCE` or, for legacy sources, `ALTER SOURCE ... ADD SUBSOURCE`, blocked every other table in that source from advancing until the new table's snapshot finished. Now, tables that are already ingesting keep advancing while the new table snapshots. Adding a table still restarts the source dataflow, and the cluster uses additional memory while the new table hydrates. This applies to PostgreSQL sources only.
+When you add a table to a PostgreSQL source, with `CREATE TABLE ... FROM SOURCE` or, for legacy sources, `ALTER SOURCE ... ADD SUBSOURCE`, Materialize can now snapshot the new table while reading the replication stream, so the source's other tables can keep making progress during the snapshot. Previously, they waited until the new table's snapshot finished. Adding a table still briefly restarts the source dataflow, and if the dataflow restarts again before the snapshot finishes (for example, after a replica resize or another table change), the other tables pause until Materialize catches back up on the replication stream. The cluster also uses additional memory while the new table hydrates. This applies to PostgreSQL sources only.
 
 ### Improvements {#v26.47-improvements}
 - **Zero-downtime upgrades wait less before promoting**: A rollout no longer imposes a full stability wait on a replica created during that rollout — the wait is capped at how old the replica was when it hydrated on the incoming generation — and no longer waits on collections or replicas that the deployment being replaced has not hydrated either.
