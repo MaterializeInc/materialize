@@ -63,8 +63,10 @@ pub enum BatchedSubscribeEvent {
         upper: Antichain<Timestamp>,
         /// The updates of every share, sorted.
         updates: Vec<(Row, Timestamp, i64)>,
-        /// The error that poisons the description, if any.
-        error: Option<String>,
+        /// The error updates of every share, as `(message, time, diff)`, sorted.
+        errors: Vec<(String, Timestamp, i64)>,
+        /// The batch's fatal error, if any.
+        fatal: Option<String>,
     },
     /// The subscribe was dropped at `frontier`.
     DroppedAt {
@@ -80,24 +82,33 @@ impl BatchedSubscribeEvent {
         match response {
             BatchedSubscribeResponse::Batch(batch) => {
                 let mut updates = Vec::new();
+                let mut errors = Vec::new();
                 for share in batch.shares {
                     match share {
-                        Share::Inline(collection) => {
-                            for (row, ts, diff) in collection.iter() {
+                        Share::Inline {
+                            rows,
+                            errors: share_errors,
+                        } => {
+                            for (row, ts, diff) in rows.iter() {
                                 updates.push((row.to_owned(), *ts, diff.into_inner()));
                             }
+                            for (error, ts, diff) in share_errors {
+                                errors.push((error.to_string(), ts, diff.into_inner()));
+                            }
                         }
-                        Share::Stashed(_) => {
+                        Share::Stashed { .. } => {
                             return Err("the driver cannot read stashed shares".into());
                         }
                     }
                 }
                 updates.sort();
+                errors.sort();
                 Ok(BatchedSubscribeEvent::Batch {
                     lower: batch.lower,
                     upper: batch.upper,
                     updates,
-                    error: batch.error,
+                    errors,
+                    fatal: batch.fatal,
                 })
             }
             BatchedSubscribeResponse::DroppedAt { frontier, orphans } => {

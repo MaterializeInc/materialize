@@ -391,15 +391,13 @@ impl DataflowBuilder {
     /// Export a batched subscribe sink `sink_id` reporting the collection `from_id` back as
     /// `ComputeResponse::BatchedSubscribeResponse` batches.
     ///
-    /// `value_desc` is the output schema and must match `from_id`'s type. `start` is the
-    /// earliest time the subscribe reports, and `up_to` the exclusive upper at which it
-    /// completes.
+    /// `value_desc` is the output schema and must match `from_id`'s type, and `up_to` is the
+    /// exclusive upper at which it completes.
     pub fn export_batched_subscribe(
         &mut self,
         sink_id: GlobalId,
         from_id: GlobalId,
         value_desc: RelationDesc,
-        start: Timestamp,
         up_to: Antichain<Timestamp>,
     ) -> &mut Self {
         let desc = ComputeSinkDesc {
@@ -407,7 +405,7 @@ impl DataflowBuilder {
             from_desc: value_desc.clone(),
             connection: ComputeSinkConnection::BatchedSubscribe(BatchedSubscribeSinkConnection {
                 stash_id: uuid::Uuid::new_v4(),
-                start,
+                with_snapshot: true,
                 output_desc: value_desc,
             }),
             with_snapshot: true,

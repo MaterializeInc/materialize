@@ -36,7 +36,7 @@ fn batched_subscribe_dataflow() -> DataflowDescription<(), ()> {
             from_desc: RelationDesc::empty(),
             connection: ComputeSinkConnection::BatchedSubscribe(BatchedSubscribeSinkConnection {
                 stash_id: Uuid::nil(),
-                start: Timestamp::MIN,
+                with_snapshot: true,
                 output_desc: RelationDesc::empty(),
             }),
             with_snapshot: true,
@@ -146,11 +146,10 @@ async fn stashed_share(blob: &CountedBlob) -> OwnedShare {
         .expect("persist finishes the batch")
         .expect("updates were pushed");
     let shard_id = batch.shard_id();
-    OwnedShare::Stashed(DeliveredBatch::new(
-        batch,
-        tokio::runtime::Handle::current(),
-        shard_id,
-    ))
+    OwnedShare::Stashed {
+        delivered: DeliveredBatch::new(batch, tokio::runtime::Handle::current(), shard_id),
+        last_error_time: None,
+    }
 }
 
 /// A stashed share queued on a buffer that a reconcile discards is deleted, since no response
@@ -168,7 +167,7 @@ async fn discarding_queued_batched_subscribe_responses_deletes_their_stash_batch
             lower: Antichain::from_elem(Timestamp::from(0)),
             upper: Antichain::from_elem(Timestamp::from(5)),
             shares: vec![share],
-            error: None,
+            fatal: None,
         },
     ));
     harness.state.discard_queued_sink_responses();
@@ -197,7 +196,7 @@ async fn a_response_for_a_departed_client_deletes_its_stash_batches() {
                 lower: Antichain::from_elem(Timestamp::from(0)),
                 upper: Antichain::from_elem(Timestamp::from(5)),
                 shares: vec![share],
-                error: None,
+                fatal: None,
             },
         ),
     );

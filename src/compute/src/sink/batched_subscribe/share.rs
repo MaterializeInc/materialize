@@ -22,7 +22,6 @@
 use std::sync::Arc;
 use std::thread::Thread;
 
-use differential_dataflow::consolidation::consolidate_updates;
 use mz_compute_types::dyncfgs::{
     BATCHED_SUBSCRIBE_INLINE_MAX_BYTES, BATCHED_SUBSCRIBE_OFFLOAD_MIN_UPDATES,
     PEEK_RESPONSE_STASH_BATCH_MAX_RUNS,
@@ -33,7 +32,7 @@ use mz_ore::metrics::IntCounter;
 use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::{PersistLocation, ShardId};
-use mz_repr::{Diff, RelationDesc, Row, Timestamp};
+use mz_repr::{RelationDesc, Timestamp};
 use timely::progress::Antichain;
 use timely::scheduling::SyncActivator;
 use tokio::sync::oneshot;
@@ -41,15 +40,12 @@ use tokio::sync::oneshot::error::TryRecvError;
 use tracing::warn;
 
 use crate::compute_state::PeekPermits;
-use crate::compute_state::description_scan::{DescriptionScan, update_byte_len};
+use crate::compute_state::description_scan::{DescriptionScan, DescriptionUpdates};
 use crate::compute_state::peek_offload::{OffloadConfig, offload_description_scan};
 use crate::compute_state::peek_stash::{DeliveredBatch, StashUpload};
 use crate::metrics::WorkerMetrics;
 
 use super::{Description, ErrBatch, OkBatch, OwnedShare, inline_share};
-
-/// The updates one share holds.
-type Updates = Vec<(Row, Timestamp, Diff)>;
 
 /// Where a subscribe's stashed shares are written.
 #[derive(Clone)]
@@ -134,7 +130,7 @@ impl Tiers {
         &self,
         description: &Description,
         scan: Option<DescriptionScan<OkBatch, ErrBatch>>,
-        updates: Updates,
+        updates: DescriptionUpdates,
         bytes: usize,
         activator: Option<SyncActivator>,
     ) -> PendingShare {
@@ -160,10 +156,14 @@ impl Tiers {
     pub(super) fn record(&self, shares: &[OwnedShare]) {
         for share in shares {
             match share {
-                OwnedShare::Inline(updates) => {
-                    self.inline_bytes.inc_by(u64::cast_from(updates.byte_len()))
+                OwnedShare::Inline { rows, errors } => {
+                    let bytes = errors
+                        .iter()
+                        .map(|(error, _, _)| error.byte_len())
+                        .fold(rows.byte_len(), usize::saturating_add);
+                    self.inline_bytes.inc_by(u64::cast_from(bytes))
                 }
-                OwnedShare::Stashed(delivered) => self
+                OwnedShare::Stashed { delivered, .. } => self
                     .stashed_bytes
                     .inc_by(u64::cast_from(delivered.batch().encoded_size_bytes())),
             }
@@ -174,9 +174,16 @@ impl Tiers {
 /// The tier a share's updates are in while it is assembled.
 enum Tier {
     /// Held in memory, accounted at `bytes`.
-    Inline { updates: Updates, bytes: usize },
+    Inline {
+        updates: DescriptionUpdates,
+        bytes: usize,
+    },
     /// Written to the stash as they arrive.
-    Stashed(StashUpload),
+    Stashed {
+        upload: StashUpload,
+        /// The greatest time of an error update written.
+        last_error_time: Option<Timestamp>,
+    },
 }
 
 /// One share, assembled away from the worker.
@@ -196,24 +203,24 @@ impl Accumulator {
     /// bound.
     ///
     /// Every update must lie within the bounds of the description. The description scan places
-    /// them there, advancing those of the first description to its lower, the as-of.
-    async fn push(&mut self, updates: Updates) -> Result<(), String> {
+    /// them there, advancing those of the first description to its lower, the as-of. The scan
+    /// hands out each error update once, consolidated, so a share's `last_error_time` is that of
+    /// an error update that survives consolidation.
+    async fn push(&mut self, updates: DescriptionUpdates) -> Result<(), String> {
         match &mut self.tier {
             Tier::Inline {
                 updates: held,
                 bytes,
             } => {
-                for update in updates {
-                    *bytes = bytes.saturating_add(update_byte_len(&update.0));
-                    held.push(update);
-                }
+                *bytes = bytes.saturating_add(updates.byte_len());
+                held.extend(updates);
                 let (Some(max_bytes), Some(stash)) = (self.inline_max_bytes, &self.stash) else {
                     return Ok(());
                 };
                 if *bytes <= max_bytes {
                     return Ok(());
                 }
-                let mut upload = StashUpload::open_range(
+                let upload = StashUpload::open_range(
                     &stash.persist_clients,
                     stash.location.clone(),
                     self.batch_max_runs,
@@ -224,21 +231,29 @@ impl Accumulator {
                 )
                 .await
                 .map_err(|error| error.to_string())?;
-                for (row, time, diff) in std::mem::take(held) {
+                let held = std::mem::take(held);
+                self.tier = Tier::Stashed {
+                    upload,
+                    last_error_time: None,
+                };
+                Box::pin(self.push(held)).await
+            }
+            Tier::Stashed {
+                upload,
+                last_error_time,
+            } => {
+                for (row, time, diff) in updates.rows {
                     upload
                         .push_update(&row, time, diff)
                         .await
                         .map_err(|error| error.to_string())?;
                 }
-                self.tier = Tier::Stashed(upload);
-                Ok(())
-            }
-            Tier::Stashed(upload) => {
-                for (row, time, diff) in updates {
+                for (error, time, diff) in updates.errors {
                     upload
-                        .push_update(&row, time, diff)
+                        .push_error_update(&error, time, diff)
                         .await
                         .map_err(|error| error.to_string())?;
+                    *last_error_time = std::cmp::max(*last_error_time, Some(time));
                 }
                 Ok(())
             }
@@ -249,17 +264,27 @@ impl Accumulator {
         match self.tier {
             Tier::Inline { mut updates, .. } => {
                 // Equal `(time, row)` pairs that a cut separated meet again here.
-                consolidate_updates(&mut updates);
-                Ok(Finished::Inline(inline_share(&updates)))
+                updates.consolidate();
+                Ok(Finished::Inline(inline_share(updates)))
             }
-            Tier::Stashed(upload) => {
+            Tier::Stashed {
+                upload,
+                last_error_time,
+            } => {
                 let batch = upload
                     .finish_stashed()
                     .await
                     .map_err(|error| error.to_string())?;
                 Ok(Finished::Stashed(batch.map(|batch| {
                     let shard_id = batch.shard_id();
-                    DeliveredBatch::new(batch, tokio::runtime::Handle::current(), shard_id)
+                    OwnedShare::Stashed {
+                        delivered: DeliveredBatch::new(
+                            batch,
+                            tokio::runtime::Handle::current(),
+                            shard_id,
+                        ),
+                        last_error_time,
+                    }
                 })))
             }
         }
@@ -270,19 +295,16 @@ impl Accumulator {
 pub(super) enum Finished {
     /// The share's consolidated updates, or `None` if there are none.
     Inline(Option<OwnedShare>),
-    /// The stash batch holding the share's updates, deleted if it is dropped before it is
-    /// reported. `None` if the upload holds no update.
-    Stashed(Option<DeliveredBatch>),
+    /// The share naming the stash batch that holds its updates, deleted if it is dropped before
+    /// it is reported. `None` if the upload holds no update.
+    Stashed(Option<OwnedShare>),
 }
 
 impl Finished {
     /// The shares to report.
     pub(super) fn into_shares(self) -> Vec<OwnedShare> {
         match self {
-            Finished::Inline(share) => share.into_iter().collect(),
-            Finished::Stashed(delivered) => {
-                delivered.into_iter().map(OwnedShare::Stashed).collect()
-            }
+            Finished::Inline(share) | Finished::Stashed(share) => share.into_iter().collect(),
         }
     }
 }
@@ -339,11 +361,11 @@ impl PendingShare {
             .await
             .as_mut()
             .expect("the share is taken once the scan has ended")
-            .push(Vec::new())
+            .push(DescriptionUpdates::default())
             .await?;
         if let Some(scan) = scan {
             let sink_accumulator = Arc::clone(accumulator);
-            let sink = move |updates: Updates| {
+            let sink = move |updates: DescriptionUpdates| {
                 let accumulator = Arc::clone(&sink_accumulator);
                 let push: futures::future::BoxFuture<'static, Result<(), String>> =
                     Box::pin(async move {

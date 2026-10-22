@@ -144,7 +144,7 @@ impl Harness {
             },
         );
         builder.build(view_id, build(input.get()));
-        builder.export_batched_subscribe(sink_id, view_id, output_desc, ts(as_of), up_to);
+        builder.export_batched_subscribe(sink_id, view_id, output_desc, up_to);
         builder.as_of(ts(as_of));
         let df = builder.finish().expect("dataflow");
         self.driver.register_batched_subscribe(sink_id);
@@ -171,7 +171,8 @@ struct Batch {
     lower: Antichain<Timestamp>,
     upper: Antichain<Timestamp>,
     updates: Vec<(Row, Timestamp, i64)>,
-    error: Option<String>,
+    errors: Vec<(String, Timestamp, i64)>,
+    fatal: Option<String>,
 }
 
 /// Unpacks `events` into batches, failing on a `DroppedAt`.
@@ -183,12 +184,14 @@ fn batches(events: Vec<BatchedSubscribeEvent>) -> Vec<Batch> {
                 lower,
                 upper,
                 updates,
-                error,
+                errors,
+                fatal,
             } => Batch {
                 lower,
                 upper,
                 updates,
-                error,
+                errors,
+                fatal,
             },
             BatchedSubscribeEvent::DroppedAt { frontier, .. } => {
                 panic!("unexpected drop at {frontier:?}")
@@ -255,7 +258,8 @@ async fn a_batched_subscribe_delivers_its_snapshot_then_deltas() {
             lower: frontier(1),
             upper: frontier(2),
             updates: vec![(row(1), ts(1), 1), (row(2), ts(1), 1), (row(3), ts(1), 1)],
-            error: None,
+            errors: vec![],
+            fatal: None,
         }],
     );
 
@@ -333,7 +337,8 @@ async fn an_empty_description_still_reports_progress() {
             lower: frontier(1),
             upper: frontier(2),
             updates: vec![],
-            error: None,
+            errors: vec![],
+            fatal: None,
         }],
     );
 }
@@ -370,7 +375,8 @@ async fn up_to_completes_the_subscribe() {
             lower: frontier(2),
             upper: Antichain::new(),
             updates: vec![],
-            error: None,
+            errors: vec![],
+            fatal: None,
         },
         "completion is the description `[up_to, ∅)` without updates",
     );
@@ -399,14 +405,15 @@ async fn up_to_completes_the_subscribe() {
             lower: frontier(3),
             upper: Antichain::new(),
             updates: vec![],
-            error: None,
+            errors: vec![],
+            fatal: None,
         }],
     );
 }
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
-async fn an_error_poisons_the_subscribe_and_stops_it() {
+async fn an_error_is_reported_as_data_and_the_chain_continues() {
     let Some(h) = harness().await else {
         return;
     };
@@ -444,31 +451,29 @@ async fn an_error_poisons_the_subscribe_and_stops_it() {
     );
     let clean = batches(h.await_upper(sink_id, frontier(1)).await);
     assert_eq!(assert_chain(&frontier(0), &clean), frontier(1));
-    assert!(clean.iter().all(|batch| batch.error.is_none()));
+    assert!(clean.iter().all(|batch| batch.errors.is_empty()));
 
     h.write(shard, &desc, 1, &[(row(3), 1)]).await;
-    let poisoned = batches(h.await_upper(sink_id, frontier(2)).await);
-    assert_eq!(poisoned.len(), 1, "{poisoned:?}");
-    assert_eq!(
-        (&poisoned[0].lower, &poisoned[0].upper),
-        (&frontier(1), &frontier(2))
-    );
-    let error = poisoned[0]
-        .error
-        .as_deref()
-        .expect("a poisoned description");
+    let failing = batches(h.await_upper(sink_id, frontier(2)).await);
+    assert_eq!(assert_chain(&frontier(1), &failing), frontier(2));
+    let errors: Vec<_> = failing
+        .iter()
+        .flat_map(|batch| batch.errors.iter().cloned())
+        .collect();
+    assert_eq!(errors.len(), 1, "{failing:?}");
+    let (error, time, diff) = &errors[0];
     assert!(error.contains("division by zero"), "{error}");
+    assert_eq!((*time, *diff), (ts(1), 1));
+    assert!(failing.iter().all(|batch| batch.fatal.is_none()));
 
-    // Neither later updates nor later progress produce a description.
+    // The replica keeps minting and scanning after the error, which it reports only once.
+    let quotient_row = |k: i64, q: i64| Row::pack_slice(&[Datum::Int64(k), Datum::Int64(q)]);
     h.write(shard, &desc, 2, &[(row(4), 1)]).await;
     h.write(shard, &desc, 3, &[]).await;
-    let ok = h
-        .driver
-        .await_batched_subscribe(sink_id, frontier(3), Duration::from_secs(5))
-        .await;
-    assert!(ok.is_err(), "no description follows a poisoned one: {ok:?}");
-    let after = h.driver.take_batched_subscribe(sink_id).expect("events");
-    assert_eq!(after, vec![]);
+    let later = batches(h.await_upper(sink_id, frontier(3)).await);
+    assert_eq!(assert_chain(&frontier(2), &later), frontier(3));
+    assert!(later.iter().all(|batch| batch.errors.is_empty()));
+    assert_eq!(all_updates(&later), vec![(quotient_row(4, 4), ts(2), 1)]);
 }
 
 #[mz_ore::test(tokio::test)]
@@ -514,7 +519,7 @@ async fn descriptions_form_a_gapless_chain_from_the_as_of() {
     let events = batches(h.await_upper(sink_id, frontier(20)).await);
     assert_eq!(assert_chain(&frontier(as_of), &events), frontier(20));
     for (index, batch) in events.iter().enumerate() {
-        assert_eq!(batch.error, None);
+        assert_eq!((&batch.errors, &batch.fatal), (&vec![], &None));
         for (_, time, _) in &batch.updates {
             assert!(
                 batch.lower.less_equal(time) && !batch.upper.less_equal(time),

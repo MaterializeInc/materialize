@@ -83,18 +83,6 @@ impl<S> ComputeSinkConnection<S> {
             false
         }
     }
-
-    /// Adapts the connection to a rendering at `as_of`, which must not be before the dataflow's
-    /// previous as-of. Call it only when the as-of was raised.
-    pub fn advance_as_of(&mut self, as_of: &Antichain<Timestamp>) {
-        match self {
-            ComputeSinkConnection::BatchedSubscribe(connection) => connection.advance_as_of(as_of),
-            ComputeSinkConnection::Subscribe(_)
-            | ComputeSinkConnection::MaterializedView(_)
-            | ComputeSinkConnection::CopyToS3Oneshot(_)
-            | ComputeSinkConnection::MetricSink(_) => {}
-        }
-    }
 }
 
 /// TODO(database-issues#7533): Add documentation.
@@ -109,26 +97,13 @@ pub struct SubscribeSinkConnection {
 pub struct BatchedSubscribeSinkConnection {
     /// Names the stash shard that the subscribe's stashed shares are written to.
     pub stash_id: Uuid,
-    /// The earliest time at which this rendering reports updates and errors.
-    pub start: Timestamp,
+    /// Whether the subscribe's output starts with the snapshot at the dataflow's as-of.
+    ///
+    /// Replicas ignore it and always render with the snapshot. The controller starts the
+    /// subscribe's output at the as-of with a snapshot, and one step past it without one.
+    pub with_snapshot: bool,
     /// The description of the subscribed relation.
     pub output_desc: RelationDesc,
-}
-
-impl BatchedSubscribeSinkConnection {
-    /// Raises `start` to the time after `as_of`, for a rendering at a raised as-of. Never lowers
-    /// `start`.
-    pub fn advance_as_of(&mut self, as_of: &Antichain<Timestamp>) {
-        // A raised as-of is at most `U - 1`, the controller's read hold below an accepted upper
-        // `U`. With a snapshot, an error standing at the as-of already poisoned an accepted batch,
-        // which retired the subscribe. Without one, errors before the original start are exactly
-        // those the subscribe must not report. So nothing at the as-of is left to report, and
-        // counting an error standing there would fail the subscribe spuriously.
-        let next = as_of.as_option().and_then(|as_of| as_of.try_step_forward());
-        if let Some(next) = next {
-            self.start = std::cmp::max(self.start, next);
-        }
-    }
 }
 
 /// Connection for a sink that publishes rows into the in-process Prometheus metrics registry.

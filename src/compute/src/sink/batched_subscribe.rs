@@ -33,7 +33,6 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchReader, TraceReader};
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
@@ -63,7 +62,7 @@ use tracing::warn;
 
 use crate::compute_state::description_iterator::DescriptionRange;
 use crate::compute_state::description_scan::{
-    DescriptionScan, DescriptionScanOutcome, update_byte_len,
+    DescriptionScan, DescriptionScanOutcome, DescriptionUpdates,
 };
 use crate::compute_state::peek_budget::InlineBudget;
 use crate::compute_state::peek_stash::{DeliveredBatch, stash_shard_id};
@@ -87,23 +86,37 @@ type ResponseBuffer = Rc<RefCell<Vec<(GlobalId, QueuedResponse)>>>;
 
 /// A worker's share of a description, on its way to the controller.
 pub(crate) enum OwnedShare {
-    Inline(UpdateCollection),
+    Inline {
+        rows: UpdateCollection,
+        /// Consolidated per `(time, error)`.
+        errors: Vec<(DataflowErrorSer, Timestamp, Diff)>,
+    },
     /// A stash batch, deleted if the share is dropped before it is sent.
-    Stashed(DeliveredBatch),
+    Stashed {
+        delivered: DeliveredBatch,
+        /// The greatest time of an error update in the batch.
+        last_error_time: Option<Timestamp>,
+    },
 }
 
 impl OwnedShare {
     /// The share as the protocol carries it. A stashed batch becomes the receiver's to delete.
     fn into_share(self) -> Share {
         match self {
-            OwnedShare::Inline(updates) => Share::Inline(updates),
-            OwnedShare::Stashed(delivered) => {
+            OwnedShare::Inline { rows, errors } => Share::Inline { rows, errors },
+            OwnedShare::Stashed {
+                delivered,
+                last_error_time,
+            } => {
                 let batch = delivered.take();
-                Share::Stashed(StashedShare {
-                    shard_id: batch.shard_id(),
-                    encoded_size_bytes: batch.encoded_size_bytes(),
-                    batches: vec![batch.into_transmittable_batch()],
-                })
+                Share::Stashed {
+                    batches: StashedShare {
+                        shard_id: batch.shard_id(),
+                        encoded_size_bytes: batch.encoded_size_bytes(),
+                        batches: vec![batch.into_transmittable_batch()],
+                    },
+                    last_error_time,
+                }
             }
         }
     }
@@ -119,7 +132,7 @@ pub(crate) enum QueuedResponse {
         lower: Antichain<Timestamp>,
         upper: Antichain<Timestamp>,
         shares: Vec<OwnedShare>,
-        error: Option<String>,
+        fatal: Option<String>,
     },
     /// The sink was dropped after reporting descriptions up to `frontier`. A sink holds no share
     /// of an unreported description, so the response carries no orphans.
@@ -142,12 +155,12 @@ impl QueuedResponse {
                 lower,
                 upper,
                 shares,
-                error,
+                fatal,
             } => BatchedSubscribeResponse::Batch(BatchedSubscribeBatch {
                 lower,
                 upper,
                 shares: shares.into_iter().map(OwnedShare::into_share).collect(),
-                error,
+                fatal,
             }),
             QueuedResponse::DroppedAt { frontier } => BatchedSubscribeResponse::DroppedAt {
                 frontier,
@@ -214,7 +227,7 @@ impl<'scope> SinkRender<'scope> for BatchedSubscribeSinkConnection {
             sink_id,
             buffer: Some(Rc::clone(&compute_state.batched_subscribe_response_buffer)),
             upper: as_of,
-            poison: None,
+            fatal: None,
         })));
         let protocol_weak = Rc::downgrade(&protocol);
         // The plan applies to rows of `from_desc`.
@@ -248,7 +261,6 @@ impl<'scope> SinkRender<'scope> for BatchedSubscribeSinkConnection {
             err_batches,
             Writer::new(
                 sink_id,
-                self.start,
                 map_filter_project,
                 InlineBudget::new(&compute_state.worker_config),
                 tiers,
@@ -279,23 +291,14 @@ struct Description {
 }
 
 impl Description {
-    /// The range the description's scan emits, for a connection starting at `start`.
-    fn range(&self, start: Timestamp) -> DescriptionRange {
+    /// The range the description's scan emits.
+    fn range(&self) -> DescriptionRange {
         if self.first {
             DescriptionRange::First {
                 as_of: self.lower.clone(),
                 upper: self.upper.clone(),
-                start,
             }
         } else {
-            // The first upper is beyond the as-of, and `start` is at most one step beyond it, as
-            // the adapter and `BatchedSubscribeSinkConnection::advance_as_of` set it.
-            soft_assert_or_log!(
-                self.lower.iter().all(|lower| start <= *lower),
-                "a later description [{:?}, {:?}) starts before the start {start}",
-                self.lower,
-                self.upper,
-            );
             DescriptionRange::Later {
                 lower: self.lower.clone(),
                 upper: self.upper.clone(),
@@ -355,9 +358,10 @@ impl Minter {
             return None;
         }
 
-        // NOTE: A poisoned description does not end the chain. The cutover drops a poisoned batch
-        // that ends at or below the accepted upper, and a chain that ended there would stall the
-        // subscribe. The workers repeat the poison on every later description instead.
+        // NOTE: A fatal error on a worker does not end the chain. The cutover drops a batch with a
+        // fatal error that ends at or below the accepted upper, and a chain that ended there would
+        // stall the subscribe. The worker repeats the fatal error on every later description
+        // instead.
         self.done = upper.is_empty();
         Some(Description {
             lower: std::mem::replace(&mut self.lower, upper.clone()),
@@ -427,12 +431,12 @@ struct Protocol {
     buffer: Option<ResponseBuffer>,
     /// The upper of the last description reported, initially the as-of.
     upper: Antichain<Timestamp>,
-    /// The error that poisoned the subscribe, reported for every later description.
-    poison: Option<String>,
+    /// The fatal error the worker hit, reported for that description and every later one.
+    fatal: Option<String>,
 }
 
 impl Protocol {
-    /// Reports `description` with `shares`, and with the poison once poisoned.
+    /// Reports `description` with `shares`, and with the fatal error once the worker hit one.
     fn report(&mut self, description: &Description, shares: Vec<OwnedShare>) {
         // The mint operator mints nothing after the completing description.
         let Some(buffer) = self.buffer.as_ref() else {
@@ -442,14 +446,15 @@ impl Protocol {
             );
             return;
         };
-        // A poisoned batch still carries its shares, so the receiver deletes their stash batches.
+        // A batch with a fatal error still carries its shares, so the receiver deletes their
+        // stash batches.
         buffer.borrow_mut().push((
             self.sink_id,
             QueuedResponse::Batch {
                 lower: description.lower.clone(),
                 upper: description.upper.clone(),
                 shares,
-                error: self.poison.clone(),
+                fatal: self.fatal.clone(),
             },
         ));
         self.upper = description.upper.clone();
@@ -460,7 +465,7 @@ impl Protocol {
 
     /// Whether the worker reports nothing that needs held batches anymore.
     fn finished(&self) -> bool {
-        self.buffer.is_none() || self.poison.is_some()
+        self.buffer.is_none() || self.fatal.is_some()
     }
 }
 
@@ -480,8 +485,6 @@ impl Drop for Protocol {
 /// The state of one worker's write operator.
 struct Writer {
     sink_id: GlobalId,
-    /// The connection's `start`, which the first description's range applies.
-    start: Timestamp,
     /// The descriptions received and not yet reported, oldest first.
     pending: VecDeque<Description>,
     /// The held batches, which the descriptions not yet reported need.
@@ -505,7 +508,7 @@ enum Scan {
     /// `inline_max_bytes`, if set, the share leaves the inline tier.
     OnWorker {
         scan: DescriptionScan<OkBatch, ErrBatch>,
-        updates: Vec<(Row, Timestamp, Diff)>,
+        updates: DescriptionUpdates,
         bytes: usize,
         inline_max_bytes: Option<usize>,
     },
@@ -516,7 +519,6 @@ enum Scan {
 impl Writer {
     fn new(
         sink_id: GlobalId,
-        start: Timestamp,
         map_filter_project: SafeMfpPlan,
         budget: InlineBudget,
         tiers: Tiers,
@@ -524,7 +526,6 @@ impl Writer {
     ) -> Self {
         Self {
             sink_id,
-            start,
             pending: VecDeque::new(),
             held_oks: Vec::new(),
             held_errs: Vec::new(),
@@ -543,8 +544,8 @@ impl Writer {
         self.pending.is_empty() && self.scan.is_none()
     }
 
-    /// Whether the worker has stopped holding batches, because the subscribe completed, was
-    /// poisoned, or was dropped.
+    /// Whether the worker has stopped holding batches, because the subscribe completed, the
+    /// worker hit a fatal error, or the subscribe was dropped.
     fn finished(&self) -> bool {
         self.protocol
             .borrow()
@@ -582,11 +583,11 @@ impl Writer {
                         description.upper,
                         protocol.upper,
                     );
-                    protocol.poison.get_or_insert_with(|| {
+                    protocol.fatal.get_or_insert_with(|| {
                         "batched subscribe received a description out of order".into()
                     });
                 }
-                if description.completion || protocol.poison.is_some() {
+                if description.completion || protocol.fatal.is_some() {
                     let description = self.pending.pop_front().expect("checked above");
                     protocol.report(&description, Vec::new());
                     self.release(protocol, &description.upper);
@@ -604,14 +605,14 @@ impl Writer {
                     Scan::Away(self.tiers.start(
                         description,
                         Some(scan),
-                        Vec::new(),
+                        DescriptionUpdates::default(),
                         0,
                         self.activator.clone(),
                     ))
                 } else {
                     Scan::OnWorker {
                         scan,
-                        updates: Vec::new(),
+                        updates: DescriptionUpdates::default(),
                         bytes: 0,
                         inline_max_bytes: self.tiers.inline_max_bytes(),
                     }
@@ -641,17 +642,11 @@ impl Writer {
                     let outcome = scan.step(&mut remaining);
                     self.budget.charge(fuel - remaining);
                     if let Some(batch) = scan.take_batch() {
-                        for update in &batch {
-                            *bytes = bytes.saturating_add(update_byte_len(&update.0));
-                        }
+                        *bytes = bytes.saturating_add(batch.byte_len());
                         updates.extend(batch);
                     }
-                    let ended = match outcome {
-                        DescriptionScanOutcome::Suspended => None,
-                        DescriptionScanOutcome::Finished(result) => Some(result),
-                    };
-                    let poisoned = matches!(ended, Some(Err(_)));
-                    if !poisoned && inline_max_bytes.is_some_and(|max_bytes| *bytes > max_bytes) {
+                    let ended = matches!(outcome, DescriptionScanOutcome::Finished);
+                    if inline_max_bytes.is_some_and(|max_bytes| *bytes > max_bytes) {
                         // Writing to the stash awaits, so the share and what remains of its scan
                         // leave the worker together.
                         let Some(Scan::OnWorker {
@@ -663,7 +658,7 @@ impl Writer {
                         else {
                             unreachable!("matched above");
                         };
-                        let scan = ended.is_none().then_some(scan);
+                        let scan = (!ended).then_some(scan);
                         self.scan = Some(Scan::Away(self.tiers.start(
                             description,
                             scan,
@@ -673,16 +668,13 @@ impl Writer {
                         )));
                         continue;
                     }
-                    match ended {
-                        None => continue,
-                        Some(Ok(())) => {
-                            let mut updates = std::mem::take(updates);
-                            // Equal `(time, row)` pairs that a cut separated meet again here.
-                            consolidate_updates(&mut updates);
-                            Ok(inline_share(&updates).into_iter().collect())
-                        }
-                        Some(Err(error)) => Err(error),
+                    if !ended {
+                        continue;
                     }
+                    let mut updates = std::mem::take(updates);
+                    // Equal `(time, row)` pairs that a cut separated meet again here.
+                    updates.consolidate();
+                    Ok(inline_share(updates).into_iter().collect())
                 }
             };
 
@@ -694,9 +686,9 @@ impl Writer {
                     shares
                 }
                 Err(error) => {
-                    // The writer releases all its batches once poisoned, so it cannot scan later
-                    // descriptions and reports each with the poison instead.
-                    protocol.poison = Some(error);
+                    // The writer releases all its batches once it hit a fatal error, so it cannot
+                    // scan later descriptions and reports each with the fatal error instead.
+                    protocol.fatal = Some(error);
                     Vec::new()
                 }
             };
@@ -708,7 +700,7 @@ impl Writer {
     /// Opens the scan of `description`, and returns it with the number of updates in the ok
     /// batches it scans.
     fn open_scan(&self, description: &Description) -> (DescriptionScan<OkBatch, ErrBatch>, usize) {
-        let range = description.range(self.start);
+        let range = description.range();
         let ok_batches = range.select_batches(&self.held_oks);
         let held_updates = ok_batches.iter().map(|batch| batch.len()).sum();
         let err_batches = range.select_batches(&self.held_errs);
@@ -733,7 +725,6 @@ impl Writer {
             self.map_filter_project.clone(),
             range,
             self.cut_bytes,
-            self.sink_id,
         );
         (scan, held_updates)
     }
@@ -761,16 +752,20 @@ impl Writer {
 }
 
 /// Builds the inline share of consolidated `updates`, or `None` if there are none.
-fn inline_share(updates: &[(Row, Timestamp, Diff)]) -> Option<OwnedShare> {
+fn inline_share(updates: DescriptionUpdates) -> Option<OwnedShare> {
     if updates.is_empty() {
         return None;
     }
-    let byte_len = updates.iter().map(|(row, _, _)| row.byte_len()).sum();
-    let mut builder = UpdateCollection::builder(byte_len, updates.len());
-    for (row, time, diff) in updates {
+    let DescriptionUpdates { rows, errors } = updates;
+    let byte_len = rows.iter().map(|(row, _, _)| row.byte_len()).sum();
+    let mut builder = UpdateCollection::builder(byte_len, rows.len());
+    for (row, time, diff) in &rows {
         builder.push((row.as_row_ref(), time, *diff));
     }
-    Some(OwnedShare::Inline(builder.build()))
+    Some(OwnedShare::Inline {
+        rows: builder.build(),
+        errors,
+    })
 }
 
 /// Renders the write operator, which runs `writer` on every worker.

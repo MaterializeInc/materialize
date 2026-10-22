@@ -172,7 +172,7 @@ pub enum ExportSpec {
         up_to: Option<u64>,
     },
     /// A batched subscribe sink reporting the collection as batches of descriptions,
-    /// collected by `await-batched-subscribe`. Its start is the dataflow's as-of.
+    /// collected by `await-batched-subscribe`.
     BatchedSubscribe {
         /// The sink's global id.
         sink_id: GlobalId,
@@ -579,7 +579,8 @@ pub enum Command {
     /// updates. The output assertion for a batched subscribe sink.
     ///
     /// Description boundaries depend on timing, so the output is the chain's bounds,
-    /// one line per poisoned description, and the updates as for `await-subscribe`.
+    /// one line per batch with a fatal error, the consolidated error updates, and the
+    /// updates as for `await-subscribe`.
     /// A gap in the chain fails the command.
     AwaitBatchedSubscribe {
         /// The batched subscribe sink's global id.
@@ -972,13 +973,7 @@ impl ScriptState {
                 } => {
                     let desc = self.resolve_schema(&schema)?;
                     self.check_sink_schema(&builder, on_id, &desc)?;
-                    builder.export_batched_subscribe(
-                        sink_id,
-                        on_id,
-                        desc,
-                        Timestamp::from(as_of),
-                        up_to_antichain(up_to),
-                    );
+                    builder.export_batched_subscribe(sink_id, on_id, desc, up_to_antichain(up_to));
                     registrations.batched_subscribes.push(sink_id);
                 }
             }
@@ -1390,21 +1385,24 @@ fn render_frontier(frontier: &Antichain<Timestamp>) -> String {
 }
 
 /// Render a batched subscribe's responses as golden text: a `chain <lower>..<upper>`
-/// line spanning the batches, an `error <lower>..<upper>: <message>` line per
-/// poisoned batch, a `dropped at <frontier>` line for a drop, then the updates as
-/// [`render_updates`] renders them. Fails if a batch's lower is not the previous
-/// upper.
+/// line spanning the batches, a `fatal <lower>..<upper>: <message>` line per batch
+/// with a fatal error, a `dropped at <frontier>` line for a drop, an
+/// `error <ts> <diff> <message>` line per error update consolidated by
+/// `(time, message)`, then the updates as [`render_updates`] renders them. Fails if a
+/// batch's lower is not the previous upper.
 fn render_batched_subscribe(events: &[BatchedSubscribeEvent]) -> anyhow::Result<String> {
     let mut chain: Option<(Antichain<Timestamp>, Antichain<Timestamp>)> = None;
     let mut lines = Vec::new();
     let mut updates = Vec::new();
+    let mut errors: BTreeMap<(Timestamp, String), i64> = BTreeMap::new();
     for event in events {
         match event {
             BatchedSubscribeEvent::Batch {
                 lower,
                 upper,
                 updates: batch_updates,
-                error,
+                errors: batch_errors,
+                fatal,
             } => {
                 match &mut chain {
                     None => chain = Some((lower.clone(), upper.clone())),
@@ -1416,12 +1414,15 @@ fn render_batched_subscribe(events: &[BatchedSubscribeEvent]) -> anyhow::Result<
                         render_frontier(end),
                     ),
                 }
-                if let Some(error) = error {
+                if let Some(fatal) = fatal {
                     lines.push(format!(
-                        "error {}..{}: {error}",
+                        "fatal {}..{}: {fatal}",
                         render_frontier(lower),
                         render_frontier(upper),
                     ));
+                }
+                for (error, ts, diff) in batch_errors {
+                    *errors.entry((*ts, error.clone())).or_default() += diff;
                 }
                 updates.extend(batch_updates.iter().cloned());
             }
@@ -1442,6 +1443,12 @@ fn render_batched_subscribe(events: &[BatchedSubscribeEvent]) -> anyhow::Result<
     };
     let mut out = vec![chain];
     out.extend(lines);
+    out.extend(
+        errors
+            .into_iter()
+            .filter(|(_, diff)| *diff != 0)
+            .map(|((ts, error), diff)| format!("error {ts} {diff} {error}")),
+    );
     let updates = render_updates(&updates);
     if !updates.is_empty() {
         out.push(updates);

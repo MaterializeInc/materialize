@@ -49,6 +49,7 @@ use timely::progress::Antichain;
 use timely::worker::Worker;
 
 use crate::compute_state::PeekPermits;
+use crate::compute_state::description_scan::DescriptionUpdates;
 use crate::compute_state::peek_budget::InlineBudget;
 use crate::compute_state::peek_stash::tests::CountedBlob;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
@@ -208,17 +209,21 @@ fn an_empty_input_frontier_ends_the_chain() {
 }
 
 /// A response, reduced to what the tests assert on. Updates are `(value, time, diff)` triples of
-/// one-column rows, sorted.
+/// one-column rows, and errors `(message, time, diff)` triples, both sorted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Reported {
     Batch {
         lower: Option<u64>,
         upper: Option<u64>,
         updates: Vec<(i64, u64, i64)>,
-        error: bool,
+        errors: Vec<(String, u64, i64)>,
+        fatal: bool,
     },
     DroppedAt(Option<u64>),
 }
+
+/// The row updates and error updates read back from a stashed share.
+type Stashed = (Vec<(i64, u64, i64)>, Vec<(String, u64, i64)>);
 
 fn option(frontier: &Antichain<Timestamp>) -> Option<u64> {
     frontier.as_option().copied().map(u64::from)
@@ -239,20 +244,23 @@ fn inline_view(queued: &QueuedResponse) -> BatchedSubscribeResponse {
             lower,
             upper,
             shares,
-            error,
+            fatal,
         } => BatchedSubscribeResponse::Batch(BatchedSubscribeBatch {
             lower: lower.clone(),
             upper: upper.clone(),
             shares: shares
                 .iter()
                 .map(|share| match share {
-                    OwnedShare::Inline(updates) => Share::Inline(updates.clone()),
-                    OwnedShare::Stashed(_) => {
+                    OwnedShare::Inline { rows, errors } => Share::Inline {
+                        rows: rows.clone(),
+                        errors: errors.clone(),
+                    },
+                    OwnedShare::Stashed { .. } => {
                         panic!("a stashed share where every share should be inline")
                     }
                 })
                 .collect(),
-            error: error.clone(),
+            fatal: fatal.clone(),
         }),
         QueuedResponse::DroppedAt { frontier } => BatchedSubscribeResponse::DroppedAt {
             frontier: frontier.clone(),
@@ -263,29 +271,53 @@ fn inline_view(queued: &QueuedResponse) -> BatchedSubscribeResponse {
 
 /// Reduces `response`, reading the updates of a stashed share, given the lower of its
 /// description, with `read_stashed`.
+///
+/// Asserts that a stashed share's `last_error_time` is the greatest time of its error updates.
 fn reduce(
     response: &BatchedSubscribeResponse,
-    mut read_stashed: impl FnMut(&StashedShare, &Antichain<Timestamp>) -> Vec<(i64, u64, i64)>,
+    mut read_stashed: impl FnMut(&StashedShare, &Antichain<Timestamp>) -> Stashed,
 ) -> Reported {
     match response {
         BatchedSubscribeResponse::Batch(batch) => {
             let mut updates = Vec::new();
+            let mut errors = Vec::new();
             for share in &batch.shares {
                 match share {
-                    Share::Inline(collection) => {
-                        for (row, time, diff) in collection.iter() {
+                    Share::Inline {
+                        rows,
+                        errors: inline_errors,
+                    } => {
+                        for (row, time, diff) in rows.iter() {
                             updates.push((value(row), u64::from(*time), diff.into_inner()));
                         }
+                        for (error, time, diff) in inline_errors {
+                            errors.push((error.to_string(), u64::from(*time), diff.into_inner()));
+                        }
                     }
-                    Share::Stashed(stashed) => updates.extend(read_stashed(stashed, &batch.lower)),
+                    Share::Stashed {
+                        batches,
+                        last_error_time,
+                    } => {
+                        let (rows, stashed_errors) = read_stashed(batches, &batch.lower);
+                        let greatest = stashed_errors.iter().map(|(_, time, _)| *time).max();
+                        assert_eq!(
+                            last_error_time.map(u64::from),
+                            greatest,
+                            "a stashed share records the time of its last error update"
+                        );
+                        updates.extend(rows);
+                        errors.extend(stashed_errors);
+                    }
                 }
             }
             updates.sort();
+            errors.sort();
             Reported::Batch {
                 lower: option(&batch.lower),
                 upper: option(&batch.upper),
                 updates,
-                error: batch.error.is_some(),
+                errors,
+                fatal: batch.fatal.is_some(),
             }
         }
         BatchedSubscribeResponse::DroppedAt { frontier, .. } => {
@@ -311,8 +343,8 @@ fn tiers(responses: &[BatchedSubscribeResponse]) -> Vec<Vec<&'static str>> {
                     .shares
                     .iter()
                     .map(|share| match share {
-                        Share::Inline(_) => "inline",
-                        Share::Stashed(_) => "stashed",
+                        Share::Inline { .. } => "inline",
+                        Share::Stashed { .. } => "stashed",
                     })
                     .collect(),
             ),
@@ -321,13 +353,26 @@ fn tiers(responses: &[BatchedSubscribeResponse]) -> Vec<Vec<&'static str>> {
         .collect()
 }
 
-fn batch(lower: u64, upper: Option<u64>, updates: &[(i64, u64, i64)], error: bool) -> Reported {
+fn batch(lower: u64, upper: Option<u64>, updates: &[(i64, u64, i64)], fatal: bool) -> Reported {
     Reported::Batch {
         lower: Some(lower),
         upper,
         updates: updates.to_vec(),
-        error,
+        errors: Vec::new(),
+        fatal,
     }
+}
+
+/// `reported` with the error updates `(time, diff)` of [`division_by_zero`].
+fn with_errors(mut reported: Reported, division_errors: &[(u64, i64)]) -> Reported {
+    let Reported::Batch { errors, .. } = &mut reported else {
+        panic!("errors are carried by batches");
+    };
+    *errors = division_errors
+        .iter()
+        .map(|(time, diff)| (division_by_zero().to_string(), *time, *diff))
+        .collect();
+    reported
 }
 
 fn identity() -> SafeMfpPlan {
@@ -345,7 +390,7 @@ fn protocol(sink_id: GlobalId, as_of: u64) -> (Rc<RefCell<Option<Protocol>>>, Re
         sink_id,
         buffer: Some(Rc::clone(&buffer)),
         upper: frontier(as_of),
-        poison: None,
+        fatal: None,
     })));
     (protocol, buffer)
 }
@@ -366,8 +411,6 @@ struct Setup {
     shard_id: ShardId,
     permits: Arc<PeekPermits>,
     cut_bytes: usize,
-    /// The connection's `start`.
-    start: Timestamp,
 }
 
 impl Setup {
@@ -379,7 +422,6 @@ impl Setup {
             shard_id: ShardId::new(),
             permits: Arc::new(PeekPermits::new(1)),
             cut_bytes: super::SCAN_CUT_BYTES,
-            start: Timestamp::MIN,
         }
     }
 
@@ -437,7 +479,6 @@ fn new_writer_with(
 ) -> Writer {
     let mut writer = Writer::new(
         sink_id,
-        setup.start,
         identity(),
         InlineBudget::new(&setup.config),
         setup.tiers(metrics),
@@ -789,7 +830,7 @@ fn both_workers_answer_a_broadcast_description_once_their_frontiers_pass() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
-fn an_error_on_another_worker_poisons_every_later_description() {
+fn an_error_is_reported_once_in_its_description_and_the_chain_continues() {
     let sink_id = sink_minted_on_worker_zero();
     let responses = two_workers(move |worker, barrier| {
         let index = worker.index();
@@ -812,7 +853,6 @@ fn an_error_on_another_worker_poisons_every_later_description() {
         step_until(worker, || rig.buffer.borrow().len() == 2);
         barrier.wait();
 
-        // The mint keeps going, in case the cutover drops the poisoned batch.
         if index == 0 {
             rig.oks
                 .update_at((row(2), Row::default()), Timestamp::from(7), Diff::ONE);
@@ -834,34 +874,30 @@ fn an_error_on_another_worker_poisons_every_later_description() {
             ],
             vec![
                 batch(0, Some(3), &[], false),
-                batch(3, Some(6), &[], true),
-                batch(6, Some(9), &[], true),
+                with_errors(batch(3, Some(6), &[], false), &[(4, 1)]),
+                batch(6, Some(9), &[], false),
                 Reported::DroppedAt(Some(9)),
             ],
         ],
-        "the worker holding the error repeats its poison on every later description",
+        "the worker holding the error reports it in its description, and only there",
     );
 }
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
-fn an_error_before_the_start_poisons_nothing() {
+fn the_first_description_accumulates_errors_into_the_as_of() {
     let sink_id = GlobalId::User(1);
     let responses = timely::execute_directly(move |worker| {
-        // A subscribe at as-of 2 without its snapshot starts at 3.
-        let setup = Setup {
-            start: Timestamp::from(3),
-            ..Setup::inline_only()
-        };
-        let mut rig = Rig::with_setup(worker, sink_id, 2, Antichain::new(), &setup);
+        let mut rig = Rig::new(worker, sink_id, 2, Antichain::new());
         rig.open_gate();
         rig.errs
             .update_at(division_by_zero(), Timestamp::from(1), Diff::ONE);
         rig.oks
             .update_at((row(1), Row::default()), Timestamp::from(2), Diff::ONE);
-        // The first description ends at `start`, so the cutover drops it.
         rig.advance(3);
         step_until(worker, || rig.buffer.borrow().len() == 1);
+        rig.errs
+            .update_at(division_by_zero(), Timestamp::from(4), Diff::MINUS_ONE);
         rig.oks
             .update_at((row(2), Row::default()), Timestamp::from(4), Diff::ONE);
         rig.advance(6);
@@ -873,12 +909,94 @@ fn an_error_before_the_start_poisons_nothing() {
     assert_eq!(
         responses,
         vec![
-            // The snapshot row, placed at the as-of, precedes the start too.
-            batch(2, Some(3), &[], false),
-            batch(3, Some(6), &[(2, 4, 1)], false),
+            with_errors(batch(2, Some(3), &[(1, 2, 1)], false), &[(2, 1)]),
+            with_errors(batch(3, Some(6), &[(2, 4, 1)], false), &[(4, -1)]),
             Reported::DroppedAt(Some(6)),
         ],
-        "the error lies in the snapshot the subscribe does not report",
+        "the replica knows no start: the standing error is placed at the as-of, and its \
+         retraction is reported at its own time",
+    );
+}
+
+/// The error updates the sink reports are the same whether an error inserted and retracted
+/// lands in one description or is split across two.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn the_reported_errors_do_not_depend_on_description_boundaries() {
+    // The error updates of each reported batch, for a chain advanced to 3 first if `split`.
+    let errors = |split: bool| {
+        let sink_id = GlobalId::User(1);
+        timely::execute_directly(move |worker| {
+            let mut rig = Rig::new(worker, sink_id, 0, Antichain::new());
+            rig.open_gate();
+            rig.errs
+                .update_at(division_by_zero(), Timestamp::from(2), Diff::ONE);
+            rig.errs
+                .update_at(division_by_zero(), Timestamp::from(4), Diff::MINUS_ONE);
+            if split {
+                rig.advance(3);
+                step_until(worker, || rig.buffer.borrow().len() == 1);
+            }
+            rig.advance(6);
+            step_until(worker, || {
+                rig.buffer
+                    .borrow()
+                    .last()
+                    .is_some_and(|(_, response)| response.frontier() == frontier(6))
+            });
+            drop(rig.protocol.borrow_mut().take());
+            reported(&rig.buffer)
+                .into_iter()
+                .filter_map(|reported| match reported {
+                    Reported::Batch { errors, .. } => Some(errors),
+                    Reported::DroppedAt(_) => None,
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+
+    let inserted = (division_by_zero().to_string(), 2, 1);
+    let retracted = (division_by_zero().to_string(), 4, -1);
+    let one = errors(false);
+    let split = errors(true);
+    assert_eq!(
+        split.first(),
+        Some(&vec![inserted.clone()]),
+        "the first description holds the insertion only"
+    );
+    let expected = vec![inserted, retracted];
+    assert_eq!(one.concat(), expected);
+    assert_eq!(split.concat(), expected);
+}
+
+/// A worker that hit a fatal error reports it on every later description, and holds no batches.
+///
+/// An out-of-order description, one source of a fatal error, panics in debug builds, so the test
+/// sets the fatal error directly.
+#[mz_ore::test]
+fn a_fatal_error_is_reported_on_every_later_description() {
+    let sink_id = GlobalId::User(1);
+    let (protocol, buffer) = protocol(sink_id, 0);
+    protocol
+        .borrow_mut()
+        .as_mut()
+        .expect("a fresh protocol")
+        .fatal = Some("stash write failed".into());
+    let mut writer = new_writer(sink_id, &protocol);
+    writer
+        .pending
+        .push_back(description(0, Some(2), true, false));
+    writer
+        .pending
+        .push_back(description(2, Some(4), false, false));
+    work(&mut writer, &frontier(4), &frontier(4));
+    assert_eq!(
+        reported(&buffer),
+        vec![batch(0, Some(2), &[], true), batch(2, Some(4), &[], true)],
+    );
+    assert!(
+        writer.finished(),
+        "a worker with a fatal error holds no batches"
     );
 }
 
@@ -902,12 +1020,13 @@ fn responses(buffer: &ResponseBuffer) -> Vec<BatchedSubscribeResponse> {
         .collect()
 }
 
-/// Reads the updates of `share` at times from `lower` on, and deletes its batches.
+/// Reads the row updates and error updates of `share` at times from `lower` on, and deletes its
+/// batches.
 async fn read_stashed(
     clients: &PersistClientCache,
     share: &StashedShare,
     lower: &Antichain<Timestamp>,
-) -> Vec<(i64, u64, i64)> {
+) -> Stashed {
     let mut client = clients
         .open(PersistLocation::new_in_mem())
         .await
@@ -934,16 +1053,19 @@ async fn read_stashed(
         .await
         .expect("range reads never fail on since");
     let mut updates = Vec::new();
+    let mut errors = Vec::new();
     while let Some(chunk) = cursor.next().await {
         for ((key, _val), time, diff) in chunk {
-            let row = key.0.expect("no errors");
-            updates.push((value(&row), u64::from(time), diff));
+            match key.0 {
+                Ok(row) => updates.push((value(&row), u64::from(time), diff)),
+                Err(error) => errors.push((error.to_string(), u64::from(time), diff)),
+            }
         }
     }
     for batch in cursor.into_lease() {
         batch.delete().await;
     }
-    updates
+    (updates, errors)
 }
 
 /// Reduces each worker's `responses`, reading their stashed shares through `clients`.
@@ -970,7 +1092,8 @@ fn reduce_all(
 /// Runs a subscribe at as-of 2 and up to 7 on two workers whose writers are set up with
 /// `setup`, and returns each worker's responses with the stashed shares they wrote.
 ///
-/// Each worker contributes updates of its own to the descriptions `[2, 5)` and `[5, 7)`. With
+/// Each worker contributes updates of its own to the descriptions `[2, 5)` and `[5, 7)`, and
+/// worker 0 also an error it inserts before the as-of and retracts in the second. With
 /// `hold_permit`, worker 0 holds the only offload permit until both workers have seen the first
 /// description without answering it, which an offloaded scan cannot.
 fn subscribe_across_two_workers(
@@ -1003,6 +1126,10 @@ fn subscribe_across_two_workers(
             rig.oks
                 .update_at((row(value), Row::default()), Timestamp::from(time), diff);
         }
+        if index == 0 {
+            rig.errs
+                .update_at(division_by_zero(), Timestamp::from(1), Diff::ONE);
+        }
         rig.advance(5);
         step_until(worker, || !rig.descriptions.less_than(&Timestamp::from(5)));
         if hold_permit {
@@ -1021,6 +1148,10 @@ fn subscribe_across_two_workers(
             rig.oks
                 .update_at((row(value), Row::default()), Timestamp::from(time), diff);
         }
+        if index == 0 {
+            rig.errs
+                .update_at(division_by_zero(), Timestamp::from(5), Diff::MINUS_ONE);
+        }
         rig.advance(8);
         step_until(worker, || rig.buffer.borrow().len() == 3);
         let stashed_bytes = rig.metrics.batched_subscribe_share_bytes_stashed.get();
@@ -1033,11 +1164,17 @@ fn subscribe_across_two_workers(
 fn expected_subscribe() -> Vec<Vec<Reported>> {
     (0..2)
         .map(|own| {
-            vec![
-                batch(2, Some(5), &[(10 + own, 2, 1), (20 + own, 3, 1)], false),
-                batch(5, Some(7), &[(10 + own, 5, -1), (30 + own, 5, 1)], false),
-                batch(7, None, &[], false),
-            ]
+            let first = batch(2, Some(5), &[(10 + own, 2, 1), (20 + own, 3, 1)], false);
+            let second = batch(5, Some(7), &[(10 + own, 5, -1), (30 + own, 5, 1)], false);
+            let (first, second) = if own == 0 {
+                (
+                    with_errors(first, &[(2, 1)]),
+                    with_errors(second, &[(5, -1)]),
+                )
+            } else {
+                (first, second)
+            };
+            vec![first, second, batch(7, None, &[], false)]
         })
         .collect()
 }
@@ -1174,19 +1311,26 @@ fn a_dropped_subscribe_leaves_no_stashed_parts_on_the_replica() {
     assert_eq!(blob.deletes_of_nothing(), 0);
 }
 
+/// A fatal error travels next to the shares and their error updates, and does not replace them,
+/// so the receiver learns of every share and can delete their stash batches.
 #[mz_ore::test]
-fn a_poisoned_description_still_carries_its_shares() {
+fn a_fatal_error_is_carried_next_to_the_shares() {
     let sink_id = GlobalId::User(1);
     let (protocol, buffer) = protocol(sink_id, 0);
     let mut protocol = protocol.borrow_mut().take().expect("a fresh protocol");
-    protocol.poison = Some("poisoned".into());
-    let updates = vec![(row(1), Timestamp::from(1), Diff::ONE)];
-    let share = super::inline_share(&updates).expect("one update");
+    protocol.fatal = Some("stash write failed".into());
+    let updates = DescriptionUpdates {
+        rows: vec![(row(1), Timestamp::from(1), Diff::ONE)],
+        errors: vec![(division_by_zero(), Timestamp::from(2), Diff::ONE)],
+    };
+    let share = super::inline_share(updates).expect("one update");
     protocol.report(&description(0, Some(3), true, false), vec![share]);
     assert_eq!(
         reported(&buffer),
-        vec![batch(0, Some(3), &[(1, 1, 1)], true)],
-        "the receiver learns of every share, so it can delete their stash batches",
+        vec![with_errors(
+            batch(0, Some(3), &[(1, 1, 1)], true),
+            &[(2, 1)]
+        )],
     );
 }
 

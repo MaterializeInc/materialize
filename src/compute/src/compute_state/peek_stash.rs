@@ -29,6 +29,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::compute_state::peek_scan::RowBatch;
+use crate::render::errors::DataflowErrorSer;
 
 /// A failure that leaves an upload unable to answer the peek whose rows it holds.
 ///
@@ -187,6 +188,23 @@ impl StashUpload {
     ) -> Result<(), StashError> {
         self.write(&SourceData(Ok(row.clone())), time, diff.into_inner())
             .await
+    }
+
+    /// Writes one error update to the stash, as `SourceData(Err)`.
+    ///
+    /// Fails where persist rejects the write, which leaves the upload unusable.
+    pub(crate) async fn push_error_update(
+        &mut self,
+        error: &DataflowErrorSer,
+        time: Timestamp,
+        diff: Diff,
+    ) -> Result<(), StashError> {
+        self.write(
+            &SourceData(Err(error.deserialize())),
+            time,
+            diff.into_inner(),
+        )
+        .await
     }
 
     async fn write(
