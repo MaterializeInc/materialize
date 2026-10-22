@@ -125,6 +125,7 @@ members = [
     "src/wasm-sink-spike",
     "test/metabase/smoketest",
     "test/test-util",
+    "misc/spike-wasm-sink/guest",
 ]
 
 # We make all members of the workspace default members, *except* for a few
@@ -263,8 +264,6 @@ exclude = [
     # All WASM crates are split into their own workspace to avoid needles cache
     #  invalidations for the core Mz crates.
     "misc/wasm/*",
-    # THROWAWAY spike guest, its own workspace.
-    "misc/spike-wasm-sink/guest",
     # Ignore any Rust dependencies that python packages might pull in.
     "misc/python/venv/*",
     # The `src/*/fuzz` cargo-fuzz crates need no entry here: each sets

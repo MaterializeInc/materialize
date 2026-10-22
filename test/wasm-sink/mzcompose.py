@@ -18,13 +18,13 @@ the sink has caught up.
 """
 
 import json
+import os
 import socket
 import subprocess
 import time
 from typing import Any
 
 from materialize import MZ_ROOT
-
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
@@ -104,12 +104,19 @@ def build_guest() -> None:
             "build",
             "--release",
             "--locked",
+            "--package",
+            "wasm-sink-guest",
             "--target",
             "wasm32-wasip2",
             "--target-dir",
             str(GUEST_DIR / "target"),
         ],
-        cwd=GUEST_DIR,
+        cwd=MZ_ROOT,
+        env={
+            **os.environ,
+            "CARGO_PROFILE_RELEASE_DEBUG": "false",
+            "CARGO_PROFILE_RELEASE_STRIP": "true",
+        },
         check=True,
     )
 
