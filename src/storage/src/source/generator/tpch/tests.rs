@@ -12,12 +12,12 @@ use std::time::Duration;
 use mz_ore::now::SYSTEM_TIME;
 use mz_repr::{Diff, Row};
 use mz_storage_types::sources::MzOffset;
-use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput};
+use mz_storage_types::sources::load_generator::{
+    Event, Generator, GeneratorUpdate as Update, LoadGeneratorOutput,
+};
 use sha2::{Digest, Sha256};
 
 use super::Tpch;
-
-type Update = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>);
 
 /// Scale factor 0.01, with the given tick.
 fn tpch(tick: Duration) -> Tpch {
@@ -97,4 +97,83 @@ fn ticks_match_golden() {
         digest(&updates),
         "f3e9a44157c5e4bd1a5215d4c10d4df4677f9b8d02a033510414d4715b92b85f"
     );
+}
+
+/// Splits updates into the sorted messages and the progress events in order.
+fn split(updates: Vec<Update>) -> (Vec<(u64, LoadGeneratorOutput, Row, Diff)>, Vec<u64>) {
+    let mut messages = Vec::new();
+    let mut progress = Vec::new();
+    for (output, event) in updates {
+        match event {
+            Event::Message(offset, (row, diff)) => {
+                messages.push((offset.offset, output, row, diff))
+            }
+            Event::Progress(offset) => progress.push(offset.expect("finite").offset),
+        }
+    }
+    messages.sort();
+    (messages, progress)
+}
+
+fn assert_partitions_match(tick: Duration, up_to: u64) {
+    let tpch = tpch(tick);
+    let single = collect(
+        tpch.by_seed(SYSTEM_TIME.clone(), None, MzOffset::from(0)),
+        up_to,
+    );
+    let (expected_messages, expected_progress) = split(single);
+    for worker_count in [1, 3, 4] {
+        let mut messages = Vec::new();
+        let mut owned_counts = Vec::new();
+        for worker_index in 0..worker_count {
+            let updates = collect(
+                tpch.by_seed_for_worker(
+                    SYSTEM_TIME.clone(),
+                    None,
+                    MzOffset::from(0),
+                    worker_index,
+                    worker_count,
+                ),
+                up_to,
+            );
+            let (worker_messages, progress) = split(updates);
+            if worker_index == 0 || tick.is_zero() {
+                assert_eq!(
+                    progress, expected_progress,
+                    "worker {worker_index}/{worker_count} progress"
+                );
+            } else {
+                assert_eq!(
+                    progress,
+                    [1],
+                    "worker {worker_index}/{worker_count} ends after the snapshot"
+                );
+            }
+            owned_counts.push(worker_messages.len());
+            messages.extend(worker_messages);
+        }
+        messages.sort();
+        assert_eq!(
+            messages, expected_messages,
+            "union of {worker_count} workers"
+        );
+        if worker_count > 1 {
+            assert!(
+                owned_counts.iter().all(|n| *n > 0),
+                "every worker owns rows: {owned_counts:?}"
+            );
+        }
+    }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn snapshot_partitions_match() {
+    assert_partitions_match(Duration::ZERO, u64::MAX);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn ticks_partitions_match() {
+    assert_partitions_match(Duration::from_secs(1), 500);
 }
