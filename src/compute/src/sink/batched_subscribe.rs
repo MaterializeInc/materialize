@@ -336,7 +336,6 @@ impl<'scope> SinkRender<'scope> for BatchedSubscribeSinkConnection {
 
 /// Renders the general path over rows of the sink's `from_desc`, which `mfp`, if any, maps to
 /// the output, and whose arity is `from_arity`.
-///
 fn render_collection<'scope>(
     sink_id: GlobalId,
     as_of: Antichain<Timestamp>,
@@ -395,7 +394,6 @@ fn render_collection<'scope>(
 
 /// Renders the arranged path over the batches of an imported index, whose scans run
 /// `map_filter_project` over the datums of a batch's key followed by those of its value.
-///
 fn render_arranged<'scope>(
     sink_id: GlobalId,
     as_of: Antichain<Timestamp>,
