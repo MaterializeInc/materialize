@@ -26,6 +26,21 @@ pub trait Guest {
     fn write(&mut self, batch: &[u8], commit: Option<u64>) -> Result<(), String>;
 }
 
+/// Accepts every call without doing work; isolates host cost.
+pub struct Null;
+
+impl Guest for Null {
+    fn open(&mut self, _config: &str) -> Result<Option<u64>, String> {
+        Ok(None)
+    }
+    fn reset(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+    fn write(&mut self, _batch: &[u8], _commit: Option<u64>) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 pub struct Native(Option<wasm_sink_guest::ValkeySink>);
 
 impl Native {
@@ -136,7 +151,11 @@ impl Wasm {
         store.limiter(|s| &mut s.limits);
         store.set_epoch_deadline(limits.call_ticks);
         store.epoch_deadline_trap();
-        let sink = w(Sink::instantiate(&mut store, component, &linker))?;
+        if limits.fuel.is_some() {
+            // Instantiation runs guest code and consumes fuel too.
+            w(store.set_fuel(u64::MAX / 2))?;
+        }
+        let sink =w(Sink::instantiate(&mut store, component, &linker))?;
         Ok(Wasm {
             store,
             sink,

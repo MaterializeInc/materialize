@@ -85,6 +85,12 @@ struct Args {
     /// Extra guest config JSON fields, merged into the generated config.
     #[clap(long, default_value = "{}")]
     guest_extra: String,
+    /// Use a guest that does nothing, to measure host cost alone.
+    #[clap(long)]
+    null_guest: bool,
+    /// Release this sink's critical hold and exit.
+    #[clap(long)]
+    release_hold: bool,
 }
 
 fn parse_desc(spec: &str) -> anyhow::Result<RelationDesc> {
@@ -210,6 +216,7 @@ async fn main() -> anyhow::Result<()> {
         consensus_uri: SensitiveUrl::from_str(&args.consensus)?,
     })
     .await?;
+    eprintln!("step: client open");
     let diag = Diagnostics::from_purpose("wasm sink spike");
     let handle = client
         .open_critical_since::<SourceData, (), Timestamp, StorageDiff>(
@@ -219,11 +226,23 @@ async fn main() -> anyhow::Result<()> {
             diag.clone(),
         )
         .await?;
+    eprintln!("step: critical since opened");
     let mut hold = Hold {
         handle,
         last: Instant::now() - Duration::from_secs(3600),
         interval: Duration::from_millis(args.downgrade_interval_ms),
     };
+    if args.release_hold {
+        // Persist has no API to expire a critical reader. Downgrading it to
+        // the empty frontier stops it from holding back the shard.
+        let opaque = hold.handle.opaque().clone();
+        let r = hold
+            .handle
+            .compare_and_downgrade_since(&opaque, (&opaque, &Antichain::new()))
+            .await;
+        println!("released hold: {r:?}");
+        return Ok(());
+    }
     let mut read = client
         .open_leased_reader::<SourceData, (), Timestamp, StorageDiff>(
             shard,
@@ -255,6 +274,7 @@ async fn main() -> anyhow::Result<()> {
                 deadline,
             )
         }
+        None if args.null_guest => GuestThread::spawn(|| Ok(Box::new(guest::Null) as _), deadline),
         None => GuestThread::spawn(|| Ok(Box::new(guest::Native::new()) as _), deadline),
     };
 
@@ -337,6 +357,9 @@ async fn main() -> anyhow::Result<()> {
                 );
                 stats.print("snapshot", commit, true);
                 if args.exit_after_snapshot {
+                    // An unexpired lease pins the shard's since until the
+                    // lease times out (15 minutes by default).
+                    read.expire().await;
                     return Ok(());
                 }
                 as_of
