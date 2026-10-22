@@ -81,12 +81,17 @@ pub struct WasmLimits {
     pub memory_bytes: usize,
     /// Per-call deadline in epoch ticks.
     pub call_ticks: u64,
+    /// Per-call fuel budget as `(base, per input byte)`; `None` disables fuel.
+    pub fuel: Option<(u64, u64)>,
 }
 
 pub struct Wasm {
     store: Store<State>,
     sink: Sink,
     call_ticks: u64,
+    fuel: Option<(u64, u64)>,
+    fuel_used: u64,
+    calls: u64,
 }
 
 impl Wasm {
@@ -107,7 +112,13 @@ impl Wasm {
             .allow_udp(false)
             .allow_ip_name_lookup(false)
             .socket_addr_check(move |addr, use_| {
-                let ok = matches!(use_, SocketAddrUse::TcpConnect) && addr == allowed;
+                // NOTE: wasi-sockets binds the client socket to an unspecified
+                // address with an ephemeral port before connecting.
+                let ok = match use_ {
+                    SocketAddrUse::TcpConnect => addr == allowed,
+                    SocketAddrUse::TcpBind => addr.ip().is_unspecified() && addr.port() == 0,
+                    _ => false,
+                };
                 if !ok {
                     eprintln!("sandbox: denied {use_:?} {addr}");
                 }
@@ -130,11 +141,36 @@ impl Wasm {
             store,
             sink,
             call_ticks: limits.call_ticks,
+            fuel: limits.fuel,
+            fuel_used: 0,
+            calls: 0,
         })
     }
 
-    fn arm(&mut self) {
+    fn arm(&mut self, input_bytes: usize) -> u64 {
         self.store.set_epoch_deadline(self.call_ticks);
+        match self.fuel {
+            Some((base, per_byte)) => {
+                let budget = base + per_byte * u64::try_from(input_bytes).unwrap();
+                self.store.set_fuel(budget).expect("fuel enabled");
+                budget
+            }
+            None => 0,
+        }
+    }
+
+    fn disarm(&mut self, budget: u64, input_bytes: usize) {
+        if self.fuel.is_some() {
+            let used = budget - self.store.get_fuel().unwrap_or(0);
+            self.fuel_used += used;
+            self.calls += 1;
+            if self.calls % 200 == 0 {
+                eprintln!(
+                    "fuel: calls={} total={} last_call={} last_bytes={}",
+                    self.calls, self.fuel_used, used, input_bytes
+                );
+            }
+        }
     }
 }
 
@@ -147,22 +183,29 @@ fn flatten<T>(r: wasmtime::Result<Result<T, String>>) -> Result<T, String> {
 
 impl Guest for Wasm {
     fn open(&mut self, config: &str) -> Result<Option<u64>, String> {
-        self.arm();
-        flatten(self.sink.call_open_sink(&mut self.store, config))
+        let b = self.arm(config.len());
+        let r = flatten(self.sink.call_open_sink(&mut self.store, config));
+        self.disarm(b, config.len());
+        r
     }
     fn reset(&mut self) -> Result<(), String> {
-        self.arm();
-        flatten(self.sink.call_reset_sink(&mut self.store))
+        let b = self.arm(0);
+        let r = flatten(self.sink.call_reset_sink(&mut self.store));
+        self.disarm(b, 0);
+        r
     }
     fn write(&mut self, batch: &[u8], commit: Option<u64>) -> Result<(), String> {
-        self.arm();
-        flatten(self.sink.call_write_batch(&mut self.store, batch, commit))
+        let b = self.arm(batch.len());
+        let r = flatten(self.sink.call_write_batch(&mut self.store, batch, commit));
+        self.disarm(b, batch.len());
+        r
     }
 }
 
-pub fn engine() -> anyhow::Result<Engine> {
+pub fn engine(fuel: bool) -> anyhow::Result<Engine> {
     let mut cfg = Config::new();
     cfg.epoch_interruption(true);
+    cfg.consume_fuel(fuel);
     let engine = w(Engine::new(&cfg))?;
     let e = engine.clone();
     std::thread::spawn(move || {

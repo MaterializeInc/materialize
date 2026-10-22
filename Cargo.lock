@@ -9397,6 +9397,7 @@ dependencies = [
  "mz-storage-types",
  "mz-timely-util",
  "mz-txn-wal",
+ "mz-wasm-sink-spike",
  "parquet",
  "pin-project",
  "postgres-replication",

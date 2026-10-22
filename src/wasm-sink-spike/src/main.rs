@@ -6,7 +6,6 @@
 //! frontier `f` in the target; the host then downgrades its own critical since
 //! hold to `f - 1`, the earliest time a restart needs to read.
 
-mod guest;
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -33,7 +32,8 @@ use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use timely::progress::Antichain;
 
-use crate::guest::GuestThread;
+use mz_wasm_sink_spike::encode::Encoder;
+use mz_wasm_sink_spike::guest::{self, GuestThread};
 
 #[derive(Parser)]
 struct Args {
@@ -66,6 +66,11 @@ struct Args {
     /// Retention cap: the hold is never kept further than this behind now.
     #[clap(long, default_value = "600000")]
     max_lag_ms: u64,
+    /// Fuel budget per guest call: base plus per input byte. 0 disables fuel.
+    #[clap(long, default_value = "0")]
+    fuel_base: u64,
+    #[clap(long, default_value = "0")]
+    fuel_per_byte: u64,
     #[clap(long, default_value = "67108864")]
     guest_memory_bytes: usize,
     /// Minimum interval between since downgrades.
@@ -120,44 +125,6 @@ fn rss_mib() -> f64 {
         .and_then(|v| v.parse().ok())
         .unwrap_or(0.0);
     pages * 4096.0 / (1024.0 * 1024.0)
-}
-
-struct Encoder {
-    desc: RelationDesc,
-}
-
-impl Encoder {
-    fn new(desc: &RelationDesc) -> Self {
-        let mut b = RelationDesc::builder();
-        for (name, ty) in desc.iter() {
-            b = b.with_column(name.clone(), ty.clone());
-        }
-        let desc = b
-            .with_column("mz_time", SqlScalarType::UInt64.nullable(false))
-            .with_column("mz_diff", SqlScalarType::Int64.nullable(false))
-            .finish();
-        Encoder { desc }
-    }
-
-    fn encode(&self, updates: &[(Row, Timestamp, i64)]) -> anyhow::Result<Vec<u8>> {
-        let mut builder = ArrowBuilder::new(&self.desc, updates.len(), updates.len() * 32)?;
-        let mut row = Row::default();
-        for (r, t, d) in updates {
-            let mut p = row.packer();
-            p.extend(r.iter());
-            p.push(Datum::UInt64(u64::from(*t)));
-            p.push(Datum::Int64(*d));
-            builder.add_row(&row)?;
-        }
-        let batch = builder.to_record_batch()?;
-        let mut out = Vec::new();
-        {
-            let mut w = StreamWriter::try_new(&mut out, &batch.schema())?;
-            w.write(&batch)?;
-            w.finish()?;
-        }
-        Ok(out)
-    }
 }
 
 struct Hold {
@@ -270,7 +237,7 @@ async fn main() -> anyhow::Result<()> {
     let deadline = Duration::from_millis(args.call_deadline_ms);
     let guest = match &args.wasm {
         Some(path) => {
-            let engine = guest::engine()?;
+            let engine = guest::engine(args.fuel_base > 0)?;
             let t = Instant::now();
             let component = guest::load_component(&engine, path)?;
             println!("component compiled in {:?}", t.elapsed());
@@ -278,6 +245,7 @@ async fn main() -> anyhow::Result<()> {
             let limits = guest::WasmLimits {
                 memory_bytes: args.guest_memory_bytes,
                 call_ticks: args.call_deadline_ms * guest::TICKS_PER_SEC / 1000,
+                fuel: (args.fuel_base > 0).then_some((args.fuel_base, args.fuel_per_byte)),
             };
             GuestThread::spawn(
                 move || {
@@ -318,12 +286,22 @@ async fn main() -> anyhow::Result<()> {
             _ => {
                 println!("fresh snapshot (resume={resume:?}, since={since})");
                 guest.reset().await?;
+                // Snapshot at the newest readable time, so the snapshot holds
+                // the current state and the listen starts near the tip.
+                let upper = client
+                    .recent_upper::<SourceData, (), Timestamp, StorageDiff>(
+                        shard,
+                        Diagnostics::from_purpose("wasm sink spike upper"),
+                    )
+                    .await?;
+                let upper = upper.as_option().copied().context("shard closed")?;
                 let as_of = read
                     .since()
                     .as_option()
                     .copied()
                     .context("empty since")?
-                    .max(since);
+                    .max(since)
+                    .max(upper.step_back().unwrap_or(upper));
                 let snap_start = Instant::now();
                 let mut cursor = read
                     .snapshot_cursor(Antichain::from_elem(as_of), |_| true)
