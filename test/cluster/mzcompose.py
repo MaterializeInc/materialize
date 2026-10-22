@@ -94,14 +94,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     slow_tests = [
         "crash-on-replica-expiration-index",
+        "test-batched-subscribe-cutover-trims",
+        "test-batched-subscribe-replica-killed-mid-range",
+        "test-batched-subscribe-replica-reconnects-with-batches-in-flight",
         "test-incident-70",
         "test-refresh-mv-restart",
         "test-slow-seqno-hold",
     ]
 
     def process(name: str) -> None:
-        # incident-70, crash-on-replica-expiration-index, refresh-mv-restart
-        # and slow-seqno-hold are slow, run in separate CI step
+        # incident-70, crash-on-replica-expiration-index, refresh-mv-restart,
+        # slow-seqno-hold and the batched subscribe workflows are slow, run in
+        # separate CI step
         # concurrent-connections is too flaky
         # TODO: Reenable test-memory-limiter when database-issues/9502 is fixed
         if name in (
@@ -2204,8 +2208,8 @@ def workflow_test_batched_subscribe_replica_killed_mid_range(c: Composition) -> 
     _batched_subscribe_setup(c)
 
     def kill_while_stashing() -> None:
-        # The writer keeps every description nonempty, so once clusterd1 has stashed a share it
-        # stashes the shares of every later description, and the kill lands among them.
+        # The kill follows clusterd1's first stashed share. The writer makes later stashed shares
+        # likely, but nothing checks that one is in flight at the kill.
         deadline = time.time() + 60
         while _batched_subscribe_stashed_bytes(c, "clusterd1") == 0:
             assert time.time() < deadline, "clusterd1 stashed no share"
@@ -2317,23 +2321,34 @@ def workflow_test_batched_subscribe_cutover_trims(c: Composition) -> None:
                 time.sleep(0.1)
             return False
 
+        # A stall of about four seconds makes the controller drop the follower's connection,
+        # after which it renders anew, which is the reconnect workflow's scenario. A trim after a
+        # longer stall does not prove a cutover trim.
+        max_stall_s = 2.0
+
         def take_over(leader: str, follower: str) -> bool:
-            """Kills `leader` and returns whether `follower` takes over with a trim."""
+            """Kills `leader` and returns whether `follower` takes over with a cutover trim."""
             # Both replicas mint a description at every frontier step of `t` they observe, so
             # their boundaries mostly coincide, and a takeover at a shared boundary needs no
             # trim. Stalling the follower until the leader has extended the subscribe twice
             # makes the follower's next batch start before the accepted upper. Whether it also
             # ends beyond it, instead of replaying the leader's boundaries, depends on how much
-            # of the backlog the follower observes as one frontier step. A stall of about four
-            # seconds makes the controller drop the follower's connection, after which it
-            # renders anew, which is the reconnect workflow's scenario.
+            # of the backlog the follower observes as one frontier step.
             c.pause(services[follower])
-            assert await_extension(leader, 2, 3), "the leader stopped extending"
-            c.kill(services[leader])
+            stalled_at = time.time()
+            leader_extended = await_extension(leader, 2, max_stall_s - 0.5)
+            if leader_extended:
+                c.kill(services[leader])
             trimmed_at_kill = _batched_subscribe_cutover_counts(c).get(
                 (follower, "trimmed"), 0
             )
             c.unpause(services[follower])
+            stall = time.time() - stalled_at
+            if not leader_extended:
+                print(
+                    f"{services[leader]} did not extend twice within the stall, retrying"
+                )
+                return False
             assert await_extension(follower, 2, 15), "the follower did not take over"
             trimmed = _batched_subscribe_cutover_counts(c).get((follower, "trimmed"), 0)
             print(
@@ -2342,10 +2357,25 @@ def workflow_test_batched_subscribe_cutover_trims(c: Composition) -> None:
             )
             c.up(services[leader])
             assert await_extension(leader, 1, 60), f"{services[leader]} did not rejoin"
+            if stall >= max_stall_s:
+                print(
+                    f"the follower stalled for {stall:.1f}s, too long to prove a cutover"
+                )
+                return False
             return trimmed > trimmed_at_kill
 
+        takeover_delay_s = 8.0
+        duration_ms = 180_000
+        # The longest an attempt takes: the observation window, the stall, the takeover, and
+        # the rejoin.
+        attempt_s = 3 + max_stall_s + 15 + 60
+
         def take_over_until_trimmed() -> None:
-            for attempt in range(5):
+            # The action runs `takeover_delay_s` after the subscribe started. A takeover after
+            # `UP TO` has no subscribe to take over, so every attempt must end before it.
+            subscribe_ends = time.time() - takeover_delay_s + duration_ms / 1000
+            attempt = 0
+            while time.time() + attempt_s < subscribe_ends:
                 before = _batched_subscribe_cutover_counts(c)
                 time.sleep(3)
                 after = _batched_subscribe_cutover_counts(c)
@@ -2357,14 +2387,17 @@ def workflow_test_batched_subscribe_cutover_trims(c: Composition) -> None:
                 follower = next(r for r in services if r != leader)
                 if take_over(leader, follower):
                     return
-            raise AssertionError("no takeover in 5 attempts was trimmed")
+                attempt += 1
+            raise AssertionError(
+                f"no takeover in {attempt} attempts was trimmed before the subscribe ended"
+            )
 
         # The subscribe lasts long enough for several takeovers, so it writes fewer rows per
         # round.
         _check_batched_subscribe(
             c,
-            actions=[(8.0, take_over_until_trimmed)],
-            duration_ms=180_000,
+            actions=[(takeover_delay_s, take_over_until_trimmed)],
+            duration_ms=duration_ms,
             rows_per_write=200,
         )
 
