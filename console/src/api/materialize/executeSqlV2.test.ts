@@ -25,7 +25,12 @@ import {
 import server from "~/api/mocks/server";
 
 import DatabaseError from "./DatabaseError";
-import { executeSqlV2, queryKeyLabel, spanErrorStatus } from "./executeSqlV2";
+import {
+  executeSqlV2,
+  labelSql,
+  queryKeyLabel,
+  spanErrorStatus,
+} from "./executeSqlV2";
 import { ErrorCode, MzDataType, Notice, OkSqlResult } from "./types";
 
 describe("executeSqlV2", () => {
@@ -190,6 +195,54 @@ describe("executeSqlV2", () => {
         queryKey: ["databaseErrorQuery"],
       }),
     ).rejects.toThrowError(DatabaseError);
+  });
+
+  it("sends each query with its label in a trailing comment", async () => {
+    let sentQueries: string[] = [];
+    server.use(
+      http.post("*/api/sql", async ({ request }) => {
+        const body = (await request.json()) as {
+          queries: { query: string }[];
+        };
+        sentQueries = body.queries.map((q) => q.query);
+        return HttpResponse.json({
+          results: body.queries.map(() => ({ ok: "BEGIN", notices: [] })),
+        });
+      }),
+    );
+
+    await executeSqlV2({
+      queries: [
+        sql`BEGIN`.compile(queryBuilder),
+        sql`COMMIT;`.compile(queryBuilder),
+      ] as const,
+      queryKey: [buildQueryKeyPart("clusters"), buildQueryKeyPart("list")],
+    });
+
+    expect(sentQueries).toEqual([
+      "BEGIN\n/*console_query='clusters.list'*/",
+      "COMMIT\n/*console_query='clusters.list'*/",
+    ]);
+  });
+});
+
+describe("labelSql", () => {
+  it("drops trailing semicolons so the label stays in the logged text", () => {
+    expect(labelSql("SELECT 1; ;\n", "healthCheck")).toBe(
+      "SELECT 1\n/*console_query='healthCheck'*/",
+    );
+  });
+
+  it("puts the label on its own line after a line comment", () => {
+    expect(labelSql("SELECT 1 -- note", "healthCheck")).toBe(
+      "SELECT 1 -- note\n/*console_query='healthCheck'*/",
+    );
+  });
+
+  it("replaces characters that could end the comment", () => {
+    expect(labelSql("SELECT 1", "a*/b c")).toBe(
+      "SELECT 1\n/*console_query='a__b_c'*/",
+    );
   });
 });
 
