@@ -171,6 +171,11 @@ where
                 }
             }
 
+            if &as_of != initial_as_of {
+                for sink in dataflow.sink_exports.values_mut() {
+                    sink.connection.advance_as_of(&as_of);
+                }
+            }
             dataflow.as_of = Some(as_of);
         }
 
@@ -293,5 +298,111 @@ where
     /// Iterate through the contained commands.
     pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand> {
         self.commands.iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_compute_types::dataflows::DataflowDescription;
+    use mz_compute_types::sinks::{
+        BatchedSubscribeSinkConnection, ComputeSinkConnection, ComputeSinkDesc,
+    };
+    use mz_ore::metrics::UIntGauge;
+    use mz_repr::{GlobalId, RelationDesc, Timestamp};
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::metrics::{CommandMetrics, HistoryMetrics};
+
+    const SINK: GlobalId = GlobalId::User(1);
+
+    fn history() -> ComputeCommandHistory<UIntGauge> {
+        let gauge = || UIntGauge::new("mz_test_history", "help").expect("valid gauge");
+        ComputeCommandHistory::new(HistoryMetrics {
+            command_counts: CommandMetrics::build(|_| gauge()),
+            dataflow_count: gauge(),
+        })
+    }
+
+    /// Creates a dataflow at as-of `as_of` that exports a batched subscribe starting at `start`.
+    fn create_batched_subscribe(as_of: u64, start: u64) -> ComputeCommand {
+        let mut dataflow = DataflowDescription::new("batched".to_string());
+        dataflow.as_of = Some(Antichain::from_elem(Timestamp::from(as_of)));
+        dataflow.sink_exports.insert(
+            SINK,
+            ComputeSinkDesc {
+                from: GlobalId::User(0),
+                from_desc: RelationDesc::empty(),
+                connection: ComputeSinkConnection::BatchedSubscribe(
+                    BatchedSubscribeSinkConnection {
+                        stash_id: Uuid::nil(),
+                        start: Timestamp::from(start),
+                        output_desc: RelationDesc::empty(),
+                    },
+                ),
+                with_snapshot: true,
+                up_to: Antichain::new(),
+                non_null_assertions: Vec::new(),
+                refresh_schedule: None,
+                from_arrangement: None,
+            },
+        );
+        ComputeCommand::CreateDataflow(Box::new(dataflow))
+    }
+
+    fn allow_compaction(frontier: u64) -> ComputeCommand {
+        ComputeCommand::AllowCompaction {
+            id: SINK,
+            frontier: Antichain::from_elem(Timestamp::from(frontier)),
+        }
+    }
+
+    /// The as-of and the batched subscribe's start of the reduced history's only dataflow.
+    fn reduced(commands: Vec<ComputeCommand>) -> (Antichain<Timestamp>, Timestamp) {
+        let mut history = history();
+        for command in commands {
+            history.push(command);
+        }
+        history.reduce();
+        let mut dataflows = history.iter().filter_map(|command| match command {
+            ComputeCommand::CreateDataflow(dataflow) => Some(dataflow),
+            _ => None,
+        });
+        let dataflow = dataflows.next().expect("the dataflow is retained");
+        assert!(dataflows.next().is_none(), "one dataflow");
+        let ComputeSinkConnection::BatchedSubscribe(connection) =
+            &dataflow.sink_exports[&SINK].connection
+        else {
+            panic!("the sink is a batched subscribe");
+        };
+        (dataflow.as_of.clone().expect("set"), connection.start)
+    }
+
+    #[mz_ore::test]
+    fn a_raised_as_of_advances_a_batched_subscribe_start() {
+        // After an accepted upper 9 the subscribe's read hold is 8, so a rendering of the reduced
+        // history starts at 9, with or without a snapshot.
+        for start in [5, 6] {
+            let (as_of, start) = reduced(vec![
+                create_batched_subscribe(5, start),
+                allow_compaction(8),
+            ]);
+            assert_eq!(as_of, Antichain::from_elem(Timestamp::from(8)));
+            assert_eq!(start, Timestamp::from(9));
+        }
+    }
+
+    #[mz_ore::test]
+    fn an_unraised_as_of_keeps_a_batched_subscribe_start() {
+        let (as_of, start) = reduced(vec![create_batched_subscribe(5, 5), allow_compaction(5)]);
+        assert_eq!(as_of, Antichain::from_elem(Timestamp::from(5)));
+        assert_eq!(
+            start,
+            Timestamp::from(5),
+            "the snapshot at the as-of stays reported"
+        );
+
+        let (_, start) = reduced(vec![create_batched_subscribe(5, 6)]);
+        assert_eq!(start, Timestamp::from(6));
     }
 }
