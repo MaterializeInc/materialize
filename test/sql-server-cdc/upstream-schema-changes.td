@@ -168,22 +168,37 @@ contains:Incompatible schema change
 # PRIMARY KEY or UNIQUE constraint stalls the table, because Materialize uses
 # the recorded key to plan queries. SQL Server does not allow dropping a PRIMARY
 # KEY while CDC is enabled, so the drop scenarios use UNIQUE constraints.
+# A recorded UNIQUE constraint is dropped.
 $ sql-server-execute name=sql-server
 CREATE TABLE unique_table (id INT NOT NULL CONSTRAINT unique_table_primary_key PRIMARY KEY, wallet VARCHAR(64) NOT NULL CONSTRAINT unique_table_wallet_unique UNIQUE);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'unique_table', @role_name = 'SA', @supports_net_changes = 0;
 INSERT INTO unique_table VALUES (1, 'a');
-CREATE TABLE added_constraint (id INT NOT NULL CONSTRAINT added_constraint_primary_key PRIMARY KEY, wallet VARCHAR(64) NOT NULL);
-EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'added_constraint', @role_name = 'SA', @supports_net_changes = 0;
-INSERT INTO added_constraint VALUES (1, 'a');
 
 > CREATE TABLE unique_table FROM SOURCE sql_server_src (REFERENCE dbo.unique_table);
-> CREATE TABLE added_constraint FROM SOURCE sql_server_src (REFERENCE dbo.added_constraint);
 
 > SELECT * FROM unique_table;
 1 a
 
+$ sql-server-execute name=sql-server
+ALTER TABLE unique_table DROP CONSTRAINT unique_table_wallet_unique;
+
+! SELECT * FROM unique_table;
+contains:incompatible schema change on dbo.unique_table: UNIQUE constraint "unique_table_wallet_unique" (wallet) was dropped upstream
+
+> DROP TABLE unique_table;
+
 # A constraint added after the table was created was never recorded as a key,
 # so adding and dropping it are non-events.
+$ sql-server-execute name=sql-server
+CREATE TABLE added_constraint (id INT NOT NULL CONSTRAINT added_constraint_primary_key PRIMARY KEY, wallet VARCHAR(64) NOT NULL);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'added_constraint', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO added_constraint VALUES (1, 'a');
+
+> CREATE TABLE added_constraint FROM SOURCE sql_server_src (REFERENCE dbo.added_constraint);
+
+> SELECT * FROM added_constraint;
+1 a
+
 $ sql-server-execute name=sql-server
 ALTER TABLE added_constraint ADD CONSTRAINT added_constraint_wallet_unique UNIQUE (wallet);
 INSERT INTO added_constraint VALUES (2, 'b');
@@ -195,38 +210,20 @@ INSERT INTO added_constraint VALUES (3, 'b');
 2 b
 3 b
 
-$ sql-server-execute name=sql-server
-ALTER TABLE unique_table DROP CONSTRAINT unique_table_wallet_unique;
+> DROP TABLE added_constraint;
 
-! SELECT * FROM unique_table;
-contains:incompatible schema change on dbo.unique_table: UNIQUE constraint "unique_table_wallet_unique" (wallet) was dropped upstream
-
+# Dropping one of several constraints names that constraint, with its columns
+# in key order.
 $ sql-server-execute name=sql-server
 CREATE TABLE multiple_constraints (id INT NOT NULL CONSTRAINT multiple_constraints_primary_key PRIMARY KEY, a INT NOT NULL, b INT NOT NULL, c INT NOT NULL, CONSTRAINT multiple_constraints_a_unique UNIQUE (a), CONSTRAINT multiple_constraints_b_c_unique UNIQUE (b, c));
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'multiple_constraints', @role_name = 'SA', @supports_net_changes = 0;
 INSERT INTO multiple_constraints VALUES (1, 10, 100, 1000);
-CREATE TABLE excluded_column (id INT NOT NULL CONSTRAINT excluded_column_primary_key PRIMARY KEY, a INT NOT NULL, meta VARCHAR(32) NOT NULL, CONSTRAINT unique_on_excluded_column UNIQUE (meta));
-EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'excluded_column', @role_name = 'SA', @supports_net_changes = 0;
-INSERT INTO excluded_column VALUES (1, 10, 'x');
-CREATE TABLE recreated_constraint (id INT NOT NULL CONSTRAINT recreated_constraint_primary_key PRIMARY KEY, a INT NOT NULL, b INT NOT NULL, CONSTRAINT recreated_constraint_unique UNIQUE (a));
-EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'recreated_constraint', @role_name = 'SA', @supports_net_changes = 0;
-INSERT INTO recreated_constraint VALUES (1, 10, 100);
 
 > CREATE TABLE multiple_constraints FROM SOURCE sql_server_src (REFERENCE dbo.multiple_constraints);
-> CREATE TABLE excluded_column FROM SOURCE sql_server_src (REFERENCE dbo.excluded_column) WITH (EXCLUDE COLUMNS = (meta));
-> CREATE TABLE recreated_constraint FROM SOURCE sql_server_src (REFERENCE dbo.recreated_constraint);
 
 > SELECT * FROM multiple_constraints;
 1 10 100 1000
 
-> SELECT * FROM excluded_column;
-1 10
-
-> SELECT * FROM recreated_constraint;
-1 10 100
-
-# Dropping one of several constraints names that constraint, with its columns
-# in key order.
 $ sql-server-execute name=sql-server
 ALTER TABLE multiple_constraints DROP CONSTRAINT multiple_constraints_b_c_unique;
 INSERT INTO multiple_constraints VALUES (2, 20, 100, 1000);
@@ -234,8 +231,20 @@ INSERT INTO multiple_constraints VALUES (2, 20, 100, 1000);
 ! SELECT * FROM multiple_constraints;
 contains:incompatible schema change on dbo.multiple_constraints: UNIQUE constraint "multiple_constraints_b_c_unique" (b, c) was dropped upstream
 
+> DROP TABLE multiple_constraints;
+
 # A constraint over an excluded column was never recorded as a key, so dropping
 # it is a non-event.
+$ sql-server-execute name=sql-server
+CREATE TABLE excluded_column (id INT NOT NULL CONSTRAINT excluded_column_primary_key PRIMARY KEY, a INT NOT NULL, meta VARCHAR(32) NOT NULL, CONSTRAINT unique_on_excluded_column UNIQUE (meta));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'excluded_column', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO excluded_column VALUES (1, 10, 'x');
+
+> CREATE TABLE excluded_column FROM SOURCE sql_server_src (REFERENCE dbo.excluded_column) WITH (EXCLUDE COLUMNS = (meta));
+
+> SELECT * FROM excluded_column;
+1 10
+
 $ sql-server-execute name=sql-server
 ALTER TABLE excluded_column DROP CONSTRAINT unique_on_excluded_column;
 INSERT INTO excluded_column VALUES (2, 20, 'x');
@@ -244,9 +253,21 @@ INSERT INTO excluded_column VALUES (2, 20, 'x');
 1 10
 2 20
 
+> DROP TABLE excluded_column;
+
 # Recreating a constraint under the same name over different columns is
 # reported as an alteration. The statements run as one batch so a poll cannot
 # observe the intermediate state where the constraint is simply gone.
+$ sql-server-execute name=sql-server
+CREATE TABLE recreated_constraint (id INT NOT NULL CONSTRAINT recreated_constraint_primary_key PRIMARY KEY, a INT NOT NULL, b INT NOT NULL, CONSTRAINT recreated_constraint_unique UNIQUE (a));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'recreated_constraint', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO recreated_constraint VALUES (1, 10, 100);
+
+> CREATE TABLE recreated_constraint FROM SOURCE sql_server_src (REFERENCE dbo.recreated_constraint);
+
+> SELECT * FROM recreated_constraint;
+1 10 100
+
 $ sql-server-execute name=sql-server split-lines=false
 ALTER TABLE recreated_constraint DROP CONSTRAINT recreated_constraint_unique;
 ALTER TABLE recreated_constraint ADD CONSTRAINT recreated_constraint_unique UNIQUE (b);
@@ -254,6 +275,8 @@ INSERT INTO recreated_constraint VALUES (2, 10, 200);
 
 ! SELECT * FROM recreated_constraint;
 contains:incompatible schema change on dbo.recreated_constraint: UNIQUE constraint "recreated_constraint_unique" (a) was renamed or recreated upstream
+
+> DROP TABLE recreated_constraint;
 
 # A table tracked by two capture instances: both exports see the table's
 # constraints, so neither reports a phantom dropped key, and a real drop is
