@@ -48,7 +48,7 @@ pub struct DurableOptions {
 impl Default for DurableOptions {
     fn default() -> DurableOptions {
         DurableOptions {
-            live: LiveOptions::default(),
+            live: LiveOptions::default().buffer(1),
             commit_interval: Duration::from_secs(1),
             write_timeout: Duration::from_secs(60),
             store_timeout: Duration::from_secs(30),
@@ -58,7 +58,10 @@ impl Default for DurableOptions {
 }
 
 impl DurableOptions {
-    /// How the stream is fetched and buffered.
+    /// How the stream is fetched and buffered. By default every batch that
+    /// arrives while a write runs is appended to the one waiting, a
+    /// [`LiveOptions::buffer`] of 1, so the next write takes them all and a
+    /// sink whose writes are slower than the stream's progress keeps up.
     pub fn live(mut self, live: LiveOptions) -> DurableOptions {
         self.live = live;
         self
