@@ -241,6 +241,18 @@ contains:division by zero
 
 > ROLLBACK
 
+# `err` is a constant, so it holds its error from before the as-of 7, in the snapshot that a
+# subscribe without one does not report.
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE err WITH (PROGRESS, SNAPSHOT = false) AS OF 7 UP TO 12
+
+> FETCH 1 c WITH (timeout = '60s')
+7 true <null> <null>
+
+> FETCH ALL c WITH (timeout = '60s')
+
+> COMMIT
+
 $ set-regex match=\d{13} replacement=<TS>
 
 > BEGIN
@@ -456,6 +468,19 @@ $ unset-regex
 contains:division by zero
 
 > ROLLBACK
+
+# `err` is a constant, so it holds its error from before the as-of 7, in the snapshot that a
+# subscribe without one does not report.
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE err WITH (BATCHED, SNAPSHOT = false) AS OF 7 UP TO 12
+
+> FETCH 1 c WITH (timeout = '60s')
+7 true <null> <null>
+
+> FETCH ALL c WITH (timeout = '60s')
+12 true <null> <null>
+
+> COMMIT
 
 $ set-regex match=\d{13} replacement=<TS>
 
@@ -679,6 +704,19 @@ contains:division by zero
 
 > ROLLBACK
 
+# `err` is a constant, so it holds its error from before the as-of 7, in the snapshot that a
+# subscribe without one does not report.
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE err WITH (BATCHED, SNAPSHOT = false) AS OF 7 UP TO 12
+
+> FETCH 1 c WITH (timeout = '60s')
+7 true <null> <null>
+
+> FETCH ALL c WITH (timeout = '60s')
+12 true <null> <null>
+
+> COMMIT
+
 $ set-regex match=\d{13} replacement=<TS>
 
 > BEGIN
@@ -900,6 +938,19 @@ true
 contains:division by zero
 
 > ROLLBACK
+
+# `err` is a constant, so it holds its error from before the as-of 7, in the snapshot that a
+# subscribe without one does not report.
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE err WITH (BATCHED, SNAPSHOT = false) AS OF 7 UP TO 12
+
+> FETCH 1 c WITH (timeout = '60s')
+7 true <null> <null>
+
+> FETCH ALL c WITH (timeout = '60s')
+12 true <null> <null>
+
+> COMMIT
 
 $ set-regex match=\d{13} replacement=<TS>
 
@@ -1124,6 +1175,19 @@ ALTER SYSTEM RESET compute_batched_subscribe_offload_min_updates;
 contains:division by zero
 
 > ROLLBACK
+
+# `err` is a constant, so it holds its error from before the as-of 7, in the snapshot that a
+# subscribe without one does not report.
+> BEGIN
+> DECLARE c CURSOR FOR SUBSCRIBE err WITH (BATCHED, SNAPSHOT = false) AS OF 7 UP TO 12
+
+> FETCH 1 c WITH (timeout = '60s')
+7 true <null> <null>
+
+> FETCH ALL c WITH (timeout = '60s')
+12 true <null> <null>
+
+> COMMIT
 
 $ set-regex match=\d{13} replacement=<TS>
 

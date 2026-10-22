@@ -1308,6 +1308,144 @@ fn test_subscribe_batched_cursor() {
     await_subscriptions(&mut writer, 0);
 }
 
+/// Tests that a live batched subscribe without a snapshot streams the updates after its as-of
+/// over a relation whose snapshot holds an error.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_without_snapshot_skips_its_errors() {
+    let server = start_batched_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+
+    writer.batch_execute("CREATE TABLE t (x int)").unwrap();
+    writer.batch_execute("INSERT INTO t VALUES (0)").unwrap();
+    client
+        .batch_execute(
+            "BEGIN; DECLARE c CURSOR FOR \
+             SUBSCRIBE (SELECT 10 / x AS a FROM t) WITH (BATCHED, SNAPSHOT = false)",
+        )
+        .unwrap();
+    fetch_until(&mut client, |lines| !lines.is_empty());
+    writer.batch_execute("INSERT INTO t VALUES (2)").unwrap();
+    // A subscribe that reports the snapshot's error fails the fetch, and one whose chain stalls
+    // times out.
+    fetch_until(&mut client, |lines| {
+        lines
+            .iter()
+            .any(|line| matches!(line, SubscribeLine::Data { a: 5, diff: 1, .. }))
+    });
+    client.batch_execute("COMMIT").unwrap();
+}
+
+/// Tests that a batched subscribe over an index evaluates its plan only on the rows it reports.
+/// Without a snapshot, a snapshot row the plan fails on does not fail the subscribe. With one,
+/// it does.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_indexed_without_snapshot_skips_its_errors() {
+    let server = start_batched_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+
+    writer.batch_execute("CREATE TABLE t (x int)").unwrap();
+    // The subscribe keeps the key column, so its plan runs in the sink on the arrangement.
+    writer.batch_execute("CREATE INDEX t_idx ON t (x)").unwrap();
+    writer.batch_execute("INSERT INTO t VALUES (0)").unwrap();
+    let subscribe = "SUBSCRIBE (SELECT x, 10 / x AS a FROM t) WITH (BATCHED";
+
+    client
+        .batch_execute(&format!("BEGIN; DECLARE c CURSOR FOR {subscribe})"))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let error = loop {
+        assert!(
+            Instant::now() < deadline,
+            "the snapshot's error never arrived"
+        );
+        match client.query("FETCH ALL c WITH (timeout = '1s')", &[]) {
+            Ok(rows) => assert!(rows.is_empty(), "rows before the error: {rows:?}"),
+            Err(error) => break error,
+        }
+    };
+    assert_eq!(
+        error.as_db_error().map(|error| error.message()),
+        Some("Evaluation error: division by zero"),
+        "unexpected error: {error:?}"
+    );
+    client.batch_execute("ROLLBACK").unwrap();
+
+    client
+        .batch_execute(&format!(
+            "BEGIN; DECLARE c CURSOR FOR {subscribe}, SNAPSHOT = false)"
+        ))
+        .unwrap();
+    fetch_until(&mut client, |lines| !lines.is_empty());
+    writer.batch_execute("INSERT INTO t VALUES (2)").unwrap();
+    // A subscribe that evaluates the plan on the snapshot fails the fetch, and one whose chain
+    // stalls times out.
+    fetch_until(&mut client, |lines| {
+        lines
+            .iter()
+            .any(|line| matches!(line, SubscribeLine::Data { a: 5, diff: 1, .. }))
+    });
+    client.batch_execute("COMMIT").unwrap();
+}
+
+/// Tests that a batched subscribe without a snapshot over a relation holding an error keeps
+/// streaming once a replica that renders it anew, at an as-of raised past its start, takes over.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_without_snapshot_survives_a_new_replica() {
+    let server = start_batched_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+
+    writer
+        .batch_execute("CREATE CLUSTER c REPLICAS (r1 (SIZE 'scale=1,workers=1'))")
+        .unwrap();
+    writer.batch_execute("CREATE TABLE t (x int)").unwrap();
+    writer.batch_execute("INSERT INTO t VALUES (0)").unwrap();
+    client
+        .batch_execute(
+            "SET CLUSTER = c; BEGIN; DECLARE c CURSOR FOR \
+             SUBSCRIBE (SELECT 10 / x AS a FROM t) WITH (BATCHED, SNAPSHOT = false)",
+        )
+        .unwrap();
+    // The first progress row is at least the as-of `A` plus one. Waiting for two more ticks puts
+    // the accepted upper `U` at `A + 3` or later, so the read hold `U - 1` is past the start.
+    fetch_until(&mut client, |lines| {
+        let progress: Vec<u64> = lines
+            .iter()
+            .filter_map(|line| match line {
+                SubscribeLine::Progress(upper) => Some(*upper),
+                SubscribeLine::Data { .. } => None,
+            })
+            .collect();
+        progress
+            .first()
+            .zip(progress.last())
+            .is_some_and(|(first, last)| *last >= first + 2)
+    });
+
+    // The new replica renders the reduced history at `U - 1`, where the error from before the
+    // start stands. Dropping the old replica leaves the subscribe to the new one.
+    writer
+        .batch_execute("CREATE CLUSTER REPLICA c.r2 SIZE 'scale=1,workers=1'")
+        .unwrap();
+    writer.batch_execute("DROP CLUSTER REPLICA c.r1").unwrap();
+    writer.batch_execute("INSERT INTO t VALUES (2)").unwrap();
+    // A replica that counts the standing error fails the fetch.
+    fetch_until(&mut client, |lines| {
+        lines
+            .iter()
+            .any(|line| matches!(line, SubscribeLine::Data { a: 5, diff: 1, .. }))
+    });
+    client.batch_execute("COMMIT").unwrap();
+}
+
 /// The data lines of `lines` split at its progress rows, each group with the time of the progress
 /// row that closes it.
 fn data_intervals(lines: &[SubscribeLine]) -> Vec<(u64, Vec<SubscribeLine>)> {
