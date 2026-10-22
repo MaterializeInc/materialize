@@ -1459,6 +1459,59 @@ fn test_subscribe_batched_fails_on_a_retracted_error_like_a_plain_subscribe() {
     );
 }
 
+/// Tests that an error standing before the start and retracted after it fails a batched
+/// subscribe as it fails a plain one, with and without a snapshot. With a snapshot the standing
+/// error fails both at the as-of. Without one only the retraction lies at or after the start.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_batched_fails_on_a_retraction_of_a_standing_error_like_a_plain_subscribe() {
+    let server = start_batched_server();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+
+    writer.batch_execute("CREATE TABLE t (x int)").unwrap();
+    let mut outcomes = Vec::new();
+    for snapshot in ["true", "false"] {
+        let mut failures = Vec::new();
+        for kind in ["BATCHED", "PROGRESS"] {
+            writer.batch_execute("INSERT INTO t VALUES (0)").unwrap();
+            client
+                .batch_execute(&format!(
+                    "BEGIN; DECLARE c CURSOR FOR \
+                     SUBSCRIBE (SELECT 10 / x AS a FROM t) WITH ({kind}, SNAPSHOT = {snapshot})"
+                ))
+                .unwrap();
+            // The first fetch runs the subscribe, which fixes its as-of before the retraction.
+            let (data, message) = if snapshot == "true" {
+                let failure = fetch_until_error(&mut client);
+                writer.batch_execute("DELETE FROM t WHERE x = 0").unwrap();
+                failure
+            } else {
+                fetch_until(&mut client, |lines| !lines.is_empty());
+                writer.batch_execute("DELETE FROM t WHERE x = 0").unwrap();
+                fetch_until_error(&mut client)
+            };
+            assert_eq!(
+                data,
+                vec![],
+                "rows before the error with {kind}, {snapshot}"
+            );
+            failures.push(message);
+            client.batch_execute("ROLLBACK").unwrap();
+        }
+        assert_eq!(
+            failures[0], failures[1],
+            "batched and plain differ with SNAPSHOT = {snapshot}"
+        );
+        outcomes.push(failures[0].clone());
+    }
+    assert_eq!(
+        outcomes,
+        vec![Some("Evaluation error: division by zero".to_string()); 2]
+    );
+}
+
 /// Tests that a batched subscribe without a snapshot over a relation holding an error keeps
 /// streaming once a replica that renders it anew, at an as-of raised past its start, takes over.
 #[mz_ore::test]
