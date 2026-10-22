@@ -13,6 +13,7 @@ use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, CursorList};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use mz_compute_client::protocol::response::PeekError;
+use mz_expr::EvalError;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, Row, RowArena};
 use timely::order::PartialOrder;
@@ -468,7 +469,9 @@ where
             &arena,
             &mut borrow,
             &mut self.row_builder,
-        )? {
+        )
+        .map_err(PeekError::from)?
+        {
             let mut copies = Diff::ZERO;
             self.cursor.map_times(&self.storage, |time, diff| {
                 if time.less_equal(&self.peek_timestamp) {
@@ -549,7 +552,7 @@ pub(super) fn evaluate_position<'a, K, V, L>(
     arena: &'a RowArena,
     datums: &mut Vec<Datum<'a>>,
     row_builder: &mut Row,
-) -> Result<Option<Row>, PeekError>
+) -> Result<Option<Row>, EvalError>
 where
     K: ExtendDatums,
     V: ExtendDatums,
@@ -563,7 +566,6 @@ where
     map_filter_project
         .evaluate_into(datums, arena, row_builder)
         .map(|row| row.cloned())
-        .map_err(PeekError::from)
 }
 
 #[cfg(test)]

@@ -97,7 +97,7 @@ fn drain(
             }
             DescriptionStep::OutOfFuel => suspensions += 1,
             DescriptionStep::Done => return (updates, spent, suspensions),
-            DescriptionStep::Error(error) => panic!("unexpected error: {error:?}"),
+            DescriptionStep::Errors(errors) => panic!("unexpected errors: {errors:?}"),
         }
     }
 }
@@ -149,7 +149,6 @@ fn a_first_range_advances_earlier_times_to_the_as_of() {
         DescriptionRange::First {
             as_of: frontier(3),
             upper: frontier(5),
-            start: ts(3),
         },
     );
     assert_eq!(
@@ -171,31 +170,35 @@ pub(crate) fn failing_on_zero() -> SafeMfpPlan {
 }
 
 #[mz_ore::test]
-fn a_first_range_neither_emits_nor_evaluates_updates_placed_before_its_start() {
-    // Key 0 fails the plan. Its update and that of key 1 are placed at the as-of 3.
+fn a_first_range_evaluates_the_snapshot_at_the_as_of() {
+    // Key 0 fails the plan. Its two updates are placed at the as-of 3 and accumulate there.
     let held = batches(
-        &[update(0, 1, 1), update(1, 2, 1), update(2, 4, 1)],
+        &[
+            update(0, 1, 1),
+            update(0, 2, 1),
+            update(1, 2, 1),
+            update(2, 4, 1),
+        ],
         &[ts(3), ts(6)],
     );
-    let range = |start| DescriptionRange::First {
+    let range = DescriptionRange::First {
         as_of: frontier(3),
         upper: frontier(5),
-        start: ts(start),
     };
-
-    let mut without_snapshot = DescriptionIterator::new(held.clone(), failing_on_zero(), range(4));
-    let (updates, _, _) = drain(&mut without_snapshot, usize::MAX);
-    assert_eq!(
-        as_set(updates),
-        BTreeSet::from([(row(2), ts(4), Diff::ONE)])
-    );
-
-    let mut with_snapshot = DescriptionIterator::new(held, failing_on_zero(), range(3));
+    let mut iterator = DescriptionIterator::new(held, failing_on_zero(), range);
     let mut fuel = usize::MAX;
     assert_eq!(
-        with_snapshot.step(&mut fuel),
-        DescriptionStep::Error(PeekError::from(EvalError::DivisionByZero)),
-        "a range starting at the as-of evaluates the snapshot"
+        iterator.step(&mut fuel),
+        DescriptionStep::Errors(vec![(
+            DataflowErrorSer::from(EvalError::DivisionByZero),
+            ts(3),
+            Diff::from(2)
+        )]),
+    );
+    let (updates, _, _) = drain(&mut iterator, usize::MAX);
+    assert_eq!(
+        as_set(updates),
+        BTreeSet::from([(row(1), ts(3), Diff::ONE), (row(2), ts(4), Diff::ONE)])
     );
 }
 
@@ -266,8 +269,11 @@ fn the_scan_is_fueled_and_resumable() {
 }
 
 #[mz_ore::test]
-fn a_filter_error_ends_the_scan() {
-    let held = batches(&[update(1, 4, 1), update(2, 4, 1)], &[ts(6)]);
+fn a_filter_error_becomes_error_updates_and_the_scan_continues() {
+    let held = batches(
+        &[update(1, 4, 1), update(1, 5, -1), update(2, 4, 1)],
+        &[ts(6)],
+    );
     let predicate = MirScalarExpr::literal(
         Err(EvalError::Internal("filter failed".into())),
         ReprScalarType::Bool,
@@ -280,20 +286,26 @@ fn a_filter_error_ends_the_scan() {
             upper: frontier(6),
         },
     );
+    let error = DataflowErrorSer::from(EvalError::Internal("filter failed".into()));
 
     let mut fuel = usize::MAX;
-    let DescriptionStep::Error(error) = iterator.step(&mut fuel) else {
-        panic!("the failing filter did not end the scan with its error");
-    };
     assert_eq!(
-        error,
-        PeekError::from(EvalError::Internal("filter failed".into()))
+        iterator.step(&mut fuel),
+        DescriptionStep::Errors(vec![
+            (error.clone(), ts(4), Diff::ONE),
+            (error.clone(), ts(5), Diff::MINUS_ONE),
+        ]),
+        "the error takes the times and diffs of the position's updates"
     );
     assert_eq!(usize::MAX - fuel, 1);
 
     let mut fuel = usize::MAX;
+    assert_eq!(
+        iterator.step(&mut fuel),
+        DescriptionStep::Errors(vec![(error, ts(4), Diff::ONE)])
+    );
+    let mut fuel = usize::MAX;
     assert_eq!(iterator.step(&mut fuel), DescriptionStep::Done);
-    assert_eq!(usize::MAX - fuel, 0, "a latched scan costs no fuel");
 }
 
 #[mz_ore::test]

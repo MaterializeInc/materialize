@@ -23,7 +23,7 @@ use mz_persist_types::PersistLocation;
 use mz_repr::{Datum, IntoRowIterator, ReprScalarType, Row, RowIterator, RowRef};
 
 use differential_dataflow::trace::TraceReader;
-use mz_repr::GlobalId;
+use mz_repr::{Diff, Timestamp};
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::description_iterator::DescriptionRange;
@@ -1077,7 +1077,7 @@ async fn a_shrink_that_finds_every_permit_held_lands_as_walks_finish() {
 }
 
 /// One batch an offloaded description scan hands to its sink.
-type HandOut = Vec<(Row, Timestamp, Diff)>;
+type HandOut = DescriptionUpdates;
 
 /// The batches a description scan offload has handed to its sink, in the order it handed them.
 type SinkLog = Arc<Mutex<Vec<HandOut>>>;
@@ -1118,7 +1118,6 @@ fn description_scan_over(
         map_filter_project,
         range,
         cut_bytes,
-        GlobalId::User(1),
     )
 }
 
@@ -1153,9 +1152,9 @@ async fn an_offloaded_description_scan_hands_every_cut_to_its_sink() {
     );
 
     let hand_outs = log.lock().expect("lock poisoned").clone();
-    let sizes: Vec<usize> = hand_outs.iter().map(Vec::len).collect();
+    let sizes: Vec<usize> = hand_outs.iter().map(|batch| batch.rows.len()).collect();
     assert_eq!(sizes, [3, 3, 1], "every cut and the tail reach the sink");
-    let mut all: Vec<_> = hand_outs.into_iter().flatten().collect();
+    let mut all: Vec<_> = hand_outs.into_iter().flat_map(|batch| batch.rows).collect();
     all.sort();
     let expected: Vec<_> = keys
         .iter()
@@ -1164,23 +1163,30 @@ async fn an_offloaded_description_scan_hands_every_cut_to_its_sink() {
     assert_eq!(all, expected);
 }
 
+/// Error updates reach the sink with the tail, after every cut of row updates.
 #[mz_ore::test(tokio::test)]
-async fn an_offloaded_poisoned_description_hands_nothing_to_its_sink() {
-    let poison = error(0);
+async fn an_offloaded_description_scan_hands_its_errors_to_the_sink_with_the_tail() {
+    let err = error(0);
+    let keys: Vec<u8> = (1..8).collect();
     let log = SinkLog::default();
     let (result, _handle) = offload_description_scan(
-        description_scan_over(&[1, 2, 3], holding(&poison)),
+        description_scan_over(&keys, holding(&err)),
         logging_sink(&log),
         Arc::new(PeekPermits::new(1)),
         offload_config(1),
         std::thread::current(),
     );
 
+    assert_eq!(description_outcome(result).await, Ok(()));
+    let hand_outs = log.lock().expect("lock poisoned").clone();
+    let errors: Vec<_> = hand_outs.iter().map(|batch| batch.errors.clone()).collect();
     assert_eq!(
-        description_outcome(result).await,
-        Err(PeekError::from(poison.deserialize()).to_string())
+        errors,
+        [vec![], vec![], vec![(err, ts(0), Diff::ONE)]],
+        "the error updates travel with the tail"
     );
-    assert!(log.lock().expect("lock poisoned").is_empty());
+    let rows: usize = hand_outs.iter().map(|batch| batch.rows.len()).sum();
+    assert_eq!(rows, keys.len(), "the error does not stop the scan");
 }
 
 #[mz_ore::test(tokio::test)]

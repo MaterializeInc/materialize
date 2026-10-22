@@ -38,13 +38,14 @@ use mz_expr::ColumnOrder;
 use mz_ore::cast::CastLossy;
 use mz_ore::soft_panic_or_log;
 use mz_ore::task::AbortOnDropHandle;
-use mz_repr::{Diff, Row, Timestamp};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::compute_state::PeekRowIterationConfig;
-use crate::compute_state::description_scan::{DescriptionScan, DescriptionScanOutcome};
+use crate::compute_state::description_scan::{
+    DescriptionScan, DescriptionScanOutcome, DescriptionUpdates,
+};
 use crate::compute_state::peek_metrics::PeekWalkMetrics;
 use crate::compute_state::peek_scan::{IndexPeekScan, RowBatch, ScanOutcome, rows_response};
 use crate::compute_state::peek_stash::{StashTarget, StashUpload};
@@ -624,18 +625,16 @@ async fn stashed_answer(peek_uuid: Uuid, mut upload: StashUpload, tail: RowBatch
 /// `sink`, and wakes `worker` once the outcome is ready.
 ///
 /// The outcome is `Ok` once `sink` has accepted every update of the description. It is `Err` with
-/// the scan's error for a poisoned description, and with the error of the first hand-out `sink`
-/// rejects, which ends the walk. Dropping the receiver cancels the walk, and dropping the handle
-/// aborts it. Either way the scan, the batches it holds, and its permit are released.
+/// the error of the first hand-out `sink` rejects, which ends the walk. Dropping the receiver
+/// cancels the walk, and dropping the handle aborts it. Either way the scan, the batches it holds,
+/// and its permit are released.
 #[cfg_attr(
     not(test),
     expect(dead_code, reason = "the batched subscribe sink is not wired up")
 )]
-pub(super) fn offload_description_scan<Ok, Err>(
+pub(super) fn offload_description_scan<Ok, Err, Sink>(
     scan: DescriptionScan<Ok, Err>,
-    mut sink: impl FnMut(Vec<(Row, Timestamp, Diff)>) -> BoxFuture<'static, Result<(), String>>
-    + Send
-    + 'static,
+    mut sink: Sink,
     permits: Arc<PeekPermits>,
     config: OffloadConfig,
     worker: Thread,
@@ -643,8 +642,9 @@ pub(super) fn offload_description_scan<Ok, Err>(
 where
     Ok: Navigable,
     Err: Navigable,
+    Sink: FnMut(DescriptionUpdates) -> BoxFuture<'static, Result<(), String>> + Send + 'static,
     DescriptionScan<Ok, Err>:
-        OffloadScan<Batch = Vec<(Row, Timestamp, Diff)>, Outcome = DescriptionScanOutcome>,
+        OffloadScan<Batch = DescriptionUpdates, Outcome = DescriptionScanOutcome>,
 {
     let (mut result_tx, result_rx) = oneshot::channel();
     permits.resize(config.permit_fraction.get());
@@ -671,7 +671,7 @@ where
                         break Err(error);
                     }
                 }
-                Slice::Finished(DescriptionScanOutcome::Finished(Ok(()))) => {
+                Slice::Finished(DescriptionScanOutcome::Finished) => {
                     if let Some(tail) = OffloadScan::take_batch(&mut state.scan) {
                         if let Err(error) = sink(tail).await {
                             break Err(error);
@@ -679,7 +679,6 @@ where
                     }
                     break Ok(());
                 }
-                Slice::Finished(DescriptionScanOutcome::Finished(Err(error))) => break Err(error),
                 Slice::Finished(DescriptionScanOutcome::Suspended) => {
                     soft_panic_or_log!("offloaded description scan finished a slice suspended");
                     break Err("internal error: offloaded description scan stopped early".into());

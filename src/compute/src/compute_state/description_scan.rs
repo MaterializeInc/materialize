@@ -17,51 +17,108 @@ use std::mem;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::trace::{BatchReader, Cursor, Navigable};
-use mz_compute_client::protocol::response::PeekError;
 use mz_expr::SafeMfpPlan;
 use mz_ore::soft_panic_or_log;
 use mz_repr::fixed_length::ExtendDatums;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Diff, Row, Timestamp};
 use timely::order::PartialOrder;
 
 use crate::compute_state::description_iterator::{
     DescriptionIterator, DescriptionRange, DescriptionStep,
 };
-use crate::compute_state::error_scan::{ErrorFilter, ErrorScan, ErrorScanStep};
+use crate::compute_state::error_scan::ErrorScan;
 use crate::compute_state::peek_offload::{OffloadConfig, OffloadScan};
 use crate::compute_state::peek_scan::entry_byte_len;
 use crate::render::errors::DataflowErrorSer;
 
 /// The outcome of a fueled [`DescriptionScan::step`].
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum DescriptionScanOutcome {
+pub(crate) enum DescriptionScanOutcome {
     /// The fuel ran out, or the buffered updates passed the cut and wait for
     /// [`DescriptionScan::take_batch`]. Stepping again resumes where this step stopped.
     Suspended,
-    /// The scan is over. `Ok` leaves the remaining buffered updates to
-    /// [`DescriptionScan::take_batch`]. `Err` carries why the description is poisoned, and the
-    /// scan then holds no updates.
-    Finished(Result<(), String>),
+    /// The scan is over, and leaves the remaining buffered updates to
+    /// [`DescriptionScan::take_batch`].
+    Finished,
 }
 
-/// Scans the updates of one description, after an error walk over the same description found
-/// it clean.
-pub(super) struct DescriptionScan<Ok: Navigable, Err: Navigable> {
-    target_id: GlobalId,
-    /// The error walk, `None` once it has found the description clean.
-    errors: Option<(ErrorScan<Err>, ErrorFilter)>,
+/// Updates of one description that a [`DescriptionScan`] hands out.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct DescriptionUpdates {
+    /// Row updates.
+    pub(crate) rows: Vec<(Row, Timestamp, Diff)>,
+    /// Error updates, of the error collection and of the `map_filter_project`.
+    pub(crate) errors: Vec<(DataflowErrorSer, Timestamp, Diff)>,
+}
+
+impl DescriptionUpdates {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.rows.is_empty() && self.errors.is_empty()
+    }
+
+    /// Consolidates the rows per `(time, row)` and the errors per `(time, error)`.
+    pub(crate) fn consolidate(&mut self) {
+        consolidate_updates(&mut self.rows);
+        consolidate_updates(&mut self.errors);
+    }
+
+    #[expect(dead_code, reason = "the batched subscribe sink is not wired up")]
+    pub(crate) fn extend(&mut self, other: DescriptionUpdates) {
+        self.rows.extend(other.rows);
+        self.errors.extend(other.errors);
+    }
+
+    /// The bytes the updates are accounted at, see [`update_byte_len`] and
+    /// [`error_update_byte_len`].
+    #[expect(dead_code, reason = "the batched subscribe sink is not wired up")]
+    pub(crate) fn byte_len(&self) -> usize {
+        let rows = self
+            .rows
+            .iter()
+            .map(|(row, _, _)| update_byte_len(row))
+            .fold(0, usize::saturating_add);
+        self.errors
+            .iter()
+            .map(|(error, _, _)| error_update_byte_len(error))
+            .fold(rows, usize::saturating_add)
+    }
+}
+
+/// Scans the updates of one description, first its error updates and then its row updates.
+///
+/// Row updates are handed out as they pass the cut. Error updates are held until the scan
+/// finishes and handed out with its last hand-out, so that they are consolidated per
+/// `(time, error)` across the whole description.
+pub(crate) struct DescriptionScan<Ok: Navigable, Err: Navigable> {
+    range: DescriptionRange,
+    /// The error walk, `None` once it has ended.
+    errors: Option<ErrorScan<Err>>,
     oks: DescriptionIterator<Ok>,
     buffer: Vec<(Row, Timestamp, Diff)>,
     /// The bytes accounted to `buffer`, see [`update_byte_len`].
     buffered_bytes: usize,
+    /// The error updates found so far, handed out once the scan has ended.
+    error_buffer: Vec<(DataflowErrorSer, Timestamp, Diff)>,
     cut_bytes: usize,
-    ended: Option<Result<(), String>>,
+    ended: bool,
 }
 
 /// The bytes one buffered update is accounted at, the peek's per-row accounting plus the time
 /// and the diff that a peek answer does not carry.
-fn update_byte_len(row: &Row) -> usize {
+pub(crate) fn update_byte_len(row: &Row) -> usize {
     entry_byte_len(row)
+        .saturating_add(size_of::<Timestamp>())
+        .saturating_add(size_of::<Diff>())
+}
+
+/// The bytes one error update is accounted at, its serialized error plus the time and the diff.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the batched subscribe sink is not wired up")
+)]
+pub(crate) fn error_update_byte_len(error: &DataflowErrorSer) -> usize {
+    error
+        .byte_len()
         .saturating_add(size_of::<Timestamp>())
         .saturating_add(size_of::<Diff>())
 }
@@ -86,32 +143,28 @@ where
     /// Opens a scan of `range` over `ok_batches` and `err_batches`, each of which must include
     /// every held batch that overlaps the range.
     ///
-    /// The buffered updates are handed out once their accounted bytes exceed `cut_bytes`, so a
-    /// hand-out can exceed the cut by the updates of one cursor position.
+    /// The buffered row updates are handed out once their accounted bytes exceed `cut_bytes`, so
+    /// a hand-out can exceed the cut by the updates of one cursor position.
     #[cfg_attr(
         not(test),
         expect(dead_code, reason = "the batched subscribe sink is not wired up")
     )]
-    pub(super) fn new(
+    pub(crate) fn new(
         ok_batches: Vec<Ok>,
         err_batches: Vec<Err>,
         map_filter_project: SafeMfpPlan,
         range: DescriptionRange,
         cut_bytes: usize,
-        target_id: GlobalId,
     ) -> Self {
-        let errors = (
-            ErrorScan::from_batches(err_batches),
-            ErrorFilter::Description(range.clone()),
-        );
         Self {
-            target_id,
-            errors: Some(errors),
+            range: range.clone(),
+            errors: Some(ErrorScan::from_batches(err_batches)),
             oks: DescriptionIterator::new(ok_batches, map_filter_project, range),
             buffer: Vec::new(),
             buffered_bytes: 0,
+            error_buffer: Vec::new(),
             cut_bytes,
-            ended: None,
+            ended: false,
         }
     }
 
@@ -121,22 +174,21 @@ where
     /// A scan whose buffer has passed the cut makes no progress until
     /// [`DescriptionScan::take_batch`] takes it. Stepping a finished scan is a defect in the
     /// driver.
-    pub(super) fn step(&mut self, fuel: &mut usize) -> DescriptionScanOutcome {
-        if let Some(ended) = &self.ended {
+    pub(crate) fn step(&mut self, fuel: &mut usize) -> DescriptionScanOutcome {
+        if self.ended {
             soft_panic_or_log!("description scan stepped after it ended");
-            return DescriptionScanOutcome::Finished(ended.clone());
+            return DescriptionScanOutcome::Finished;
         }
         if self.past_cut() {
             return DescriptionScanOutcome::Suspended;
         }
 
-        if let Some((errors, filter)) = &mut self.errors {
-            match errors.step(filter, self.target_id, fuel) {
-                ErrorScanStep::OutOfFuel => return DescriptionScanOutcome::Suspended,
-                ErrorScanStep::Finished(Err(error)) => return self.fail(error),
-                // Dropped here, so a scan in its ok walk stops pinning error batches.
-                ErrorScanStep::Finished(Ok(_)) => self.errors = None,
+        if let Some(errors) = &mut self.errors {
+            if !errors.step_description(&self.range, fuel, &mut self.error_buffer) {
+                return DescriptionScanOutcome::Suspended;
             }
+            // Dropped here, so a scan in its ok walk stops pinning error batches.
+            self.errors = None;
         }
 
         loop {
@@ -152,42 +204,40 @@ where
                         return DescriptionScanOutcome::Suspended;
                     }
                 }
+                DescriptionStep::Errors(errors) => self.error_buffer.extend(errors),
                 DescriptionStep::OutOfFuel => return DescriptionScanOutcome::Suspended,
-                DescriptionStep::Error(error) => return self.fail(error),
                 DescriptionStep::Done => {
-                    self.ended = Some(Ok(()));
-                    return DescriptionScanOutcome::Finished(Ok(()));
+                    self.ended = true;
+                    return DescriptionScanOutcome::Finished;
                 }
             }
         }
     }
 
-    /// Takes the buffered updates, consolidated per `(time, row)`, once they have passed the cut
-    /// or the scan has finished. Returns `None` before that, and when nothing remains.
+    /// Takes the buffered updates, consolidated, once the row updates have passed the cut or the
+    /// scan has finished. Returns `None` before that, and when nothing remains. The error updates
+    /// are taken once the scan has finished.
     ///
     /// Equal `(time, row)` pairs that a cut separated land in different hand-outs.
-    pub(super) fn take_batch(&mut self) -> Option<Vec<(Row, Timestamp, Diff)>> {
-        if !self.past_cut() && self.ended.is_none() {
+    pub(crate) fn take_batch(&mut self) -> Option<DescriptionUpdates> {
+        if !self.past_cut() && !self.ended {
             return None;
         }
         self.buffered_bytes = 0;
-        let mut batch = mem::take(&mut self.buffer);
-        consolidate_updates(&mut batch);
+        let mut batch = DescriptionUpdates {
+            rows: mem::take(&mut self.buffer),
+            errors: if self.ended {
+                mem::take(&mut self.error_buffer)
+            } else {
+                Vec::new()
+            },
+        };
+        batch.consolidate();
         (!batch.is_empty()).then_some(batch)
     }
 
     fn past_cut(&self) -> bool {
         self.buffered_bytes > self.cut_bytes
-    }
-
-    /// Ends the scan with `error`, discarding what it has buffered.
-    fn fail(&mut self, error: PeekError) -> DescriptionScanOutcome {
-        self.errors = None;
-        self.buffer = Vec::new();
-        self.buffered_bytes = 0;
-        let message = error.to_string();
-        self.ended = Some(Err(message.clone()));
-        DescriptionScanOutcome::Finished(Err(message))
     }
 }
 
@@ -209,7 +259,7 @@ where
         >,
     Self: Send + 'static,
 {
-    type Batch = Vec<(Row, Timestamp, Diff)>;
+    type Batch = DescriptionUpdates;
     type Outcome = DescriptionScanOutcome;
 
     fn step(&mut self, _config: &OffloadConfig, fuel: &mut usize) -> DescriptionScanOutcome {

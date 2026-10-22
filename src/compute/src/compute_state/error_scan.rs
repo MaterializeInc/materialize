@@ -8,6 +8,7 @@
 
 use std::time::{Duration, Instant};
 
+use differential_dataflow::consolidation::consolidate;
 use differential_dataflow::trace::cursor::{CursorList, cursor_list};
 use differential_dataflow::trace::{BatchReader, Cursor, Navigable, TraceReader};
 use mz_compute_client::protocol::response::PeekError;
@@ -27,22 +28,6 @@ pub(super) type ErrsHandle = PaddedTrace<ErrAgent<Timestamp, Diff>>;
 
 /// The batch type of an index's error trace.
 pub(super) type ErrsBatch = <ErrsHandle as TraceReader>::Batch;
-
-/// Which error updates make a walk answer with an error.
-#[derive(Clone, Debug)]
-pub(super) enum ErrorFilter {
-    /// Updates at times less than or equal to the timestamp. A key accumulating to a negative
-    /// multiplicity is a defect of the trace.
-    AtOrBefore(Timestamp),
-    /// Updates the description range emits. Any nonzero accumulation of a key poisons the
-    /// description, negative ones included, because a description may begin after the insertion
-    /// that a retraction inside it cancels.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the batched subscribe sink is not wired up")
-    )]
-    Description(DescriptionRange),
-}
 
 /// A walk over an index peek's error trace, suspendable between cursor positions.
 ///
@@ -108,7 +93,7 @@ where
         >,
 {
     /// Opens a walk over held `batches`, which must include every held batch that overlaps the
-    /// filter.
+    /// range it walks.
     #[cfg_attr(
         not(test),
         expect(dead_code, reason = "the batched subscribe sink is not wired up")
@@ -143,7 +128,7 @@ where
     /// outcome and drops the walk, so a finished peek stops pinning error batches.
     pub(super) fn step(
         &mut self,
-        filter: &ErrorFilter,
+        peek_timestamp: Timestamp,
         target_id: GlobalId,
         fuel: &mut usize,
     ) -> ErrorScanStep {
@@ -167,17 +152,11 @@ where
 
             let mut copies = Diff::ZERO;
             self.cursor.map_times(&self.storage, |time, diff| {
-                let included = match filter {
-                    ErrorFilter::AtOrBefore(peek_timestamp) => time.less_equal(peek_timestamp),
-                    ErrorFilter::Description(range) => range
-                        .place(<B::Cursor as Cursor>::owned_time(time))
-                        .is_some(),
-                };
-                if included {
+                if time.less_equal(&peek_timestamp) {
                     copies += diff;
                 }
             });
-            if copies.is_negative() && matches!(filter, ErrorFilter::AtOrBefore(_)) {
+            if copies.is_negative() {
                 let error = self.cursor.key(&self.storage);
                 error!(
                     target = %target_id, diff = %copies, %error,
@@ -189,7 +168,7 @@ where
                     -copies, error,
                 ))));
             }
-            if !copies.is_zero() {
+            if copies.is_positive() {
                 let error = self.cursor.key(&self.storage).deserialize();
                 break ErrorScanStep::Finished(Err(error.into()));
             }
@@ -198,6 +177,50 @@ where
 
         self.scan_time += step_start.elapsed();
         outcome
+    }
+
+    /// Advances a walk over the error updates `range` emits until the cursor is exhausted or
+    /// `fuel` runs out, and appends the updates it visits to `updates`. Decrements `fuel` by the
+    /// number of cursor positions visited, and returns whether the walk reached its end.
+    ///
+    /// The walk visits each error once, so the updates it appends over all its steps are
+    /// consolidated per `(time, error)`, retractions included. It ignores the row-iteration limit.
+    pub(super) fn step_description(
+        &mut self,
+        range: &DescriptionRange,
+        fuel: &mut usize,
+        updates: &mut Vec<(DataflowErrorSer, Timestamp, Diff)>,
+    ) -> bool {
+        let step_start = Instant::now();
+        let mut times = Vec::new();
+        let finished = loop {
+            if !self.cursor.key_valid(&self.storage) {
+                break true;
+            }
+            if *fuel == 0 {
+                break false;
+            }
+            *fuel -= 1;
+
+            times.clear();
+            self.cursor.map_times(&self.storage, |time, diff| {
+                if let Some(time) = range.place(<B::Cursor as Cursor>::owned_time(time)) {
+                    times.push((time, *diff));
+                }
+            });
+            consolidate(&mut times);
+            if !times.is_empty() {
+                let error = self.cursor.key(&self.storage);
+                updates.extend(
+                    times
+                        .drain(..)
+                        .map(|(time, diff)| (error.clone(), time, diff)),
+                );
+            }
+            self.cursor.step_key(&self.storage);
+        };
+        self.scan_time += step_start.elapsed();
+        finished
     }
 }
 

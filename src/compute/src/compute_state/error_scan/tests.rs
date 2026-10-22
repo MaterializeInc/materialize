@@ -25,9 +25,6 @@ use crate::compute_state::description_iterator::DescriptionRange;
 /// The time at which the peeks in these tests read.
 pub(crate) const PEEK_TIMESTAMP: Timestamp = Timestamp::new(1);
 
-/// The filter of a peek reading at [`PEEK_TIMESTAMP`].
-const AT_PEEK: ErrorFilter = ErrorFilter::AtOrBefore(PEEK_TIMESTAMP);
-
 /// The updates that make up an error trace, in the form its batcher takes them.
 pub(crate) type ErrorUpdates = Vec<((DataflowErrorSer, ()), Timestamp, Diff)>;
 
@@ -89,7 +86,7 @@ fn run_sliced(scan: &mut ErrorScan, fuel_per_step: usize) -> (ErrorScanStep, usi
     // test instead of hanging it.
     for calls in 1..=100 {
         let mut fuel = fuel_per_step;
-        let outcome = scan.step(&AT_PEEK, GlobalId::User(1), &mut fuel);
+        let outcome = scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel);
         consumed += fuel_per_step - fuel;
         if !matches!(outcome, ErrorScanStep::OutOfFuel) {
             return (outcome, consumed, calls);
@@ -117,7 +114,7 @@ fn error_scan_is_fueled_and_resumable() {
 
     let mut scan = error_scan(updates.clone(), None);
     let mut fuel = usize::MAX;
-    let unbudgeted = scan.step(&AT_PEEK, GlobalId::User(1), &mut fuel);
+    let unbudgeted = scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel);
     assert_eq!(unbudgeted, expected());
     assert_eq!(usize::MAX - fuel, expected_fuel);
 
@@ -144,7 +141,7 @@ fn error_scan_threads_row_count_across_suspensions() {
 
     let mut scan = error_scan(updates.clone(), None);
     let mut fuel = usize::MAX;
-    let unbudgeted = scan.step(&AT_PEEK, GlobalId::User(1), &mut fuel);
+    let unbudgeted = scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel);
     assert_eq!(unbudgeted, ErrorScanStep::Finished(Ok(errors.len())));
     assert_eq!(usize::MAX - fuel, expected_fuel);
 
@@ -176,7 +173,7 @@ fn error_scan_row_iteration_limit_trips_at_the_same_key_when_sliced() {
 
     let mut scan = error_scan(updates.clone(), Some(limit));
     let mut fuel = usize::MAX;
-    let unbudgeted = scan.step(&AT_PEEK, GlobalId::User(1), &mut fuel);
+    let unbudgeted = scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel);
     assert_eq!(unbudgeted, expected());
     assert_eq!(usize::MAX - fuel, expected_fuel);
 
@@ -205,7 +202,7 @@ fn a_limit_adopted_mid_walk_counts_the_keys_already_examined() {
     let mut scan = error_scan(updates.clone(), None);
     let mut fuel = examined;
     assert_eq!(
-        scan.step(&AT_PEEK, GlobalId::User(1), &mut fuel),
+        scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel),
         ErrorScanStep::OutOfFuel
     );
     assert_eq!(fuel, 0);
@@ -216,7 +213,7 @@ fn a_limit_adopted_mid_walk_counts_the_keys_already_examined() {
     scan.set_row_iteration_limit(Some(limit));
     let mut fuel = usize::MAX;
     assert_eq!(
-        scan.step(&AT_PEEK, GlobalId::User(1), &mut fuel),
+        scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel),
         ErrorScanStep::Finished(Err(PeekError::RowIterationLimitExceeded { limit }))
     );
     assert_eq!(usize::MAX - fuel, 1);
@@ -227,13 +224,13 @@ fn a_limit_adopted_mid_walk_counts_the_keys_already_examined() {
     let mut scan = error_scan(updates, Some(limit));
     let mut fuel = limit;
     assert_eq!(
-        scan.step(&AT_PEEK, GlobalId::User(1), &mut fuel),
+        scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel),
         ErrorScanStep::OutOfFuel
     );
     scan.set_row_iteration_limit(None);
     let mut fuel = usize::MAX;
     assert_eq!(
-        scan.step(&AT_PEEK, GlobalId::User(1), &mut fuel),
+        scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel),
         ErrorScanStep::Finished(Ok(errors.len()))
     );
 }
@@ -242,97 +239,111 @@ fn frontier(time: u64) -> Antichain<Timestamp> {
     Antichain::from_elem(Timestamp::new(time))
 }
 
-/// Walks a single-batch error trace holding `updates` under a description filter.
-fn scan_description(updates: ErrorUpdates, range: DescriptionRange) -> ErrorScanStep {
+/// Walks a single-batch error trace holding `updates` over `range`, and returns the updates the
+/// walk emits.
+fn scan_description(
+    updates: ErrorUpdates,
+    range: DescriptionRange,
+) -> Vec<(DataflowErrorSer, Timestamp, Diff)> {
     let mut scan = ErrorScan::from_batches(vec![error_batch(updates)]);
     let mut fuel = usize::MAX;
-    scan.step(
-        &ErrorFilter::Description(range),
-        GlobalId::User(1),
-        &mut fuel,
-    )
+    let mut emitted = Vec::new();
+    assert!(scan.step_description(&range, &mut fuel, &mut emitted));
+    emitted
 }
 
-/// A first description `[as_of, upper)` of a connection starting at `start`.
-fn first(as_of: u64, upper: u64, start: u64) -> DescriptionRange {
+/// A first description `[as_of, upper)`.
+fn first(as_of: u64, upper: u64) -> DescriptionRange {
     DescriptionRange::First {
         as_of: frontier(as_of),
         upper: frontier(upper),
-        start: Timestamp::new(start),
+    }
+}
+
+fn later(lower: u64, upper: u64) -> DescriptionRange {
+    DescriptionRange::Later {
+        lower: frontier(lower),
+        upper: frontier(upper),
     }
 }
 
 #[mz_ore::test]
-fn an_error_emitted_before_the_start_is_ignored() {
+fn a_first_description_accumulates_errors_into_the_as_of() {
     let err = error(0);
-    // Emitted at the as-of 5, which a subscribe starting at 6 does not report.
-    let at_as_of = vec![((err.clone(), ()), Timestamp::new(4), Diff::ONE)];
+    let updates = vec![
+        ((err.clone(), ()), Timestamp::new(2), Diff::ONE),
+        ((err.clone(), ()), Timestamp::new(4), Diff::ONE),
+        ((err.clone(), ()), Timestamp::new(6), Diff::ONE),
+        ((err.clone(), ()), Timestamp::new(8), Diff::ONE),
+    ];
     assert_eq!(
-        scan_description(at_as_of.clone(), first(5, 8, 6)),
-        ErrorScanStep::Finished(Ok(1))
-    );
-    assert_eq!(
-        scan_description(at_as_of, first(5, 8, 5)),
-        ErrorScanStep::Finished(Err(err.deserialize().into())),
-        "a subscribe starting at the as-of reports it"
-    );
-    let at_start = vec![((err.clone(), ()), Timestamp::new(6), Diff::ONE)];
-    assert_eq!(
-        scan_description(at_start, first(5, 8, 6)),
-        ErrorScanStep::Finished(Err(err.deserialize().into()))
+        scan_description(updates, first(5, 8)),
+        vec![
+            (err.clone(), Timestamp::new(5), Diff::from(2)),
+            (err, Timestamp::new(6), Diff::ONE),
+        ],
+        "updates before the as-of meet at it, and the upper bounds the range"
     );
 }
 
 #[mz_ore::test]
-fn a_description_with_an_error_inside_it_is_poisoned() {
-    let err = error(0);
-    let updates = vec![((err.clone(), ()), Timestamp::new(4), Diff::ONE)];
-    let later = DescriptionRange::Later {
-        lower: frontier(3),
-        upper: frontier(6),
-    };
-    assert_eq!(
-        scan_description(updates.clone(), later),
-        ErrorScanStep::Finished(Err(err.deserialize().into()))
-    );
-    // The first description sums everything before its upper, whatever the as-of.
-    assert_eq!(
-        scan_description(updates, first(5, 6, 5)),
-        ErrorScanStep::Finished(Err(err.deserialize().into()))
-    );
-}
-
-#[mz_ore::test]
-fn an_error_outside_the_description_is_ignored() {
+fn a_later_description_emits_its_errors_at_their_times() {
     let err = error(0);
     let updates = vec![
         ((err.clone(), ()), Timestamp::new(1), Diff::ONE),
+        ((err.clone(), ()), Timestamp::new(4), Diff::ONE),
         ((err.clone(), ()), Timestamp::new(8), Diff::ONE),
     ];
-    let later = DescriptionRange::Later {
-        lower: frontier(3),
-        upper: frontier(6),
-    };
     assert_eq!(
-        scan_description(updates, later),
-        ErrorScanStep::Finished(Ok(1))
+        scan_description(updates, later(3, 6)),
+        vec![(err, Timestamp::new(4), Diff::ONE)]
     );
 }
 
 #[mz_ore::test]
-fn a_retracted_error_inside_a_later_description_poisons_it() {
+fn a_retraction_inside_a_later_description_is_emitted() {
     let err = error(0);
-    // The insertion precedes the description, so inside it only the retraction accumulates.
+    // The insertion precedes the description, so inside it only the retraction remains.
     let updates = vec![
         ((err.clone(), ()), Timestamp::new(1), Diff::ONE),
         ((err.clone(), ()), Timestamp::new(4), Diff::MINUS_ONE),
     ];
-    let later = DescriptionRange::Later {
-        lower: frontier(3),
-        upper: frontier(6),
-    };
     assert_eq!(
-        scan_description(updates, later),
-        ErrorScanStep::Finished(Err(err.deserialize().into()))
+        scan_description(updates, later(3, 6)),
+        vec![(err, Timestamp::new(4), Diff::MINUS_ONE)]
     );
+}
+
+#[mz_ore::test]
+fn errors_that_cancel_in_the_first_description_are_not_emitted() {
+    let err = error(0);
+    let updates = vec![
+        ((err.clone(), ()), Timestamp::new(1), Diff::ONE),
+        ((err.clone(), ()), Timestamp::new(4), Diff::MINUS_ONE),
+    ];
+    assert_eq!(scan_description(updates, first(5, 8)), vec![]);
+}
+
+/// The walk continues past the first error, and slicing it neither drops nor repeats one.
+#[mz_ore::test]
+fn the_description_walk_emits_every_error_when_sliced() {
+    let errors: Vec<DataflowErrorSer> = (0..16).map(error).collect();
+    let updates: Vec<_> = errors.iter().flat_map(holding).collect();
+    let expected = scan_description(updates.clone(), later(0, 5));
+    assert_eq!(expected.len(), errors.len());
+
+    let mut scan = ErrorScan::from_batches(vec![error_batch(updates)]);
+    let range = later(0, 5);
+    let mut emitted = Vec::new();
+    let mut calls = 0;
+    loop {
+        calls += 1;
+        let mut fuel = 3;
+        if scan.step_description(&range, &mut fuel, &mut emitted) {
+            break;
+        }
+        assert_eq!(fuel, 0, "a walk that stops early spent its fuel");
+    }
+    assert!(calls > 1, "the budget did not slice the walk");
+    assert_eq!(emitted, expected);
 }

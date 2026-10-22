@@ -13,7 +13,6 @@ use differential_dataflow::consolidation::consolidate;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::cursor::{CursorList, cursor_list};
 use differential_dataflow::trace::{BatchReader, Cursor, Navigable};
-use mz_compute_client::protocol::response::PeekError;
 use mz_expr::SafeMfpPlan;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, Row, RowArena, Timestamp};
@@ -21,6 +20,7 @@ use timely::order::PartialOrder;
 use timely::progress::Antichain;
 
 use crate::compute_state::peek_result_iterator::evaluate_position;
+use crate::render::errors::DataflowErrorSer;
 
 /// The times a [`DescriptionIterator`] emits, and the time it emits each one at.
 #[cfg_attr(
@@ -30,17 +30,13 @@ use crate::compute_state::peek_result_iterator::evaluate_position;
 #[derive(Clone, Debug)]
 pub(super) enum DescriptionRange {
     /// The first description of a scan rendered at `as_of`. Emits every update with a time
-    /// before `upper`, at that time advanced to `as_of`, if that time is at or after `start`.
-    ///
-    /// The placed time decides for rows, for the `map_filter_project` run on them, and for
-    /// errors alike, so a subscribe fails on nothing before `start`, which it does not report.
+    /// before `upper`, at that time advanced to `as_of`, rows and errors alike.
     First {
         as_of: Antichain<Timestamp>,
         upper: Antichain<Timestamp>,
-        start: Timestamp,
     },
     /// A description after the first. Emits every update with `lower <= time < upper`, at its
-    /// own time. A sink must not cut one with `lower` before its `start`.
+    /// own time.
     Later {
         lower: Antichain<Timestamp>,
         upper: Antichain<Timestamp>,
@@ -51,16 +47,12 @@ impl DescriptionRange {
     /// Returns the time an update at `time` is emitted at, or `None` if the range excludes it.
     pub(super) fn place(&self, mut time: Timestamp) -> Option<Timestamp> {
         match self {
-            DescriptionRange::First {
-                as_of,
-                upper,
-                start,
-            } => {
+            DescriptionRange::First { as_of, upper } => {
                 if upper.less_equal(&time) {
                     return None;
                 }
                 time.advance_by(as_of.borrow());
-                (*start <= time).then_some(time)
+                Some(time)
             }
             DescriptionRange::Later { lower, upper } => {
                 (lower.less_equal(&time) && !upper.less_equal(&time)).then_some(time)
@@ -75,9 +67,9 @@ pub(super) enum DescriptionStep {
     /// The updates of one cursor position, consolidated per time and never empty. Diffs may be
     /// negative.
     Updates(Vec<(Row, Timestamp, Diff)>),
-    /// Evaluating the `map_filter_project` failed. The scan is over, and further steps return
-    /// [`DescriptionStep::Done`].
-    Error(PeekError),
+    /// Evaluating the `map_filter_project` on one cursor position failed. The position's updates
+    /// become updates of the error, consolidated per time and never empty. The scan continues.
+    Errors(Vec<(DataflowErrorSer, Timestamp, Diff)>),
     /// Every position has been visited. Further steps also return `Done`, and cost no fuel.
     Done,
     /// The budget is spent. The scan resumes at the next unvisited position.
@@ -99,7 +91,6 @@ pub(super) struct DescriptionIterator<B: Navigable> {
     datum_vec: DatumVec,
     /// Scratch space for the in-range times of the current position.
     times: Vec<(Timestamp, Diff)>,
-    exhausted: bool,
 }
 
 #[cfg_attr(
@@ -132,20 +123,16 @@ where
             row_builder: Row::default(),
             datum_vec: DatumVec::new(),
             times: Vec::new(),
-            exhausted: false,
         }
     }
 
-    /// Advances until a cursor position yields updates, the batches are exhausted, an error
-    /// occurs, or `fuel` runs out. Charges one unit of `fuel` per cursor position visited,
+    /// Advances until a cursor position yields updates or errors, the batches are exhausted, or
+    /// `fuel` runs out. Charges one unit of `fuel` per cursor position visited,
     /// whether or not the position yields updates, so the total cost of a scan does not depend
     /// on how it is sliced.
     ///
     /// A zero budget makes no progress and returns [`DescriptionStep::OutOfFuel`].
     pub(super) fn step(&mut self, fuel: &mut usize) -> DescriptionStep {
-        if self.exhausted {
-            return DescriptionStep::Done;
-        }
         loop {
             // Validity checks run before the charge, so an exhausted scan costs nothing.
             if !self.cursor.key_valid(&self.storage) {
@@ -163,23 +150,18 @@ where
             }
             *fuel -= 1;
 
-            match self.extract_current_updates() {
-                Ok(updates) => {
-                    self.cursor.step_val(&self.storage);
-                    if !updates.is_empty() {
-                        return DescriptionStep::Updates(updates);
-                    }
-                }
-                Err(error) => {
-                    self.exhausted = true;
-                    return DescriptionStep::Error(error);
-                }
+            let step = self.extract_current_updates();
+            self.cursor.step_val(&self.storage);
+            if let Some(step) = step {
+                return step;
             }
         }
     }
 
-    /// Returns the in-range updates of the current position, consolidated per time.
-    fn extract_current_updates(&mut self) -> Result<Vec<(Row, Timestamp, Diff)>, PeekError> {
+    /// Returns the in-range updates of the current position, consolidated per time, or the
+    /// error evaluating the position raised at those times. Returns `None` if the position has
+    /// no in-range update or the `map_filter_project` filters it out.
+    fn extract_current_updates(&mut self) -> Option<DescriptionStep> {
         self.times.clear();
         let range = &self.range;
         let times = &mut self.times;
@@ -190,17 +172,17 @@ where
         });
         consolidate(&mut self.times);
         // A position with no update in the range is not part of the description's collection,
-        // so the `map_filter_project` must not run on it. An error it raised there would poison a
-        // description that does not contain the row.
+        // so the `map_filter_project` must not run on it. An error it raised there would be an
+        // update the description does not contain.
         if self.times.is_empty() {
-            return Ok(Vec::new());
+            return None;
         }
 
         let arena = RowArena::new();
         let key = self.cursor.key(&self.storage);
         let val = self.cursor.val(&self.storage);
         let mut datums = self.datum_vec.borrow();
-        let row = evaluate_position(
+        let evaluated = evaluate_position(
             &key,
             &val,
             None::<&Row>,
@@ -208,15 +190,25 @@ where
             &arena,
             &mut datums,
             &mut self.row_builder,
-        )?;
-        Ok(match row {
-            Some(row) => self
-                .times
-                .drain(..)
-                .map(|(time, diff)| (row.clone(), time, diff))
-                .collect(),
-            None => Vec::new(),
-        })
+        );
+        match evaluated {
+            Ok(Some(row)) => Some(DescriptionStep::Updates(
+                self.times
+                    .drain(..)
+                    .map(|(time, diff)| (row.clone(), time, diff))
+                    .collect(),
+            )),
+            Ok(None) => None,
+            Err(error) => {
+                let error = DataflowErrorSer::from(error);
+                Some(DescriptionStep::Errors(
+                    self.times
+                        .drain(..)
+                        .map(|(time, diff)| (error.clone(), time, diff))
+                        .collect(),
+                ))
+            }
+        }
     }
 }
 
