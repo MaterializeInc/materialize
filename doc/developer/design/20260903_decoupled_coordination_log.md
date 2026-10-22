@@ -54,19 +54,31 @@ A reduced rename transaction reproduces invalidation by six controller
 This matches the original CI startup window, without tracing its rejecting update.
 Evidence is in `scratch/cadence60-default/ci140154/runtime-boundary/`.
 
-Awaiting Aljoscha's decision: move managed-to-unmanaged lifecycle validation into
-catalog transaction admission, then exclude runtime bookkeeping from SQL planning
-invalidation, or exempt only equivalent initialization. Blanket exclusion alone
-can bypass the sequencer-only guard after catch-up. The independent boundary review
-is `ci140154/cluster-runtime-planning-boundary.md` under the same evidence root.
-No production correction is implemented.
+The explicit-DDL failures are known and deferred to Aljoscha's separate branch,
+not passing. Do not implement an admission-ownership correction, exempt startup
+updates, suppress revision checks or replay acknowledged DDL here. That branch
+may become a rebase target, but is not one for this closeout. The independent
+boundary review is `ci140154/cluster-runtime-planning-boundary.md` under the same
+evidence root.
 
 The restart fixture assumes that a 1h interval
 pauses publication, but startup/reconfiguration stagger from zero. Independent
 review identifies this as a pre-existing probabilistic assumption, not evidence
-against the 60s default. Keep its assertions and production scheduling unchanged
-pending a fixture decision. The full scratch run and unchanged CI retry pass,
-without repairing that probabilistic assumption.
+against the 60s default. The approved fixture correction is an explicit test-only
+pause of periodic requirement advancement/release and bound publication across
+adapters and replicas, synchronized through existing machinery before recording
+the bound. Acquisition, following, installation and committed-permission
+application remain active. Preserve assertions and production scheduling.
+The full scratch run and unchanged CI retry pass without repairing the
+probabilistic assumption. The deterministic correction is not yet verified.
+The local implementation uses the unsafe, default-false
+`unsafe_pause_catalog_read_protection_publication` setting. Static review found
+no implementation defect. Native coverage includes acquisition while paused and
+a peer pause discovered during conflict refresh. Prewarming race/failure paths
+have static review but no dedicated executable coverage. Rust formatting, Black,
+Ruff and Python syntax checks pass. Compilation and runtime checks await restored
+scratch authentication. Bootstrap's nonperiodic grant transfer/release remains
+active, outside the periodic pause contract.
 
 The exact CI140146 seed still needs resolution. Its 60s parallel shard 2 OOM
 repeats, killing quickstart at about 10.7GiB anonymous RSS. CI140148's 1s control
@@ -76,6 +88,11 @@ an unchanged ManyRows index bound through recovery, not attribution of memory to
 retained history. A bounded scratch initialization at the aggregate CI memory
 limit and 8-CPU quota completes without OOM, with quickstart below 2GiB RSS.
 It has no swap and different hardware, so it does not clear the CI failure.
+Unprofiled logs show long outstanding INSERTs but lack pre-kill worker-install
+milestones. The passing 1s control also overlaps ingestion and INSERTs, so this
+does not establish increased ingestion overlap or allocation ownership.
+Keep the repeated 60s OOM as the main product investigation, separate from known
+exclusions and the fixture correction.
 Evidence is under `scratch/cadence60-default/ci140146/parallel2-retry/` and
 `scratch/cadence60-memory/`.
 
