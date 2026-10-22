@@ -224,19 +224,19 @@ impl Coordinator {
     }
 
     #[instrument(level = "debug")]
-    /// Repacks `mz_cluster_replica_sizes` if `enforce_source_only_cluster_families`
+    /// Repacks `mz_cluster_replica_sizes` if `cluster_family_allowed_workloads`
     /// differs from the value its rows were packed with.
-    fn repack_replica_sizes_if_source_only_families_changed(&mut self) {
+    fn repack_replica_sizes_if_family_workloads_changed(&mut self) {
         let state = self.catalog().state();
-        let families = state.source_only_cluster_families();
-        if families == self.replica_sizes_source_only_families {
+        let family_workloads = state.family_allowed_workloads();
+        if family_workloads == self.replica_sizes_family_workloads {
             return;
         }
-        let mut updates = state
-            .pack_replica_size_updates(&self.replica_sizes_source_only_families, Diff::MINUS_ONE);
-        updates.extend(state.pack_replica_size_updates(&families, Diff::ONE));
+        let mut updates =
+            state.pack_replica_size_updates(&self.replica_sizes_family_workloads, Diff::MINUS_ONE);
+        updates.extend(state.pack_replica_size_updates(&family_workloads, Diff::ONE));
         let updates = state.resolve_builtin_table_updates(updates);
-        self.replica_sizes_source_only_families = families;
+        self.replica_sizes_family_workloads = family_workloads;
         let _notify = self.builtin_table_update().defer(updates);
     }
 
@@ -257,7 +257,7 @@ impl Coordinator {
         // idempotent reads, so we fire them once, up front.
         if system_config_changed {
             self.catalog().system_config().notify_all_callbacks();
-            self.repack_replica_sizes_if_source_only_families_changed();
+            self.repack_replica_sizes_if_family_workloads_changed();
         }
 
         let mut tables_to_drop = BTreeSet::new();

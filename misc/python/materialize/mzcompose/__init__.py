@@ -409,11 +409,11 @@ def get_variable_system_parameters(
         ),
         # sqllogictest and `TestHarness` sizes are all in the `legacy` family,
         # so enforcing it would reject nearly every query they run.
-        # `test/testdrive/source-only-cluster.td` sets it.
+        # `test/testdrive/cluster-workload-restrictions.td` sets it.
         VariableSystemParameter(
-            "enforce_source_only_cluster_families",
-            "[]",
-            ["[]"],
+            "cluster_family_allowed_workloads",
+            "{}",
+            ["{}"],
         ),
         VariableSystemParameter(
             "enable_simplify_from_less_existence",
@@ -1098,9 +1098,9 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
         disabled: bool = False,
         is_cc: bool = True,
         memory_limit: str = "4 GiB",
-        source_only: bool = False,
+        allowed_workloads: list[str] | None = None,
     ) -> dict[str, Any]:
-        return {
+        size: dict[str, Any] = {
             "cpu_exclusive": False,
             "cpu_limit": None,
             "credits_per_hour": f"{workers * scale}",
@@ -1109,17 +1109,26 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
             "is_cc": is_cc,
             "memory_limit": memory_limit,
             "scale": scale,
-            "source_only": source_only,
             "workers": workers,
             # "selectors": {},
         }
+        if allowed_workloads is not None:
+            size["allowed_workloads"] = allowed_workloads
+        return size
 
     replica_sizes = {
         bootstrap_cluster_replica_size(): replica_size(1, 1),
         "scale=2,workers=4": replica_size(2, 4),
         "scale=1,workers=1,legacy": replica_size(1, 1, is_cc=False),
         "scale=1,workers=2,legacy": replica_size(1, 2, is_cc=False),
-        "scale=1,workers=1,source-only": replica_size(1, 1, source_only=True),
+        "scale=1,workers=1,ingest-only": replica_size(
+            1, 1, allowed_workloads=["ingest"]
+        ),
+        "scale=1,workers=1,no-ingest": replica_size(
+            1,
+            1,
+            allowed_workloads=["sink", "compute_maintained", "compute_interactive"],
+        ),
         # Intentionally not following the naming scheme
         "free": replica_size(1, 1, disabled=True),
     }

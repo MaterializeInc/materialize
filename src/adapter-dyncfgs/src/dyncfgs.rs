@@ -190,12 +190,12 @@ pub const OIDC_AUDIENCE: Config<fn() -> serde_json::Value> = Config::new(
     ParameterScope::Environment,
 );
 
-/// Replica size families whose sizes are source-only, in addition to sizes
-/// that set `source_only` themselves.
-pub const ENFORCE_SOURCE_ONLY_CLUSTER_FAMILIES: Config<fn() -> serde_json::Value> = Config::new(
-    "enforce_source_only_cluster_families",
-    || serde_json::json!([]),
-    "Replica size families whose sizes are source-only. A JSON array of strings. Clusters using such a size cannot run queries or host objects other than sources.",
+/// The workload classes allowed per replica size family, in addition to what
+/// each size allows itself.
+pub const CLUSTER_FAMILY_ALLOWED_WORKLOADS: Config<fn() -> serde_json::Value> = Config::new(
+    "cluster_family_allowed_workloads",
+    || serde_json::json!({}),
+    "The workload classes that clusters using sizes of a family may run. A JSON object mapping family names to arrays of classes: ingest, sink, compute_maintained, compute_interactive. Families not listed allow every class.",
     ParameterScope::Environment,
 );
 
@@ -591,7 +591,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&READ_THEN_WRITE_MAX_DEPENDENCIES)
         .add(&OIDC_ISSUER)
         .add(&OIDC_AUDIENCE)
-        .add(&ENFORCE_SOURCE_ONLY_CLUSTER_FAMILIES)
+        .add(&CLUSTER_FAMILY_ALLOWED_WORKLOADS)
         .add(&OIDC_AUTHENTICATION_CLAIM)
         .add(&OIDC_GROUP_ROLE_SYNC_ENABLED)
         .add(&OIDC_GROUP_CLAIM)

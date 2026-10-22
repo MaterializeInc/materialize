@@ -552,7 +552,7 @@ impl PeekClient {
             &conn_catalog,
             &plan,
         )?;
-        coord::catalog_serving::check_source_only_cluster_restrictions(
+        coord::catalog_serving::check_cluster_workload_restrictions(
             catalog.state(),
             target_cluster_id,
             session,

@@ -182,7 +182,7 @@ impl Coordinator {
                 }
             }
             if let Some(cluster_id) = target_cluster_id {
-                if let Err(e) = catalog_serving::check_source_only_cluster_restrictions(
+                if let Err(e) = catalog_serving::check_cluster_workload_restrictions(
                     self.catalog().state(),
                     cluster_id,
                     ctx.session(),

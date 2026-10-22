@@ -114,7 +114,7 @@ any kind of capacity planning.
 | `memory_bytes`         | [`uint8`]   | The RAM allocation per process, in bytes.                                                                                                                    |
 | `disk_bytes`           | [`uint8`]   | The disk allocation per process.                                                                                                                             |
 | `credits_per_hour`     | [`numeric`] | The number of compute credits consumed per hour.                                                                                                             |
-| `source_only`          | [`boolean`] | Whether clusters of this size can only host sources. Such clusters cannot run queries or host other objects.                                                 |
+| `allowed_workloads`    | [`text list`] | The workload classes that clusters of this size may run: `ingest`, `sink`, `compute_maintained`, and `compute_interactive`.                                   |
 
 ### `mz_cluster_replicas`
 

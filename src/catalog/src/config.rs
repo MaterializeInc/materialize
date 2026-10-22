@@ -192,7 +192,7 @@ impl ClusterReplicaSizeMap {
                             family: None,
                             swap_enabled: false,
                             disabled: false,
-                            source_only: false,
+                            allowed_workloads: None,
                             selectors: BTreeMap::default(),
                         },
                     )
@@ -217,7 +217,7 @@ impl ClusterReplicaSizeMap {
                     family: None,
                     swap_enabled: false,
                     disabled: false,
-                    source_only: false,
+                    allowed_workloads: None,
                     selectors: BTreeMap::default(),
                 },
             );
@@ -237,7 +237,7 @@ impl ClusterReplicaSizeMap {
                     family: None,
                     swap_enabled: false,
                     disabled: false,
-                    source_only: false,
+                    allowed_workloads: None,
                     selectors: BTreeMap::default(),
                 },
             );
@@ -257,7 +257,7 @@ impl ClusterReplicaSizeMap {
                     family: None,
                     swap_enabled: false,
                     disabled: false,
-                    source_only: false,
+                    allowed_workloads: None,
                     selectors: BTreeMap::default(),
                 },
             );
@@ -278,7 +278,7 @@ impl ClusterReplicaSizeMap {
                 family: None,
                 swap_enabled: false,
                 disabled: false,
-                source_only: false,
+                allowed_workloads: None,
                 selectors: BTreeMap::default(),
             },
         );
@@ -298,7 +298,7 @@ impl ClusterReplicaSizeMap {
                 family: None,
                 swap_enabled: false,
                 disabled: true,
-                source_only: false,
+                allowed_workloads: None,
                 selectors: BTreeMap::default(),
             },
         );

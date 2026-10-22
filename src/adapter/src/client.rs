@@ -1746,7 +1746,7 @@ impl SessionClient {
                 )?;
             }
             if let Some(cluster_id) = target_cluster_id {
-                crate::coord::catalog_serving::check_source_only_cluster_restrictions(
+                crate::coord::catalog_serving::check_cluster_workload_restrictions(
                     catalog.state(),
                     cluster_id,
                     session,

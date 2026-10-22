@@ -1711,17 +1711,13 @@ impl Catalog {
                     }
                 }
 
-                // Source-only clusters may host sources and nothing else.
-                if let Some(cluster_id) = item.cluster_id()
-                    && !matches!(item, CatalogItem::Source(_))
-                {
-                    let cluster = &state.clusters_by_id[&cluster_id];
-                    if state.source_only_cluster_restricted(cluster, session.map(|s| s.user())) {
-                        return Err(AdapterError::SourceOnlyCluster {
-                            cluster: cluster.name.clone(),
-                            action: format!("host {} {}", item.typ(), name.item.quoted()),
-                        });
-                    }
+                if let Some((cluster_id, class)) = state.item_workload(&item) {
+                    state.ensure_cluster_allows_workload(
+                        &state.clusters_by_id[&cluster_id],
+                        class,
+                        session.map(|s| s.user()),
+                        || format!("host {} {}", item.typ(), name.item.quoted()),
+                    )?;
                 }
 
                 let owner_privileges = vec![rbac::owner_privilege(item.typ().into(), owner_id)];
