@@ -1535,6 +1535,7 @@ mod test {
                                 let source_statistics = SourceStatistics::new(
                                     source_id, 0, &stats_defs, source_id, &ShardId::new(),
                                     envelope, Antichain::from_elem(Timestamp::minimum()),
+                                    Antichain::from_elem(Timestamp::minimum()),
                                 );
                                 let source_config = SourceExportCreationConfig {
                                     id: source_id,
@@ -2025,6 +2026,7 @@ mod test {
                             source_id,
                             &ShardId::new(),
                             envelope,
+                            Antichain::from_elem(Timestamp::minimum()),
                             Antichain::from_elem(Timestamp::minimum()),
                         );
                         let source_config = SourceExportCreationConfig {

@@ -1610,6 +1610,60 @@ def workflow_pg_seal_on_replay(c: Composition) -> None:
         c.run_testdrive_files("pg-seal-on-replay/02-verify.td")
 
 
+def workflow_pg_snapshot_committed_late_add(c: Composition) -> None:
+    """Test that a table added to an established source reports
+    snapshot_committed = false while its snapshot is held. The ingestion renders
+    with an as_of past the minimum, so the held snapshot lands at that as_of
+    rather than at 0."""
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(t_paused)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "postgres", "clusterd1")
+
+        c.run_testdrive_files("pg-snapshot-freshness/01-setup.td")
+
+        # Each ingestion render opens a leased reader on the remap shard and
+        # holds it at the since it read for 300s (`deferred_expire` in
+        # async_storage_worker.rs). The setup's renders read a since of 0, so a
+        # table added before they expire renders with an as_of of 0.
+        time.sleep(330)
+
+        c.testdrive(
+            "> CREATE TABLE t_paused FROM SOURCE mz_source (REFERENCE t_paused);"
+        )
+
+        # A new table reads snapshot_committed = false until its first report,
+        # which would satisfy the assertion vacuously. WAL written after the
+        # table is added can only reach its offset_known through a report.
+        lsn = c.sql_query(
+            "INSERT INTO t_before VALUES (3) RETURNING pg_current_wal_insert_lsn() - '0/0'",
+            service="postgres",
+            user="postgres",
+            password="postgres",
+            database="postgres",
+        )[0][0]
+
+        c.testdrive(dedent(f"""
+                > SELECT u.offset_known::numeric >= {lsn}
+                  FROM mz_internal.mz_source_statuses s
+                  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+                  WHERE s.name = 't_paused'
+                true
+
+                > SELECT u.snapshot_committed
+                  FROM mz_internal.mz_source_statuses s
+                  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+                  WHERE s.name = 't_paused'
+                false
+                """))
+
+
 def workflow_sink_failure(c: Composition) -> None:
     """Test specific sink failure scenarios"""
 
