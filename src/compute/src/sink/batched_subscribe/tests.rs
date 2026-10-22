@@ -207,43 +207,6 @@ fn an_empty_input_frontier_ends_the_chain() {
     assert_eq!(minter.mint(Antichain::new().borrow()), None);
 }
 
-#[mz_ore::test]
-fn an_error_poisons_its_description_and_nothing_is_minted_after() {
-    let mut minter = Minter::new(frontier(0), Antichain::new());
-    minter
-        .errors
-        .push((division_by_zero(), Timestamp::from(4), Diff::ONE));
-    assert_eq!(
-        minter.mint(frontier(3).borrow()),
-        Some(description(0, Some(3), true, false)),
-    );
-    assert!(!minter.done, "the error lies beyond the first description");
-    assert_eq!(
-        minter.mint(frontier(5).borrow()),
-        Some(description(3, Some(5), false, false)),
-    );
-    assert!(minter.done);
-    assert_eq!(minter.mint(frontier(9).borrow()), None);
-}
-
-#[mz_ore::test]
-fn errors_that_cancel_within_a_description_poison_nothing() {
-    let mut minter = Minter::new(frontier(0), Antichain::new());
-    minter.errors.extend([
-        (division_by_zero(), Timestamp::from(1), Diff::ONE),
-        (division_by_zero(), Timestamp::from(2), Diff::MINUS_ONE),
-    ]);
-    assert_eq!(
-        minter.mint(frontier(3).borrow()),
-        Some(description(0, Some(3), true, false)),
-    );
-    assert!(!minter.done);
-    assert!(
-        minter.errors.is_empty(),
-        "the description consumed its errors"
-    );
-}
-
 /// A response, reduced to what the tests assert on. Updates are `(value, time, diff)` triples of
 /// one-column rows, sorted.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -403,6 +366,8 @@ struct Setup {
     shard_id: ShardId,
     permits: Arc<PeekPermits>,
     cut_bytes: usize,
+    /// The connection's `start`.
+    start: Timestamp,
 }
 
 impl Setup {
@@ -414,6 +379,7 @@ impl Setup {
             shard_id: ShardId::new(),
             permits: Arc::new(PeekPermits::new(1)),
             cut_bytes: super::SCAN_CUT_BYTES,
+            start: Timestamp::MIN,
         }
     }
 
@@ -471,6 +437,7 @@ fn new_writer_with(
 ) -> Writer {
     let mut writer = Writer::new(
         sink_id,
+        setup.start,
         identity(),
         InlineBudget::new(&setup.config),
         setup.tiers(metrics),
@@ -679,7 +646,7 @@ impl Rig {
                 frontier(as_of),
                 up_to,
                 ok_batches.clone(),
-                err_collection,
+                err_batches.clone(),
             );
             let (descriptions, broadcast) = minted.broadcast().probe();
             write(
@@ -822,7 +789,7 @@ fn both_workers_answer_a_broadcast_description_once_their_frontiers_pass() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
-fn an_error_on_another_worker_stops_the_mint() {
+fn an_error_on_another_worker_poisons_every_later_description() {
     let sink_id = sink_minted_on_worker_zero();
     let responses = two_workers(move |worker, barrier| {
         let index = worker.index();
@@ -836,7 +803,7 @@ fn an_error_on_another_worker_stops_the_mint() {
         step_until(worker, || rig.buffer.borrow().len() == 1);
         barrier.wait();
 
-        // Only worker 1 holds the error. The mint worker learns of it through the exchange.
+        // Only worker 1 holds the error.
         if index == 1 {
             rig.errs
                 .update_at(division_by_zero(), Timestamp::from(4), Diff::ONE);
@@ -845,10 +812,14 @@ fn an_error_on_another_worker_stops_the_mint() {
         step_until(worker, || rig.buffer.borrow().len() == 2);
         barrier.wait();
 
-        // A mint that kept going would mint `[6, 9)` here, which both writers could answer.
+        // The mint keeps going, in case the cutover drops the poisoned batch.
+        if index == 0 {
+            rig.oks
+                .update_at((row(2), Row::default()), Timestamp::from(7), Diff::ONE);
+        }
         rig.advance(9);
-        step_until(worker, || !rig.descriptions.less_than(&Timestamp::from(9)));
-        settle(worker);
+        step_until(worker, || rig.buffer.borrow().len() == 3);
+        drop(rig.protocol.borrow_mut().take());
         Rc::clone(&rig.buffer)
     });
 
@@ -858,10 +829,56 @@ fn an_error_on_another_worker_stops_the_mint() {
             vec![
                 batch(0, Some(3), &[(1, 1, 1)], false),
                 batch(3, Some(6), &[], false),
+                batch(6, Some(9), &[(2, 7, 1)], false),
+                Reported::DroppedAt(Some(9)),
             ],
-            vec![batch(0, Some(3), &[], false), batch(3, Some(6), &[], true),],
+            vec![
+                batch(0, Some(3), &[], false),
+                batch(3, Some(6), &[], true),
+                batch(6, Some(9), &[], true),
+                Reported::DroppedAt(Some(9)),
+            ],
         ],
-        "the worker holding the error poisons its share, and no description follows",
+        "the worker holding the error repeats its poison on every later description",
+    );
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn an_error_before_the_start_poisons_nothing() {
+    let sink_id = GlobalId::User(1);
+    let responses = timely::execute_directly(move |worker| {
+        // A subscribe at as-of 2 without its snapshot starts at 3.
+        let setup = Setup {
+            start: Timestamp::from(3),
+            ..Setup::inline_only()
+        };
+        let mut rig = Rig::with_setup(worker, sink_id, 2, Antichain::new(), &setup);
+        rig.open_gate();
+        rig.errs
+            .update_at(division_by_zero(), Timestamp::from(1), Diff::ONE);
+        rig.oks
+            .update_at((row(1), Row::default()), Timestamp::from(2), Diff::ONE);
+        // The first description ends at `start`, so the cutover drops it.
+        rig.advance(3);
+        step_until(worker, || rig.buffer.borrow().len() == 1);
+        rig.oks
+            .update_at((row(2), Row::default()), Timestamp::from(4), Diff::ONE);
+        rig.advance(6);
+        step_until(worker, || rig.buffer.borrow().len() == 2);
+        drop(rig.protocol.borrow_mut().take());
+        reported(&rig.buffer)
+    });
+
+    assert_eq!(
+        responses,
+        vec![
+            // The snapshot row, placed at the as-of, precedes the start too.
+            batch(2, Some(3), &[], false),
+            batch(3, Some(6), &[(2, 4, 1)], false),
+            Reported::DroppedAt(Some(6)),
+        ],
+        "the error lies in the snapshot the subscribe does not report",
     );
 }
 

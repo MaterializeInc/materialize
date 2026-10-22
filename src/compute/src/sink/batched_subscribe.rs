@@ -33,7 +33,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::consolidation::{consolidate, consolidate_updates};
+use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchReader, TraceReader};
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
@@ -53,7 +53,7 @@ use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Stream;
-use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::vec::Broadcast;
@@ -193,7 +193,7 @@ impl<'scope> SinkRender<'scope> for BatchedSubscribeSinkConnection {
         let Arranged {
             stream: err_batches,
             trace,
-        } = KeyCollection::from(err_collection.clone())
+        } = KeyCollection::from(err_collection)
             .mz_arrange::<
                 ColumnationChunker<_>,
                 ErrBatcher<_, _>,
@@ -207,7 +207,7 @@ impl<'scope> SinkRender<'scope> for BatchedSubscribeSinkConnection {
             as_of.clone(),
             sink.up_to.clone(),
             ok_batches.clone(),
-            err_collection,
+            err_batches.clone(),
         );
 
         let protocol = Rc::new(RefCell::new(Some(Protocol {
@@ -248,6 +248,7 @@ impl<'scope> SinkRender<'scope> for BatchedSubscribeSinkConnection {
             err_batches,
             Writer::new(
                 sink_id,
+                self.start,
                 map_filter_project,
                 InlineBudget::new(&compute_state.worker_config),
                 tiers,
@@ -278,13 +279,23 @@ struct Description {
 }
 
 impl Description {
-    fn range(&self) -> DescriptionRange {
+    /// The range the description's scan emits, for a connection starting at `start`.
+    fn range(&self, start: Timestamp) -> DescriptionRange {
         if self.first {
             DescriptionRange::First {
                 as_of: self.lower.clone(),
                 upper: self.upper.clone(),
+                start,
             }
         } else {
+            // The first upper is beyond the as-of, and `start` is at most one step beyond it, as
+            // the adapter and `BatchedSubscribeSinkConnection::advance_as_of` set it.
+            soft_assert_or_log!(
+                self.lower.iter().all(|lower| start <= *lower),
+                "a later description [{:?}, {:?}) starts before the start {start}",
+                self.lower,
+                self.upper,
+            );
             DescriptionRange::Later {
                 lower: self.lower.clone(),
                 upper: self.upper.clone(),
@@ -301,9 +312,7 @@ struct Minter {
     /// Whether the next description is the first.
     first: bool,
     up_to: Antichain<Timestamp>,
-    /// The error updates no minted description covers yet.
-    errors: Vec<(DataflowErrorSer, Timestamp, Diff)>,
-    /// Whether the chain has ended, by completion, by an empty input frontier, or by an error.
+    /// Whether the chain has ended, by completion or by an empty input frontier.
     done: bool,
 }
 
@@ -313,15 +322,12 @@ impl Minter {
             lower: as_of,
             first: true,
             up_to,
-            errors: Vec::new(),
             done: false,
         }
     }
 
     /// Returns the next description, given that the input is complete before `frontier`, or
     /// `None` if the frontier allows none.
-    ///
-    /// `self.errors` must hold every error update before `frontier`.
     fn mint(&mut self, frontier: AntichainRef<Timestamp>) -> Option<Description> {
         if self.done {
             return None;
@@ -349,8 +355,10 @@ impl Minter {
             return None;
         }
 
-        let poisoned = self.take_poison(&upper);
-        self.done = poisoned || upper.is_empty();
+        // NOTE: A poisoned description does not end the chain. The cutover drops a poisoned batch
+        // that ends at or below the accepted upper, and a chain that ended there would stall the
+        // subscribe. The workers repeat the poison on every later description instead.
+        self.done = upper.is_empty();
         Some(Description {
             lower: std::mem::replace(&mut self.lower, upper.clone()),
             upper,
@@ -358,36 +366,17 @@ impl Minter {
             completion: false,
         })
     }
-
-    /// Removes the error updates before `upper` and returns whether any error accumulates to
-    /// nonzero across them, which poisons the description ending at `upper`.
-    ///
-    /// Every error update before the description's lower was removed when the previous
-    /// description was minted, so the updates removed here are exactly those the description
-    /// covers. The first description covers all updates before its upper.
-    fn take_poison(&mut self, upper: &Antichain<Timestamp>) -> bool {
-        let mut covered = Vec::new();
-        self.errors.retain(|(error, time, diff)| {
-            let before = !upper.less_equal(time);
-            if before {
-                covered.push((error.clone(), *diff));
-            }
-            !before
-        });
-        consolidate(&mut covered);
-        !covered.is_empty()
-    }
 }
 
 /// Renders the mint operator, which runs on one worker and emits the descriptions it cuts.
 ///
-/// Its input frontier is the meet of the ok arrangement's and the error input's frontiers.
+/// Its input frontier is the meet of the ok and the error arrangements' frontiers.
 fn mint<'scope>(
     sink_id: GlobalId,
     as_of: Antichain<Timestamp>,
     up_to: Antichain<Timestamp>,
     ok_batches: Stream<'scope, Timestamp, Vec<OkBatch>>,
-    errs: VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
+    err_batches: Stream<'scope, Timestamp, Vec<ErrBatch>>,
 ) -> Stream<'scope, Timestamp, Vec<Description>> {
     let scope = ok_batches.scope();
     let mint_worker = usize::cast_from(sink_id.hashed()) % scope.peers();
@@ -396,25 +385,16 @@ fn mint<'scope>(
     let mut op = OperatorBuilder::new(format!("BatchedSubscribeMint({sink_id})"), scope);
     let (output, descriptions) = op.new_output();
     let mut output = OutputBuilder::<_, CapacityContainerBuilder<Vec<Description>>>::from(output);
-    // Only the frontier of the ok batches matters here.
+    // Only the frontiers of the batches matter here.
     let mut ok_input = op.new_input(ok_batches, Pipeline);
-    // NOTE: The error collection is teed, since every worker also arranges it, and this copy
-    // takes a non-key exchange. The mint worker sees every error update, so it knows which
-    // description an error poisons and mints nothing after it. Error updates are rare, so the
-    // copy and the routing to one worker cost little.
-    let mint_target = u64::cast_from(mint_worker);
-    let mut err_input = op.new_input(errs.inner, Exchange::new(move |_| mint_target));
+    let mut err_input = op.new_input(err_batches, Pipeline);
 
     op.build(move |capabilities| {
         let mut capability = capabilities.into_iter().next().filter(|_| is_mint_worker);
         let mut minter = Minter::new(as_of, up_to);
         move |frontiers| {
             ok_input.for_each(|_, _| {});
-            err_input.for_each(|_, data| {
-                if !minter.done {
-                    minter.errors.append(data);
-                }
-            });
+            err_input.for_each(|_, _| {});
             let Some(cap) = capability.as_mut() else {
                 return;
             };
@@ -432,7 +412,6 @@ fn mint<'scope>(
             }
             if minter.done {
                 capability = None;
-                minter.errors = Vec::new();
             }
         }
     });
@@ -501,6 +480,8 @@ impl Drop for Protocol {
 /// The state of one worker's write operator.
 struct Writer {
     sink_id: GlobalId,
+    /// The connection's `start`, which the first description's range applies.
+    start: Timestamp,
     /// The descriptions received and not yet reported, oldest first.
     pending: VecDeque<Description>,
     /// The held batches, which the descriptions not yet reported need.
@@ -535,6 +516,7 @@ enum Scan {
 impl Writer {
     fn new(
         sink_id: GlobalId,
+        start: Timestamp,
         map_filter_project: SafeMfpPlan,
         budget: InlineBudget,
         tiers: Tiers,
@@ -542,6 +524,7 @@ impl Writer {
     ) -> Self {
         Self {
             sink_id,
+            start,
             pending: VecDeque::new(),
             held_oks: Vec::new(),
             held_errs: Vec::new(),
@@ -711,10 +694,7 @@ impl Writer {
                     shares
                 }
                 Err(error) => {
-                    // A scan error the error collection does not hold, such as one raised by the
-                    // `map_filter_project`, is local to this writer. The mint does not learn of
-                    // it and keeps minting until the controller drops the subscribe. The writer
-                    // releases all its batches once poisoned, so it cannot scan those later
+                    // The writer releases all its batches once poisoned, so it cannot scan later
                     // descriptions and reports each with the poison instead.
                     protocol.poison = Some(error);
                     Vec::new()
@@ -728,7 +708,7 @@ impl Writer {
     /// Opens the scan of `description`, and returns it with the number of updates in the ok
     /// batches it scans.
     fn open_scan(&self, description: &Description) -> (DescriptionScan<OkBatch, ErrBatch>, usize) {
-        let range = description.range();
+        let range = description.range(self.start);
         let ok_batches = range.select_batches(&self.held_oks);
         let held_updates = ok_batches.iter().map(|batch| batch.len()).sum();
         let err_batches = range.select_batches(&self.held_errs);
