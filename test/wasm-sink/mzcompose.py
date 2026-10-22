@@ -113,7 +113,14 @@ def build_guest() -> None:
         ],
         cwd=MZ_ROOT,
         env={
-            **os.environ,
+            # ci-builder exports host RUSTFLAGS (x86 target-cpu, `-Wl,...` link
+            # args) that apply to every target and break wasm-component-ld.
+            **{
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS")
+            },
+            "RUSTFLAGS": "",
             "CARGO_PROFILE_RELEASE_DEBUG": "false",
             "CARGO_PROFILE_RELEASE_STRIP": "true",
         },
