@@ -50,14 +50,15 @@ use timely::progress::{Antichain, ChangeBatch};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
+use crate::controller::cutover::{Cutover, CutoverDecision, trim_inline};
 use crate::controller::error::{
     CollectionMissing, ERROR_TARGET_REPLICA_FAILED, HydrationCheckBadTarget,
 };
 use crate::controller::instance_client::PeekError;
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
-    CollectionReadiness, ComputeControllerResponse, IntrospectionUpdates, PeekNotification,
-    ReplicaId, StorageCollections,
+    AcceptedBatch, AcceptedShare, CollectionReadiness, ComputeControllerResponse,
+    IntrospectionUpdates, PeekNotification, ReplicaId, StorageCollections,
 };
 use crate::logging::LogVariant;
 use crate::metrics::IntCounter;
@@ -67,8 +68,9 @@ use crate::protocol::command::{
 };
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, PeekError as ProtocolPeekError,
-    PeekResponse, StashedPeekResponse, StatusResponse, SubscribeBatch, SubscribeResponse,
+    BatchedSubscribeBatch, BatchedSubscribeResponse, ComputeResponse, CopyToResponse,
+    FrontiersResponse, PeekError as ProtocolPeekError, PeekResponse, Share, StashedPeekResponse,
+    StashedShare, StatusResponse, SubscribeBatch, SubscribeResponse,
 };
 use crate::stash::OwnedStash;
 
@@ -177,6 +179,13 @@ pub(super) struct Instance {
     /// on the subscribe's input. `subscribes` is only used to track which updates have been
     /// emitted, to decide if new ones should be emitted or suppressed.
     subscribes: BTreeMap<GlobalId, ActiveSubscribe>,
+    /// The cutovers of in-progress batched subscribes.
+    ///
+    /// New entries are added for all batched subscribes exported from dataflows created through
+    /// [`Instance::create_dataflow`]. The entry for a batched subscribe is removed once the
+    /// controller accepted its completion batch, once it is dropped, or once its target replica
+    /// failed. `DroppedAt` responses do not remove it.
+    batched_subscribes: BTreeMap<GlobalId, Cutover>,
     /// Tracks all in-progress COPY TOs.
     ///
     /// New entries are added for all s3 oneshot sinks (corresponding to a COPY TO) exported from
@@ -520,9 +529,9 @@ impl Instance {
         self.metrics
             .peek_count
             .set(u64::cast_from(self.peeks.len()));
-        self.metrics
-            .subscribe_count
-            .set(u64::cast_from(self.subscribes.len()));
+        self.metrics.subscribe_count.set(u64::cast_from(
+            self.subscribes.len() + self.batched_subscribes.len(),
+        ));
         self.metrics
             .copy_to_count
             .set(u64::cast_from(self.copy_tos.len()));
@@ -892,6 +901,7 @@ impl Instance {
             log_sources: _,
             peeks,
             subscribes,
+            batched_subscribes,
             copy_tos,
             history: _,
             command_rx: _,
@@ -923,6 +933,10 @@ impl Instance {
             .iter()
             .map(|(id, subscribe)| (id.to_string(), format!("{subscribe:?}")))
             .collect();
+        let batched_subscribes: BTreeMap<_, _> = batched_subscribes
+            .iter()
+            .map(|(id, cutover)| (id.to_string(), format!("{cutover:?}")))
+            .collect();
         let copy_tos: Vec<_> = copy_tos.iter().map(|id| id.to_string()).collect();
         let wallclock_lag_last_recorded = format!("{wallclock_lag_last_recorded:?}");
 
@@ -934,6 +948,7 @@ impl Instance {
             "collections": collections,
             "peeks": peeks,
             "subscribes": subscribes,
+            "batched_subscribes": batched_subscribes,
             "copy_tos": copy_tos,
             "wallclock_lag_last_recorded": wallclock_lag_last_recorded,
         }))
@@ -1000,6 +1015,7 @@ impl Instance {
             log_sources,
             peeks: Default::default(),
             subscribes: Default::default(),
+            batched_subscribes: Default::default(),
             copy_tos: Default::default(),
             history,
             command_rx,
@@ -1378,6 +1394,26 @@ impl Instance {
             );
             self.deliver_response(response);
         }
+        let to_drop: Vec<_> = self
+            .batched_subscribes
+            .keys()
+            .copied()
+            .filter(|subscribe_id| self.expect_collection(*subscribe_id).target_replica == Some(id))
+            .collect();
+        for subscribe_id in to_drop {
+            let cutover = self.batched_subscribes.remove(&subscribe_id).unwrap();
+            let frontier = cutover.accepted().clone();
+            let response = ComputeControllerResponse::BatchedSubscribeResponse(
+                subscribe_id,
+                AcceptedBatch {
+                    lower: frontier.clone(),
+                    upper: frontier,
+                    shares: Vec::new(),
+                    error: Some(ERROR_TARGET_REPLICA_FAILED.into()),
+                },
+            );
+            self.deliver_response(response);
+        }
 
         // Peeks targeting this replica might not be served anymore (if the replica is dropped).
         // If the replica has failed it might come back and respond to the peek later, but it still
@@ -1544,9 +1580,18 @@ impl Instance {
         // `subscribes` tracks streams of `SubscribeResponse`s, which batched subscribes do not
         // produce, so it holds only unbatched ones.
         for (subscribe_id, sink) in &dataflow.sink_exports {
-            if let ComputeSinkConnection::Subscribe(_) = sink.connection {
-                self.subscribes
-                    .insert(*subscribe_id, ActiveSubscribe::default());
+            match &sink.connection {
+                ComputeSinkConnection::Subscribe(_) => {
+                    self.subscribes
+                        .insert(*subscribe_id, ActiveSubscribe::default());
+                }
+                ComputeSinkConnection::BatchedSubscribe(connection) => {
+                    self.batched_subscribes
+                        .insert(*subscribe_id, Cutover::new(connection.start));
+                }
+                ComputeSinkConnection::MaterializedView(_)
+                | ComputeSinkConnection::CopyToS3Oneshot(_)
+                | ComputeSinkConnection::MetricSink(_) => {}
             }
         }
 
@@ -1785,6 +1830,7 @@ impl Instance {
             // If the collection is a subscribe, stop tracking it. This ensures that the controller
             // ceases to produce `SubscribeResponse`s for this subscribe.
             self.subscribes.remove(id);
+            self.batched_subscribes.remove(id);
             // If the collection is a copy to, stop tracking it. This ensures that the controller
             // ceases to produce `CopyToResponse`s` for this copy to.
             self.copy_tos.remove(id);
@@ -2084,8 +2130,17 @@ impl Instance {
             .filter(|replica| replica.epoch == epoch)
             .is_none()
         {
-            if let ComputeResponse::PeekResponse(_uuid, response, _otel_ctx) = response {
-                self.discard_peek_response(response);
+            match response {
+                ComputeResponse::PeekResponse(_uuid, response, _otel_ctx) => {
+                    self.discard_peek_response(response);
+                }
+                ComputeResponse::BatchedSubscribeResponse(_id, response) => {
+                    discard_batched_subscribe_response(self.stash_client.as_ref(), *response);
+                }
+                ComputeResponse::Frontiers(..)
+                | ComputeResponse::CopyToResponse(..)
+                | ComputeResponse::SubscribeResponse(..)
+                | ComputeResponse::Status(..) => {}
             }
             return;
         }
@@ -2105,8 +2160,8 @@ impl Instance {
             ComputeResponse::SubscribeResponse(id, response) => {
                 self.handle_subscribe_response(id, response, replica_id);
             }
-            ComputeResponse::BatchedSubscribeResponse(id, _response) => {
-                tracing::warn!(%id, %replica_id, "dropping unexpected batched subscribe response");
+            ComputeResponse::BatchedSubscribeResponse(id, response) => {
+                self.handle_batched_subscribe_response(id, *response, replica_id);
             }
             ComputeResponse::Status(response) => {
                 self.handle_status_response(response, replica_id);
@@ -2359,6 +2414,89 @@ impl Instance {
                 );
                 self.subscribes.remove(&subscribe_id);
             }
+        }
+    }
+
+    fn handle_batched_subscribe_response(
+        &mut self,
+        subscribe_id: GlobalId,
+        response: BatchedSubscribeResponse,
+        replica_id: ReplicaId,
+    ) {
+        let client = self.stash_client.as_ref();
+        if !self.collections.contains_key(&subscribe_id) {
+            discard_batched_subscribe_response(client, response);
+            soft_panic_or_log!(
+                "received response for an unknown batched subscribe \
+                 (subscribe_id={subscribe_id}, replica_id={replica_id})",
+            );
+            return;
+        }
+        let Some(replica) = self.replicas.get_mut(&replica_id) else {
+            discard_batched_subscribe_response(client, response);
+            soft_panic_or_log!(
+                "batched subscribe response for an unknown replica (replica_id={replica_id})"
+            );
+            return;
+        };
+        let Some(replica_collection) = replica.collections.get_mut(&subscribe_id) else {
+            discard_batched_subscribe_response(client, response);
+            soft_panic_or_log!(
+                "batched subscribe response for an unknown replica collection \
+                 (subscribe_id={subscribe_id}, replica_id={replica_id})"
+            );
+            return;
+        };
+
+        // Replica frontiers follow every batch upper, as for subscribes, so that the replica's
+        // input read holds are released even for batches the cutover drops.
+        let write_frontier = match &response {
+            BatchedSubscribeResponse::Batch(batch) => batch.upper.clone(),
+            BatchedSubscribeResponse::DroppedAt { .. } => Antichain::new(),
+        };
+        replica_collection.update_write_frontier(write_frontier.clone());
+        replica_collection.update_input_frontier(write_frontier.clone());
+        replica_collection.update_output_frontier(write_frontier);
+        let replica_metrics = Arc::clone(&replica.metrics.inner);
+
+        let Some(cutover) = self.batched_subscribes.get_mut(&subscribe_id) else {
+            discard_batched_subscribe_response(client, response);
+            return;
+        };
+
+        let outcome = process_batched_subscribe_response(cutover, client, response);
+        // C2: the write frontier is the accepted upper `U`, so the implied read hold stays at
+        // `U - 1` and a replica that renders anew starts at or before `U`.
+        if let Some(upper) = outcome.accepted_upper() {
+            self.maybe_update_global_write_frontier(subscribe_id, upper.clone());
+        }
+
+        let metrics = &replica_metrics.batched_subscribe_batches_total;
+        match outcome {
+            BatchedSubscribeOutcome::Accepted { batch, trimmed } => {
+                if trimmed {
+                    metrics.trimmed.inc();
+                } else {
+                    metrics.accepted.inc();
+                }
+                if batch.upper.is_empty() {
+                    self.batched_subscribes.remove(&subscribe_id);
+                }
+                self.deliver_response(ComputeControllerResponse::BatchedSubscribeResponse(
+                    subscribe_id,
+                    batch,
+                ));
+            }
+            BatchedSubscribeOutcome::Dropped => metrics.dropped.inc(),
+            BatchedSubscribeOutcome::Gap { lower, upper } => {
+                metrics.dropped.inc();
+                soft_panic_or_log!(
+                    "batched subscribe batch starts beyond the accepted upper \
+                     (subscribe_id={subscribe_id}, replica_id={replica_id}, \
+                     lower={lower:?}, upper={upper:?})"
+                );
+            }
+            BatchedSubscribeOutcome::DroppedAt => {}
         }
     }
 
@@ -3579,6 +3717,160 @@ fn discard_peek_response(client: Option<&PersistClient>, response: PeekResponse)
             batches = batches.len(),
             "no persist client for stashed batches, leaving a discarded peek response's batches behind"
         ),
+    }
+}
+
+/// What [`process_batched_subscribe_response`] did with a response.
+#[derive(Debug)]
+enum BatchedSubscribeOutcome {
+    /// The batch extended `U`. `trimmed` is set if it started before `U`.
+    Accepted { batch: AcceptedBatch, trimmed: bool },
+    /// The batch ended at or below `U`, or the subscribe had completed. Its shares are deleted.
+    Dropped,
+    /// The batch started beyond `U`, which violates the protocol. Its shares are deleted.
+    Gap {
+        lower: Antichain<Timestamp>,
+        upper: Antichain<Timestamp>,
+    },
+    /// The response was a `DroppedAt`. Its orphans are deleted.
+    DroppedAt,
+}
+
+impl BatchedSubscribeOutcome {
+    /// The upper the subscribe's write frontier advances to, if any.
+    fn accepted_upper(&self) -> Option<&Antichain<Timestamp>> {
+        match self {
+            Self::Accepted { batch, .. } => Some(&batch.upper),
+            Self::Dropped | Self::Gap { .. } | Self::DroppedAt => None,
+        }
+    }
+}
+
+/// Runs the cutover on `response` and turns an accepted batch into the batch delivered to the
+/// controller's client.
+///
+/// Every share and orphan the outcome does not carry is deleted through `client`. With no
+/// `client`, stashed batches are left in blob storage, and an accepted batch that has stashed
+/// shares is delivered poisoned, without its shares.
+fn process_batched_subscribe_response(
+    cutover: &mut Cutover,
+    client: Option<&PersistClient>,
+    response: BatchedSubscribeResponse,
+) -> BatchedSubscribeOutcome {
+    let batch = match response {
+        BatchedSubscribeResponse::Batch(batch) => batch,
+        BatchedSubscribeResponse::DroppedAt {
+            frontier: _,
+            orphans,
+        } => {
+            discard_shares(client, orphans);
+            return BatchedSubscribeOutcome::DroppedAt;
+        }
+    };
+    let BatchedSubscribeBatch {
+        lower: batch_lower,
+        upper,
+        shares,
+        mut error,
+    } = batch;
+
+    let (lower, trim) = match cutover.process(&batch_lower, &upper) {
+        CutoverDecision::Accept { lower, trim } => (lower, trim),
+        CutoverDecision::Drop => {
+            discard_shares(client, shares);
+            return BatchedSubscribeOutcome::Dropped;
+        }
+        CutoverDecision::Gap => {
+            discard_shares(client, shares);
+            return BatchedSubscribeOutcome::Gap {
+                lower: batch_lower,
+                upper,
+            };
+        }
+    };
+
+    let mut accepted = Vec::with_capacity(shares.len());
+    let mut unowned = Vec::new();
+    for share in shares {
+        match share {
+            Share::Inline(updates) => {
+                let updates = if trim {
+                    trim_inline(updates, &lower)
+                } else {
+                    updates
+                };
+                if updates.len() > 0 {
+                    accepted.push(AcceptedShare::Inline(updates));
+                }
+            }
+            Share::Stashed(stashed) => match client {
+                // Without a trim the batch lower is `lower`, so `from` is the batch lower then.
+                Some(client) => accepted.push(AcceptedShare::Stashed {
+                    shard_id: stashed.shard_id,
+                    stash: OwnedStash::from_proto(client, stashed.shard_id, stashed.batches),
+                    from: lower.clone(),
+                }),
+                None => unowned.push(Share::Stashed(stashed)),
+            },
+        }
+    }
+    if !unowned.is_empty() {
+        // The output would miss the stashed updates, so the batch must not pass as complete.
+        discard_shares(None, unowned);
+        accepted.clear();
+        error.get_or_insert_with(|| {
+            "batched subscribe output was stashed, but the controller cannot own stashed \
+             batches"
+                .into()
+        });
+    }
+
+    BatchedSubscribeOutcome::Accepted {
+        batch: AcceptedBatch {
+            lower,
+            upper,
+            shares: accepted,
+            error,
+        },
+        trimmed: trim,
+    }
+}
+
+/// Deletes the stashed batches of a batched subscribe `response` nobody will read, through
+/// `client`, and drops anything else.
+///
+/// With no `client` the batches are left in blob storage.
+fn discard_batched_subscribe_response(
+    client: Option<&PersistClient>,
+    response: BatchedSubscribeResponse,
+) {
+    let shares = match response {
+        BatchedSubscribeResponse::Batch(batch) => batch.shares,
+        BatchedSubscribeResponse::DroppedAt { orphans, .. } => orphans,
+    };
+    discard_shares(client, shares);
+}
+
+/// Deletes the stashed batches of `shares` through `client`, and drops anything else.
+///
+/// With no `client` the batches are left in blob storage.
+fn discard_shares(client: Option<&PersistClient>, shares: Vec<Share>) {
+    for share in shares {
+        let Share::Stashed(StashedShare {
+            shard_id, batches, ..
+        }) = share
+        else {
+            continue;
+        };
+        match client {
+            Some(client) => drop(OwnedStash::from_proto(client, shard_id, batches)),
+            None => tracing::warn!(
+                %shard_id,
+                batches = batches.len(),
+                "no persist client for stashed batches, leaving a discarded batched subscribe \
+                 share's batches behind"
+            ),
+        }
     }
 }
 

@@ -55,8 +55,8 @@ use mz_ore::soft_assert_or_log;
 use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_types::PersistLocation;
-use mz_repr::{GlobalId, RelationDesc, Row, Timestamp, frontier_within_lag};
+use mz_persist_types::{PersistLocation, ShardId};
+use mz_repr::{GlobalId, RelationDesc, Row, Timestamp, UpdateCollection, frontier_within_lag};
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::read_holds::ReadHold;
@@ -82,6 +82,7 @@ use crate::logging::{LogVariant, LoggingConfig};
 use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::{ComputeParameters, PeekTarget};
 use crate::protocol::response::{PeekResponse, SubscribeBatch};
+use crate::stash::OwnedStash;
 
 mod cutover;
 mod instance;
@@ -150,6 +151,12 @@ pub enum ComputeControllerResponse {
     PeekNotification(Uuid, PeekNotification, OpenTelemetryContext),
     /// See [`crate::protocol::response::ComputeResponse::SubscribeResponse`].
     SubscribeResponse(GlobalId, SubscribeBatch),
+    /// The next batch of a batched subscribe.
+    ///
+    /// The batches of one subscribe are contiguous: each one's `lower` is the previous one's
+    /// `upper`. A batch with an empty `upper` is the last one. Batches can follow a batch with an
+    /// `error`, and the receiver must not report them.
+    BatchedSubscribeResponse(GlobalId, AcceptedBatch),
     /// The response from a dataflow containing an `CopyToS3Oneshot` sink.
     ///
     /// The `GlobalId` identifies the sink. The `Result` is the response from
@@ -170,6 +177,37 @@ pub enum ComputeControllerResponse {
         id: GlobalId,
         /// The new upper frontier of the identified compute collection.
         upper: Antichain<Timestamp>,
+    },
+}
+
+/// The updates of a batched subscribe at times in `[lower, upper)`.
+#[derive(Debug)]
+pub struct AcceptedBatch {
+    /// The lower frontier of the batch.
+    pub lower: Antichain<Timestamp>,
+    /// The upper frontier of the batch. An empty upper completes the subscribe.
+    pub upper: Antichain<Timestamp>,
+    /// The updates of the batch, in no particular order across shares.
+    pub shares: Vec<AcceptedShare>,
+    /// The error that poisons the batch, if any.
+    pub error: Option<String>,
+}
+
+/// A part of the updates of an [`AcceptedBatch`].
+#[derive(Debug)]
+pub enum AcceptedShare {
+    /// Updates carried inline, all at times in the batch.
+    Inline(UpdateCollection),
+    /// Updates in stashed batches, which can hold updates at times before the batch's lower.
+    ///
+    /// Read with [`mz_persist_client::PersistClient::read_batches_consolidated_from`] at `from`.
+    Stashed {
+        /// The stash shard the batches were written to.
+        shard_id: ShardId,
+        /// The batches, deleted when dropped.
+        stash: OwnedStash,
+        /// The batch's lower. Updates at earlier times are not part of the batch.
+        from: Antichain<Timestamp>,
     },
 }
 

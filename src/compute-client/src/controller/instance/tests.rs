@@ -11,18 +11,25 @@ use std::collections::BTreeSet;
 
 use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_MZ_JOIN_CORE};
 use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
+use mz_ore::cast::CastFrom;
 use mz_persist_types::{PersistLocation, ShardId};
-use mz_repr::{GlobalId, RelationDesc, Timestamp};
+use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row, Timestamp, UpdateCollection};
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 
+use crate::controller::cutover::Cutover;
+use crate::controller::{AcceptedBatch, AcceptedShare};
 use crate::protocol::command::{ComputeCommand, InstanceConfig};
-use crate::protocol::response::{PeekResponse, StashedPeekResponse};
+use crate::protocol::response::{
+    BatchedSubscribeBatch, BatchedSubscribeResponse, PeekResponse, Share, StashedPeekResponse,
+    StashedShare,
+};
 use crate::stash::tests::CountedClient;
 
 use super::{
-    CollectionReadiness, Instance, ReplicaCollectionIntrospection, ReplicaCollectionState,
-    ReplicaId, classify_collection_readiness, discard_peek_response,
+    BatchedSubscribeOutcome, CollectionReadiness, Instance, ReplicaCollectionIntrospection,
+    ReplicaCollectionState, ReplicaId, classify_collection_readiness,
+    discard_batched_subscribe_response, discard_peek_response, process_batched_subscribe_response,
 };
 
 fn ac(ts: u64) -> Antichain<Timestamp> {
@@ -341,4 +348,224 @@ async fn discarding_a_stashed_peek_response_deletes_its_batches() {
     discard_peek_response(Some(&persist.client), response);
 
     persist.wait_until_nothing_is_left().await;
+}
+
+/// Writes one stash batch to `shard_id` and wraps it in a share.
+async fn stashed_share(persist: &CountedClient, shard_id: ShardId) -> Share {
+    Share::Stashed(StashedShare {
+        shard_id,
+        batches: vec![persist.write_batch(shard_id).await],
+        encoded_size_bytes: 0,
+    })
+}
+
+/// An inline share with one update at each of `times`.
+fn inline_share(times: &[u64]) -> Share {
+    let mut builder = UpdateCollection::builder(64, times.len());
+    for (id, time) in times.iter().enumerate() {
+        let row = Row::pack_slice(&[Datum::UInt64(u64::cast_from(id))]);
+        builder.push((row.as_ref(), &Timestamp::from(*time), Diff::ONE));
+    }
+    Share::Inline(builder.build())
+}
+
+fn batch(
+    lower: Antichain<Timestamp>,
+    upper: Antichain<Timestamp>,
+    shares: Vec<Share>,
+) -> BatchedSubscribeResponse {
+    BatchedSubscribeResponse::Batch(BatchedSubscribeBatch {
+        lower,
+        upper,
+        shares,
+        error: None,
+    })
+}
+
+fn expect_accepted(outcome: BatchedSubscribeOutcome, trim: bool) -> AcceptedBatch {
+    match outcome {
+        BatchedSubscribeOutcome::Accepted { batch, trimmed } => {
+            assert_eq!(trimmed, trim, "trim of {batch:?}");
+            batch
+        }
+        other => panic!("expected an accepted batch, got {other:?}"),
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+async fn dropped_batches_delete_their_stashed_shares() {
+    let persist = CountedClient::new().await;
+    let client = Some(&persist.client);
+    let shard_id = ShardId::new();
+    let mut cutover = Cutover::new(Timestamp::MIN);
+
+    let outcome =
+        process_batched_subscribe_response(&mut cutover, client, batch(ac(0), ac(5), vec![]));
+    expect_accepted(outcome, false);
+
+    // A lagging replica reports a batch below `U`.
+    let share = stashed_share(&persist, shard_id).await;
+    let outcome =
+        process_batched_subscribe_response(&mut cutover, client, batch(ac(0), ac(3), vec![share]));
+    assert!(
+        matches!(outcome, BatchedSubscribeOutcome::Dropped),
+        "{outcome:?}"
+    );
+
+    // A batch starting beyond `U` is a protocol violation, and its shares are dropped too.
+    let share = stashed_share(&persist, shard_id).await;
+    let outcome =
+        process_batched_subscribe_response(&mut cutover, client, batch(ac(7), ac(9), vec![share]));
+    assert!(
+        matches!(outcome, BatchedSubscribeOutcome::Gap { .. }),
+        "{outcome:?}"
+    );
+    assert_eq!(cutover.accepted(), &ac(5));
+
+    persist.wait_until_nothing_is_left().await;
+}
+
+#[mz_ore::test(tokio::test)]
+async fn accepted_stashed_shares_carry_the_trim() {
+    let persist = CountedClient::new().await;
+    let client = Some(&persist.client);
+    let shard_id = ShardId::new();
+    let mut cutover = Cutover::new(Timestamp::from(5u64));
+
+    // The batch straddles `U = 5`.
+    let shares = vec![
+        stashed_share(&persist, shard_id).await,
+        inline_share(&[3, 5, 7]),
+    ];
+    let outcome =
+        process_batched_subscribe_response(&mut cutover, client, batch(ac(3), ac(8), shares));
+    let accepted = expect_accepted(outcome, true);
+    assert_eq!(accepted.lower, ac(5));
+    assert_eq!(accepted.upper, ac(8));
+    let [
+        AcceptedShare::Stashed {
+            shard_id: id, from, ..
+        },
+        AcceptedShare::Inline(updates),
+    ] = &accepted.shares[..]
+    else {
+        panic!("unexpected shares {:?}", accepted.shares);
+    };
+    assert_eq!(*id, shard_id);
+    assert_eq!(from, &ac(5));
+    let times: Vec<_> = updates.iter().map(|(_, t, _)| u64::from(*t)).collect();
+    assert_eq!(times, vec![5, 7]);
+
+    // A batch starting at `U` reads from its own lower.
+    let shares = vec![stashed_share(&persist, shard_id).await];
+    let outcome =
+        process_batched_subscribe_response(&mut cutover, client, batch(ac(8), ac(10), shares));
+    let untrimmed = expect_accepted(outcome, false);
+    let [AcceptedShare::Stashed { from, .. }] = &untrimmed.shares[..] else {
+        panic!("unexpected shares {:?}", untrimmed.shares);
+    };
+    assert_eq!(from, &ac(8));
+
+    // The accepted batches own their stashed shares until dropped.
+    assert_eq!(persist.succeeded("blob_delete"), 0);
+    drop(accepted);
+    drop(untrimmed);
+    persist.wait_until_nothing_is_left().await;
+}
+
+#[mz_ore::test]
+fn the_write_frontier_follows_accepted_uppers_only() {
+    let mut cutover = Cutover::new(Timestamp::MIN);
+    let responses = [
+        batch(ac(0), ac(5), vec![]),
+        // A lagging replica.
+        batch(ac(0), ac(3), vec![]),
+        // A gap.
+        batch(ac(6), ac(9), vec![]),
+        batch(ac(5), ac(7), vec![]),
+        BatchedSubscribeResponse::DroppedAt {
+            frontier: ac(9),
+            orphans: vec![],
+        },
+        // A straddling completion batch.
+        batch(ac(3), Antichain::new(), vec![]),
+        // Nothing is accepted after completion.
+        batch(ac(7), Antichain::new(), vec![]),
+    ];
+    let advanced: Vec<_> = responses
+        .into_iter()
+        .map(|response| {
+            process_batched_subscribe_response(&mut cutover, None, response)
+                .accepted_upper()
+                .cloned()
+        })
+        .collect();
+    assert_eq!(
+        advanced,
+        vec![
+            Some(ac(5)),
+            None,
+            None,
+            Some(ac(7)),
+            None,
+            Some(Antichain::new()),
+            None,
+        ]
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+async fn orphans_are_deleted() {
+    let persist = CountedClient::new().await;
+    let client = Some(&persist.client);
+    let shard_id = ShardId::new();
+    let mut cutover = Cutover::new(Timestamp::MIN);
+    let outcome =
+        process_batched_subscribe_response(&mut cutover, client, batch(ac(0), ac(5), vec![]));
+    expect_accepted(outcome, false);
+
+    let response = BatchedSubscribeResponse::DroppedAt {
+        frontier: ac(5),
+        orphans: vec![stashed_share(&persist, shard_id).await, inline_share(&[6])],
+    };
+    let outcome = process_batched_subscribe_response(&mut cutover, client, response);
+    assert!(
+        matches!(outcome, BatchedSubscribeOutcome::DroppedAt),
+        "{outcome:?}"
+    );
+    // `DroppedAt` leaves the cutover alone.
+    assert_eq!(cutover.accepted(), &ac(5));
+
+    persist.wait_until_nothing_is_left().await;
+}
+
+#[mz_ore::test(tokio::test)]
+async fn untracked_batched_subscribe_responses_delete_their_shares() {
+    let persist = CountedClient::new().await;
+    let shard_id = ShardId::new();
+    let shares = vec![stashed_share(&persist, shard_id).await];
+    discard_batched_subscribe_response(Some(&persist.client), batch(ac(0), ac(5), shares));
+    let response = BatchedSubscribeResponse::DroppedAt {
+        frontier: ac(5),
+        orphans: vec![stashed_share(&persist, shard_id).await],
+    };
+    discard_batched_subscribe_response(Some(&persist.client), response);
+
+    persist.wait_until_nothing_is_left().await;
+}
+
+#[mz_ore::test(tokio::test)]
+async fn accepted_stashed_shares_without_a_client_poison_the_batch() {
+    let persist = CountedClient::new().await;
+    let shares = vec![
+        stashed_share(&persist, ShardId::new()).await,
+        inline_share(&[1]),
+    ];
+    let mut cutover = Cutover::new(Timestamp::MIN);
+    let outcome =
+        process_batched_subscribe_response(&mut cutover, None, batch(ac(0), ac(5), shares));
+    let accepted = expect_accepted(outcome, false);
+    assert!(accepted.error.is_some());
+    assert!(accepted.shares.is_empty(), "{:?}", accepted.shares);
+    assert_eq!(cutover.accepted(), &ac(5));
 }

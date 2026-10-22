@@ -19,10 +19,6 @@ use timely::progress::Antichain;
 
 /// The decision for one batch.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the instance controller consumes decisions")
-)]
 pub(super) enum CutoverDecision {
     /// The batch ends at or below `U`. Discard it.
     Drop,
@@ -43,18 +39,10 @@ pub(super) enum CutoverDecision {
 /// Callers present the batches of each replica in the order that replica sent them. The state
 /// holds nothing per replica.
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the instance controller owns the cutover")
-)]
 pub(super) struct Cutover {
     accepted: Antichain<Timestamp>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the instance controller drives the cutover")
-)]
 impl Cutover {
     /// Creates a cutover that accepts the chain starting at `start`.
     pub(super) fn new(start: Timestamp) -> Self {
@@ -93,10 +81,6 @@ impl Cutover {
 /// Keeps the updates of `updates` at times at or after `from`.
 ///
 /// The updates of a share carry no order, so this filters every one.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the instance controller trims straddling batches")
-)]
 pub(super) fn trim_inline(
     updates: UpdateCollection,
     from: &Antichain<Timestamp>,
