@@ -513,3 +513,69 @@ async fn an_empty_upper_finishes_the_stream() {
         "the stream continues past an empty upper"
     );
 }
+
+fn inline_bytes(share: &AcceptedShare) -> usize {
+    match share {
+        AcceptedShare::Inline(updates) => updates.byte_len(),
+        AcceptedShare::Stashed { .. } => panic!("not an inline share"),
+    }
+}
+
+#[mz_ore::test(tokio::test)]
+async fn queued_inline_shares_count_until_formatted() {
+    let persist = CountedClient::new().await;
+    let mut harness = Harness::new(&persist, 1);
+    let updates: Vec<_> = (0..10).map(|value| (value, 1, 1)).collect();
+    let first = inline(&updates);
+    let second = inline(&[(10, 2, 1)]);
+    let (first_bytes, second_bytes) = (inline_bytes(&first), inline_bytes(&second));
+    assert!(first_bytes > 0 && second_bytes > 0);
+
+    harness.forwarder.send(batch(0, Some(2), vec![first]));
+    harness.forwarder.send(batch(2, Some(3), vec![second]));
+    assert_eq!(
+        harness.forwarder.unread_inline_bytes(),
+        first_bytes + second_bytes
+    );
+
+    // The client stops draining, so the forwarder stalls while formatting the first share.
+    for _ in 0..2 {
+        harness.recv_undrained().await.expect("rows");
+    }
+    assert_eq!(
+        harness.forwarder.unread_inline_bytes(),
+        first_bytes + second_bytes
+    );
+
+    harness.drain();
+    harness.drain();
+    harness.rows_until_progress(2).await;
+    harness.rows_until_progress(3).await;
+    assert_eq!(harness.forwarder.unread_inline_bytes(), 0);
+}
+
+#[mz_ore::test(tokio::test)]
+async fn dropped_inline_shares_release_their_count() {
+    let persist = CountedClient::new().await;
+    let mut harness = Harness::new(&persist, 1024 * 1024);
+
+    // A poisoned batch discards its own shares and every batch queued behind it.
+    let mut poisoned = batch(0, Some(2), vec![inline(&[(1, 1, 1)])]);
+    poisoned.error = Some("division by zero".into());
+    harness.forwarder.send(poisoned);
+    harness
+        .forwarder
+        .send(batch(2, Some(3), vec![inline(&[(2, 2, 1)])]));
+    assert!(harness.forwarder.unread_inline_bytes() > 0);
+
+    assert_eq!(harness.event().await, ForwarderEvent::Errored(SINK_ID));
+    assert!(harness.recv().await.is_some());
+    assert!(harness.recv().await.is_none(), "the stream continues");
+    assert_eq!(harness.forwarder.unread_inline_bytes(), 0);
+
+    // A batch sent after the stream ended is dropped at once.
+    harness
+        .forwarder
+        .send(batch(3, Some(4), vec![inline(&[(3, 3, 1)])]));
+    assert_eq!(harness.forwarder.unread_inline_bytes(), 0);
+}

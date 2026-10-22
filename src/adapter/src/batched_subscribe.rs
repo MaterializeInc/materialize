@@ -49,9 +49,13 @@ pub(crate) enum ForwarderEvent {
 ///
 /// Dropping the handle aborts the task. Every stashed share it was sent and has not finished
 /// reading is then deleted.
+///
+/// NOTE: An error update in a stashed share is found only while the share is read. Rows of the
+/// same batch can reach the client before that error, and no progress row follows it.
 pub(crate) struct Forwarder {
     batches: mpsc::UnboundedSender<QueuedBatch>,
     unread_stash_bytes: Arc<AtomicUsize>,
+    unread_inline_bytes: Arc<AtomicUsize>,
     _task: AbortOnDropHandle<()>,
 }
 
@@ -59,6 +63,7 @@ impl fmt::Debug for Forwarder {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Forwarder")
             .field("unread_stash_bytes", &self.unread_stash_bytes())
+            .field("unread_inline_bytes", &self.unread_inline_bytes())
             .finish_non_exhaustive()
     }
 }
@@ -114,6 +119,7 @@ impl Forwarder {
         Forwarder {
             batches: batches_tx,
             unread_stash_bytes: Arc::new(AtomicUsize::new(0)),
+            unread_inline_bytes: Arc::new(AtomicUsize::new(0)),
             _task: handle.abort_on_drop(),
         }
     }
@@ -131,13 +137,17 @@ impl Forwarder {
         let shares = shares
             .into_iter()
             .map(|share| match share {
-                AcceptedShare::Inline(updates) => QueuedShare::Inline(updates),
+                AcceptedShare::Inline(updates) => {
+                    let unread =
+                        UnreadBytes::new(updates.byte_len(), Arc::clone(&self.unread_inline_bytes));
+                    QueuedShare::Inline { updates, unread }
+                }
                 AcceptedShare::Stashed {
                     shard_id,
                     stash,
                     from,
                 } => {
-                    let unread = UnreadStash::new(
+                    let unread = UnreadBytes::new(
                         stash.encoded_size_bytes(),
                         Arc::clone(&self.unread_stash_bytes),
                     );
@@ -161,6 +171,15 @@ impl Forwarder {
     pub(crate) fn unread_stash_bytes(&self) -> usize {
         self.unread_stash_bytes.load(Ordering::SeqCst)
     }
+
+    /// The size of the inline shares sent to the forwarder and not yet formatted.
+    ///
+    /// These are held in environmentd memory. Together with the client's backlog they are what
+    /// the subscribe buffers for its client, so the caller bounds their sum by
+    /// `subscribe_max_buffered_bytes`.
+    pub(crate) fn unread_inline_bytes(&self) -> usize {
+        self.unread_inline_bytes.load(Ordering::SeqCst)
+    }
 }
 
 /// An [`AcceptedBatch`] in the forwarder's queue.
@@ -171,30 +190,35 @@ struct QueuedBatch {
 }
 
 enum QueuedShare {
-    Inline(mz_repr::UpdateCollection),
+    Inline {
+        updates: mz_repr::UpdateCollection,
+        /// Dropped once the share is formatted or discarded.
+        unread: UnreadBytes,
+    },
     Stashed {
         shard_id: ShardId,
         stash: OwnedStash,
         from: Antichain<Timestamp>,
         /// Dropped once the share is fully read or discarded.
-        unread: UnreadStash,
+        unread: UnreadBytes,
     },
 }
 
-/// A share's contribution to [`Forwarder::unread_stash_bytes`], withdrawn on drop.
-struct UnreadStash {
+/// A share's contribution to [`Forwarder::unread_stash_bytes`] or
+/// [`Forwarder::unread_inline_bytes`], withdrawn on drop.
+struct UnreadBytes {
     bytes: usize,
     total: Arc<AtomicUsize>,
 }
 
-impl UnreadStash {
+impl UnreadBytes {
     fn new(bytes: usize, total: Arc<AtomicUsize>) -> Self {
         total.fetch_add(bytes, Ordering::SeqCst);
-        UnreadStash { bytes, total }
+        UnreadBytes { bytes, total }
     }
 }
 
-impl Drop for UnreadStash {
+impl Drop for UnreadBytes {
     fn drop(&mut self) {
         self.total.fetch_sub(self.bytes, Ordering::SeqCst);
     }
@@ -278,12 +302,13 @@ impl ForwarderTask {
         let mut chunk = Chunk::default();
         for share in shares {
             match share {
-                QueuedShare::Inline(updates) => {
+                QueuedShare::Inline { updates, unread } => {
                     for (row, time, diff) in updates.iter() {
                         if chunk.push(&self.format, row, *time, diff) > self.read_batch_bytes {
                             self.flush(&mut chunk).await?;
                         }
                     }
+                    drop(unread);
                 }
                 QueuedShare::Stashed {
                     shard_id,
