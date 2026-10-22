@@ -50,6 +50,7 @@ mz-sql-server-util = { path = ".", features = ["proptest"] }
 proptest.workspace = true
 proptest-derive.workspace = true
 tracing-subscriber.workspace = true
+uuid.workspace = true
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
