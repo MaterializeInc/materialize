@@ -25,6 +25,8 @@ use crate::protocol::response::{
     StashedShare,
 };
 use crate::stash::tests::CountedClient;
+use mz_compute_types::errors::DataflowErrorSer;
+use mz_expr::EvalError;
 
 use super::{
     BatchedSubscribeOutcome, CollectionReadiness, Instance, ReplicaCollectionIntrospection,
@@ -352,21 +354,50 @@ async fn discarding_a_stashed_peek_response_deletes_its_batches() {
 
 /// Writes one stash batch to `shard_id` and wraps it in a share.
 async fn stashed_share(persist: &CountedClient, shard_id: ShardId) -> Share {
-    Share::Stashed(StashedShare {
-        shard_id,
-        batches: vec![persist.write_batch(shard_id).await],
-        encoded_size_bytes: 0,
-    })
+    stashed_share_with_errors(persist, shard_id, None).await
 }
 
-/// An inline share with one update at each of `times`.
+/// Writes one stash batch to `shard_id` and wraps it in a share whose error updates end at
+/// `last_error_time`.
+async fn stashed_share_with_errors(
+    persist: &CountedClient,
+    shard_id: ShardId,
+    last_error_time: Option<u64>,
+) -> Share {
+    Share::Stashed {
+        batches: StashedShare {
+            shard_id,
+            batches: vec![persist.write_batch(shard_id).await],
+            encoded_size_bytes: 0,
+        },
+        last_error_time: last_error_time.map(Timestamp::from),
+    }
+}
+
+/// An inline share with one row update at each of `times`.
 fn inline_share(times: &[u64]) -> Share {
-    let mut builder = UpdateCollection::builder(64, times.len());
-    for (id, time) in times.iter().enumerate() {
+    inline_share_with_errors(times, &[])
+}
+
+/// An inline share with one row update at each of `row_times` and one error update at each of
+/// `error_times`.
+fn inline_share_with_errors(row_times: &[u64], error_times: &[u64]) -> Share {
+    let mut builder = UpdateCollection::builder(64, row_times.len());
+    for (id, time) in row_times.iter().enumerate() {
         let row = Row::pack_slice(&[Datum::UInt64(u64::cast_from(id))]);
         builder.push((row.as_ref(), &Timestamp::from(*time), Diff::ONE));
     }
-    Share::Inline(builder.build())
+    let errors = error_times
+        .iter()
+        .map(|time| {
+            let error = DataflowErrorSer::from(EvalError::DivisionByZero);
+            (error, Timestamp::from(*time), Diff::ONE)
+        })
+        .collect();
+    Share::Inline {
+        rows: builder.build(),
+        errors,
+    }
 }
 
 fn batch(
@@ -378,7 +409,7 @@ fn batch(
         lower,
         upper,
         shares,
-        error: None,
+        fatal: None,
     })
 }
 
@@ -397,7 +428,7 @@ async fn dropped_batches_delete_their_stashed_shares() {
     let persist = CountedClient::new().await;
     let client = Some(&persist.client);
     let shard_id = ShardId::new();
-    let mut cutover = Cutover::new(Timestamp::MIN);
+    let mut cutover = Cutover::new(ac(0));
 
     let outcome =
         process_batched_subscribe_response(&mut cutover, client, batch(ac(0), ac(5), vec![]));
@@ -430,12 +461,12 @@ async fn accepted_stashed_shares_carry_the_trim() {
     let persist = CountedClient::new().await;
     let client = Some(&persist.client);
     let shard_id = ShardId::new();
-    let mut cutover = Cutover::new(Timestamp::from(5u64));
+    let mut cutover = Cutover::new(ac(5));
 
     // The batch straddles `U = 5`.
     let shares = vec![
-        stashed_share(&persist, shard_id).await,
-        inline_share(&[3, 5, 7]),
+        stashed_share_with_errors(&persist, shard_id, Some(4)).await,
+        inline_share_with_errors(&[3, 5, 7], &[4, 6]),
     ];
     let outcome =
         process_batched_subscribe_response(&mut cutover, client, batch(ac(3), ac(8), shares));
@@ -444,17 +475,31 @@ async fn accepted_stashed_shares_carry_the_trim() {
     assert_eq!(accepted.upper, ac(8));
     let [
         AcceptedShare::Stashed {
-            shard_id: id, from, ..
+            shard_id: id,
+            from,
+            last_error_time,
+            ..
         },
-        AcceptedShare::Inline(updates),
+        AcceptedShare::Inline { rows, errors },
     ] = &accepted.shares[..]
     else {
         panic!("unexpected shares {:?}", accepted.shares);
     };
     assert_eq!(*id, shard_id);
     assert_eq!(from, &ac(5));
-    let times: Vec<_> = updates.iter().map(|(_, t, _)| u64::from(*t)).collect();
+    assert_eq!(
+        *last_error_time,
+        Some(Timestamp::from(4u64)),
+        "the reader applies the trim to stashed errors"
+    );
+    let times: Vec<_> = rows.iter().map(|(_, t, _)| u64::from(*t)).collect();
     assert_eq!(times, vec![5, 7]);
+    let error_times: Vec<_> = errors.iter().map(|(_, t, _)| u64::from(*t)).collect();
+    assert_eq!(
+        error_times,
+        vec![6],
+        "errors below `U` are trimmed like rows"
+    );
 
     // A batch starting at `U` reads from its own lower.
     let shares = vec![stashed_share(&persist, shard_id).await];
@@ -475,7 +520,7 @@ async fn accepted_stashed_shares_carry_the_trim() {
 
 #[mz_ore::test]
 fn the_write_frontier_follows_accepted_uppers_only() {
-    let mut cutover = Cutover::new(Timestamp::MIN);
+    let mut cutover = Cutover::new(ac(0));
     let responses = [
         batch(ac(0), ac(5), vec![]),
         // A lagging replica.
@@ -519,7 +564,7 @@ async fn orphans_are_deleted() {
     let persist = CountedClient::new().await;
     let client = Some(&persist.client);
     let shard_id = ShardId::new();
-    let mut cutover = Cutover::new(Timestamp::MIN);
+    let mut cutover = Cutover::new(ac(0));
     let outcome =
         process_batched_subscribe_response(&mut cutover, client, batch(ac(0), ac(5), vec![]));
     expect_accepted(outcome, false);
@@ -555,17 +600,58 @@ async fn untracked_batched_subscribe_responses_delete_their_shares() {
 }
 
 #[mz_ore::test(tokio::test)]
-async fn accepted_stashed_shares_without_a_client_poison_the_batch() {
+async fn accepted_stashed_shares_without_a_client_fail_the_batch() {
     let persist = CountedClient::new().await;
     let shares = vec![
         stashed_share(&persist, ShardId::new()).await,
         inline_share(&[1]),
     ];
-    let mut cutover = Cutover::new(Timestamp::MIN);
+    let mut cutover = Cutover::new(ac(0));
     let outcome =
         process_batched_subscribe_response(&mut cutover, None, batch(ac(0), ac(5), shares));
     let accepted = expect_accepted(outcome, false);
-    assert!(accepted.error.is_some());
+    assert!(accepted.fatal.is_some());
     assert!(accepted.shares.is_empty(), "{:?}", accepted.shares);
     assert_eq!(cutover.accepted(), &ac(5));
+}
+
+/// A batch with a fatal error passes the cutover like any other. Dropped below `U`, its stashed
+/// shares are deleted. Accepted, it is delivered with its fatal error and its shares, whose
+/// owner deletes their stashed batches.
+#[mz_ore::test(tokio::test)]
+async fn batches_with_a_fatal_error_hand_their_shares_to_deletion() {
+    let persist = CountedClient::new().await;
+    let client = Some(&persist.client);
+    let shard_id = ShardId::new();
+    let failed = |lower, upper, shares| {
+        BatchedSubscribeResponse::Batch(BatchedSubscribeBatch {
+            lower,
+            upper,
+            shares,
+            fatal: Some("stash write failed".into()),
+        })
+    };
+    let mut cutover = Cutover::new(ac(0));
+
+    let shares = vec![stashed_share(&persist, shard_id).await];
+    let outcome =
+        process_batched_subscribe_response(&mut cutover, client, failed(ac(0), ac(5), shares));
+    let accepted = expect_accepted(outcome, false);
+    assert_eq!(accepted.fatal.as_deref(), Some("stash write failed"));
+    assert_eq!(
+        accepted.shares.len(),
+        1,
+        "the shares travel with the fatal error"
+    );
+
+    let shares = vec![stashed_share(&persist, shard_id).await];
+    let outcome =
+        process_batched_subscribe_response(&mut cutover, client, failed(ac(0), ac(5), shares));
+    assert!(
+        matches!(outcome, BatchedSubscribeOutcome::Dropped),
+        "{outcome:?}"
+    );
+
+    drop(accepted);
+    persist.wait_until_nothing_is_left().await;
 }

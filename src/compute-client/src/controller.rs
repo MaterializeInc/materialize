@@ -45,6 +45,7 @@ use mz_compute_types::config::ComputeReplicaConfig;
 use mz_compute_types::dyncfgs::{
     COMPUTE_REPLICA_EXPIRATION_OFFSET, ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA,
 };
+use mz_compute_types::errors::DataflowErrorSer;
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_expr::RowSetFinishing;
 use mz_expr::row::RowCollection;
@@ -56,7 +57,9 @@ use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::{PersistLocation, ShardId};
-use mz_repr::{GlobalId, RelationDesc, Row, Timestamp, UpdateCollection, frontier_within_lag};
+use mz_repr::{
+    Diff, GlobalId, RelationDesc, Row, Timestamp, UpdateCollection, frontier_within_lag,
+};
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::read_holds::ReadHold;
@@ -154,8 +157,8 @@ pub enum ComputeControllerResponse {
     /// The next batch of a batched subscribe.
     ///
     /// The batches of one subscribe are contiguous: each one's `lower` is the previous one's
-    /// `upper`. A batch with an empty `upper` is the last one. Batches can follow a batch with an
-    /// `error`, and the receiver must not report them.
+    /// `upper`. A batch with an empty `upper` is the last one. Batches can follow a batch with
+    /// error updates or a `fatal` error, and the receiver decides whether to report them.
     BatchedSubscribeResponse(GlobalId, AcceptedBatch),
     /// The response from a dataflow containing an `CopyToS3Oneshot` sink.
     ///
@@ -187,20 +190,27 @@ pub struct AcceptedBatch {
     pub lower: Antichain<Timestamp>,
     /// The upper frontier of the batch. An empty upper completes the subscribe.
     pub upper: Antichain<Timestamp>,
-    /// The updates of the batch, in no particular order across shares.
+    /// The row updates and error updates of the batch, in no particular order across shares.
     pub shares: Vec<AcceptedShare>,
-    /// The error that poisons the batch, if any.
-    pub error: Option<String>,
+    /// A failure that is not part of the subscribe's output. The output of a batch with a fatal
+    /// error is incomplete.
+    pub fatal: Option<String>,
 }
 
 /// A part of the updates of an [`AcceptedBatch`].
 #[derive(Debug)]
 pub enum AcceptedShare {
     /// Updates carried inline, all at times in the batch.
-    Inline(UpdateCollection),
+    Inline {
+        /// The row updates.
+        rows: UpdateCollection,
+        /// The error updates, consolidated per `(time, error)`.
+        errors: Vec<(DataflowErrorSer, Timestamp, Diff)>,
+    },
     /// Updates in stashed batches, which can hold updates at times before the batch's lower.
     ///
     /// Read with [`mz_persist_client::PersistClient::read_batches_consolidated_from`] at `from`.
+    /// Error updates are stored as `SourceData(Err)`.
     Stashed {
         /// The stash shard the batches were written to.
         shard_id: ShardId,
@@ -208,6 +218,10 @@ pub enum AcceptedShare {
         stash: OwnedStash,
         /// The batch's lower. Updates at earlier times are not part of the batch.
         from: Antichain<Timestamp>,
+        /// The greatest time of an error update in the batches, including those before `from`.
+        /// The batches hold an error update at or after `from` exactly when this is at or after
+        /// `from`.
+        last_error_time: Option<Timestamp>,
     },
 }
 

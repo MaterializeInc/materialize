@@ -13,7 +13,8 @@
 //! upper `U` and forwards the output of whichever replica extends it, so replicas that
 //! re-render or fail over rejoin the output without duplicates or gaps.
 
-use mz_repr::{Timestamp, UpdateCollection};
+use mz_compute_types::errors::DataflowErrorSer;
+use mz_repr::{Diff, Timestamp, UpdateCollection};
 use timely::PartialOrder;
 use timely::progress::Antichain;
 
@@ -44,11 +45,10 @@ pub(super) struct Cutover {
 }
 
 impl Cutover {
-    /// Creates a cutover that accepts the chain starting at `start`.
-    pub(super) fn new(start: Timestamp) -> Self {
-        Self {
-            accepted: Antichain::from_elem(start),
-        }
+    /// Creates a cutover that accepts the chain starting at `start`. An empty `start` accepts
+    /// nothing.
+    pub(super) fn new(start: Antichain<Timestamp>) -> Self {
+        Self { accepted: start }
     }
 
     /// Decides the fate of the batch `[lower, upper)` and advances `U` if it is accepted.
@@ -78,10 +78,10 @@ impl Cutover {
     }
 }
 
-/// Keeps the updates of `updates` at times at or after `from`.
+/// Keeps the row updates of `updates` at times at or after `from`.
 ///
 /// The updates of a share carry no order, so this filters every one.
-pub(super) fn trim_inline(
+pub(super) fn trim_rows(
     updates: UpdateCollection,
     from: &Antichain<Timestamp>,
 ) -> UpdateCollection {
@@ -92,6 +92,15 @@ pub(super) fn trim_inline(
         }
     }
     builder.build()
+}
+
+/// Keeps the error updates of `errors` at times at or after `from`.
+pub(super) fn trim_errors(
+    mut errors: Vec<(DataflowErrorSer, Timestamp, Diff)>,
+    from: &Antichain<Timestamp>,
+) -> Vec<(DataflowErrorSer, Timestamp, Diff)> {
+    errors.retain(|(_, time, _)| from.less_equal(time));
+    errors
 }
 
 #[cfg(test)]

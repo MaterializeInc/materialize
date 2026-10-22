@@ -50,7 +50,7 @@ use timely::progress::{Antichain, ChangeBatch};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-use crate::controller::cutover::{Cutover, CutoverDecision, trim_inline};
+use crate::controller::cutover::{Cutover, CutoverDecision, trim_errors, trim_rows};
 use crate::controller::error::{
     CollectionMissing, ERROR_TARGET_REPLICA_FAILED, HydrationCheckBadTarget,
 };
@@ -1409,7 +1409,7 @@ impl Instance {
                     lower: frontier.clone(),
                     upper: frontier,
                     shares: Vec::new(),
-                    error: Some(ERROR_TARGET_REPLICA_FAILED.into()),
+                    fatal: Some(ERROR_TARGET_REPLICA_FAILED.into()),
                 },
             );
             self.deliver_response(response);
@@ -1586,8 +1586,17 @@ impl Instance {
                         .insert(*subscribe_id, ActiveSubscribe::default());
                 }
                 ComputeSinkConnection::BatchedSubscribe(connection) => {
+                    // The output starts at `S`, the as-of with a snapshot and one step past it
+                    // without. The as-of is read once, here. History reduction may raise the as-of
+                    // of a replica's rendering later, but never past `U - 1` (C2).
+                    let as_of = dataflow.as_of.as_ref().and_then(|as_of| as_of.as_option());
+                    let start = if connection.with_snapshot {
+                        as_of.copied()
+                    } else {
+                        as_of.and_then(|as_of| as_of.try_step_forward())
+                    };
                     self.batched_subscribes
-                        .insert(*subscribe_id, Cutover::new(connection.start));
+                        .insert(*subscribe_id, Cutover::new(start.into_iter().collect()));
                 }
                 ComputeSinkConnection::MaterializedView(_)
                 | ComputeSinkConnection::CopyToS3Oneshot(_)
@@ -3751,7 +3760,10 @@ impl BatchedSubscribeOutcome {
 ///
 /// Every share and orphan the outcome does not carry is deleted through `client`. With no
 /// `client`, stashed batches are left in blob storage, and an accepted batch that has stashed
-/// shares is delivered poisoned, without its shares.
+/// shares is delivered with a fatal error, without its shares.
+///
+/// The trim at `U` treats error updates like row updates. A stashed share keeps its
+/// `last_error_time`, and its reader applies the trim.
 fn process_batched_subscribe_response(
     cutover: &mut Cutover,
     client: Option<&PersistClient>,
@@ -3771,7 +3783,7 @@ fn process_batched_subscribe_response(
         lower: batch_lower,
         upper,
         shares,
-        mut error,
+        mut fatal,
     } = batch;
 
     let (lower, trim) = match cutover.process(&batch_lower, &upper) {
@@ -3793,24 +3805,31 @@ fn process_batched_subscribe_response(
     let mut unowned = Vec::new();
     for share in shares {
         match share {
-            Share::Inline(updates) => {
-                let updates = if trim {
-                    trim_inline(updates, &lower)
+            Share::Inline { rows, errors } => {
+                let (rows, errors) = if trim {
+                    (trim_rows(rows, &lower), trim_errors(errors, &lower))
                 } else {
-                    updates
+                    (rows, errors)
                 };
-                if updates.len() > 0 {
-                    accepted.push(AcceptedShare::Inline(updates));
+                if rows.len() > 0 || !errors.is_empty() {
+                    accepted.push(AcceptedShare::Inline { rows, errors });
                 }
             }
-            Share::Stashed(stashed) => match client {
+            Share::Stashed {
+                batches,
+                last_error_time,
+            } => match client {
                 // Without a trim the batch lower is `lower`, so `from` is the batch lower then.
                 Some(client) => accepted.push(AcceptedShare::Stashed {
-                    shard_id: stashed.shard_id,
-                    stash: OwnedStash::from_proto(client, stashed.shard_id, stashed.batches),
+                    shard_id: batches.shard_id,
+                    stash: OwnedStash::from_proto(client, batches.shard_id, batches.batches),
                     from: lower.clone(),
+                    last_error_time,
                 }),
-                None => unowned.push(Share::Stashed(stashed)),
+                None => unowned.push(Share::Stashed {
+                    batches,
+                    last_error_time,
+                }),
             },
         }
     }
@@ -3818,7 +3837,7 @@ fn process_batched_subscribe_response(
         // The output would miss the stashed updates, so the batch must not pass as complete.
         discard_shares(None, unowned);
         accepted.clear();
-        error.get_or_insert_with(|| {
+        fatal.get_or_insert_with(|| {
             "batched subscribe output was stashed, but the controller cannot own stashed \
              batches"
                 .into()
@@ -3830,7 +3849,7 @@ fn process_batched_subscribe_response(
             lower,
             upper,
             shares: accepted,
-            error,
+            fatal,
         },
         trimmed: trim,
     }
@@ -3856,9 +3875,12 @@ fn discard_batched_subscribe_response(
 /// With no `client` the batches are left in blob storage.
 fn discard_shares(client: Option<&PersistClient>, shares: Vec<Share>) {
     for share in shares {
-        let Share::Stashed(StashedShare {
-            shard_id, batches, ..
-        }) = share
+        let Share::Stashed {
+            batches: StashedShare {
+                shard_id, batches, ..
+            },
+            ..
+        } = share
         else {
             continue;
         };
