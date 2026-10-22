@@ -181,7 +181,8 @@ enum Tier {
     /// Written to the stash as they arrive.
     Stashed {
         upload: StashUpload,
-        /// The greatest time of an error update written.
+        /// The greatest time of an error update written. Updates written in different hand-outs
+        /// can cancel when the batch is read, so this bounds the batch's error times from above.
         last_error_time: Option<Timestamp>,
     },
 }
@@ -203,9 +204,7 @@ impl Accumulator {
     /// bound.
     ///
     /// Every update must lie within the bounds of the description. The description scan places
-    /// them there, advancing those of the first description to its lower, the as-of. The scan
-    /// hands out each error update once, consolidated, so a share's `last_error_time` is that of
-    /// an error update that survives consolidation.
+    /// them there, advancing those of the first description to its lower, the as-of.
     async fn push(&mut self, updates: DescriptionUpdates) -> Result<(), String> {
         match &mut self.tier {
             Tier::Inline {

@@ -272,7 +272,7 @@ fn inline_view(queued: &QueuedResponse) -> BatchedSubscribeResponse {
 /// Reduces `response`, reading the updates of a stashed share, given the lower of its
 /// description, with `read_stashed`.
 ///
-/// Asserts that a stashed share's `last_error_time` is the greatest time of its error updates.
+/// Asserts that a stashed share's `last_error_time` bounds the times of its error updates.
 fn reduce(
     response: &BatchedSubscribeResponse,
     mut read_stashed: impl FnMut(&StashedShare, &Antichain<Timestamp>) -> Stashed,
@@ -300,10 +300,10 @@ fn reduce(
                     } => {
                         let (rows, stashed_errors) = read_stashed(batches, &batch.lower);
                         let greatest = stashed_errors.iter().map(|(_, time, _)| *time).max();
-                        assert_eq!(
-                            last_error_time.map(u64::from),
-                            greatest,
-                            "a stashed share records the time of its last error update"
+                        assert!(
+                            last_error_time.map(u64::from) >= greatest,
+                            "a stashed share bounds the times of its error updates: \
+                             {last_error_time:?} < {greatest:?}"
                         );
                         updates.extend(rows);
                         errors.extend(stashed_errors);

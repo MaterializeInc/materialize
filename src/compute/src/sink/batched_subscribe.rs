@@ -94,7 +94,8 @@ pub(crate) enum OwnedShare {
     /// A stash batch, deleted if the share is dropped before it is sent.
     Stashed {
         delivered: DeliveredBatch,
-        /// The greatest time of an error update in the batch.
+        /// The greatest time of an error update written to the batch, an upper bound on those
+        /// it holds.
         last_error_time: Option<Timestamp>,
     },
 }
