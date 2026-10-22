@@ -44,6 +44,7 @@ use launchdarkly_server_sdk as ld;
 use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
+use mz_orchestrator_tracing::NO_SENTRY_TARGET;
 use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::conn_id_org_uuid;
 use mz_ore::metrics::{
@@ -1409,6 +1410,20 @@ impl mz_server_core::Server for PgwireBalancer {
                     return Ok(());
                 };
                 drop(pre_resolved);
+                // One line per connection ties a client IP to a tenant; the metrics carry the
+                // tenant but not the IP, and flow logs see the IP but not the tenant. Skipped
+                // without a tenant (self-managed). `authenticated` is false when the tenant came
+                // from the client's SNI, which environmentd authenticates only after this point.
+                if let Some(tenant) = &resolved.tenant {
+                    info!(
+                        target: NO_SENTRY_TARGET,
+                        %conn_uuid,
+                        client_addr = params.get(MZ_FORWARDED_FOR_KEY).map_or("", String::as_str),
+                        %tenant,
+                        authenticated = resolved.password.is_some(),
+                        "pgwire connection resolved",
+                    );
+                }
 
                 PgwireBalancer::proxy(
                     conn,
@@ -1743,6 +1758,17 @@ impl mz_server_core::Server for HttpsBalancer {
                 )
                 .await?;
                 drop(pre_resolved);
+                // See the matching log line in the pgwire handler. The tenant always comes from
+                // SNI here, before any authentication.
+                if let Some(tenant) = &resolved.tenant {
+                    info!(
+                        target: NO_SENTRY_TARGET,
+                        client_addr = %peer_addr.ip(),
+                        %tenant,
+                        authenticated = false,
+                        "https connection resolved",
+                    );
+                }
                 let inner_active_guard = resolved
                     .tenant
                     .as_ref()
