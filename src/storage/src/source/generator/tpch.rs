@@ -44,6 +44,15 @@ impl Generator for Tpch {
         seed: Option<u64>,
         _resume_offset: MzOffset,
     ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>> {
+        self.updates(seed)
+    }
+}
+
+impl Tpch {
+    fn updates(
+        &self,
+        seed: Option<u64>,
+    ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>> {
         let mut rng = StdRng::seed_from_u64(seed.unwrap_or_default());
         let mut ctx = Context {
             tpch: self.clone(),
@@ -600,3 +609,6 @@ const NATIONS: &[(&str, i64)] = &[
     ("UNITED KINGDOM", 3),
     ("UNITED STATES", 1),
 ];
+
+#[cfg(test)]
+mod tests;
