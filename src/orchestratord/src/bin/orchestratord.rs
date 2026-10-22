@@ -447,10 +447,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         )
         .await?;
 
-    // Besides exporting allocator metrics, this reference is what links
-    // mz-alloc into the binary. Without it rustc drops the crate, and with it
-    // the `#[global_allocator]`, so orchestratord would silently run on the
-    // system allocator and serve empty heap profiles.
     mz_alloc::register_metrics_into(&metrics_registry).await;
 
     let metrics = Arc::new(Metrics::register_into(&metrics_registry));
