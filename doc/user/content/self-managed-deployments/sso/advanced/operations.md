@@ -163,8 +163,13 @@ polis_helm_values = {
 ```
 
 and re-apply. The UI is then available at
-`https://<your-polis-hostname>/admin/auth/login`. You'll need to
-configure a NextAuth provider for login (see
+`https://<your-polis-hostname>/admin/auth/login`. Out of the box, no one
+can sign in: Polis offers email magic-link login only when `NEXTAUTH_ACL`
+is set, and the module leaves it empty. To sign in, either
+[use SAML](#unlock-the-polis-admin-ui-without-smtp) or configure SMTP and
+set `nextAuthAcl` to the admin addresses or patterns, for example
+`polis = { hosted = true, nextAuthAcl = "alice@example.com,*@ops.example.com" }`
+(see
 [Polis hosted-mode docs](https://www.ory.sh/docs/polis/deploy/env-variables)).
 
 ### Unlock the Polis admin UI without SMTP
@@ -181,8 +186,17 @@ gate the admin UI login on a SAML IdP you already have. Registering
 your customer's IdP there lets operators sign into the admin UI via
 their own SSO with no mail server involved.
 
-Reuse the same Okta (or other) SAML app you configured for user login,
-then register a second connection under the reserved tenant:
+{{< warning >}}
+Everyone the admin SAML app lets sign in becomes a Polis admin, able to
+change SAML connections and SCIM directories. `NEXTAUTH_ACL` doesn't
+apply to SAML admin login, so the IdP's app assignment is the only
+control. Don't reuse the end-user SAML app here: that would make every
+Materialize user a Polis admin.
+{{< /warning >}}
+
+Create a **separate** SAML app on the IdP side for admin access, assign
+only your Polis operators to it, and register it as a connection under
+the reserved tenant:
 
 ```bash
 curl -sS -H "Authorization: Api-Key $POLIS_API_KEY" \
@@ -190,7 +204,7 @@ curl -sS -H "Authorization: Api-Key $POLIS_API_KEY" \
   --data-urlencode "tenant=_jackson_boxyhq" \
   --data-urlencode "product=_jackson_admin_portal" \
   --data-urlencode "name=admin-bootstrap" \
-  --data-urlencode "encodedRawMetadata=$(base64 < okta-metadata.xml | tr -d '\n')" \
+  --data-urlencode "encodedRawMetadata=$(base64 < okta-admin-metadata.xml | tr -d '\n')" \
   --data-urlencode "defaultRedirectUrl=https://<your-polis-hostname>/admin/sso-connection" \
   --data-urlencode 'redirectUrl=["https://<your-polis-hostname>/api/auth/callback/boxyhq-saml"]'
 ```
@@ -199,33 +213,36 @@ Then browse to `https://<your-polis-hostname>/admin/auth/login` and
 click "**Sign in with SAML**". The flow bounces through your IdP and
 lands you at the Polis admin dashboard.
 
-For a production deployment, register a **separate** SAML app on the
-IdP side for admin access (rather than reusing the end-user app), so
-you can control admin membership independently.
+## Control who can sign in
 
-## Disable registration in Kratos
+Users can't create a Kratos account with an email and password: the
+module turns off password login and registration and leaves SSO as the
+only way in. Kratos creates an identity the first time someone signs in
+through a configured identity provider. That first sign-in goes through
+Kratos's registration flow, so registration has to stay enabled.
 
-By default Kratos allows users to register new identities through the
-selfservice UI. For production deployments where users come exclusively
-from your IdP, disable registration via Helm values in tfvars:
+{{< warning >}}
+Don't set `selfservice.flows.registration.enabled = false` in
+`kratos_helm_values`. Kratos would then reject the first sign-in of every
+new user, from OIDC or SAML, while users who already signed in keep
+working.
+{{< /warning >}}
 
-```hcl
-kratos_helm_values = {
-  kratos = {
-    config = {
-      selfservice = {
-        flows = {
-          registration = {
-            enabled = false
-          }
-        }
-      }
-    }
-  }
-}
-```
+Anyone your identity provider lets sign in to the Materialize app gets
+an account. Control that in the IdP:
 
-Apply. The "Sign up" link disappears from the login screen.
+- **Okta**: Okta enforces app assignment. Assign the app to the users or
+  groups who should have access, not to **Everyone**.
+- **Microsoft Entra ID**: on the enterprise application, set
+  **Assignment required?** to **Yes**. It defaults to **No**, which lets
+  every user in the tenant sign in.
+- **Public OIDC providers** such as Google: anyone with an account can
+  sign in unless the provider restricts it, for example to a Google
+  Workspace domain.
+
+To remove a user's access, unassign them in the IdP and
+[lock their Kratos identity](#manage-kratos-identities). Their
+Materialize role isn't dropped automatically.
 
 ## Back up the Ory PostgreSQL database
 
