@@ -83,6 +83,7 @@ use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::{ComputeParameters, PeekTarget};
 use crate::protocol::response::{PeekResponse, SubscribeBatch};
 
+mod cutover;
 mod instance;
 mod introspection;
 mod replica;
