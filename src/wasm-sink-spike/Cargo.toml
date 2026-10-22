@@ -21,6 +21,6 @@ mz-storage-types = { path = "../storage-types" }
 serde_json.workspace = true
 timely.workspace = true
 tokio.workspace = true
-wasm-sink-guest = { path = "/tmp/claude-1000/-home-moritz-dev-repos-materialize/aa72d2eb-d8d5-4ced-904e-9120a5e17007/scratchpad/wasm-sink/guest" }
+wasm-sink-guest = { path = "../../misc/spike-wasm-sink/guest" }
 wasmtime = { version = "50", default-features = false, features = ["cranelift", "component-model", "runtime", "std", "parallel-compilation", "cache"] }
 wasmtime-wasi = { version = "50" }

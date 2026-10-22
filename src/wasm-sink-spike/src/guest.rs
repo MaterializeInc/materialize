@@ -64,7 +64,7 @@ impl Guest for Native {
 }
 
 wasmtime::component::bindgen!({
-    path: "/tmp/claude-1000/-home-moritz-dev-repos-materialize/aa72d2eb-d8d5-4ced-904e-9120a5e17007/scratchpad/wasm-sink/guest/wit",
+    path: "../../misc/spike-wasm-sink/guest/wit",
     world: "sink",
 });
 
