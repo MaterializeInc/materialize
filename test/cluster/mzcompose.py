@@ -2316,11 +2316,19 @@ def workflow_test_batched_subscribe_cutover_trims(c: Composition) -> None:
             # Both replicas mint a description at every frontier step of `t` they observe, so
             # their boundaries mostly coincide. Stalling the follower makes it miss the steps
             # the leader extends the subscribe by, so its next batch starts before the
-            # accepted upper and ends beyond it. A stall of a few seconds makes the controller
-            # drop the follower's connection, after which it renders anew, which is the
-            # reconnect workflow's scenario.
+            # accepted upper and ends beyond it. The leader extends the subscribe about once a
+            # second, so the stall lasts until it has done so twice. A stall of about four
+            # seconds makes the controller drop the follower's connection, after which it
+            # renders anew, which is the reconnect workflow's scenario.
             c.pause(services[follower[0]])
-            time.sleep(1)
+            paused_at = _batched_subscribe_cutover_counts(c)
+            deadline = time.time() + 3
+            while (
+                extended(_batched_subscribe_cutover_counts(c), leader[0])
+                < extended(paused_at, leader[0]) + 2
+            ):
+                assert time.time() < deadline, "the leader stopped extending"
+                time.sleep(0.1)
             c.kill(services[leader[0]])
             trimmed_at_kill.append(
                 _batched_subscribe_cutover_counts(c).get((follower[0], "trimmed"), 0)
