@@ -22,6 +22,7 @@ use tokio::sync::mpsc;
 
 use crate::active_compute_sink::{
     ActiveSubscribe, ActiveSubscribeOwner, SubscribeBacklogAccounting, SubscribeRowFormat,
+    send_last_to_client, send_to_client,
 };
 use crate::coord::peek::PeekResponseUnary;
 
@@ -205,4 +206,21 @@ fn the_progress_row_carries_nulls_for_every_column() {
     let (active, mut rx) = subscribe(false, 3, SubscribeOutput::Diffs);
     active.initialize();
     assert!(drain(&mut rx).is_empty());
+}
+
+#[mz_ore::test]
+fn nothing_is_sent_after_the_last_message() {
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let backlog = Mutex::new(SubscribeBacklogAccounting::default());
+
+    send_to_client(&tx, &backlog, PeekResponseUnary::Canceled, 0);
+    send_last_to_client(&tx, &backlog, PeekResponseUnary::Canceled);
+    send_to_client(&tx, &backlog, PeekResponseUnary::Canceled, 0);
+    send_last_to_client(&tx, &backlog, PeekResponseUnary::Canceled);
+
+    let mut received = 0;
+    while rx.try_recv().is_ok() {
+        received += 1;
+    }
+    assert_eq!(received, 2);
 }

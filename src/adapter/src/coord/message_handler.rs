@@ -47,6 +47,7 @@ use crate::coord::{
     AlterConnectionValidationReady, ArrangementSizeRecord, ClusterReplicaStatuses, Coordinator,
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
+use crate::error::SubscribeBudget;
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::{AdapterNotice, TimestampContext};
 
@@ -768,6 +769,7 @@ impl Coordinator {
                         Some(ActiveComputeSinkRetireReason::BufferExceeded {
                             buffered_bytes,
                             max_buffered_bytes,
+                            budget: SubscribeBudget::BufferedBytes,
                         })
                     } else {
                         None

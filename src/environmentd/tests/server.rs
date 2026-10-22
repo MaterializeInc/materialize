@@ -1659,7 +1659,9 @@ fn test_subscribe_batched_unread_stash_bound() {
 
     let chain = batched_subscribe_fell_behind_error(&server);
     assert!(
-        chain.contains("fell behind") && chain.contains("exceeding the 64.0 KiB budget"),
+        chain.contains("fell behind")
+            && chain.contains("exceeding the 64.0 KiB budget")
+            && chain.contains("raise the batched_subscribe_max_unread_stash_bytes system variable"),
         "expected a fell-behind error for the stash bound, got: {chain}"
     );
 }
@@ -1677,7 +1679,9 @@ fn test_subscribe_batched_buffer_bound() {
 
     let chain = batched_subscribe_fell_behind_error(&server);
     assert!(
-        chain.contains("fell behind") && chain.contains("exceeding the 64.0 KiB budget"),
+        chain.contains("fell behind")
+            && chain.contains("exceeding the 64.0 KiB budget")
+            && chain.contains("raise the subscribe_max_buffered_bytes system variable"),
         "expected a fell-behind error for the memory bound, got: {chain}"
     );
 }

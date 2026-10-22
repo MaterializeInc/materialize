@@ -14,6 +14,7 @@
 //! size never passes through the coordinator. The task applies backpressure by waiting on the
 //! client's backlog, which the coordinator loop cannot do.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -33,7 +34,9 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
 use crate::AdapterError;
-use crate::active_compute_sink::{SubscribeBacklogAccounting, SubscribeRowFormat, send_to_client};
+use crate::active_compute_sink::{
+    SubscribeBacklogAccounting, SubscribeRowFormat, send_last_to_client, send_to_client,
+};
 use crate::coord::peek::PeekResponseUnary;
 
 /// How a forwarder ended the client's stream.
@@ -55,7 +58,7 @@ pub enum ForwarderEvent {
 pub(crate) struct Forwarder {
     batches: mpsc::UnboundedSender<QueuedBatch>,
     unread_stash_bytes: Arc<AtomicUsize>,
-    unread_inline_bytes: Arc<AtomicUsize>,
+    unread_inline: Arc<Mutex<UnreadInline>>,
     _task: AbortOnDropHandle<()>,
 }
 
@@ -72,8 +75,9 @@ impl Forwarder {
     /// Spawns the forwarding task of sink `sink_id`.
     ///
     /// Stashed shares are read with `output_desc` as their key schema. Client rows are sent in
-    /// messages of about `read_batch_bytes`, and each one waits until `backlog` holds at most
-    /// `read_batch_bytes`. The task reports to `events` once it has ended the stream.
+    /// messages of about a chunk size, the smaller of `read_batch_bytes` and a quarter of
+    /// `max_buffered_bytes`, and each one waits until `backlog` holds at most a chunk. The task
+    /// reports to `events` once it has ended the stream.
     ///
     /// Must be called from within a tokio runtime.
     pub(crate) fn spawn<E: From<ForwarderEvent> + Send + 'static>(
@@ -85,8 +89,15 @@ impl Forwarder {
         backlog: Arc<Mutex<SubscribeBacklogAccounting>>,
         read_batch_bytes: usize,
         read_memory_budget_bytes: usize,
+        max_buffered_bytes: usize,
         events: mpsc::UnboundedSender<E>,
     ) -> Forwarder {
+        // A client that keeps up holds about one chunk in its backlog, the message queued behind
+        // the one it drains. The coordinator retires the subscribe once that backlog plus the
+        // queued inline shares exceeds `max_buffered_bytes`, so a chunk the size of the budget
+        // would retire a client that keeps up as soon as any inline share queues. A quarter
+        // leaves the rest of the budget to queued inline shares.
+        let chunk_bytes = std::cmp::min(read_batch_bytes, max_buffered_bytes / 4);
         let (batches_tx, batches_rx) = mpsc::unbounded_channel();
         let task = ForwarderTask {
             format,
@@ -98,7 +109,7 @@ impl Forwarder {
             persist_client,
             channel,
             backlog,
-            read_batch_bytes,
+            chunk_bytes,
             read_memory_budget_bytes,
         };
         let handle = mz_ore::task::spawn(
@@ -112,7 +123,7 @@ impl Forwarder {
         Forwarder {
             batches: batches_tx,
             unread_stash_bytes: Arc::new(AtomicUsize::new(0)),
-            unread_inline_bytes: Arc::new(AtomicUsize::new(0)),
+            unread_inline: Arc::new(Mutex::new(UnreadInline::default())),
             _task: handle.abort_on_drop(),
         }
     }
@@ -127,14 +138,18 @@ impl Forwarder {
             shares,
             error,
         } = batch;
+        let inline_bytes = shares
+            .iter()
+            .map(|share| match share {
+                AcceptedShare::Inline(updates) => updates.byte_len(),
+                AcceptedShare::Stashed { .. } => 0,
+            })
+            .sum();
+        let inline = UnreadInlineBatch::new(inline_bytes, Arc::clone(&self.unread_inline));
         let shares = shares
             .into_iter()
             .map(|share| match share {
-                AcceptedShare::Inline(updates) => {
-                    let unread =
-                        UnreadBytes::new(updates.byte_len(), Arc::clone(&self.unread_inline_bytes));
-                    QueuedShare::Inline { updates, unread }
-                }
+                AcceptedShare::Inline(updates) => QueuedShare::Inline { updates },
                 AcceptedShare::Stashed {
                     shard_id,
                     stash,
@@ -157,6 +172,7 @@ impl Forwarder {
             upper,
             shares,
             error,
+            inline,
         });
     }
 
@@ -168,13 +184,19 @@ impl Forwarder {
         self.unread_stash_bytes.load(Ordering::SeqCst)
     }
 
-    /// The size of the inline shares sent to the forwarder and not yet formatted.
+    /// The size of the inline shares of the batches queued behind the one the forwarder is
+    /// formatting.
     ///
     /// These are held in environmentd memory. The caller retires the subscribe with
-    /// `SubscribeFellBehind` once the client's `backlog_size` plus these bytes exceeds
-    /// `subscribe_max_buffered_bytes`.
+    /// `SubscribeFellBehind` once `backlog_size + unread_inline_bytes` exceeds
+    /// `subscribe_max_buffered_bytes`. The batch being formatted is tolerated whatever its size,
+    /// as `backlog_size` tolerates the message the client drains. The batches behind it count,
+    /// because nothing backpressures the replicas that produce them.
     pub(crate) fn unread_inline_bytes(&self) -> usize {
-        self.unread_inline_bytes.load(Ordering::SeqCst)
+        self.unread_inline
+            .lock()
+            .expect("unread inline accounting poisoned")
+            .queued_bytes()
     }
 }
 
@@ -183,13 +205,13 @@ struct QueuedBatch {
     upper: Antichain<Timestamp>,
     shares: Vec<QueuedShare>,
     error: Option<String>,
+    /// Dropped once the batch is forwarded or discarded.
+    inline: UnreadInlineBatch,
 }
 
 enum QueuedShare {
     Inline {
         updates: mz_repr::UpdateCollection,
-        /// Dropped once the share is formatted or discarded.
-        unread: UnreadBytes,
     },
     Stashed {
         shard_id: ShardId,
@@ -200,8 +222,58 @@ enum QueuedShare {
     },
 }
 
-/// A share's contribution to [`Forwarder::unread_stash_bytes`] or
-/// [`Forwarder::unread_inline_bytes`], withdrawn on drop.
+/// The inline bytes of every batch sent to the forwarder and not yet forwarded or discarded.
+#[derive(Default)]
+struct UnreadInline {
+    /// Inline bytes by batch, keyed by send order.
+    batches: BTreeMap<u64, usize>,
+    /// The key of the next batch sent.
+    next: u64,
+    /// Sum of `batches`.
+    total: usize,
+}
+
+impl UnreadInline {
+    /// The inline bytes of every batch but the oldest, which is the one being formatted.
+    fn queued_bytes(&self) -> usize {
+        let head = self.batches.values().next().copied().unwrap_or(0);
+        self.total - head
+    }
+}
+
+/// A batch's entry in [`UnreadInline`], removed on drop.
+struct UnreadInlineBatch {
+    key: u64,
+    unread: Arc<Mutex<UnreadInline>>,
+}
+
+impl UnreadInlineBatch {
+    fn new(bytes: usize, unread: Arc<Mutex<UnreadInline>>) -> Self {
+        let key = {
+            let mut guard = unread.lock().expect("unread inline accounting poisoned");
+            let key = guard.next;
+            guard.next += 1;
+            guard.batches.insert(key, bytes);
+            guard.total += bytes;
+            key
+        };
+        UnreadInlineBatch { key, unread }
+    }
+}
+
+impl Drop for UnreadInlineBatch {
+    fn drop(&mut self) {
+        let mut guard = self
+            .unread
+            .lock()
+            .expect("unread inline accounting poisoned");
+        if let Some(bytes) = guard.batches.remove(&self.key) {
+            guard.total -= bytes;
+        }
+    }
+}
+
+/// A share's contribution to [`Forwarder::unread_stash_bytes`], withdrawn on drop.
 struct UnreadBytes {
     bytes: usize,
     total: Arc<AtomicUsize>,
@@ -262,7 +334,8 @@ struct ForwarderTask {
     persist_client: PersistClient,
     channel: mpsc::UnboundedSender<PeekResponseUnary>,
     backlog: Arc<Mutex<SubscribeBacklogAccounting>>,
-    read_batch_bytes: usize,
+    /// The target size of a client message, and the backlog a send waits for.
+    chunk_bytes: usize,
     read_memory_budget_bytes: usize,
 }
 
@@ -290,6 +363,7 @@ impl ForwarderTask {
             upper,
             shares,
             error,
+            inline: _inline,
         } = batch;
         if let Some(error) = error {
             return Err(self.error(sink_id, error));
@@ -298,13 +372,12 @@ impl ForwarderTask {
         let mut chunk = Chunk::default();
         for share in shares {
             match share {
-                QueuedShare::Inline { updates, unread } => {
+                QueuedShare::Inline { updates } => {
                     for (row, time, diff) in updates.iter() {
-                        if chunk.push(&self.format, row, *time, diff) > self.read_batch_bytes {
+                        if chunk.push(&self.format, row, *time, diff) > self.chunk_bytes {
                             self.flush(&mut chunk).await?;
                         }
                     }
-                    drop(unread);
                 }
                 QueuedShare::Stashed {
                     shard_id,
@@ -362,7 +435,7 @@ impl ForwarderTask {
                     Ok(row) => row,
                     Err(error) => return Err(self.error(sink_id, error.to_string())),
                 };
-                if chunk.push(&self.format, &row, time, Diff::from(diff)) > self.read_batch_bytes {
+                if chunk.push(&self.format, &row, time, Diff::from(diff)) > self.chunk_bytes {
                     self.flush(chunk).await?;
                 }
             }
@@ -373,11 +446,10 @@ impl ForwarderTask {
 
     /// Sends the subscribe's error, which ends the stream.
     fn error(&self, sink_id: GlobalId, error: String) -> Stop {
-        send_to_client(
+        send_last_to_client(
             &self.channel,
             &self.backlog,
             PeekResponseUnary::Error(AdapterError::Unstructured(anyhow::Error::msg(error))),
-            0,
         );
         Stop::Ended(ForwarderEvent::Errored(sink_id))
     }
@@ -396,7 +468,7 @@ impl ForwarderTask {
         tokio::select! {
             () = SubscribeBacklogAccounting::wait_until_at_most(
                 &self.backlog,
-                self.read_batch_bytes,
+                self.chunk_bytes,
             ) => {}
             // A client that went away never drains its backlog.
             () = self.channel.closed() => return Err(Stop::ClientGone),

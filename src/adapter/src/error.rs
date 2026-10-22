@@ -46,6 +46,26 @@ use crate::coord::NetworkPolicyError;
 use crate::optimize::OptimizerError;
 use crate::peek_client::CollectionLookupError;
 
+/// A budget that bounds what a `SUBSCRIBE` holds for a client that does not read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubscribeBudget {
+    /// The bytes buffered in environmentd memory, set by `subscribe_max_buffered_bytes`.
+    BufferedBytes,
+    /// The bytes of stashed shares a batched subscribe has not read, set by
+    /// `batched_subscribe_max_unread_stash_bytes`.
+    UnreadStashBytes,
+}
+
+impl SubscribeBudget {
+    /// The system variable that sets the budget.
+    pub fn system_variable(&self) -> &'static str {
+        match self {
+            SubscribeBudget::BufferedBytes => "subscribe_max_buffered_bytes",
+            SubscribeBudget::UnreadStashBytes => "batched_subscribe_max_unread_stash_bytes",
+        }
+    }
+}
+
 /// Errors that can occur in the coordinator.
 #[derive(Debug)]
 pub enum AdapterError {
@@ -200,8 +220,10 @@ pub enum AdapterError {
     SubscribeFellBehind {
         /// Bytes buffered when the budget was exceeded.
         buffered_bytes: usize,
-        /// The `subscribe_max_buffered_bytes` budget that was exceeded.
+        /// The budget that was exceeded.
         max_buffered_bytes: usize,
+        /// Which budget was exceeded.
+        budget: SubscribeBudget,
     },
     /// A query exceeded the configured compute peek row iteration limit.
     PeekRowIterationLimitExceeded {
@@ -788,11 +810,11 @@ impl AdapterError {
             ),
             AdapterError::Catalog(c) => c.hint(),
             AdapterError::Eval(e) => e.hint(),
-            AdapterError::SubscribeFellBehind { .. } => Some(
+            AdapterError::SubscribeFellBehind { budget, .. } => Some(format!(
                 "The client is not reading results fast enough. Use a client that reads output \
-                without buffering, or raise the subscribe_max_buffered_bytes system variable."
-                    .to_string(),
-            ),
+                without buffering, or raise the {} system variable.",
+                budget.system_variable(),
+            )),
             AdapterError::Dataflow(e) => match &**e {
                 DataflowError::EvalError(e) => e.hint(),
                 DataflowError::SourceError(e) => e.hint.as_ref().map(|hint| hint.to_string()),
@@ -1433,6 +1455,7 @@ impl fmt::Display for AdapterError {
             AdapterError::SubscribeFellBehind {
                 buffered_bytes,
                 max_buffered_bytes,
+                budget: _,
             } => {
                 use bytesize::ByteSize;
                 let buffered = u64::cast_from(*buffered_bytes);

@@ -641,6 +641,7 @@ impl Coordinator {
                     Arc::clone(&backlog_accounting),
                     PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES.get(dyncfgs),
                     PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES.get(dyncfgs),
+                    max_buffered_bytes,
                     self.internal_cmd_tx.clone(),
                 );
                 ActiveComputeSink::BatchedSubscribe(ActiveBatchedSubscribe {

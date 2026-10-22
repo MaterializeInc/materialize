@@ -209,6 +209,14 @@ struct Harness {
 
 impl Harness {
     fn new(persist: &CountedClient, read_batch_bytes: usize) -> Self {
+        Self::with_max_buffered_bytes(persist, read_batch_bytes, usize::MAX)
+    }
+
+    fn with_max_buffered_bytes(
+        persist: &CountedClient,
+        read_batch_bytes: usize,
+        max_buffered_bytes: usize,
+    ) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let (events_tx, events) = mpsc::unbounded_channel();
         let backlog = Arc::new(Mutex::new(SubscribeBacklogAccounting::default()));
@@ -225,6 +233,7 @@ impl Harness {
             Arc::clone(&backlog),
             read_batch_bytes,
             1024 * 1024,
+            max_buffered_bytes,
             events_tx,
         );
         Harness {
@@ -528,30 +537,111 @@ async fn queued_inline_shares_count_until_formatted() {
     let updates: Vec<_> = (0..10).map(|value| (value, 1, 1)).collect();
     let first = inline(&updates);
     let second = inline(&[(10, 2, 1)]);
-    let (first_bytes, second_bytes) = (inline_bytes(&first), inline_bytes(&second));
-    assert!(first_bytes > 0 && second_bytes > 0);
+    let third = inline(&[(11, 3, 1), (12, 3, 1)]);
+    let (second_bytes, third_bytes) = (inline_bytes(&second), inline_bytes(&third));
+    assert!(second_bytes > 0 && third_bytes > 0);
 
     harness.forwarder.send(batch(0, Some(2), vec![first]));
     harness.forwarder.send(batch(2, Some(3), vec![second]));
+    harness.forwarder.send(batch(3, Some(4), vec![third]));
     assert_eq!(
         harness.forwarder.unread_inline_bytes(),
-        first_bytes + second_bytes
+        second_bytes + third_bytes
     );
 
-    // The client stops draining, so the forwarder stalls while formatting the first share.
+    // The client stops draining, so the forwarder stalls while formatting the first batch.
     for _ in 0..2 {
         harness.recv_undrained().await.expect("rows");
     }
     assert_eq!(
         harness.forwarder.unread_inline_bytes(),
-        first_bytes + second_bytes
+        second_bytes + third_bytes
     );
 
     harness.drain();
     harness.drain();
     harness.rows_until_progress(2).await;
     harness.rows_until_progress(3).await;
+    harness.rows_until_progress(4).await;
     assert_eq!(harness.forwarder.unread_inline_bytes(), 0);
+}
+
+#[mz_ore::test(tokio::test)]
+async fn a_large_head_batch_alone_does_not_count_against_the_memory_bound() {
+    let persist = CountedClient::new().await;
+    let mut harness = Harness::new(&persist, 1);
+    let updates: Vec<_> = (0..1000).map(|value| (value, 1, 1)).collect();
+    let head = inline(&updates);
+    assert!(inline_bytes(&head) > 1000);
+
+    harness.forwarder.send(batch(0, Some(2), vec![head]));
+    assert_eq!(harness.forwarder.unread_inline_bytes(), 0);
+
+    // The client stops draining, so the forwarder stalls while formatting the batch.
+    for _ in 0..2 {
+        harness.recv_undrained().await.expect("rows");
+    }
+    assert_eq!(harness.forwarder.unread_inline_bytes(), 0);
+
+    // A batch queued behind it counts.
+    let queued = inline(&[(1000, 2, 1)]);
+    let queued_bytes = inline_bytes(&queued);
+    harness.forwarder.send(batch(2, Some(3), vec![queued]));
+    assert_eq!(harness.forwarder.unread_inline_bytes(), queued_bytes);
+}
+
+/// Returns an inline share of at least `bytes` bytes, at time `time`, with values from `first`.
+fn inline_of_bytes(bytes: usize, time: u64, first: u64) -> AcceptedShare {
+    let mut count = 1;
+    loop {
+        let updates: Vec<_> = (first..first + count)
+            .map(|value| (value, time, 1))
+            .collect();
+        let share = inline(&updates);
+        if inline_bytes(&share) >= bytes {
+            return share;
+        }
+        count *= 2;
+    }
+}
+
+/// A client that drains one message at a time, scaled from the defaults: a read batch size of
+/// half the memory bound models 100 MiB of 128 MiB. With a chunk the size of the read batch,
+/// the message queued behind the drained one and a batch of inline shares queued behind the head
+/// batch would exceed the bound.
+#[mz_ore::test(tokio::test)]
+async fn a_draining_client_is_not_retired_with_a_full_chunk_queued() {
+    const MAX_BUFFERED_BYTES: usize = 64 * 1024;
+    let persist = CountedClient::new().await;
+    let mut harness =
+        Harness::with_max_buffered_bytes(&persist, MAX_BUFFERED_BYTES / 2, MAX_BUFFERED_BYTES);
+
+    let head = inline_of_bytes(4 * MAX_BUFFERED_BYTES, 1, 0);
+    let queued = inline_of_bytes(MAX_BUFFERED_BYTES / 2, 2, 1_000_000);
+    harness.forwarder.send(batch(0, Some(2), vec![head]));
+    harness.forwarder.send(batch(2, Some(3), vec![queued]));
+
+    let mut messages = 0;
+    loop {
+        // Gives the forwarder time to fill the backlog up to where it waits.
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        let backlog = harness.backlog.lock().expect("not poisoned").backlog_size();
+        let buffered = backlog + harness.forwarder.unread_inline_bytes();
+        assert!(
+            buffered <= MAX_BUFFERED_BYTES,
+            "{buffered} bytes buffered after {messages} messages, over {MAX_BUFFERED_BYTES}",
+        );
+        messages += 1;
+        if harness.rows().await == [progress_row(2)] {
+            break;
+        }
+    }
+    assert!(
+        messages > 4,
+        "the head batch was not chunked: {messages} messages"
+    );
 }
 
 #[mz_ore::test(tokio::test)]

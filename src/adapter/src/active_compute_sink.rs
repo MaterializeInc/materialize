@@ -32,6 +32,7 @@ use uuid::Uuid;
 
 use crate::batched_subscribe::Forwarder;
 use crate::coord::peek::{DroppedDependency, PeekResponseUnary};
+use crate::error::SubscribeBudget;
 use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 
 #[derive(Debug)]
@@ -106,6 +107,7 @@ pub enum ActiveComputeSinkRetireReason {
     BufferExceeded {
         buffered_bytes: usize,
         max_buffered_bytes: usize,
+        budget: SubscribeBudget,
     },
 }
 
@@ -135,6 +137,8 @@ pub struct SubscribeBacklogAccounting {
     total: usize,
     /// Signalled whenever a message is popped.
     drained: Arc<Notify>,
+    /// Set once the terminal message was sent. Later sends are dropped.
+    closed: bool,
 }
 
 impl SubscribeBacklogAccounting {
@@ -189,6 +193,8 @@ fn lock(backlog: &Mutex<SubscribeBacklogAccounting>) -> MutexGuard<'_, Subscribe
 /// `bytes` is the message's payload size. Its footprint (payload plus a fixed
 /// per-message overhead) is recorded in `backlog` here and released by the
 /// receiver side when the message is drained.
+///
+/// Nothing is sent after [`send_last_to_client`].
 pub(crate) fn send_to_client(
     channel: &mpsc::UnboundedSender<PeekResponseUnary>,
     backlog: &Mutex<SubscribeBacklogAccounting>,
@@ -196,8 +202,29 @@ pub(crate) fn send_to_client(
     bytes: usize,
 ) {
     let footprint = bytes.saturating_add(SUBSCRIBE_MESSAGE_OVERHEAD_BYTES);
-    lock(backlog).push(footprint);
+    // The send happens under the lock, so that it is ordered with `send_last_to_client`.
+    let mut backlog = lock(backlog);
+    if backlog.closed {
+        return;
+    }
+    backlog.push(footprint);
     let _ = channel.send(response);
+}
+
+/// Sends the terminal message of a subscribe, after which [`send_to_client`] sends nothing to
+/// the client.
+pub(crate) fn send_last_to_client(
+    channel: &mpsc::UnboundedSender<PeekResponseUnary>,
+    backlog: &Mutex<SubscribeBacklogAccounting>,
+    response: PeekResponseUnary,
+) {
+    let mut backlog = lock(backlog);
+    if backlog.closed {
+        return;
+    }
+    backlog.push(SUBSCRIBE_MESSAGE_OVERHEAD_BYTES);
+    let _ = channel.send(response);
+    backlog.closed = true;
 }
 
 /// Ownership and cleanup scope of an active subscribe.
@@ -602,9 +629,11 @@ impl ActiveSubscribe {
             ActiveComputeSinkRetireReason::BufferExceeded {
                 buffered_bytes,
                 max_buffered_bytes,
+                budget,
             } => PeekResponseUnary::Error(AdapterError::SubscribeFellBehind {
                 buffered_bytes,
                 max_buffered_bytes,
+                budget,
             }),
         };
         self.send(message, 0);
@@ -668,6 +697,7 @@ impl ActiveBatchedSubscribe {
             return Some(ActiveComputeSinkRetireReason::BufferExceeded {
                 buffered_bytes,
                 max_buffered_bytes: self.max_buffered_bytes,
+                budget: SubscribeBudget::BufferedBytes,
             });
         }
         let unread_stash_bytes = self.forwarder.unread_stash_bytes();
@@ -675,6 +705,7 @@ impl ActiveBatchedSubscribe {
             return Some(ActiveComputeSinkRetireReason::BufferExceeded {
                 buffered_bytes: unread_stash_bytes,
                 max_buffered_bytes: self.max_unread_stash_bytes,
+                budget: SubscribeBudget::UnreadStashBytes,
             });
         }
         None
@@ -695,17 +726,22 @@ impl ActiveBatchedSubscribe {
             ActiveComputeSinkRetireReason::BufferExceeded {
                 buffered_bytes,
                 max_buffered_bytes,
+                budget,
             } => Some(PeekResponseUnary::Error(
                 AdapterError::SubscribeFellBehind {
                     buffered_bytes,
                     max_buffered_bytes,
+                    budget,
                 },
             )),
         };
-        if let Some(message) = message {
-            send_to_client(&self.channel, &self.backlog_accounting, message, 0);
-        }
+        // Dropping the forwarder aborts its task, but the task can still be in a send on
+        // another thread. `send_last_to_client` closes the channel to every later send, so the
+        // terminal message is the last one the client receives.
         drop(self.forwarder);
+        if let Some(message) = message {
+            send_last_to_client(&self.channel, &self.backlog_accounting, message);
+        }
     }
 }
 
@@ -753,9 +789,11 @@ impl ActiveCopyTo {
             ActiveComputeSinkRetireReason::BufferExceeded {
                 buffered_bytes,
                 max_buffered_bytes,
+                budget,
             } => Err(AdapterError::SubscribeFellBehind {
                 buffered_bytes,
                 max_buffered_bytes,
+                budget,
             }),
         };
         let _ = self.tx.send(message);
