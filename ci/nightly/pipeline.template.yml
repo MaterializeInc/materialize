@@ -387,6 +387,8 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: wasm-sink
+              # The composition builds the guest with cargo for wasm32-wasip2.
+              ci-builder: stable
 
       - id: redpanda-resumption
         topics: [kafka, kafka-sink]
