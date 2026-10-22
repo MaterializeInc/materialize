@@ -280,6 +280,19 @@ async fn exercise_liveness() {
     );
     let acquisition_due = Instant::now();
     driver.publication_clock.as_mut().unwrap().due = acquisition_due;
+    driver
+        .transact(
+            &mut catalog,
+            &mut effects,
+            cluster,
+            &build,
+            vec![Op::UpdateSystemConfiguration {
+                name: "unsafe_pause_catalog_read_protection_publication".into(),
+                value: mz_sql::session::vars::OwnedVarInput::Flat("true".into()),
+            }],
+        )
+        .await
+        .unwrap();
     let mut holds = driver
         .acquire(
             &mut catalog,
@@ -306,6 +319,42 @@ async fn exercise_liveness() {
         .get_mut(&fixture.source)
         .unwrap()
         .try_downgrade(Antichain::from_elem(Timestamp::new(16_000)))
+        .unwrap();
+    let paused_requirements = catalog.state().client_read_requirements().clone();
+    let paused_bounds = catalog.state().collection_compaction_bounds().clone();
+    // Both client-only and combined publication stay paused even when due.
+    // The acquisition above still commits immediately while the pause is active.
+    for metadata in [None, Some(&metadata)] {
+        driver.publication_clock.as_mut().unwrap().due = Instant::now();
+        assert_eq!(
+            driver
+                .publish(&mut catalog, &mut effects, cluster, &build, false, metadata)
+                .await
+                .unwrap(),
+            PublicationOutcome::Deferred
+        );
+        assert_eq!(
+            catalog.state().client_read_requirements(),
+            &paused_requirements
+        );
+        assert_eq!(
+            catalog.state().collection_compaction_bounds(),
+            &paused_bounds
+        );
+        assert!(!driver.publication_clock.as_ref().unwrap().due());
+    }
+    driver
+        .transact(
+            &mut catalog,
+            &mut effects,
+            cluster,
+            &build,
+            vec![Op::UpdateSystemConfiguration {
+                name: "unsafe_pause_catalog_read_protection_publication".into(),
+                value: mz_sql::session::vars::OwnedVarInput::Flat("false".into()),
+            }],
+        )
+        .await
         .unwrap();
     driver.configure_publication(
         catalog
@@ -393,10 +442,16 @@ async fn exercise_liveness() {
             None,
             ts,
             None,
-            vec![Op::CreateClientIncarnation {
-                replica_id: None,
-                expected: None,
-            }],
+            vec![
+                Op::CreateClientIncarnation {
+                    replica_id: None,
+                    expected: None,
+                },
+                Op::UpdateSystemConfiguration {
+                    name: "unsafe_pause_catalog_read_protection_publication".into(),
+                    value: mz_sql::session::vars::OwnedVarInput::Flat("true".into()),
+                },
+            ],
         )
         .await
         .unwrap()
@@ -440,6 +495,34 @@ async fn exercise_liveness() {
             retry_after.saturating_duration_since(Instant::now()),
         ))
         .await;
+    // Catch-up must observe the peer's pause before preparing the retry.
+    assert_eq!(
+        driver
+            .publish(&mut catalog, &mut effects, cluster, &build, true, None)
+            .await
+            .unwrap(),
+        PublicationOutcome::Deferred
+    );
+    assert_eq!(
+        catalog.state().client_read_requirements()[&requirement],
+        Timestamp::new(15_000),
+    );
+    assert!(!driver.protection.publication_pending());
+    assert!(!driver.publication_clock.as_ref().unwrap().due());
+    driver
+        .transact(
+            &mut catalog,
+            &mut effects,
+            cluster,
+            &build,
+            vec![Op::UpdateSystemConfiguration {
+                name: "unsafe_pause_catalog_read_protection_publication".into(),
+                value: mz_sql::session::vars::OwnedVarInput::Flat("false".into()),
+            }],
+        )
+        .await
+        .unwrap();
+    driver.publication_clock.as_mut().unwrap().due = Instant::now();
     driver
         .publish(&mut catalog, &mut effects, cluster, &build, true, None)
         .await

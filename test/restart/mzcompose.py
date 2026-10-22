@@ -1372,6 +1372,8 @@ def workflow_catalog_read_protection(c: Composition) -> None:
                 "enable_expression_cache": "false",
                 "enable_logical_compaction_window": "true",
                 "enable_index_options": "true",
+                # Observe advancement within the fixture's existing deadlines.
+                "catalog_read_protection_publish_interval": "1s",
                 # Physical-retention observations require individual shard series.
                 "persist_shard_metrics": "both",
                 # Crash-surviving readers must expire before physical reclamation is observable.
@@ -1432,7 +1434,9 @@ def workflow_catalog_read_protection(c: Composition) -> None:
                 )
             time.sleep(0.5)
         assert inspect(index_input)["since"][0] > 0
-        query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1h'")
+        query(
+            "ALTER SYSTEM SET unsafe_pause_catalog_read_protection_publication = true"
+        )
         advancement_paused_at = time.monotonic()
         td("""
             > CREATE INDEX protected_index ON protected_index_input (a)
@@ -1473,7 +1477,7 @@ def workflow_catalog_read_protection(c: Composition) -> None:
                     counts[strategy[1]] += float(line.rsplit(" ", 1)[1])
             return counts
 
-        def indexed_read_before_advancement(phase: str) -> None:
+        def indexed_read(phase: str) -> None:
             td(f"""
                 > SELECT read_frontier > 0 FROM ({index_frontier_sql}) f;
                 true
@@ -1494,23 +1498,29 @@ def workflow_catalog_read_protection(c: Composition) -> None:
                 before,
                 after,
             )
-            assert index_permission() == initial_permission
 
+        # The indexed peek certifies the post-pause catalog and waits for the
+        # replica to follow it and install the index before we record permission.
+        indexed_read("pause-synchronized")
         initial_permission = index_permission()
         assert initial_permission is not None
         initial_since = initial_permission["elements"]
         assert len(initial_since) == 1
         assert initial_since[0] >= physical_since[0] > 0
-        indexed_read_before_advancement("initial")
+        indexed_read("initial")
+        assert index_permission() == initial_permission
         pre_crash_incarnations = catalog_snapshot()["client_incarnations"]
         assert pre_crash_incarnations, "crash proof requires live client incarnations"
         print(f"Pre-crash client incarnations: {sorted(pre_crash_incarnations)}")
         c.kill("materialized")
         c.up("materialized")
         assert gid("protected_index") == index
-        indexed_read_before_advancement("restarted")
+        indexed_read("restarted")
+        assert index_permission() == initial_permission
         assert time.monotonic() - advancement_paused_at < 300
-        query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s'")
+        query(
+            "ALTER SYSTEM SET unsafe_pause_catalog_read_protection_publication = false"
+        )
         advancement_deadline = time.monotonic() + 120
         # Restart replaces the exact prior executions and transfers their grants.
         # Publication can then release requirements the successors no longer need.
@@ -1546,9 +1556,12 @@ def workflow_catalog_read_protection(c: Composition) -> None:
             """,
             timeout=remaining,
         )
-        query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1h'")
-        # Stay well inside the positive cadence while driving progress past the cap.
-        # No peek is kept open to retain index history.
+        query(
+            "ALTER SYSTEM SET unsafe_pause_catalog_read_protection_publication = true"
+        )
+        indexed_read("cap-synchronized")
+        # Drive progress past committed permission without keeping a peek open
+        # to retain index history.
         capped_start = time.monotonic()
         published_permission = index_permission()
         assert published_permission is not None
@@ -1565,7 +1578,9 @@ def workflow_catalog_read_protection(c: Composition) -> None:
             assert record("CollectionCompactionBound", index)["frontier"] == cap
             assert index_permission() == {"elements": [cap]}
             assert time.monotonic() - capped_start < 300
-        query("ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s'")
+        query(
+            "ALTER SYSTEM SET unsafe_pause_catalog_read_protection_publication = false"
+        )
         # Observe committed protection as the current executions publish progress.
         snapshot = catalog_snapshot()
         print(

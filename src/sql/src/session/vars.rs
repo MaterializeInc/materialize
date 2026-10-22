@@ -1306,6 +1306,7 @@ impl SystemVars {
             &WEBHOOKS_SECRETS_CACHING_TTL_SECS,
             &COORD_SLOW_MESSAGE_WARN_THRESHOLD,
             &CATALOG_READ_PROTECTION_PUBLISH_INTERVAL,
+            &UNSAFE_PAUSE_CATALOG_READ_PROTECTION_PUBLICATION,
             &grpc_client::CONNECT_TIMEOUT,
             &grpc_client::HTTP2_KEEP_ALIVE_INTERVAL,
             &grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT,
@@ -2248,6 +2249,10 @@ impl SystemVars {
 
     pub fn catalog_read_protection_publish_interval(&self) -> Duration {
         *self.expect_value(&CATALOG_READ_PROTECTION_PUBLISH_INTERVAL)
+    }
+
+    pub fn unsafe_pause_catalog_read_protection_publication(&self) -> bool {
+        *self.expect_value(&UNSAFE_PAUSE_CATALOG_READ_PROTECTION_PUBLICATION)
     }
 
     pub fn grpc_client_http2_keep_alive_interval(&self) -> Duration {

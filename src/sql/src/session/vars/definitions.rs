@@ -978,6 +978,14 @@ pub static CATALOG_READ_PROTECTION_PUBLISH_INTERVAL: VarDefinition = VarDefiniti
 )
 .with_constraint(&NON_ZERO_DURATION);
 
+pub static UNSAFE_PAUSE_CATALOG_READ_PROTECTION_PUBLICATION: VarDefinition = VarDefinition::new(
+    "unsafe_pause_catalog_read_protection_publication",
+    value!(bool; false),
+    "Pauses periodic read-protection advancement and release for testing. \
+     Grant acquisition and application of committed compaction permission remain active.",
+    false,
+);
+
 /// Controls the connect_timeout setting when connecting to PG via `mz_postgres_util`.
 pub static PG_SOURCE_CONNECT_TIMEOUT: VarDefinition = VarDefinition::new(
     "pg_source_connect_timeout",

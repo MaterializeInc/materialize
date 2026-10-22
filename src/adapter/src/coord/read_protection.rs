@@ -1001,19 +1001,48 @@ impl Coordinator {
         let Some(requirements) = client.protection.prepare_updates_if_needed() else {
             return Ok(());
         };
+        if let Err(error) = self.sync_client_protection_catalog().await {
+            client.protection.finish_publication(false);
+            return Err(error);
+        }
+        let catalog = self
+            .client_protection_catalog
+            .as_mut()
+            .expect("prewarming publication");
+        if catalog
+            .system_config()
+            .unsafe_pause_catalog_read_protection_publication()
+        {
+            client.protection.finish_publication(false);
+            return Ok(());
+        }
         let incarnation = client.protection.incarnation();
-        let result = self
-            .transact_client_protection_inner(
-                Op::UpdateClientReadRequirements {
+        // The pause check uses the synchronized prefix. Transaction-open
+        // validation must reject a subsequent pause rather than refresh past it.
+        let ts = catalog.current_upper().await;
+        let result = catalog
+            .transact(
+                None,
+                Some(&mut self.controller.storage_collections),
+                ts,
+                None,
+                vec![Op::UpdateClientReadRequirements {
                     incarnation,
                     requirements,
-                },
-                true,
+                }],
             )
             .await;
         // Definitive failure releases only the pending barrier, not committed
         // protection. No barrier survives the timer owner's yield between attempts.
         client.protection.finish_publication(result.is_ok());
+        if matches!(&result, Err(AdapterError::Catalog(error)) if matches!(
+            &error.kind,
+            mz_catalog::memory::error::ErrorKind::Durable(
+                mz_catalog::durable::DurableCatalogError::CatalogOutOfSync { .. }
+            )
+        )) {
+            self.sync_client_protection_catalog().await?;
+        }
         if !self
             .client_read_catalog()
             .state()
@@ -1089,6 +1118,13 @@ impl Coordinator {
             // Sample against a freshly applied prefix, not the previous tick's
             // state. Sampled bounds cannot absorb catch-up at transaction open.
             self.refresh_catalog_for_write().await?;
+        }
+        if self
+            .catalog()
+            .system_config()
+            .unsafe_pause_catalog_read_protection_publication()
+        {
+            return Ok(());
         }
         let client = self.query_client.clone();
         let requirements = client

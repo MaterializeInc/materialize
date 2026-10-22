@@ -1168,6 +1168,18 @@ impl ReplicaEnactment {
                 return Ok(PublicationOutcome::Deferred);
             }
         }
+        if catalog
+            .system_config()
+            .unsafe_pause_catalog_read_protection_publication()
+        {
+            // Keep polling and applying committed permission without a due timer
+            // spinning while the fixture retains its published requirements.
+            let clock = self.publication_clock.as_mut().expect("configured");
+            if clock.due() {
+                clock.completed();
+            }
+            return Ok(PublicationOutcome::Deferred);
+        }
         // Acquisitions commit independently before use. Maintenance coalesces
         // advances and releases while retaining committed protection until publication.
         if !pending && !refreshed {
