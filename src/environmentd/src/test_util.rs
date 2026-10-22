@@ -288,7 +288,7 @@ impl TestHarness {
         self,
         tls_reload_certs: ReloadTrigger,
     ) -> Result<TestServer, anyhow::Error> {
-        let listeners = Listeners::new(&self).await?;
+        let listeners = Listeners::new(&self)?;
         listeners.serve_with_trigger(self, tls_reload_certs).await
     }
 
@@ -730,8 +730,8 @@ pub struct Listeners {
 }
 
 impl Listeners {
-    pub async fn new(config: &TestHarness) -> Result<Listeners, anyhow::Error> {
-        let inner = crate::Listeners::bind(config.listeners_config.clone()).await?;
+    pub fn new(config: &TestHarness) -> Result<Listeners, anyhow::Error> {
+        let inner = crate::Listeners::bind(config.listeners_config.clone())?;
         Ok(Listeners { inner })
     }
 

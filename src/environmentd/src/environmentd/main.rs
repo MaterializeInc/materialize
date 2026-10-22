@@ -1100,7 +1100,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let serve_start = Instant::now();
     info!("startup: envd init: serving beginning");
     let server = runtime.block_on(async {
-        let listeners = Listeners::bind(listeners_config).await?;
+        let listeners = Listeners::bind(listeners_config)?;
         let catalog_config = CatalogConfig {
             persist_clients,
             metrics: Arc::new(mz_catalog::durable::Metrics::new(&metrics_registry)),
