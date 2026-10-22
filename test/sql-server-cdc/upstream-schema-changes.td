@@ -278,6 +278,36 @@ contains:incompatible schema change on dbo.recreated_constraint: UNIQUE constrai
 
 > DROP TABLE recreated_constraint;
 
+# Renaming the upstream table is a non-event. The capture instance, its change
+# table, and the constraint re-read follow the table by object id, not by name,
+# and a constraint dropped after the rename is still reported, under the name
+# the Materialize table was created with.
+$ sql-server-execute name=sql-server
+CREATE TABLE renamed_table (id INT NOT NULL CONSTRAINT renamed_table_primary_key PRIMARY KEY, wallet VARCHAR(64) NOT NULL CONSTRAINT renamed_table_wallet_unique UNIQUE);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'renamed_table', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO renamed_table VALUES (1, 'a');
+
+> CREATE TABLE renamed_table FROM SOURCE sql_server_src (REFERENCE dbo.renamed_table);
+
+> SELECT * FROM renamed_table;
+1 a
+
+$ sql-server-execute name=sql-server
+EXEC sp_rename 'dbo.renamed_table', 'renamed_table_after';
+INSERT INTO renamed_table_after VALUES (2, 'b');
+
+> SELECT * FROM renamed_table;
+1 a
+2 b
+
+$ sql-server-execute name=sql-server
+ALTER TABLE renamed_table_after DROP CONSTRAINT renamed_table_wallet_unique;
+
+! SELECT * FROM renamed_table;
+contains:incompatible schema change on dbo.renamed_table: UNIQUE constraint "renamed_table_wallet_unique" (wallet) was dropped upstream
+
+> DROP TABLE renamed_table;
+
 # A table tracked by two capture instances: both exports see the table's
 # constraints, so neither reports a phantom dropped key, and a real drop is
 # reported on both.
