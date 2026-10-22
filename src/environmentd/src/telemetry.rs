@@ -110,9 +110,6 @@ pub struct Config {
     /// The version of the helm chart that deployed this environment, if
     /// self-managed. Folded into the reported `mz_version` trait.
     pub helm_chart_version: Option<String>,
-    /// The version of the Terraform module that deployed this environment, if
-    /// any. Reported as the `terraform_module_version` trait.
-    pub terraform_module_version: Option<String>,
     /// How frequently to send a summary to Segment.
     pub report_interval: Duration,
 }
@@ -129,7 +126,6 @@ async fn report_loop(
         environment_id,
         license_key,
         helm_chart_version,
-        terraform_module_version,
         report_interval,
     }: Config,
 ) {
@@ -230,7 +226,6 @@ async fn report_loop(
                 &license_key,
                 &BUILD_INFO,
                 helm_chart_version.clone(),
-                terraform_module_version.as_deref(),
             );
         }
 
@@ -297,7 +292,6 @@ fn build_segment_traits(
     license_key: &ValidatedLicenseKey,
     build_info: &BuildInfo,
     helm_chart_version: Option<String>,
-    terraform_module_version: Option<&str>,
 ) {
     let now_secs = u64::try_from(Utc::now().timestamp()).unwrap_or(0);
     let license_expired =
@@ -317,12 +311,6 @@ fn build_segment_traits(
     traits.insert(
         "mz_version".into(),
         json!(build_info.human_version(helm_chart_version)),
-    );
-    // Reported as null when unset so a deployment that stops using the
-    // Terraform module clears the group trait in Segment.
-    traits.insert(
-        "terraform_module_version".into(),
-        json!(terraform_module_version),
     );
 }
 
@@ -357,7 +345,6 @@ mod tests {
             &license_key(u64::MAX, false),
             &DUMMY_BUILD_INFO,
             Some("25.1.0".into()),
-            Some("v1.2.3"),
         );
         assert_eq!(
             traits,
@@ -369,8 +356,7 @@ mod tests {
                 "license_expiration_timestamp": u64::MAX,
                 "license_expired": false,
                 "license_expiration_behavior": "Warn",
-                "mz_version": DUMMY_BUILD_INFO.human_version(Some("25.1.0".into())),
-                "terraform_module_version": "v1.2.3"
+                "mz_version": DUMMY_BUILD_INFO.human_version(Some("25.1.0".into()))
             })
         );
     }
@@ -384,7 +370,6 @@ mod tests {
             traits.as_object_mut().unwrap(),
             &license_key(1, false),
             &DUMMY_BUILD_INFO,
-            None,
             None,
         );
         assert_eq!(&traits["license_expired"], &json!(true));
@@ -400,7 +385,6 @@ mod tests {
             &license_key(u64::MAX, true),
             &DUMMY_BUILD_INFO,
             None,
-            None,
         );
         assert_eq!(&traits["license_expired"], &json!(true));
     }
@@ -412,7 +396,6 @@ mod tests {
             traits.as_object_mut().unwrap(),
             &license_key(0, false),
             &DUMMY_BUILD_INFO,
-            None,
             None,
         );
         assert_eq!(&traits["license_expired"], &json!(false));

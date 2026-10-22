@@ -37,7 +37,7 @@ operator:
     # -- Log filtering settings for startup logs
     startupLogFilter: "INFO,mz_orchestratord=TRACE"
     # -- (string) Version of the Materialize Terraform module installing this
-    # chart. Set by the Terraform modules and reported in environmentd
+    # chart. Set by the Terraform modules and reported in orchestratord
     # telemetry. Leave unset otherwise.
     terraformModuleVersion: null
     enableInternalStatementLogging: true

@@ -1402,7 +1402,6 @@ impl<'a> RunnerInner<'a> {
             internal_console_redirect_url: None,
             tls_reload_certs: mz_server_core::cert_reload_never_reload(),
             helm_chart_version: None,
-            terraform_module_version: None,
             license_key: ValidatedLicenseKey::for_tests(),
             external_login_password_mz_system: None,
             force_builtin_schema_migration: None,
