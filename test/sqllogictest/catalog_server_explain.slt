@@ -5013,47 +5013,90 @@ query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_index_columns";
 ----
 mz_catalog.mz_index_columns:
-  →Union
-    →Differential Join %0:mz_catalog_raw[((#0{data} -> "key") -> "id")] » %1:mz_catalog_raw[((#0{data} -> "key") -> "gid")]
-      after %1:
-        Project: #4, #5, #8..=#10
-        Map: (#1{data} -> "key"), parse_catalog_id((#3 -> "id")), (text_to_uint8((#3 ->> "position")) + 1), (#1{data} -> "value"), (#6 ->> "column"), (text_to_uint8(#7) + 1), case when (#7) IS NULL then ((parse_catalog_create_sql(((((#2{data} -> "value") -> "definition") -> "V1") ->> "create_sql")) -> "key_parts") ->> text_to_bigint(((#1{data} -> "key") ->> "position"))) else null end, text_to_boolean((#6 ->> "nullable"))
-      →Arrange (((#0{data} -> "key") -> "id"))
+  →With
+    cte l0 =
+      →Differential Join %0:mz_catalog_raw[((#0{data} -> "key") -> "id")] » %1:mz_catalog_raw[((#0{data} -> "key") -> "gid")]
+        after %1:
+          Project: #3..=#5
+          Map: parse_catalog_id(((#1{data} -> "key") -> "id")), ((#1{data} -> "value") -> "columns"), (parse_catalog_create_sql(((((#2{data} -> "value") -> "definition") -> "V1") ->> "create_sql")) -> "key_parts")
+        →Arrange (((#0{data} -> "key") -> "id"))
+          →Fused with Child Map/Filter/Project
+            Project: #0
+            Filter: ((#1 -> "id")) IS NOT NULL AND ("IndexColumns" = #2)
+              →Read mz_internal.mz_catalog_raw
+        →Arrange (((#0{data} -> "key") -> "gid"))
+          →Fused with Child Map/Filter/Project
+            Project: #0
+            Filter: ((#1 -> "gid")) IS NOT NULL AND ("Item" = #2)
+              →Read mz_internal.mz_catalog_raw
+    cte l1 =
+      →Fused with Child Map/Filter/Project
+        Project: #0, #2, #3
+          →Table Function jsonb_array_elements[with_ordinality](#1{columns})
+            →Fused with Child Map/Filter/Project
+              Project: #0, #1
+                →Read l0
+    cte l2 =
+      →Arrange (#0{index_id}, #2{ordinality})
         →Fused with Child Map/Filter/Project
-          Project: #0
-          Filter: ((#1 -> "id")) IS NOT NULL AND ("IndexColumn" = #2)
-            →Read mz_internal.mz_catalog_raw
-      →Arrange (((#0{data} -> "key") -> "gid"))
-        →Fused with Child Map/Filter/Project
-          Project: #0
-          Filter: ((#1 -> "gid")) IS NOT NULL AND ("Item" = #2)
-            →Read mz_internal.mz_catalog_raw
-    →Differential Join %1:mz_catalog_raw[#1{name}] » %0[#0{name}]
-      Final closure:
-        Project: #3, #0, #1, #4, #2
-        Map: null
-      →Arrange (#0{name})
-        →Constant (108 rows)
-      →Arrange (#1{name})
-        →Fused with Child Map/Filter/Project
-          Project: #4, #3
-          Filter: ("6" = (#1 ->> "object_type")) AND ("GidMapping" = #2) AND (#3) IS NOT NULL
-          Map: (#1 ->> "object_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id"))
-            →Read mz_internal.mz_catalog_raw
-    →Differential Join %0:mz_catalog_raw[((#0{data} -> "key") ->> "name")] » %1[#0{name}]
-      after %1:
-        Project: #2..=#5
-        Map: ("si" || ((#1{data} -> "value") ->> "catalog_id"))
-      Final closure:
-        Project: #3, #0, #1, #4, #2
-        Map: null
-      →Arrange (((#0{data} -> "key") ->> "name"))
-        →Fused with Child Map/Filter/Project
-          Project: #0
-          Filter: ((#1 ->> "name")) IS NOT NULL AND ("ClusterIntrospectionSourceIndex" = #2)
-            →Read mz_internal.mz_catalog_raw
-      →Arrange (#0{name})
-        →Constant (83 rows)
+          Filter: (#0{index_id}) IS NOT NULL
+            →Read l1
+    cte l3 =
+      →Differential Join %0:l2[#0{index_id}, #2{ordinality}] » %1[#0{index_id}, #2{ordinality}]
+        →Arranged l2
+        →Arrange (#0{index_id}, #2{ordinality})
+          →Fused with Child Map/Filter/Project
+            Project: #0, #2, #3
+              →Table Function jsonb_array_elements_text[with_ordinality](#1{key_parts})
+                →Fused with Child Map/Filter/Project
+                  Project: #0, #2
+                  Filter: (#0{index_id}) IS NOT NULL
+                    →Read l0
+  →Return
+    →Union
+      →Map/Filter/Project
+        Project: #0, #4, #6..=#8
+        Map: bigint_to_uint8(#2{ordinality}), (#1{value} ->> "column"), (text_to_uint8(#5) + 1), case when (#5) IS NULL then #3{expression} else null end, text_to_boolean((#1{value} ->> "nullable"))
+          →Union
+            →Map/Filter/Project
+              Project: #0..=#3
+              Map: null
+                →Consolidating Union
+                  →Negate Diffs
+                    →Differential Join %1[#0, #1] » %0:l2[#0{index_id}, #2{ordinality}]
+                      →Arranged l2
+                      →Distinct GroupAggregate
+                        →Fused with Child Map/Filter/Project
+                          Project: #0, #2
+                            →Read l3
+                  →Stream l1
+            →Stream l3
+      →Differential Join %1:mz_catalog_raw[#1{name}] » %0[#0{name}]
+        Final closure:
+          Project: #3, #0, #1, #4, #2
+          Map: null
+        →Arrange (#0{name})
+          →Constant (108 rows)
+        →Arrange (#1{name})
+          →Fused with Child Map/Filter/Project
+            Project: #4, #3
+            Filter: ("6" = (#1 ->> "object_type")) AND ("GidMapping" = #2) AND (#3) IS NOT NULL
+            Map: (#1 ->> "object_name"), ("s" || ((#0{data} -> "value") ->> "catalog_id"))
+              →Read mz_internal.mz_catalog_raw
+      →Differential Join %0:mz_catalog_raw[((#0{data} -> "key") ->> "name")] » %1[#0{name}]
+        after %1:
+          Project: #2..=#5
+          Map: ("si" || ((#1{data} -> "value") ->> "catalog_id"))
+        Final closure:
+          Project: #3, #0, #1, #4, #2
+          Map: null
+        →Arrange (((#0{data} -> "key") ->> "name"))
+          →Fused with Child Map/Filter/Project
+            Project: #0
+            Filter: ((#1 ->> "name")) IS NOT NULL AND ("ClusterIntrospectionSourceIndex" = #2)
+              →Read mz_internal.mz_catalog_raw
+        →Arrange (#0{name})
+          →Constant (83 rows)
 
 Source mz_internal.mz_catalog_raw
   project=(#0..=#2)
@@ -6190,7 +6233,7 @@ mz_internal.mz_object_dependencies:
               Project: #4..=#6, #2
               Filter: case when (#7{ref_kind} = "func") then (#3{object_type} = "8") else case when (#7{ref_kind} = "type") then (#3{object_type} = "7") else ((#3{object_type} != "7") AND (#3{object_type} != "8")) end end
           →Arrange (#0{object_schema}..=#2{object_type}) (#3{ref_schema}, #4{ref_name})
-            →Constant (1087 rows)
+            →Constant (1088 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
@@ -10744,7 +10787,7 @@ Explained Query:
               Project: #3, #4
               Filter: case when (#2{ref_kind} = "func") then (#5{object_type} = "8") else case when (#2{ref_kind} = "type") then (#5{object_type} = "7") else ((#5{object_type} != "7") AND (#5{object_type} != "8")) end end
           →Unarranged Raw Stream
-            →Constant (1087 rows)
+            →Constant (1088 rows)
           →Arrange (#1{schema_name}..=#3{object_type})
             →Fused with Child Map/Filter/Project
               Project: #5, #4, #2, #3
