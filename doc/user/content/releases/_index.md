@@ -38,6 +38,12 @@ CREATE TABLE orders
 
 For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/postgres/) for PostgreSQL and the guide on [handling upstream constraint drops](/ingest-data/postgres/source-versioning/#handle-upstream-constraint-drop).
 
+### Add tables to PostgreSQL sources without pausing ingestion {#v26.47-postgres-add-table-freshness}
+
+{{< private-preview />}}
+
+Previously, adding a table to a running PostgreSQL source, with `CREATE TABLE ... FROM SOURCE` or, for legacy sources, `ALTER SOURCE ... ADD SUBSOURCE`, blocked every other table in that source from advancing until the new table's snapshot finished. Now, tables that are already ingesting keep advancing while the new table snapshots. Adding a table still restarts the source dataflow, and the cluster uses additional memory while the new table hydrates. This applies to PostgreSQL sources only.
+
 ### Improvements {#v26.47-improvements}
 - **Zero-downtime upgrades wait less before promoting**: A rollout no longer imposes a full stability wait on a replica created during that rollout — the wait is capped at how old the replica was when it hydrated on the incoming generation — and no longer waits on collections or replicas that the deployment being replaced has not hydrated either.
 - **Lower connection balancer memory per connection**: An idle TLS connection through the connection balancer now holds 44.0 KB of heap instead of 68.3 KB (20.5 KB instead of 44.7 KB without TLS), because the buffers and authentication state needed only during startup are released once the connection is proxied, so a self-managed deployment running the 256 MiB default is no longer killed for running out of memory at roughly 3,800 of its 5,000 permitted connections.
