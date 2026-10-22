@@ -85,10 +85,10 @@ pub(crate) mod description_scan;
 mod error_scan;
 pub(crate) mod peek_budget;
 mod peek_metrics;
-mod peek_offload;
+pub(crate) mod peek_offload;
 mod peek_result_iterator;
 mod peek_scan;
-mod peek_stash;
+pub(crate) mod peek_stash;
 
 /// Cheap handles on the dyncfgs that bound how many rows a peek may examine.
 ///

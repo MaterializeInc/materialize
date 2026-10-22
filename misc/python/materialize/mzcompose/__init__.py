@@ -952,6 +952,10 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "compute_index_peek_activation_budget",
     "compute_index_peek_yield_granularity",
     "compute_index_peek_permit_fraction",
+    # The batched subscribe tiers, left at their code defaults for the same
+    # reason. parallel-workload varies them.
+    "compute_batched_subscribe_inline_max_bytes",
+    "compute_batched_subscribe_offload_min_bytes",
     "compute_peek_response_stash_batch_bytes",
     "compute_peek_response_stash_read_batch_size_bytes",
     "compute_peek_response_stash_read_memory_budget_bytes",

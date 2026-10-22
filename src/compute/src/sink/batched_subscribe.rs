@@ -23,11 +23,15 @@
 //!
 //! Every worker reports exactly one response per description, including an empty one, because the
 //! partitioned merge pairs the k-th response of every worker.
+//!
+//! A share too large to travel inline, and a scan too large to run on the worker, leave the worker
+//! as described in [`share`].
 
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::operators::arrange::Arranged;
@@ -54,15 +58,24 @@ use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::vec::Broadcast;
 use timely::progress::{Antichain, frontier::AntichainRef};
+use timely::scheduling::SyncActivator;
+use tracing::warn;
 
 use crate::compute_state::description_iterator::DescriptionRange;
-use crate::compute_state::description_scan::{DescriptionScan, DescriptionScanOutcome};
+use crate::compute_state::description_scan::{
+    DescriptionScan, DescriptionScanOutcome, update_byte_len,
+};
 use crate::compute_state::peek_budget::InlineBudget;
+use crate::compute_state::peek_stash::stash_shard_id;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::render::StartSignal;
 use crate::render::errors::DataflowErrorSer;
 use crate::render::sinks::SinkRender;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine};
+
+use self::share::{PendingShare, StashSpec, Tiers};
+
+mod share;
 
 /// A batch of the sink's ok arrangement.
 type OkBatch = <RowRowSpine<Timestamp, Diff> as TraceReader>::Batch;
@@ -138,6 +151,24 @@ impl<'scope> SinkRender<'scope> for BatchedSubscribeSinkConnection {
             .expect("an identity plan is valid")
             .into_nontemporal()
             .expect("an identity plan is not temporal");
+        let stash = match &compute_state.peek_stash_persist_location {
+            Some(location) => Some(StashSpec::new(
+                Arc::clone(&compute_state.persist_clients),
+                location.clone(),
+                stash_shard_id(self.stash_id),
+                self.output_desc.clone(),
+            )),
+            None => {
+                warn!(%sink_id, "no stash location, so batched subscribe shares stay inline");
+                None
+            }
+        };
+        let tiers = Tiers::new(
+            &compute_state.worker_config,
+            stash,
+            Arc::clone(&compute_state.peek_permits),
+            &compute_state.metrics,
+        );
         write(
             sink_id,
             descriptions.broadcast(),
@@ -147,6 +178,7 @@ impl<'scope> SinkRender<'scope> for BatchedSubscribeSinkConnection {
                 sink_id,
                 map_filter_project,
                 InlineBudget::new(&compute_state.worker_config),
+                tiers,
                 protocol,
             ),
         );
@@ -406,14 +438,30 @@ struct Writer {
     /// The held batches, which the descriptions not yet reported need.
     held_oks: Vec<OkBatch>,
     held_errs: Vec<ErrBatch>,
-    /// The scan of the oldest pending description, and the updates it has handed out.
-    scan: Option<(
-        DescriptionScan<OkBatch, ErrBatch>,
-        Vec<(Row, Timestamp, Diff)>,
-    )>,
+    /// The scan of the oldest pending description.
+    scan: Option<Scan>,
     map_filter_project: SafeMfpPlan,
     budget: InlineBudget,
+    /// The bytes a scan buffers before it hands them out.
+    cut_bytes: usize,
+    tiers: Tiers,
+    /// Activates the write operator, once it is built.
+    activator: Option<SyncActivator>,
     protocol: Rc<RefCell<Option<Protocol>>>,
+}
+
+/// The scan of a description, and where it runs.
+enum Scan {
+    /// On the worker, with the updates it has handed out, accounted at `bytes`. Above
+    /// `inline_max_bytes`, if set, the share leaves the inline tier.
+    OnWorker {
+        scan: DescriptionScan<OkBatch, ErrBatch>,
+        updates: Vec<(Row, Timestamp, Diff)>,
+        bytes: usize,
+        inline_max_bytes: Option<usize>,
+    },
+    /// Away from the worker, which reports the share once it is ready.
+    Away(PendingShare),
 }
 
 impl Writer {
@@ -421,6 +469,7 @@ impl Writer {
         sink_id: GlobalId,
         map_filter_project: SafeMfpPlan,
         budget: InlineBudget,
+        tiers: Tiers,
         protocol: Rc<RefCell<Option<Protocol>>>,
     ) -> Self {
         Self {
@@ -431,6 +480,9 @@ impl Writer {
             scan: None,
             map_filter_project,
             budget,
+            cut_bytes: SCAN_CUT_BYTES,
+            tiers,
+            activator: None,
             protocol,
         }
     }
@@ -491,34 +543,99 @@ impl Writer {
                 if !complete {
                     return false;
                 }
-                let scan = self.open_scan(description);
-                self.scan = Some((scan, Vec::new()));
+                let (scan, held_updates) = self.open_scan(description);
+                self.scan = Some(if self.tiers.offloads(held_updates) {
+                    Scan::Away(self.tiers.start(
+                        description,
+                        Some(scan),
+                        Vec::new(),
+                        0,
+                        self.activator.clone(),
+                    ))
+                } else {
+                    Scan::OnWorker {
+                        scan,
+                        updates: Vec::new(),
+                        bytes: 0,
+                        inline_max_bytes: self.tiers.inline_max_bytes(),
+                    }
+                });
             }
 
-            // The peek budget's placement policy applies, minus the offload: with the budget
-            // bounded the scan yields the worker and resumes in the next activation, and with it
-            // unbounded the scan runs to its end here.
-            let Some(fuel) = self.budget.grant() else {
-                return true;
-            };
-            let (scan, updates) = self.scan.as_mut().expect("opened above");
-            let mut remaining = fuel;
-            let outcome = scan.step(&mut remaining);
-            self.budget.charge(fuel - remaining);
-            if let Some(batch) = scan.take_batch() {
-                updates.extend(batch);
-            }
-            let DescriptionScanOutcome::Finished(result) = outcome else {
-                continue;
+            let result = match self.scan.as_mut().expect("opened above") {
+                // The share task activates the operator once its outcome is ready.
+                Scan::Away(pending) => match pending.try_take() {
+                    None => return false,
+                    Some(result) => result.map(share::Finished::into_shares),
+                },
+                Scan::OnWorker {
+                    scan,
+                    updates,
+                    bytes,
+                    inline_max_bytes,
+                } => {
+                    // The peek budget's placement policy applies: with the budget bounded the
+                    // scan yields the worker and resumes in the next activation, and with it
+                    // unbounded the scan runs to its end here. A scan too large for that is
+                    // offloaded when it opens.
+                    let Some(fuel) = self.budget.grant() else {
+                        return true;
+                    };
+                    let mut remaining = fuel;
+                    let outcome = scan.step(&mut remaining);
+                    self.budget.charge(fuel - remaining);
+                    if let Some(batch) = scan.take_batch() {
+                        for update in &batch {
+                            *bytes = bytes.saturating_add(update_byte_len(&update.0));
+                        }
+                        updates.extend(batch);
+                    }
+                    let ended = match outcome {
+                        DescriptionScanOutcome::Suspended => None,
+                        DescriptionScanOutcome::Finished(result) => Some(result),
+                    };
+                    let poisoned = matches!(ended, Some(Err(_)));
+                    if !poisoned && inline_max_bytes.is_some_and(|max_bytes| *bytes > max_bytes) {
+                        // Writing to the stash awaits, so the share and what remains of its scan
+                        // leave the worker together.
+                        let Some(Scan::OnWorker {
+                            scan,
+                            updates,
+                            bytes,
+                            ..
+                        }) = self.scan.take()
+                        else {
+                            unreachable!("matched above");
+                        };
+                        let scan = ended.is_none().then_some(scan);
+                        self.scan = Some(Scan::Away(self.tiers.start(
+                            description,
+                            scan,
+                            updates,
+                            bytes,
+                            self.activator.clone(),
+                        )));
+                        continue;
+                    }
+                    match ended {
+                        None => continue,
+                        Some(Ok(())) => {
+                            let mut updates = std::mem::take(updates);
+                            // Equal `(time, row)` pairs that a cut separated meet again here.
+                            consolidate_updates(&mut updates);
+                            Ok(inline_share(&updates).into_iter().collect())
+                        }
+                        Some(Err(error)) => Err(error),
+                    }
+                }
             };
 
-            let (_, mut updates) = self.scan.take().expect("opened above");
+            self.scan = None;
             let description = self.pending.pop_front().expect("checked above");
             let shares = match result {
-                Ok(()) => {
-                    // Equal `(time, row)` pairs that a cut separated meet again here.
-                    consolidate_updates(&mut updates);
-                    inline_share(&updates).into_iter().collect()
+                Ok(shares) => {
+                    self.tiers.record(&shares);
+                    shares
                 }
                 Err(error) => {
                     // A scan error the error collection does not hold, such as one raised by the
@@ -535,9 +652,12 @@ impl Writer {
         }
     }
 
-    fn open_scan(&self, description: &Description) -> DescriptionScan<OkBatch, ErrBatch> {
+    /// Opens the scan of `description`, and returns it with the number of updates in the ok
+    /// batches it scans.
+    fn open_scan(&self, description: &Description) -> (DescriptionScan<OkBatch, ErrBatch>, usize) {
         let range = description.range();
         let ok_batches = range.select_batches(&self.held_oks);
+        let held_updates = ok_batches.iter().map(|batch| batch.len()).sum();
         let err_batches = range.select_batches(&self.held_errs);
         // A since beyond the lower would have advanced the times the scan places in the range.
         // The arrangement emits freshly sealed batches with a minimal since.
@@ -554,14 +674,15 @@ impl Writer {
             self.sink_id,
             description.lower,
         );
-        DescriptionScan::new(
+        let scan = DescriptionScan::new(
             ok_batches,
             err_batches,
             self.map_filter_project.clone(),
             range,
-            SCAN_CUT_BYTES,
+            self.cut_bytes,
             self.sink_id,
-        )
+        );
+        (scan, held_updates)
     }
 
     /// Releases the held batches that end at or before `upper`, which no later description
@@ -615,6 +736,11 @@ fn write<'scope>(
     let operator_info = op.operator_info();
 
     op.build(move |_capabilities| {
+        writer.activator = Some(
+            scope
+                .worker()
+                .sync_activator_for(operator_info.address.to_vec()),
+        );
         let activator = scope.activator_for(operator_info.address);
         move |frontiers| {
             descriptions_input.for_each(|_, data| writer.pending.extend(data.drain(..)));

@@ -34,7 +34,7 @@ use crate::compute_state::peek_scan::RowBatch;
 ///
 /// The variant names the step that refused, and the driver reports it as the peek's error.
 #[derive(Debug, thiserror::Error)]
-pub(super) enum StashError {
+pub(crate) enum StashError {
     /// The stash location did not open, so nothing was written.
     #[error("peek stash could not open its persist location: {0}")]
     OpenLocation(#[source] ExternalError),
@@ -61,7 +61,7 @@ pub(super) enum StashError {
 /// that does not reach a reader deletes what it can, whether it is dropped by a driver that will
 /// answer with something else or stopped part-way through finishing.
 /// [`StashUpload::abandon`] bounds what that reaches and what it costs.
-pub(super) struct StashUpload {
+pub(crate) struct StashUpload {
     /// The description the stashed response reports, and the schema the batch is written under.
     relation_desc: RelationDesc,
     /// The shard the batch belongs to. A peek derives it from its uuid with [`stash_shard_id`] so
@@ -179,7 +179,6 @@ impl StashUpload {
     /// Writes one update to the stash.
     ///
     /// Fails where persist rejects the write, which leaves the upload unusable.
-    #[cfg_attr(not(test), expect(dead_code, reason = "no caller outside tests"))]
     pub(crate) async fn push_update(
         &mut self,
         row: &Row,
@@ -254,7 +253,6 @@ impl StashUpload {
     ///
     /// Fails where persist rejects the batch, which takes the parts with it, as for
     /// [`StashUpload::finish`]. That includes a batch holding a time at or beyond the upper.
-    #[cfg_attr(not(test), expect(dead_code, reason = "no caller outside tests"))]
     pub(crate) async fn finish_stashed(
         mut self,
     ) -> Result<Option<Batch<SourceData, (), Timestamp, i64>>, StashError> {
@@ -365,7 +363,7 @@ impl Drop for StashUpload {
 /// deletes it. That covers both ways a delivery goes unclaimed: a send that finds no receiver, and
 /// a receiver dropped between the send and the take. Persist's own `Drop for Batch` covers neither,
 /// logging the blob keys and leaving them.
-struct DeliveredBatch {
+pub(crate) struct DeliveredBatch {
     /// Taken by [`DeliveredBatch::take`], and a `None` says the batch has an owner that will
     /// answer for it.
     batch: Option<Batch<SourceData, (), Timestamp, i64>>,
@@ -374,7 +372,7 @@ struct DeliveredBatch {
 }
 
 impl DeliveredBatch {
-    fn new(
+    pub(crate) fn new(
         batch: Batch<SourceData, (), Timestamp, i64>,
         runtime: Handle,
         shard_id: ShardId,
@@ -390,7 +388,7 @@ impl DeliveredBatch {
     ///
     /// The caller takes over the obligation: a batch dropped without being transmitted or deleted
     /// leaves its blobs behind.
-    fn take(mut self) -> Batch<SourceData, (), Timestamp, i64> {
+    pub(crate) fn take(mut self) -> Batch<SourceData, (), Timestamp, i64> {
         self.batch
             .take()
             .expect("a delivery holds its batch until it is claimed")
