@@ -85,6 +85,15 @@ static V26_42_0: LazyLock<Version> = LazyLock::new(|| Version {
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
 });
 
+/// Version at which `environmentd` learned `--terraform-module-version`.
+static V26_48_0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 26,
+    minor: 48,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
+
 static V26_1_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
     minor: 1,
@@ -622,22 +631,19 @@ fn create_environmentd_statefulset_object(
         ..Default::default()
     });
 
-    // Passed as an env var so environmentd versions that predate it ignore it
-    // instead of failing on an unknown flag.
-    if let Some(terraform_module_version) = &config.terraform_module_version {
-        env.push(EnvVar {
-            name: "MZ_TERRAFORM_MODULE_VERSION".to_string(),
-            value: Some(terraform_module_version.clone()),
-            ..Default::default()
-        });
-    }
-
     env.extend(mz.spec.environmentd_extra_env.iter().flatten().cloned());
 
     let mut args = vec![];
 
     if let Some(helm_chart_version) = &config.helm_chart_version {
         args.push(format!("--helm-chart-version={helm_chart_version}"));
+    }
+    if mz.meets_minimum_version(&V26_48_0) {
+        if let Some(terraform_module_version) = &config.terraform_module_version {
+            args.push(format!(
+                "--terraform-module-version={terraform_module_version}"
+            ));
+        }
     }
 
     // Add environment ID argument.
