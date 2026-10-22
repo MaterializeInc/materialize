@@ -1578,7 +1578,7 @@ pub(crate) fn into_consolidatable_updates_startup(
 
 #[cfg(test)]
 mod tests {
-    use mz_catalog::durable::debug::{IndexColumnCollection, ItemColumnCollection};
+    use mz_catalog::durable::debug::{IndexColumnsCollection, ItemColumnsCollection};
     use mz_catalog::durable::{
         CatalogError, ClusterVariantManaged, DurableCatalogError, Snapshot,
         TestCatalogStateBuilder, test_bootstrap_args,
@@ -1749,13 +1749,34 @@ mod tests {
             catalog.expire().await;
             written
         };
-        // Each item recorded its rows when it was written.
-        assert_eq!(written.item_columns.len(), 2, "{:?}", written.item_columns);
+        // Each item recorded its row when it was written.
+        assert_eq!(written.item_columns.len(), 1, "{:?}", written.item_columns);
         assert_eq!(
             written.index_columns.len(),
             1,
             "{:?}",
             written.index_columns
+        );
+
+        // We record two columns for the view and one column for the index.
+        let item_columns = written.item_columns.iter().next();
+        assert_eq!(
+            item_columns
+                .expect("item columns should exist")
+                .1
+                .columns
+                .len(),
+            2
+        );
+
+        let index_columns = written.index_columns.iter().next();
+        assert_eq!(
+            index_columns
+                .expect("index columns should exist")
+                .1
+                .columns
+                .len(),
+            1
         );
 
         // A fresh boot plans the items again and finds its output recorded.
@@ -1773,11 +1794,11 @@ mod tests {
             catalog.expire().await;
         }
 
-        // Drop the view's second column and the index key behind the
-        // catalog's back.
+        // Drop the view's columns and the index's keys behind the catalog's
+        // back.
         {
-            let column_key = written.item_columns.keys().nth(1).expect("two columns");
-            let index_key = written.index_columns.keys().next().expect("one key");
+            let column_key = written.item_columns.keys().next().expect("one row");
+            let index_key = written.index_columns.keys().next().expect("one row");
             let mut debug_state = TestCatalogStateBuilder::new(persist_client.clone())
                 .with_organization_id(organization_id)
                 .with_default_deploy_generation()
@@ -1787,13 +1808,13 @@ mod tests {
                 .await
                 .expect("unable to open debug state");
             debug_state
-                .delete::<ItemColumnCollection>(column_key.clone())
+                .delete::<ItemColumnsCollection>(column_key.clone())
                 .await
-                .expect("delete column");
+                .expect("delete columns");
             debug_state
-                .delete::<IndexColumnCollection>(index_key.clone())
+                .delete::<IndexColumnsCollection>(index_key.clone())
                 .await
-                .expect("delete index key");
+                .expect("delete index keys");
         }
 
         // The next refresh stages exactly the two missing rows.
@@ -1813,8 +1834,8 @@ mod tests {
             };
             assert!(
                 message.contains("2 updates")
-                    && message.contains("ItemColumn")
-                    && message.contains("IndexColumn"),
+                    && message.contains("ItemColumns")
+                    && message.contains("IndexColumns"),
                 "{message}"
             );
             catalog.expire().await;
@@ -1836,7 +1857,7 @@ mod tests {
     }
 
     /// The bootstrap refresh rewrites rows that disagree with what the
-    /// running build's planner produces, and drops rows beyond its output.
+    /// running build's planner produces, surplus entries included.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn refresh_rewrites_stale_item_metadata() {
@@ -1874,7 +1895,7 @@ mod tests {
             catalog.expire().await;
             written
         };
-        assert_eq!(written.item_columns.len(), 2, "{:?}", written.item_columns);
+        assert_eq!(written.item_columns.len(), 1, "{:?}", written.item_columns);
         assert_eq!(
             written.index_columns.len(),
             1,
@@ -1882,21 +1903,22 @@ mod tests {
             written.index_columns
         );
 
-        // Behind the catalog's back, swap the two columns' recorded values,
-        // change the index key's column and nullability, and add a column and a key
-        // beyond the planner's output.
+        // Behind the catalog's back, swap the view's two recorded columns,
+        // change the index key's column and nullability, and add a column and
+        // a key beyond the planner's output.
         {
-            let mut columns = written.item_columns.iter();
-            let (key_a, value_a) = columns.next().expect("column a");
-            let (key_b, value_b) = columns.next().expect("column b");
-            let (index_key, index_value) = written.index_columns.iter().next().expect("one key");
-            let mut surplus_column_key = key_a.clone();
-            surplus_column_key.position = 2;
-            let mut surplus_index_key = index_key.clone();
-            surplus_index_key.position = 1;
-            let mut changed_index_value = index_value.clone();
-            changed_index_value.column = changed_index_value.column.map(|column| column + 1);
-            changed_index_value.nullable = !changed_index_value.nullable;
+            let (columns_key, columns_value) = written.item_columns.iter().next().expect("one row");
+            let (index_key, index_value) = written.index_columns.iter().next().expect("one row");
+            let mut stale_columns = columns_value.clone();
+            stale_columns.columns.swap(0, 1);
+            let surplus_column = stale_columns.columns[0].clone();
+            stale_columns.columns.push(surplus_column);
+            let mut stale_index = index_value.clone();
+            let changed_key = &mut stale_index.columns[0];
+            changed_key.column = changed_key.column.map(|column| column + 1);
+            changed_key.nullable = !changed_key.nullable;
+            let surplus_key = index_value.columns[0];
+            stale_index.columns.push(surplus_key);
 
             let mut debug_state = TestCatalogStateBuilder::new(persist_client.clone())
                 .with_organization_id(organization_id)
@@ -1906,30 +1928,18 @@ mod tests {
                 .open_debug()
                 .await
                 .expect("unable to open debug state");
-            for (key, value) in [
-                (key_a.clone(), value_b.clone()),
-                (key_b.clone(), value_a.clone()),
-                (surplus_column_key, value_a.clone()),
-            ] {
-                debug_state
-                    .edit::<ItemColumnCollection>(key, value)
-                    .await
-                    .expect("edit column");
-            }
-            for (key, value) in [
-                (index_key.clone(), changed_index_value),
-                (surplus_index_key, index_value.clone()),
-            ] {
-                debug_state
-                    .edit::<IndexColumnCollection>(key, value)
-                    .await
-                    .expect("edit index key");
-            }
+            debug_state
+                .edit::<ItemColumnsCollection>(columns_key.clone(), stale_columns)
+                .await
+                .expect("edit columns");
+            debug_state
+                .edit::<IndexColumnsCollection>(index_key.clone(), stale_index)
+                .await
+                .expect("edit index keys");
         }
 
-        // The next refresh stages a rewrite of every disagreeing row, a
-        // retraction and an addition each, and a retraction of each surplus
-        // row.
+        // The next refresh stages a rewrite of each disagreeing row, a
+        // retraction and an addition each.
         {
             let catalog = Catalog::open_debug_read_only_catalog(
                 persist_client.clone(),
@@ -1945,14 +1955,14 @@ mod tests {
                 panic!("unexpected error {error:?}");
             };
             assert!(
-                message.contains("8 updates")
-                    && message.contains("ItemColumn")
-                    && message.contains("IndexColumn"),
+                message.contains("4 updates")
+                    && message.contains("ItemColumns")
+                    && message.contains("IndexColumns"),
                 "{message}"
             );
             catalog.expire().await;
         }
-        // A writable open puts the planner's rows back and drops the surplus.
+        // A writable open puts the planner's rows back.
         {
             let catalog = Catalog::open_debug_catalog(
                 persist_client.clone(),

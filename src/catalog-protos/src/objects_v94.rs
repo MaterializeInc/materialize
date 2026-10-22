@@ -271,7 +271,7 @@ pub struct ItemVersion {
     pub version: Version,
 }
 
-/// Identifies a column of a relation item by its 0-based position.
+/// Identifies the recorded columns of a relation item.
 #[derive(
     Clone,
     Copy,
@@ -284,20 +284,26 @@ pub struct ItemVersion {
     Deserialize
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
-pub struct ItemColumnKey {
+pub struct ItemColumnsKey {
     pub id: CatalogItemId,
-    pub position: u64,
 }
 
-/// A column of a relation item, as planning resolved it, by the identity
-/// its type presents as: the OID and type modifier of its
-/// PostgreSQL-compatible type, and the `CREATE TYPE` item of a list, map or
-/// record type that one defines. Written with every change to the item's
-/// definition and refreshed at bootstrap, so that catalog views can report
-/// columns without planning.
+/// The columns of a relation item in position order, as planning resolved
+/// them: a column's 0-based position is its index in `columns`. Written with
+/// every change to the item's definition and refreshed at bootstrap, so that
+/// catalog views can report columns without the planner.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
-pub struct ItemColumnValue {
+pub struct ItemColumnsValue {
+    pub columns: Vec<ItemColumn>,
+}
+
+/// A column of a relation item by the identity its type presents as: the OID
+/// and type modifier of its PostgreSQL-compatible type, and the `CREATE TYPE`
+/// item of a list, map or record type that one defines.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct ItemColumn {
     pub name: String,
     pub nullable: bool,
     pub type_oid: u32,
@@ -305,7 +311,7 @@ pub struct ItemColumnValue {
     pub custom_type: Option<CatalogItemId>,
 }
 
-/// Identifies a key of an index item by its 0-based position in the index.
+/// Identifies the recorded keys of an index item.
 #[derive(
     Clone,
     Copy,
@@ -318,13 +324,19 @@ pub struct ItemColumnValue {
     Deserialize
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
-pub struct IndexColumnKey {
+pub struct IndexColumnsKey {
     pub id: CatalogItemId,
-    pub position: u64,
 }
 
-/// A key of an index, as planning resolved it. Maintained like
-/// `ItemColumnValue`.
+/// The keys of an index in key order, as planning resolved them. Maintained
+/// like `ItemColumnsValue`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
+pub struct IndexColumnsValue {
+    pub columns: Vec<IndexColumn>,
+}
+
+/// A key of an index.
 #[derive(
     Clone,
     Copy,
@@ -337,9 +349,9 @@ pub struct IndexColumnKey {
     Deserialize
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
-pub struct IndexColumnValue {
-    /// The 0-based column of the indexed relation when the key is a bare
-    /// column reference, `None` for any other expression.
+pub struct IndexColumn {
+    /// The 0-based position of the relation's column the index is on.
+    /// `None` when the key is an expression rather than a column reference.
     pub column: Option<u64>,
     pub nullable: bool,
 }
@@ -2080,9 +2092,9 @@ pub enum StateUpdateKind {
     FenceToken(FenceToken),
     GidMapping(GidMapping),
     IdAlloc(IdAlloc),
-    IndexColumn(IndexColumn),
+    IndexColumns(IndexColumns),
     Item(Item),
-    ItemColumn(ItemColumn),
+    ItemColumns(ItemColumns),
     NetworkPolicy(NetworkPolicy),
     Role(Role),
     RoleAuth(RoleAuth),
@@ -2189,9 +2201,9 @@ pub struct ClusterIntrospectionSourceIndex {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
-pub struct IndexColumn {
-    pub key: IndexColumnKey,
-    pub value: IndexColumnValue,
+pub struct IndexColumns {
+    pub key: IndexColumnsKey,
+    pub value: IndexColumnsValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -2203,9 +2215,9 @@ pub struct Item {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
-pub struct ItemColumn {
-    pub key: ItemColumnKey,
-    pub value: ItemColumnValue,
+pub struct ItemColumns {
+    pub key: ItemColumnsKey,
+    pub value: ItemColumnsValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

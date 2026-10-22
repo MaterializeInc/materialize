@@ -1050,29 +1050,26 @@ impl CatalogState {
             let Some(entry) = self.try_get_entry(&id) else {
                 continue;
             };
-            tx.set_item_metadata(id, self.durable_item_metadata(id, entry.item()))?;
+            tx.set_item_metadata(id, self.durable_item_metadata(entry.item()))?;
         }
         Ok(())
     }
 
-    /// The planner-resolved metadata the durable catalog records for `item`,
-    /// whose id is `id`: the columns of a relation, each by the identity its
-    /// type presents as, and the keys of an index. See
-    /// `mz_catalog::durable::ItemMetadata`.
+    /// The planner-resolved metadata the durable catalog records for `item`:
+    /// the columns of a relation, each by the identity its type presents as,
+    /// and the keys of an index. See `mz_catalog::durable::ItemMetadata`.
     ///
     /// An index's keys are typed against the version of the indexed relation
     /// it was created on, which must be in this catalog.
     pub(super) fn durable_item_metadata(
         &self,
-        id: CatalogItemId,
         item: &CatalogItem,
     ) -> mz_catalog::durable::ItemMetadata {
         let columns = item
             .relation_desc(RelationVersionSelector::Latest)
             .map(|desc| {
                 desc.iter()
-                    .enumerate()
-                    .map(|(i, (name, typ))| {
+                    .map(|(name, typ)| {
                         let pg_type = mz_pgrepr::Type::from(&typ.scalar_type);
                         let custom_type = match &typ.scalar_type {
                             SqlScalarType::List {
@@ -1090,8 +1087,6 @@ impl CatalogState {
                             _ => None,
                         };
                         mz_catalog::durable::ItemColumn {
-                            id,
-                            position: i,
                             name: name.clone(),
                             nullable: typ.nullable,
                             type_oid: pg_type.oid(),
@@ -1117,10 +1112,7 @@ impl CatalogState {
                 index
                     .keys
                     .iter()
-                    .enumerate()
-                    .map(|(i, key)| mz_catalog::durable::IndexColumn {
-                        id,
-                        position: i,
+                    .map(|key| mz_catalog::durable::IndexColumn {
                         column: match key {
                             MirScalarExpr::Column(column, _) => Some(*column),
                             _ => None,

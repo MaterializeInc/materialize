@@ -19,14 +19,15 @@ use crate::durable::objects::{
     ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterSystemConfigurationKey,
     ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, ConfigKey,
     ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
-    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, IndexColumnKey, IndexColumnValue,
-    IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemColumnKey,
-    ItemColumnValue, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
-    ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, RoleKey, RoleValue, SchemaKey,
-    SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue,
-    SourceReference, SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
-    SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue, IndexColumn, IndexColumnsKey,
+    IndexColumnsValue, IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId,
+    ItemColumn, ItemColumnsKey, ItemColumnsValue, ItemKey, ItemValue, NetworkPolicyKey,
+    NetworkPolicyValue, ReplicaSystemConfigurationKey, ReplicaSystemConfigurationValue, RoleKey,
+    RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue,
+    SettingKey, SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemCatalogItemId,
+    SystemGlobalId, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     BurstState, ClusterConfig, ClusterVariant, ClusterVariantManaged, ReconfigurationState,
@@ -601,25 +602,37 @@ impl RustType<proto::ItemValue> for ItemValue {
     }
 }
 
-impl RustType<proto::ItemColumnKey> for ItemColumnKey {
-    fn into_proto(&self) -> proto::ItemColumnKey {
-        proto::ItemColumnKey {
+impl RustType<proto::ItemColumnsKey> for ItemColumnsKey {
+    fn into_proto(&self) -> proto::ItemColumnsKey {
+        proto::ItemColumnsKey {
             id: self.id.into_proto(),
-            position: u64::cast_from(self.position),
         }
     }
 
-    fn from_proto(proto: proto::ItemColumnKey) -> Result<Self, TryFromProtoError> {
-        Ok(ItemColumnKey {
+    fn from_proto(proto: proto::ItemColumnsKey) -> Result<Self, TryFromProtoError> {
+        Ok(ItemColumnsKey {
             id: proto.id.into_rust()?,
-            position: usize::cast_from(proto.position),
         })
     }
 }
 
-impl RustType<proto::ItemColumnValue> for ItemColumnValue {
-    fn into_proto(&self) -> proto::ItemColumnValue {
-        proto::ItemColumnValue {
+impl RustType<proto::ItemColumnsValue> for ItemColumnsValue {
+    fn into_proto(&self) -> proto::ItemColumnsValue {
+        proto::ItemColumnsValue {
+            columns: self.columns.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ItemColumnsValue) -> Result<Self, TryFromProtoError> {
+        Ok(ItemColumnsValue {
+            columns: proto.columns.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ItemColumn> for ItemColumn {
+    fn into_proto(&self) -> proto::ItemColumn {
+        proto::ItemColumn {
             name: self.name.to_string(),
             nullable: self.nullable,
             type_oid: self.type_oid,
@@ -628,8 +641,8 @@ impl RustType<proto::ItemColumnValue> for ItemColumnValue {
         }
     }
 
-    fn from_proto(proto: proto::ItemColumnValue) -> Result<Self, TryFromProtoError> {
-        Ok(ItemColumnValue {
+    fn from_proto(proto: proto::ItemColumn) -> Result<Self, TryFromProtoError> {
+        Ok(ItemColumn {
             name: ColumnName::from(proto.name),
             nullable: proto.nullable,
             type_oid: proto.type_oid,
@@ -639,32 +652,44 @@ impl RustType<proto::ItemColumnValue> for ItemColumnValue {
     }
 }
 
-impl RustType<proto::IndexColumnKey> for IndexColumnKey {
-    fn into_proto(&self) -> proto::IndexColumnKey {
-        proto::IndexColumnKey {
+impl RustType<proto::IndexColumnsKey> for IndexColumnsKey {
+    fn into_proto(&self) -> proto::IndexColumnsKey {
+        proto::IndexColumnsKey {
             id: self.id.into_proto(),
-            position: u64::cast_from(self.position),
         }
     }
 
-    fn from_proto(proto: proto::IndexColumnKey) -> Result<Self, TryFromProtoError> {
-        Ok(IndexColumnKey {
+    fn from_proto(proto: proto::IndexColumnsKey) -> Result<Self, TryFromProtoError> {
+        Ok(IndexColumnsKey {
             id: proto.id.into_rust()?,
-            position: usize::cast_from(proto.position),
         })
     }
 }
 
-impl RustType<proto::IndexColumnValue> for IndexColumnValue {
-    fn into_proto(&self) -> proto::IndexColumnValue {
-        proto::IndexColumnValue {
+impl RustType<proto::IndexColumnsValue> for IndexColumnsValue {
+    fn into_proto(&self) -> proto::IndexColumnsValue {
+        proto::IndexColumnsValue {
+            columns: self.columns.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::IndexColumnsValue) -> Result<Self, TryFromProtoError> {
+        Ok(IndexColumnsValue {
+            columns: proto.columns.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::IndexColumn> for IndexColumn {
+    fn into_proto(&self) -> proto::IndexColumn {
+        proto::IndexColumn {
             column: self.column.map(u64::cast_from),
             nullable: self.nullable,
         }
     }
 
-    fn from_proto(proto: proto::IndexColumnValue) -> Result<Self, TryFromProtoError> {
-        Ok(IndexColumnValue {
+    fn from_proto(proto: proto::IndexColumn) -> Result<Self, TryFromProtoError> {
+        Ok(IndexColumn {
             column: proto.column.map(usize::cast_from),
             nullable: proto.nullable,
         })

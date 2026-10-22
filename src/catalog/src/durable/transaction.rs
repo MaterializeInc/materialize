@@ -55,8 +55,8 @@ use crate::durable::objects::{
     ClusterSystemConfigurationValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey,
     ConfigValue, Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IndexColumnKey, IndexColumnValue, IntrospectionSourceIndex, Item, ItemColumnKey,
-    ItemColumnValue, ItemKey, ItemMetadata, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
+    IndexColumnsKey, IndexColumnsValue, IntrospectionSourceIndex, Item, ItemColumnsKey,
+    ItemColumnsValue, ItemKey, ItemMetadata, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
     ReplicaConfig, ReplicaSystemConfiguration, ReplicaSystemConfigurationKey,
     ReplicaSystemConfigurationValue, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
     ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
@@ -90,8 +90,8 @@ pub struct Transaction<'a> {
     databases: TableTransaction<DatabaseKey, DatabaseValue>,
     schemas: TableTransaction<SchemaKey, SchemaValue>,
     items: TableTransaction<ItemKey, ItemValue>,
-    item_columns: TableTransaction<ItemColumnKey, ItemColumnValue>,
-    index_columns: TableTransaction<IndexColumnKey, IndexColumnValue>,
+    item_columns: TableTransaction<ItemColumnsKey, ItemColumnsValue>,
+    index_columns: TableTransaction<IndexColumnsKey, IndexColumnsValue>,
     comments: TableTransaction<CommentKey, CommentValue>,
     roles: TableTransaction<RoleKey, RoleValue>,
     role_auth: TableTransaction<RoleAuthKey, RoleAuthValue>,
@@ -810,7 +810,7 @@ impl<'a> Transaction<'a> {
     }
 
     /// Records `metadata` as the planner-resolved metadata of item `id`,
-    /// replacing whatever rows it had.
+    /// replacing whatever it had.
     pub fn set_item_metadata(
         &mut self,
         id: CatalogItemId,
@@ -820,66 +820,29 @@ impl<'a> Transaction<'a> {
             columns,
             index_columns,
         } = metadata;
-        soft_assert_or_log!(
-            columns.iter().all(|column| column.id == id)
-                && index_columns.iter().all(|column| column.id == id),
-            "metadata recorded for item {id} belongs to another item"
-        );
-        soft_assert_or_log!(
-            columns
-                .iter()
-                .map(|column| column.position)
-                .eq(0..columns.len())
-                && index_columns
-                    .iter()
-                    .map(|column| column.position)
-                    .eq(0..index_columns.len()),
-            "metadata recorded for item {id} does not fill positions from zero"
-        );
-
-        self.truncate_item_metadata(id, columns.len(), index_columns.len());
-        for column in columns {
-            let (key, value) = column.into_key_value();
-            if self.item_columns.get(&key) != Some(&value) {
-                self.item_columns.set(key, Some(value), self.op_id)?;
-            }
+        // An item without columns or keys has no row, so a relation without
+        // columns and an item that is not a relation read the same.
+        let columns = (!columns.is_empty()).then_some(ItemColumnsValue { columns });
+        let key = ItemColumnsKey { id };
+        if self.item_columns.get(&key) != columns.as_ref() {
+            self.item_columns.set(key, columns, self.op_id)?;
         }
-
-        for column in index_columns {
-            let (key, value) = column.into_key_value();
-            if self.index_columns.get(&key) != Some(&value) {
-                self.index_columns.set(key, Some(value), self.op_id)?;
-            }
+        let index_columns = (!index_columns.is_empty()).then_some(IndexColumnsValue {
+            columns: index_columns,
+        });
+        let key = IndexColumnsKey { id };
+        if self.index_columns.get(&key) != index_columns.as_ref() {
+            self.index_columns.set(key, index_columns, self.op_id)?;
         }
         Ok(())
     }
 
-    /// Deletes the recorded columns of item `id` from position `columns_len` on
-    /// and its recorded index keys from position `index_columns_len` on.
-    /// Column positions are expected to be contiguous otherwise
-    /// the truncations stops at the first missing position.
-    fn truncate_item_metadata(
-        &mut self,
-        id: CatalogItemId,
-        columns_len: usize,
-        index_columns_len: usize,
-    ) {
-        let mut position = columns_len;
-        while self
-            .item_columns
-            .delete_by_key(ItemColumnKey { id, position }, self.op_id)
-            .is_some()
-        {
-            position += 1;
-        }
-        let mut position = index_columns_len;
-        while self
-            .index_columns
-            .delete_by_key(IndexColumnKey { id, position }, self.op_id)
-            .is_some()
-        {
-            position += 1;
-        }
+    /// Deletes the recorded columns and index keys of item `id`.
+    fn delete_item_metadata(&mut self, id: CatalogItemId) {
+        self.item_columns
+            .delete_by_key(ItemColumnsKey { id }, self.op_id);
+        self.index_columns
+            .delete_by_key(IndexColumnsKey { id }, self.op_id);
     }
 
     /// Removes every item owned by an ephemeral session from the transaction,
@@ -912,7 +875,7 @@ impl<'a> Transaction<'a> {
         }
         self.items.delete_by_keys(keys, self.op_id);
         for id in &item_ids {
-            self.truncate_item_metadata(*id, 0, 0);
+            self.delete_item_metadata(*id);
         }
 
         // Move the items' storage mappings to the finalization WAL, like
@@ -1589,7 +1552,7 @@ impl<'a> Transaction<'a> {
     pub fn remove_item(&mut self, id: CatalogItemId) -> Result<(), CatalogError> {
         let prev = self.items.set(ItemKey { id }, None, self.op_id)?;
         if prev.is_some() {
-            self.truncate_item_metadata(id, 0, 0);
+            self.delete_item_metadata(id);
             Ok(())
         } else {
             Err(SqlCatalogError::UnknownItem(id.to_string()).into())
@@ -1610,7 +1573,7 @@ impl<'a> Transaction<'a> {
         let ks: Vec<_> = ids.clone().into_iter().map(|id| ItemKey { id }).collect();
         let n = self.items.delete_by_keys(ks, self.op_id).len();
         for id in ids {
-            self.truncate_item_metadata(*id, 0, 0);
+            self.delete_item_metadata(*id);
         }
         if n == ids.len() {
             Ok(())
@@ -3124,8 +3087,8 @@ pub struct TransactionBatch {
     pub(crate) databases: Vec<(proto::DatabaseKey, proto::DatabaseValue, Diff)>,
     pub(crate) schemas: Vec<(proto::SchemaKey, proto::SchemaValue, Diff)>,
     pub(crate) items: Vec<(proto::ItemKey, proto::ItemValue, Diff)>,
-    pub(crate) item_columns: Vec<(proto::ItemColumnKey, proto::ItemColumnValue, Diff)>,
-    pub(crate) index_columns: Vec<(proto::IndexColumnKey, proto::IndexColumnValue, Diff)>,
+    pub(crate) item_columns: Vec<(proto::ItemColumnsKey, proto::ItemColumnsValue, Diff)>,
+    pub(crate) index_columns: Vec<(proto::IndexColumnsKey, proto::IndexColumnsValue, Diff)>,
     pub(crate) comments: Vec<(proto::CommentKey, proto::CommentValue, Diff)>,
     pub(crate) roles: Vec<(proto::RoleKey, proto::RoleValue, Diff)>,
     pub(crate) role_auth: Vec<(proto::RoleAuthKey, proto::RoleAuthValue, Diff)>,
@@ -3311,8 +3274,8 @@ mod unique_name {
         DefaultPrivilegesValue,
         GidMappingValue,
         IdAllocValue,
-        IndexColumnValue,
-        ItemColumnValue,
+        IndexColumnsValue,
+        ItemColumnsValue,
         ReplicaSystemConfigurationValue,
         ServerConfigurationValue,
         SettingValue,
