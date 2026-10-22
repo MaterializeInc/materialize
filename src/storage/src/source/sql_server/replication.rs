@@ -538,8 +538,8 @@ pub(crate) fn render<'scope>(
                         capture_instance,
                         constraints,
                     } => {
-                        // The stream polls only the instances in
-                        // `capture_instances`.
+                        // The stream polls only the instances in `capture_instances`, so
+                        // a missing capture instance is an unexpected programming error.
                         let partition_indexes = capture_instances
                             .get(&capture_instance)
                             .unwrap_or_else(|| {
@@ -557,11 +557,13 @@ pub(crate) fn render<'scope>(
                             if errored_partitions.contains(partition_idx) {
                                 continue;
                             }
+                            // Every partition index was registered above, so a missing
+                            // partition index is an unexpected programming error.
                             let desc = upstream_descs
                                 .get(partition_idx)
                                 .unwrap_or_else(|| {
                                     panic!(
-                                        "Partition index didn't \
+                                        "partition index didn't \
                                          exist: '{partition_idx}'"
                                     )
                                 });
