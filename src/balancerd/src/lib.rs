@@ -1410,13 +1410,16 @@ impl mz_server_core::Server for PgwireBalancer {
                 };
                 drop(pre_resolved);
                 // One line per connection ties a client IP to a tenant; the metrics carry the
-                // tenant but not the IP, and flow logs see the IP but not the tenant.
-                info!(
-                    %conn_uuid,
-                    client_addr = params.get(MZ_FORWARDED_FOR_KEY).map_or("", String::as_str),
-                    tenant = resolved.tenant.as_deref().unwrap_or_default(),
-                    "pgwire connection resolved",
-                );
+                // tenant but not the IP, and flow logs see the IP but not the tenant. Skipped
+                // without a tenant (self-managed), where it would only repeat the client IP.
+                if let Some(tenant) = &resolved.tenant {
+                    info!(
+                        %conn_uuid,
+                        client_addr = params.get(MZ_FORWARDED_FOR_KEY).map_or("", String::as_str),
+                        %tenant,
+                        "pgwire connection resolved",
+                    );
+                }
 
                 PgwireBalancer::proxy(
                     conn,
@@ -1752,11 +1755,9 @@ impl mz_server_core::Server for HttpsBalancer {
                 .await?;
                 drop(pre_resolved);
                 // See the matching log line in the pgwire handler.
-                info!(
-                    client_addr = %peer_addr.ip(),
-                    tenant = resolved.tenant.as_deref().unwrap_or_default(),
-                    "https connection resolved",
-                );
+                if let Some(tenant) = &resolved.tenant {
+                    info!(client_addr = %peer_addr.ip(), %tenant, "https connection resolved");
+                }
                 let inner_active_guard = resolved
                     .tenant
                     .as_ref()
