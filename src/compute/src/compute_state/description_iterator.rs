@@ -30,13 +30,17 @@ use crate::compute_state::peek_result_iterator::evaluate_position;
 #[derive(Clone, Debug)]
 pub(super) enum DescriptionRange {
     /// The first description of a scan rendered at `as_of`. Emits every update with a time
-    /// before `upper`, at that time advanced to `as_of`.
+    /// before `upper`, at that time advanced to `as_of`, if that time is at or after `start`.
+    ///
+    /// The placed time decides for rows, for the `map_filter_project` run on them, and for
+    /// errors alike, so a subscribe fails on nothing before `start`, which it does not report.
     First {
         as_of: Antichain<Timestamp>,
         upper: Antichain<Timestamp>,
+        start: Timestamp,
     },
     /// A description after the first. Emits every update with `lower <= time < upper`, at its
-    /// own time.
+    /// own time. A sink must not cut one with `lower` before its `start`.
     Later {
         lower: Antichain<Timestamp>,
         upper: Antichain<Timestamp>,
@@ -44,20 +48,19 @@ pub(super) enum DescriptionRange {
 }
 
 impl DescriptionRange {
-    /// Whether the range emits updates at `time`.
-    pub(super) fn contains(&self, time: Timestamp) -> bool {
-        self.place(time).is_some()
-    }
-
     /// Returns the time an update at `time` is emitted at, or `None` if the range excludes it.
-    fn place(&self, mut time: Timestamp) -> Option<Timestamp> {
+    pub(super) fn place(&self, mut time: Timestamp) -> Option<Timestamp> {
         match self {
-            DescriptionRange::First { as_of, upper } => {
+            DescriptionRange::First {
+                as_of,
+                upper,
+                start,
+            } => {
                 if upper.less_equal(&time) {
                     return None;
                 }
                 time.advance_by(as_of.borrow());
-                Some(time)
+                (*start <= time).then_some(time)
             }
             DescriptionRange::Later { lower, upper } => {
                 (lower.less_equal(&time) && !upper.less_equal(&time)).then_some(time)

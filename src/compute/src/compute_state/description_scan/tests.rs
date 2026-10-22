@@ -15,7 +15,7 @@ use differential_dataflow::trace::TraceReader;
 use mz_expr::MapFilterProject;
 
 use crate::compute_state::description_iterator::tests::{
-    ArcOrdValBatch, batches, frontier, row, ts, update,
+    ArcOrdValBatch, batches, failing_on_zero, frontier, row, ts, update,
 };
 use crate::compute_state::error_scan::tests::{error, error_batch, holding};
 use crate::typedefs::ErrSpine;
@@ -101,6 +101,7 @@ fn a_poisoned_description_finishes_with_its_error() {
     let range = DescriptionRange::First {
         as_of: frontier(1),
         upper: frontier(5),
+        start: ts(1),
     };
     let mut scan = description_scan(held, errs, pass_through(), range, usize::MAX);
 
@@ -114,6 +115,49 @@ fn a_poisoned_description_finishes_with_its_error() {
         scan.take_batch(),
         None,
         "a poisoned description hands out no ok updates"
+    );
+}
+
+#[mz_ore::test]
+fn a_first_description_after_the_as_of_ignores_snapshot_errors() {
+    // Key 0 fails the plan. Its update and the standing error are placed at the as-of 1.
+    let held = batches(&[update(0, 0, 1), update(2, 2, 1)], &[ts(5)]);
+    let poison = error(0);
+    let range = |start| DescriptionRange::First {
+        as_of: frontier(1),
+        upper: frontier(5),
+        start: ts(start),
+    };
+
+    let errs = vec![error_batch(holding(&poison))];
+    let mut without_snapshot =
+        description_scan(held.clone(), errs, failing_on_zero(), range(2), usize::MAX);
+    let mut fuel = usize::MAX;
+    assert_eq!(
+        without_snapshot.step(&mut fuel),
+        DescriptionScanOutcome::Finished(Ok(()))
+    );
+    assert_eq!(
+        without_snapshot.take_batch(),
+        Some(vec![(row(2), ts(2), Diff::ONE)])
+    );
+
+    // Starting at the as-of, the error collection and then the plan poison the description.
+    let errs = vec![error_batch(holding(&poison))];
+    let mut with_snapshot =
+        description_scan(held.clone(), errs, failing_on_zero(), range(1), usize::MAX);
+    let mut fuel = usize::MAX;
+    assert_eq!(
+        with_snapshot.step(&mut fuel),
+        DescriptionScanOutcome::Finished(Err(PeekError::from(poison.deserialize()).to_string()))
+    );
+    let mut plan_only = description_scan(held, Vec::new(), failing_on_zero(), range(1), usize::MAX);
+    let mut fuel = usize::MAX;
+    assert_eq!(
+        plan_only.step(&mut fuel),
+        DescriptionScanOutcome::Finished(Err(
+            PeekError::from(mz_expr::EvalError::DivisionByZero).to_string()
+        ))
     );
 }
 

@@ -253,6 +253,36 @@ fn scan_description(updates: ErrorUpdates, range: DescriptionRange) -> ErrorScan
     )
 }
 
+/// A first description `[as_of, upper)` of a connection starting at `start`.
+fn first(as_of: u64, upper: u64, start: u64) -> DescriptionRange {
+    DescriptionRange::First {
+        as_of: frontier(as_of),
+        upper: frontier(upper),
+        start: Timestamp::new(start),
+    }
+}
+
+#[mz_ore::test]
+fn an_error_emitted_before_the_start_is_ignored() {
+    let err = error(0);
+    // Emitted at the as-of 5, which a subscribe starting at 6 does not report.
+    let at_as_of = vec![((err.clone(), ()), Timestamp::new(4), Diff::ONE)];
+    assert_eq!(
+        scan_description(at_as_of.clone(), first(5, 8, 6)),
+        ErrorScanStep::Finished(Ok(1))
+    );
+    assert_eq!(
+        scan_description(at_as_of, first(5, 8, 5)),
+        ErrorScanStep::Finished(Err(err.deserialize().into())),
+        "a subscribe starting at the as-of reports it"
+    );
+    let at_start = vec![((err.clone(), ()), Timestamp::new(6), Diff::ONE)];
+    assert_eq!(
+        scan_description(at_start, first(5, 8, 6)),
+        ErrorScanStep::Finished(Err(err.deserialize().into()))
+    );
+}
+
 #[mz_ore::test]
 fn a_description_with_an_error_inside_it_is_poisoned() {
     let err = error(0);
@@ -266,12 +296,8 @@ fn a_description_with_an_error_inside_it_is_poisoned() {
         ErrorScanStep::Finished(Err(err.deserialize().into()))
     );
     // The first description sums everything before its upper, whatever the as-of.
-    let first = DescriptionRange::First {
-        as_of: frontier(5),
-        upper: frontier(6),
-    };
     assert_eq!(
-        scan_description(updates, first),
+        scan_description(updates, first(5, 6, 5)),
         ErrorScanStep::Finished(Err(err.deserialize().into()))
     );
 }

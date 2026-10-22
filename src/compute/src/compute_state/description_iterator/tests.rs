@@ -149,11 +149,53 @@ fn a_first_range_advances_earlier_times_to_the_as_of() {
         DescriptionRange::First {
             as_of: frontier(3),
             upper: frontier(5),
+            start: ts(3),
         },
     );
     assert_eq!(
         as_set(updates),
         BTreeSet::from([(row(1), ts(3), Diff::from(2)), (row(2), ts(4), Diff::ONE),])
+    );
+}
+
+/// A plan whose filter fails on key 0, the way `10 / b` fails on a row with `b = 0`.
+pub(crate) fn failing_on_zero() -> SafeMfpPlan {
+    let is_zero = MirScalarExpr::column(0).call_binary(
+        MirScalarExpr::literal_ok(Datum::UInt8(0), ReprScalarType::UInt8),
+        mz_expr::func::Eq,
+    );
+    plan(is_zero.if_then_else(
+        MirScalarExpr::literal(Err(EvalError::DivisionByZero), ReprScalarType::Bool),
+        MirScalarExpr::literal_ok(Datum::True, ReprScalarType::Bool),
+    ))
+}
+
+#[mz_ore::test]
+fn a_first_range_neither_emits_nor_evaluates_updates_placed_before_its_start() {
+    // Key 0 fails the plan. Its update and that of key 1 are placed at the as-of 3.
+    let held = batches(
+        &[update(0, 1, 1), update(1, 2, 1), update(2, 4, 1)],
+        &[ts(3), ts(6)],
+    );
+    let range = |start| DescriptionRange::First {
+        as_of: frontier(3),
+        upper: frontier(5),
+        start: ts(start),
+    };
+
+    let mut without_snapshot = DescriptionIterator::new(held.clone(), failing_on_zero(), range(4));
+    let (updates, _, _) = drain(&mut without_snapshot, usize::MAX);
+    assert_eq!(
+        as_set(updates),
+        BTreeSet::from([(row(2), ts(4), Diff::ONE)])
+    );
+
+    let mut with_snapshot = DescriptionIterator::new(held, failing_on_zero(), range(3));
+    let mut fuel = usize::MAX;
+    assert_eq!(
+        with_snapshot.step(&mut fuel),
+        DescriptionStep::Error(PeekError::from(EvalError::DivisionByZero)),
+        "a range starting at the as-of evaluates the snapshot"
     );
 }
 

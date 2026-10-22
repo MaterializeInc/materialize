@@ -34,9 +34,9 @@ pub(super) enum ErrorFilter {
     /// Updates at times less than or equal to the timestamp. A key accumulating to a negative
     /// multiplicity is a defect of the trace.
     AtOrBefore(Timestamp),
-    /// Updates at times the description range emits. Any nonzero accumulation of a key poisons
-    /// the description, negative ones included, because a description may begin after the
-    /// insertion that a retraction inside it cancels.
+    /// Updates the description range emits. Any nonzero accumulation of a key poisons the
+    /// description, negative ones included, because a description may begin after the insertion
+    /// that a retraction inside it cancels.
     #[cfg_attr(
         not(test),
         expect(dead_code, reason = "the batched subscribe sink is not wired up")
@@ -169,9 +169,9 @@ where
             self.cursor.map_times(&self.storage, |time, diff| {
                 let included = match filter {
                     ErrorFilter::AtOrBefore(peek_timestamp) => time.less_equal(peek_timestamp),
-                    ErrorFilter::Description(range) => {
-                        range.contains(<B::Cursor as Cursor>::owned_time(time))
-                    }
+                    ErrorFilter::Description(range) => range
+                        .place(<B::Cursor as Cursor>::owned_time(time))
+                        .is_some(),
                 };
                 if included {
                     copies += diff;
