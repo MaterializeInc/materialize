@@ -132,7 +132,8 @@ impl<'scope> SinkRender<'scope> for BatchedSubscribeSinkConnection {
             poison: None,
         })));
         let protocol_weak = Rc::downgrade(&protocol);
-        let map_filter_project = MapFilterProject::new(self.output_desc.arity())
+        // The plan applies to rows of `from_desc`.
+        let map_filter_project = MapFilterProject::new(sink.from_desc.arity())
             .into_plan()
             .expect("an identity plan is valid")
             .into_nontemporal()
@@ -293,9 +294,10 @@ fn mint<'scope>(
     let mut output = OutputBuilder::<_, CapacityContainerBuilder<Vec<Description>>>::from(output);
     // Only the frontier of the ok batches matters here.
     let mut ok_input = op.new_input(ok_batches, Pipeline);
-    // NOTE: A non-key exchange. The mint worker sees every error update, so it knows which
-    // description an error poisons and mints nothing after it. Error updates are rare, so routing
-    // them to one worker costs little.
+    // NOTE: The error collection is teed, since every worker also arranges it, and this copy
+    // takes a non-key exchange. The mint worker sees every error update, so it knows which
+    // description an error poisons and mints nothing after it. Error updates are rare, so the
+    // copy and the routing to one worker cost little.
     let mint_target = u64::cast_from(mint_worker);
     let mut err_input = op.new_input(errs.inner, Exchange::new(move |_| mint_target));
 
@@ -519,6 +521,11 @@ impl Writer {
                     inline_share(&updates).into_iter().collect()
                 }
                 Err(error) => {
+                    // A scan error the error collection does not hold, such as one raised by the
+                    // `map_filter_project`, is local to this writer. The mint does not learn of
+                    // it and keeps minting until the controller drops the subscribe. The writer
+                    // releases all its batches once poisoned, so it cannot scan those later
+                    // descriptions and reports each with the poison instead.
                     protocol.poison = Some(error);
                     Vec::new()
                 }
