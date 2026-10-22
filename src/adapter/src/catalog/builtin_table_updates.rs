@@ -9,8 +9,6 @@
 
 mod notice;
 
-use std::collections::BTreeSet;
-
 use bytesize::ByteSize;
 use ipnet::IpNet;
 use mz_audit_log::VersionedStorageUsage;
@@ -24,6 +22,7 @@ use mz_catalog::builtin::{
 };
 use mz_catalog::memory::error::Error;
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Func, Type};
+use mz_controller::clusters::WorkloadClass;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
 use mz_ore::cast::CastFrom;
@@ -44,7 +43,7 @@ use uuid::Uuid;
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::active_compute_sink::ActiveSubscribe;
 use crate::catalog::CatalogState;
-use crate::catalog::state::is_source_only_allocation;
+use crate::catalog::state::{FamilyWorkloads, allocation_allows_workload};
 use crate::coord::ConnMeta;
 
 /// An update to a built-in table.
@@ -476,11 +475,11 @@ impl CatalogState {
         Ok(BuiltinTableUpdate::row(id, row, Diff::ONE))
     }
 
-    /// Packs the rows of the replica size tables, with `source_only`
-    /// derived from `source_only_families`.
+    /// Packs the rows of the replica size tables, with `allowed_workloads`
+    /// derived from `family_workloads`.
     pub fn pack_all_replica_size_updates(
         &self,
-        source_only_families: &BTreeSet<String>,
+        family_workloads: &FamilyWorkloads,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut updates = Vec::new();
         for (size, alloc) in &self.cluster_replica_sizes.0 {
@@ -509,17 +508,17 @@ impl CatalogState {
             ));
         }
 
-        updates.extend(self.pack_replica_size_updates(source_only_families, Diff::ONE));
+        updates.extend(self.pack_replica_size_updates(family_workloads, Diff::ONE));
         updates
     }
 
-    /// Packs the rows of `mz_cluster_replica_sizes`, with `source_only`
-    /// derived from `source_only_families` rather than the current
-    /// `enforce_source_only_cluster_families`, so that callers can retract
-    /// rows packed under an earlier value.
+    /// Packs the rows of `mz_cluster_replica_sizes`, with `allowed_workloads`
+    /// derived from `family_workloads` rather than the current
+    /// `cluster_family_allowed_workloads`, so that callers can retract rows
+    /// packed under an earlier value.
     pub fn pack_replica_size_updates(
         &self,
-        source_only_families: &BTreeSet<String>,
+        family_workloads: &FamilyWorkloads,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut updates = Vec::new();
@@ -534,16 +533,23 @@ impl CatalogState {
             let MemoryLimit(ByteSize(memory_bytes)) =
                 (alloc.memory_limit).unwrap_or(MemoryLimit::MAX);
 
-            let row = Row::pack_slice(&[
+            let mut row = Row::default();
+            let mut packer = row.packer();
+            packer.extend([
                 size.as_str().into(),
                 u64::cast_from(alloc.scale).into(),
                 u64::cast_from(alloc.workers).into(),
                 cpu_limit.as_nanocpus().into(),
                 memory_bytes.into(),
                 disk_bytes.into(),
-                (alloc.credits_per_hour).into(),
-                Datum::from(is_source_only_allocation(alloc, source_only_families)),
+                Datum::from(alloc.credits_per_hour),
             ]);
+            packer.push_list(
+                WorkloadClass::ALL
+                    .iter()
+                    .filter(|class| allocation_allows_workload(alloc, **class, family_workloads))
+                    .map(|class| Datum::String(class.as_str())),
+            );
 
             updates.push(BuiltinTableUpdate::row(
                 &*MZ_CLUSTER_REPLICA_SIZES,

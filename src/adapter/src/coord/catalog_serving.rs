@@ -34,6 +34,7 @@ use crate::coord::TargetCluster;
 use crate::notice::AdapterNotice;
 use crate::session::Session;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
+use mz_controller::clusters::WorkloadClass;
 use mz_controller_types::ClusterId;
 
 /// Checks whether or not we should automatically run a query on the `mz_catalog_server`
@@ -286,27 +287,120 @@ pub fn check_cluster_restrictions(
     }
 }
 
-/// Checks that `plan` does not run a query on a cluster that
-/// [`CatalogState::source_only_cluster_restricted`] restricts for `session`.
-pub fn check_source_only_cluster_restrictions(
+/// The workload class of the work `plan` runs on its target cluster, with a
+/// description of it for errors, or `None` if it runs no work there.
+///
+/// NOTE: The match is exhaustive so that a new plan kind cannot run on a
+/// restricted cluster without being classified.
+pub fn plan_workload(plan: &Plan) -> Option<(WorkloadClass, &'static str)> {
+    match plan {
+        Plan::Select(_) | Plan::ShowColumns(_) => {
+            Some((WorkloadClass::ComputeInteractive, "run SELECT"))
+        }
+        Plan::CopyTo(_) => Some((WorkloadClass::ComputeInteractive, "run COPY TO")),
+        Plan::ReadThenWrite(_) => Some((WorkloadClass::ComputeInteractive, "run UPDATE or DELETE")),
+        // NOTE: Whether an INSERT reads on the cluster is only known after
+        // optimization, since even a VALUES list is not constant before it, so
+        // every INSERT counts as interactive compute.
+        Plan::Insert(_) => Some((WorkloadClass::ComputeInteractive, "run INSERT")),
+        Plan::Subscribe(_) => Some((WorkloadClass::ComputeMaintained, "run SUBSCRIBE")),
+        Plan::CopyFrom(_) => Some((WorkloadClass::Ingest, "run COPY FROM")),
+        // Objects created by these plans are checked when the catalog
+        // transaction creates them.
+        Plan::CreateConnection(_)
+        | Plan::CreateDatabase(_)
+        | Plan::CreateSchema(_)
+        | Plan::CreateRole(_)
+        | Plan::CreateCluster(_)
+        | Plan::CreateClusterReplica(_)
+        | Plan::CreateSource(_)
+        | Plan::CreateSources(_)
+        | Plan::CreateSecret(_)
+        | Plan::CreateSink(_)
+        | Plan::CreateTable(_)
+        | Plan::CreateView(_)
+        | Plan::CreateMaterializedView(_)
+        | Plan::CreateNetworkPolicy(_)
+        | Plan::CreateIndex(_)
+        | Plan::CreateMetricSink(_)
+        | Plan::CreateType(_)
+        | Plan::Comment(_)
+        | Plan::DiscardTemp
+        | Plan::DiscardAll
+        | Plan::DropObjects(_)
+        | Plan::DropOwned(_)
+        | Plan::EmptyQuery
+        | Plan::ShowAllVariables
+        | Plan::ShowCreate(_)
+        | Plan::ShowVariable(_)
+        | Plan::InspectShard(_)
+        | Plan::SetVariable(_)
+        | Plan::ResetVariable(_)
+        | Plan::SetTransaction(_)
+        | Plan::StartTransaction(_)
+        | Plan::CommitTransaction(_)
+        | Plan::AbortTransaction(_)
+        | Plan::ExplainPlan(_)
+        | Plan::ExplainPushdown(_)
+        | Plan::ExplainTimestamp(_)
+        | Plan::ExplainSinkSchema(_)
+        | Plan::AlterCluster(_)
+        | Plan::AlterClusterSwap(_)
+        | Plan::AlterNoop(_)
+        | Plan::AlterSetCluster(_)
+        | Plan::AlterConnection(_)
+        | Plan::AlterSource(_)
+        | Plan::AlterClusterRename(_)
+        | Plan::AlterClusterReplicaRename(_)
+        | Plan::AlterItemRename(_)
+        | Plan::AlterSchemaRename(_)
+        | Plan::AlterSchemaSwap(_)
+        | Plan::AlterSecret(_)
+        | Plan::AlterSink(_)
+        | Plan::AlterSystemSet(_)
+        | Plan::AlterSystemReset(_)
+        | Plan::AlterSystemResetAll(_)
+        | Plan::AlterRole(_)
+        | Plan::AlterOwner(_)
+        | Plan::AlterTableAddColumn(_)
+        | Plan::AlterMaterializedViewApplyReplacement(_)
+        | Plan::AlterNetworkPolicy(_)
+        | Plan::AlterRetainHistory(_)
+        | Plan::AlterSourceTimestampInterval(_)
+        // A cursor's query is checked when FETCH runs it.
+        | Plan::Declare(_)
+        | Plan::Fetch(_)
+        | Plan::Close(_)
+        | Plan::Prepare(_)
+        | Plan::Execute(_)
+        | Plan::Deallocate(_)
+        | Plan::Raise(_)
+        | Plan::GrantRole(_)
+        | Plan::RevokeRole(_)
+        | Plan::GrantPrivileges(_)
+        | Plan::RevokePrivileges(_)
+        | Plan::AlterDefaultPrivileges(_)
+        | Plan::ReassignOwned(_)
+        | Plan::SideEffectingFunc(_)
+        | Plan::ValidateConnection(_) => None,
+    }
+}
+
+/// Fails if the replica sizes of the cluster `plan` targets do not allow the
+/// work it runs there.
+pub fn check_cluster_workload_restrictions(
     catalog: &CatalogState,
     cluster_id: ClusterId,
     session: &Session,
     plan: &Plan,
 ) -> Result<(), AdapterError> {
-    let runs_query = match plan {
-        Plan::Select(_) | Plan::Subscribe(_) | Plan::CopyTo(_) | Plan::ReadThenWrite(_) => true,
-        // Mirrors `check_cluster_restrictions`: an INSERT without
-        // dependencies is a write that needs no computation on the cluster.
-        Plan::Insert(plan) => !plan.values.depends_on().is_empty(),
-        _ => false,
+    let Some((class, action)) = plan_workload(plan) else {
+        return Ok(());
     };
-    let cluster = catalog.get_cluster(cluster_id);
-    if runs_query && catalog.source_only_cluster_restricted(cluster, Some(session.user())) {
-        return Err(AdapterError::SourceOnlyCluster {
-            cluster: cluster.name.clone(),
-            action: "run queries".into(),
-        });
-    }
-    Ok(())
+    catalog.ensure_cluster_allows_workload(
+        catalog.get_cluster(cluster_id),
+        class,
+        Some(session.user()),
+        || action.to_string(),
+    )
 }
