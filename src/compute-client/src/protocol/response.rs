@@ -448,7 +448,10 @@ pub enum Share {
     Stashed {
         /// The batches holding the updates.
         batches: StashedShare,
-        /// The greatest time of an error update in the batches, or `None` if they hold none.
+        /// An upper bound on the times of the error updates in the batches: the greatest time of
+        /// an error update written to them, or `None` if none was written. Updates written
+        /// separately can cancel when the batches are read, so the batches may hold no error
+        /// update at this time.
         last_error_time: Option<Timestamp>,
     },
 }
