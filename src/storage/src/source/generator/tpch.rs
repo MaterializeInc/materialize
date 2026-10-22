@@ -86,9 +86,9 @@ impl Tpch {
 
         let mut offset = 0;
         let mut row = Row::default();
-        Box::new(iter::from_fn(move || {
+        let updates = iter::from_fn(move || {
             if let Some((output, event)) = pending.pop_front() {
-                return Some((LoadGeneratorOutput::Tpch(output), event));
+                return Some(Some((LoadGeneratorOutput::Tpch(output), event)));
             }
             if let Some((output, key)) = rows.next() {
                 let key_usize = usize::try_from(key).expect("key known to be non-negative");
@@ -105,7 +105,7 @@ impl Tpch {
                             // TODO: add customer complaints and recommends, see 4.2.3.
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 25, 100)),
                         ]);
-                        row.clone()
+                        Some(row.clone())
                     }
                     TpchView::Part => {
                         let name: String = PARTNAMES
@@ -150,7 +150,7 @@ impl Tpch {
                             Datum::Numeric(partkey_retailprice(key)),
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 49, 198)),
                         ]);
-                        row.clone()
+                        Some(row.clone())
                     }
                     TpchView::Customer => {
                         let nation = rng.gen_range(0..count_nation);
@@ -164,10 +164,13 @@ impl Tpch {
                             Datum::String(SEGMENTS.choose(&mut rng).unwrap()),
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 29, 116)),
                         ]);
-                        row.clone()
+                        Some(row.clone())
                     }
                     TpchView::Orders => {
                         let seed = rng.r#gen();
+                        if !ctx.tpch.tick.is_zero() {
+                            active_orders.push((key, seed));
+                        }
                         let (order, lineitems) = ctx.order_row(seed, key);
                         for row in lineitems {
                             pending.push_back((
@@ -175,10 +178,7 @@ impl Tpch {
                                 Event::Message(MzOffset::from(offset), (row, Diff::ONE)),
                             ));
                         }
-                        if !ctx.tpch.tick.is_zero() {
-                            active_orders.push((key, seed));
-                        }
-                        order
+                        Some(order)
                     }
                     TpchView::Nation => {
                         let (name, region) = NATIONS[key_usize];
@@ -188,7 +188,7 @@ impl Tpch {
                             Datum::Int64(region),
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 31, 114)),
                         ]);
-                        row.clone()
+                        Some(row.clone())
                     }
                     TpchView::Region => {
                         row.packer().extend([
@@ -196,15 +196,17 @@ impl Tpch {
                             Datum::String(REGIONS[key_usize]),
                             Datum::String(text_string(&mut rng, &ctx.text_string_source, 31, 115)),
                         ]);
-                        row.clone()
+                        Some(row.clone())
                     }
                     _ => unreachable!("{output:?}"),
                 };
 
-                pending.push_back((
-                    output,
-                    Event::Message(MzOffset::from(offset), (row, Diff::ONE)),
-                ));
+                if let Some(row) = row {
+                    pending.push_back((
+                        output,
+                        Event::Message(MzOffset::from(offset), (row, Diff::ONE)),
+                    ));
+                }
                 if rows.peek().is_none() {
                     offset += 1;
                     pending.push_back((output, Event::Progress(Some(MzOffset::from(offset)))));
@@ -248,10 +250,13 @@ impl Tpch {
                 ));
                 active_orders.push((key, new_seed));
             }
-            pending
-                .pop_front()
-                .map(|(output, event)| (LoadGeneratorOutput::Tpch(output), event))
-        }))
+            Some(
+                pending
+                    .pop_front()
+                    .map(|(output, event)| (LoadGeneratorOutput::Tpch(output), event)),
+            )
+        });
+        Box::new(updates.flatten())
     }
 }
 
