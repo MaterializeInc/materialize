@@ -46,14 +46,18 @@ fn probe(p: &str) -> Result<(), String> {
     }
 }
 
-/// Commands queued before a pipeline flush.
+/// Commands queued before a transaction is committed mid-batch.
 const FLUSH_EVERY: usize = 20_000;
 
 pub struct ValkeySink {
     conn: Conn,
     prefix: String,
-    /// Whether commands were sent since the last commit.
-    dirty: bool,
+    epoch_key: String,
+    /// The epoch this instance claimed with `INCR` on open. Every transaction
+    /// WATCHes the epoch key, so an older instance's writes abort once a newer
+    /// instance has opened.
+    epoch: Vec<u8>,
+    in_tx: bool,
     pub stats: Stats,
 }
 
@@ -71,6 +75,11 @@ impl ValkeySink {
             probe(p)?;
         }
         let mut conn = Conn::connect(&cfg.addr)?;
+        let epoch_key = format!("{}:epoch", cfg.prefix);
+        let epoch = match conn.call(&["INCR", epoch_key.as_str()])? {
+            Reply::Int(e) => e.to_string().into_bytes(),
+            r => return Err(format!("unexpected INCR reply {r:?}")),
+        };
         let progress = format!("{}:progress", cfg.prefix);
         let resume = match conn.call(&["GET", progress.as_str()])? {
             Reply::Bulk(None) => None,
@@ -85,11 +94,57 @@ impl ValkeySink {
             ValkeySink {
                 conn,
                 prefix: cfg.prefix,
-                dirty: false,
+                epoch_key,
+                epoch,
+                in_tx: false,
                 stats: Stats::default(),
             },
             resume,
         ))
+    }
+
+    /// Queues a command inside the current fenced transaction, starting one
+    /// if needed.
+    fn push<A: AsRef<[u8]>>(&mut self, args: &[A]) -> Result<(), String> {
+        if !self.in_tx {
+            self.conn.call(&["WATCH", self.epoch_key.as_str()])?;
+            let current = match self.conn.call(&["GET", self.epoch_key.as_str()])? {
+                Reply::Bulk(Some(b)) => b,
+                r => return Err(format!("fenced: epoch key {r:?}")),
+            };
+            if current != self.epoch {
+                return Err(format!(
+                    "fenced: epoch is {}, ours is {}",
+                    String::from_utf8_lossy(&current),
+                    String::from_utf8_lossy(&self.epoch)
+                ));
+            }
+            self.conn.queue(&["MULTI"]);
+            self.in_tx = true;
+        }
+        self.conn.queue(args);
+        Ok(())
+    }
+
+    /// Commits the current transaction, if any.
+    fn commit_tx(&mut self) -> Result<(), String> {
+        if !self.in_tx {
+            return Ok(());
+        }
+        self.conn.queue(&["EXEC"]);
+        self.stats.commands += self.conn.queued() as u64;
+        self.in_tx = false;
+        let replies = self.conn.flush()?;
+        match replies.last() {
+            Some(Reply::Array(Some(rs))) => {
+                if let Some(e) = rs.iter().find(|r| matches!(r, Reply::Error(_))) {
+                    return Err(format!("EXEC error {e:?}"));
+                }
+                Ok(())
+            }
+            Some(Reply::Array(None)) => Err("fenced: EXEC aborted, epoch changed".into()),
+            r => Err(format!("unexpected EXEC reply {r:?}")),
+        }
     }
 
     pub fn reset(&mut self) -> Result<(), String> {
@@ -115,11 +170,14 @@ impl ValkeySink {
                 let mut args: Vec<Vec<u8>> = vec![b"UNLINK".to_vec()];
                 for k in keys {
                     if let Reply::Bulk(Some(k)) = k {
-                        args.push(k);
+                        if k != self.epoch_key.as_bytes() {
+                            args.push(k);
+                        }
                     }
                 }
                 if args.len() > 1 {
-                    self.conn.call(&args)?;
+                    self.push(&args)?;
+                    self.commit_tx()?;
                 }
             }
             if next == b"0" {
@@ -131,45 +189,23 @@ impl ValkeySink {
 
     pub fn write(&mut self, batch: &[u8], commit: Option<u64>) -> Result<(), String> {
         let batches = decode(batch)?;
-        // A step delivered in one call with its commit is applied atomically.
-        let atomic = commit.is_some() && !self.dirty && !batches.is_empty();
-        if atomic {
-            self.conn.queue(&["MULTI"]);
-        }
         for b in &batches {
-            self.apply(b, atomic)?;
+            self.apply(b)?;
         }
         if let Some(f) = commit {
             let progress = format!("{}:progress", self.prefix);
-            self.conn.queue(&["SET", progress.as_str(), f.to_string().as_str()]);
-            if atomic {
-                self.conn.queue(&["EXEC"]);
-            }
-            self.stats.commands += self.conn.queued() as u64;
-            let replies = self.conn.flush()?;
-            if atomic {
-                // EXEC reports per-command errors inside its array.
-                if let Some(Reply::Array(Some(rs))) = replies.last() {
-                    if let Some(e) = rs.iter().find(|r| matches!(r, Reply::Error(_))) {
-                        return Err(format!("EXEC error {e:?}"));
-                    }
-                } else {
-                    return Err(format!("EXEC aborted: {:?}", replies.last()));
-                }
-            }
-            self.dirty = false;
+            self.push(&["SET", progress.as_str(), f.to_string().as_str()])?;
+            self.commit_tx()?;
             self.stats.commits += 1;
-        } else if self.conn.queued() > 0 {
-            self.stats.commands += self.conn.queued() as u64;
-            self.conn.flush()?;
-            self.dirty = true;
+        } else {
+            self.commit_tx()?;
         }
         Ok(())
     }
 
     /// Queues commands for one batch sorted by `(mz_time, row)`. Rows of one
     /// key at one time are contiguous because the key is the first column.
-    fn apply(&mut self, b: &RecordBatch, atomic: bool) -> Result<(), String> {
+    fn apply(&mut self, b: &RecordBatch) -> Result<(), String> {
         let n = b.num_columns();
         let ncols = n - 2;
         let times = b
@@ -206,7 +242,7 @@ impl ValkeySink {
                 j += 1;
             }
             let k = format!("{}:k:{}", self.prefix, key);
-            self.conn.queue(&[b"DEL".as_slice(), k.as_bytes()]);
+            self.push(&[b"DEL".as_slice(), k.as_bytes()])?;
             if let Some(p) = positive {
                 let mut args: Vec<Vec<u8>> = vec![b"HSET".to_vec(), k.into_bytes()];
                 for c in 1..ncols {
@@ -216,15 +252,12 @@ impl ValkeySink {
                     }
                 }
                 if args.len() > 2 {
-                    self.conn.queue(&args);
+                    self.push(&args)?;
                 }
             }
             i = j;
-            // Inside MULTI everything must reach EXEC before replies are read.
-            if !atomic && self.conn.queued() >= FLUSH_EVERY {
-                self.stats.commands += self.conn.queued() as u64;
-                self.conn.flush()?;
-                self.dirty = true;
+            if self.conn.queued() >= FLUSH_EVERY {
+                self.commit_tx()?;
             }
         }
         Ok(())

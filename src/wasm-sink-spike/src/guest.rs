@@ -41,6 +41,7 @@ impl Guest for Null {
     }
 }
 
+#[derive(Default)]
 pub struct Native(Option<wasm_sink_guest::ValkeySink>);
 
 impl Native {
@@ -155,7 +156,7 @@ impl Wasm {
             // Instantiation runs guest code and consumes fuel too.
             w(store.set_fuel(u64::MAX / 2))?;
         }
-        let sink =w(Sink::instantiate(&mut store, component, &linker))?;
+        let sink = w(Sink::instantiate(&mut store, component, &linker))?;
         Ok(Wasm {
             store,
             sink,
@@ -183,7 +184,7 @@ impl Wasm {
             let used = budget - self.store.get_fuel().unwrap_or(0);
             self.fuel_used += used;
             self.calls += 1;
-            if self.calls % 200 == 0 {
+            if self.calls.is_multiple_of(200) {
                 eprintln!(
                     "fuel: calls={} total={} last_call={} last_bytes={}",
                     self.calls, self.fuel_used, used, input_bytes
@@ -256,9 +257,10 @@ pub struct GuestThread {
 }
 
 impl GuestThread {
-    pub fn spawn<F>(make: F, deadline: Duration) -> Self
+    pub fn spawn<G, F>(make: F, deadline: Duration) -> Self
     where
-        F: FnOnce() -> anyhow::Result<Box<dyn Guest>> + Send + 'static,
+        G: Guest + 'static,
+        F: FnOnce() -> anyhow::Result<G> + Send + 'static,
     {
         let (tx, rx) = std::sync::mpsc::channel::<Req>();
         let poisoned = Arc::new(AtomicBool::new(false));

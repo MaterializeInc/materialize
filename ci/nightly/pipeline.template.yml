@@ -376,6 +376,18 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: kafka-multi-broker
 
+      # THROWAWAY spike, never merge.
+      - id: wasm-sink-spike
+        topics: [kafka, kafka-sink]
+        label: "WASM sink spike"
+        depends_on: build-x86_64
+        timeout_in_minutes: 90
+        agents:
+          queue: hetzner-x86-64-dedi-8cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: wasm-sink
+
       - id: redpanda-resumption
         topics: [kafka, kafka-sink]
         label: ":panda_face: resumption"

@@ -6,17 +6,14 @@
 //! frontier `f` in the target; the host then downgrades its own critical since
 //! hold to `f - 1`, the earliest time a restart needs to read.
 
-
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow, bail};
-use arrow::ipc::writer::StreamWriter;
 use clap::Parser;
 use differential_dataflow::consolidation::consolidate_updates;
-use mz_arrow_util::builder::ArrowBuilder;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::url::SensitiveUrl;
@@ -27,7 +24,7 @@ use mz_persist_client::read::ListenEvent;
 use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{Diagnostics, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::{Datum, RelationDesc, Row, SqlScalarType, Timestamp};
+use mz_repr::{RelationDesc, Row, SqlScalarType, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use timely::progress::Antichain;
@@ -267,15 +264,12 @@ async fn main() -> anyhow::Result<()> {
                 fuel: (args.fuel_base > 0).then_some((args.fuel_base, args.fuel_per_byte)),
             };
             GuestThread::spawn(
-                move || {
-                    Ok(Box::new(guest::Wasm::new(&engine, &component, allowed, limits)?)
-                        as Box<dyn guest::Guest>)
-                },
+                move || guest::Wasm::new(&engine, &component, allowed, limits),
                 deadline,
             )
         }
-        None if args.null_guest => GuestThread::spawn(|| Ok(Box::new(guest::Null) as _), deadline),
-        None => GuestThread::spawn(|| Ok(Box::new(guest::Native::new()) as _), deadline),
+        None if args.null_guest => GuestThread::spawn(|| Ok(guest::Null), deadline),
+        None => GuestThread::spawn(|| Ok(guest::Native::new()), deadline),
     };
 
     let mut config: serde_json::Value = serde_json::from_str(&args.guest_extra)?;
@@ -295,7 +289,10 @@ async fn main() -> anyhow::Result<()> {
     let result = async {
         let resume = guest.open(config.to_string()).await?;
         let since = hold.since().context("shard since is empty")?;
-        println!("open: resume={resume:?} hold_since={since} shard_since={:?}", read.since());
+        println!(
+            "open: resume={resume:?} hold_since={since} shard_since={:?}",
+            read.since()
+        );
         let encoder = Encoder::new(&desc);
 
         let as_of = match resume {
@@ -425,11 +422,11 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("sink failed: {e:#}");
         let now = (mz_ore::now::SYSTEM_TIME)();
         let floor = now.saturating_sub(max_lag);
-        if let Some(since) = hold.since() {
-            if u64::from(since) < floor {
-                println!("RETENTION_CAP releasing hold from {since} to {floor}");
-                hold.downgrade(Timestamp::from(floor), true).await?;
-            }
+        if let Some(since) = hold.since()
+            && u64::from(since) < floor
+        {
+            println!("RETENTION_CAP releasing hold from {since} to {floor}");
+            hold.downgrade(Timestamp::from(floor), true).await?;
         }
     }
     result

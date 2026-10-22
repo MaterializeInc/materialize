@@ -4,6 +4,7 @@
 Usage: verify.py VALKEY_HOST VALKEY_PORT PREFIX
 Prints both digests and row counts; exits 1 on mismatch.
 """
+
 import hashlib
 import os
 import socket
@@ -58,9 +59,26 @@ progress = int(progress)
 
 # Query Materialize first: the sink's hold only guarantees progress - 1
 # stays readable briefly once the sink moves on.
-q = "SELECT id, v, n FROM mv" if os.environ.get("NOASOF") else f"SELECT id, v, n FROM mv AS OF {progress - 1}"
+q = (
+    "SELECT id, v, n FROM mv"
+    if os.environ.get("NOASOF")
+    else f"SELECT id, v, n FROM mv AS OF {progress - 1}"
+)
 out = subprocess.run(
-    ["psql", "-h", "localhost", "-p", "6875", "-U", "materialize", "-At", "-F", "|", "-c", q],
+    [
+        "psql",
+        "-h",
+        "localhost",
+        "-p",
+        "6875",
+        "-U",
+        "materialize",
+        "-At",
+        "-F",
+        "|",
+        "-c",
+        q,
+    ],
     check=True,
     capture_output=True,
     text=True,
@@ -85,14 +103,14 @@ for i in range(0, len(keys), 20000):
 valkey_rows.sort()
 
 
-
-
 def digest(rows):
     return hashlib.sha256("\n".join(rows).encode()).hexdigest()[:16]
 
 
 dv, dm = digest(valkey_rows), digest(mz_rows)
-print(f"progress={progress} valkey_rows={len(valkey_rows)} mz_rows={len(mz_rows)} valkey={dv} mz={dm}")
+print(
+    f"progress={progress} valkey_rows={len(valkey_rows)} mz_rows={len(mz_rows)} valkey={dv} mz={dm}"
+)
 if dv != dm:
     sv, sm = set(valkey_rows), set(mz_rows)
     print("only_valkey", sorted(sv - sm)[:5])

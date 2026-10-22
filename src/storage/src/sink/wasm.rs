@@ -18,15 +18,15 @@
 //! the sink input at `f - 1`, and a restart derives its as-of from the shard.
 
 use std::cell::RefCell;
-use std::net::SocketAddr;
+use std::net::ToSocketAddrs;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail};
 use differential_dataflow::Hashable;
-use futures::StreamExt;
 use differential_dataflow::VecCollection;
+use futures::StreamExt;
 use mz_interchange::envelopes::for_each_diff_pair;
 use mz_persist_client::Diagnostics;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -44,6 +44,8 @@ use mz_wasm_sink_spike::guest::{self, GuestThread};
 use timely::PartialOrder;
 use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::Exchange;
+use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::vec::Map;
 use timely::progress::Antichain;
 use tracing::info;
@@ -55,7 +57,8 @@ use crate::storage_state::StorageState;
 #[derive(Clone, Debug, serde::Deserialize)]
 pub(crate) struct SpikeConfig {
     wasm: String,
-    valkey: SocketAddr,
+    /// `host:port`; resolved by the host, the guest has no DNS.
+    valkey: String,
     #[serde(default = "default_deadline")]
     call_deadline_ms: u64,
     #[serde(default)]
@@ -141,18 +144,26 @@ impl<'scope> SinkRender<'scope> for WasmSinkRender {
         let name = format!("wasm-{sink_id}");
         let mut builder = AsyncOperatorBuilder::new(name.clone(), scope.clone());
         let hashed_id = sink_id.hashed();
-        let is_active_worker =
-            usize::try_from(hashed_id % u64::try_from(scope.peers()).unwrap()).unwrap()
-                == scope.index();
+        let is_active_worker = usize::try_from(hashed_id % u64::try_from(scope.peers()).unwrap())
+            .unwrap()
+            == scope.index();
         // Each worker flattens its share of the arranged batches into diff
         // pairs, keyed updates stay in time order per key, and one worker
         // talks to the guest.
-        let pairs = batches.flat_map(|batch| {
-            let mut v = Vec::new();
-            for_each_diff_pair(&batch, |_key, time, pair| {
-                v.push(((pair.before, pair.after), time));
-            });
-            v
+        // Gives pairs into the output session one at a time, which ships them
+        // in bounded containers, so a snapshot-sized batch is never collected
+        // into one message.
+        let pairs = batches.unary(Pipeline, "WasmSinkDiffPairs", |_, _| {
+            move |input, output| {
+                input.for_each(|cap, data| {
+                    let mut session = output.session(&cap);
+                    for batch in data.drain(..) {
+                        for_each_diff_pair(&batch, |_key, time, pair| {
+                            session.give(((pair.before, pair.after), time));
+                        });
+                    }
+                });
+            }
         });
         let mut input = builder.new_disconnected_input(pairs, Exchange::new(move |_| hashed_id));
 
@@ -173,23 +184,22 @@ impl<'scope> SinkRender<'scope> for WasmSinkRender {
 
                 let engine = guest::engine(cfg.fuel_base > 0)?;
                 let component = guest::load_component(&engine, cfg.wasm.as_ref())?;
-                let allowed = cfg.valkey;
+                let allowed = cfg
+                    .valkey
+                    .to_socket_addrs()?
+                    .next()
+                    .ok_or_else(|| anyhow!("cannot resolve {}", cfg.valkey))?;
                 let limits = guest::WasmLimits {
                     memory_bytes: cfg.memory_bytes,
                     call_ticks: cfg.call_deadline_ms * guest::TICKS_PER_SEC / 1000,
                     fuel: (cfg.fuel_base > 0).then_some((cfg.fuel_base, cfg.fuel_per_byte)),
                 };
                 let guest = GuestThread::spawn(
-                    move || {
-                        Ok(
-                            Box::new(guest::Wasm::new(&engine, &component, allowed, limits)?)
-                                as Box<dyn guest::Guest>,
-                        )
-                    },
+                    move || guest::Wasm::new(&engine, &component, allowed, limits),
                     Duration::from_millis(cfg.call_deadline_ms),
                 );
                 let config = serde_json::json!({
-                    "addr": cfg.valkey.to_string(),
+                    "addr": allowed.to_string(),
                     "prefix": format!("{{{sink_id}}}"),
                 });
                 let resume = guest.open(config.to_string()).await?;
@@ -202,7 +212,6 @@ impl<'scope> SinkRender<'scope> for WasmSinkRender {
                         if !with_snapshot {
                             bail!("target has no progress and the sink starts without snapshot");
                         }
-                        guest.reset().await?;
                         None
                     }
                     Some(r) => {
@@ -218,7 +227,19 @@ impl<'scope> SinkRender<'scope> for WasmSinkRender {
                 let encoder = Encoder::new(&desc);
                 let mut rows: Vec<(Row, Timestamp, i64)> = Vec::new();
                 let mut committed = as_of.clone();
+                // Clearing the target waits for the first data or for progress
+                // past the as_of: a restart can render with a stale as_of whose
+                // input cannot be served, and that attempt fails before either.
+                let mut needs_reset = resume.is_none();
                 while let Some(event) = input.next().await {
+                    let readable = match &event {
+                        Event::Data(..) => true,
+                        Event::Progress(upper) => PartialOrder::less_than(&as_of, upper),
+                    };
+                    if needs_reset && readable {
+                        guest.reset().await?;
+                        needs_reset = false;
+                    }
                     match event {
                         Event::Data(_cap, mut data) => {
                             for ((before, after), time) in data.drain(..) {
