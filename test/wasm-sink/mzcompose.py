@@ -172,7 +172,8 @@ def wait_caught_up(c: Composition, sink_id: str, timeout: float = 900) -> None:
         )
         p = progress(c, sink_id)
         print(f"mv upper {upper}, sink progress {p}")
-        if p is not None and p >= upper:
+        # An upper of 0 means the MV has not written yet.
+        if p is not None and upper > 0 and p >= upper:
             return
         assert time.time() < deadline, f"sink did not catch up: {p} < {upper}"
         time.sleep(5)

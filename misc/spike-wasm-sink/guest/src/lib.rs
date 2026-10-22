@@ -169,10 +169,10 @@ impl ValkeySink {
             if let Some(Reply::Array(Some(keys))) = keys {
                 let mut args: Vec<Vec<u8>> = vec![b"UNLINK".to_vec()];
                 for k in keys {
-                    if let Reply::Bulk(Some(k)) = k {
-                        if k != self.epoch_key.as_bytes() {
-                            args.push(k);
-                        }
+                    if let Reply::Bulk(Some(k)) = k
+                        && k != self.epoch_key.as_bytes()
+                    {
+                        args.push(k);
                     }
                 }
                 if args.len() > 1 {

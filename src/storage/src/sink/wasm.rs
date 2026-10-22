@@ -45,8 +45,9 @@ use timely::PartialOrder;
 use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::vec::Map;
+use timely::dataflow::operators::vec::ToStream;
+use timely::dataflow::operators::{Concatenate, Operator};
 use timely::progress::Antichain;
 use tracing::info;
 
@@ -303,6 +304,14 @@ impl<'scope> SinkRender<'scope> for WasmSinkRender {
             update: HealthStatusUpdate::halting(format!("{error:#}"), None),
             namespace: StatusNamespace::Kafka,
         });
+        // Like the Kafka sink, report running once rendered; errors follow.
+        let running = Some(HealthStatusMessage {
+            id: None,
+            update: HealthStatusUpdate::Running,
+            namespace: StatusNamespace::Kafka,
+        })
+        .to_stream(scope.clone());
+        let statuses = scope.concatenate([running, statuses]);
         (statuses, vec![button.press_on_drop()])
     }
 }
