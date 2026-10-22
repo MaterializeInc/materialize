@@ -116,7 +116,7 @@ steps:
     depends_on: devel-docker-tags
     concurrency: 1
     concurrency_group: "cluster-spec-sheet-account-$$CI_CONCURRENCY_POOL_SLOT"
-    concurrency_pool: 20
+    concurrency_pool: 1
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cluster-spec-sheet
