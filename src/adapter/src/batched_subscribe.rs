@@ -38,7 +38,7 @@ use crate::coord::peek::PeekResponseUnary;
 
 /// How a forwarder ended the client's stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ForwarderEvent {
+pub enum ForwarderEvent {
     /// The subscribe reached the empty frontier and every update was sent.
     Finished(GlobalId),
     /// The subscribe's error was sent to the client, and nothing follows it.
@@ -68,13 +68,6 @@ impl fmt::Debug for Forwarder {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the coordinator does not sequence batched subscribes yet"
-    )
-)]
 impl Forwarder {
     /// Spawns the forwarding task of sink `sink_id`.
     ///
@@ -83,7 +76,7 @@ impl Forwarder {
     /// `read_batch_bytes`. The task reports to `events` once it has ended the stream.
     ///
     /// Must be called from within a tokio runtime.
-    pub(crate) fn spawn(
+    pub(crate) fn spawn<E: From<ForwarderEvent> + Send + 'static>(
         sink_id: GlobalId,
         format: SubscribeRowFormat,
         output_desc: RelationDesc,
@@ -92,7 +85,7 @@ impl Forwarder {
         backlog: Arc<Mutex<SubscribeBacklogAccounting>>,
         read_batch_bytes: usize,
         read_memory_budget_bytes: usize,
-        events: mpsc::UnboundedSender<ForwarderEvent>,
+        events: mpsc::UnboundedSender<E>,
     ) -> Forwarder {
         let (batches_tx, batches_rx) = mpsc::unbounded_channel();
         let task = ForwarderTask {
@@ -112,7 +105,7 @@ impl Forwarder {
             || format!("batched_subscribe_forwarder({sink_id})"),
             async move {
                 if let Some(event) = task.run(sink_id, batches_rx).await {
-                    let _ = events.send(event);
+                    let _ = events.send(event.into());
                 }
             },
         );
@@ -168,14 +161,17 @@ impl Forwarder {
     }
 
     /// The encoded size of the stashed shares sent to the forwarder and not yet fully read.
+    ///
+    /// These are held in blob storage. The caller retires the subscribe with
+    /// `SubscribeFellBehind` once they exceed `batched_subscribe_max_unread_stash_bytes`.
     pub(crate) fn unread_stash_bytes(&self) -> usize {
         self.unread_stash_bytes.load(Ordering::SeqCst)
     }
 
     /// The size of the inline shares sent to the forwarder and not yet formatted.
     ///
-    /// These are held in environmentd memory. Together with the client's backlog they are what
-    /// the subscribe buffers for its client, so the caller bounds their sum by
+    /// These are held in environmentd memory. The caller retires the subscribe with
+    /// `SubscribeFellBehind` once the client's `backlog_size` plus these bytes exceeds
     /// `subscribe_max_buffered_bytes`.
     pub(crate) fn unread_inline_bytes(&self) -> usize {
         self.unread_inline_bytes.load(Ordering::SeqCst)

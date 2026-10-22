@@ -16,7 +16,9 @@ use std::time::{Duration, Instant};
 use differential_dataflow::lattice::Lattice;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::plan::LirRelationExpr;
-use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
+use mz_compute_types::sinks::{
+    BatchedSubscribeSinkConnection, ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
+};
 use mz_expr::{ColumnOrder, MirRelationExpr};
 use mz_ore::soft_assert_or_log;
 use mz_repr::{GlobalId, RelationDesc, Timestamp};
@@ -27,6 +29,7 @@ use mz_transform::dataflow::{DataflowMetainfo, optimize_dataflow_snapshot};
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{SharedTypecheckingContext, empty_typechecking_context};
 use timely::progress::Antichain;
+use uuid::Uuid;
 
 use crate::CollectionIdBundle;
 use crate::optimize::dataflows::{
@@ -54,6 +57,8 @@ pub struct Optimizer {
     with_snapshot: bool,
     /// Sink timestamp.
     up_to: Option<Timestamp>,
+    /// Set for a `SUBSCRIBE ... WITH (BATCHED)`.
+    batched: Option<BatchedSubscribeOptions>,
     /// A human-readable name exposed internally (useful for debugging).
     debug_name: String,
     /// Optimizer config.
@@ -85,6 +90,7 @@ impl Optimizer {
         sink_id: GlobalId,
         with_snapshot: bool,
         up_to: Option<Timestamp>,
+        batched: Option<BatchedSubscribeOptions>,
         debug_name: String,
         config: OptimizerConfig,
         metrics: OptimizerMetrics,
@@ -97,6 +103,7 @@ impl Optimizer {
             sink_id,
             with_snapshot,
             up_to,
+            batched,
             debug_name,
             config,
             metrics,
@@ -186,11 +193,29 @@ impl Optimizer {
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
         // Make SinkDesc
+        let (connection, with_snapshot) = match &self.batched {
+            None => (
+                ComputeSinkConnection::Subscribe(SubscribeSinkConnection { output }),
+                self.with_snapshot,
+            ),
+            // A batched subscribe's replicas always render with the snapshot, which a re-rendered
+            // replica needs to start its chain at its replayed as-of. The cutover at `start`
+            // removes the snapshot when the subscribe has none.
+            Some(BatchedSubscribeOptions { stash_id }) => (
+                ComputeSinkConnection::BatchedSubscribe(BatchedSubscribeSinkConnection {
+                    stash_id: *stash_id,
+                    // Set once the as-of is known, in the `GlobalMirPlan<Resolved>` stage.
+                    start: Timestamp::MIN,
+                    output_desc: from_desc.clone(),
+                }),
+                true,
+            ),
+        };
         let sink_description = ComputeSinkDesc {
             from,
             from_desc,
-            connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection { output }),
-            with_snapshot: self.with_snapshot,
+            connection,
+            with_snapshot,
             up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
             // No `FORCE NOT NULL` for subscribes
             non_null_assertions: vec![],
@@ -233,6 +258,26 @@ impl Optimizer {
             df_meta,
             phantom: PhantomData::<Unresolved>,
         })
+    }
+}
+
+/// The parameters of a `SUBSCRIBE ... WITH (BATCHED)`.
+#[derive(Clone, Copy, Debug)]
+pub struct BatchedSubscribeOptions {
+    /// Names the subscribe's stash shard. It must be unique across environmentd restarts, which
+    /// transient sink ids are not.
+    pub stash_id: Uuid,
+}
+
+/// The earliest time a batched subscribe with as-of `as_of` reports updates at.
+///
+/// Returns `None` if no such time exists, which is the case for a subscribe without a snapshot at
+/// `Timestamp::MAX`. Such a subscribe reports nothing.
+pub fn batched_subscribe_start(as_of: Timestamp, with_snapshot: bool) -> Option<Timestamp> {
+    if with_snapshot {
+        Some(as_of)
+    } else {
+        as_of.try_step_forward()
     }
 }
 
@@ -381,8 +426,25 @@ impl Optimize<GlobalMirPlan<Resolved>> for Optimizer {
             normalize_lets(&mut build.plan.0, &self.config.features)?
         }
 
+        let as_of = df_desc
+            .as_of
+            .as_ref()
+            .and_then(|as_of| as_of.as_option())
+            .copied()
+            .expect("set in `resolve`");
+        for sink in df_desc.sink_exports.values_mut() {
+            if let ComputeSinkConnection::BatchedSubscribe(connection) = &mut sink.connection {
+                // Without a start the dataflow is never shipped (see `implement_subscribe`), so
+                // the value does not matter.
+                connection.start =
+                    batched_subscribe_start(as_of, self.with_snapshot).unwrap_or(as_of);
+            }
+        }
+
         if self.config.subscribe_snapshot_optimization {
             // Determine whether we can elide any snapshots for this subscribe.
+            //
+            // A batched subscribe's sink requests the snapshot, so its inputs keep theirs.
             optimize_dataflow_snapshot(&mut df_desc)?;
         }
 

@@ -10,13 +10,20 @@
 use futures::StreamExt;
 use maplit::btreemap;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::SUBSCRIBE_MAX_BUFFERED_BYTES;
+use mz_adapter_types::dyncfgs::{
+    BATCHED_SUBSCRIBE_MAX_UNREAD_STASH_BYTES, SUBSCRIBE_MAX_BUFFERED_BYTES,
+};
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::LirDataflowDescription;
+use mz_compute_types::dyncfgs::{
+    PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES, PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES,
+};
+use mz_compute_types::sinks::ComputeSinkConnection;
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::GlobalId;
+use mz_repr::IntoRowIterator;
 use mz_repr::Timestamp;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
@@ -32,9 +39,10 @@ use tracing::{Instrument, Span};
 use uuid::Uuid;
 
 use crate::active_compute_sink::{
-    ActiveComputeSink, ActiveComputeSinkRetireReason, ActiveSubscribe, ActiveSubscribeOwner,
-    SubscribeBacklogAccounting, SubscribeRowFormat,
+    ActiveBatchedSubscribe, ActiveComputeSink, ActiveComputeSinkRetireReason, ActiveSubscribe,
+    ActiveSubscribeOwner, SubscribeBacklogAccounting, SubscribeRowFormat, send_to_client,
 };
+use crate::batched_subscribe::Forwarder;
 use crate::command::ExecuteResponse;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::peek::PeekResponseUnary;
@@ -48,6 +56,7 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::Optimize;
+use crate::optimize::subscribe::batched_subscribe_start;
 use crate::session::{Session, TransactionOps};
 use crate::{
     AdapterNotice, ExecuteContext, ExecuteContextGuard, ReadHolds, TimelineContext, optimize,
@@ -275,6 +284,7 @@ impl Coordinator {
         let plan::SubscribePlan {
             with_snapshot,
             up_to,
+            batched,
             ..
         } = &plan;
 
@@ -284,6 +294,9 @@ impl Coordinator {
             .expect("compute instance does not exist");
         let (_, view_id) = self.allocate_transient_id();
         let (_, sink_id) = self.allocate_transient_id();
+        let batched = batched.then(|| optimize::subscribe::BatchedSubscribeOptions {
+            stash_id: Uuid::new_v4(),
+        });
         let debug_name = format!("subscribe-{}", sink_id);
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(cluster_id).config.features())
@@ -298,6 +311,7 @@ impl Coordinator {
             sink_id,
             *with_snapshot,
             *up_to,
+            batched,
             debug_name,
             optimizer_config,
             self.optimizer_metrics(),
@@ -554,54 +568,110 @@ impl Coordinator {
         plan: plan::SubscribePlan,
     ) -> Result<(ExecuteResponse, BuiltinTableAppendNotify), AdapterError> {
         let sink_id = df_desc.sink_id();
+        let as_of = df_desc
+            .as_of
+            .as_ref()
+            .and_then(|t| t.as_option())
+            .copied()
+            .expect("set to Some in an earlier stage");
+        let batched_output_desc = match &df_desc.sink_exports.values().into_element().connection {
+            ComputeSinkConnection::BatchedSubscribe(connection) => {
+                Some(connection.output_desc.clone())
+            }
+            _ => None,
+        };
 
         let (tx, rx) = mpsc::unbounded_channel::<PeekResponseUnary>();
         let backlog_accounting = Arc::new(Mutex::new(SubscribeBacklogAccounting::default()));
-        let max_buffered_bytes =
-            SUBSCRIBE_MAX_BUFFERED_BYTES.get(self.catalog().system_config().dyncfgs());
-        let active_subscribe = ActiveSubscribe {
-            owner: ActiveSubscribeOwner::Session {
-                conn_id: conn_id.clone(),
-                session_uuid,
-            },
-            channel: tx,
-            backlog_accounting: Arc::clone(&backlog_accounting),
-            max_buffered_bytes,
-            format: SubscribeRowFormat {
-                emit_progress: plan.emit_progress,
-                arity: df_desc
+        let dyncfgs = self.catalog().system_config().dyncfgs();
+        let max_buffered_bytes = SUBSCRIBE_MAX_BUFFERED_BYTES.get(dyncfgs);
+        let format = SubscribeRowFormat {
+            emit_progress: plan.emit_progress,
+            arity: match &batched_output_desc {
+                // The sink's `from_desc` can be the schema of an index the subscribed relation
+                // is read from, which differs from the relation's.
+                Some(output_desc) => output_desc.arity(),
+                None => df_desc
                     .sink_exports
                     .values()
                     .into_element()
                     .from_desc
                     .arity(),
-                output: plan.output,
             },
-            as_of: df_desc
-                .as_of
-                .as_ref()
-                .and_then(|t| t.as_option())
-                .copied()
-                .expect("set to Some in an earlier stage"),
-            cluster_id,
-            depends_on: dependency_ids,
-            start_time: self.now(),
-            internal: false,
+            output: plan.output,
         };
-        active_subscribe.initialize();
+        let start_time = self.now();
+        let active_sink = match batched_output_desc {
+            None => {
+                let active_subscribe = ActiveSubscribe {
+                    owner: ActiveSubscribeOwner::Session {
+                        conn_id: conn_id.clone(),
+                        session_uuid,
+                    },
+                    channel: tx,
+                    backlog_accounting: Arc::clone(&backlog_accounting),
+                    max_buffered_bytes,
+                    format,
+                    as_of,
+                    cluster_id,
+                    depends_on: dependency_ids,
+                    start_time,
+                    internal: false,
+                };
+                active_subscribe.initialize();
+                ActiveComputeSink::Subscribe(active_subscribe)
+            }
+            Some(output_desc) => {
+                // Emit the progress row at the as-of, as `ActiveSubscribe::initialize` does.
+                if let Some(rows) = format.progress_row(&Antichain::from_elem(as_of)) {
+                    let bytes = rows.byte_len();
+                    send_to_client(
+                        &tx,
+                        &backlog_accounting,
+                        PeekResponseUnary::Rows(Box::new(rows.into_row_iter())),
+                        bytes,
+                    );
+                }
+                let forwarder = Forwarder::spawn(
+                    sink_id,
+                    format,
+                    output_desc,
+                    self.persist_client.clone(),
+                    tx.clone(),
+                    Arc::clone(&backlog_accounting),
+                    PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES.get(dyncfgs),
+                    PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES.get(dyncfgs),
+                    self.internal_cmd_tx.clone(),
+                );
+                ActiveComputeSink::BatchedSubscribe(ActiveBatchedSubscribe {
+                    conn_id: conn_id.clone(),
+                    session_uuid,
+                    cluster_id,
+                    depends_on: dependency_ids,
+                    as_of,
+                    start_time,
+                    channel: tx,
+                    backlog_accounting: Arc::clone(&backlog_accounting),
+                    max_buffered_bytes,
+                    max_unread_stash_bytes: BATCHED_SUBSCRIBE_MAX_UNREAD_STASH_BYTES.get(dyncfgs),
+                    forwarder,
+                })
+            }
+        };
 
         // A subscribe whose `up_to` is not beyond its `as_of` covers an empty range and
-        // produces no data beyond the progress row `initialize` already emitted. It must
+        // produces no data beyond the progress row already emitted. It must
         // not install a sink: the sink only finishes once its input frontier reaches
         // `up_to`, which a live input never does at `MAX`, so `AS OF MAX UP TO MAX` would
-        // never complete. Retiring `active_subscribe` drops its channel sender, which
+        // never complete. Retiring the sink drops its channel sender, which
         // completes the subscribe for the client.
-        let is_empty = df_desc
-            .as_of
-            .as_ref()
-            .is_some_and(|as_of| PartialOrder::less_equal(&df_desc.until, as_of));
+        //
+        // A batched subscribe without a snapshot at `MAX` covers no times either, and its
+        // sink would never complete for the same reason.
+        let is_empty = PartialOrder::less_equal(&df_desc.until, &Antichain::from_elem(as_of))
+            || (plan.batched && batched_subscribe_start(as_of, plan.with_snapshot).is_none());
         let write_notify: BuiltinTableAppendNotify = if is_empty {
-            active_subscribe.retire(ActiveComputeSinkRetireReason::Finished);
+            active_sink.retire(ActiveComputeSinkRetireReason::Finished);
             // No `mz_subscriptions` bookkeeping was deferred.
             Box::pin(std::future::ready(()))
         } else {
@@ -611,8 +681,7 @@ impl Coordinator {
             // the coordinator loop on a timestamp-oracle round trip. We hand the notify back
             // so the caller can wait before returning the `SUBSCRIBE` response to the
             // subscribing session.
-            let write_notify = self
-                .add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe));
+            let write_notify = self.add_active_compute_sink(sink_id, active_sink);
 
             // Ship the dataflow, handling errors gracefully. With the frontend subscribe
             // sequencing, a dependency can be dropped between sequencing (on the session

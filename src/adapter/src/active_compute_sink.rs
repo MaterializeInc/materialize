@@ -15,6 +15,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use mz_adapter_types::connection::ConnectionId;
+use mz_compute_client::controller::AcceptedBatch;
 use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_controller_types::ClusterId;
 use mz_expr::row::{RowCollection, RowCollectionBuilder};
@@ -29,6 +30,7 @@ use timely::progress::Antichain;
 use tokio::sync::{Notify, mpsc, oneshot};
 use uuid::Uuid;
 
+use crate::batched_subscribe::Forwarder;
 use crate::coord::peek::{DroppedDependency, PeekResponseUnary};
 use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 
@@ -37,6 +39,8 @@ use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 pub enum ActiveComputeSink {
     /// An active subscribe sink.
     Subscribe(ActiveSubscribe),
+    /// An active `SUBSCRIBE ... WITH (BATCHED)` sink.
+    BatchedSubscribe(ActiveBatchedSubscribe),
     /// An active copy to sink.
     CopyTo(ActiveCopyTo),
 }
@@ -46,6 +50,7 @@ impl ActiveComputeSink {
     pub fn cluster_id(&self) -> ClusterId {
         match &self {
             ActiveComputeSink::Subscribe(subscribe) => subscribe.cluster_id,
+            ActiveComputeSink::BatchedSubscribe(subscribe) => subscribe.cluster_id,
             ActiveComputeSink::CopyTo(copy_to) => copy_to.cluster_id,
         }
     }
@@ -54,6 +59,7 @@ impl ActiveComputeSink {
     pub fn connection_id(&self) -> Option<&ConnectionId> {
         match &self {
             ActiveComputeSink::Subscribe(subscribe) => subscribe.connection_id(),
+            ActiveComputeSink::BatchedSubscribe(subscribe) => Some(&subscribe.conn_id),
             ActiveComputeSink::CopyTo(copy_to) => Some(&copy_to.conn_id),
         }
     }
@@ -62,6 +68,7 @@ impl ActiveComputeSink {
     pub fn depends_on(&self) -> &BTreeSet<GlobalId> {
         match &self {
             ActiveComputeSink::Subscribe(subscribe) => &subscribe.depends_on,
+            ActiveComputeSink::BatchedSubscribe(subscribe) => &subscribe.depends_on,
             ActiveComputeSink::CopyTo(copy_to) => &copy_to.depends_on,
         }
     }
@@ -74,6 +81,7 @@ impl ActiveComputeSink {
     pub fn retire(self, reason: ActiveComputeSinkRetireReason) {
         match self {
             ActiveComputeSink::Subscribe(subscribe) => subscribe.retire(reason),
+            ActiveComputeSink::BatchedSubscribe(subscribe) => subscribe.retire(reason),
             ActiveComputeSink::CopyTo(copy_to) => copy_to.retire(reason),
         }
     }
@@ -92,6 +100,9 @@ pub enum ActiveComputeSinkRetireReason {
     /// The compute sink was retired because its coordinator-side buffer exceeded
     /// its budget while the client was not reading fast enough. Carries the
     /// buffered and budget byte counts for the terminal error.
+    ///
+    /// A batched subscribe also retires with this reason when its unread stashed
+    /// shares exceed `batched_subscribe_max_unread_stash_bytes`.
     BufferExceeded {
         buffered_bytes: usize,
         max_buffered_bytes: usize,
@@ -607,6 +618,94 @@ impl ActiveSubscribe {
     /// not here, because this method cannot retire the sink.
     fn send(&self, response: PeekResponseUnary, bytes: usize) {
         send_to_client(&self.channel, &self.backlog_accounting, response, bytes);
+    }
+}
+
+/// A description of an active `SUBSCRIBE ... WITH (BATCHED)` from the coordinator's perspective.
+///
+/// Its `Forwarder` sends the subscribe's rows to the client. The coordinator hands it every
+/// accepted batch and retires the subscribe once the forwarder reports a `ForwarderEvent`.
+#[derive(Debug)]
+pub struct ActiveBatchedSubscribe {
+    /// The ID of the connection that created the subscribe.
+    pub conn_id: ConnectionId,
+    /// The UUID of the session that created the subscribe.
+    pub session_uuid: Uuid,
+    /// The ID of the cluster on which the subscribe is running.
+    pub cluster_id: ClusterId,
+    /// The IDs of the objects on which the subscribe depends.
+    pub depends_on: BTreeSet<GlobalId>,
+    /// The logical timestamp at which the subscribe began execution.
+    pub as_of: Timestamp,
+    /// The time when the subscribe started.
+    pub start_time: EpochMillis,
+    /// The channel to the client, shared with the forwarder.
+    pub channel: mpsc::UnboundedSender<PeekResponseUnary>,
+    /// The footprints of the messages queued in `channel`, shared with the forwarder and the
+    /// receiver side.
+    pub backlog_accounting: Arc<Mutex<SubscribeBacklogAccounting>>,
+    /// The bound on the client backlog plus the forwarder's unread inline shares. A snapshot of
+    /// `subscribe_max_buffered_bytes`.
+    pub max_buffered_bytes: usize,
+    /// The bound on the forwarder's unread stashed shares. A snapshot of
+    /// `batched_subscribe_max_unread_stash_bytes`.
+    pub max_unread_stash_bytes: usize,
+    /// The task that sends the subscribe's batches to the client.
+    pub(crate) forwarder: Forwarder,
+}
+
+impl ActiveBatchedSubscribe {
+    /// Hands an accepted batch to the forwarder.
+    ///
+    /// Returns the reason to retire the subscribe with, if the batch pushed it past one of its
+    /// bounds.
+    pub(crate) fn send(&self, batch: AcceptedBatch) -> Option<ActiveComputeSinkRetireReason> {
+        self.forwarder.send(batch);
+
+        let backlog = lock(&self.backlog_accounting).backlog_size();
+        let buffered_bytes = backlog.saturating_add(self.forwarder.unread_inline_bytes());
+        if buffered_bytes > self.max_buffered_bytes {
+            return Some(ActiveComputeSinkRetireReason::BufferExceeded {
+                buffered_bytes,
+                max_buffered_bytes: self.max_buffered_bytes,
+            });
+        }
+        let unread_stash_bytes = self.forwarder.unread_stash_bytes();
+        if unread_stash_bytes > self.max_unread_stash_bytes {
+            return Some(ActiveComputeSinkRetireReason::BufferExceeded {
+                buffered_bytes: unread_stash_bytes,
+                max_buffered_bytes: self.max_unread_stash_bytes,
+            });
+        }
+        None
+    }
+
+    /// Retires the subscribe with the specified reason.
+    ///
+    /// A `Finished` subscribe was ended by its forwarder, which already sent the last message.
+    /// For any other reason the client receives the matching terminal message. Dropping the
+    /// forwarder deletes the stashed shares it still holds.
+    pub fn retire(self, reason: ActiveComputeSinkRetireReason) {
+        let message = match reason {
+            ActiveComputeSinkRetireReason::Finished => None,
+            ActiveComputeSinkRetireReason::Canceled => Some(PeekResponseUnary::Canceled),
+            ActiveComputeSinkRetireReason::DependencyDropped(d) => {
+                Some(PeekResponseUnary::DependencyDropped(d))
+            }
+            ActiveComputeSinkRetireReason::BufferExceeded {
+                buffered_bytes,
+                max_buffered_bytes,
+            } => Some(PeekResponseUnary::Error(
+                AdapterError::SubscribeFellBehind {
+                    buffered_bytes,
+                    max_buffered_bytes,
+                },
+            )),
+        };
+        if let Some(message) = message {
+            send_to_client(&self.channel, &self.backlog_accounting, message, 0);
+        }
+        drop(self.forwarder);
     }
 }
 
