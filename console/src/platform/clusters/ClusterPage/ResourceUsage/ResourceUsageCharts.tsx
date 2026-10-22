@@ -97,20 +97,34 @@ const STATUS_LABEL_MAX_CHARS = Math.floor(
   (CHART_MARGIN.left - STATUS_LABEL_GAP_PX) / (STATUS_LABEL_FONT_PX * 0.6),
 );
 
+// The square swatch is 8px wide, so more stripes are too thin to tell apart.
+const MAX_SWATCH_STRIPES = 3;
+
 interface LegendSwatchProps {
-  /** Several colors split the swatch, one stripe per replica it stands for. */
+  /**
+   * Several colors split the swatch, one stripe per replica it stands for, up
+   * to the first `MAX_SWATCH_STRIPES`.
+   */
   color: string | string[];
   variant: "square" | "line" | "dashed" | "diamond" | "tick";
 }
 
 export const LegendSwatch = ({ color, variant }: LegendSwatchProps) => {
-  const palette = typeof color === "string" ? [color] : color;
+  const palette = (typeof color === "string" ? [color] : color).slice(
+    0,
+    MAX_SWATCH_STRIPES,
+  );
   if (variant === "square") {
     if (palette.length === 1) return <TooltipColorSwatch color={palette[0]} />;
     return (
       <Flex width="2" height="2" borderRadius="sm" overflow="hidden">
         {palette.map((stripe, stripeIndex) => (
-          <Box key={stripeIndex} flex="1" background={stripe} />
+          <Box
+            key={stripeIndex}
+            flex="1"
+            background={stripe}
+            data-testid="swatch-stripe"
+          />
         ))}
       </Flex>
     );

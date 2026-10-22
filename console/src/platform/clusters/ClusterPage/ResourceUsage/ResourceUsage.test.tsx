@@ -87,13 +87,14 @@ const BUCKET_COUNT = 160;
 const OOM_AT_MS = FIRST_BUCKET_MS + 100 * HOUR_MS + 10 * 60_000;
 const DDL_AT_MS = FIRST_BUCKET_MS + 20 * HOUR_MS;
 const GIB = 2 ** 30;
-const HEAP_LIMIT_BYTES = 25 * GIB;
-// One 100cc process's allocation. Its heap limit is its RAM plus 5 GiB of swap.
+// One 100cc process's allocation.
 const ALLOCATION = {
   cpuNanoCores: 2e9,
   memoryBytes: 20 * GIB,
   diskBytes: 8 * GIB,
 };
+// As the controller passes `--heap-limit` to a replica with swap.
+const HEAP_LIMIT_BYTES = ALLOCATION.memoryBytes + ALLOCATION.diskBytes;
 // `CpuLimit::MAX`, which a size without a CPU limit reports.
 const UNLIMITED_CPU_NANO_CORES = "18446744073709000000";
 
@@ -163,11 +164,14 @@ const float8 = (name: string) =>
   buildColumn({ name, type_oid: MzDataType.float8 });
 
 type Readings = Partial<
-  Record<"maxCpuPercent" | "maxMemoryPercent" | "maxDiskPercent", number>
+  Record<
+    "maxCpuPercent" | "maxMemoryPercent" | "maxDiskPercent" | "maxHeapPercent",
+    number
+  >
 >;
 
-// With swap, a sample holds 10 GiB of RAM and 5 GiB of swap, which counts as
-// disk.
+// With swap, a sample holds 10 GiB of RAM and 4 GiB of swap, which counts as
+// disk, of a 28 GiB heap limit.
 const utilizationRows = ({
   withSwap,
   withoutHeapLimit,
@@ -194,7 +198,7 @@ const utilizationRows = ({
         replicaId,
         maxMemoryPercent: emptyReadings ? null : 0.5,
         maxMemoryAt: at,
-        maxDiskPercent: emptyReadings || !withSwap ? null : 0.625,
+        maxDiskPercent: emptyReadings || !withSwap ? null : 0.5,
         maxDiskAt: at,
         maxCpuPercent: emptyReadings
           ? null
@@ -202,7 +206,7 @@ const utilizationRows = ({
             ? 0.45
             : r2CpuPercent,
         maxCpuAt: at,
-        maxHeapPercent: emptyReadings ? null : 0.6,
+        maxHeapPercent: emptyReadings ? null : 0.5,
         maxHeapAt: at,
         maxMemoryAndDiskPercent: null,
         maxMemoryAndDiskMemoryPercent: null,
@@ -213,7 +217,7 @@ const utilizationRows = ({
         name: replicaNames[replicaId],
         clusterId: "u9",
         size: "100cc",
-        ...(withSwap ? { swapOfRamPercent: 0.25, heapLimitPercent: 1.25 } : {}),
+        ...(withSwap ? { swapOfRamPercent: 0.2, heapLimitPercent: 1.4 } : {}),
         ...(withoutHeapLimit
           ? { swapOfRamPercent: null, heapLimitPercent: null }
           : {}),
@@ -590,18 +594,17 @@ describe("ResourceUsage", () => {
     setClusterObjects([CREATED_INDEX]);
   });
 
-  it("shows each replica's CPU, memory and disk for the hovered time against its own allocation, and the total against the heap limit", async () => {
+  it("shows each replica's CPU, memory and disk for the hovered time against its own allocation, and heap against the heap limit", async () => {
     await renderResourceUsage({ withSwap: true });
 
     const tooltip = await hoverAt(FIRST_BUCKET_MS + 50 * HOUR_MS);
-    // A 25 GB heap limit, 60% full: 10 GB of RAM and 5 GB of swap.
     expect(tooltip).toHaveTextContent(
-      /r1.*Running.*CPU0\.9 cores · 45\.0%.*Memory10 GB · 50\.0% of 20 GB.*Disk5 GB · 62\.5% of 8 GB.*Total15 GB · 60\.0% of heap limit/,
+      /r1.*Running.*CPU0\.9 cores · 45\.0%.*Memory10 GB · 50\.0% of 20 GB.*Disk4 GB · 50\.0% of 8 GB.*Heap14 GB · 50\.0% of heap limit/,
     );
     expect(tooltip).toHaveTextContent(/r2.*Running.*CPU1\.8 cores · 90\.0%/);
   });
 
-  it("reads a multi-process replica's memory and disk against its whole allocation, as the Clusters list does", async () => {
+  it("reads a multi-process replica's memory and disk against its whole allocation, as the Clusters list does, and heap as its fullest process's", async () => {
     // As `mz_console_cluster_utilization_overview_3h`, which the Clusters list
     // reads, computes a share: summed over processes, against one process's
     // allocation times the process count.
@@ -618,13 +621,26 @@ describe("ResourceUsage", () => {
           ALLOCATION.memoryBytes,
         ),
         maxDiskPercent: overviewShare([4 * GIB, 2 * GIB], ALLOCATION.diskBytes),
+        // The view takes the fullest process's heap: process 0's RAM and swap.
+        maxHeapPercent: (14 * GIB + 4 * GIB) / HEAP_LIMIT_BYTES,
       },
     });
 
     const tooltip = await hoverAt(FIRST_BUCKET_MS + 50 * HOUR_MS);
     expect(tooltip).toHaveTextContent(
-      /r1.*CPU1\.8 cores · 45\.0%.*Memory20 GB · 50\.0% of 40 GB.*Disk6 GB · 37\.5% of 16 GB/,
+      /r1.*CPU1\.8 cores · 45\.0%.*Memory20 GB · 50\.0% of 40 GB.*Disk6 GB · 37\.5% of 16 GB.*Fullest process18 GB · 64\.3% of process heap limit/,
     );
+    expect(tooltip).not.toHaveTextContent("Heap");
+  });
+
+  it("reads a sliver of CPU as under a hundredth of a core", async () => {
+    await renderResourceUsage({
+      withSwap: true,
+      readings: { maxCpuPercent: 0.001 },
+    });
+
+    const tooltip = await hoverAt(FIRST_BUCKET_MS + 50 * HOUR_MS);
+    expect(tooltip).toHaveTextContent(/r1.*CPU< 0\.01 cores · 0\.1%/);
   });
 
   it("reads an idle disk as empty, not missing", async () => {
@@ -659,8 +675,8 @@ describe("ResourceUsage", () => {
   it("labels the memory limits with their sizes", async () => {
     await renderResourceUsage({ withSwap: true });
 
-    expect(await screen.findByText("heap limit · 25 GB")).toBeVisible();
-    // The heap limit is 125% of memory, so memory ends at 80% of it.
+    expect(await screen.findByText("heap limit · 28 GB")).toBeVisible();
+    // The heap limit is 140% of memory, so memory ends at about 71% of it.
     expect(screen.getByText("memory limit · 20 GB")).toBeVisible();
     expect(screen.getByText("disk")).toBeVisible();
   });
@@ -675,10 +691,10 @@ describe("ResourceUsage", () => {
     expect(screen.queryByText("disk")).not.toBeInTheDocument();
     const tooltip = await hoverAt(FIRST_BUCKET_MS + 50 * HOUR_MS);
     expect(tooltip).toHaveTextContent(
-      /r1.*CPU0\.9 cores · 45\.0%.*Heap15 GB · 60\.0%/,
+      /r1.*CPU0\.9 cores · 45\.0%.*Heap14 GB · 50\.0%/,
     );
     expect(tooltip).not.toHaveTextContent("Disk");
-    expect(tooltip).not.toHaveTextContent("Total");
+    expect(tooltip).not.toHaveTextContent("of heap limit");
   });
 
   it("labels memory as a share of the allocation when no sample has a heap limit", async () => {
@@ -1333,6 +1349,17 @@ describe("ResourceUsage", () => {
       const tooltip = await screen.findByRole("tooltip");
       expect(within(tooltip).getAllByRole("listitem")).toHaveLength(4);
       expect(tooltip).toHaveTextContent(/^(r1100cc){4}$/);
+    });
+
+    it("splits their swatch into at most three stripes", async () => {
+      await renderDeployments();
+
+      const pastToggle = screen.getByRole("button", {
+        name: "+4 past replicas",
+      });
+      expect(within(pastToggle).getAllByTestId("swatch-stripe")).toHaveLength(
+        3,
+      );
     });
 
     it("shows or hides them together", async () => {

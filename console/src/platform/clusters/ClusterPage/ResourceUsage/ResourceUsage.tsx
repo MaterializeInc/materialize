@@ -101,11 +101,16 @@ const formatBytes = (bytes: number) =>
 const isCpuLimited = (allocation: SizeAllocation) =>
   allocation.cpuNanoCores <= Number.MAX_SAFE_INTEGER;
 
+const formatCores = (cores: number) =>
+  cores > 0 && cores < 0.01
+    ? "< 0.01 cores"
+    : `${cores.toFixed(cores < 0.1 ? 2 : 1)} cores`;
+
 /**
  * A replica's readings at one time, in percent, 0 to 100. CPU, memory and disk
  * are shares of the replica's allocation of each, summed over its processes,
- * as the Clusters list shows them. Heap and the total are shares of one
- * process's heap limit, `heapLimitBytes`, as the memory bar draws them.
+ * as the Clusters list shows them. Heap is its fullest process's share of one
+ * process's heap limit, `heapLimitBytes`, as the memory bar draws it.
  */
 const readingRows = (
   point: DataPoint,
@@ -159,23 +164,34 @@ const readingRows = (
     point.diskPercent ??
     (point.swapPercent !== null && allocation?.diskBytes ? 0 : null);
   const bar = memoryBar(point);
+  // Memory and disk sum over processes and heap doesn't, so on a multi-process
+  // replica the label says whose heap it is.
+  const isMultiProcess = (allocation?.processes ?? 1) > 1;
+  const heapLabel = isMultiProcess ? "Fullest process" : "Heap";
   return [
     {
       label: "CPU",
       percent: point.cpuPercent,
-      amount:
-        cores === undefined
-          ? undefined
-          : `${cores.toFixed(cores < 0.1 ? 2 : 1)} cores`,
+      amount: cores === undefined ? undefined : formatCores(cores),
     },
     point.swapPercent === null && hasHeapLimit
-      ? ofHeapLimit("Heap", point.heapPercent)
+      ? ofHeapLimit(
+          heapLabel,
+          point.heapPercent,
+          isMultiProcess ? "process heap limit" : undefined,
+        )
       : ofAllocation("Memory", point.memoryPercent, allocation?.memoryBytes),
     ...(canSwap(point) || diskPercent !== null
       ? [ofAllocation("Disk", diskPercent, allocation?.diskBytes)]
       : []),
     ...(canSwap(point)
-      ? [ofHeapLimit("Total", bar?.heap ?? null, "heap limit")]
+      ? [
+          ofHeapLimit(
+            heapLabel,
+            bar?.heap ?? null,
+            isMultiProcess ? "process heap limit" : "heap limit",
+          ),
+        ]
       : []),
   ];
 };
@@ -969,8 +985,10 @@ export const ResourceUsage = ({
           <Text as="h3" textStyle="heading-sm" whiteSpace="nowrap">
             Resource Usage
           </Text>
+          {/* NOTE: a basis of 0, as `flex="1"` sets, never wraps this below
+              the title, so long toggles overlap it on a narrow card. */}
           <Flex
-            flex="1"
+            flex="1 1 auto"
             minWidth={0}
             justifyContent="flex-end"
             alignItems="center"
