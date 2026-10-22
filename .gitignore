@@ -68,3 +68,5 @@ uv.lock
 /test/testdrive/types.parquet*
 /test/mz-deploy/**/target/
 target-fuzz/
+# THROWAWAY spike: wasm guest build output, must not change image fingerprints.
+/misc/spike-wasm-sink/guest/target/
