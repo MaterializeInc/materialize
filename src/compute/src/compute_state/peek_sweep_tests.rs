@@ -22,7 +22,7 @@ use timely::communication::Allocator;
 use tokio::sync::mpsc;
 
 use crate::metrics::ComputeMetrics;
-use crate::server::ComputeRuntimeRole;
+use crate::server::{ComputeRuntimeRole, WorkerResponse};
 
 use super::index_peek_tests::{
     TARGET_ID, cancelling_errors, index_peek_with_uuid, rows_answer, trace_bundle, wide_ok_rows,
@@ -85,7 +85,7 @@ pub(super) struct Harness {
     pub(super) state: ComputeState,
     timely_worker: TimelyWorker,
     response_tx: ResponseSender,
-    pub(super) responses: mpsc::UnboundedReceiver<(ComputeResponse, Uuid)>,
+    pub(super) responses: mpsc::UnboundedReceiver<(WorkerResponse, Uuid)>,
 }
 
 impl Harness {
@@ -203,7 +203,7 @@ impl Harness {
     fn peek_responses(&mut self) -> Vec<(Uuid, PeekResponse)> {
         let mut responses = Vec::new();
         while let Ok((response, _nonce)) = self.responses.try_recv() {
-            match response {
+            match response.into_compute() {
                 ComputeResponse::PeekResponse(uuid, response, _otel_ctx) => {
                     responses.push((uuid, response))
                 }

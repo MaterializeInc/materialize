@@ -1490,10 +1490,7 @@ impl<'a> ActiveComputeState<'a> {
                 response.frontier(),
             );
 
-            self.send_compute_response(ComputeResponse::BatchedSubscribeResponse(
-                sink_id,
-                Box::new(response.into_response()),
-            ));
+            self.response_tx.send_batched_subscribe(sink_id, response);
         }
     }
 

@@ -20,6 +20,7 @@ use super::peek_stash::tests::CountedBlob;
 use super::peek_stash::{DeliveredBatch, StashUpload, stash_shard_id};
 use super::peek_sweep_tests::Harness;
 use super::*;
+use crate::server::{WorkerResponse, forward_response};
 use crate::sink::batched_subscribe::OwnedShare;
 
 /// The sink the batched subscribe fixtures export.
@@ -104,7 +105,7 @@ async fn reconciliation_discards_queued_batched_subscribe_responses() {
         .try_recv()
         .expect("a response queued after the reconcile is sent");
     assert_eq!(
-        response,
+        response.into_compute(),
         ComputeResponse::BatchedSubscribeResponse(
             BATCHED_SINK,
             Box::new(dropped_at(Timestamp::from(3)).into_response()),
@@ -112,12 +113,8 @@ async fn reconciliation_discards_queued_batched_subscribe_responses() {
     );
 }
 
-/// A stashed share queued on a buffer that a reconcile discards is deleted, since no response
-/// will ever name it.
-#[mz_ore::test(tokio::test)]
-async fn discarding_queued_batched_subscribe_responses_deletes_their_stash_batches() {
-    let mut harness = Harness::new(|_| {});
-    let blob = CountedBlob::new();
+/// A stashed share of four updates, written to `blob`.
+async fn stashed_share(blob: &CountedBlob) -> OwnedShare {
     let desc = RelationDesc::builder()
         .with_column("value", SqlScalarType::Int64.nullable(false))
         .finish();
@@ -149,11 +146,20 @@ async fn discarding_queued_batched_subscribe_responses_deletes_their_stash_batch
         .expect("persist finishes the batch")
         .expect("updates were pushed");
     let shard_id = batch.shard_id();
-    let share = OwnedShare::Stashed(DeliveredBatch::new(
+    OwnedShare::Stashed(DeliveredBatch::new(
         batch,
         tokio::runtime::Handle::current(),
         shard_id,
-    ));
+    ))
+}
+
+/// A stashed share queued on a buffer that a reconcile discards is deleted, since no response
+/// will ever name it.
+#[mz_ore::test(tokio::test)]
+async fn discarding_queued_batched_subscribe_responses_deletes_their_stash_batches() {
+    let mut harness = Harness::new(|_| {});
+    let blob = CountedBlob::new();
+    let share = stashed_share(&blob).await;
 
     let old_buffer = Rc::clone(&harness.state.batched_subscribe_response_buffer);
     old_buffer.borrow_mut().push((
@@ -174,6 +180,31 @@ async fn discarding_queued_batched_subscribe_responses_deletes_their_stash_batch
     assert_eq!(blob.deletes_of_nothing(), 0);
     harness.active().process_batched_subscribes();
     assert!(harness.responses.try_recv().is_err(), "nothing is sent");
+}
+
+#[mz_ore::test(tokio::test)]
+async fn a_response_for_a_departed_client_deletes_its_stash_batches() {
+    let blob = CountedBlob::new();
+    let share = stashed_share(&blob).await;
+    let (response_tx, response_rx) = tokio::sync::mpsc::unbounded_channel();
+    drop(response_rx);
+
+    let forwarded = forward_response(
+        &response_tx,
+        WorkerResponse::BatchedSubscribe(
+            BATCHED_SINK,
+            QueuedResponse::Batch {
+                lower: Antichain::from_elem(Timestamp::from(0)),
+                upper: Antichain::from_elem(Timestamp::from(5)),
+                shares: vec![share],
+                error: None,
+            },
+        ),
+    );
+    assert!(!forwarded, "a closed client takes no response");
+    blob.wait_until_nothing_is_left("a response for a departed client")
+        .await;
+    assert_eq!(blob.deletes_of_nothing(), 0);
 }
 
 #[mz_ore::test]

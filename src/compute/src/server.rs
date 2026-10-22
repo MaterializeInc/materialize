@@ -31,6 +31,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
+use mz_repr::GlobalId;
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage::internal_control::{InternalCommandSender, InternalStorageCommand};
 use mz_storage::metrics::StorageMetrics;
@@ -51,6 +52,7 @@ use crate::compute_state::{
     ActiveComputeState, ComputeState, PeekPermits, PendingPeek, ReportedFrontier,
 };
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
+use crate::sink::batched_subscribe::QueuedResponse;
 
 /// Caller-provided configuration for compute.
 #[derive(Clone, Debug)]
@@ -377,13 +379,36 @@ enum WorkerCommand {
     Storage(InternalStorageCommand),
 }
 
+/// A response on its way from a worker to the channel adapter.
+pub(crate) enum WorkerResponse {
+    Compute(ComputeResponse),
+    /// A batched subscribe response, which owns its stash batches until the adapter hands it to
+    /// a connected client. Dropping it deletes them.
+    BatchedSubscribe(GlobalId, QueuedResponse),
+}
+
+impl WorkerResponse {
+    /// The response as the protocol carries it, which hands any stash batches to the receiver.
+    pub(crate) fn into_compute(self) -> ComputeResponse {
+        match self {
+            WorkerResponse::Compute(response) => response,
+            WorkerResponse::BatchedSubscribe(sink_id, response) => {
+                ComputeResponse::BatchedSubscribeResponse(
+                    sink_id,
+                    Box::new(response.into_response()),
+                )
+            }
+        }
+    }
+}
+
 /// Endpoint used by workers to send sending compute responses.
 ///
 /// Tags responses with the current nonce, allowing receivers to filter out responses intended for
 /// previous client connections.
 pub(crate) struct ResponseSender {
     /// The channel consuming responses.
-    inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>,
+    inner: mpsc::UnboundedSender<(WorkerResponse, Uuid)>,
     /// The ID of the Timely worker.
     worker_id: usize,
     /// The nonce identifying the current cluster protocol incarnation.
@@ -393,7 +418,7 @@ pub(crate) struct ResponseSender {
 impl ResponseSender {
     /// `pub(crate)` rather than private so the peek tests can build the sender a worker holds.
     pub(crate) fn new(
-        inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>,
+        inner: mpsc::UnboundedSender<(WorkerResponse, Uuid)>,
         worker_id: usize,
     ) -> Self {
         Self {
@@ -414,8 +439,19 @@ impl ResponseSender {
 
         trace!(worker = self.worker_id, %nonce, ?response, "sending response");
         self.inner
-            .send((response, nonce))
-            .map_err(|SendError((resp, _))| SendError(resp))
+            .send((WorkerResponse::Compute(response), nonce))
+            .map_err(|SendError((resp, _))| SendError(resp.into_compute()))
+    }
+
+    /// Send a batched subscribe response. A response that cannot be sent deletes its stash
+    /// batches.
+    pub(crate) fn send_batched_subscribe(&self, sink_id: GlobalId, response: QueuedResponse) {
+        let nonce = self.nonce.expect("nonce must be initialized");
+
+        trace!(worker = self.worker_id, %nonce, %sink_id, "sending batched subscribe response");
+        let _ = self
+            .inner
+            .send((WorkerResponse::BatchedSubscribe(sink_id, response), nonce));
     }
 }
 
@@ -1297,6 +1333,22 @@ impl<'w> Worker<'w> {
     }
 }
 
+/// Forwards `response` to a client, and returns `false` if the client is gone.
+///
+/// A response that is not forwarded is dropped as a [`WorkerResponse`], which deletes the stash
+/// batches it owns.
+pub(crate) fn forward_response(
+    response_tx: &mpsc::UnboundedSender<ComputeResponse>,
+    response: WorkerResponse,
+) -> bool {
+    // A converted response no longer deletes its stash batches on drop, so a send that fails after
+    // the conversion would leak them.
+    if response_tx.is_closed() {
+        return false;
+    }
+    response_tx.send(response.into_compute()).is_ok()
+}
+
 /// Spawn a task to bridge between [`ClusterClient`] and [`Worker`] channels.
 ///
 /// The [`Worker`] expects a pair of persistent channels, with punctuation marking reconnects,
@@ -1308,7 +1360,7 @@ fn spawn_channel_adapter(
         mpsc::UnboundedSender<ComputeResponse>,
     )>,
     command_tx: command_channel::Sender,
-    mut response_rx: mpsc::UnboundedReceiver<(ComputeResponse, Uuid)>,
+    mut response_rx: mpsc::UnboundedReceiver<(WorkerResponse, Uuid)>,
     worker_id: usize,
 ) {
     mz_ore::task::spawn(
@@ -1330,13 +1382,31 @@ fn spawn_channel_adapter(
             // stashed responses with a matching nonce. Every time we receive a new response with a
             // nonce that matches our current one, we can discard the entire response stash as we
             // know that all stashed responses must be from the past.
-            let mut stashed_responses = BTreeMap::<Uuid, Vec<ComputeResponse>>::new();
+            //
+            // A batched subscribe response stays a `WorkerResponse` until it is forwarded, so
+            // every response this adapter drops, by clearing the stash, by stashing it for a nonce
+            // that never connects, or by finding the client gone, deletes its stash batches.
+            //
+            // TODO: four losses remain that no hop here can see, and each leaves blobs in the
+            // subscribe's stash shard.
+            // * Responses forwarded to a client whose transport then dies are lost inside that
+            //   transport's buffers.
+            // * A replica killed after uploading a share but before reporting it leaves the
+            //   share behind.
+            // * Dropping a `Partitioned` client, in clusterd and in environmentd, drops the
+            //   stashed shares its `PendingBatchedSubscribe` holds for descriptions that not
+            //   every part has reported. The peek path has the same gap, recorded at
+            //   `merge_peek_responses` in `mz_compute_client::service`.
+            // * A client that closes between the `is_closed` check and the `send` in
+            //   `forward_response` drops a response already converted out of its
+            //   `WorkerResponse`.
+            let mut stashed_responses = BTreeMap::<Uuid, Vec<WorkerResponse>>::new();
 
             while let Some((nonce, mut command_rx, response_tx)) = client_rx.recv().await {
                 // Send stashed responses for this client.
                 if let Some(resps) = stashed_responses.remove(&nonce) {
                     for resp in resps {
-                        let _ = response_tx.send(resp);
+                        forward_response(&response_tx, resp);
                     }
                 }
 
@@ -1362,7 +1432,7 @@ fn spawn_channel_adapter(
                     if resp_nonce == nonce {
                         // Response for the current connection; forward it.
                         stashed_responses.clear();
-                        if response_tx.send(resp).is_err() {
+                        if !forward_response(&response_tx, resp) {
                             break;
                         }
                     } else {
