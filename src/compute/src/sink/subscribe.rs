@@ -29,7 +29,7 @@ use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 
 use crate::render::StartSignal;
 use crate::render::errors::DataflowErrorSer;
-use crate::render::sinks::SinkRender;
+use crate::render::sinks::{SinkInput, SinkRender};
 
 impl<'scope> SinkRender<'scope> for SubscribeSinkConnection {
     fn render_sink(
@@ -39,10 +39,10 @@ impl<'scope> SinkRender<'scope> for SubscribeSinkConnection {
         sink_id: GlobalId,
         as_of: Antichain<Timestamp>,
         _start_signal: StartSignal,
-        sinked_collection: VecCollection<'scope, Timestamp, Row, Diff>,
-        err_collection: VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
+        input: SinkInput<'scope>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
+        let (sinked_collection, err_collection) = input.expect_collection();
         // An encapsulation of the Subscribe response protocol.
         // Used to send rows and progress messages,
         // and alert if the dataflow was dropped before completing.

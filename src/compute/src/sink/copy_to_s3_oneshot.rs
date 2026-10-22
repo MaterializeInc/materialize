@@ -11,14 +11,14 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use differential_dataflow::{Hashable, VecCollection};
+use differential_dataflow::Hashable;
 use mz_compute_client::protocol::response::CopyToResponse;
 use mz_compute_types::dyncfgs::{
     COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO, COPY_TO_S3_MULTIPART_PART_SIZE_BYTES,
     COPY_TO_S3_PARQUET_ROW_GROUP_FILE_RATIO,
 };
 use mz_compute_types::sinks::{ComputeSinkDesc, CopyToS3OneshotSinkConnection};
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::consolidate_pact;
@@ -29,7 +29,7 @@ use timely::progress::Antichain;
 
 use crate::render::StartSignal;
 use crate::render::errors::DataflowErrorSer;
-use crate::render::sinks::SinkRender;
+use crate::render::sinks::{SinkInput, SinkRender};
 use crate::typedefs::KeyBatcher;
 
 impl<'scope> SinkRender<'scope> for CopyToS3OneshotSinkConnection {
@@ -40,10 +40,10 @@ impl<'scope> SinkRender<'scope> for CopyToS3OneshotSinkConnection {
         sink_id: GlobalId,
         _as_of: Antichain<Timestamp>,
         _start_signal: StartSignal,
-        sinked_collection: VecCollection<'scope, Timestamp, Row, Diff>,
-        err_collection: VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
+        input: SinkInput<'scope>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
+        let (sinked_collection, err_collection) = input.expect_collection();
         // Set up a callback to communicate the result of the copy-to operation to the controller.
         let mut response_protocol = ResponseProtocol {
             sink_id,

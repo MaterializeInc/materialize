@@ -206,6 +206,7 @@ impl Optimizer {
                     stash_id: *stash_id,
                     with_snapshot: self.with_snapshot,
                     output_desc: from_desc.clone(),
+                    mfp: None,
                 }),
                 true,
             ),
