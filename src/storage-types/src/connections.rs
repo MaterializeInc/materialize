@@ -646,7 +646,7 @@ impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
 }
 
 /// Auth mechanism for Iceberg REST catalogs.
-#[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum IcebergCatalogAuth<C: ConnectionAccess = InlinedConnection> {
     /// Use Iceberg catalog REST API's standard OAuth flow.
     OAuth {
@@ -663,25 +663,6 @@ pub enum IcebergCatalogAuth<C: ConnectionAccess = InlinedConnection> {
         server_url: Option<String>,
     },
     Gcp(GcpConnectionReference<C>),
-}
-
-impl<C: ConnectionAccess> std::fmt::Debug for IcebergCatalogAuth<C> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            IcebergCatalogAuth::OAuth {
-                credential,
-                scope,
-                server_url,
-            } => f
-                .debug_struct("OAuth")
-                .field("credential", &credential.redacted())
-                .field("scope", scope)
-                .field("server_url", server_url)
-                .finish(),
-            // A GCP connection holds only a reference to its key secret.
-            IcebergCatalogAuth::Gcp(gcp) => f.debug_tuple("Gcp").field(gcp).finish(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]

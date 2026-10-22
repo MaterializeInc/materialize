@@ -77,7 +77,7 @@ pub enum AwsAuth {
 }
 
 /// AWS credentials to access an AWS account using user access keys.
-#[derive(Clone, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub struct AwsCredentials {
     /// The AWS API Access Key required to connect to the AWS account.
@@ -86,20 +86,6 @@ pub struct AwsCredentials {
     pub secret_access_key: CatalogItemId,
     /// Optional session token to connect to the AWS account.
     pub session_token: Option<StringOrSecret>,
-}
-
-impl std::fmt::Debug for AwsCredentials {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // The access key ID is not sensitive.
-        f.debug_struct("AwsCredentials")
-            .field("access_key_id", &self.access_key_id)
-            .field("secret_access_key", &self.secret_access_key)
-            .field(
-                "session_token",
-                &self.session_token.as_ref().map(StringOrSecret::redacted),
-            )
-            .finish()
-    }
 }
 
 impl AwsCredentials {
