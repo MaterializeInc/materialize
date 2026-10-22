@@ -144,7 +144,7 @@ pub struct Args {
     helm_chart_version: Option<String>,
     /// Version of the Materialize Terraform module that installed the operator,
     /// if any. Passed to environmentd for telemetry.
-    #[clap(long)]
+    #[clap(long, env = "TERRAFORM_MODULE_VERSION")]
     terraform_module_version: Option<String>,
     #[clap(long, default_value = "kubernetes")]
     secrets_controller: String,

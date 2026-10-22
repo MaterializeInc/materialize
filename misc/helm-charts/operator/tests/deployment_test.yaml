@@ -333,8 +333,10 @@ tests:
     operator.args.terraformModuleVersion: v1.2.3
   asserts:
   - contains:
-      path: spec.template.spec.containers[0].args
-      content: "--terraform-module-version=v1.2.3"
+      path: spec.template.spec.containers[0].env
+      content:
+        name: ORCHESTRATORD_TERRAFORM_MODULE_VERSION
+        value: v1.2.3
 
 - it: should have database network policies disabled by default
   asserts:

@@ -72,9 +72,6 @@ spec:
         imagePullPolicy: {{ .Values.operator.image.pullPolicy }}
         args:
         - "--helm-chart-version={{ .Chart.Version }}"
-        {{- with .Values.operator.args.terraformModuleVersion }}
-        - "--terraform-module-version={{ . }}"
-        {{- end }}
         - "--startup-log-filter={{ .Values.operator.args.startupLogFilter }}"
         - "--cloud-provider={{ .Values.operator.cloudProvider.type }}"
         - "--region={{ .Values.operator.cloudProvider.region }}"
@@ -315,6 +312,12 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.name
+        {{- with .Values.operator.args.terraformModuleVersion }}
+        # An env var, so operator images that predate it ignore it instead of
+        # failing on an unknown flag.
+        - name: ORCHESTRATORD_TERRAFORM_MODULE_VERSION
+          value: {{ . | quote }}
+        {{- end }}
         ports:
         - containerPort: 3100
           name: metrics
