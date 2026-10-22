@@ -24,9 +24,8 @@ export interface RenderableNode {
   /** Count of off-path sibling inputs sharing the same child as this node. */
   offPathCount: number;
   objectType: string | null;
-  /** For subsources, the parent source id — link targets should use this. */
-  parentSourceId: string | null;
-  /** Cluster the node runs on. Null for objects without a cluster (tables). */
+  /** Cluster the node runs on, or that a subsource's or table's source
+   *  ingests on. */
   cluster: { id: string; name: string } | null;
   /** Max lag this node observed in the lookback window. */
   peakLag: IPostgresInterval | null;
@@ -227,7 +226,6 @@ export const buildGraphView = (
     }),
     offPathCount: 0,
     objectType: probe.objectType,
-    parentSourceId: null,
     cluster: probe.cluster,
     peakLag: probeRow?.peakLag ?? null,
     peakLagAt: probeRow?.peakLagAt ?? null,
@@ -248,7 +246,6 @@ export const buildGraphView = (
         }),
         offPathCount: offPathCountById.get(id) ?? 0,
         objectType: r.objectType,
-        parentSourceId: r.parentSourceId,
         cluster:
           r.clusterId && r.clusterName
             ? { id: r.clusterId, name: r.clusterName }
@@ -296,7 +293,6 @@ export const buildGraphView = (
     kind: "offPath",
     offPathCount: 0,
     objectType: r.objectType,
-    parentSourceId: r.parentSourceId,
     cluster:
       r.clusterId && r.clusterName
         ? { id: r.clusterId, name: r.clusterName }

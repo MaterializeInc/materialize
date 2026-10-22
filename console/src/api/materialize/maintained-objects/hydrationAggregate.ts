@@ -19,12 +19,15 @@ export interface HydrationAggregateRow {
   sourceStatus: string | null;
   sourceError: string | null;
   snapshotCommitted: boolean | null;
+  /** Set for subsources and source-fed tables: the source ingesting them. */
+  parentSourceId: string | null;
 }
 
 /**
  * One row per object: how many of its replicas report `hydrated = true` out of
- * the total replicas recorded in `mz_hydration_statuses`, plus, for sources,
- * their ingestion status, error, and snapshot flag.
+ * the total replicas recorded in `mz_hydration_statuses`, plus, for sources
+ * and the subsources and tables they ingest into, their ingestion status,
+ * error, snapshot flag, and parent source.
  *
  * Source status rides on this feed rather than its own SUBSCRIBE: it is the
  * same one-row-per-object grain, and `mz_hydration_statuses` already reads
@@ -40,8 +43,10 @@ export interface HydrationAggregateRow {
  * `replica_id`, which is how webhook sources report); a dropped replica's
  * stale row must not pin the flag.
  *
- * Subsources and progress collections are excluded: the UI hides them, and
- * they multiply the feed's cardinality several times over.
+ * Progress collections are excluded: the UI hides them, and every source
+ * carries one. Subsources only appear through their status. They also have
+ * hydration rows, but the UI reports them by ingestion status like their
+ * parent.
  */
 export function buildHydrationAggregateQuery() {
   const hydration = queryBuilder
@@ -55,12 +60,23 @@ export function buildHydrationAggregateQuery() {
     ])
     .groupBy("hs.object_id");
 
-  // The other side of the FULL JOIN needs the same exclusion, against a
-  // relation `buildHydrationStatusesTable` does not read.
   const statuses = queryBuilder
     .selectFrom("mz_source_statuses")
-    .where("type", "not in", ["subsource", "progress"])
+    .where("type", "<>", "progress")
     .select(["id", "status", "error"]);
+
+  const exportParents = queryBuilder
+    .selectFrom("mz_object_dependencies as od")
+    .innerJoin("mz_sources as sub", "sub.id", "od.object_id")
+    .innerJoin("mz_sources as parent", "parent.id", "od.referenced_object_id")
+    .where("sub.type", "=", "subsource")
+    .select(["od.object_id as id", "parent.id as parentSourceId"])
+    .unionAll(
+      queryBuilder
+        .selectFrom("mz_tables")
+        .where("source_id", "is not", null)
+        .select(["id", sql<string>`source_id`.as("parentSourceId")]),
+    );
 
   const snapshotCommittedBySource = queryBuilder
     .selectFrom("mz_source_statistics as st")
@@ -80,6 +96,7 @@ export function buildHydrationAggregateQuery() {
     .selectFrom(hydration.as("h"))
     .fullJoin(statuses.as("ss"), "ss.id", "h.object_id")
     .leftJoin(snapshotCommittedBySource.as("stats"), "stats.id", "ss.id")
+    .leftJoin(exportParents.as("ep"), "ep.id", "ss.id")
     .select([
       sql<string>`coalesce(h.object_id, ss.id)`.as("object_id"),
       "h.hydratedReplicas",
@@ -87,5 +104,6 @@ export function buildHydrationAggregateQuery() {
       "ss.status as sourceStatus",
       "ss.error as sourceError",
       "stats.snapshotCommitted",
+      "ep.parentSourceId",
     ]);
 }

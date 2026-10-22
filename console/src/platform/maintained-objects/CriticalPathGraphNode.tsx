@@ -103,7 +103,7 @@ export const CriticalPathGraphNode = ({
   const showPeakBadge = node.peakLag !== null && peakMs > lagMs * 1.05;
 
   const journeyLinkState = useJourneyLinkState(pageObjectId);
-  const objectLinkTarget = `../${node.parentSourceId ?? node.id}`;
+  const objectLinkTarget = `../${node.id}`;
 
   return (
     <Box

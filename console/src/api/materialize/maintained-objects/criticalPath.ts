@@ -30,6 +30,7 @@ export interface CriticalPathRow {
   objectType: string;
   schemaName: string;
   databaseName: string | null;
+  /** For a subsource or source-fed table, the cluster its source ingests on. */
   clusterId: string | null;
   clusterName: string | null;
   /** This node's lag at the snapshot moment used to draw the chain. */
@@ -37,7 +38,6 @@ export interface CriticalPathRow {
   /** The consumer's lag at the same snapshot moment. */
   targetLag: IPostgresInterval | null;
   isBottleneck: boolean;
-  parentSourceId: string | null;
   /** This node's max lag in the lookback window, independent of the chain snapshot. */
   peakLag: IPostgresInterval | null;
   /** Observation time of `peakLag`. */
@@ -121,8 +121,8 @@ const perObjectLagCteAtTime = (timestamp: Date, bucketSizeMs: number) => {
  * 1) For each child, pick its slowest input(s) — the bottlenecks
  * 2) Walk backwards from the queried object along bottleneck edges
  * 3) Restrict to inputs of nodes on the chain (queried object + ancestors)
- * 4) Join object metadata, cluster name, subsource → parent redirection,
- *    and per-node window-pMAX (independent of the chain snapshot)
+ * 4) Join object metadata, cluster name, and per-node window-pMAX
+ *    (independent of the chain snapshot)
  */
 const buildCriticalPathQuery = (
   objectId: string,
@@ -134,14 +134,17 @@ const buildCriticalPathQuery = (
 WITH MUTUALLY RECURSIVE
   -- mz_materialization_dependencies covers sinks (which read from MVs/sources)
   -- as well as compute objects. Restrict both ends of the edge to maintained
-  -- object types so tables drop out of the chain.
+  -- object types so tables written with INSERT drop out of the chain.
+  -- Source-fed tables stay: like subsources, their lag is ingestion lag.
   input_of(source text, target text) AS (
     SELECT md.dependency_id, md.object_id
     FROM mz_materialization_dependencies md
     JOIN mz_objects src ON src.id = md.dependency_id
-      AND src.type IN (${MAINTAINED_OBJECT_TYPES_SQL})
+    LEFT JOIN mz_tables t ON t.id = md.dependency_id
     JOIN mz_objects tgt ON tgt.id = md.object_id
       AND tgt.type IN (${MAINTAINED_OBJECT_TYPES_SQL})
+    WHERE src.type IN (${MAINTAINED_OBJECT_TYPES_SQL})
+      OR t.source_id IS NOT NULL
   ),
   ${perObjectLag},
   -- Per-node max lag in the lookback window and when it occurred.
@@ -177,14 +180,16 @@ WITH MUTUALLY RECURSIVE
   chain_targets(target text) AS (
     SELECT DISTINCT target FROM delayed_by
   ),
-  -- Subsources are filtered out of the maintained-objects list, so the panel
-  -- redirects drawer links to the parent source.
-  subsource_parents(subsource_id text, parent_id text) AS (
-    SELECT od.object_id, od.referenced_object_id
+  -- Subsources and source-fed tables have no cluster of their own.
+  export_clusters(export_id text, cluster_id text) AS (
+    SELECT od.object_id, ps.cluster_id
     FROM mz_object_dependencies od
     JOIN mz_sources cs ON cs.id = od.object_id AND cs.type = 'subsource'
     JOIN mz_sources ps ON ps.id = od.referenced_object_id
-      AND ps.id LIKE 'u%'
+    UNION ALL
+    SELECT t.id, ps.cluster_id
+    FROM mz_tables t
+    JOIN mz_sources ps ON ps.id = t.source_id
   )
 SELECT
   i.source AS "id",
@@ -201,17 +206,16 @@ SELECT
     SELECT 1 FROM crit_input ci
     WHERE ci.source = i.source AND ci.target = i.target
   ) AS "isBottleneck",
-  sp.parent_id AS "parentSourceId",
   pk.peak_lag AS "peakLag",
   pk.peak_at AS "peakLagAt"
 FROM input_of i
 JOIN chain_targets ct ON ct.target = i.target
 JOIN mz_objects o ON o.id = i.source
 JOIN mz_object_fully_qualified_names fqn ON fqn.id = i.source
-LEFT JOIN mz_clusters c ON c.id = o.cluster_id
+LEFT JOIN export_clusters ec ON ec.export_id = i.source
+LEFT JOIN mz_clusters c ON c.id = coalesce(o.cluster_id, ec.cluster_id)
 LEFT JOIN per_object_lag ls ON ls.object_id = i.source
 LEFT JOIN per_object_lag lt ON lt.object_id = i.target
-LEFT JOIN subsource_parents sp ON sp.subsource_id = i.source
 LEFT JOIN per_object_peak pk ON pk.object_id = i.source
 ORDER BY ls.lag DESC NULLS LAST
   `.compile(queryBuilder);

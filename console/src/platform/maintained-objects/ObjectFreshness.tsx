@@ -31,10 +31,12 @@ import { FreshnessBreakdownStrip } from "./FreshnessBreakdownStrip";
 import { peakLagTimestampFromHistory } from "./freshnessHistory";
 import { ObjectFreshnessChart } from "./ObjectFreshnessChart";
 import {
+  isSourceCollection,
   MaintainedObjectListItem,
   useCriticalPath,
   useObjectFreshnessHistory,
 } from "./queries";
+import { SourceTablesFreshness } from "./SourceTablesFreshness";
 
 export interface ObjectFreshnessProps {
   item: MaintainedObjectListItem;
@@ -66,7 +68,7 @@ export const ObjectFreshness = ({
   // window. The history call is already cached by `ObjectFreshnessChart`,
   // so React Query dedupes it.
   const { data: freshnessHistory } = useObjectFreshnessHistory({
-    objectId: item.id,
+    object: item,
     lookbackMs: timePeriodMinutes * 60 * 1000,
   });
   const autoAnchorTimestamp = peakLagTimestampFromHistory(
@@ -88,7 +90,7 @@ export const ObjectFreshness = ({
   // Sources ingest from external systems and have no Materialize-internal
   // upstream chain to walk. Their "critical path" is the cluster they ingest
   // on, so they get its replica metrics instead.
-  const isSource = item.objectType === "source";
+  const isSource = isSourceCollection(item);
 
   return (
     <VStack align="start" spacing={6} width="100%">
@@ -117,12 +119,16 @@ export const ObjectFreshness = ({
           </HStack>
 
           <ObjectFreshnessChart
-            objectId={item.id}
+            item={item}
             timePeriodMinutes={timePeriodMinutes}
             onTimestampLock={setLockedTimestamp}
             selectedTimestamp={anchorTimestamp}
             isLocked={isLocked}
           />
+
+          {item.objectType === "source" && (
+            <SourceTablesFreshness sourceId={item.id} />
+          )}
 
           {isSource && (
             <>
@@ -134,8 +140,8 @@ export const ObjectFreshness = ({
                   textStyle="text-small"
                   color={colors.foreground.secondary}
                 >
-                  Resources of the cluster this source ingests on, at the point
-                  selected on the freshness graph above.
+                  Resources of the cluster this data is ingested on, at the
+                  point selected on the freshness graph above.
                 </Text>
               </VStack>
 

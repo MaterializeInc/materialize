@@ -50,7 +50,12 @@ const seedCatalogSql = (testSchema: string) => `
         );
       > CREATE TABLE ${testSchema}.mz_sources (
           id TEXT NOT NULL,
-          type TEXT
+          type TEXT,
+          cluster_id TEXT
+        );
+      > CREATE TABLE ${testSchema}.mz_tables (
+          id TEXT NOT NULL,
+          source_id TEXT
         );`;
 
 // Bucket size large enough that all seed rows in the same `now()` second land
@@ -132,7 +137,6 @@ describe("buildCriticalPathLiveQuery", () => {
       objectType: "source",
       clusterName: "compute",
       isBottleneck: true,
-      parentSourceId: null,
     });
     expect(rows[0].lag?.toPostgres()).toBe("2 seconds");
     expect(rows[1]).toMatchObject({
@@ -238,5 +242,79 @@ describe("buildCriticalPathLiveQuery", () => {
     const slow = rows.find((r) => r.id === "u_slow");
     expect(fast?.isBottleneck).toBe(true);
     expect(slow?.isBottleneck).toBe(false);
+  });
+
+  /**
+   * Source exports. The probe reads a source-fed table, a subsource, and a
+   * table written with INSERT. The table and subsource have no cluster.
+   *
+   *   ┌────────────────┐ ┌────────────────┐ ┌──────────────────┐
+   *   │ t1 table · 30s │ │ s1 subsrc · 4s │ │ t2 written · 50s │
+   *   └───────┬────────┘ └───────┬────────┘ └────────┬─────────┘
+   *           │                  │                   │ (dropped)
+   *           └─────────┬────────┘
+   *                     ▼
+   *           ┌──────────────────┐
+   *           │ u9  probe · 31s  │
+   *           └──────────────────┘
+   *
+   * Expectation: t1 is the bottleneck and s1 is off-path, both reporting the
+   * cluster their source u1 ingests on. t2 is not on the critical path even
+   * though it lags the most.
+   */
+  it("follows source-fed tables and subsources to their source's cluster", async () => {
+    const testSchema = "test_critical_path";
+
+    await testdrive(`${seedCatalogSql(testSchema)}
+      > INSERT INTO ${testSchema}.mz_materialization_dependencies VALUES
+          ('u9', 't1'),
+          ('u9', 's1'),
+          ('u9', 't2');
+      > INSERT INTO ${testSchema}.mz_wallclock_global_lag_recent_history VALUES
+          ('t1', INTERVAL '30 SECONDS', now()),
+          ('s1', INTERVAL '4 SECONDS', now()),
+          ('t2', INTERVAL '50 SECONDS', now()),
+          ('u9', INTERVAL '31 SECONDS', now());
+      > INSERT INTO ${testSchema}.mz_objects VALUES
+          ('u1', 'source', 'c1'),
+          ('t1', 'table', NULL),
+          ('s1', 'source', NULL),
+          ('t2', 'table', NULL),
+          ('u9', 'materialized-view', 'c2');
+      > INSERT INTO ${testSchema}.mz_object_fully_qualified_names VALUES
+          ('t1', 'orders', 'public', 'mz'),
+          ('s1', 'customers', 'public', 'mz'),
+          ('t2', 'written', 'public', 'mz'),
+          ('u9', 'probe', 'public', 'mz');
+      > INSERT INTO ${testSchema}.mz_sources VALUES
+          ('u1', 'postgres', 'c1'),
+          ('s1', 'subsource', NULL);
+      > INSERT INTO ${testSchema}.mz_tables VALUES
+          ('t1', 'u1'),
+          ('t2', NULL);
+      > INSERT INTO ${testSchema}.mz_object_dependencies VALUES
+          ('s1', 'u1'),
+          ('t1', 'u1');
+      > INSERT INTO ${testSchema}.mz_clusters VALUES
+          ('c1', 'ingest'),
+          ('c2', 'compute');
+    `);
+
+    const rows = (await runQuery(testSchema, "u9")).sort((a, b) =>
+      a.id.localeCompare(b.id),
+    );
+    expect(rows.map((r) => r.id)).toEqual(["s1", "t1"]);
+    expect(rows[0]).toMatchObject({
+      objectType: "source",
+      clusterId: "c1",
+      clusterName: "ingest",
+      isBottleneck: false,
+    });
+    expect(rows[1]).toMatchObject({
+      objectType: "table",
+      clusterId: "c1",
+      clusterName: "ingest",
+      isBottleneck: true,
+    });
   });
 });

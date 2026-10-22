@@ -147,7 +147,7 @@ const ClusterMetricsHeader = ({
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const journeyLinkState = useJourneyLinkState(pageObjectId);
-  const objectLinkTarget = `../${node.parentSourceId ?? node.id}`;
+  const objectLinkTarget = `../${node.id}`;
   return (
     <VStack align="stretch" spacing={1}>
       <Text textStyle="heading-sm" noOfLines={1} title={node.name}>

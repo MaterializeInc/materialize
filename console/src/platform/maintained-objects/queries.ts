@@ -19,10 +19,10 @@ import {
   Bucket,
   fetchReplicaUtilizationHistory,
 } from "~/api/materialize/cluster/replicaUtilizationHistory";
-import { fetchLagHistory } from "~/api/materialize/freshness/lagHistory";
+import { fetchObjectLagHistory } from "~/api/materialize/freshness/lagHistory";
 import {
   MAINTAINED_OBJECT_TYPES,
-  MaintainedObjectType,
+  MaintainedObjectListType,
 } from "~/api/materialize/maintained-objects/constants";
 import {
   CriticalPathRow,
@@ -37,6 +37,7 @@ import {
   buildLagAggregateQuery,
   LagAggregateRow,
 } from "~/api/materialize/maintained-objects/lagAggregate";
+import { DatabaseObject } from "~/api/materialize/objects";
 import { fetchSourceStatistics } from "~/api/materialize/source/sourceStatistics";
 import {
   buildSubscribeQuery,
@@ -46,10 +47,12 @@ import { sourceQueryKeys } from "~/platform/sources/queries";
 import { useAllObjects } from "~/store/allObjects";
 import { sumPostgresIntervalMs } from "~/util";
 
-import { transformObjectFreshnessHistory } from "./freshnessHistory";
+import {
+  LagHistoryRow,
+  transformObjectFreshnessHistory,
+} from "./freshnessHistory";
 
-/** Cluster the object is maintained on. `null` for tables, which aren't
- *  bound to a cluster. */
+/** Cluster the object is maintained on. */
 export interface MaintainedObjectCluster {
   id: string;
   name: string;
@@ -84,9 +87,14 @@ export interface MaintainedObjectListItem {
   name: string;
   schemaName: string;
   databaseName: string;
-  objectType: MaintainedObjectType;
-  /** Subtype for sources (e.g. `postgres`, `kafka`); null for non-sources. */
+  objectType: MaintainedObjectListType;
+  /** Connector type (e.g. `postgres`, `kafka`) of a source, or of the source
+   *  ingesting a subsource or table. Null for everything else. */
   sourceType: string | null;
+  /** The source ingesting a subsource or table. Null for everything else,
+   *  and until the hydration snapshot arrives. */
+  parentSource: { id: string; name: string } | null;
+  /** For a subsource or table, the cluster its source ingests on. */
   cluster: MaintainedObjectCluster | null;
   /** 0 until the hydration snapshot arrives. */
   hydratedReplicas: number;
@@ -97,6 +105,16 @@ export interface MaintainedObjectListItem {
   /** Null for non-sources, and until the hydration snapshot arrives. */
   sourceStatus: MaintainedObjectSourceStatus | null;
 }
+
+/**
+ * True for a source and for the subsources and tables it ingests into. These
+ * report ingestion status in place of replica hydration, and have no upstream
+ * dataflow for the critical path to walk.
+ */
+export const isSourceCollection = (item: MaintainedObjectListItem) =>
+  item.objectType === "source" ||
+  item.objectType === "subsource" ||
+  item.objectType === "table";
 
 const MAINTAINED_OBJECT_TYPE_SET: ReadonlySet<string> = new Set(
   MAINTAINED_OBJECT_TYPES,
@@ -139,6 +157,82 @@ const useSubscribeToHydrationAggregate = () => {
   });
 };
 
+/**
+ * Joins object metadata with the lag and hydration aggregates into the list's
+ * rows, sorted by name.
+ */
+export const buildMaintainedObjectsList = ({
+  objects,
+  lagRows,
+  hydrationRows,
+}: {
+  objects: DatabaseObject[];
+  lagRows: LagAggregateRow[];
+  hydrationRows: HydrationAggregateRow[];
+}): MaintainedObjectListItem[] => {
+  const lagById = new Map(lagRows.map((r) => [r.object_id, r.lag]));
+  const hydrationById = new Map(hydrationRows.map((r) => [r.object_id, r]));
+  const metadataById = new Map(objects.map((o) => [o.id, o]));
+
+  const objectsById = new Map<string, MaintainedObjectListItem>();
+  for (const obj of objects) {
+    if (isSystemId(obj.id)) continue;
+    if (!obj.schemaName || !obj.databaseName) continue;
+    const hydrationRow = hydrationById.get(obj.id);
+    const parent = hydrationRow?.parentSourceId
+      ? metadataById.get(hydrationRow.parentSourceId)
+      : undefined;
+
+    // `mz_objects` reports subsources and progress collections as sources.
+    // A progress collection's freshness is its source's, so it is hidden.
+    let objectType: MaintainedObjectListType;
+    if (obj.sourceType === "progress") {
+      continue;
+    } else if (obj.sourceType === "subsource") {
+      objectType = "subsource";
+    } else if (obj.objectType === "table") {
+      // Only source-fed tables are maintained. One is indistinguishable from
+      // a table written with INSERT until the hydration snapshot names its
+      // source.
+      if (!parent) continue;
+      objectType = "table";
+    } else if (MAINTAINED_OBJECT_TYPE_SET.has(obj.objectType)) {
+      objectType = obj.objectType as MaintainedObjectListType;
+    } else {
+      continue;
+    }
+
+    const clusterOwner = parent ?? obj;
+    const lagInterval = lagById.get(obj.id);
+    objectsById.set(obj.id, {
+      id: obj.id,
+      name: obj.name,
+      schemaName: obj.schemaName,
+      databaseName: obj.databaseName,
+      objectType,
+      sourceType: parent ? parent.sourceType : obj.sourceType,
+      parentSource: parent ? { id: parent.id, name: parent.name } : null,
+      cluster:
+        clusterOwner.clusterId && clusterOwner.clusterName
+          ? { id: clusterOwner.clusterId, name: clusterOwner.clusterName }
+          : null,
+      hydratedReplicas: bigintToNumber(hydrationRow?.hydratedReplicas),
+      totalReplicas: bigintToNumber(hydrationRow?.totalReplicas),
+      lag: lagInterval
+        ? { value: lagInterval, ms: sumPostgresIntervalMs(lagInterval) }
+        : null,
+      sourceStatus: hydrationRow?.sourceStatus
+        ? {
+            status: hydrationRow.sourceStatus,
+            error: hydrationRow.sourceError,
+            snapshotCommitted: hydrationRow.snapshotCommitted,
+          }
+        : null,
+    });
+  }
+  return [...objectsById.values()].sort((a, b) => a.name.localeCompare(b.name));
+};
+
 export interface UseMaintainedObjectsListResult {
   data: MaintainedObjectListItem[];
   /** True until the all-objects snapshot completes. */
@@ -164,52 +258,15 @@ export const useMaintainedObjectsList = ({
   const lag = useSubscribeToLagAggregate({ lookbackMinutes });
   const hydration = useSubscribeToHydrationAggregate();
 
-  const data = React.useMemo<MaintainedObjectListItem[]>(() => {
-    const lagById = new Map(lag.data.map((r) => [r.object_id, r.lag]));
-    const hydrationById = new Map(hydration.data.map((r) => [r.object_id, r]));
-
-    const objectsById = new Map<string, MaintainedObjectListItem>();
-    for (const obj of allObjects.data) {
-      if (isSystemId(obj.id)) continue;
-      if (!MAINTAINED_OBJECT_TYPE_SET.has(obj.objectType)) continue;
-      // TODO(@leedqin): drop once `force_source_table_syntax` is on by
-      // default (#30483); until then mz_objects still returns subsources as
-      // sources, and we hide them and progress alongside their parent.
-      if (obj.sourceType === "subsource" || obj.sourceType === "progress") {
-        continue;
-      }
-      if (!obj.schemaName || !obj.databaseName) continue;
-      const lagInterval = lagById.get(obj.id);
-      const hydrationRow = hydrationById.get(obj.id);
-      objectsById.set(obj.id, {
-        id: obj.id,
-        name: obj.name,
-        schemaName: obj.schemaName,
-        databaseName: obj.databaseName,
-        objectType: obj.objectType as MaintainedObjectType,
-        sourceType: obj.sourceType,
-        cluster:
-          obj.clusterId && obj.clusterName
-            ? { id: obj.clusterId, name: obj.clusterName }
-            : null,
-        hydratedReplicas: bigintToNumber(hydrationRow?.hydratedReplicas),
-        totalReplicas: bigintToNumber(hydrationRow?.totalReplicas),
-        lag: lagInterval
-          ? { value: lagInterval, ms: sumPostgresIntervalMs(lagInterval) }
-          : null,
-        sourceStatus: hydrationRow?.sourceStatus
-          ? {
-              status: hydrationRow.sourceStatus,
-              error: hydrationRow.sourceError,
-              snapshotCommitted: hydrationRow.snapshotCommitted,
-            }
-          : null,
-      });
-    }
-    return [...objectsById.values()].sort((a, b) =>
-      a.name.localeCompare(b.name),
-    );
-  }, [allObjects.data, lag.data, hydration.data]);
+  const data = React.useMemo(
+    () =>
+      buildMaintainedObjectsList({
+        objects: allObjects.data,
+        lagRows: lag.data,
+        hydrationRows: hydration.data,
+      }),
+    [allObjects.data, lag.data, hydration.data],
+  );
 
   return {
     data,
@@ -253,25 +310,35 @@ const freshnessHistoryQueryKey = (objectId: string, lookbackMs: number) =>
   ] as const;
 
 export function useObjectFreshnessHistory({
-  objectId,
+  object,
   lookbackMs,
 }: {
-  objectId: string;
+  object: Pick<MaintainedObjectListItem, "id" | "name" | "schemaName">;
   lookbackMs: number;
 }) {
+  const { id: objectId, name, schemaName } = object;
+  // NOTE: `fetchLagHistory` would return names, but it inner-joins
+  // `mz_clusters`, so it returns nothing for subsources and source-fed tables.
+  const select = React.useCallback(
+    (rows: Omit<LagHistoryRow, "schemaName" | "objectName">[]) =>
+      transformObjectFreshnessHistory(
+        rows.map((r) => ({ ...r, schemaName, objectName: name })),
+        lookbackMs,
+      ),
+    [name, schemaName, lookbackMs],
+  );
   return useQuery({
     queryKey: freshnessHistoryQueryKey(objectId, lookbackMs),
     queryFn: async ({ queryKey, signal }) => {
-      const { rows } = await fetchLagHistory({
-        params: {
-          lookback: { type: "historical", lookbackMs },
-          objectIds: [objectId],
-        },
+      const { rows } = await fetchObjectLagHistory({
+        objectIds: [objectId],
+        lookbackMs,
         requestOptions: { signal },
         queryKey,
       });
-      return transformObjectFreshnessHistory(rows, lookbackMs);
+      return rows;
     },
+    select,
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
