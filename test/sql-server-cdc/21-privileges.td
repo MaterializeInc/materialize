@@ -101,7 +101,7 @@ contains:insufficient permissions for tables [] or capture instances [dbo_t1_pri
 # under test.
 $ sql-server-execute name=sql-server
 USE test;
-CREATE TABLE t2_privileges (id INT NOT NULL CONSTRAINT t2_privileges_pk PRIMARY KEY, wallet VARCHAR(64) NOT NULL CONSTRAINT t2_privileges_uq UNIQUE);
+CREATE TABLE t2_privileges (id INT NOT NULL CONSTRAINT t2_privileges_primary_key PRIMARY KEY, wallet VARCHAR(64) NOT NULL CONSTRAINT t2_privileges_wallet_unique UNIQUE);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't2_privileges', @role_name = 'SA', @supports_net_changes = 0;
 INSERT INTO t2_privileges VALUES (1, 'a');
 CREATE LOGIN authorization_user_revoked WITH PASSWORD = '${arg.default-sql-server-password}';
