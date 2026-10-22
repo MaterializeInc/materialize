@@ -1397,10 +1397,12 @@ impl PeekClient {
                         )
                         .await?
                     }
-                    PeekPlan::SlowPath(dataflow_plan) => {
+                    PeekPlan::SlowPath(mut dataflow_plan) => {
                         if let Some(logging_id) = logging.id() {
                             self.log_set_transient_index_id(logging_id, dataflow_plan.id);
                         }
+
+                        dataflow_plan.desc.heap_size_limit = session.vars().max_query_heap_size();
 
                         let response = self
                             .call_coordinator(|tx| Command::ExecuteSlowPathPeek {
@@ -1450,10 +1452,12 @@ impl PeekClient {
             }
             Execution::Subscribe {
                 subscribe_plan,
-                df_desc,
+                mut df_desc,
                 df_meta,
                 optimization_finished_at: _optimization_finished_at,
             } => {
+                df_desc.heap_size_limit = session.vars().max_query_heap_size();
+
                 if df_desc.as_of.as_ref().expect("as of set") == &df_desc.until {
                     session.add_notice(AdapterNotice::EqualSubscribeBounds {
                         bound: *df_desc.until.as_option().expect("as of set"),
