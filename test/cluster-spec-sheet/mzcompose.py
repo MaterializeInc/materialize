@@ -147,8 +147,8 @@ SCENARIO_SOURCE_INGESTION_STRONG = "source_ingestion_strong"
 SCENARIO_QPS_ENVD_STRONG_SCALING = "qps_envd_strong_scaling"
 QPS_ATTRIBUTION_DEFAULTS = {
     "enable_frontend_transaction_completion": "true",
-    "enable_prepared_query_reuse": "false",
-    "enable_prepared_query_templates": "false",
+    "enable_prepared_query_reuse": "true",
+    "enable_prepared_query_templates": "true",
 }
 SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING = "copy_from_stdin_envd_strong_scaling"
 SCENARIO_ENVD_OBJECTS_SCALABILITY_TABLES = "envd_objects_scalability_tables"
