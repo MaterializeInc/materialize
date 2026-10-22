@@ -19,8 +19,9 @@ use mz_catalog::durable::objects::serialization::RustType;
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{Comment, DurableType, IdAlloc, Snapshot};
 use mz_catalog::durable::{
-    CatalogError, Database, DurableCatalogError, FenceError, IndexColumn, Item, ItemColumn,
-    ItemMetadata, Metrics, TestCatalogStateBuilder, USER_ITEM_ALLOC_KEY, test_bootstrap_args,
+    CatalogError, Database, DurableCatalogError, FenceError, IndexColumn, IndexColumns, Item,
+    ItemColumn, ItemColumns, ItemMetadata, Metrics, TestCatalogStateBuilder, USER_ITEM_ALLOC_KEY,
+    test_bootstrap_args,
 };
 use mz_ore::assert_ok;
 use mz_ore::collections::HashSet;
@@ -1190,34 +1191,30 @@ async fn test_item_metadata(state_builder: TestCatalogStateBuilder) {
 
     let table = CatalogItemId::User(100);
     let index = CatalogItemId::User(101);
-    let column = |position, name: &str| ItemColumn {
-        id: table,
-        position,
+    let column = |name: &str| ItemColumn {
         name: ColumnName::from(name),
         nullable: true,
         type_oid: 23,
         type_mod: -1,
         custom_type: None,
     };
-    let key = |position, column| IndexColumn {
-        id: index,
-        position,
+    let key = |column| IndexColumn {
         column,
         nullable: true,
     };
-    fn recorded(snapshot: Snapshot) -> (Vec<ItemColumn>, Vec<IndexColumn>) {
+    fn recorded(snapshot: Snapshot) -> (Vec<ItemColumns>, Vec<IndexColumns>) {
         let columns = snapshot
             .item_columns
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(|(k, v)| ItemColumn::from_key_value(k, v))
+            .map_ok(|(k, v)| ItemColumns::from_key_value(k, v))
             .collect::<Result<_, _>>()
             .unwrap();
         let index_columns = snapshot
             .index_columns
             .into_iter()
             .map(RustType::from_proto)
-            .map_ok(|(k, v)| IndexColumn::from_key_value(k, v))
+            .map_ok(|(k, v)| IndexColumns::from_key_value(k, v))
             .collect::<Result<_, _>>()
             .unwrap();
         (columns, index_columns)
@@ -1240,7 +1237,7 @@ async fn test_item_metadata(state_builder: TestCatalogStateBuilder) {
     txn.set_item_metadata(
         table,
         ItemMetadata {
-            columns: vec![column(0, "a"), column(1, "b")],
+            columns: vec![column("a"), column("b")],
             index_columns: vec![],
         },
     )
@@ -1262,7 +1259,7 @@ async fn test_item_metadata(state_builder: TestCatalogStateBuilder) {
         index,
         ItemMetadata {
             columns: vec![],
-            index_columns: vec![key(0, Some(1))],
+            index_columns: vec![key(Some(1))],
         },
     )
     .unwrap();
@@ -1271,15 +1268,24 @@ async fn test_item_metadata(state_builder: TestCatalogStateBuilder) {
     txn.commit(commit_ts).await.unwrap();
     assert_eq!(
         recorded(state.snapshot().await.unwrap()),
-        (vec![column(0, "a"), column(1, "b")], vec![key(0, Some(1))])
+        (
+            vec![ItemColumns {
+                id: table,
+                columns: vec![column("a"), column("b")]
+            }],
+            vec![IndexColumns {
+                id: index,
+                columns: vec![key(Some(1))]
+            }]
+        )
     );
 
-    // Replacing an item's metadata retracts the positions it no longer has.
+    // Replacing an item's metadata replaces its row.
     let mut txn = state.transaction().await.unwrap();
     txn.set_item_metadata(
         table,
         ItemMetadata {
-            columns: vec![column(0, "a")],
+            columns: vec![column("a")],
             index_columns: vec![],
         },
     )
@@ -1288,7 +1294,7 @@ async fn test_item_metadata(state_builder: TestCatalogStateBuilder) {
         index,
         ItemMetadata {
             columns: vec![],
-            index_columns: vec![key(0, None), key(1, Some(0))],
+            index_columns: vec![key(None), key(Some(0))],
         },
     )
     .unwrap();
@@ -1297,10 +1303,19 @@ async fn test_item_metadata(state_builder: TestCatalogStateBuilder) {
     txn.commit(commit_ts).await.unwrap();
     assert_eq!(
         recorded(state.snapshot().await.unwrap()),
-        (vec![column(0, "a")], vec![key(0, None), key(1, Some(0))])
+        (
+            vec![ItemColumns {
+                id: table,
+                columns: vec![column("a")]
+            }],
+            vec![IndexColumns {
+                id: index,
+                columns: vec![key(None), key(Some(0))]
+            }]
+        )
     );
 
-    // Dropping an item drops its rows, by either removal path.
+    // Dropping an item drops its row, by either removal path.
     let mut txn = state.transaction().await.unwrap();
     txn.remove_item(index).unwrap();
     txn.remove_items(&BTreeSet::from([table])).unwrap();
