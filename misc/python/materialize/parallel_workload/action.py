@@ -3316,6 +3316,7 @@ class FlipFlagsAction(Action):
             "compute_dataflow_max_inflight_bytes",
             "compute_dataflow_max_inflight_bytes_cc",
             "subscribe_max_buffered_bytes",
+            "batched_subscribe_max_unread_stash_bytes",
             "compute_flat_map_fuel",
             "consolidating_vec_growth_dampener",
             "compute_hydration_concurrency",

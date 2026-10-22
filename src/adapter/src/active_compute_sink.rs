@@ -12,7 +12,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, VecDeque};
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::protocol::response::SubscribeBatch;
@@ -26,7 +26,7 @@ use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, Row, RowRef
 use mz_sql::plan::SubscribeOutput;
 use mz_storage_types::instances::StorageInstanceId;
 use timely::progress::Antichain;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::coord::peek::{DroppedDependency, PeekResponseUnary};
@@ -122,6 +122,8 @@ pub struct SubscribeBacklogAccounting {
     footprints: VecDeque<usize>,
     /// Sum of `footprints`.
     total: usize,
+    /// Signalled whenever a message is popped.
+    drained: Arc<Notify>,
 }
 
 impl SubscribeBacklogAccounting {
@@ -136,6 +138,7 @@ impl SubscribeBacklogAccounting {
         if let Some(footprint) = self.footprints.pop_front() {
             self.total = self.total.saturating_sub(footprint);
         }
+        self.drained.notify_waiters();
     }
 
     /// Bytes queued behind the message the client is currently draining. That
@@ -145,6 +148,45 @@ impl SubscribeBacklogAccounting {
         self.total
             .saturating_sub(self.footprints.front().copied().unwrap_or(0))
     }
+
+    /// Waits until the [`backlog_size`](Self::backlog_size) of the shared
+    /// accounting is at most `bytes`.
+    pub async fn wait_until_at_most(this: &Mutex<Self>, bytes: usize) {
+        let drained = Arc::clone(&lock(this).drained);
+        loop {
+            let notified = drained.notified();
+            tokio::pin!(notified);
+            // Registers for `notify_waiters` before checking, so a pop between
+            // the check and the await is not missed.
+            notified.as_mut().enable();
+            if lock(this).backlog_size() <= bytes {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+fn lock(backlog: &Mutex<SubscribeBacklogAccounting>) -> MutexGuard<'_, SubscribeBacklogAccounting> {
+    backlog
+        .lock()
+        .expect("subscribe backlog accounting poisoned")
+}
+
+/// Sends a message to a subscribe client, unless the client has gone away.
+///
+/// `bytes` is the message's payload size. Its footprint (payload plus a fixed
+/// per-message overhead) is recorded in `backlog` here and released by the
+/// receiver side when the message is drained.
+pub(crate) fn send_to_client(
+    channel: &mpsc::UnboundedSender<PeekResponseUnary>,
+    backlog: &Mutex<SubscribeBacklogAccounting>,
+    response: PeekResponseUnary,
+    bytes: usize,
+) {
+    let footprint = bytes.saturating_add(SUBSCRIBE_MESSAGE_OVERHEAD_BYTES);
+    lock(backlog).push(footprint);
+    let _ = channel.send(response);
 }
 
 /// Ownership and cleanup scope of an active subscribe.
@@ -560,18 +602,11 @@ impl ActiveSubscribe {
     /// Sends a message to the client if the subscribe has not already completed
     /// and if the client has not already gone away.
     ///
-    /// `bytes` is the message's payload size. Its footprint (payload plus a fixed
-    /// per-message overhead) is recorded in `backlog_accounting` here and
-    /// released by the receiver side when the message is drained. Overflow of
-    /// the budget is detected by the coordinator after `process_response`
-    /// returns, not here, because this method cannot retire the sink.
+    /// See [`send_to_client`] for the accounting of `bytes`. Overflow of the
+    /// budget is detected by the coordinator after `process_response` returns,
+    /// not here, because this method cannot retire the sink.
     fn send(&self, response: PeekResponseUnary, bytes: usize) {
-        let footprint = bytes.saturating_add(SUBSCRIBE_MESSAGE_OVERHEAD_BYTES);
-        self.backlog_accounting
-            .lock()
-            .expect("subscribe backlog accounting poisoned")
-            .push(footprint);
-        let _ = self.channel.send(response);
+        send_to_client(&self.channel, &self.backlog_accounting, response, bytes);
     }
 }
 
