@@ -80,10 +80,10 @@ use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
 
-mod description_iterator;
-mod description_scan;
+pub(crate) mod description_iterator;
+pub(crate) mod description_scan;
 mod error_scan;
-mod peek_budget;
+pub(crate) mod peek_budget;
 mod peek_metrics;
 mod peek_offload;
 mod peek_result_iterator;
