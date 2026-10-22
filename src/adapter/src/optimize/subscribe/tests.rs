@@ -71,7 +71,7 @@ fn dataflow(plan: MirRelationExpr, keys: &[Vec<usize>]) -> MirDataflowDescriptio
             from_desc: view_desc.clone(),
             connection: ComputeSinkConnection::BatchedSubscribe(BatchedSubscribeSinkConnection {
                 stash_id: Uuid::nil(),
-                start: Timestamp::MIN,
+                with_snapshot: true,
                 output_desc: view_desc,
                 mfp: None,
             }),

@@ -18,9 +18,10 @@ use differential_dataflow::input::{Input, InputSession};
 use differential_dataflow::operators::arrange::{Arranged, ShutdownButton};
 use differential_dataflow::trace::{BatchReader, TraceReader};
 use mz_compute_client::protocol::response::{BatchedSubscribeResponse, Share};
-use mz_expr::func::Gt;
+use mz_expr::func::{Eq, Gt};
 use mz_expr::{
-    BinaryFunc, MapFilterProject, MirScalarExpr, SafeMfpPlan, permutation_for_arrangement,
+    BinaryFunc, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan,
+    permutation_for_arrangement,
 };
 use mz_repr::{Datum, Diff, GlobalId, ReprScalarType, Row, RowRef, Timestamp};
 use mz_row_spine::{RowRowBatcher, RowRowBuilder, RowRowSpine};
@@ -81,13 +82,15 @@ fn ints(row: &RowRef) -> Vec<i64> {
         .collect()
 }
 
-/// A description as a worker reported it, with its inline updates as `(columns, time, diff)`.
+/// A description as a worker reported it, with its inline updates as `(columns, time, diff)` and
+/// its inline error updates as `(message, time, diff)`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Reported {
     lower: Option<u64>,
     upper: Option<u64>,
     updates: Vec<(Vec<i64>, u64, i64)>,
-    error: bool,
+    errors: Vec<(String, u64, i64)>,
+    fatal: bool,
 }
 
 fn option(frontier: &Antichain<Timestamp>) -> Option<u64> {
@@ -100,20 +103,30 @@ fn reported(responses: Vec<BatchedSubscribeResponse>) -> Vec<Reported> {
         .map(|response| match response {
             BatchedSubscribeResponse::Batch(batch) => {
                 let mut updates = Vec::new();
+                let mut errors = Vec::new();
                 for share in &batch.shares {
-                    let Share::Inline(collection) = share else {
+                    let Share::Inline {
+                        rows,
+                        errors: share_errors,
+                    } = share
+                    else {
                         panic!("a stashed share where every share should be inline");
                     };
-                    for (row, time, diff) in collection.iter() {
+                    for (row, time, diff) in rows.iter() {
                         updates.push((ints(row), u64::from(*time), diff.into_inner()));
+                    }
+                    for (error, time, diff) in share_errors {
+                        errors.push((error.to_string(), u64::from(*time), diff.into_inner()));
                     }
                 }
                 updates.sort();
+                errors.sort();
                 Reported {
                     lower: option(&batch.lower),
                     upper: option(&batch.upper),
                     updates,
-                    error: batch.error.is_some(),
+                    errors,
+                    fatal: batch.fatal.is_some(),
                 }
             }
             BatchedSubscribeResponse::DroppedAt { frontier, .. } => {
@@ -135,6 +148,22 @@ fn content(workers: &[Vec<Reported>]) -> Vec<(Vec<i64>, u64, i64)> {
     updates
         .into_iter()
         .map(|((row, time), diff)| (row, time, diff))
+        .collect()
+}
+
+/// The error updates of every description that `workers` reported, consolidated per
+/// `(error, time)`.
+fn error_content(workers: &[Vec<Reported>]) -> Vec<(String, u64, i64)> {
+    let mut errors: Vec<_> = workers
+        .iter()
+        .flatten()
+        .flat_map(|reported| reported.errors.iter().cloned())
+        .map(|(error, time, diff)| ((error, time), diff))
+        .collect();
+    consolidate(&mut errors);
+    errors
+        .into_iter()
+        .map(|((error, time), diff)| (error, time, diff))
         .collect()
 }
 
@@ -248,7 +277,6 @@ impl Index {
         let (protocol, buffer) = protocol(sink_id, as_of);
         let setup = Setup::inline_only();
         let parts = WriterParts {
-            start: Timestamp::MIN,
             budget: InlineBudget::new(&setup.config),
             tiers: setup.tiers(&worker_metrics()),
             protocol: Rc::clone(&protocol),
@@ -393,9 +421,56 @@ fn a_batched_subscribe_over_an_index_reads_its_arrangement() {
     );
     assert_eq!(content(&arranged), content(&general));
     assert!(
-        arranged.iter().flatten().all(|r| !r.error),
-        "no description is poisoned"
+        arranged
+            .iter()
+            .flatten()
+            .all(|r| r.errors.is_empty() && !r.fatal),
+        "no description holds an error"
     );
+}
+
+/// The plan of a subscribe that fails on the row with `k = 3`, the way `10 / (k - 3)` does.
+fn failing_on_three() -> SafeMfpPlan {
+    let k_is_three = MirScalarExpr::column(0).call_binary(
+        MirScalarExpr::literal_ok(Datum::Int64(3), ReprScalarType::Int64),
+        BinaryFunc::Eq(Eq),
+    );
+    let predicate = k_is_three.if_then_else(
+        MirScalarExpr::literal(Err(EvalError::DivisionByZero), ReprScalarType::Bool),
+        MirScalarExpr::literal_ok(Datum::True, ReprScalarType::Bool),
+    );
+    MapFilterProject::new(ARITY)
+        .filter([predicate])
+        .into_plan()
+        .expect("a valid plan")
+        .into_nontemporal()
+        .expect("not temporal")
+}
+
+/// The connection plan's errors on the arranged path are error updates at the times of the rows
+/// that raise them, as they are on the general path, and the rows around them are reported.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn errors_of_the_connection_mfp_are_error_updates_at_their_rows_times() {
+    let arranged = subscribe_to_index(Path::Arranged, Some(failing_on_three()));
+    let general = subscribe_to_index(Path::General, Some(failing_on_three()));
+    let division = DataflowErrorSer::from(EvalError::DivisionByZero).to_string();
+    assert_eq!(
+        error_content(&arranged),
+        vec![(division, 4, 1)],
+        "the row `(3, 30)` stands at the as-of, so its error does too",
+    );
+    assert_eq!(error_content(&arranged), error_content(&general));
+    assert_eq!(
+        content(&arranged),
+        vec![
+            (vec![1, 10], 4, 1),
+            (vec![1, 10], 6, -1),
+            (vec![4, 40], 5, 1),
+        ],
+        "the scan continues past the error",
+    );
+    assert_eq!(content(&arranged), content(&general));
 }
 
 #[mz_ore::test]
@@ -482,7 +557,6 @@ fn the_general_path_applies_the_connection_mfp_before_arranging() {
         let (protocol, buffer) = protocol(sink_id, 0);
         let setup = Setup::inline_only();
         let parts = WriterParts {
-            start: Timestamp::MIN,
             budget: InlineBudget::new(&setup.config),
             tiers: setup.tiers(&worker_metrics()),
             protocol: Rc::clone(&protocol),
