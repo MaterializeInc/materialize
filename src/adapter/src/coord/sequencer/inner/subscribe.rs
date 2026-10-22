@@ -33,7 +33,7 @@ use uuid::Uuid;
 
 use crate::active_compute_sink::{
     ActiveComputeSink, ActiveComputeSinkRetireReason, ActiveSubscribe, ActiveSubscribeOwner,
-    SubscribeBacklogAccounting,
+    SubscribeBacklogAccounting, SubscribeRowFormat,
 };
 use crate::command::ExecuteResponse;
 use crate::coord::appends::BuiltinTableAppendNotify;
@@ -567,23 +567,25 @@ impl Coordinator {
             channel: tx,
             backlog_accounting: Arc::clone(&backlog_accounting),
             max_buffered_bytes,
-            emit_progress: plan.emit_progress,
+            format: SubscribeRowFormat {
+                emit_progress: plan.emit_progress,
+                arity: df_desc
+                    .sink_exports
+                    .values()
+                    .into_element()
+                    .from_desc
+                    .arity(),
+                output: plan.output,
+            },
             as_of: df_desc
                 .as_of
                 .as_ref()
                 .and_then(|t| t.as_option())
                 .copied()
                 .expect("set to Some in an earlier stage"),
-            arity: df_desc
-                .sink_exports
-                .values()
-                .into_element()
-                .from_desc
-                .arity(),
             cluster_id,
             depends_on: dependency_ids,
             start_time: self.now(),
-            output: plan.output,
             internal: false,
         };
         active_subscribe.initialize();
