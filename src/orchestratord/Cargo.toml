@@ -55,4 +55,4 @@ default = ["mz-alloc-default"]
 jemalloc = ["mz-alloc/jemalloc"]
 
 [package.metadata.unused-deps]
-ignore = ["mz-alloc", "mz-alloc-default"]
+ignore = ["mz-alloc-default"]
