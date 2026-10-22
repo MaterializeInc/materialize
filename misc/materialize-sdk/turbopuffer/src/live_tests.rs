@@ -1267,3 +1267,166 @@ async fn a_view_converges_through_restarts_lost_responses_and_take_overs() {
 
     sql(&format!("DROP TABLE materialize.public.{table}")).await;
 }
+
+/// Each document's attributes without the ones turbopuffer returns as null,
+/// which a NULL cell leaves unset.
+fn without_nulls(documents: BTreeMap<String, Value>) -> BTreeMap<String, Value> {
+    documents
+        .into_iter()
+        .map(|(id, mut row)| {
+            row.as_object_mut()
+                .unwrap()
+                .retain(|_, value| !value.is_null());
+            (id, row)
+        })
+        .collect()
+}
+
+#[tokio::test]
+#[ignore = "needs TURBOPUFFER_API_KEY and a running Materialize at MATERIALIZE_URL"]
+async fn every_column_type_reaches_turbopuffer_as_its_attribute() {
+    let name = unique("types");
+    let _cleanup = Cleanup(name.clone());
+    let table = format!("tp_types_{}", std::process::id());
+    let relation = format!("materialize.public.{table}");
+    sql(&format!("DROP TABLE IF EXISTS {relation}")).await;
+    sql(&format!(
+        "CREATE TABLE {relation} (region text, item int8, b bool, i2 int2, i8 int8, \
+         u uint8, f float8, n numeric, j jsonb, ts timestamptz, l int list, t text, \
+         \"Mixed Case\" text, \"ünïcode\" text) WITH (RETAIN HISTORY = FOR '1h')"
+    ))
+    .await;
+    // Rows 3 to 5 cannot be documents: a float turbopuffer cannot store, and a
+    // key over turbopuffer's 64-byte id limit.
+    sql(&format!(
+        "INSERT INTO {relation} VALUES \
+         ('eu', 1, true, -32768, 9223372036854775807, 18446744073709551615, '1.5e300'::float8, \
+          12345678901234567890.123, '{{\"a\": [1, \"x\\\"y\"], \"b\": null}}', \
+          '2026-10-22 10:00:00+00', LIST[1, 2], 'héllo 🐟 \"quoted\"' || chr(10) || 'line', \
+          'mixed', 'ü'), \
+         (NULL, 2, false, 0, -1, 0, -0.5, NULL, NULL, NULL, NULL, '', NULL, NULL), \
+         ('eu', 3, NULL, NULL, NULL, NULL, 'NaN', NULL, NULL, NULL, NULL, NULL, NULL, NULL), \
+         ('us', 4, NULL, NULL, NULL, NULL, 'Infinity', NULL, NULL, NULL, NULL, NULL, NULL, NULL), \
+         (repeat('k', 70), 5, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)"
+    ))
+    .await;
+    let object = ObjectName {
+        database: Some("materialize".into()),
+        schema: "public".into(),
+        name: table.clone(),
+    };
+    let options = || DurableOptions::default().commit_interval(Duration::from_millis(200));
+    let sink = || TurbopufferSink::new(&connection(), "types", &name).unwrap();
+
+    // turbopuffer keeps `id` for the document id, so a column named `id` in a
+    // key of several columns is refused at setup, before any worker starts.
+    let with_id = format!("tp_types_id_{}", std::process::id());
+    sql(&format!(
+        "CREATE TABLE materialize.public.{with_id} (region text, id int8) \
+         WITH (RETAIN HISTORY = FOR '1h')"
+    ))
+    .await;
+    let refused = DurableSink::new("types_id", sink(), options())
+        .setup(
+            &materialize(),
+            NoTls,
+            &ObjectName {
+                database: Some("materialize".into()),
+                schema: "public".into(),
+                name: with_id.clone(),
+            },
+            Envelope::Upsert {
+                key: vec!["region".into(), "id".into()],
+            },
+        )
+        .await;
+    assert!(
+        matches!(&refused, Err(Error::Sink(SinkError::Target { permanent: true, message }))
+            if message.contains("\"id\"")),
+        "{refused:?}"
+    );
+    sql(&format!("DROP TABLE materialize.public.{with_id}")).await;
+    DurableSink::new("types", sink(), options())
+        .setup(
+            &materialize(),
+            NoTls,
+            &object,
+            Envelope::Upsert {
+                key: vec!["region".into(), "item".into()],
+            },
+        )
+        .await
+        .unwrap();
+    let mut durable = DurableSink::new("types", sink(), options());
+    let worker = tokio::spawn(async move { durable.run(&materialize(), NoTls).await });
+
+    // The text cells are what the subscription decodes, so the expected
+    // attributes come from Materialize's own text, typed as the sink types it.
+    let text = |row: i64| {
+        let query = format!("SELECT n, j, ts, l, t FROM {relation} WHERE item = {row}");
+        async move {
+            let (client, connection) = materialize().connect(NoTls).await.unwrap();
+            tokio::spawn(connection);
+            let messages = client.simple_query(&query).await.unwrap();
+            messages
+                .into_iter()
+                .find_map(|message| match message {
+                    tokio_postgres::SimpleQueryMessage::Row(row) => Some(
+                        (0..5)
+                            .map(|i| row.get(i).map(str::to_string))
+                            .collect::<Vec<_>>(),
+                    ),
+                    _ => None,
+                })
+                .unwrap()
+        }
+    };
+    let first = text(1).await;
+    let expected = BTreeMap::from([
+        (
+            r#"["eu","1"]"#.to_string(),
+            json!({
+                "region": "eu", "item": 1, "b": true, "i2": -32768,
+                "i8": 9223372036854775807_i64, "u": 18446744073709551615_u64,
+                "f": 1.5e300, "n": first[0], "j": first[1], "ts": first[2],
+                "l": first[3], "t": first[4], "Mixed Case": "mixed", "ünïcode": "ü",
+            }),
+        ),
+        (
+            r#"[null,"2"]"#.to_string(),
+            json!({"item": 2, "b": false, "i2": 0, "i8": -1, "u": 0, "f": -0.5, "t": ""}),
+        ),
+    ]);
+
+    let reader = Client::new(&connection()).unwrap();
+    let mut checkpoints =
+        Checkpoints::new(reader.clone(), checkpoint_namespace(&name), "types".into());
+    let mut active = None;
+    until("the snapshot to become active", async || {
+        active = checkpoints.load().await.unwrap().unwrap().active;
+        active.is_some()
+    })
+    .await;
+    let namespace = data_namespace(&name, active.unwrap());
+    assert_eq!(
+        without_nulls(live_documents(&reader, &namespace).await),
+        expected
+    );
+
+    // A change to a row with odd values, and a delete by a key with a NULL.
+    sql(&format!(
+        "UPDATE {relation} SET t = 'changed' WHERE item = 1"
+    ))
+    .await;
+    sql(&format!("DELETE FROM {relation} WHERE item = 2")).await;
+    let mut changed = expected;
+    changed.remove(r#"[null,"2"]"#);
+    changed.get_mut(r#"["eu","1"]"#).unwrap()["t"] = json!("changed");
+    until("the changes", async || {
+        without_nulls(live_documents(&reader, &namespace).await) == changed
+    })
+    .await;
+    worker.abort();
+    let _ = worker.await;
+    sql(&format!("DROP TABLE {relation}")).await;
+}
