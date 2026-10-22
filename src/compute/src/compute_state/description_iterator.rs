@@ -200,6 +200,9 @@ where
             )),
             Ok(None) => None,
             Err(error) => {
+                // NOTE: Workers evaluate the plan over their own positions, so error updates of
+                // different workers are not consolidated with each other, as in the plain
+                // subscribe sink.
                 let error = DataflowErrorSer::from(error);
                 Some(DescriptionStep::Errors(
                     self.times

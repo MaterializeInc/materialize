@@ -248,7 +248,8 @@ fn scan_description(
     let mut scan = ErrorScan::from_batches(vec![error_batch(updates)]);
     let mut fuel = usize::MAX;
     let mut emitted = Vec::new();
-    assert!(scan.step_description(&range, &mut fuel, &mut emitted));
+    let mut room = usize::MAX;
+    assert!(scan.step_description(&range, &mut fuel, &mut room, &mut emitted));
     emitted
 }
 
@@ -339,11 +340,33 @@ fn the_description_walk_emits_every_error_when_sliced() {
     loop {
         calls += 1;
         let mut fuel = 3;
-        if scan.step_description(&range, &mut fuel, &mut emitted) {
+        let mut room = usize::MAX;
+        if scan.step_description(&range, &mut fuel, &mut room, &mut emitted) {
             break;
         }
         assert_eq!(fuel, 0, "a walk that stops early spent its fuel");
     }
     assert!(calls > 1, "the budget did not slice the walk");
     assert_eq!(emitted, expected);
+}
+
+/// The walk stops once the updates it appended exhaust its room, after the error that did so.
+#[mz_ore::test]
+fn the_description_walk_stops_when_its_room_is_spent() {
+    let errors: Vec<DataflowErrorSer> = (0..16).map(error).collect();
+    let updates: Vec<_> = errors.iter().flat_map(holding).collect();
+    let mut scan = ErrorScan::from_batches(vec![error_batch(updates)]);
+    let range = later(0, 5);
+    let mut emitted = Vec::new();
+    let mut fuel = usize::MAX;
+    let mut room = 1;
+    assert!(!scan.step_description(&range, &mut fuel, &mut room, &mut emitted));
+    assert_eq!((emitted.len(), room), (1, 0));
+    let mut room = usize::MAX;
+    assert!(scan.step_description(&range, &mut fuel, &mut room, &mut emitted));
+    assert_eq!(
+        emitted.len(),
+        errors.len(),
+        "the walk resumes after the error"
+    );
 }

@@ -18,6 +18,7 @@ use tracing::error;
 
 use crate::arrangement::manager::PaddedTrace;
 use crate::compute_state::description_iterator::DescriptionRange;
+use crate::compute_state::description_scan::error_update_byte_len;
 use crate::compute_state::{PeekRowIterationTracker, peek_result_iterator};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::ErrAgent;
@@ -179,9 +180,10 @@ where
         outcome
     }
 
-    /// Advances a walk over the error updates `range` emits until the cursor is exhausted or
-    /// `fuel` runs out, and appends the updates it visits to `updates`. Decrements `fuel` by the
-    /// number of cursor positions visited, and returns whether the walk reached its end.
+    /// Advances a walk over the error updates `range` emits until the cursor is exhausted, `fuel`
+    /// runs out, or the updates it appended exhaust `room`, and appends the updates it visits to
+    /// `updates`. Decrements `fuel` by the number of cursor positions visited and `room` by the
+    /// bytes appended, see [`error_update_byte_len`], and returns whether the walk reached its end.
     ///
     /// The walk visits each error once, so the updates it appends over all its steps are
     /// consolidated per `(time, error)`, retractions included. It ignores the row-iteration limit.
@@ -189,6 +191,7 @@ where
         &mut self,
         range: &DescriptionRange,
         fuel: &mut usize,
+        room: &mut usize,
         updates: &mut Vec<(DataflowErrorSer, Timestamp, Diff)>,
     ) -> bool {
         let step_start = Instant::now();
@@ -197,7 +200,7 @@ where
             if !self.cursor.key_valid(&self.storage) {
                 break true;
             }
-            if *fuel == 0 {
+            if *fuel == 0 || *room == 0 {
                 break false;
             }
             *fuel -= 1;
@@ -211,6 +214,8 @@ where
             consolidate(&mut times);
             if !times.is_empty() {
                 let error = self.cursor.key(&self.storage);
+                let bytes = error_update_byte_len(error).saturating_mul(times.len());
+                *room = room.saturating_sub(bytes);
                 updates.extend(
                     times
                         .drain(..)

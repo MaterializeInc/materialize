@@ -1163,9 +1163,9 @@ async fn an_offloaded_description_scan_hands_every_cut_to_its_sink() {
     assert_eq!(all, expected);
 }
 
-/// Error updates reach the sink with the tail, after every cut of row updates.
+/// Error updates reach the sink in the hand-outs, and the scan continues past them.
 #[mz_ore::test(tokio::test)]
-async fn an_offloaded_description_scan_hands_its_errors_to_the_sink_with_the_tail() {
+async fn an_offloaded_description_scan_hands_its_errors_to_the_sink() {
     let err = error(0);
     let keys: Vec<u8> = (1..8).collect();
     let log = SinkLog::default();
@@ -1181,9 +1181,9 @@ async fn an_offloaded_description_scan_hands_its_errors_to_the_sink_with_the_tai
     let hand_outs = log.lock().expect("lock poisoned").clone();
     let errors: Vec<_> = hand_outs.iter().map(|batch| batch.errors.clone()).collect();
     assert_eq!(
-        errors,
-        [vec![], vec![], vec![(err, ts(0), Diff::ONE)]],
-        "the error updates travel with the tail"
+        errors.concat(),
+        vec![(err, ts(0), Diff::ONE)],
+        "the error updates reach the sink"
     );
     let rows: usize = hand_outs.iter().map(|batch| batch.rows.len()).sum();
     assert_eq!(rows, keys.len(), "the error does not stop the scan");

@@ -134,9 +134,9 @@ fn errors_of_the_plan_and_of_the_collection_consolidate() {
     );
 }
 
-/// Error updates wait for the end of the scan, whatever cuts the rows take.
+/// The error walk runs first, so the error updates leave with the first hand-out.
 #[mz_ore::test]
-fn errors_are_handed_out_with_the_last_hand_out() {
+fn errors_are_handed_out_with_the_first_hand_out() {
     let updates: Vec<_> = (1..8).map(|key| update(key, 1, 1)).collect();
     let held = batches(&updates, &[ts(5)]);
     let err = error(0);
@@ -154,7 +154,82 @@ fn errors_are_handed_out_with_the_last_hand_out() {
         }
     }
     let errors: Vec<_> = hand_outs.iter().map(|batch| batch.errors.len()).collect();
-    assert_eq!(errors, [0, 0, 1]);
+    assert_eq!(errors, [1, 0, 0]);
+}
+
+/// A plan that fails on every row of an arrangement buffers no more error bytes than the cut,
+/// plus the updates of one position, and its errors leave in several hand-outs.
+#[mz_ore::test]
+fn errors_of_a_plan_that_fails_on_every_row_stay_within_the_cut() {
+    // Every key at a time of its own, so no two error updates consolidate.
+    let keys: Vec<u8> = (0..200).collect();
+    let updates: Vec<_> = keys
+        .iter()
+        .map(|key| update(*key, u64::from(*key), 1))
+        .collect();
+    let held = batches(&updates, &[ts(1000)]);
+    let failing = MapFilterProject::new(1)
+        .filter([mz_expr::MirScalarExpr::literal(
+            Err(mz_expr::EvalError::DivisionByZero),
+            mz_repr::ReprScalarType::Bool,
+        )])
+        .into_plan()
+        .expect("valid plan")
+        .into_nontemporal()
+        .expect("non-temporal plan");
+    let division = DataflowErrorSer::from(mz_expr::EvalError::DivisionByZero);
+    let error_bytes = error_update_byte_len(&division);
+    let cut_bytes = 4 * error_bytes;
+    let mut scan = description_scan(held, Vec::new(), failing, later(0, 1000), cut_bytes);
+
+    let mut hand_outs = Vec::new();
+    loop {
+        let mut fuel = usize::MAX;
+        let outcome = scan.step(&mut fuel);
+        assert!(
+            scan.buffered_bytes() <= cut_bytes + error_bytes,
+            "{} bytes buffered over a cut of {cut_bytes}",
+            scan.buffered_bytes(),
+        );
+        hand_outs.extend(scan.take_batch());
+        if outcome == DescriptionScanOutcome::Finished {
+            break;
+        }
+    }
+    assert!(hand_outs.len() > 1, "the errors were not cut");
+    let errors: usize = hand_outs.iter().map(|batch| batch.errors.len()).sum();
+    assert_eq!(errors, keys.len());
+    assert!(hand_outs.iter().all(|batch| batch.rows.is_empty()));
+}
+
+/// Errors that repeat at one time consolidate in the buffer as it grows, before any cut.
+#[mz_ore::test]
+fn repeated_errors_consolidate_in_the_buffer() {
+    let keys: Vec<u8> = (0..200).collect();
+    let updates: Vec<_> = keys.iter().map(|key| update(*key, 1, 1)).collect();
+    let held = batches(&updates, &[ts(5)]);
+    let failing = MapFilterProject::new(1)
+        .filter([mz_expr::MirScalarExpr::literal(
+            Err(mz_expr::EvalError::DivisionByZero),
+            mz_repr::ReprScalarType::Bool,
+        )])
+        .into_plan()
+        .expect("valid plan")
+        .into_nontemporal()
+        .expect("non-temporal plan");
+    let division = DataflowErrorSer::from(mz_expr::EvalError::DivisionByZero);
+    let bound = 2 * ERROR_CONSOLIDATION_MIN_LEN * error_update_byte_len(&division);
+    let mut scan = description_scan(held, Vec::new(), failing, later(0, 5), usize::MAX);
+
+    let mut fuel = 1;
+    while scan.step(&mut fuel) == DescriptionScanOutcome::Suspended {
+        assert!(scan.buffered_bytes() <= bound, "{}", scan.buffered_bytes());
+        fuel = 1;
+    }
+    assert_eq!(
+        scan.take_batch().map(|batch| batch.errors),
+        Some(vec![(division, ts(1), Diff::from(200))])
+    );
 }
 
 #[mz_ore::test]

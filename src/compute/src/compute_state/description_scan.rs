@@ -86,9 +86,9 @@ impl DescriptionUpdates {
 
 /// Scans the updates of one description, first its error updates and then its row updates.
 ///
-/// Row updates are handed out as they pass the cut. Error updates are held until the scan
-/// finishes and handed out with its last hand-out, so that they are consolidated per
-/// `(time, error)` across the whole description.
+/// Row updates and error updates are handed out together once their accounted bytes pass the
+/// cut, so neither is held beyond it. Equal `(time, row)` or `(time, error)` pairs that a cut
+/// separated land in different hand-outs and can cancel across them.
 pub(crate) struct DescriptionScan<Ok: Navigable, Err: Navigable> {
     range: DescriptionRange,
     /// The error walk, `None` once it has ended.
@@ -97,11 +97,21 @@ pub(crate) struct DescriptionScan<Ok: Navigable, Err: Navigable> {
     buffer: Vec<(Row, Timestamp, Diff)>,
     /// The bytes accounted to `buffer`, see [`update_byte_len`].
     buffered_bytes: usize,
-    /// The error updates found so far, handed out once the scan has ended.
+    /// The error updates found and not yet handed out.
     error_buffer: Vec<(DataflowErrorSer, Timestamp, Diff)>,
+    /// The bytes accounted to `error_buffer`, see [`error_update_byte_len`].
+    error_bytes: usize,
+    /// The length of `error_buffer` after it was last consolidated.
+    consolidated_errors: usize,
     cut_bytes: usize,
     ended: bool,
 }
+
+/// The length below which a growing error buffer is not consolidated.
+///
+/// Consolidating each time the buffer doubles keeps the cost amortized linear, and lets a plan
+/// that fails with the same error on many rows at one time occupy one entry.
+const ERROR_CONSOLIDATION_MIN_LEN: usize = 64;
 
 /// The bytes one buffered update is accounted at, the peek's per-row accounting plus the time
 /// and the diff that a peek answer does not carry.
@@ -112,10 +122,6 @@ pub(crate) fn update_byte_len(row: &Row) -> usize {
 }
 
 /// The bytes one error update is accounted at, its serialized error plus the time and the diff.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the batched subscribe sink is not wired up")
-)]
 pub(crate) fn error_update_byte_len(error: &DataflowErrorSer) -> usize {
     error
         .byte_len()
@@ -143,8 +149,8 @@ where
     /// Opens a scan of `range` over `ok_batches` and `err_batches`, each of which must include
     /// every held batch that overlaps the range.
     ///
-    /// The buffered row updates are handed out once their accounted bytes exceed `cut_bytes`, so
-    /// a hand-out can exceed the cut by the updates of one cursor position.
+    /// The buffered updates are handed out once their accounted bytes exceed `cut_bytes`, so a
+    /// hand-out can exceed the cut by the updates of one cursor position.
     #[cfg_attr(
         not(test),
         expect(dead_code, reason = "the batched subscribe sink is not wired up")
@@ -163,6 +169,8 @@ where
             buffer: Vec::new(),
             buffered_bytes: 0,
             error_buffer: Vec::new(),
+            error_bytes: 0,
+            consolidated_errors: 0,
             cut_bytes,
             ended: false,
         }
@@ -184,11 +192,23 @@ where
         }
 
         if let Some(errors) = &mut self.errors {
-            if !errors.step_description(&self.range, fuel, &mut self.error_buffer) {
+            // One past the room left below the cut, so the walk stops once the buffer passes it.
+            let mut room = self
+                .cut_bytes
+                .saturating_sub(self.buffered_bytes.saturating_add(self.error_bytes))
+                .saturating_add(1);
+            let found = self.error_buffer.len();
+            let finished =
+                errors.step_description(&self.range, fuel, &mut room, &mut self.error_buffer);
+            self.account_errors(found);
+            if !finished {
                 return DescriptionScanOutcome::Suspended;
             }
             // Dropped here, so a scan in its ok walk stops pinning error batches.
             self.errors = None;
+            if self.past_cut() {
+                return DescriptionScanOutcome::Suspended;
+            }
         }
 
         loop {
@@ -204,7 +224,14 @@ where
                         return DescriptionScanOutcome::Suspended;
                     }
                 }
-                DescriptionStep::Errors(errors) => self.error_buffer.extend(errors),
+                DescriptionStep::Errors(errors) => {
+                    let found = self.error_buffer.len();
+                    self.error_buffer.extend(errors);
+                    self.account_errors(found);
+                    if self.past_cut() {
+                        return DescriptionScanOutcome::Suspended;
+                    }
+                }
                 DescriptionStep::OutOfFuel => return DescriptionScanOutcome::Suspended,
                 DescriptionStep::Done => {
                     self.ended = true;
@@ -214,30 +241,52 @@ where
         }
     }
 
-    /// Takes the buffered updates, consolidated, once the row updates have passed the cut or the
-    /// scan has finished. Returns `None` before that, and when nothing remains. The error updates
-    /// are taken once the scan has finished.
-    ///
-    /// Equal `(time, row)` pairs that a cut separated land in different hand-outs.
+    /// Takes the buffered updates, consolidated, once they have passed the cut or the scan has
+    /// finished. Returns `None` before that, and when nothing remains.
     pub(crate) fn take_batch(&mut self) -> Option<DescriptionUpdates> {
         if !self.past_cut() && !self.ended {
             return None;
         }
         self.buffered_bytes = 0;
+        self.error_bytes = 0;
+        self.consolidated_errors = 0;
         let mut batch = DescriptionUpdates {
             rows: mem::take(&mut self.buffer),
-            errors: if self.ended {
-                mem::take(&mut self.error_buffer)
-            } else {
-                Vec::new()
-            },
+            errors: mem::take(&mut self.error_buffer),
         };
         batch.consolidate();
         (!batch.is_empty()).then_some(batch)
     }
 
+    /// The bytes the buffered row and error updates are accounted at.
+    pub(crate) fn buffered_bytes(&self) -> usize {
+        self.buffered_bytes.saturating_add(self.error_bytes)
+    }
+
     fn past_cut(&self) -> bool {
-        self.buffered_bytes > self.cut_bytes
+        self.buffered_bytes() > self.cut_bytes
+    }
+
+    /// Accounts the error updates appended to `error_buffer` from index `from` on, and
+    /// consolidates the buffer in place once it has doubled since it was last consolidated.
+    fn account_errors(&mut self, from: usize) {
+        self.error_bytes = self.error_buffer[from..]
+            .iter()
+            .map(|(error, _, _)| error_update_byte_len(error))
+            .fold(self.error_bytes, usize::saturating_add);
+        let threshold = std::cmp::max(
+            self.consolidated_errors.saturating_mul(2),
+            ERROR_CONSOLIDATION_MIN_LEN,
+        );
+        if self.error_buffer.len() >= threshold {
+            consolidate_updates(&mut self.error_buffer);
+            self.consolidated_errors = self.error_buffer.len();
+            self.error_bytes = self
+                .error_buffer
+                .iter()
+                .map(|(error, _, _)| error_update_byte_len(error))
+                .fold(0, usize::saturating_add);
+        }
     }
 }
 
