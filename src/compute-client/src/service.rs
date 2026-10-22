@@ -614,7 +614,8 @@ impl PendingSubscribe {
 /// Assembles the output of a batched subscribe from the responses of every part.
 ///
 /// Part `p`'s k-th batch reports the k-th description. A description is emitted once every part
-/// has reported it, with the shares of all parts concatenated and the first error kept.
+/// has reported it, with the shares of all parts concatenated and the first fatal error kept.
+/// Error updates travel in the shares like row updates.
 /// Descriptions are emitted in order. Each input adds to one description and only the oldest
 /// description can be emitted, so each input emits at most one response.
 #[derive(Debug)]
@@ -644,8 +645,8 @@ struct PendingDescription {
     upper: Antichain<Timestamp>,
     /// The shares of the parts that have reported the description.
     shares: Vec<Share>,
-    /// The first error reported for the description.
-    error: Option<String>,
+    /// The first fatal error reported for the description.
+    fatal: Option<String>,
     /// The number of parts that have reported the description.
     reported: usize,
 }
@@ -717,7 +718,7 @@ impl PendingBatchedSubscribe {
                 lower: batch.lower.clone(),
                 upper: batch.upper.clone(),
                 shares: Vec::new(),
-                error: None,
+                fatal: None,
                 reported: 0,
             });
         }
@@ -725,11 +726,11 @@ impl PendingBatchedSubscribe {
         let description = &mut self.descriptions[index];
         if description.lower != batch.lower || description.upper != batch.upper {
             description
-                .error
+                .fatal
                 .get_or_insert_with(|| "replica processes disagree on batch descriptions".into());
         }
-        if description.error.is_none() {
-            description.error = batch.error;
+        if description.fatal.is_none() {
+            description.fatal = batch.fatal;
         }
         self.inline_bytes += batch
             .shares
@@ -755,8 +756,8 @@ impl PendingBatchedSubscribe {
         }
 
         // The limit covers every held share, including those of descriptions not yet complete.
-        if description.error.is_none() && u64::cast_from(self.inline_bytes) > max_result_size {
-            description.error = Some(format!(
+        if description.fatal.is_none() && u64::cast_from(self.inline_bytes) > max_result_size {
+            description.fatal = Some(format!(
                 "total result exceeds max size of {}",
                 ByteSize::b(max_result_size)
             ));
@@ -771,7 +772,7 @@ impl PendingBatchedSubscribe {
             lower: description.lower,
             upper: description.upper,
             shares: description.shares,
-            error: description.error,
+            fatal: description.fatal,
         }))
     }
 
