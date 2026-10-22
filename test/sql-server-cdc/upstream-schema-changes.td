@@ -185,6 +185,23 @@ ALTER TABLE unique_table DROP CONSTRAINT unique_table_wallet_unique;
 ! SELECT * FROM unique_table;
 contains:incompatible schema change on dbo.unique_table: UNIQUE constraint "unique_table_wallet_unique" (wallet) was dropped upstream
 
+# Rows written after the error are still ingested. The error makes the table
+# unreadable, so this is visible only in the export's statistics.
+$ set-from-sql var=unique-table-updates-committed
+SELECT SUM(u.updates_committed)::text
+  FROM mz_internal.mz_source_statistics u
+  JOIN mz_tables t ON t.id = u.id
+  WHERE t.name = 'unique_table'
+
+$ sql-server-execute name=sql-server
+INSERT INTO unique_table VALUES (2, 'a'), (3, 'c');
+
+> SELECT SUM(u.updates_committed) > ${unique-table-updates-committed}
+  FROM mz_internal.mz_source_statistics u
+  JOIN mz_tables t ON t.id = u.id
+  WHERE t.name = 'unique_table';
+true
+
 > DROP TABLE unique_table;
 
 # A constraint added after the table was created was never recorded as a key,

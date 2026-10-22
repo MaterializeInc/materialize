@@ -419,6 +419,16 @@ pub(crate) fn render<'scope>(
             let mut cdc_stream = std::pin::pin!(cdc_stream);
 
             let mut errored_partitions = BTreeSet::new();
+            // Partitions whose recorded key no longer holds upstream. Unlike
+            // `errored_partitions`, these keep receiving data: a constraint change
+            // leaves rows decodable, and the error row alone makes the table
+            // unreadable once it lands. Withholding rows would turn an error row
+            // that lost a persist append race against another writer of the
+            // shard into missing data with nothing to explain it. The set only
+            // stops the error from being emitted again on every poll. It records
+            // that the error was emitted, not that it was persisted: nothing
+            // reports back whether the append carrying it won.
+            let mut key_errored_partitions = BTreeSet::new();
 
             // TODO(sql_server2): We should emit `ProgressStatisticsUpdate::SteadyState` messages
             // here, when we receive progress events. What stops us from doing this now is our
@@ -554,7 +564,9 @@ pub(crate) fn render<'scope>(
                             .collect::<Result<Vec<_>, _>>()
                             .map_err(TransientError::from)?;
                         for partition_idx in partition_indexes {
-                            if errored_partitions.contains(partition_idx) {
+                            if errored_partitions.contains(partition_idx)
+                                || key_errored_partitions.contains(partition_idx)
+                            {
                                 continue;
                             }
                             // Every partition index was registered above, so a missing
@@ -579,7 +591,7 @@ pub(crate) fn render<'scope>(
                                 data_output
                                     .give_fueled(&data_cap_set[0], update, size)
                                     .await;
-                                errored_partitions.insert(*partition_idx);
+                                key_errored_partitions.insert(*partition_idx);
                             }
                         }
                     }
