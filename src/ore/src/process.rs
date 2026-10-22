@@ -60,6 +60,15 @@ macro_rules! exit {
     }};
 }
 
+/// Like [`halt!`], but exits with the given code, so that a restart with a
+/// specific cause can be told apart from a routine halt.
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "tracing")))]
+#[cfg(feature = "tracing")]
+pub fn halt_with_code(exit_code: i32, message: std::fmt::Arguments<'_>) -> ! {
+    crate::__private::tracing::warn!("halting process: {message}");
+    exit_thread_safe(exit_code)
+}
+
 /// Helper for exiting macros.
 ///
 /// This function exists to avoid that all callers of `halt!` have to explicitly depend on `libc`.

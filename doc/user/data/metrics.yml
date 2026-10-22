@@ -2414,6 +2414,10 @@ metrics:
   help: count of LeasedBatchParts that were dropped without being politely returned
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_lease_expired_live_read
+  help: count of fetches that found their reader's lease had timed out
+  source: src/persist-client/src/internal/metrics.rs
+  visibility: internal
 - name: mz_persist_lease_timeout_read
   help: count of readers whose lease timed out
   source: src/persist-client/src/internal/metrics.rs

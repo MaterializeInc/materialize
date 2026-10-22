@@ -1061,6 +1061,9 @@ impl GcMetrics {
 #[derive(Debug)]
 pub struct LeaseMetrics {
     pub(crate) timeout_read: IntCounter,
+    /// Counted where `shard_source` reports a lost lease. Only observable where
+    /// the error handler survives it (storage); compute halts right after.
+    pub(crate) expired_live_read: IntCounter,
     pub(crate) dropped_part: IntCounter,
 }
 
@@ -1070,6 +1073,10 @@ impl LeaseMetrics {
             timeout_read: registry.register(metric!(
                 name: "mz_persist_lease_timeout_read",
                 help: "count of readers whose lease timed out",
+            )),
+            expired_live_read: registry.register(metric!(
+                name: "mz_persist_lease_expired_live_read",
+                help: "count of fetches that found their reader's lease had timed out",
             )),
             dropped_part: registry.register(metric!(
                 name: "mz_persist_lease_dropped_part",
