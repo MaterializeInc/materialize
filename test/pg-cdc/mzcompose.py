@@ -757,8 +757,15 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def process(name: str) -> None:
-        # The kill points of `truncate-replay-kill` depend on wall clock timing.
-        if name in ("default", "large-scale", "truncate-replay-kill"):
+        # The kill points of `truncate-replay-kill` depend on wall clock timing, and the
+        # truncate benchmarks measure rather than assert.
+        if name in (
+            "default",
+            "large-scale",
+            "truncate-replay-kill",
+            "truncate-bench",
+            "truncate-steady-bench",
+        ):
             return
 
         c.kill("postgres")
@@ -1267,3 +1274,590 @@ def workflow_truncate_replay_failpoint(
                     ):
                         print(f"LOG {line[:400]}")
                 raise
+
+
+def workflow_truncate_bench(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """
+    Benchmark, not part of `default`. Measures the retraction of upstream
+    TRUNCATE: frontier stall, scale, and a clusterd kill while a retraction is
+    in flight. Prints RESULT lines.
+    """
+    parser.add_argument("--rows", type=int, default=10_000_000)
+    parser.add_argument("--kill-rows", type=int, default=2_000_000)
+    parser.add_argument("--burst-rows", type=int, default=2_000_000)
+    parser.add_argument("--skip-big", action="store_true")
+    parser.add_argument("--tail-max-bytes", type=int, default=None)
+    parser.add_argument("--workers", type=int, default=1)
+    args = parser.parse_args()
+    params = {}
+    if args.tail_max_bytes is not None:
+        params["pg_source_truncate_buffer_max_bytes"] = str(args.tail_max_bytes)
+
+    def pg_connect() -> Connection:
+        conn = psycopg.connect(
+            host="localhost",
+            user="postgres",
+            password="postgres",
+            port=c.default_port("postgres"),
+        )
+        conn.autocommit = True
+        return conn
+
+    def mz_connect() -> Connection:
+        conn = psycopg.connect(
+            host="localhost",
+            user="materialize",
+            port=c.default_port("materialized"),
+        )
+        conn.autocommit = True
+        return conn
+
+    def mz_one(conn: Connection, sql: str):
+        return _exec(conn, sql).fetchall()[0]
+
+    def wait_for(conn: Connection, sql: str, expected, timeout: float = 600) -> float:
+        start = time.time()
+        while True:
+            try:
+                got = mz_one(conn, sql)
+            except psycopg.Error as e:
+                got = str(e)
+            if got == expected:
+                return time.time() - start
+            if time.time() - start > timeout:
+                raise AssertionError(f"{sql}: got {got}, expected {expected}")
+            time.sleep(0.1)
+
+    def clusterd_pid() -> str:
+        cluster_id = mz_one(mz, "SELECT id FROM mz_clusters WHERE name = 'src'")[0]
+        out = c.exec(
+            "materialized",
+            "bash",
+            "-c",
+            "for p in /proc/[0-9]*; do "
+            "if tr '\\0' ' ' < $p/cmdline 2>/dev/null "
+            f"| grep -q -- '^[^ ]*clusterd .*{cluster_id}'; "
+            "then basename $p; fi; done",
+            capture=True,
+        ).stdout.split()
+        assert len(out) == 1, f"clusterd pids for {cluster_id}: {out}"
+        return out[0]
+
+    def thread_ticks(pid: str) -> dict[str, int]:
+        out = c.exec(
+            "materialized",
+            "bash",
+            "-c",
+            f"for t in /proc/{pid}/task/*; do "
+            "echo \"$(cat $t/comm)|$(sed 's/.*) //' $t/stat | cut -d' ' -f12,13)\"; "
+            "done",
+            capture=True,
+            silent=True,
+        ).stdout
+        ticks: dict[str, int] = {}
+        for line in out.splitlines():
+            name, times = line.rsplit("|", 1)
+            if len(times.split()) != 2:
+                continue
+            utime, stime = times.split()
+            group = "tokio" if name.startswith("tokio") else name
+            group = "persist" if group.startswith("persist") else group
+            ticks[group] = ticks.get(group, 0) + int(utime) + int(stime)
+        return ticks
+
+    class ThreadSampler:
+        """Samples per-thread-group CPU of clusterd once per second."""
+
+        def __init__(self, pid: str) -> None:
+            self.pid = pid
+            self.series: list[tuple[float, dict[str, int]]] = []
+            self.stop = threading.Event()
+            self.thread = threading.Thread(target=self.run)
+
+        def __enter__(self) -> "ThreadSampler":
+            self.thread.start()
+            return self
+
+        def __exit__(self, *_) -> None:
+            self.stop.set()
+            self.thread.join()
+
+        def run(self) -> None:
+            while not self.stop.is_set():
+                self.series.append((time.time(), thread_ticks(self.pid)))
+                time.sleep(1)
+
+        def report(self, t0: float) -> list[str]:
+            lines = []
+            for (ta, a), (tb, b) in zip(self.series, self.series[1:]):
+                dt = tb - ta
+                util = {k: round((b.get(k, 0) - a.get(k, 0)) / dt) for k in b}
+                top = sorted(util.items(), key=lambda kv: -kv[1])[:4]
+                lines.append(
+                    f"t={tb - t0:+.1f}s " + " ".join(f"{k}={v}%" for k, v in top)
+                )
+            return lines
+
+    def proc_status(pid: str, field: str) -> int:
+        out = c.exec(
+            "materialized",
+            "bash",
+            "-c",
+            f"grep {field} /proc/{pid}/status",
+            capture=True,
+        ).stdout
+        return int(out.split()[1])
+
+    class Sampler:
+        """Samples the write frontier lag of subsources every 100ms."""
+
+        def __init__(self, names: list[str]) -> None:
+            self.names = names
+            self.max_lag: dict[str, int] = {}
+            self.samples: list[tuple[float, str, int]] = []
+            self.mark = 0.0
+            self.stop = threading.Event()
+            self.thread = threading.Thread(target=self.run)
+
+        def __enter__(self) -> "Sampler":
+            self.thread.start()
+            return self
+
+        def __exit__(self, *_) -> None:
+            self.stop.set()
+            self.thread.join()
+
+        def run(self) -> None:
+            conn = mz_connect()
+            names = ", ".join(f"'{n}'" for n in self.names)
+            while not self.stop.is_set():
+                rows = _exec(
+                    conn,
+                    "SELECT o.name, f.write_frontier::text::numeric, "
+                    "extract(epoch FROM now()) * 1000 "
+                    "FROM mz_internal.mz_frontiers f "
+                    "JOIN mz_objects o ON o.id = f.object_id "
+                    f"WHERE o.name IN ({names})",
+                ).fetchall()
+                for name, frontier, now in rows:
+                    lag = int(now - frontier)
+                    if frontier == 0:
+                        continue
+                    self.samples.append((time.time(), name, lag))
+                    self.max_lag[name] = max(self.max_lag.get(name, 0), lag)
+                time.sleep(0.1)
+
+    def ticker(stop: threading.Event) -> None:
+        with pg_connect() as conn:
+            while not stop.is_set():
+                _exec(conn, "INSERT INTO ticker VALUES (1)")
+                time.sleep(0.05)
+
+    results: dict[str, object] = {}
+
+    with c.override(
+        create_postgres(pg_version=None, extra_command=[]),
+        Materialized(
+            volumes_extra=["secrets:/share/secrets"],
+            additional_system_parameter_defaults={"log_filter": "info", **params},
+            default_replication_factor=1,
+        ),
+    ):
+        c.up("materialized", "postgres")
+        pg = pg_connect()
+        results["wal_sender_timeout"] = _exec(pg, "SHOW wal_sender_timeout").fetchall()[
+            0
+        ][0]
+        tables = ["big", "small", "killme", "burst", "ticker"]
+        for t in tables:
+            _exec(pg, f"DROP TABLE IF EXISTS {t}")
+        _exec(pg, "DROP PUBLICATION IF EXISTS mz_source")
+        for t in ["big", "small", "killme", "burst"]:
+            _exec(pg, f"CREATE TABLE {t} (id bigint, pad text)")
+        _exec(pg, "CREATE TABLE ticker (x int)")
+        for t in tables:
+            _exec(pg, f"ALTER TABLE {t} REPLICA IDENTITY FULL")
+        _exec(
+            pg,
+            "INSERT INTO small SELECT g, md5(g::text) FROM generate_series(1, 10000) g",
+        )
+        _exec(pg, "CREATE PUBLICATION mz_source FOR ALL TABLES")
+
+        mz = mz_connect()
+        _exec(mz, f"CREATE CLUSTER src SIZE 'scale=1,workers={args.workers}'")
+        _exec(mz, "CREATE SECRET pgpass AS 'postgres'")
+        _exec(
+            mz,
+            "CREATE CONNECTION pg TO POSTGRES (HOST postgres, DATABASE postgres, "
+            "USER postgres, PASSWORD SECRET pgpass)",
+        )
+        _exec(
+            mz,
+            "CREATE SOURCE mz_source IN CLUSTER src FROM POSTGRES CONNECTION pg "
+            "(PUBLICATION 'mz_source')",
+        )
+        for t in tables:
+            _exec(mz, f"CREATE TABLE {t} FROM SOURCE mz_source (REFERENCE {t})")
+        wait_for(mz, "SELECT count(*) FROM small", (10000,))
+
+        stop_ticker = threading.Event()
+        ticker_thread = threading.Thread(target=ticker, args=(stop_ticker,))
+        ticker_thread.start()
+        try:
+            with Sampler(["small", "ticker"]) as s:
+                time.sleep(10)
+            results["baseline_max_lag_ms"] = dict(s.max_lag)
+
+            # Stall on a 10k row table.
+            with Sampler(["small", "ticker"]) as s:
+                time.sleep(2)
+                start = time.time()
+                _exec(pg, "TRUNCATE small")
+                _exec(pg, "INSERT INTO small VALUES (1, 'a')")
+                wait_for(mz, "SELECT count(*), sum(id) FROM small", (1, 1))
+                results["small_converge_s"] = time.time() - start
+                time.sleep(3)
+            results["small_max_lag_ms"] = dict(s.max_lag)
+
+            # A truncate right after a large transaction, before it is durable.
+            with Sampler(["burst", "ticker"]) as s:
+                time.sleep(2)
+                start = time.time()
+                _exec(
+                    pg,
+                    "INSERT INTO burst SELECT g, md5(g::text) "
+                    f"FROM generate_series(1, {args.burst_rows}) g",
+                )
+                _exec(pg, "TRUNCATE burst")
+                _exec(pg, "INSERT INTO burst VALUES (1, 'a')")
+                wait_for(mz, "SELECT count(*), sum(id) FROM burst", (1, 1))
+                results["burst_converge_s"] = time.time() - start
+                time.sleep(3)
+            results["burst_max_lag_ms"] = dict(s.max_lag)
+
+            # Kill clusterd while a retraction is in flight.
+            start = time.time()
+            _exec(
+                pg,
+                "INSERT INTO killme SELECT g, md5(g::text) "
+                f"FROM generate_series(1, {args.kill_rows}) g",
+            )
+            wait_for(mz, "SELECT count(*) FROM killme", (args.kill_rows,))
+            results["killme_ingest_s"] = time.time() - start
+            time.sleep(3)
+            pid = clusterd_pid()
+            _exec(pg, "TRUNCATE killme")
+            _exec(pg, "INSERT INTO killme VALUES (1, 'a'), (2, 'b')")
+            time.sleep(0.5)
+            c.exec("materialized", "kill", "-9", pid)
+            start = time.time()
+            wait_for(mz, "SELECT count(*), sum(id) FROM killme", (2, 3))
+            results["killme_converge_after_kill_s"] = time.time() - start
+            _exec(pg, "INSERT INTO killme VALUES (3, 'c')")
+            wait_for(mz, "SELECT count(*), sum(id) FROM killme", (3, 6))
+            results["killme_pid_changed"] = clusterd_pid() != pid
+
+            if not args.skip_big:
+                start = time.time()
+                _exec(
+                    pg,
+                    "INSERT INTO big SELECT g, md5(g::text) "
+                    f"FROM generate_series(1, {args.rows}) g",
+                )
+                results["big_pg_insert_s"] = time.time() - start
+                wait_for(mz, "SELECT count(*) FROM big", (args.rows,), timeout=3600)
+                results["big_ingest_s"] = time.time() - start
+                time.sleep(5)
+                pid = clusterd_pid()
+                results["rss_before_kb"] = proc_status(pid, "VmRSS")
+                results["hwm_before_kb"] = proc_status(pid, "VmHWM")
+                c.exec("materialized", "bash", "-c", f"echo 5 > /proc/{pid}/clear_refs")
+                with Sampler(["big", "ticker"]) as s, ThreadSampler(pid) as ts:
+                    time.sleep(3)
+                    start = time.time()
+                    s.mark = start
+                    _exec(pg, "TRUNCATE big")
+                    _exec(pg, "INSERT INTO big VALUES (1, 'a')")
+                    wait_for(
+                        mz, "SELECT count(*), sum(id) FROM big", (1, 1), timeout=1800
+                    )
+                    results["big_converge_s"] = time.time() - start
+                    time.sleep(3)
+                results["big_max_lag_ms"] = dict(s.max_lag)
+                buckets: dict[int, int] = {}
+                for t, name, lag in s.samples:
+                    if name == "ticker":
+                        b = int((t - start) // 1)
+                        buckets[b] = max(buckets.get(b, 0), lag)
+                results["big_ticker_lag_timeline"] = [
+                    f"t={b:+d}s max_lag={lag}" for b, lag in sorted(buckets.items())
+                ]
+                results["big_thread_cpu"] = ts.report(start)
+                results["rss_after_kb"] = proc_status(pid, "VmRSS")
+                results["hwm_during_truncate_kb"] = proc_status(pid, "VmHWM")
+                results["big_clusterd_pid_unchanged"] = clusterd_pid() == pid
+        finally:
+            stop_ticker.set()
+            ticker_thread.join()
+
+        logs = c.invoke("logs", "materialized", capture=True).stdout
+        results["retraction_log_lines"] = [
+            line[line.find("retracted truncate") :]
+            for line in logs.splitlines()
+            if "retracted truncate" in line or "replaying from" in line
+        ]
+        results["replication_starts"] = logs.count(
+            "started replication using backend PID"
+        )
+        pg_logs = c.invoke("logs", "postgres", capture=True).stdout
+        results["walsender_timeouts"] = pg_logs.count("replication timeout")
+        for k, v in results.items():
+            if isinstance(v, list):
+                print(f"RESULT {k}:")
+                for line in v:
+                    print(f"RESULT   {line}")
+            else:
+                print(f"RESULT {k}: {v}")
+
+
+def workflow_truncate_steady_bench(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Benchmark, not part of `default`. Measures the cost of a sustained insert
+    and update workload on several tables of one source, optionally truncating
+    one of them periodically. Prints RESULT lines.
+    """
+    parser.add_argument("--seconds", type=int, default=120)
+    parser.add_argument("--warmup", type=int, default=20)
+    parser.add_argument("--tables", type=int, default=4)
+    parser.add_argument("--rate", type=int, default=2500)
+    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--tail-max-bytes", type=int, default=None)
+    parser.add_argument("--truncate-every", type=int, default=0)
+    args = parser.parse_args()
+    params = {}
+    if args.tail_max_bytes is not None:
+        params["pg_source_truncate_buffer_max_bytes"] = str(args.tail_max_bytes)
+
+    def pg_connect() -> Connection:
+        conn = psycopg.connect(
+            host="localhost",
+            user="postgres",
+            password="postgres",
+            port=c.default_port("postgres"),
+        )
+        conn.autocommit = True
+        return conn
+
+    def mz_connect() -> Connection:
+        conn = psycopg.connect(
+            host="localhost",
+            user="materialize",
+            port=c.default_port("materialized"),
+        )
+        conn.autocommit = True
+        return conn
+
+    def clusterd_pid(mz: Connection) -> str:
+        cluster_id = _exec(
+            mz, "SELECT id FROM mz_clusters WHERE name = 'src'"
+        ).fetchall()[0][0]
+        out = c.exec(
+            "materialized",
+            "bash",
+            "-c",
+            "for p in /proc/[0-9]*; do "
+            "if tr '\\0' ' ' < $p/cmdline 2>/dev/null "
+            f"| grep -q -- '^[^ ]*clusterd .*{cluster_id}'; "
+            "then basename $p; fi; done",
+            capture=True,
+        ).stdout.split()
+        assert len(out) == 1, f"clusterd pids for {cluster_id}: {out}"
+        return out[0]
+
+    def thread_ticks(pid: str) -> dict[str, int]:
+        out = c.exec(
+            "materialized",
+            "bash",
+            "-c",
+            f"for t in /proc/{pid}/task/*; do "
+            "echo \"$(cat $t/comm)|$(sed 's/.*) //' $t/stat | cut -d' ' -f12,13)\"; "
+            "done",
+            capture=True,
+        ).stdout
+        ticks: dict[str, int] = {}
+        for line in out.splitlines():
+            name, times = line.rsplit("|", 1)
+            utime, stime = times.split()
+            ticks[name] = ticks.get(name, 0) + int(utime) + int(stime)
+        return ticks
+
+    def rss_kb(pid: str) -> int:
+        out = c.exec(
+            "materialized", "bash", "-c", f"grep VmRSS /proc/{pid}/status", capture=True
+        ).stdout
+        return int(out.split()[1])
+
+    tables = [f"s{i}" for i in range(args.tables)]
+
+    def load(table: str, stop: threading.Event, counter: list[int]) -> None:
+        per_tick = args.rate // 10
+        n = 0
+        with pg_connect() as conn:
+            while not stop.is_set():
+                start = time.time()
+                _exec(
+                    conn,
+                    f"INSERT INTO {table} SELECT g, md5(g::text) "
+                    f"FROM generate_series({n}, {n + per_tick - 1}) g",
+                )
+                lo = max(0, n - 10 * per_tick)
+                _exec(
+                    conn,
+                    f"UPDATE {table} SET pad = md5(pad) "
+                    f"WHERE id >= {lo} AND id < {lo + per_tick // 2}",
+                )
+                n += per_tick
+                counter[0] += per_tick + per_tick // 2
+                time.sleep(max(0.0, 0.1 - (time.time() - start)))
+
+    lags: list[tuple[float, str, int]] = []
+    truncates: list[float] = []
+
+    def sample(stop: threading.Event) -> None:
+        conn = mz_connect()
+        names = ", ".join(f"'{t}'" for t in tables)
+        while not stop.is_set():
+            rows = _exec(
+                conn,
+                "SELECT o.name, f.write_frontier::text::numeric, "
+                "extract(epoch FROM now()) * 1000 "
+                "FROM mz_internal.mz_frontiers f "
+                "JOIN mz_objects o ON o.id = f.object_id "
+                f"WHERE o.name IN ({names})",
+            ).fetchall()
+            for name, frontier, now in rows:
+                if frontier != 0:
+                    lags.append((time.time(), name, int(now - frontier)))
+            time.sleep(0.1)
+
+    def truncator(stop: threading.Event) -> None:
+        with pg_connect() as conn:
+            while not stop.wait(args.truncate_every):
+                truncates.append(time.time())
+                _exec(conn, f"TRUNCATE {tables[0]}")
+
+    with c.override(
+        create_postgres(pg_version=None, extra_command=[]),
+        Materialized(
+            volumes_extra=["secrets:/share/secrets"],
+            additional_system_parameter_defaults={"log_filter": "info", **params},
+            default_replication_factor=1,
+        ),
+    ):
+        c.up("materialized", "postgres")
+        pg = pg_connect()
+        _exec(pg, "DROP PUBLICATION IF EXISTS mz_source")
+        for t in tables:
+            _exec(pg, f"DROP TABLE IF EXISTS {t}")
+            _exec(pg, f"CREATE TABLE {t} (id bigint, pad text)")
+            _exec(pg, f"ALTER TABLE {t} REPLICA IDENTITY FULL")
+        _exec(pg, "CREATE PUBLICATION mz_source FOR ALL TABLES")
+        mz = mz_connect()
+        _exec(mz, f"CREATE CLUSTER src SIZE 'scale=1,workers={args.workers}'")
+        _exec(mz, "CREATE SECRET pgpass AS 'postgres'")
+        _exec(
+            mz,
+            "CREATE CONNECTION pg TO POSTGRES (HOST postgres, DATABASE postgres, "
+            "USER postgres, PASSWORD SECRET pgpass)",
+        )
+        _exec(
+            mz,
+            "CREATE SOURCE mz_source IN CLUSTER src FROM POSTGRES CONNECTION pg "
+            "(PUBLICATION 'mz_source')",
+        )
+        for t in tables:
+            _exec(mz, f"CREATE TABLE {t} FROM SOURCE mz_source (REFERENCE {t})")
+        time.sleep(5)
+        pid = clusterd_pid(mz)
+
+        stop = threading.Event()
+        counters = [[0] for _ in tables]
+        loaders = [
+            threading.Thread(target=load, args=(t, stop, counters[i]))
+            for i, t in enumerate(tables)
+        ]
+        for th in loaders:
+            th.start()
+        try:
+            time.sleep(args.warmup)
+            stop_sample = threading.Event()
+            sampler = threading.Thread(target=sample, args=(stop_sample,))
+            sampler.start()
+            truncator_thread = None
+            if args.truncate_every > 0:
+                truncator_thread = threading.Thread(
+                    target=truncator, args=(stop_sample,)
+                )
+                truncator_thread.start()
+            before = thread_ticks(pid)
+            start = time.time()
+            rows_before = sum(cnt[0] for cnt in counters)
+            rss = []
+            while time.time() - start < args.seconds:
+                time.sleep(5)
+                rss.append(rss_kb(pid))
+            after = thread_ticks(pid)
+            elapsed = time.time() - start
+            rows = sum(cnt[0] for cnt in counters) - rows_before
+            stop_sample.set()
+            sampler.join()
+            if truncator_thread is not None:
+                truncator_thread.join()
+        finally:
+            stop.set()
+            for th in loaders:
+                th.join()
+
+        clk = 100
+        print(f"RESULT elapsed_s: {elapsed:.1f}")
+        print(f"RESULT upstream_row_changes_per_s: {rows / elapsed:.0f}")
+        total = sum(after.values()) - sum(before.values())
+        print(f"RESULT clusterd_cpu_pct: {100 * total / clk / elapsed:.1f}")
+        by_name = {
+            name: after.get(name, 0) - before.get(name, 0)
+            for name in after
+            if after.get(name, 0) - before.get(name, 0) > 0
+        }
+        for name, ticks in sorted(by_name.items(), key=lambda kv: -kv[1])[:8]:
+            print(f"RESULT thread_cpu_pct[{name}]: {100 * ticks / clk / elapsed:.1f}")
+        print(f"RESULT rss_kb_max: {max(rss)} rss_kb_last: {rss[-1]}")
+
+        def summary(values: list[int]) -> str:
+            values = sorted(values)
+            if not values:
+                return "n=0"
+            return (
+                f"n={len(values)} p50={values[len(values) // 2]} "
+                f"p99={values[int(len(values) * 0.99)]} max={values[-1]}"
+            )
+
+        print(f"RESULT lag_ms: {summary([lag for _, _, lag in lags])}")
+        if truncates:
+            others = [(t, lag) for t, name, lag in lags if name != tables[0]]
+            near = [
+                lag for t, lag in others if any(0 <= t - tr < 10 for tr in truncates)
+            ]
+            far = [
+                lag
+                for t, lag in others
+                if not any(0 <= t - tr < 10 for tr in truncates)
+            ]
+            print(f"RESULT truncates: {len(truncates)}")
+            print(f"RESULT other_tables_lag_ms_within_10s_of_truncate: {summary(near)}")
+            print(f"RESULT other_tables_lag_ms_otherwise: {summary(far)}")
+        logs = c.invoke("logs", "materialized", capture=True).stdout
+        for line in logs.splitlines():
+            if "retracted truncate" in line:
+                print(f"RESULT {line[line.find('retracted truncate') :][:200]}")
