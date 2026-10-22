@@ -178,6 +178,11 @@ pub mod v1alpha1 {
         pub console_resource_requirements: Option<ResourceRequirements>,
         /// Number of balancerd pods to create.
         pub balancerd_replicas: Option<i32>,
+        /// Leave the balancerd Deployment's replica count to an external
+        /// autoscaler, such as a HorizontalPodAutoscaler. `balancerd_replicas`
+        /// then only seeds the count when the Deployment is first created.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub balancerd_externally_scaled: Option<bool>,
         /// Number of console pods to create.
         pub console_replicas: Option<i32>,
 
@@ -868,6 +873,7 @@ pub mod v1alpha1 {
                     balancerd_configmap_name: value.spec.balancerd_configmap_name,
                     console_resource_requirements: value.spec.console_resource_requirements,
                     balancerd_replicas: value.spec.balancerd_replicas,
+                    balancerd_externally_scaled: value.spec.balancerd_externally_scaled,
                     console_replicas: value.spec.console_replicas,
                     service_account_name: value.spec.service_account_name,
                     service_account_annotations: value.spec.service_account_annotations,
@@ -989,6 +995,12 @@ pub mod v1alpha1 {
             skip_serializing_if = "Option::is_none"
         )]
         pub balancerd_replicas: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub balancerd_externally_scaled: PartialField,
         #[serde(
             default,
             with = "double_option",
@@ -1195,6 +1207,7 @@ pub mod v1alpha1 {
                 balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -1230,6 +1243,7 @@ pub mod v1alpha1 {
                 balancerd_configmap_name: present_opt(balancerd_configmap_name),
                 console_resource_requirements: present_opt(console_resource_requirements),
                 balancerd_replicas: present_opt(balancerd_replicas),
+                balancerd_externally_scaled: present_opt(balancerd_externally_scaled),
                 console_replicas: present_opt(console_replicas),
                 service_account_name: present_opt(service_account_name),
                 service_account_annotations: present_opt(service_account_annotations),
@@ -1316,6 +1330,7 @@ pub mod v1alpha1 {
                 balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -1348,6 +1363,7 @@ pub mod v1alpha1 {
                 balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -1486,6 +1502,13 @@ pub mod v1 {
         ///
         /// This field is excluded from the rollout hash and changes will not trigger a rollout.
         pub balancerd_replicas: Option<i32>,
+        /// Leave the balancerd Deployment's replica count to an external
+        /// autoscaler, such as a HorizontalPodAutoscaler. `balancerd_replicas`
+        /// then only seeds the count when the Deployment is first created.
+        ///
+        /// This field is excluded from the rollout hash and changes will not trigger a rollout.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub balancerd_externally_scaled: Option<bool>,
         /// Number of console pods to create.
         ///
         /// This field is excluded from the rollout hash and changes will not trigger a rollout.
@@ -1626,6 +1649,7 @@ pub mod v1 {
                 balancerd_configmap_name: None,
                 console_resource_requirements: None,
                 balancerd_replicas: None,
+                balancerd_externally_scaled: None,
                 console_replicas: None,
                 service_account_name: self.spec.service_account_name.clone(),
                 service_account_annotations: self.spec.service_account_annotations.clone(),
@@ -2103,6 +2127,7 @@ pub mod v1 {
                     balancerd_configmap_name: value.spec.balancerd_configmap_name,
                     console_resource_requirements: value.spec.console_resource_requirements,
                     balancerd_replicas: value.spec.balancerd_replicas,
+                    balancerd_externally_scaled: value.spec.balancerd_externally_scaled,
                     console_replicas: value.spec.console_replicas,
                     service_account_name: value.spec.service_account_name,
                     service_account_annotations,
@@ -2247,6 +2272,12 @@ pub mod v1 {
             skip_serializing_if = "Option::is_none"
         )]
         pub balancerd_replicas: PartialField,
+        #[serde(
+            default,
+            with = "double_option",
+            skip_serializing_if = "Option::is_none"
+        )]
+        pub balancerd_externally_scaled: PartialField,
         #[serde(
             default,
             with = "double_option",
@@ -2434,6 +2465,7 @@ pub mod v1 {
                 balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -2466,6 +2498,7 @@ pub mod v1 {
                 balancerd_configmap_name: present_opt(balancerd_configmap_name),
                 console_resource_requirements: present_opt(console_resource_requirements),
                 balancerd_replicas: present_opt(balancerd_replicas),
+                balancerd_externally_scaled: present_opt(balancerd_externally_scaled),
                 console_replicas: present_opt(console_replicas),
                 service_account_name: present_opt(service_account_name),
                 service_account_annotations: present_opt(service_account_annotations),
@@ -2549,6 +2582,7 @@ pub mod v1 {
                 balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -2592,6 +2626,7 @@ pub mod v1 {
                 balancerd_configmap_name,
                 console_resource_requirements,
                 balancerd_replicas,
+                balancerd_externally_scaled,
                 console_replicas,
                 service_account_name,
                 service_account_annotations,
@@ -2913,6 +2948,49 @@ mod tests {
             });
             let v1 = super::convert_v1alpha1_to_v1(subset.clone()).unwrap();
             assert_eq!(v1["spec"]["balancerdConfigmapName"], value);
+            let roundtrip = super::convert_v1_to_v1alpha1(v1).unwrap();
+            assert_eq!(roundtrip, subset);
+        }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn balancerd_externally_scaled_preserves_rollout_hash_and_conversion() {
+        let mut mz = super::v1::Materialize {
+            spec: super::v1::MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v26.0.0".to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta::default(),
+            status: None,
+        };
+        let hash = mz.generate_rollout_hash();
+        // Omitting the new field also preserves hashes calculated by older operators.
+        assert!(
+            serde_json::to_value(&mz.spec)
+                .unwrap()
+                .get("balancerdExternallyScaled")
+                .is_none()
+        );
+        mz.spec.balancerd_externally_scaled = Some(true);
+        assert_eq!(mz.generate_rollout_hash(), hash);
+        let alpha = Materialize::from(mz.clone());
+        assert_eq!(alpha.spec.balancerd_externally_scaled, Some(true));
+        assert_eq!(
+            super::v1::Materialize::from(alpha)
+                .spec
+                .balancerd_externally_scaled,
+            Some(true),
+        );
+        for value in [serde_json::json!(true), serde_json::Value::Null] {
+            let subset = serde_json::json!({
+                "apiVersion": "materialize.cloud/v1alpha1",
+                "kind": "Materialize",
+                "metadata": {"name": "mz"},
+                "spec": {"balancerdExternallyScaled": value},
+            });
+            let v1 = super::convert_v1alpha1_to_v1(subset.clone()).unwrap();
+            assert_eq!(v1["spec"]["balancerdExternallyScaled"], value);
             let roundtrip = super::convert_v1_to_v1alpha1(v1).unwrap();
             assert_eq!(roundtrip, subset);
         }
