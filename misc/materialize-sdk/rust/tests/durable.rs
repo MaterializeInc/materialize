@@ -49,6 +49,9 @@ struct Target {
     /// apply.
     drop_chunks: usize,
     chunk_writes: usize,
+    /// How long each write takes, and how many writes after the snapshot ran.
+    write_delay: Duration,
+    live_writes: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -95,6 +98,8 @@ impl Sink for Transactional {
 
     async fn write(&mut self, request: WriteRequest<'_>) -> WriteResult {
         let checkpoint = request.checkpoint().expect("a checkpoint write");
+        let delay = self.0.lock().unwrap().write_delay;
+        tokio::time::sleep(delay).await;
         let mut target = self.0.lock().unwrap();
         let Some(batch) = request.batch() else {
             return match compare_and_set(&mut target, checkpoint) {
@@ -131,6 +136,8 @@ impl Sink for Transactional {
         target.rows.retain(|_, count| *count != 0);
         if batch.is_snapshot() {
             target.snapshot_writes += 1;
+        } else {
+            target.live_writes += 1;
         }
         if chunk && target.lose_chunk_responses > 0 {
             target.lose_chunk_responses -= 1;
@@ -576,4 +583,36 @@ async fn batches_name_their_columns_with_the_key_first() {
     };
     assert_eq!(key, &[Some("eu".to_string()), Some("1".to_string())]);
     assert_eq!(value, &[Some("a".to_string())]);
+}
+
+#[tokio::test]
+#[ignore = "needs a running Materialize at MATERIALIZE_URL"]
+async fn a_slow_sink_gets_the_batches_that_waited_in_one_write() {
+    let (object, relation) = source("durable_merge").await;
+    let admin = admin().await;
+    let sink = Transactional::default();
+    DurableSink::new("merge", sink.clone(), options())
+        .setup(&config(), NoTls, &object, Envelope::Diff)
+        .await
+        .unwrap();
+    let worker = spawn(DurableSink::new("merge", sink.clone(), options()));
+    until("the snapshot", || {
+        sink.checkpoint().is_some_and(|c| c.frontier.is_some())
+    })
+    .await;
+    // Each insert commits at its own timestamp, and each write takes a
+    // second, so without appending, every insert would wait for a write of
+    // its own.
+    sink.0.lock().unwrap().write_delay = Duration::from_secs(1);
+    let before = sink.0.lock().unwrap().live_writes;
+    const INSERTS: i64 = 40;
+    for id in 0..INSERTS {
+        execute(&admin, &format!("INSERT INTO {relation} VALUES ({id})")).await;
+    }
+    let expected = table_rows(&relation).await;
+    until("the inserts", || sink.rows() == expected).await;
+    let writes = sink.0.lock().unwrap().live_writes - before;
+    assert!(writes <= 15, "{INSERTS} inserts took {writes} writes");
+    worker.abort();
+    let _ = worker.await;
 }
