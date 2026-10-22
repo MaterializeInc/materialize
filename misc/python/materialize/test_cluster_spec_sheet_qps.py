@@ -126,6 +126,36 @@ def composition_module():
     return module
 
 
+def test_attribution_flags_survive_staging_recreation(monkeypatch, tmp_path):
+    from materialize.mzcompose import loader
+
+    monkeypatch.setattr(loader, "composition_path", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    module = composition_module()
+    monkeypatch.setattr(module, "staging_version", lambda: "test-version")
+    calls = []
+    target = SimpleNamespace(
+        is_staging=True,
+        composition=SimpleNamespace(run=lambda *args, **kwargs: calls.append(args)),
+    )
+    assert (
+        module.QPS_ATTRIBUTION_DEFAULTS["enable_frontend_transaction_completion"]
+        == "true"
+    )
+    for cpus in (1, 32):
+        module.enable_region(target, cpus)
+    assert len(calls) == 2
+    for call in calls:
+        for name, value in module.QPS_ATTRIBUTION_DEFAULTS.items():
+            assert (
+                f"--environmentd-extra-arg=--system-parameter-default={name}={value}"
+                in call
+            )
+    target.is_staging = False
+    module.enable_region(target, 32)
+    assert not any("--environmentd-extra-arg" in arg for arg in calls[-1])
+
+
 def test_each_cpu_runs_full_concurrency_sweep(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     from materialize.mzcompose import loader
