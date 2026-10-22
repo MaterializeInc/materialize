@@ -54,6 +54,21 @@ impl StringOrSecret {
             StringOrSecret::Secret(id) => *id,
         }
     }
+
+    /// Returns a `Debug` view that redacts an inline string, for fields whose
+    /// inline value may be sensitive. Secret references print as usual.
+    pub fn redacted(&self) -> impl std::fmt::Debug + '_ {
+        struct Redacted<'a>(&'a StringOrSecret);
+        impl std::fmt::Debug for Redacted<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self.0 {
+                    StringOrSecret::String(_) => f.write_str("String(<redacted>)"),
+                    StringOrSecret::Secret(id) => f.debug_tuple("Secret").field(id).finish(),
+                }
+            }
+        }
+        Redacted(self)
+    }
 }
 
 impl<V: std::fmt::Display> From<V> for StringOrSecret {

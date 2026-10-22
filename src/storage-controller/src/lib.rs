@@ -1761,7 +1761,7 @@ impl StorageController for Controller {
             // update that because `ExportState` is not clone, because it holds
             // a `ReadHandle` and cloning that would cause additional work for
             // whoever guarantees those read holds.
-            let (mut new_export_description, as_of): (ExportDescription, _) = {
+            let (current_export_description, as_of): (ExportDescription, _) = {
                 let export = &self.collections[&id];
                 let DataSource::Sink { desc } = &export.data_source else {
                     panic!("export exists")
@@ -1774,12 +1774,15 @@ impl StorageController for Controller {
 
                 (export_description, as_of)
             };
-            let current_sink = new_export_description.sink.clone();
+
+            let mut new_export_description = current_export_description.clone();
 
             new_export_description.sink.connection = connection;
 
             // Ensure compatibility
-            current_sink.alter_compatible(id, &new_export_description.sink)?;
+            current_export_description
+                .sink
+                .alter_compatible(id, &new_export_description.sink)?;
 
             let from_storage_metadata = self
                 .storage_collections

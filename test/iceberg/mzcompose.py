@@ -53,7 +53,7 @@ SERVICES = [
         depends_on=["minio"],
         sanity_restart=False,
         additional_system_parameter_defaults={
-            "log_filter": "mz_storage::sink::iceberg=debug",
+            "log_filter": "info,warn,mz_storage::sink::iceberg=debug,mz_storage_types=debug",
         },
     ),
     Testdrive(),
@@ -172,6 +172,25 @@ def workflow_storage_provider(c: Composition) -> None:
     c.run_testdrive_files(
         "storage-provider.td",
     )
+
+
+def workflow_alter_catalog_aws_connection(c: Composition) -> None:
+    """ALTER CONNECTION on the AWS connection an S3 Tables catalog uses must
+    not panic the coordinator while an Iceberg sink depends on the catalog.
+    The change reaches the sink's inlined catalog connection, which the
+    coordinator applies after committing the ALTER. This needs no Iceberg
+    backend, the sink only has to exist."""
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.run_testdrive_files(
+        "alter-catalog-aws-connection.td",
+    )
+
+    logs = c.invoke("logs", "materialized", capture=True)
+    assert (
+        "altering export connections after txn must succeed" not in logs.stdout
+    ), "coordinator panicked applying the altered catalog connection to the sink"
 
 
 def workflow_mode_append(c: Composition) -> None:

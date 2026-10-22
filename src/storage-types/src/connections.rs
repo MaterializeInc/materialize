@@ -630,6 +630,9 @@ impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
             (Self::Kafka(s), Self::Kafka(o)) => s.alter_compatible(id, o),
             (Self::Postgres(s), Self::Postgres(o)) => s.alter_compatible(id, o),
             (Self::MySql(s), Self::MySql(o)) => s.alter_compatible(id, o),
+            (Self::SqlServer(s), Self::SqlServer(o)) => s.alter_compatible(id, o),
+            (Self::GlueSchemaRegistry(s), Self::GlueSchemaRegistry(o)) => s.alter_compatible(id, o),
+            (Self::IcebergCatalog(s), Self::IcebergCatalog(o)) => s.alter_compatible(id, o),
             _ => {
                 tracing::warn!(
                     "Connection incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
@@ -643,7 +646,7 @@ impl<C: ConnectionAccess> AlterCompatible for Connection<C> {
 }
 
 /// Auth mechanism for Iceberg REST catalogs.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum IcebergCatalogAuth<C: ConnectionAccess = InlinedConnection> {
     /// Use Iceberg catalog REST API's standard OAuth flow.
     OAuth {
@@ -660,6 +663,25 @@ pub enum IcebergCatalogAuth<C: ConnectionAccess = InlinedConnection> {
         server_url: Option<String>,
     },
     Gcp(GcpConnectionReference<C>),
+}
+
+impl<C: ConnectionAccess> std::fmt::Debug for IcebergCatalogAuth<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IcebergCatalogAuth::OAuth {
+                credential,
+                scope,
+                server_url,
+            } => f
+                .debug_struct("OAuth")
+                .field("credential", &credential.redacted())
+                .field("scope", scope)
+                .field("server_url", server_url)
+                .finish(),
+            // A GCP connection holds only a reference to its key secret.
+            IcebergCatalogAuth::Gcp(gcp) => f.debug_tuple("Gcp").field(gcp).finish(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -694,6 +716,24 @@ impl IcebergAccessDelegation {
     pub fn as_header_value(&self) -> &'static str {
         match self {
             IcebergAccessDelegation::VendedCredentials => "vended-credentials",
+        }
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for RestIcebergCatalog<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        // Auth and access delegation are not considered for compatibility, because they can
+        // be changed without breaking existing tables.
+        if (self.warehouse != other.warehouse) || (self.storage_provider != other.storage_provider)
+        {
+            tracing::warn!(
+                "RestIcebergCatalog incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+            Err(AlterError { id })
+        } else {
+            Ok(())
         }
     }
 }
@@ -745,6 +785,26 @@ impl<R: ConnectionResolver> IntoInlineConnection<S3TablesRestIcebergCatalog, R>
         S3TablesRestIcebergCatalog {
             aws_connection: self.aws_connection.into_inline_connection(&r),
             warehouse: self.warehouse,
+        }
+    }
+}
+
+impl<C: ConnectionAccess> AlterCompatible for S3TablesRestIcebergCatalog<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        if self.aws_connection.connection_id != other.aws_connection.connection_id
+            || self.warehouse != other.warehouse
+        {
+            tracing::warn!(
+                "S3TablesRestIcebergCatalog incompatible:\nself:\n{:#?}\n\nother\n{:#?}",
+                self,
+                other
+            );
+            Err(AlterError { id })
+        } else {
+            self.aws_connection
+                .connection
+                .alter_compatible(id, &other.aws_connection.connection)?;
+            Ok(())
         }
     }
 }
@@ -806,6 +866,21 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogImpl, R>
     }
 }
 
+impl<C: ConnectionAccess> AlterCompatible for IcebergCatalogImpl<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        match (self, other) {
+            (IcebergCatalogImpl::Rest(rest), IcebergCatalogImpl::Rest(other_rest)) => {
+                rest.alter_compatible(id, other_rest)
+            }
+            (
+                IcebergCatalogImpl::S3TablesRest(s3tables),
+                IcebergCatalogImpl::S3TablesRest(other_s3tables),
+            ) => s3tables.alter_compatible(id, other_s3tables),
+            _ => Err(AlterError { id }),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct IcebergCatalogConnection<C: ConnectionAccess = InlinedConnection> {
     /// The catalog impl impl of that catalog
@@ -814,9 +889,26 @@ pub struct IcebergCatalogConnection<C: ConnectionAccess = InlinedConnection> {
     pub uri: reqwest_0_12::Url,
 }
 
-impl AlterCompatible for IcebergCatalogConnection {
-    fn alter_compatible(&self, id: GlobalId, _other: &Self) -> Result<(), AlterError> {
-        Err(AlterError { id })
+impl<C: ConnectionAccess> AlterCompatible for IcebergCatalogConnection<C> {
+    fn alter_compatible(&self, id: GlobalId, other: &Self) -> Result<(), AlterError> {
+        let compatibility_checks = [
+            (
+                self.catalog.alter_compatible(id, &other.catalog).is_ok(),
+                "catalog",
+            ),
+            (self.uri == other.uri, "uri"),
+        ];
+        for (is_ok, field) in compatibility_checks {
+            if !is_ok {
+                tracing::warn!(
+                    "IcebergCatalogConnection incompatible at {field}:\nself:\n{:#?}\n\nother\n{:#?}",
+                    self,
+                    other
+                );
+                return Err(AlterError { id });
+            }
+        }
+        Ok(())
     }
 }
 
