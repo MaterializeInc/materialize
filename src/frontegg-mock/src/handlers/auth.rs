@@ -170,8 +170,8 @@ pub async fn handle_post_auth_vendor(
 ) -> Result<Json<VendorAuthResponse>, StatusCode> {
     // For the mock, we accept any client_id/secret and return a valid token.
     // In production, this would validate the credentials.
-    let now_secs = (context.now)() / 1000;
-    let exp_secs = now_secs as i64 + context.expires_in_secs;
+    let now_secs = context.now.as_secs();
+    let exp_secs = now_secs + context.expires_in_secs;
     let token = jsonwebtoken::encode(
         &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
         &serde_json::json!({

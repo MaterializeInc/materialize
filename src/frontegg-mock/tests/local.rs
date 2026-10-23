@@ -2568,3 +2568,170 @@ async fn test_latency() {
         "Request completed faster than the configured latency"
     );
 }
+
+// Tenant Tests
+
+#[mz_ore::test(tokio::test)]
+async fn test_list_tenants_derived_from_users() {
+    let ctx = setup_test_context().await;
+
+    let response = ctx
+        .client
+        .get(format!("{}/tenants/resources/tenants/v1", ctx.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    let body: serde_json::Value = response.json().await.unwrap();
+    let tenants = body.as_array().unwrap();
+    assert_eq!(tenants.len(), 1);
+    assert_eq!(tenants[0]["tenantId"], ctx.tenant_id.to_string());
+    // Frontegg returns metadata as a JSON-encoded string.
+    assert_eq!(tenants[0]["metadata"], "{}");
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_get_tenant() {
+    let ctx = setup_test_context().await;
+
+    // A tenant derived from a configured user is found.
+    let response = ctx
+        .client
+        .get(format!(
+            "{}/tenants/resources/tenants/v1/{}",
+            ctx.base_url, ctx.tenant_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    let tenants = body.as_array().unwrap();
+    assert_eq!(tenants.len(), 1);
+    assert_eq!(tenants[0]["tenantId"], ctx.tenant_id.to_string());
+
+    // An unknown tenant yields an empty list, as Frontegg does.
+    let response = ctx
+        .client
+        .get(format!(
+            "{}/tenants/resources/tenants/v1/{}",
+            ctx.base_url,
+            Uuid::new_v4()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert!(body.as_array().unwrap().is_empty());
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_create_tenant_and_set_metadata() {
+    let ctx = setup_test_context().await;
+    let tenant_id = Uuid::new_v4();
+
+    let response = ctx
+        .client
+        .post(format!("{}/tenants/resources/tenants/v1", ctx.base_url))
+        .json(&json!({
+            "tenantId": tenant_id,
+            "name": "Test Tenant",
+            "metadata": {"a": 1},
+            "creatorEmail": "creator@example.com",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["tenantId"], tenant_id.to_string());
+    assert_eq!(body["name"], "Test Tenant");
+    assert_eq!(body["creatorEmail"], "creator@example.com");
+    let metadata: serde_json::Value =
+        serde_json::from_str(body["metadata"].as_str().unwrap()).unwrap();
+    assert_eq!(metadata, json!({"a": 1}));
+
+    // Metadata updates are merged into the existing metadata.
+    let response = ctx
+        .client
+        .post(format!(
+            "{}/tenants/resources/tenants/v1/{}/metadata",
+            ctx.base_url, tenant_id
+        ))
+        .json(&json!({"metadata": {"b": 2}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    let metadata: serde_json::Value =
+        serde_json::from_str(body["metadata"].as_str().unwrap()).unwrap();
+    assert_eq!(metadata, json!({"a": 1, "b": 2}));
+
+    // Once explicit tenants exist, only those are listed.
+    let response = ctx
+        .client
+        .get(format!("{}/tenants/resources/tenants/v1", ctx.base_url))
+        .send()
+        .await
+        .unwrap();
+    let body: serde_json::Value = response.json().await.unwrap();
+    let tenants = body.as_array().unwrap();
+    assert_eq!(tenants.len(), 1);
+    assert_eq!(tenants[0]["tenantId"], tenant_id.to_string());
+
+    // Setting metadata on an unknown tenant is a 404.
+    let response = ctx
+        .client
+        .post(format!(
+            "{}/tenants/resources/tenants/v1/{}/metadata",
+            ctx.base_url,
+            Uuid::new_v4()
+        ))
+        .json(&json!({"metadata": {"b": 2}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 404);
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_set_metadata_on_user_derived_tenant() {
+    let ctx = setup_test_context().await;
+
+    let response = ctx
+        .client
+        .post(format!(
+            "{}/tenants/resources/tenants/v1/{}/metadata",
+            ctx.base_url, ctx.tenant_id
+        ))
+        .json(&json!({"metadata": {"k": "v"}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert_eq!(body["tenantId"], ctx.tenant_id.to_string());
+    let metadata: serde_json::Value =
+        serde_json::from_str(body["metadata"].as_str().unwrap()).unwrap();
+    assert_eq!(metadata, json!({"k": "v"}));
+}
+
+#[mz_ore::test(tokio::test)]
+async fn test_auth_vendor() {
+    let ctx = setup_test_context().await;
+
+    let response = ctx
+        .client
+        .post(format!("{}/auth/vendor", ctx.base_url))
+        .json(&json!({"clientId": "vendor-client", "secret": "vendor-secret"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.unwrap();
+    assert!(!body["token"].as_str().unwrap().is_empty());
+    assert_eq!(body["expiresIn"], 50);
+}
