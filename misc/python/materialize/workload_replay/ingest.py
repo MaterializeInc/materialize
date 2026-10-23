@@ -17,6 +17,7 @@ import asyncio
 import json
 import random
 import re
+import threading
 import time
 import urllib.parse
 from functools import cache
@@ -47,6 +48,64 @@ from materialize.workload_replay.util import (
     get_postgres_reference_db_schema_table,
     get_sql_server_reference_db_schema_table,
 )
+
+# Per-ingestion-thread connection reuse for the reference databases. Continuous
+# ingestion runs one thread per source table, each writing a small batch every
+# few milliseconds. Opening a fresh connection for every batch turns each write
+# into a TCP and TLS handshake plus a server-side process or thread, and under
+# that churn a connect can outlast Postgres's `authentication_timeout` or fail
+# with a MySQL "Packet sequence number wrong" error. Reusing one connection per
+# thread bounds the connection count to the number of ingestion threads.
+_thread_local = threading.local()
+
+
+def _get_reference_connection(key: tuple[str, int, str], connect):
+    conns: dict[tuple[str, int, str], Any] | None = getattr(
+        _thread_local, "conns", None
+    )
+    if conns is None:
+        conns = {}
+        _thread_local.conns = conns
+    conn = conns.get(key)
+    # psycopg connections expose `closed`, pymysql connections expose `open`.
+    if (
+        conn is None
+        or getattr(conn, "closed", False)
+        or not getattr(conn, "open", True)
+    ):
+        conn = connect()
+        conns[key] = conn
+    return conn
+
+
+def _reset_reference_connection(key: tuple[str, int, str]) -> None:
+    """Drop the thread's connection so the next batch reconnects (self-heal)."""
+    conns = getattr(_thread_local, "conns", None)
+    conn = conns.pop(key, None) if conns else None
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _write_with_reconnect(key: tuple[str, int, str], connect, rng, write) -> None:
+    """Run `write(conn)` on the thread's connection. If it fails with a
+    connection-level error, retry once on a fresh connection, rewinding `rng`
+    so the retry writes the same rows."""
+    state = rng.getstate()
+    try:
+        write(_get_reference_connection(key, connect))
+    except (
+        psycopg.OperationalError,
+        psycopg.InterfaceError,
+        pymysql.err.OperationalError,
+        pymysql.err.InterfaceError,
+        pymysql.err.InternalError,
+    ):
+        _reset_reference_connection(key)
+        rng.setstate(state)
+        write(_get_reference_connection(key, connect))
 
 
 def delivery_report(err: KafkaError | None, msg: Any) -> None:
@@ -411,56 +470,72 @@ def ingest(
         ref_database, ref_schema, ref_table = get_postgres_reference_db_schema_table(
             child
         )
-        conn = psycopg.connect(
-            host="127.0.0.1",
-            port=c.default_port("postgres"),
-            user="postgres",
-            password="postgres",
-            dbname=ref_database,
-        )
-        conn.autocommit = True
+        port = c.default_port("postgres")
+
+        def connect_postgres() -> psycopg.Connection:
+            conn = psycopg.connect(
+                host="127.0.0.1",
+                port=port,
+                user="postgres",
+                password="postgres",
+                dbname=ref_database,
+            )
+            conn.autocommit = True
+            return conn
 
         col_names = [col.name for col in columns]
+        copy_stmt = SQL("COPY {}.{} ({}) FROM STDIN").format(
+            Identifier(ref_schema),
+            Identifier(ref_table),
+            SQL(", ").join(map(Identifier, col_names)),
+        )
 
-        with conn.cursor() as cur:
-            copy_stmt = SQL("COPY {}.{} ({}) FROM STDIN").format(
-                Identifier(ref_schema),
-                Identifier(ref_table),
-                SQL(", ").join(map(Identifier, col_names)),
-            )
+        def write_postgres(conn: psycopg.Connection) -> None:
+            with conn.cursor() as cur:
+                with cur.copy(copy_stmt) as copy:
+                    for _ in range(num_rows):
+                        row = [col.value(rng, in_query=False) for col in columns]
+                        copy.write_row(row)
 
-            with cur.copy(copy_stmt) as copy:
-                for _ in range(num_rows):
-                    row = [col.value(rng, in_query=False) for col in columns]
-                    copy.write_row(row)
+        _write_with_reconnect(
+            ("postgres", port, ref_database), connect_postgres, rng, write_postgres
+        )
 
     elif source["type"] == "mysql":
         ref_database, ref_table = get_mysql_reference_db_table(child)
 
-        conn = pymysql.connect(
-            host="127.0.0.1",
-            user="root",
-            password=MySql.DEFAULT_ROOT_PASSWORD,
-            database=ref_database,
-            port=c.default_port("mysql"),
-            autocommit=False,
-        )
+        port = c.default_port("mysql")
+
+        def connect_mysql() -> pymysql.connections.Connection:
+            return pymysql.connect(
+                host="127.0.0.1",
+                user="root",
+                password=MySql.DEFAULT_ROOT_PASSWORD,
+                database=ref_database,
+                port=port,
+                autocommit=False,
+            )
 
         value_funcs = [col.value for col in columns]
-        rows_sql = []
-        for _ in range(num_rows):
-            row = [fn(rng) for fn in value_funcs]
-            rows_sql.append("(" + ", ".join(row) + ")")
 
-        stmt = f"INSERT INTO {ref_table} VALUES " + ", ".join(rows_sql)
+        def write_mysql(conn: pymysql.connections.Connection) -> None:
+            rows_sql = []
+            for _ in range(num_rows):
+                row = [fn(rng) for fn in value_funcs]
+                rows_sql.append("(" + ", ".join(row) + ")")
 
-        with conn.cursor() as cur:
-            cur.execute(stmt)
-        # The connection is opened with autocommit=False, so without this commit
-        # the implicit InnoDB transaction is discarded on close and no rows are
-        # ingested.
-        conn.commit()
-        conn.close()
+            stmt = f"INSERT INTO {ref_table} VALUES " + ", ".join(rows_sql)
+
+            with conn.cursor() as cur:
+                cur.execute(stmt)
+            # The connection is opened with autocommit=False, so without this
+            # commit the implicit InnoDB transaction is discarded and no rows
+            # are ingested.
+            conn.commit()
+
+        _write_with_reconnect(
+            ("mysql", port, ref_database), connect_mysql, rng, write_mysql
+        )
 
     elif source["type"] == "kafka":
         topic = get_kafka_topic(source)
