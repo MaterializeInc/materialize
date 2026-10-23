@@ -104,6 +104,10 @@ pub struct Args {
     /// this should never be enabled in CI.
     #[clap(long, env = "ALL_FEATURES")]
     all_features: bool,
+    /// Set by the container entrypoint when it restarts environmentd after
+    /// `mz_ore::restart_in_place!`.
+    #[clap(long, env = "RESTARTED_IN_PLACE", hide = true)]
+    restarted_in_place: bool,
 
     // === Connection options. ===
     /// Path to a file containing the json-formatted configuration of our
@@ -1110,6 +1114,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 // Special modes.
                 unsafe_mode: args.unsafe_mode,
                 all_features: args.all_features,
+                restarted_in_place: args.restarted_in_place,
                 // Connection options.
                 tls,
                 tls_reload_certs: mz_server_core::default_cert_reload_ticker(),
