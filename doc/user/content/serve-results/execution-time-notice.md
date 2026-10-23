@@ -21,13 +21,13 @@ The notice's `detail` is a string that holds a JSON object:
 
 ```
 {
-    "kind": <"first_row"|"empty_result"|"completed"|"staged"|"committed">,
+    "kind": <"first_row"|"empty_result"|"completed"|"staged">,
     "duration_us": <microseconds>
 }
 ```
 
 Its message is meant for people, for example `execution time: 0.412 ms`, with
-` (before commit)` for a `staged` write.
+` (staged)` for `staged`.
 
 New kinds and fields may be added, and the message text may change, so clients
 should parse `detail` and ignore kinds and fields they do not recognize.
@@ -36,36 +36,27 @@ should parse `detail` and ignore kinds and fields they do not recognize.
 
 The duration starts when Materialize begins executing the statement, after
 parsing and binding it. For a SQL `EXECUTE`, it includes binding the prepared
-statement that it runs. On this page, a query is any statement that returns
-rows, such as `SELECT`, `SHOW` or `EXPLAIN`, except a write with `RETURNING`.
-Where the duration ends depends on `kind`:
+statement that it runs. It ends when the statement's result is ready, and
+`kind` says when that was:
 
-- `first_row`: a query's first row is ready. Materialize computes the whole
-  result before it sends the first row, so the duration covers computing the
-  result but not sending the rows to the client.
-- `empty_result`: a query finished without returning rows.
-- `completed`: a statement other than a query or a write completed. For
-  `COMMIT`, this includes the commit and any DDL that the transaction applies at
-  its commit.
-- `staged`: a write was added to a transaction that commits later.
-- `committed`: the write was durable by the time its result was sent, and the
-  duration includes making it durable. For a write with `RETURNING`, the
-  duration is the time to its first row, or to the end of an empty result, plus
-  the time its result waited for the commit.
+- `first_row`: the first row of a statement that returns rows, such as `SELECT`,
+  `SHOW`, `EXPLAIN` or a write with `RETURNING`, is ready. Materialize computes
+  the whole result before it sends the first row, so the duration covers
+  computing the result but not sending the rows to the client.
+- `empty_result`: a statement that returns rows finished without any.
+- `completed`: a statement that returns no rows completed.
+- `staged`: the statement's result is ready, but its transaction still holds
+  work for a later commit, such as a write or DDL that the transaction applies
+  when it commits. The duration does not include that commit. A statement that
+  follows such work in the same transaction reports `staged` too.
 
-When an implicit transaction spans several statements, only the statement that
-ends it waits for the commit. That statement's duration includes the commit,
-unless it is a query, whose duration ends at its first row.
+The duration never includes the commit of an implicit transaction. In an
+explicit transaction, `COMMIT` reports the commit.
 
 ## PostgreSQL wire protocol
 
 - The notice precedes `CommandComplete` or `PortalSuspended`.
 - `COPY ... TO STDOUT` and `COPY ... FROM STDIN` get none.
-- A simple query commits its implicit transaction before the last statement's
-  `CommandComplete`, as the HTTP and WebSocket APIs do.
-- The extended protocol commits a write's implicit transaction at `Sync`, after
-  its `CommandComplete`, so the write reports `staged` unless it was already
-  durable.
 - For a portal executed in steps, or a cursor, the duration is reported once, by
   the step or `FETCH` that starts executing it, if that step sees a row or
   learns that the result is empty. A cursor over `SUBSCRIBE` reports nothing.
