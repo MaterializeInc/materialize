@@ -21,6 +21,7 @@ import {
   useTheme,
 } from "@chakra-ui/react";
 import * as Sentry from "@sentry/react";
+import { useQueryErrorResetBoundary } from "@tanstack/react-query";
 import React, { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -29,6 +30,7 @@ import { PermissionError } from "~/api/materialize/DatabaseError";
 import Alert from "~/components/Alert";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import { LoadingContainer } from "~/components/LoadingContainer";
+import { useLastDefined } from "~/hooks/useLastDefined";
 import { InfoIcon } from "~/icons";
 import { useBuildWorkflowGraphPath } from "~/platform/routeHelpers";
 import { MaterializeTheme } from "~/theme";
@@ -129,7 +131,14 @@ export interface LargestReplicaBoundaryProps {
   clusterId: string;
   /** A replica to show instead of the cluster's largest, which then isn't queried. */
   replica?: LargestReplica;
-  children: (replica: LargestReplica) => React.ReactNode;
+  /**
+   * Renders the replica shown. `isStale` while the largest replica loads in
+   * place of a replica given before, which is then the one passed.
+   */
+  children: (
+    replica: LargestReplica,
+    state: { isStale: boolean },
+  ) => React.ReactNode;
   /** Wraps the loading and error states, so a caller can draw them in its card. */
   wrapFallback?: (fallback: React.ReactNode) => React.ReactNode;
 }
@@ -137,9 +146,44 @@ export interface LargestReplicaBoundaryProps {
 const identity = (fallback: React.ReactNode) => fallback;
 
 /**
+ * A `resetKey` and `onError` for an error boundary, which remount it once
+ * `value` differs from what it was when the boundary caught. Until it catches,
+ * the key holds, so a change of `value` keeps its children mounted.
+ *
+ * NOTE: a plain `key={value}` remounts on every change, so every replica pick
+ * swaps the card for its loading spinner, even when the pick is a transition,
+ * as react-router's navigation is.
+ */
+const useResetOnChange = (value: string | undefined) => {
+  const { reset } = useQueryErrorResetBoundary();
+  const [resetKey, setResetKey] = React.useState(0);
+  const caughtFor = React.useRef<{ value: string | undefined } | undefined>(
+    undefined,
+  );
+  React.useEffect(() => {
+    if (caughtFor.current && caughtFor.current.value !== value) {
+      caughtFor.current = undefined;
+      // Lets the remounted children's queries retry a cached failure. Only
+      // leaving a boundary that caught resets, so a return to a failed value
+      // from a healthy one rethrows its cached error.
+      reset();
+      setResetKey((current) => current + 1);
+    }
+  }, [value, reset]);
+  return {
+    resetKey,
+    onError: () => {
+      caughtFor.current = { value };
+    },
+  };
+};
+
+/**
  * Loads the cluster's largest replica, unless given one, and renders
  * `children` with it, behind the loading and error states of the per-object
  * memory insights. Renders nothing for a cluster without replicas.
+ *
+ * A caught error stays until the replica changes.
  */
 export const LargestReplicaBoundary = ({
   clusterId,
@@ -147,8 +191,11 @@ export const LargestReplicaBoundary = ({
   children,
   wrapFallback = identity,
 }: LargestReplicaBoundaryProps) => {
+  const { resetKey, onError } = useResetOnChange(replica?.id);
   return (
     <AppErrorBoundary
+      key={resetKey}
+      onError={onError}
       renderFallback={({ error }) =>
         wrapFallback(<LargestMaintainedQueriesError error={error} />)
       }
@@ -177,20 +224,26 @@ const LargestReplicaLoader = ({
     { clusterId },
     { enabled: replica === undefined },
   );
-  const shown =
+  const current =
     replica ??
-    (largestReplica && {
-      id: largestReplica.id,
-      name: largestReplica.name,
-      heapLimit:
-        largestReplica.heapLimit === null
-          ? null
-          : Number(largestReplica.heapLimit),
-    });
+    (largestReplica
+      ? {
+          id: largestReplica.id,
+          name: largestReplica.name,
+          heapLimit:
+            largestReplica.heapLimit === null
+              ? null
+              : Number(largestReplica.heapLimit),
+        }
+      : undefined);
+  // A switch from a given replica to the largest keeps the given one up until
+  // the largest is known.
+  const shown = useLastDefined(current);
+  const { resetKey, onError } = useResetOnChange(shown?.id);
 
-  if (!shown) {
-    // Don't show anything if the cluster has no replicas
-    if (largestReplica === null) return null;
+  // Don't show anything if the cluster has no replicas
+  if (!current && largestReplica === null) return null;
+  if (!shown || (!current && error)) {
     return wrapFallback(
       error ? (
         <LargestMaintainedQueriesError error={error} />
@@ -204,6 +257,8 @@ const LargestReplicaLoader = ({
   // given, so a switch between a given replica and the largest keeps its state.
   return (
     <AppErrorBoundary
+      key={resetKey}
+      onError={onError}
       renderFallback={({ error: childError }) =>
         wrapFallback(
           <LargestMaintainedQueriesError
@@ -213,7 +268,7 @@ const LargestReplicaLoader = ({
         )
       }
     >
-      {children(shown)}
+      {children(shown, { isStale: !current })}
     </AppErrorBoundary>
   );
 };
