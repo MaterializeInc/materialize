@@ -68,6 +68,31 @@ ws-text
 {"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
 {"type":"ReadyForQuery","payload":"I"}
 
+# The implicit commit reverts a SET LOCAL, and the restored value is reported with the
+# statement that ends the transaction, also when that statement returns rows.
+
+ws-text
+{"queries": [{"query": "SET LOCAL application_name = 'reverted'"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"reverted"}}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text
+{"query": "SET LOCAL application_name = 'reverted'; SELECT 1"}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"reverted"}}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["1"]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"a"}}
+{"type":"ReadyForQuery","payload":"I"}
+
 ws-text
 {"query": ""}
 ----
