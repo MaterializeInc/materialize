@@ -29,6 +29,7 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::chunk::{AccountedChunkBatcher, ChunkChunker, ComputeSpill};
 use mz_timely_util::columnar::columnar_consolidate_exchange;
 use mz_timely_util::operator::consolidate_pact;
+use mz_timely_util::temporal::batcher::TemporalBatcher;
 use timely::ContainerBuilder;
 use timely::container::{CapacityContainerBuilder, NoopBuilder};
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -324,9 +325,17 @@ where
     let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
         columnar_consolidate_exchange::<Row, T, Diff>,
     );
+    // The batcher parks future updates in a bucket chain, which makes this the bucketing site
+    // for consolidating unions and `LetRec` bindings.
     let consolidated = consolidate_pact::<
         ChunkChunker<Row, T, Diff, ComputeSpill>,
-        AccountedChunkBatcher<Row, T, Diff, ComputeSpill>,
+        TemporalBatcher<
+            AccountedChunkBatcher<Row, T, Diff, ComputeSpill>,
+            ChunkChunker<Row, T, Diff, ComputeSpill>,
+            Row,
+            T,
+            Diff,
+        >,
         _,
         _,
     >(collection.inner, exchange, name);
