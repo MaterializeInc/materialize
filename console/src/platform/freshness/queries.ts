@@ -13,9 +13,13 @@ import {
   buildQueryKeyPart,
   buildRegionQueryKey,
 } from "~/api/buildQueryKeySchema";
+import { IPostgresInterval } from "~/api/materialize";
 import { fetchHydrationCounts } from "~/api/materialize/freshness/hydrationCounts";
 import {
+  calculateBucketSizeFromLookback,
   fetchLatestLag,
+  fetchObjectLagPercentiles,
+  fetchScopeLagPercentiles,
   LATEST_READING_INTERVAL_MS,
 } from "~/api/materialize/freshness/lagHistory";
 import { DatabaseObject } from "~/api/materialize/objects";
@@ -23,6 +27,7 @@ import { isOnCluster } from "~/platform/clusters/queries";
 import { sumPostgresIntervalMs } from "~/util";
 
 import { FreshnessScope, OBJECT_TYPE_FILTERS } from "./constants";
+import { UNREADABLE } from "./freshnessRows";
 
 export interface HydrationCounts {
   hydratedReplicas: number;
@@ -54,6 +59,22 @@ export const freshnessQueryKeys = {
       // objects happened to arrive in.
       buildQueryKeyPart("hydrationCounts", {
         objectIds: [...objectIds].sort().join(","),
+      }),
+    ] as const,
+  objectLagPercentiles: (params: { lookbackMs: number; objectIds: string[] }) =>
+    [
+      ...freshnessQueryKeys.all(),
+      buildQueryKeyPart("objectLagPercentiles", {
+        lookbackMs: params.lookbackMs,
+        objectIds: [...params.objectIds].sort().join(","),
+      }),
+    ] as const,
+  scopeLagPercentiles: (params: { lookbackMs: number; objectIds: string[] }) =>
+    [
+      ...freshnessQueryKeys.all(),
+      buildQueryKeyPart("scopeLagPercentiles", {
+        lookbackMs: params.lookbackMs,
+        objectIds: [...params.objectIds].sort().join(","),
       }),
     ] as const,
   // No lookback: the newest reading is the newest reading whatever range is
@@ -97,6 +118,94 @@ export function useLatestLag(objectIds: string[]) {
     // whose answer cannot have changed.
     staleTime: LATEST_READING_INTERVAL_MS,
     refetchInterval: LATEST_READING_INTERVAL_MS,
+  });
+}
+
+/** Lags in milliseconds. `UNREADABLE` where the reading at that rank could not be taken. */
+export interface LagPercentiles {
+  peak: number;
+  p90: number;
+  p99: number;
+  p99_9: number;
+}
+
+type PercentileRow = Record<keyof LagPercentiles, IPostgresInterval | null>;
+
+const lagMs = (lag: IPostgresInterval | null) =>
+  lag === null ? UNREADABLE : sumPostgresIntervalMs(lag);
+
+const toLagPercentiles = (row: PercentileRow): LagPercentiles => ({
+  peak: lagMs(row.peak),
+  p90: lagMs(row.p90),
+  p99: lagMs(row.p99),
+  p99_9: lagMs(row.p99_9),
+});
+
+interface LagPercentilesParams {
+  objectIds: string[];
+  lookbackMs: number;
+}
+
+/**
+ * Each object's peak and percentiles over every reading in the range, keyed by
+ * object ID. An object with no readings in the range is absent.
+ */
+export function useObjectLagPercentiles({
+  objectIds,
+  lookbackMs,
+}: LagPercentilesParams) {
+  return useQuery({
+    queryKey: freshnessQueryKeys.objectLagPercentiles({
+      lookbackMs,
+      objectIds,
+    }),
+    queryFn: async ({ queryKey, signal }) => {
+      if (objectIds.length === 0) return new Map<string, LagPercentiles>();
+
+      const { rows } = await fetchObjectLagPercentiles({
+        objectIds,
+        lookbackMs,
+        queryKey,
+        requestOptions: { signal },
+      });
+
+      return new Map(
+        rows.map((row) => [row.objectId, toLagPercentiles(row)] as const),
+      );
+    },
+    // The series' schedule, for the reasons `useClusterFreshness` gives.
+    staleTime: LATEST_READING_INTERVAL_MS,
+    refetchInterval: calculateBucketSizeFromLookback(lookbackMs),
+  });
+}
+
+/**
+ * The peak and percentiles of every reading from every object in `objectIds`,
+ * ranked together. Null when none of them has a reading in the range.
+ */
+export function useScopeLagPercentiles({
+  objectIds,
+  lookbackMs,
+}: LagPercentilesParams) {
+  return useQuery({
+    queryKey: freshnessQueryKeys.scopeLagPercentiles({
+      lookbackMs,
+      objectIds,
+    }),
+    queryFn: async ({ queryKey, signal }) => {
+      if (objectIds.length === 0) return null;
+
+      const { rows } = await fetchScopeLagPercentiles({
+        objectIds,
+        lookbackMs,
+        queryKey,
+        requestOptions: { signal },
+      });
+
+      return rows[0] ? toLagPercentiles(rows[0]) : null;
+    },
+    staleTime: LATEST_READING_INTERVAL_MS,
+    refetchInterval: calculateBucketSizeFromLookback(lookbackMs),
   });
 }
 
