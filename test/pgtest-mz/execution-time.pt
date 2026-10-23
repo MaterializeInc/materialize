@@ -1,0 +1,372 @@
+# With emit_execution_time_notice on, a statement's execution time arrives as a
+# notice with code MZ012 before the statement's CommandComplete, or before the
+# PortalSuspended of a portal executed in steps. The detail's `kind` says where
+# the measured interval ends.
+
+# Durations vary between runs.
+replace
+duration_us\\":\d+
+duration_us\":<DURATION>
+----
+
+send
+Query {"query": "SET emit_execution_time_notice = on"}
+Query {"query": "CREATE TABLE t (a int)"}
+----
+
+until err_field_typs=CD
+ReadyForQuery
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+# A non-row acknowledgment ends the measurement before the implicit commit.
+send
+Query {"query": "INSERT INTO t VALUES (1), (2)"}
+----
+
+until err_field_typs=CD
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"INSERT 0 2"}
+ReadyForQuery {"status":"I"}
+
+# The extended protocol uses the same result-ready boundary.
+send
+Parse {"query": "INSERT INTO t VALUES (3)"}
+Bind
+Execute
+Sync
+----
+
+until err_field_typs=CD
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"INSERT 0 1"}
+ReadyForQuery {"status":"I"}
+
+# RETURNING uses the same first-row boundary as SELECT, on both protocols.
+send
+Parse {"query": "INSERT INTO t VALUES (4) RETURNING a"}
+Bind
+Execute
+Sync
+Query {"query": "INSERT INTO t VALUES (4) RETURNING a"}
+----
+
+until err_field_typs=CD
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+DataRow {"fields":["4"]}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"a"}]}
+DataRow {"fields":["4"]}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# A SQL EXECUTE is timed as the prepared statement it runs.
+send
+Query {"query": "PREPARE ins AS INSERT INTO t VALUES (5) RETURNING a"}
+Query {"query": "EXECUTE ins"}
+----
+
+until err_field_typs=CD
+ReadyForQuery
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"PREPARE"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"a"}]}
+DataRow {"fields":["5"]}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# A read's time ends at its first row, or at the end of an empty result.
+send
+Query {"query": "SELECT a FROM t ORDER BY a"}
+Query {"query": "SELECT a FROM t WHERE a < 0"}
+----
+
+until err_field_typs=CD
+ReadyForQuery
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"a"}]}
+DataRow {"fields":["1"]}
+DataRow {"fields":["2"]}
+DataRow {"fields":["3"]}
+DataRow {"fields":["4"]}
+DataRow {"fields":["4"]}
+DataRow {"fields":["5"]}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"SELECT 6"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"a"}]}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"empty_result\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"SELECT 0"}
+ReadyForQuery {"status":"I"}
+
+# Normal notice filtering applies.
+send
+Query {"query": "SET client_min_messages = warning"}
+Query {"query": "SELECT a FROM t ORDER BY a LIMIT 1"}
+Query {"query": "RESET client_min_messages"}
+----
+
+until err_field_typs=CD
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"a"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"RESET"}
+ReadyForQuery {"status":"I"}
+
+# A portal executed in steps reports once, on the step that starts executing it.
+send
+Query {"query": "BEGIN"}
+Parse {"query": "SELECT a FROM t ORDER BY a"}
+Bind {"portal": "p"}
+Execute {"portal": "p", "max_rows": 1}
+Sync
+Execute {"portal": "p", "max_rows": 1}
+Sync
+----
+
+until err_field_typs=CD
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+ParseComplete
+BindComplete
+DataRow {"fields":["1"]}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}]}
+PortalSuspended
+ReadyForQuery {"status":"T"}
+DataRow {"fields":["2"]}
+PortalSuspended
+ReadyForQuery {"status":"T"}
+
+# Likewise a cursor, on the FETCH that starts executing it.
+send
+Query {"query": "DECLARE rows CURSOR FOR SELECT a FROM t ORDER BY a"}
+Query {"query": "FETCH 1 rows"}
+Query {"query": "FETCH 1 rows"}
+----
+
+until err_field_typs=CD
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"DECLARE CURSOR"}
+ReadyForQuery {"status":"T"}
+RowDescription {"fields":[{"name":"a"}]}
+DataRow {"fields":["1"]}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"FETCH 1"}
+ReadyForQuery {"status":"T"}
+RowDescription {"fields":[{"name":"a"}]}
+DataRow {"fields":["2"]}
+CommandComplete {"tag":"FETCH 1"}
+ReadyForQuery {"status":"T"}
+
+# A FETCH that reads no row starts the cursor without a time, so no later FETCH
+# reports a time that includes the client's pause before it.
+send
+Query {"query": "DECLARE idle CURSOR FOR SELECT a FROM t ORDER BY a"}
+Query {"query": "FETCH 0 idle"}
+Query {"query": "FETCH 1 idle"}
+Query {"query": "COMMIT"}
+----
+
+until err_field_typs=CD
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"DECLARE CURSOR"}
+ReadyForQuery {"status":"T"}
+RowDescription {"fields":[{"name":"a"}]}
+CommandComplete {"tag":"FETCH 0"}
+ReadyForQuery {"status":"T"}
+RowDescription {"fields":[{"name":"a"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"FETCH 1"}
+ReadyForQuery {"status":"T"}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"COMMIT"}
+ReadyForQuery {"status":"I"}
+
+# SUBSCRIBE reports no execution time, also when fetched through a cursor. Its
+# rows carry timestamps, so they are skipped.
+send
+Query {"query": "BEGIN"}
+Query {"query": "DECLARE c CURSOR FOR SUBSCRIBE t"}
+Query {"query": "FETCH 1 c"}
+Query {"query": "ROLLBACK"}
+----
+
+until err_field_typs=CD ignore=DataRow
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"BEGIN"}
+ReadyForQuery {"status":"T"}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"DECLARE CURSOR"}
+ReadyForQuery {"status":"T"}
+RowDescription {"fields":[{"name":"mz_timestamp"},{"name":"mz_diff"},{"name":"a"}]}
+CommandComplete {"tag":"FETCH 1"}
+ReadyForQuery {"status":"T"}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"ROLLBACK"}
+ReadyForQuery {"status":"I"}
+
+# Non-row writes report completed, including writes that read a table.
+send
+Parse {"query": "UPDATE t SET a = a + 10"}
+Bind
+Execute
+Sync
+Parse {"query": "INSERT INTO t SELECT a FROM t"}
+Bind
+Execute
+Sync
+Parse {"query": "DELETE FROM t WHERE a > 1"}
+Bind
+Execute
+Sync
+----
+
+until err_field_typs=CD
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"UPDATE 6"}
+ReadyForQuery {"status":"I"}
+ParseComplete
+BindComplete
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"INSERT 0 6"}
+ReadyForQuery {"status":"I"}
+ParseComplete
+BindComplete
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"DELETE 12"}
+ReadyForQuery {"status":"I"}
+
+# Empty RETURNING results use empty_result on both protocols.
+send
+Query {"query": "DELETE FROM t WHERE a < 0 RETURNING a"}
+Parse {"query": "DELETE FROM t WHERE a < 0 RETURNING a"}
+Bind
+Execute
+Sync
+----
+
+until err_field_typs=CD
+ReadyForQuery
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"a"}]}
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"empty_result\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"SELECT 0"}
+ReadyForQuery {"status":"I"}
+ParseComplete
+BindComplete
+NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"empty_result\",\"duration_us\":<DURATION>}"}]}
+CommandComplete {"tag":"SELECT 0"}
+ReadyForQuery {"status":"I"}
+
+# Neither COPY direction emits an execution time notice.
+send
+Query {"query": "COPY (SELECT 1) TO STDOUT"}
+----
+
+until err_field_typs=CD
+ReadyForQuery
+----
+CopyOut {"format":"text","column_formats":["text"]}
+CopyData "1\n"
+CopyDone
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+
+send
+Query {"query": "COPY t FROM STDIN"}
+CopyData "1\n"
+CopyDone
+----
+
+until err_field_typs=CD
+ReadyForQuery
+----
+CopyIn {"format":"text","column_formats":["text"]}
+CommandComplete {"tag":"COPY 1"}
+ReadyForQuery {"status":"I"}
+
+# Errors do not emit success notices.
+send
+Query {"query": "SELECT 1 / 0"}
+----
+
+until err_field_typs=C ignore=RowDescription
+ReadyForQuery
+----
+ErrorResponse {"fields":[{"typ":"C","value":"22012"}]}
+ReadyForQuery {"status":"I"}
+
+# Opting out suppresses notices for both the SET and later statements.
+send
+Query {"query": "SET emit_execution_time_notice = off"}
+Query {"query": "SELECT 1"}
+----
+
+until err_field_typs=CD
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+RowDescription {"fields":[{"name":"?column?"}]}
+DataRow {"fields":["1"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}

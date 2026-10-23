@@ -442,6 +442,141 @@ ws-text fixid=true
 {"type":"Error","payload":{"message":"Evaluation error: division by zero","code":"22012"}}
 {"type":"ReadyForQuery","payload":"I"}
 
+# Execution time notices (emit_execution_time_notice) precede the CommandComplete of
+# the statement they describe. Plan insights are turned off so that only the timing
+# notices show.
+
+ws-text fixtiming=true
+{"queries": [{"query": "SET emit_plan_insights_notice = off"}, {"query": "SET emit_execution_time_notice = on"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# Non-row statements report completed at result readiness, excluding implicit commit.
+
+ws-text fixtiming=true
+{"queries": [{"query": "CREATE TABLE timing_t (a int)"}, {"query": "INSERT INTO timing_t VALUES (1)"}, {"query": "SELECT a FROM timing_t"}, {"query": "SELECT a FROM timing_t WHERE a < 0"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"CREATE TABLE"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"INSERT 0 1"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["1"]}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"empty_result\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"SELECT 0"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# Inside an explicit transaction, COMMIT includes its commit work.
+
+ws-text fixtiming=true
+{"queries": [{"query": "BEGIN"}, {"query": "INSERT INTO timing_t VALUES (2)"}, {"query": "COMMIT"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"BEGIN"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"INSERT 0 1"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"COMMIT"}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text fixtiming=true
+{"queries": [{"query": "SET client_min_messages = warning"}, {"query": "SELECT 1"}, {"query": "SET client_min_messages = notice"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["1"]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# RETURNING uses the same first-row boundary as SELECT.
+
+ws-text fixtiming=true
+{"queries": [{"query": "INSERT INTO timing_t VALUES (3) RETURNING a"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["3"]}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# Each statement in a simple request reports its own result-ready boundary.
+
+ws-text fixtiming=true
+{"query": "INSERT INTO timing_t VALUES (4); SET application_name = 'timing2'; SELECT 1"}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"INSERT 0 1"}
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ParameterStatus","payload":{"name":"application_name","value":"timing2"}}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["1"]}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# Empty RETURNING results use the same boundary as empty SELECT results.
+ws-text fixtiming=true
+{"queries": [{"query": "DELETE FROM timing_t WHERE a < 0 RETURNING a"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"empty_result\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"SELECT 0"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# A failed statement emits no execution time notice.
+ws-text fixtiming=true
+{"query": "SELECT 1 / 0 FROM mz_sources LIMIT 1"}
+----
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Error","payload":{"message":"Evaluation error: division by zero","code":"22012"}}
+{"type":"ReadyForQuery","payload":"I"}
+
+ws-text fixtiming=true
+{"queries": [{"query": "SET emit_execution_time_notice = off"}, {"query": "SELECT 1"}]}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
+{"type":"Rows","payload":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]}}
+{"type":"Row","payload":["1"]}
+{"type":"CommandComplete","payload":"SELECT 1"}
+{"type":"ReadyForQuery","payload":"I"}
+
+# SUBSCRIBE remains excluded even when execution time notices are enabled.
+ws-text fixtiming=true
+{"query": "SET emit_execution_time_notice = on"}
+----
+{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
+{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
+{"type":"CommandComplete","payload":"SET"}
+{"type":"ReadyForQuery","payload":"I"}
+
 ws-text rows=2 fixtimestamp=true
 {"query": "SUBSCRIBE t"}
 ----
