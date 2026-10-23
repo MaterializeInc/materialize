@@ -71,6 +71,11 @@ from materialize.ui import (
 )
 from materialize.util import filter_cmd
 
+# How long `Composition.sql_connection` retries while environmentd reports it
+# is starting up. Matches the `start_period` of the `Materialized` service's
+# healthcheck.
+STARTUP_RETRY_SECONDS = 600
+
 
 def _split_complete_lines(buffered: str) -> tuple[str, str]:
     split = max(buffered.rfind("\n"), buffered.rfind("\r"))
@@ -802,15 +807,30 @@ class Composition:
         key = (threading.get_ident(), database, user, password, port, sslmode, options)
         if reuse_connection and key in self.conns:
             return self.conns[key]
-        conn = psycopg.connect(
-            host="127.0.0.1",
-            dbname=database,
-            user=user,
-            password=password,
-            port=port,
-            sslmode=sslmode,
-            options=options,
-        )
+        # environmentd answers connections made while it boots, for example
+        # while a promoted 0dt generation restarts as leader, with PostgreSQL's
+        # 57P03 error. psycopg reports it at connect time with only the
+        # message, no SQLSTATE.
+        deadline = time.monotonic() + STARTUP_RETRY_SECONDS
+        while True:
+            try:
+                conn = psycopg.connect(
+                    host="127.0.0.1",
+                    dbname=database,
+                    user=user,
+                    password=password,
+                    port=port,
+                    sslmode=sslmode,
+                    options=options,
+                )
+                break
+            except psycopg.OperationalError as e:
+                if (
+                    "the database system is starting up" not in str(e)
+                    or time.monotonic() >= deadline
+                ):
+                    raise
+                time.sleep(1)
         conn.autocommit = True
         if reuse_connection:
             self.conns[key] = conn
