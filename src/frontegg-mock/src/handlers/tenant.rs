@@ -61,7 +61,7 @@ pub async fn handle_list_tenants(
 /// Handle GET /tenants/resources/tenants/v1/:id
 /// Gets a single tenant by ID.
 ///
-/// Note: The frontegg client expects a Vec<Tenant> response (and pops the first element).
+/// Note: The frontegg client expects a `Vec<Tenant>` response (and pops the first element).
 pub async fn handle_get_tenant(
     State(context): State<Arc<Context>>,
     Path(id): Path<Uuid>,
