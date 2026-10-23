@@ -57,7 +57,7 @@ healthy pattern for a lightly loaded object.
 Wallclock lag is recorded in whole seconds, rounded up, so sub-second lag
 reads as `00:00:01`. To measure sub-second freshness, see [Fine tune for
 sub-second
-freshness](/transform-data/freshness/subsecond-freshness/#step-3-verify-freshness-with-subscribe).
+freshness](/transform-data/freshness/subsecond-freshness/#step-3-verify-freshness-with-end-to-end-latency).
 
 {{< note >}}
 
