@@ -3059,6 +3059,13 @@ class FlipFlagsAction(Action):
             "'1min'",
             "'120d'",
         ]
+        self.flags_with_values["pg_source_truncate_retract"] = BOOLEAN_FLAG_VALUES
+        # "0" replays every truncate from the replication slot.
+        self.flags_with_values["pg_source_truncate_buffer_max_bytes"] = [
+            "0",
+            "1048576",
+            "268435456",
+        ]
         # "0s" turns committing a ceiling ahead of a pinned frontier off.
         self.flags_with_values["storage_persist_sink_description_lookahead"] = [
             "'0s'",
