@@ -161,3 +161,66 @@ test("a timestamp limit above the cap is refused", async () => {
     UsageError,
   );
 });
+
+test("an error the server sends between requests explains the next failure", async () => {
+  fake([
+    OK,
+    OK,
+    new Error("Client has encountered a connection error and is not queryable"),
+  ]);
+  let connected;
+  Client.prototype.connect.mock.mockImplementation(async function () {
+    connected = this;
+  });
+  const live = await LiveSubscription.open("", "SELECT 1");
+  const expired = new pg.DatabaseError("authentication expired", 0, "error");
+  expired.code = "28000";
+  connected.emit("error", expired);
+  await assert.rejects(live.next(), (error) => {
+    assert.ok(error instanceof ServerError);
+    assert.equal(error.sqlstate, "28000");
+    assert.deepEqual(error.classification, {
+      action: "kind",
+      kind: "credentials_expired",
+    });
+    return true;
+  });
+});
+
+test("a FETCH that releases more events than a call takes arguments", async () => {
+  const many = 150_000;
+  const rows = [["5", "t", null, null]];
+  for (let i = 0; i < many; i++) rows.push(["5", "f", "1", String(i)]);
+  rows.push(["6", "t", null, null]);
+  fake([OK, OK, result(COLUMNS, rows)]);
+  // Without a pending limit, every update is a snapshot chunk of its own.
+  const live = await LiveSubscription.open("", "SELECT 1", {
+    maxRows: many + 2,
+    maxPendingBytes: 0,
+    maxTimestampBytes: 2 ** 28,
+  });
+  const { value } = await live.next();
+  assert.equal(value.event, "snapshot_chunk");
+});
+
+test("a closed subscription ends its iteration", async () => {
+  fake([OK, OK, result(COLUMNS, ROWS)]);
+  const live = await LiveSubscription.open("", "SELECT 1");
+  await live.close();
+  assert.deepEqual(await live.next(), { done: true, value: undefined });
+});
+
+test("invalid options fail before connecting", async () => {
+  fake([]);
+  for (const options of [
+    { maxRows: 0 },
+    { fetchTimeoutMs: -1 },
+    { maxPendingBytes: 100, maxTimestampBytes: 100 },
+  ]) {
+    await assert.rejects(
+      LiveSubscription.open("", "SELECT 1", options),
+      UsageError,
+    );
+  }
+  assert.equal(Client.prototype.connect.mock.callCount(), 0);
+});

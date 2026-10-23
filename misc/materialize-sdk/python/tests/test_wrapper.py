@@ -18,7 +18,7 @@
 from typing import Any
 
 import pytest
-from materialize_sdk import LiveSubscription, ProtocolError, ServerError
+from materialize_sdk import LiveSubscription, ProtocolError, ServerError, UsageError
 from psycopg import pq
 
 COLUMNS = ["mz_timestamp", "mz_progressed", "mz_diff", "id"]
@@ -132,3 +132,25 @@ def test_every_statement_waits_through_the_connection(monkeypatch):
     connection = live(monkeypatch, [Result(OK), Result(OK)])
     LiveSubscription("", "SELECT 1")
     assert connection.waited == 2
+
+
+def test_a_closed_subscription_ends_its_iteration(monkeypatch):
+    live(monkeypatch, [Result(OK), Result(OK)])
+    subscription = LiveSubscription("", "SELECT 1")
+    subscription.close()
+    with pytest.raises(StopIteration):
+        next(subscription)
+
+
+def test_invalid_options_fail_before_connecting(monkeypatch):
+    def connect(*_, **__):
+        raise AssertionError("connected")
+
+    monkeypatch.setattr("psycopg.connect", connect)
+    for options in [
+        {"max_rows": 0},
+        {"fetch_timeout": -1},
+        {"max_pending_bytes": 100, "max_timestamp_bytes": 100},
+    ]:
+        with pytest.raises(UsageError):
+            LiveSubscription("", "SELECT 1", **options)

@@ -7,6 +7,10 @@
   "type": "commonjs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "core",
+    "dist"
+  ],
   "imports": {
     "#core": "./core/materialize_sdk_node.js",
     "#errors": "./dist/errors.js"
@@ -16,7 +20,7 @@
   },
   "scripts": {
     "build": "npm run build:wasm && tsc",
-    "build:wasm": "wasm-pack build --release --target nodejs --out-dir core --out-name materialize_sdk_node --no-pack",
+    "build:wasm": "env RUSTFLAGS= wasm-pack build --release --target nodejs --out-dir core --out-name materialize_sdk_node --no-pack && rm -f core/.gitignore",
     "test": "node --test"
   },
   "dependencies": {
