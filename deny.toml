@@ -30,6 +30,10 @@ skip = [
     { name = "arrayvec", version = "0.5.2" },
     # One-time exception for base64 due to its prevalence in the crate graph.
     { name = "base64", version = "0.13.1" },
+    # `backtrace` 0.3.76 pins gimli 0.32 and object 0.37, while wasmtime 50
+    # (for `mz-jq`) needs gimli 0.33 and object 0.40.
+    { name = "gimli", version = "0.32.3" },
+    { name = "object", version = "0.37.3" },
     # `syn` is a core crate that a huge part of the ecosystem either directly, or
     # transitively depends on, so major versions linger for years. We are on v3;
     # roughly 60 transitive dependencies still pull v2, among them `prost-build`,
@@ -249,6 +253,8 @@ wrappers = [
     "apache-avro",
     "buildid",
     "cookie_store",
+    "cranelift-codegen",
+    "cranelift-frontend",
     "eventsource-client",
     "fail",
     "globset",
@@ -268,8 +274,10 @@ wrappers = [
     "postgres",
     "pprof",
     "prost-build",
+    "pulley-interpreter",
     # TODO(guswynn): switch to tracing in rdkafka
     "rdkafka",
+    "regalloc2",
     "reqsign-aws-core",
     "reqsign-aws-v4",
     "reqsign-azure-storage",
@@ -284,6 +292,10 @@ wrappers = [
     "tracing-log",
     "tracing",
     "tungstenite",
+    "wasmtime",
+    "wasmtime-environ",
+    "wasmtime-internal-cranelift",
+    "wasmtime-internal-unwinder",
     "zopfli",
 ]
 

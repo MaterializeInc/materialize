@@ -38,13 +38,11 @@ fallible-iterator.workspace = true
 hex.workspace = true
 hmac.workspace = true
 itertools.workspace = true
-jaq-core.workspace = true
-jaq-json.workspace = true
-jaq-std.workspace = true
 md-5.workspace = true
 murmur2.workspace = true
 mz-catalog-decode = { path = "../catalog-decode" }
 mz-expr-derive = { path = "../expr-derive", features = ["test"] }
+mz-jq = { path = "../jq" }
 mz-ore = { path = "../ore", features = ["network", "proptest", "id_gen"] }
 mz-persist-types = { path = "../persist-types" }
 mz-pgrepr = { path = "../pgrepr" }
@@ -65,7 +63,6 @@ seahash.workspace = true
 serde.workspace = true
 serde_bytes.workspace = true
 serde_json.workspace = true
-stacker.workspace = true
 aws-lc-rs.workspace = true
 tracing.workspace = true
 uncased.workspace = true
