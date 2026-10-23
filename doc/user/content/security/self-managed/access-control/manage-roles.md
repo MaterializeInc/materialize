@@ -1,6 +1,6 @@
 ---
 title: "Manage database roles"
-description: "Create and manage database roles and privileges in Materialize"
+description: "Create and manage database roles and privileges in Self-Managed Materialize"
 menu:
   main:
     parent: access-control-sm
