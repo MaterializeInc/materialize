@@ -926,8 +926,8 @@ def workflow_truncate_replay_schema(
     leaves the table as the buffered retraction does: a compatible change keeps
     the post-truncate rows, an incompatible one errors the table.
 
-    The snapshot retraction is rate limited, so each replay starts seconds after
-    the schema change, which follows its truncate after about a second.
+    A failpoint delays each retraction by five seconds, so its replay starts
+    after the schema change, which follows its truncate after about a second.
     """
     tables = ["tadd", "tdrop", "ttype"]
     rows = 10000
@@ -938,13 +938,15 @@ def workflow_truncate_replay_schema(
             _truncate_materialized(
                 {
                     "pg_source_truncate_buffer_max_bytes": buffer_max_bytes,
-                    "pg_source_truncate_retract_max_rows_per_sec": "1000",
                     # Only the replication stream reports the schema changes, which
                     # keeps the outcome independent of when the periodic check runs.
                     "pg_schema_validation_interval": "1h",
                 },
                 # The incompatible schema changes leave sources stalled.
                 sanity_restart=False,
+                environment_extra=[
+                    "FAILPOINTS=pg_truncate_retraction_delay=return(5000)"
+                ],
             )
         ):
             c.down(destroy_volumes=True)

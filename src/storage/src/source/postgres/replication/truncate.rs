@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::{Stream as AsyncStream, StreamExt, TryStreamExt};
-use mz_ore::cast::CastLossy;
 use mz_persist_client::Diagnostics;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -155,13 +154,14 @@ pub(super) async fn retraction_job(
     lsn: MzOffset,
     mut tail: Tail,
     mut latest_uppers: watch::Receiver<Option<ResumeUppers<MzOffset>>>,
-    max_rate: usize,
     job_id: u64,
     tx: mpsc::Sender<(u64, JobMsg)>,
 ) {
     const BATCH: usize = 1024;
     let send = |msg| tx.send((job_id, msg));
-    let rate_start = Instant::now();
+    if let Some(delay) = retraction_delay() {
+        tokio::time::sleep(delay).await;
+    }
     let mut read_handle = None;
     loop {
         let pair = latest_uppers
@@ -252,12 +252,9 @@ pub(super) async fn retraction_job(
                                     if send(JobMsg::Updates(full)).await.is_err() {
                                         return;
                                     }
-                                    if max_rate > 0 {
-                                        let due = Duration::from_secs_f64(
-                                            f64::cast_lossy(rows) / f64::cast_lossy(max_rate),
-                                        );
-                                        tokio::time::sleep_until(rate_start + due).await;
-                                    }
+                                    // The cursor can stay ready across many batches, and the
+                                    // bounded channel only waits once it is full.
+                                    tokio::task::yield_now().await;
                                 }
                             }
                         }
@@ -425,6 +422,17 @@ where
     }
     fail::fail_point!("pg_truncate_replay_end", |_| replay_failpoint("end"));
     Ok((transactions, replayed))
+}
+
+/// The delay the failpoint `pg_truncate_retraction_delay` configures with `return(<millis>)`
+/// before a retraction job starts.
+fn retraction_delay() -> Option<Duration> {
+    fail::fail_point!("pg_truncate_retraction_delay", |millis| {
+        millis
+            .and_then(|millis| millis.parse().ok())
+            .map(Duration::from_millis)
+    });
+    None
 }
 
 /// The error a replay failpoint returns.

@@ -85,10 +85,7 @@ use mz_postgres_util::PostgresError;
 use mz_postgres_util::{execute, sql};
 use mz_repr::{DatumVec, Diff, GlobalId, Row};
 use mz_storage_types::dyncfgs::STORAGE_PERSIST_SINK_DESCRIPTION_LOOKAHEAD;
-use mz_storage_types::dyncfgs::{
-    PG_SOURCE_TRUNCATE_BUFFER_MAX_BYTES, PG_SOURCE_TRUNCATE_RETRACT,
-    PG_SOURCE_TRUNCATE_RETRACT_MAX_ROWS_PER_SEC,
-};
+use mz_storage_types::dyncfgs::{PG_SOURCE_TRUNCATE_BUFFER_MAX_BYTES, PG_SOURCE_TRUNCATE_RETRACT};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceTimestamp;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
@@ -189,8 +186,6 @@ pub(crate) fn render<'scope>(
     // always an error, however often the operator replays it.
     let truncate_retract = PG_SOURCE_TRUNCATE_RETRACT.get(config.config.config_set());
     let tail_max = PG_SOURCE_TRUNCATE_BUFFER_MAX_BYTES.get(config.config.config_set());
-    let retract_max_rate =
-        PG_SOURCE_TRUNCATE_RETRACT_MAX_ROWS_PER_SEC.get(config.config.config_set());
 
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
     // One data output port per source export, in output index order. With concurrent
@@ -775,7 +770,6 @@ pub(crate) fn render<'scope>(
                                                         commit_lsn,
                                                         frozen,
                                                         latest_uppers.clone(),
-                                                        retract_max_rate,
                                                         job_id,
                                                         job_tx.clone(),
                                                     ),

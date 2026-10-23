@@ -358,15 +358,6 @@ pub static PG_SOURCE_TRUNCATE_BUFFER_MAX_BYTES: Config<usize> = Config::new(
     ParameterScope::Replica,
 );
 
-/// The bound on the rate at which a PG source retracts the persisted contents of a truncated
-/// table, in updates per second. Zero is unbounded.
-pub static PG_SOURCE_TRUNCATE_RETRACT_MAX_ROWS_PER_SEC: Config<usize> = Config::new(
-    "pg_source_truncate_retract_max_rows_per_sec",
-    0,
-    "Updates per second a PG source retracts of a truncated table, or zero for unbounded",
-    ParameterScope::Replica,
-);
-
 /// Controls behavior of the SQL Server source when the upstream DB restore history changes. The
 /// default behavior is to emit a definite error, forcing source recreation.  In cases of Always
 /// On Availability Group (AOAG), the upstream DB may guarantee continuity without loss of data.
@@ -657,7 +648,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PG_SOURCE_VALIDATE_TIMELINE)
         .add(&PG_SOURCE_TRUNCATE_RETRACT)
         .add(&PG_SOURCE_TRUNCATE_BUFFER_MAX_BYTES)
-        .add(&PG_SOURCE_TRUNCATE_RETRACT_MAX_ROWS_PER_SEC)
         .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
         .add(&SINK_ENSURE_TOPIC_CONFIG)
         .add(&SINK_PROGRESS_SEARCH)

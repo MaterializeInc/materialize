@@ -917,10 +917,9 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "pg_schema_validation_interval",
     "pg_source_replication_slot_creation_timeout",
     "pg_source_validate_timeline",
-    # Performance knobs of PG truncate retraction. Their extremes are
+    # A performance knob of PG truncate retraction. Its extreme of zero is
     # exercised by the truncate workflows in test/pg-cdc/mzcompose.py.
     "pg_source_truncate_buffer_max_bytes",
-    "pg_source_truncate_retract_max_rows_per_sec",
     "sql_server_source_validate_restore_history",
     "storage_enforce_external_addresses",
     "storage_upsert_prevent_snapshot_buffering",

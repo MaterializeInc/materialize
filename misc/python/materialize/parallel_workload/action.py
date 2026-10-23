@@ -3066,10 +3066,6 @@ class FlipFlagsAction(Action):
             "1048576",
             "268435456",
         ]
-        self.flags_with_values["pg_source_truncate_retract_max_rows_per_sec"] = [
-            "0",
-            "100000",
-        ]
         # "0s" turns committing a ceiling ahead of a pinned frontier off.
         self.flags_with_values["storage_persist_sink_description_lookahead"] = [
             "'0s'",
