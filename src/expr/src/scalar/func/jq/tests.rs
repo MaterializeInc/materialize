@@ -95,6 +95,34 @@ fn jq_withheld_filters_are_undefined() {
     assert!(compile("$ENV").is_err());
 }
 
+/// Programs of the maximum length whose nesting uses the most stack per byte
+/// in jaq's loader and compiler.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn jq_deeply_nested_programs_compile() {
+    let fill = |open: &str, close: &str| {
+        let n = (MAX_PROGRAM_LEN - 1) / (open.len() + close.len());
+        format!("{}.{}", open.repeat(n), close.repeat(n))
+    };
+    for program in [
+        fill("-", ""),
+        fill("(", ")"),
+        fill(".[", "]"),
+        fill("{a:", "}"),
+    ] {
+        assert!(program.len() <= MAX_PROGRAM_LEN);
+        assert!(compile(&program).is_ok(), "{}", &program[..20]);
+    }
+    let long = format!("{}.", " ".repeat(MAX_PROGRAM_LEN));
+    assert_eq!(
+        compile(&long).err(),
+        Some(format!(
+            "program is {} bytes, more than the maximum of {MAX_PROGRAM_LEN}",
+            MAX_PROGRAM_LEN + 1
+        ))
+    );
+}
+
 fn arb_jsonb() -> impl Strategy<Value = Jsonb> {
     arb_datum_for_scalar(SqlScalarType::Jsonb)
         .prop_map(|d| Jsonb::from_row(Row::pack_slice(&[Datum::from(&d)])))
