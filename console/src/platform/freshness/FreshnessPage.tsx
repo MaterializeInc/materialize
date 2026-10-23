@@ -55,7 +55,6 @@ import { useAllClusters } from "~/store/allClusters";
 import { useAllObjects } from "~/store/allObjects";
 import { useAllSchemas } from "~/store/allSchemas";
 import { MaterializeTheme } from "~/theme";
-import { pluralize } from "~/util";
 import { formatDurationExact, formatDurationForAxis } from "~/utils/format";
 
 import {
@@ -66,10 +65,12 @@ import {
 } from "./constants";
 import {
   describeThreshold,
+  latestPeak,
   Predicate,
   PREDICATE_LABELS,
   qualifiedSchemaName,
 } from "./freshnessRows";
+import { FreshnessStatboxes } from "./FreshnessStatboxes";
 import { FreshnessTable } from "./FreshnessTable";
 import {
   HydrationCounts,
@@ -125,12 +126,68 @@ interface FreshnessViewOptions {
   typeFilters: string[];
 }
 
+interface HighlightControlsProps {
+  thresholdControl: ThresholdControl;
+  predicate: Predicate;
+  setPredicate: (predicate: Predicate) => void;
+}
+
+const HighlightControls = ({
+  thresholdControl,
+  predicate,
+  setPredicate,
+}: HighlightControlsProps) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  return (
+    <HStack
+      spacing="2"
+      alignItems="center"
+      flexWrap="wrap"
+      borderWidth="1px"
+      borderColor={colors.border.primary}
+      borderRadius="lg"
+      padding="3"
+    >
+      <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
+        Highlight objects that had a
+      </Text>
+      <Select
+        size="sm"
+        width="auto"
+        aria-label="Freshness statistic"
+        value={predicate}
+        onChange={(e) =>
+          setPredicate(parsePredicate(e.target.value) ?? predicate)
+        }
+      >
+        {(Object.keys(PREDICATE_LABELS) as Predicate[]).map((key) => (
+          <option key={key} value={key}>
+            {PREDICATE_LABELS[key].menu}
+          </option>
+        ))}
+      </Select>
+      <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
+        freshness exceeding
+      </Text>
+      <ThresholdInput
+        {...thresholdControl.inputProps}
+        ariaLabel="Freshness threshold in seconds"
+      />
+      <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
+        seconds
+      </Text>
+    </HStack>
+  );
+};
+
 const FreshnessContent = ({
   scope,
   scopeId,
   lookbackMs,
+  setPredicate,
   ...viewOptions
 }: FreshnessViewOptions & {
+  setPredicate: (predicate: Predicate) => void;
   scopeId: string;
   lookbackMs: number;
 }) => {
@@ -144,10 +201,25 @@ const FreshnessContent = ({
   const latest = useLatestLag(objectIds);
   const percentiles = useObjectLagPercentiles({ objectIds, lookbackMs });
   const hydration = useFreshnessHydration(objectIds);
+  const { typeFilters, thresholdControl, predicate } = viewOptions;
+  // The statboxes rank the scope's objects, not the loaded rows, so they stay
+  // up while a new range loads. An object with no readings adds nothing to
+  // the ranking either way.
+  const statboxObjectIds = React.useMemo(
+    () =>
+      objects
+        .filter(
+          (object) =>
+            typeFilters.length === 0 || typeFilters.includes(object.objectType),
+        )
+        .map((object) => object.objectId),
+    [objects, typeFilters],
+  );
+  const statboxLatestPeak = latestPeak(statboxObjectIds, latest.data);
 
-  // Before the headline, the graph and the tables, because each of them would
-  // otherwise render its own "0" and the page would read as a passing health
-  // check for a scope with nothing in it.
+  // Before the Summary, the graph and the tables, because each of them would
+  // otherwise render its own empty state and the page would read as a passing
+  // health check for a scope with nothing in it.
   if (objects.length === 0 && snapshotComplete) {
     return (
       <Box padding="4" color={colors.foreground.secondary}>
@@ -160,32 +232,47 @@ const FreshnessContent = ({
   // or the percentiles would show columns that disagree with it. An error only
   // replaces the page when there is nothing to show, so a failed refetch keeps
   // the last good readings on screen.
-  if (
-    !freshness.data ||
-    !latest.data ||
-    !percentiles.data ||
-    objects.length === 0
-  ) {
-    return freshness.isError || latest.isError || percentiles.isError ? (
-      <ErrorBox message="An error occurred fetching freshness data." />
-    ) : (
-      <Box height="320px" width="100%">
-        <LoadingContainer />
-      </Box>
-    );
-  }
-
-  // A failed hydration request leaves the column at "—" rather than taking the
-  // page down: the lag readings are what the page is for.
   return (
-    <FreshnessView
-      data={freshness.data}
-      latestByObjectId={latest.data}
-      percentilesByObjectId={percentiles.data}
-      hydrationByObjectId={hydration.data ?? NO_HYDRATION}
-      scope={scope}
-      {...viewOptions}
-    />
+    <VStack alignItems="stretch" width="100%" spacing="4">
+      <Accordion allowMultiple defaultIndex={[0]}>
+        <AccordionItem>
+          <SectionHeader title="Summary" />
+          <AccordionPanel px="0">
+            <FreshnessStatboxes
+              objectIds={statboxObjectIds}
+              lookbackMs={lookbackMs}
+              latestPeak={statboxLatestPeak}
+            />
+          </AccordionPanel>
+        </AccordionItem>
+      </Accordion>
+      <HighlightControls
+        thresholdControl={thresholdControl}
+        predicate={predicate}
+        setPredicate={setPredicate}
+      />
+      {freshness.data &&
+      latest.data &&
+      percentiles.data &&
+      objects.length > 0 ? (
+        // A failed hydration request leaves the column at "—" rather than
+        // taking the page down: the lag readings are what the page is for.
+        <FreshnessView
+          data={freshness.data}
+          latestByObjectId={latest.data}
+          percentilesByObjectId={percentiles.data}
+          hydrationByObjectId={hydration.data ?? NO_HYDRATION}
+          scope={scope}
+          {...viewOptions}
+        />
+      ) : freshness.isError || latest.isError || percentiles.isError ? (
+        <ErrorBox message="An error occurred fetching freshness data." />
+      ) : (
+        <Box height="320px" width="100%">
+          <LoadingContainer />
+        </Box>
+      )}
+    </VStack>
   );
 };
 
@@ -225,14 +312,6 @@ const FreshnessView = ({
 
   return (
     <VStack alignItems="stretch" width="100%" spacing="4">
-      <Text textStyle="text-base">
-        <Text as="span" textStyle="text-ui-med">
-          {breaching.length} of {rows.length}
-        </Text>{" "}
-        {pluralize(rows.length, "object", "objects")} exceeded {thresholdClause}
-        .
-      </Text>
-
       <Accordion allowMultiple defaultIndex={[0, 1]}>
         <AccordionItem>
           <SectionHeader title="Lag Over Time" count={`(${rows.length})`} />
@@ -378,7 +457,7 @@ const FreshnessPage = () => {
   if (scopeError || !scopeReady) {
     return (
       <MainContentContainer>
-        <PageHeader variant="compact" sticky boxProps={{ pb: "4" }}>
+        <PageHeader variant="compact" boxProps={{ pb: "4" }}>
           <PageHeading>Freshness</PageHeading>
         </PageHeader>
         {scopeError ? (
@@ -395,7 +474,7 @@ const FreshnessPage = () => {
 
   return (
     <MainContentContainer>
-      <PageHeader variant="compact" sticky boxProps={{ pb: "4" }}>
+      <PageHeader variant="compact" boxProps={{ pb: "4" }}>
         <PageHeading>Freshness</PageHeading>
         <VStack
           mt="4"
@@ -408,41 +487,26 @@ const FreshnessPage = () => {
           padding="3"
         >
           <HStack spacing="2" alignItems="center" flexWrap="wrap">
+            <Box minWidth="60">
+              <SearchableSelect<SelectOption, true>
+                isMulti
+                ariaLabel="Object types"
+                placeholder="All object types"
+                options={OBJECT_TYPE_FILTERS[scope].map((filter) => ({
+                  id: filter.value,
+                  name: filter.label,
+                }))}
+                value={OBJECT_TYPE_FILTERS[scope]
+                  .filter((filter) => objectTypes.includes(filter.value))
+                  .map((filter) => ({ id: filter.value, name: filter.label }))}
+                onChange={(chosen) =>
+                  setObjectTypes(chosen.map((option) => option.id))
+                }
+              />
+            </Box>
             <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
-              Highlight objects that exceeded
+              within
             </Text>
-            <ThresholdInput
-              {...thresholdControl.inputProps}
-              ariaLabel="Freshness threshold in seconds"
-            />
-            <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
-              seconds
-            </Text>
-            <Select
-              size="sm"
-              width="auto"
-              aria-label="When the threshold must be exceeded"
-              value={predicate}
-              onChange={(e) =>
-                setPredicate(parsePredicate(e.target.value) ?? predicate)
-              }
-            >
-              {(Object.keys(PREDICATE_LABELS) as Predicate[]).map((key) => (
-                <option key={key} value={key}>
-                  {PREDICATE_LABELS[key].menu}
-                </option>
-              ))}
-            </Select>
-            <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
-              over the last
-            </Text>
-            <TimePeriodSelect
-              timePeriodMinutes={timePeriodMinutes}
-              setTimePeriodMinutes={setTimePeriodMinutes}
-              options={TIME_PERIOD_OPTIONS}
-            />
-          </HStack>
-          <HStack spacing="2" alignItems="center" flexWrap="wrap">
             <Select
               size="sm"
               width="auto"
@@ -473,23 +537,14 @@ const FreshnessPage = () => {
                 />
               )}
             </Box>
-            <Box minWidth="60">
-              <SearchableSelect<SelectOption, true>
-                isMulti
-                ariaLabel="Object types"
-                placeholder="All object types"
-                options={OBJECT_TYPE_FILTERS[scope].map((filter) => ({
-                  id: filter.value,
-                  name: filter.label,
-                }))}
-                value={OBJECT_TYPE_FILTERS[scope]
-                  .filter((filter) => objectTypes.includes(filter.value))
-                  .map((filter) => ({ id: filter.value, name: filter.label }))}
-                onChange={(chosen) =>
-                  setObjectTypes(chosen.map((option) => option.id))
-                }
-              />
-            </Box>
+            <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
+              over the last
+            </Text>
+            <TimePeriodSelect
+              timePeriodMinutes={timePeriodMinutes}
+              setTimePeriodMinutes={setTimePeriodMinutes}
+              options={TIME_PERIOD_OPTIONS}
+            />
           </HStack>
         </VStack>
       </PageHeader>
@@ -507,6 +562,7 @@ const FreshnessPage = () => {
               lookbackMs={timePeriodMinutes * 60_000}
               rangeLabel={rangeLabel}
               predicate={predicate}
+              setPredicate={setPredicate}
               thresholdControl={thresholdControl}
               typeFilters={objectTypes}
             />
@@ -523,17 +579,45 @@ const FreshnessPage = () => {
           </Text>
         )}
 
-        <Text textStyle="text-small" color={colors.foreground.secondary}>
-          Freshness is wallclock lag: how far behind wall clock time an
-          object&rsquo;s results are. Readings are binned to 60 points per
-          range, and each point is the worst lag in its span, so p90 is a
-          percentile of those maxima. The &ldquo;Now&rdquo; column and the
-          &ldquo;right now&rdquo; option both use the most recent single reading
-          rather than a binned point, so at wider ranges a point on the graph
-          can sit above the &ldquo;Now&rdquo; value in its row. While the page
-          stays open the graph refreshes once per point, so pMAX can include a
-          newer &ldquo;Now&rdquo; value that the graph has not drawn yet.
-        </Text>
+        <VStack
+          alignItems="flex-start"
+          spacing="2"
+          color={colors.foreground.secondary}
+        >
+          <Text textStyle="text-small">
+            Freshness is wallclock lag: how far behind wall clock time an
+            object&rsquo;s results are. Each object reports it once a minute. A
+            percentile ranks those minutes, so p99 is the lag that 99% of
+            minutes stayed at or under. The Summary section pools the readings
+            for all objects shown and ranks those results together.
+          </Text>
+          <Text textStyle="text-small">
+            The graph displays 60 points per object. Each point describes the
+            worst lag observed on that object during a timespan equal to 1/60 of
+            the selected time window. At 6 hours, for example, each point
+            represents the worst minute during a 6-minute span.
+          </Text>
+          <Text textStyle="text-small">
+            A percentile needs enough readings to differ from pMAX: about 100
+            for p99 and 1,000 for p99.9. Over 1 hour an object has 60, so its
+            p99 equals its pMAX. A scope with few objects displays this same
+            convergence in the Summary section.
+          </Text>
+          <Text textStyle="text-small">
+            The &ldquo;Now&rdquo; column in the tables and the
+            &ldquo;current&rdquo; option in the threshold menu display the
+            reading from the latest minute. The final point on the graph
+            displays the worst minute in the most recent timespan (e.g., 24
+            minutes at a 24 hour time window). Therefore, at longer time
+            windows, the last point on the graph can sit above the
+            &ldquo;Now&rdquo; reading in the table.
+          </Text>
+          <Text textStyle="text-small">
+            pMAX (in the table, as a threshold option and in the Summary)
+            updates once per minute. The graph and all percentiles refresh once
+            per timespan.
+          </Text>
+        </VStack>
       </VStack>
     </MainContentContainer>
   );

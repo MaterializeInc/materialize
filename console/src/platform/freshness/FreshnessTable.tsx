@@ -30,14 +30,11 @@ import { MaterializeTheme } from "~/theme";
 import { kebabToTitleCase } from "~/util";
 import { formatDurationExact } from "~/utils/format";
 
-import { FreshnessScope, SCOPE_LABELS } from "./constants";
+import { FreshnessScope, NO_VALUE, SCOPE_LABELS } from "./constants";
 import { FreshnessRow, qualifiedSchemaName, UNREADABLE } from "./freshnessRows";
 import { withScope } from "./useFreshnessParams";
 
 const PAGE_SIZE = 25;
-
-/** Shown where a statistic has no value, matching the rest of the Console. */
-const NO_VALUE = "—";
 
 /**
  * The object's name, linking to its workflow graph in Object Explorer, which
@@ -81,7 +78,7 @@ const ObjectCell = ({ row }: { row: FreshnessRow }) => {
 /**
  * A statistic, marked when it is the one that put its row over the threshold.
  *
- * The swatch says a row is on the graph; it does not say which of its three
+ * The swatch says a row is on the graph; it does not say which of its
  * numbers is responsible, so the responsible one is marked here.
  */
 const StatCell = ({
@@ -230,17 +227,24 @@ const buildColumns = (scope: FreshnessScope) => [
       <StatCell value={info.row.original.current} row={info.row.original} />
     ),
   }),
-  columnHelper.accessor("peak", {
-    // Named as Monitoring's Objects page names it, so the same statistic does
-    // not carry two names across the product.
-    header: "pMAX",
+  columnHelper.accessor("p90", {
+    header: "p90",
     sortingFn: sortingFunctions.numericNullsLast,
     cell: (info) => (
       <StatCell value={info.getValue()} row={info.row.original} />
     ),
   }),
-  columnHelper.accessor("p90", {
-    header: "p90",
+  columnHelper.accessor("p99", {
+    header: "p99",
+    sortingFn: sortingFunctions.numericNullsLast,
+    cell: (info) => (
+      <StatCell value={info.getValue()} row={info.row.original} />
+    ),
+  }),
+  columnHelper.accessor("peak", {
+    // Named as Monitoring's Objects page names it, so the same statistic does
+    // not carry two names across the product.
+    header: "pMAX",
     sortingFn: sortingFunctions.numericNullsLast,
     cell: (info) => (
       <StatCell value={info.getValue()} row={info.row.original} />
