@@ -25,7 +25,7 @@ export interface ProcessBucket {
   readings: Map<string, ProcessReading>;
 }
 
-const percentOf = (value: number | null, total: number | null) =>
+export const percentOf = (value: number | null, total: number | null) =>
   value === null || !total ? null : (value / total) * 100;
 
 const greatestOf = (a: number | null | undefined, b: number | null) =>

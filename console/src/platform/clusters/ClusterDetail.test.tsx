@@ -60,6 +60,9 @@ vi.mock("~/platform/clusters/ClusterPage/ClusterWorkers", async () => {
     ),
   };
 });
+vi.mock("~/platform/clusters/ClusterPage/Hydration/ClusterHydration", () => ({
+  ClusterHydration: () => <div>ClusterHydration component</div>,
+}));
 vi.mock("~/platform/clusters/ClusterReplicas", () => ({
   default: () => <div>ClusterReplicas component</div>,
 }));
@@ -185,9 +188,11 @@ describe("ClusterDetail redesign preview", () => {
           .getAllByRole("link")
           .map((link) => link.textContent)
           .filter((name) =>
-            ["Metrics", "Workers", "Objects", "Replicas"].includes(name ?? ""),
+            ["Metrics", "Workers", "Objects", "Hydration", "Replicas"].includes(
+              name ?? "",
+            ),
           ),
-      ).toEqual(["Metrics", "Workers", "Objects"]);
+      ).toEqual(["Metrics", "Workers", "Objects", "Hydration"]);
       expect(
         screen.getByRole("button", { name: "Configure cluster" }),
       ).toBeVisible();
@@ -247,6 +252,18 @@ describe("ClusterDetail redesign preview", () => {
         "aria-pressed",
         "true",
       );
+    });
+
+    it("opens the Hydration tab from its link", async () => {
+      const user = userEvent.setup();
+      await renderClusterDetail("/u1/default");
+
+      await user.click(await screen.findByRole("link", { name: "Hydration" }));
+
+      await expectPathname("/u1/default/hydration");
+      expect(
+        await screen.findByText("ClusterHydration component"),
+      ).toBeVisible();
     });
 
     it("opens the Objects tab on its first object type", async () => {
@@ -451,6 +468,15 @@ describe("ClusterDetail redesign preview", () => {
 
       await expectPathname("/u1/default/sinks");
       expect(await screen.findByText("Sinks component")).toBeVisible();
+    });
+
+    it("sends a redesigned Hydration URL to the classic overview", async () => {
+      await renderClusterDetail("/u1/default/hydration");
+
+      await expectPathname("/u1/default");
+      expect(
+        await screen.findByText("ClusterOverview component"),
+      ).toBeVisible();
     });
   });
 });

@@ -12,6 +12,7 @@ import { To } from "react-router-dom";
 import { REPLICA_SEARCH_PARAM } from "./useSelectedReplica";
 
 export const WORKERS_TAB_PATH = "workers";
+export const HYDRATION_TAB_PATH = "hydration";
 
 /** The search string that selects `replicaName`, or none for all replicas. */
 export const replicaSearch = (replicaName: string | undefined) =>
