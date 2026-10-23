@@ -59,20 +59,6 @@ ln -s ../../console/misc/githooks/pre-commit .git/hooks/pre-commit
 
 **Client-only React app** hosted on Vercel, communicating with Materialize Cloud APIs and Materialize database endpoints.
 
-### Key Directory Structure
-
-- `src/api/` - API clients and query builders
-  - `materialize/` - Kysely query builders for Materialize system catalog queries
-  - `schemas/` - Generated TypeScript types from OpenAPI specs
-  - `mocks/` - MSW handlers for testing
-- `src/platform/` - Main application routes and pages organized by feature (clusters, sources, sinks, etc.)
-- `src/components/` - Reusable UI components
-- `src/hooks/` - Custom React hooks
-- `src/store/` - Jotai atoms for global state
-- `src/theme/` - Chakra UI theme customizations
-- `src/test/` - Test utilities and helpers
-- `types/materialize.d.ts` - Generated types from Materialize system catalog (via `yarn gen:types`)
-
 ### Path Aliases
 
 Use `~/` for imports from src: `import { foo } from "~/api/materialize"`
