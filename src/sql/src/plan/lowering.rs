@@ -42,7 +42,9 @@ use std::iter::repeat;
 use itertools::Itertools;
 use mz_expr::func::variadic;
 use mz_expr::visit::Visit;
-use mz_expr::{AccessStrategy, AggregateFunc, Columns, MirRelationExpr, MirScalarExpr, func};
+use mz_expr::{
+    AccessStrategy, AggregateFunc, Columns, MirRelationExpr, MirScalarExpr, OrderByValues, func,
+};
 use mz_ore::collections::CollectionExt;
 use mz_ore::stack::maybe_grow;
 use mz_repr::*;
@@ -1202,7 +1204,9 @@ impl HirScalarExpr {
                          _subquery_map: &Option<&_>,
                          order_by_mir: Vec<MirScalarExpr>,
                          original_row_record,
-                         original_row_record_type: SqlScalarType| {
+                         original_row_record_type: SqlScalarType,
+                         _mir_aggr_func: &mut AggregateFunc,
+                         _input_arity: usize| {
                             let agg_input = MirScalarExpr::call_variadic(
                                 variadic::ListCreate {
                                     elem_type: original_row_record_type.clone(),
@@ -1248,8 +1252,10 @@ impl HirScalarExpr {
                          subquery_map: &Option<&_>,
                          order_by_mir: Vec<MirScalarExpr>,
                          original_row_record,
-                         original_row_record_type| {
-                            // Creates [((OriginalRow, EncodedArgs), OrderByExprs...)]
+                         original_row_record_type,
+                         mir_aggr_func: &mut AggregateFunc,
+                         input_arity: usize| {
+                            // Creates [((OriginalRow, EncodedArgs?), OrderByExprs...)]
 
                             // Compute the encoded args for all rows
                             let mir_encoded_args = hir_encoded_args.applied_to(
@@ -1260,24 +1266,36 @@ impl HirScalarExpr {
                                 subquery_map,
                                 context,
                             )?;
-                            let mir_encoded_args_type = mir_encoded_args
-                                .sql_typ(&get_inner.sql_typ().column_types)
-                                .scalar_type;
+                            let mir_encoded_args = Self::describe_window_args(
+                                mir_aggr_func,
+                                mir_encoded_args,
+                                input_arity,
+                            );
 
-                            // Build a new record that has two fields:
-                            // 1. the original row in a record
-                            // 2. the encoded args (which can be either a single value, or a record
-                            //    if the window function has multiple arguments, such as `lag`)
-                            let fn_input_record_fields: Box<[_]> =
-                                [original_row_record_type, mir_encoded_args_type]
-                                    .iter()
-                                    .map(|t| {
-                                        (
-                                            ColumnName::from(UNKNOWN_COLUMN_NAME),
-                                            t.clone().nullable(false),
-                                        )
-                                    })
-                                    .collect();
+                            // Build a record holding the original row, plus
+                            // the arguments the function still reads per row,
+                            // where it reads any. The encoded args are a
+                            // single value, or a record when the call has
+                            // several arguments (`lag`) or is a fused call.
+                            let mut fn_input = vec![original_row_record];
+                            let mut fn_input_types = vec![original_row_record_type];
+                            if let Some(mir_encoded_args) = mir_encoded_args {
+                                fn_input_types.push(
+                                    mir_encoded_args
+                                        .sql_typ(&get_inner.sql_typ().column_types)
+                                        .scalar_type,
+                                );
+                                fn_input.push(mir_encoded_args);
+                            }
+                            let fn_input_record_fields: Box<[_]> = fn_input_types
+                                .iter()
+                                .map(|t| {
+                                    (
+                                        ColumnName::from(UNKNOWN_COLUMN_NAME),
+                                        t.clone().nullable(false),
+                                    )
+                                })
+                                .collect();
                             let fn_input_record = MirScalarExpr::call_variadic(
                                 variadic::RecordCreate {
                                     field_names: fn_input_record_fields
@@ -1285,7 +1303,7 @@ impl HirScalarExpr {
                                         .map(|(n, _)| n.clone())
                                         .collect_vec(),
                                 },
-                                vec![original_row_record, mir_encoded_args],
+                                fn_input,
                             );
                             let fn_input_record_type = SqlScalarType::Record {
                                 fields: fn_input_record_fields,
@@ -1374,6 +1392,146 @@ impl HirScalarExpr {
         })
     }
 
+    /// Moves a window function's per-row arguments into the function itself
+    /// where it can find them without a copy in every row.
+    ///
+    /// A `lag`/`lead` whose `offset` and `default` are already described in the
+    /// function (see [`mz_expr::LagLeadArgs`]) has the bare `value` argument
+    /// left per row. When that `value` is one of the window function's input
+    /// columns, the row's `OriginalRow` record already holds it, so the
+    /// function records which field to read and nothing is encoded per row.
+    ///
+    /// `input_arity` bounds the columns `OriginalRow` covers. Lowering the
+    /// arguments may have mapped further columns onto the input, for a
+    /// subquery in an argument, and those are not in the record.
+    ///
+    /// Returns the arguments still encoded per row, `None` when none are.
+    fn describe_window_args(
+        mir_aggr_func: &mut AggregateFunc,
+        encoded_args: MirScalarExpr,
+        input_arity: usize,
+    ) -> Option<MirScalarExpr> {
+        match mir_aggr_func {
+            AggregateFunc::LagLead {
+                args: Some(args), ..
+            } => match encoded_args {
+                MirScalarExpr::Column(column, _name) if column < input_arity => {
+                    args.value = Some(column);
+                    None
+                }
+                encoded_args => Some(encoded_args),
+            },
+            AggregateFunc::FusedValueWindowFunc { funcs, .. } => {
+                // Fusion builds the arguments as a record with one field per
+                // constituent call. Describe each field against its own
+                // function and keep only the fields that survive, so a call
+                // that needs nothing per row contributes no field.
+                let MirScalarExpr::CallVariadic {
+                    func: mz_expr::VariadicFunc::RecordCreate(record_create),
+                    exprs,
+                } = encoded_args
+                else {
+                    unreachable!(
+                        "`transform_hir::fuse_window_functions` builds the arguments of a \
+                         fused call as a record with one field per constituent call"
+                    );
+                };
+                let (field_names, exprs): (Vec<_>, Vec<_>) = record_create
+                    .field_names
+                    .into_iter()
+                    .zip_eq(exprs)
+                    .zip_eq(funcs.iter_mut())
+                    .filter_map(|((field_name, expr), func)| {
+                        Self::describe_window_args(func, expr, input_arity)
+                            .map(|expr| (field_name, expr))
+                    })
+                    .unzip();
+                (!exprs.is_empty()).then(|| {
+                    MirScalarExpr::call_variadic(variadic::RecordCreate { field_names }, exprs)
+                })
+            }
+            _ => Some(encoded_args),
+        }
+    }
+
+    /// Moves a window function's ORDER BY values into the function itself where
+    /// it can find them without a copy in every row.
+    ///
+    /// The `OriginalRow` record the per-row value leads with holds every input
+    /// column, so an ORDER BY expression that is one of those columns needs no
+    /// appended copy. This is all or nothing: a window function reads its
+    /// ORDER BY values from one place, so a single expression that is not an
+    /// input column keeps all of them appended.
+    ///
+    /// `input_arity` bounds the columns `OriginalRow` covers, as in
+    /// [`Self::describe_window_args`].
+    ///
+    /// Returns the ORDER BY values still appended per row, empty when none are.
+    fn describe_window_order_by(
+        mir_aggr_func: &mut AggregateFunc,
+        order_by_mir: Vec<MirScalarExpr>,
+        input_arity: usize,
+    ) -> Vec<MirScalarExpr> {
+        let fields = order_by_mir
+            .iter()
+            .map(|expr| match expr {
+                MirScalarExpr::Column(column, _name) if *column < input_arity => Some(*column),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .filter(|fields| !fields.is_empty());
+        let Some(fields) = fields else {
+            return order_by_mir;
+        };
+        Self::set_order_by_values(mir_aggr_func, &OrderByValues::OriginalRow(fields));
+        Vec::new()
+    }
+
+    /// Records where a window function reads its ORDER BY values.
+    ///
+    /// A fused call's constituents carry their own copy, which the evaluation
+    /// asserts agrees with the outer one, so they are set too. The aggregates
+    /// wrapped by a window aggregate are not window functions and have none.
+    fn set_order_by_values(mir_aggr_func: &mut AggregateFunc, values: &OrderByValues) {
+        match mir_aggr_func {
+            AggregateFunc::RowNumber {
+                order_by_values, ..
+            }
+            | AggregateFunc::Rank {
+                order_by_values, ..
+            }
+            | AggregateFunc::DenseRank {
+                order_by_values, ..
+            }
+            | AggregateFunc::LagLead {
+                order_by_values, ..
+            }
+            | AggregateFunc::FirstValue {
+                order_by_values, ..
+            }
+            | AggregateFunc::LastValue {
+                order_by_values, ..
+            }
+            | AggregateFunc::WindowAggregate {
+                order_by_values, ..
+            }
+            | AggregateFunc::FusedWindowAggregate {
+                order_by_values, ..
+            } => *order_by_values = values.clone(),
+            AggregateFunc::FusedValueWindowFunc {
+                funcs,
+                order_by_values,
+                ..
+            } => {
+                *order_by_values = values.clone();
+                for func in funcs {
+                    Self::set_order_by_values(func, values);
+                }
+            }
+            func => unreachable!("not a window function: {func:?}"),
+        }
+    }
+
     fn window_func_applied_to<F>(
         id_gen: &mut mz_ore::id_gen::IdGen,
         col_map: &ColumnMap,
@@ -1396,6 +1554,8 @@ impl HirScalarExpr {
             Vec<MirScalarExpr>,
             MirScalarExpr,
             SqlScalarType,
+            &mut AggregateFunc,
+            usize,
         ) -> Result<(MirScalarExpr, SqlColumnType), PlanError>,
     {
         // Example MIRs for a window function (specifically, a window aggregation):
@@ -1439,6 +1599,13 @@ impl HirScalarExpr {
         //   - The <original row> currently always captures the entire original row. This should
         //     improve when we make `ProjectionPushdown` smarter, see
         //     https://github.com/MaterializeInc/database-issues/issues/5090
+        //
+        // Because <original row> holds every input column, the parts of this
+        // encoding that would repeat one of them are left out and recorded in
+        // the aggregate function instead: the <arguments to window function>
+        // by `describe_window_args`, the <order by values> by
+        // `describe_window_order_by`. Either can therefore be absent, and the
+        // function says whether it is.
         //
         // TODO:
         // We should probably introduce some dedicated Datum constructor functions instead of `row`
@@ -1515,6 +1682,15 @@ impl HirScalarExpr {
                         custom_id: None,
                     };
 
+                    // `lower_args` may move arguments into the function, so
+                    // it takes the function by reference and the aggregate is
+                    // built afterwards.
+                    let mut mir_aggr_func = mir_aggr_func;
+                    let order_by_mir = Self::describe_window_order_by(
+                        &mut mir_aggr_func,
+                        order_by_mir,
+                        input_arity,
+                    );
                     let (agg_input, agg_input_type) = lower_args(
                         id_gen,
                         col_map,
@@ -1524,6 +1700,8 @@ impl HirScalarExpr {
                         order_by_mir,
                         original_row_record,
                         original_row_record_type,
+                        &mut mir_aggr_func,
+                        input_arity,
                     )?;
 
                     let aggregate = mz_expr::AggregateExpr {
