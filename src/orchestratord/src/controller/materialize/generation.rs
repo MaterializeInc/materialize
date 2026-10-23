@@ -1380,7 +1380,7 @@ fn create_environmentd_statefulset_object(
 /// Rejects a probe that sets more than one handler (`exec`, `grpc`, `httpGet`,
 /// `tcpSocket`), which Kubernetes would reject when the pod is created.
 ///
-/// [`environmentd_probe`] only produces a valid probe if every layer passes
+/// `environmentd_probe` only produces a valid probe if every layer passes
 /// this check.
 pub fn validate_probe_handlers(probe: &Probe) -> Result<(), anyhow::Error> {
     let handlers: Vec<_> = [

@@ -170,14 +170,14 @@ pub mod v1alpha1 {
         ///
         /// Fields set here are overlaid onto the operator's default probe, so only the fields
         /// being changed need to be set. If no handler (`exec`, `grpc`, `httpGet`, `tcpSocket`)
-        /// is set, the default TCP check against the internal SQL port is kept.
+        /// is set, the default TCP check against environmentd's SQL port is kept.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub environmentd_readiness_probe: Option<Probe>,
         /// Liveness probe for the environmentd container.
         ///
         /// Fields set here are overlaid onto the operator's default probe, so only the fields
         /// being changed need to be set. If no handler (`exec`, `grpc`, `httpGet`, `tcpSocket`)
-        /// is set, the default TCP check against the internal SQL port is kept.
+        /// is set, the default TCP check against environmentd's SQL port is kept.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub environmentd_liveness_probe: Option<Probe>,
         /// Startup probe for the environmentd container. Liveness and readiness checks are held
@@ -187,7 +187,7 @@ pub mod v1alpha1 {
         /// No startup probe runs unless this field or the operator's default sets one. Fields set
         /// here are overlaid onto the operator's default probe, so only the fields being changed
         /// need to be set. If no handler (`exec`, `grpc`, `httpGet`, `tcpSocket`) is set, the
-        /// default TCP check against the internal SQL port is used.
+        /// default TCP check against environmentd's SQL port is used.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub environmentd_startup_probe: Option<Probe>,
         /// Resource requirements for the balancerd pod.
@@ -1545,14 +1545,14 @@ pub mod v1 {
         ///
         /// Fields set here are overlaid onto the operator's default probe, so only the fields
         /// being changed need to be set. If no handler (`exec`, `grpc`, `httpGet`, `tcpSocket`)
-        /// is set, the default TCP check against the internal SQL port is kept.
+        /// is set, the default TCP check against environmentd's SQL port is kept.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub environmentd_readiness_probe: Option<Probe>,
         /// Liveness probe for the environmentd container.
         ///
         /// Fields set here are overlaid onto the operator's default probe, so only the fields
         /// being changed need to be set. If no handler (`exec`, `grpc`, `httpGet`, `tcpSocket`)
-        /// is set, the default TCP check against the internal SQL port is kept.
+        /// is set, the default TCP check against environmentd's SQL port is kept.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub environmentd_liveness_probe: Option<Probe>,
         /// Startup probe for the environmentd container. Liveness and readiness checks are held
@@ -1562,7 +1562,7 @@ pub mod v1 {
         /// No startup probe runs unless this field or the operator's default sets one. Fields set
         /// here are overlaid onto the operator's default probe, so only the fields being changed
         /// need to be set. If no handler (`exec`, `grpc`, `httpGet`, `tcpSocket`) is set, the
-        /// default TCP check against the internal SQL port is used.
+        /// default TCP check against environmentd's SQL port is used.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub environmentd_startup_probe: Option<Probe>,
         /// Resource requirements for the balancerd pod.
