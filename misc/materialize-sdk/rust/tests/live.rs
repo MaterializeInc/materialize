@@ -553,3 +553,96 @@ async fn dropping_ends_the_subscribe_while_a_fetch_waits() {
     )
     .await;
 }
+
+/// Forwards between a client and Materialize until `frozen` is set, then
+/// holds both connections open and forwards nothing, as a network partition
+/// does. Returns the port to connect to.
+async fn partition(frozen: std::sync::Arc<std::sync::atomic::AtomicBool>) -> u16 {
+    use std::sync::atomic::Ordering;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let direct = config();
+    let tokio_postgres::config::Host::Tcp(host) = &direct.get_hosts()[0] else {
+        panic!("MATERIALIZE_URL names no TCP host");
+    };
+    let target = format!("{host}:{}", direct.get_ports()[0]);
+    tokio::spawn(async move {
+        let (client, _) = listener.accept().await.unwrap();
+        let server = tokio::net::TcpStream::connect(target).await.unwrap();
+        let pump = |mut from: tokio::net::tcp::OwnedReadHalf,
+                    mut to: tokio::net::tcp::OwnedWriteHalf,
+                    frozen: std::sync::Arc<std::sync::atomic::AtomicBool>| async move {
+            let mut buffer = vec![0; 65536];
+            loop {
+                let read = from.read(&mut buffer).await.unwrap_or(0);
+                if read == 0 {
+                    return;
+                }
+                if frozen.load(Ordering::SeqCst) {
+                    std::future::pending::<()>().await;
+                }
+                to.write_all(&buffer[..read]).await.unwrap();
+            }
+        };
+        let (client_read, client_write) = client.into_split();
+        let (server_read, server_write) = server.into_split();
+        let up = tokio::spawn(pump(
+            client_read,
+            server_write,
+            std::sync::Arc::clone(&frozen),
+        ));
+        let down = tokio::spawn(pump(server_read, client_write, frozen));
+        let _ = (up.await, down.await);
+    });
+    port
+}
+
+#[tokio::test]
+#[ignore = "needs a running Materialize at MATERIALIZE_URL"]
+async fn a_connection_that_goes_silent_fails_as_transient() {
+    let frozen = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let port = partition(std::sync::Arc::clone(&frozen)).await;
+    let admin = admin().await;
+    let object = table(&admin, "live_silent", "(id int)").await;
+    // `host` adds to a config's hosts, so the connection through the
+    // partition starts from a fresh one.
+    let direct = config();
+    let mut through = Config::new();
+    through
+        .host("127.0.0.1")
+        .port(port)
+        .user(direct.get_user().unwrap())
+        .dbname(direct.get_dbname().unwrap_or("materialize"));
+    let options = LiveOptions::default().fetch_timeout(Duration::from_secs(1));
+    let mut live =
+        LiveSubscription::connect(&through, NoTls, Subscribe::object(object.object), options)
+            .await
+            .unwrap();
+    assert!(matches!(next(&mut live).await, Some(Ok(_))));
+    frozen.store(true, std::sync::atomic::Ordering::SeqCst);
+    // The timed FETCH's one second, plus its grace.
+    let failed = tokio::time::timeout(Duration::from_secs(45), async {
+        loop {
+            match live.next().await {
+                Some(Ok(_)) => continue,
+                other => return other,
+            }
+        }
+    })
+    .await
+    .expect("the stream still waits on the silent connection");
+    assert!(
+        matches!(
+            &failed,
+            Some(Err(Error::Server {
+                sqlstate: None,
+                classification: Classification::Kind {
+                    kind: ErrorKind::Transient
+                },
+                ..
+            }))
+        ),
+        "{failed:?}"
+    );
+}
