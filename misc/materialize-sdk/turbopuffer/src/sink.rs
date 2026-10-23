@@ -80,6 +80,18 @@ pub struct TurbopufferSink {
     /// namespace again changes nothing, so the resend of a batch after a
     /// timeout or throttling skips it, however its requests split.
     acknowledged: BTreeMap<[u8; 32], bool>,
+    /// Digests of each upsert turbopuffer refused on its own since the last
+    /// write that applied in full, with its message, so that the resend of a
+    /// batch does not repeat the split that found it.
+    refused: BTreeMap<[u8; 32], String>,
+    /// Whether turbopuffer accepted an upsert request since the last write
+    /// that applied in full.
+    upserted: bool,
+    /// Digests of each document in a request turbopuffer refused whole, since
+    /// the last write that applied in full. The resend of a batch sends them
+    /// one a request, so a write that yields before it finds the refused row
+    /// still makes progress.
+    suspect: BTreeSet<[u8; 32]>,
     pacer: Pacer,
     /// The namespaces whose embedding settings match the sink's. turbopuffer
     /// refuses a write that adds an embedded attribute to an existing
@@ -119,6 +131,9 @@ impl TurbopufferSink {
             fence_checked: None,
             fence_interval: FENCE_CHECK,
             acknowledged: BTreeMap::new(),
+            refused: BTreeMap::new(),
+            upserted: false,
+            suspect: BTreeSet::new(),
             pacer: Pacer::new(2_000_000, 1024),
             matching: BTreeSet::new(),
             embedded_tokens: 0,
@@ -282,9 +297,11 @@ impl TurbopufferSink {
             },
         };
         let namespace = data_namespace(&self.name, batch.generation());
+        // A namespace that does not exist yet holds nothing a patch could match.
+        let mut exists = true;
         if !self.matching.contains(&namespace) {
             match self.client.embeddings(&namespace).await {
-                Ok(None) => {}
+                Ok(None) => exists = false,
                 Ok(Some(stored)) if stored == layout.embedded() => {
                     self.matching.insert(namespace.clone());
                 }
@@ -312,19 +329,21 @@ impl TurbopufferSink {
             namespace: &namespace,
             layout,
             acknowledged: &mut self.acknowledged,
+            refused: &mut self.refused,
+            upserted: &mut self.upserted,
+            suspect: &mut self.suspect,
             pacer: &mut self.pacer,
             started,
             slice: self.write_slice,
             sent_any: false,
             tokens: 0,
-            rejected: Vec::new(),
         };
 
         // A patch costs a query per request, and most snapshot documents are
         // new to their namespace, so snapshot writes skip it. A document
         // without text to embed costs nothing to upsert, so it skips it too.
         let mut failed = None;
-        if !layout.embeddings().is_empty() && !batch.is_snapshot() {
+        if exists && !layout.embeddings().is_empty() && !batch.is_snapshot() {
             let (live, rest): (Vec<_>, Vec<_>) = documents
                 .into_iter()
                 .partition(|d| !d.is_tombstone() && d.tokens > 0);
@@ -354,17 +373,23 @@ impl TurbopufferSink {
                 .chain(rest)
                 .collect();
         }
+        let candidates: Vec<(usize, [u8; 32])> = documents
+            .iter()
+            .map(|document| (document.index, sent.key(Kind::Upsert, document)))
+            .collect();
         if failed.is_none() {
             let unsent = documents
                 .into_iter()
-                .filter(|document| sent.acknowledged(Kind::Upsert, document).is_none())
+                .filter(|document| {
+                    sent.acknowledged(Kind::Upsert, document).is_none()
+                        && !sent.refused.contains_key(&sent.key(Kind::Upsert, document))
+                })
                 .collect();
             if let Err(failure) = sent.send(Kind::Upsert, unsent, limits).await {
                 failed = Some(failure);
             }
         }
         let tokens = sent.tokens;
-        rejected.append(&mut sent.rejected);
         self.embedded_tokens = self.embedded_tokens.saturating_add(tokens);
         if let Some(failure) = failed {
             if let Failure::Throttled {
@@ -375,7 +400,34 @@ impl TurbopufferSink {
             }
             return WriteResult::Failed(failure.into_error());
         }
+        let refusals: Vec<Rejected> = candidates
+            .iter()
+            .filter_map(|(index, key)| {
+                self.refused.get(key).map(|message| Rejected {
+                    index: *index,
+                    category: "refused".into(),
+                    message: message.clone(),
+                })
+            })
+            .collect();
+        // Every upsert refused, and none accepted, points at the request
+        // rather than the rows, such as an embedding model turbopuffer does
+        // not have. Rejecting them all would commit past every row.
+        if let Some(first) = refusals.first().filter(|_| !self.upserted) {
+            return WriteResult::Failed(SinkError::Target {
+                message: format!(
+                    "turbopuffer refused every row of the batch, so the sink stops instead of \
+                     skipping them: {}",
+                    first.message
+                ),
+                permanent: true,
+            });
+        }
+        rejected.extend(refusals);
         self.acknowledged.clear();
+        self.refused.clear();
+        self.upserted = false;
+        self.suspect.clear();
         rejected.sort_by_key(|rejected| rejected.index);
         WriteResult::Applied { rejected }
     }
@@ -500,14 +552,15 @@ struct Sent<'a> {
     namespace: &'a str,
     layout: &'a Layout,
     acknowledged: &'a mut BTreeMap<[u8; 32], bool>,
+    refused: &'a mut BTreeMap<[u8; 32], String>,
+    upserted: &'a mut bool,
+    suspect: &'a mut BTreeSet<[u8; 32]>,
     pacer: &'a mut Pacer,
     started: Instant,
     slice: Duration,
     sent_any: bool,
     /// The embedding tokens turbopuffer reported for this call.
     tokens: u64,
-    /// The upserts turbopuffer refused one by one.
-    rejected: Vec<Rejected>,
 }
 
 impl Sent<'_> {
@@ -537,7 +590,11 @@ impl Sent<'_> {
         limits: Limits,
     ) -> Result<BTreeSet<String>, Failure> {
         let mut applied = BTreeSet::new();
+        let (suspects, documents): (Vec<_>, Vec<_>) = documents
+            .into_iter()
+            .partition(|document| self.suspect.contains(&self.key(kind, document)));
         let mut requests = documents::requests(documents, limits);
+        requests.extend(suspects.into_iter().map(|document| vec![document]));
         requests.reverse();
         while let Some(mut request) = requests.pop() {
             // A long write yields as throttling, which the SDK sends again
@@ -573,6 +630,9 @@ impl Sent<'_> {
                         self.pacer.applied(reservation, tokens.unwrap_or(estimate));
                     }
                     Err(Failure::Throttled { .. }) => self.pacer.refused(reservation),
+                    Err(Failure::Refused {
+                        status: 400 | 422, ..
+                    }) => self.pacer.returned(reservation),
                     Err(_) => {}
                 }
             }
@@ -580,6 +640,9 @@ impl Sent<'_> {
                 Ok(response) => {
                     let tokens = response.performance.embedding_tokens.unwrap_or(0);
                     self.tokens = self.tokens.saturating_add(tokens);
+                    if kind == Kind::Upsert {
+                        *self.upserted = true;
+                    }
                     let patched: BTreeSet<&str> = response
                         .patched_ids
                         .iter()
@@ -602,16 +665,18 @@ impl Sent<'_> {
                     message,
                 }) => {
                     if request.len() > 1 {
+                        for document in &request {
+                            let key = self.key(kind, document);
+                            self.suspect.insert(key);
+                        }
                         let second = request.split_off(request.len() / 2);
                         requests.push(second);
                         requests.push(request);
                     } else if kind == Kind::Upsert {
-                        self.rejected
-                            .extend(request.iter().map(|document| Rejected {
-                                index: document.index,
-                                category: "refused".into(),
-                                message: message.clone(),
-                            }));
+                        for document in &request {
+                            let key = self.key(kind, document);
+                            self.refused.insert(key, message.clone());
+                        }
                     }
                 }
                 Err(failure) => return Err(failure),

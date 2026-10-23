@@ -106,6 +106,24 @@ impl Failure {
 
 /// A response whose shape the client does not know, which it treats as a
 /// failure instead of guessing.
+/// The unindexed bytes `metadata` reports. A status without a count is taken
+/// as not indexed yet: waiting keeps readers on the incarnation they use,
+/// where a failure would end the run and start the snapshot, and its
+/// embedding, again.
+fn unindexed(namespace: &str, metadata: &Value) -> u64 {
+    let index = |field: &str| metadata.get("index").and_then(|index| index.get(field));
+    match index("status").and_then(Value::as_str) {
+        Some("up-to-date") => 0,
+        Some("updating") => index("unindexed_bytes")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX),
+        other => {
+            tracing::warn!(namespace, status = ?other, "an unknown index status");
+            u64::MAX
+        }
+    }
+}
+
 fn unexpected(what: &str, detail: &str) -> Failure {
     Failure::Lost {
         message: format!("an unexpected turbopuffer {what} response: {detail}"),
@@ -297,15 +315,7 @@ impl Client {
         let Some(metadata) = self.metadata(namespace).await? else {
             return Ok(None);
         };
-        let index = |field: &str| metadata.get("index").and_then(|index| index.get(field));
-        match index("status").and_then(Value::as_str) {
-            Some("up-to-date") => Ok(Some(0)),
-            Some("updating") => match index("unindexed_bytes").and_then(Value::as_u64) {
-                Some(bytes) => Ok(Some(bytes)),
-                None => Err(unexpected("metadata", "an updating index without a count")),
-            },
-            other => Err(unexpected("metadata", &format!("index status {other:?}"))),
-        }
+        Ok(Some(unindexed(namespace, &metadata)))
     }
 
     /// The model and dimensions of each attribute `namespace` embeds, or
@@ -474,6 +484,19 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_index_status_without_a_count_waits() {
+        let status = |index: Value| unindexed("ns", &json!({ "index": index }));
+        assert_eq!(status(json!({"status": "up-to-date"})), 0);
+        assert_eq!(
+            status(json!({"status": "updating", "unindexed_bytes": 7})),
+            7
+        );
+        assert_eq!(status(json!({"status": "updating"})), u64::MAX);
+        assert_eq!(status(json!({"status": "rebuilding"})), u64::MAX);
+        assert_eq!(unindexed("ns", &json!({})), u64::MAX);
+    }
 
     #[test]
     fn failures_keep_what_they_say_about_the_write() {
