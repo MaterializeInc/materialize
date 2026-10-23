@@ -97,19 +97,6 @@ authors to squash on merge or to keep every intermediate commit green.
 * We value simplicity and clear abstractions. We especially care about
   designing the interfaces or boundaries between components well. This includes
   components, traits, interfaces, modules, and crates.
-* In code comments or inline documentation, we value clearly described
-  contracts and assumptions.
-* In code comments, we don't like "fluff" comments, comments that describe what
-  code does when it is obvious from the code. Good code should be readable. It
-  _is_ okay to call out tricky parts of the code or "nota benes".
-* In code comments and code documentation we value concise but complete
-  comments.
-* In code comments and documentation, don't refer to potential previous states
-  of the code, or things like future PRs, try not to use chronology in there,
-  except when it's needed to explain why a certain thing behaves as it does and
-  we need to record that knowledge. In general comments need to stand on their
-  own and make sense from just looking at them and the code around it, not
-  previous changes.
 * Avoid em-dashes for structuring sentences in any prose: code comments, specs,
   design docs, all of it. Restructure with full stops and commas instead. The
   same goes for semicolons, though one is fine where splitting would mangle the
@@ -202,6 +189,10 @@ imply it. No ASCII section-divider banners (`// ----- helpers -----`); item
 placement carries the structure. Performance claims in comments should state
 a constraint or a measured number, not unverifiable color ("the compiler can
 autovectorize this").
+
+A comment must make sense from the code around it, not from previous changes.
+Don't refer to earlier states of the code or to future PRs, unless the history
+explains why the code behaves as it does and that knowledge needs recording.
 
 Before keeping a sentence, ask whether a maintainer would get something wrong
 without it. If deleting it changes nothing they would do or believe, delete it,
