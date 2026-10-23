@@ -7,16 +7,20 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cell::RefCell;
 use std::pin::pin;
+use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use futures::stream::LocalBoxStream;
 use futures::{Stream as AsyncStream, StreamExt};
 use mz_dyncfg::ConfigSet;
-use mz_postgres_util::{Client, Sql, query_opt, simple_query_opt, sql};
-use mz_storage_types::dyncfgs::PG_SOURCE_VALIDATE_TIMELINE;
+use mz_ore::retry::Retry;
+use mz_postgres_util::{Client, Sql, execute, query_opt, simple_query_opt, sql};
+use mz_storage_types::dyncfgs::{PG_FETCH_SLOT_RESUME_LSN_INTERVAL, PG_SOURCE_VALIDATE_TIMELINE};
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::AsyncOutputHandle;
 use postgres_replication::LogicalReplicationStream;
@@ -25,6 +29,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::Capability;
 use timely::progress::Antichain;
 use tokio::sync::watch;
+use tokio::time::Instant;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 use tracing::{error, trace};
@@ -257,6 +262,111 @@ pub(super) async fn raw_stream<'a>(
         }
     });
     Ok(Ok(stream))
+}
+
+/// Starts the replication stream of one replication operator, initially and for each replay.
+pub(super) struct StreamStarter<'a> {
+    pub(super) config: &'a RawSourceCreationConfig,
+    pub(super) connection: &'a PostgresSourceConnection,
+    pub(super) connection_config: &'a mz_postgres_util::Config,
+    pub(super) metadata_client: &'a Arc<Client>,
+    /// The LSN the operator resumed at, which statistics never report below.
+    pub(super) resume_lsn: MzOffset,
+    /// The committed resume uppers, shared by the streams this starts.
+    pub(super) uppers: Rc<RefCell<LocalBoxStream<'static, ResumeUppers<MzOffset>>>>,
+    pub(super) probe_output:
+        &'a AsyncOutputHandle<MzOffset, CapacityContainerBuilder<Vec<Probe<MzOffset>>>>,
+    pub(super) probe_cap: &'a Capability<MzOffset>,
+    pub(super) latest_uppers: &'a watch::Sender<Option<ResumeUppers<MzOffset>>>,
+}
+
+impl<'a> StreamStarter<'a> {
+    /// Starts the replication stream at `from`, retrying transient failures for a bounded time.
+    /// See [`raw_stream`].
+    pub(super) async fn start(
+        &self,
+        from: MzOffset,
+    ) -> Result<
+        Result<impl AsyncStream<Item = Result<LogicalReplMsg, TransientError>> + 'a, DefiniteError>,
+        TransientError,
+    > {
+        Retry::default()
+            .initial_backoff(Duration::from_millis(100))
+            .clamp_backoff(Duration::from_secs(1))
+            .max_duration(Duration::from_secs(30))
+            .retry_async(|_| async {
+                let replication_client = self
+                    .connection_config
+                    .connect_replication(&self.config.config.connection_context.ssh_tunnel_manager)
+                    .await?;
+                let uppers = Rc::clone(&self.uppers);
+                raw_stream(
+                    self.config,
+                    self.connection,
+                    replication_client,
+                    Arc::clone(self.metadata_client),
+                    self.resume_lsn,
+                    from,
+                    futures::stream::poll_fn(move |cx| uppers.borrow_mut().poll_next_unpin(cx)),
+                    self.probe_output,
+                    self.probe_cap,
+                    self.latest_uppers,
+                )
+                .await
+            })
+            .await
+    }
+
+    /// The process ID of the backend that uses the replication slot, if any.
+    pub(super) async fn active_pid(&self) -> Result<Option<i32>, TransientError> {
+        let metadata = super::super::fetch_slot_metadata(
+            self.metadata_client,
+            &self.connection.publication_details.slot,
+            PG_FETCH_SLOT_RESUME_LSN_INTERVAL.get(self.config.config.config_set()),
+        )
+        .await?;
+        Ok(metadata.active_pid)
+    }
+
+    /// Waits until no backend uses the replication slot, after the operator dropped the stream
+    /// whose walsender was `own_pid`.
+    pub(super) async fn wait_for_slot_release(
+        &self,
+        own_pid: Option<i32>,
+    ) -> Result<(), TransientError> {
+        // The slot accepts one connection, and the server's walsender can stay attached after
+        // the client drops, until it notices the closed connection. Wait for it to detach, and
+        // terminate it only if it outlasts most of the wait. Only our own walsender is
+        // terminated, unlike `drop_replication_slots` in `mz_postgres_util`, which terminates
+        // any backend because it drops the slot.
+        let started = Instant::now();
+        Retry::default()
+            .initial_backoff(Duration::from_millis(50))
+            .clamp_backoff(Duration::from_secs(1))
+            .max_duration(Duration::from_secs(30))
+            .retry_async(|_| async {
+                let Some(active_pid) = self.active_pid().await? else {
+                    return Ok(());
+                };
+                if Some(active_pid) == own_pid && started.elapsed() > Duration::from_secs(20) {
+                    tracing::warn!(
+                        %self.config.id,
+                        %active_pid,
+                        "replication slot still held by our dropped stream; terminating it",
+                    );
+                    execute(
+                        &***self.metadata_client,
+                        sql!("SELECT pg_terminate_backend($1)"),
+                        &[&active_pid],
+                    )
+                    .await?;
+                }
+                Err(TransientError::from(anyhow::anyhow!(
+                    "replication slot in use by backend {active_pid}"
+                )))
+            })
+            .await
+    }
 }
 
 /// Ensures the upstream still meets the conditions the replication stream depends on. Once

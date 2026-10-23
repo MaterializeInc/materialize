@@ -69,13 +69,12 @@
 //! [1]: https://www.postgresql.org/docs/15/protocol-replication.html#PROTOCOL-REPLICATION-START-REPLICATION
 //! [2]: https://www.postgresql.org/message-id/CAFPTHDZS9O9WG02EfayBd6oONzK%2BqfUxS6AbVLJ7W%2BKECza2gg%40mail.gmail.com
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::convert::Infallible;
 use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
 
 use differential_dataflow::AsCollection;
 use futures::{FutureExt, StreamExt, TryStreamExt};
@@ -120,7 +119,7 @@ pub(super) use stream::ensure_replication_prerequisites;
 
 use decode::{ExtractMode, TxEvent, extract_transaction};
 use schema::{SchemaValidationError, spawn_schema_validator};
-use stream::raw_stream;
+use stream::StreamStarter;
 use truncate::{Replay, Retractions};
 
 /// A logical replication message from the server.
@@ -256,10 +255,6 @@ pub(crate) fn render<'scope>(
                 .await?;
 
             let slot = &connection.publication_details.slot;
-            let replication_client = connection_config
-                .connect_replication(&config.config.connection_context.ssh_tunnel_manager)
-                .await?;
-
             let metadata_client = connection_config
                 .connect(
                     "replication metadata",
@@ -437,26 +432,19 @@ pub(crate) fn render<'scope>(
             trace!(%id, "timely-{worker_id} pending rewinds {rewinds:?}");
 
             // Shared, so a replay can start a new stream from the same uppers.
-            let committed_uppers = Rc::new(std::cell::RefCell::new(Box::pin(committed_uppers)));
-            let shared_uppers = || {
-                let uppers = Rc::clone(&committed_uppers);
-                futures::stream::poll_fn(move |cx| uppers.borrow_mut().as_mut().poll_next(cx))
-            };
-
             let (latest_uppers_tx, latest_uppers) = watch::channel(None);
-            let stream_result = raw_stream(
-                &config,
-                &connection,
-                replication_client,
-                Arc::clone(&metadata_client),
+            let starter = StreamStarter {
+                config: &config,
+                connection: &connection,
+                connection_config: &connection_config,
+                metadata_client: &metadata_client,
                 resume_lsn,
-                resume_lsn,
-                shared_uppers(),
-                &probe_output,
-                &probe_cap[0],
-                &latest_uppers_tx,
-            )
-            .await?;
+                uppers: Rc::new(RefCell::new(Box::pin(committed_uppers))),
+                probe_output: &probe_output,
+                probe_cap: &probe_cap[0],
+                latest_uppers: &latest_uppers_tx,
+            };
+            let stream_result = starter.start(resume_lsn).await?;
 
             let stream = match stream_result {
                 Ok(stream) => stream,
@@ -518,60 +506,17 @@ pub(crate) fn render<'scope>(
             loop {
                 if let Some(replay) = pending_replay.take() {
                     let from = replay.from();
-                    // The slot accepts one connection, so the current stream must end first.
+                    // The replay's stream needs the slot, which the current stream's walsender
+                    // holds while the stream is live.
+                    let own_pid = starter.active_pid().await?;
                     stream_slot = None;
-                    let mut attempts = 0;
-                    let new_stream = loop {
-                        attempts += 1;
-                        let slot_metadata = super::fetch_slot_metadata(
-                            &*metadata_client,
-                            slot,
-                            mz_storage_types::dyncfgs::PG_FETCH_SLOT_RESUME_LSN_INTERVAL
-                                .get(config.config.config_set()),
-                        )
-                        .await?;
-                        if let Some(active_pid) = slot_metadata.active_pid {
-                            let _ = execute(
-                                &**metadata_client,
-                                sql!("SELECT pg_terminate_backend($1)"),
-                                &[&active_pid],
-                            )
-                            .await;
-                            tokio::time::sleep(Duration::from_millis(100)).await;
-                            if attempts < 100 {
-                                continue;
-                            }
-                        }
-                        let replication_client = connection_config
-                            .connect_replication(
-                                &config.config.connection_context.ssh_tunnel_manager,
-                            )
-                            .await?;
-                        match raw_stream(
-                            &config,
-                            &connection,
-                            replication_client,
-                            Arc::clone(&metadata_client),
-                            resume_lsn,
-                            from,
-                            shared_uppers(),
-                            &probe_output,
-                            &probe_cap[0],
-                            &latest_uppers_tx,
-                        )
-                        .await
-                        {
-                            Ok(Ok(stream)) => break stream,
-                            Ok(Err(err)) => {
-                                return Err(TransientError::from(anyhow::anyhow!(
-                                    "replaying from {from}: {err}"
-                                )));
-                            }
-                            Err(err) if attempts < 100 => {
-                                tracing::info!(%id, "replay from {from} failed to start: {err}");
-                                tokio::time::sleep(Duration::from_millis(100)).await;
-                            }
-                            Err(err) => return Err(err),
+                    starter.wait_for_slot_release(own_pid).await?;
+                    let new_stream = match starter.start(from).await? {
+                        Ok(stream) => stream,
+                        Err(err) => {
+                            return Err(TransientError::from(anyhow::anyhow!(
+                                "replaying from {from}: {err}"
+                            )));
                         }
                     };
                     let stream = stream_slot.insert(Box::pin(new_stream.peekable()));
