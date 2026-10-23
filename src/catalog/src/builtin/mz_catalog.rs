@@ -3059,6 +3059,7 @@ SELECT
         WHEN '17' THEN 'continual-task'
         WHEN '18' THEN 'network-policy'
         WHEN '19' THEN 'metric-sink'
+        WHEN '20' THEN 'query-policy'
     END                                                                     AS object_type,
     mz_internal.parse_catalog_audit_log_details(e->'details')               AS details,
     e->'user'->>'inner'                                                     AS \"user\",
@@ -3284,6 +3285,7 @@ SELECT
         WHEN '15' THEN 'function'
         -- variant 16 reserved/unused in mz_catalog_protos::ObjectType.
         WHEN '17' THEN 'network policy'
+        WHEN '19' THEN 'query policy'
     END AS object_type,
     mz_internal.parse_catalog_id(data->'key'->'grantee') AS grantee,
     mz_internal.parse_catalog_acl_mode(data->'value'->'privileges') AS privileges
@@ -3944,6 +3946,7 @@ mod tests {
                 ProtoObjectType::Schema => Some(SqlObjectType::Schema),
                 ProtoObjectType::Func => Some(SqlObjectType::Func),
                 ProtoObjectType::NetworkPolicy => Some(SqlObjectType::NetworkPolicy),
+                ProtoObjectType::QueryPolicy => Some(SqlObjectType::QueryPolicy),
             }
         }
 
@@ -3970,6 +3973,7 @@ mod tests {
             ProtoObjectType::Func,
             ProtoObjectType::NetworkPolicy,
             ProtoObjectType::MetricSink,
+            ProtoObjectType::QueryPolicy,
         ];
 
         let sql = MZ_DEFAULT_PRIVILEGES.sql;
