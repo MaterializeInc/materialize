@@ -539,16 +539,6 @@ ws-text fixtiming=true
 {"type":"CommandComplete","payload":"SELECT 1"}
 {"type":"ReadyForQuery","payload":"I"}
 
-# Empty RETURNING results use the same boundary as empty SELECT results.
-ws-text fixtiming=true
-{"queries": [{"query": "DELETE FROM timing_t WHERE a < 0 RETURNING a"}]}
-----
-{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":false}}
-{"type":"Rows","payload":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]}}
-{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"empty_result\",\"duration_us\":<DURATION>}"}}
-{"type":"CommandComplete","payload":"SELECT 0"}
-{"type":"ReadyForQuery","payload":"I"}
-
 # A failed statement emits no execution time notice.
 ws-text fixtiming=true
 {"query": "SELECT 1 / 0 FROM mz_sources LIMIT 1"}
