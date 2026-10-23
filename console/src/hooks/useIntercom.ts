@@ -61,38 +61,54 @@ export function isIntercomBooted() {
   return typeof intercom === "function" && intercom.booted === true;
 }
 
+/** Whether the console has an Intercom JWT for the signed-in user. */
+export function useHasIntercomJwt() {
+  const { intercomJwt } = useIntercomJwt();
+  return Boolean(intercomJwt?.jwt);
+}
+
 /**
  * Whether the Messenger is booted and identifies the signed-in user. The
  * console boots Intercom anonymously before sign-in, so the Messenger can be
  * running without the user's company, tickets, or outage eligibility.
+ *
+ * The widget boots asynchronously and exposes no event for it, so this
+ * checks every second at first, then keeps checking every
+ * `INTERCOM_BOOT_SLOW_CHECK_INTERVAL_MS` in case it boots late (slow network,
+ * cookies allowed after a prompt). Callers acting on a click should also
+ * check `isIntercomBooted()` at that moment rather than rely on this value.
  */
 export function useIsIntercomIdentified() {
-  const { intercomJwt } = useIntercomJwt();
-  const hasJwt = Boolean(intercomJwt?.jwt);
+  const hasJwt = useHasIntercomJwt();
   const [isBooted, setIsBooted] = useState(isIntercomBooted);
 
   useEffect(() => {
     if (isBooted) return;
-    // The widget boots asynchronously and exposes no event for it, so check
-    // briefly until it does.
     let attempts = 0;
-    const interval = window.setInterval(() => {
+    let timeout: number;
+    const check = () => {
       attempts += 1;
       if (isIntercomBooted()) {
         setIsBooted(true);
-        window.clearInterval(interval);
-      } else if (attempts >= INTERCOM_BOOT_MAX_CHECKS) {
-        window.clearInterval(interval);
+        return;
       }
-    }, INTERCOM_BOOT_CHECK_INTERVAL_MS);
-    return () => window.clearInterval(interval);
+      timeout = window.setTimeout(
+        check,
+        attempts < INTERCOM_BOOT_FAST_CHECKS
+          ? INTERCOM_BOOT_FAST_CHECK_INTERVAL_MS
+          : INTERCOM_BOOT_SLOW_CHECK_INTERVAL_MS,
+      );
+    };
+    timeout = window.setTimeout(check, INTERCOM_BOOT_FAST_CHECK_INTERVAL_MS);
+    return () => window.clearTimeout(timeout);
   }, [isBooted]);
 
   return hasJwt && isBooted;
 }
 
-const INTERCOM_BOOT_CHECK_INTERVAL_MS = 1_000;
-const INTERCOM_BOOT_MAX_CHECKS = 30;
+export const INTERCOM_BOOT_FAST_CHECK_INTERVAL_MS = 1_000;
+export const INTERCOM_BOOT_FAST_CHECKS = 30;
+export const INTERCOM_BOOT_SLOW_CHECK_INTERVAL_MS = 10_000;
 
 /**
  * Opens a new Messenger conversation. The Messenger's workflow offers the

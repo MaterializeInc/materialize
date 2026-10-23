@@ -45,6 +45,7 @@ import {
 import {
   openIntercomMessenger,
   openIntercomNewConversation,
+  useHasIntercomJwt,
   useIntercomUnreadCount,
   useIsIntercomIdentified,
 } from "~/hooks/useIntercom";
@@ -72,12 +73,14 @@ const EXTERNAL_LINK_PROPS = {
 /**
  * Opens the Intercom Messenger instead of following the link when the
  * Messenger is booted for the signed-in user. Otherwise the link's href (email
- * or the Help Center) is the fallback.
+ * or the Help Center) is the fallback. `open` checks that the Messenger has
+ * booted at click time, so a late boot is picked up without waiting for the
+ * next readiness check.
  */
 const preferIntercom =
-  (isIdentified: boolean, open: () => boolean) =>
+  (hasJwt: boolean, open: () => boolean) =>
   (event: React.MouseEvent<HTMLElement>) => {
-    if (isIdentified && open()) event.preventDefault();
+    if (hasJwt && open()) event.preventDefault();
   };
 
 const SEVERITIES = [
@@ -97,9 +100,28 @@ const statusPageButtonProps = (href: string) => ({
   ...EXTERNAL_LINK_PROPS,
 });
 
+/** Shown instead of live status while it loads, or if it can't be fetched. */
+const StatusLink = () => (
+  <TextLink
+    data-testid="support-status-link"
+    href={STATUS_PAGE_URL}
+    fontWeight="500"
+    {...EXTERNAL_LINK_PROPS}
+  >
+    Check system status ↗
+  </TextLink>
+);
+
 const SupportStatusBannerInner = () => {
-  const { data: summary } = useSummary();
+  const { data: summary, isError } = useSummary();
   const regionId = useAtomValue(currentRegionIdAtom);
+
+  // A failed refresh keeps the last good data cached, and suspense queries
+  // only throw to the error boundary when there's no data. Don't present a
+  // stale "operational" (or a stale incident) as current.
+  if (isError) {
+    return <StatusLink />;
+  }
 
   const event =
     summary.ongoing_incidents[0] ??
@@ -143,16 +165,7 @@ const SupportStatusBannerInner = () => {
  * to the status page is shown, never an assumed "operational" state.
  */
 const SupportStatusBanner = () => {
-  const statusLink = (
-    <TextLink
-      data-testid="support-status-link"
-      href={STATUS_PAGE_URL}
-      fontWeight="500"
-      {...EXTERNAL_LINK_PROPS}
-    >
-      Check system status ↗
-    </TextLink>
-  );
+  const statusLink = <StatusLink />;
   return (
     <ErrorBoundary fallback={statusLink}>
       <Suspense fallback={statusLink}>
@@ -231,6 +244,7 @@ const SupportPage = () => {
   const { colors } = useTheme<MaterializeTheme>();
   const organizationId = useMaybeCurrentOrganizationId()?.data;
   const isIntercomIdentified = useIsIntercomIdentified();
+  const hasIntercomJwt = useHasIntercomJwt();
   const unreadCount = useIntercomUnreadCount();
   const outageHint = isIntercomIdentified
     ? "For an outage, choose “Report Production Outage” in the chat. SLA plans only."
@@ -248,7 +262,7 @@ const SupportPage = () => {
             as="a"
             href={SUPPORT_MAILTO}
             onClick={preferIntercom(
-              isIntercomIdentified,
+              hasIntercomJwt,
               openIntercomNewConversation,
             )}
             variant="primary"
@@ -260,7 +274,7 @@ const SupportPage = () => {
             as="a"
             href={OUTAGE_MAILTO}
             onClick={preferIntercom(
-              isIntercomIdentified,
+              hasIntercomJwt,
               openIntercomNewConversation,
             )}
             variant="outline"
@@ -356,7 +370,7 @@ const SupportPage = () => {
                   description="AI answers from the docs, any time"
                   href={HELP_CENTER_URL}
                   onClick={preferIntercom(
-                    isIntercomIdentified,
+                    hasIntercomJwt,
                     openIntercomMessenger,
                   )}
                 />

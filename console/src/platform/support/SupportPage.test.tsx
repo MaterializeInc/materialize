@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { show, showNewMessage } from "@intercom/messenger-js-sdk";
+import { QueryClient } from "@tanstack/react-query";
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -23,6 +24,7 @@ import {
   STATUS_PAGE_URL,
   SUPPORT_PLANS_URL,
 } from "~/externalUrls";
+import { incidentIOQueryKeys } from "~/queries/incident-io";
 import { renderComponent } from "~/test/utils";
 
 import SupportPage, { OUTAGE_MAILTO, SUPPORT_MAILTO } from "./SupportPage";
@@ -205,6 +207,42 @@ describe("SupportPage", () => {
     const banner = await screen.findByTestId("support-status-banner");
     expect(banner).toHaveTextContent(/Ongoing incident/);
     expect(banner).toHaveTextContent(/Elevated query latency/);
+  });
+
+  it("stops showing cached status when a refresh fails", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    await renderComponent(<SupportPage />, { queryClient });
+    expect(
+      await screen.findByTestId("support-status-banner"),
+    ).toHaveTextContent(/All systems operational/);
+
+    server.use(
+      http.get(STATUSPAGE_URL, () => HttpResponse.json({}, { status: 500 })),
+    );
+    await queryClient.refetchQueries({ queryKey: incidentIOQueryKeys.all() });
+
+    expect(await screen.findByTestId("support-status-link")).toHaveAttribute(
+      "href",
+      STATUS_PAGE_URL,
+    );
+    expect(screen.queryByText(/All systems operational/)).toBeNull();
+  });
+
+  it("opens the Messenger if it boots after the page rendered", async () => {
+    setIntercom("stub");
+    const user = userEvent.setup();
+    await renderComponent(<SupportPage />);
+    const openTicket = await screen.findByRole("link", {
+      name: "Open a ticket",
+    });
+
+    // The widget finishes booting between readiness checks.
+    (window as unknown as { Intercom: IntercomStub }).Intercom.booted = true;
+    await user.click(openTicket);
+
+    expect(showNewMessage).toHaveBeenCalledTimes(1);
   });
 
   it("only links to the status page when the status API fails", async () => {
