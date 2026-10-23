@@ -2177,7 +2177,6 @@ pub struct RecordFirstRowStream {
     pub no_more_rows: bool,
     /// Whether the first-to-last-byte metric has already been recorded for this stream.
     pub metric_recorded: bool,
-    // Empty inline or OFFSET-discarded blob batches must not end the notice's interval.
     execution_time: Option<ExecutionTime>,
     execution_time_reported: bool,
 }
@@ -2246,6 +2245,8 @@ impl RecordFirstRowStream {
         }
         if self.execution_time.is_none() && !self.execution_time_reported {
             let kind = match &mut msg {
+                // An empty batch does not end the interval. A stashed result can start with an
+                // empty inline batch, and an `OFFSET` can empty whole stashed batches.
                 Some(PeekResponseUnary::Rows(rows)) => {
                     rows.peek().is_some().then_some(ExecutionTimeKind::FirstRow)
                 }

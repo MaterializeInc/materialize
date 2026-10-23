@@ -1741,7 +1741,8 @@ fn test_execution_time_result_ready_boundary() {
             .set_read_timeout(Some(Duration::from_secs(120)))
             .unwrap();
     }
-    // Sends `request` and returns the details of its execution time notices.
+    // Sends `request` and returns the details of its execution time notices and how long the
+    // request took.
     let mut run_ws = |request: serde_json::Value| {
         arm();
         let start = Instant::now();

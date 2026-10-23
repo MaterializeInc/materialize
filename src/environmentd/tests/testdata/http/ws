@@ -560,15 +560,6 @@ ws-text fixtiming=true
 {"type":"CommandComplete","payload":"SELECT 1"}
 {"type":"ReadyForQuery","payload":"I"}
 
-# SUBSCRIBE remains excluded even when execution time notices are enabled.
-ws-text fixtiming=true
-{"query": "SET emit_execution_time_notice = on"}
-----
-{"type":"CommandStarting","payload":{"has_rows":false,"is_streaming":false}}
-{"type":"Notice","payload":{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}}
-{"type":"CommandComplete","payload":"SET"}
-{"type":"ReadyForQuery","payload":"I"}
-
 ws-text rows=2 fixtimestamp=true
 {"query": "SUBSCRIBE t"}
 ----

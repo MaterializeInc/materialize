@@ -614,7 +614,7 @@ impl From<PlanNotice> for AdapterNotice {
 /// Parsing, describing, and binding are excluded, except binding within SQL `EXECUTE`.
 /// Reads and writes use the same boundary. Subsequent row delivery and implicit commit
 /// are excluded. Work performed within execution, including an explicit `COMMIT`, is
-/// included. This is not a guarantee of write durability.
+/// included.
 #[derive(Clone, Debug)]
 pub struct ExecutionTime {
     pub(crate) kind: ExecutionTimeKind,
@@ -622,7 +622,7 @@ pub struct ExecutionTime {
 }
 
 impl ExecutionTime {
-    /// Records execution returning a successful response without rows.
+    /// The time of a statement that cannot return rows.
     pub fn completed(elapsed: Duration) -> Self {
         Self {
             kind: ExecutionTimeKind::Completed,
@@ -631,10 +631,14 @@ impl ExecutionTime {
     }
 }
 
+/// Where the interval of an [`ExecutionTime`] ends.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ExecutionTimeKind {
+    /// A statement that returns rows has its first row ready. Delivering the rows is excluded.
     FirstRow,
+    /// A statement that could return rows finished without any.
     EmptyResult,
+    /// A statement that cannot return rows, such as `SET`, finished executing.
     Completed,
     /// The transaction still holds work for a later commit, which the time excludes.
     Staged,
