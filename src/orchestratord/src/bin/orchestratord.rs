@@ -23,7 +23,7 @@ use k8s_openapi::{
     api::{
         apps::v1::Deployment,
         core::v1::{
-            Affinity, ConfigMap, ResourceRequirements, Service, ServiceAccount, Toleration,
+            Affinity, ConfigMap, Probe, ResourceRequirements, Service, ServiceAccount, Toleration,
         },
         networking::v1::NetworkPolicy,
         rbac::v1::{Role, RoleBinding},
@@ -252,6 +252,12 @@ pub struct Args {
     environmentd_tolerations: Option<Vec<Toleration>>,
     #[clap(long, value_parser = parse_resources)]
     environmentd_default_resources: Option<ResourceRequirements>,
+    #[clap(long, value_parser = parse_probe)]
+    environmentd_default_readiness_probe: Option<Probe>,
+    #[clap(long, value_parser = parse_probe)]
+    environmentd_default_liveness_probe: Option<Probe>,
+    #[clap(long, value_parser = parse_probe)]
+    environmentd_default_startup_probe: Option<Probe>,
     #[clap(long)]
     environmentd_priority_class_name: Option<String>,
     #[clap(long)]
@@ -369,6 +375,12 @@ fn parse_tolerations(s: &str) -> anyhow::Result<Toleration> {
 
 fn parse_resources(s: &str) -> anyhow::Result<ResourceRequirements> {
     Ok(serde_json::from_str(s)?)
+}
+
+fn parse_probe(s: &str) -> anyhow::Result<Probe> {
+    let probe = serde_json::from_str(s)?;
+    controller::materialize::generation::validate_probe_handlers(&probe)?;
+    Ok(probe)
 }
 
 fn parse_crd_columns(val: &str) -> Result<Vec<CustomResourceColumnDefinition>, serde_json::Error> {
@@ -702,6 +714,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             environmentd_affinity: args.environmentd_affinity,
             environmentd_tolerations: args.environmentd_tolerations,
             environmentd_default_resources: args.environmentd_default_resources,
+            environmentd_default_readiness_probe: args.environmentd_default_readiness_probe,
+            environmentd_default_liveness_probe: args.environmentd_default_liveness_probe,
+            environmentd_default_startup_probe: args.environmentd_default_startup_probe,
             environmentd_priority_class_name: args.environmentd_priority_class_name,
             clusterd_node_selector: args.clusterd_node_selector,
             clusterd_affinity: args.clusterd_affinity,
@@ -1082,6 +1097,30 @@ mod tests {
         assert_eq!(
             args.webhook_service_namespace.as_deref(),
             Some("materialize")
+        );
+    }
+
+    #[mz_ore::test]
+    fn default_probe_args_reject_multiple_handlers() {
+        let args = Args::try_parse_from(
+            REQUIRED_ARGS
+                .iter()
+                .copied()
+                .chain([r#"--environmentd-default-startup-probe={"failureThreshold":360}"#]),
+        )
+        .expect("parses a probe without a handler");
+        assert_eq!(
+            args.environmentd_default_startup_probe
+                .and_then(|probe| probe.failure_threshold),
+            Some(360)
+        );
+
+        assert!(
+            Args::try_parse_from(REQUIRED_ARGS.iter().copied().chain([
+                r#"--environmentd-default-liveness-probe={"exec":{"command":["true"]},"tcpSocket":{"port":6875}}"#,
+            ]))
+            .is_err(),
+            "a probe with two handlers should be rejected"
         );
     }
 

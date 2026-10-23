@@ -300,6 +300,31 @@ tests:
       path: spec.template.spec.containers[0].args
       content: "--environmentd-priority-class-name=mz-environmentd-high"
 
+- it: should not pass default environmentd probes when not configured
+  asserts:
+  - notMatchRegex:
+      path: spec.template.spec.containers[0].args[*]
+      pattern: "^--environmentd-default-(readiness|liveness|startup)-probe"
+
+- it: should pass default environmentd probes when configured
+  set:
+    environmentd.defaultReadinessProbe:
+      periodSeconds: 5
+    environmentd.defaultLivenessProbe:
+      failureThreshold: 60
+    environmentd.defaultStartupProbe:
+      failureThreshold: 360
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: '--environmentd-default-readiness-probe={"periodSeconds":5}'
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: '--environmentd-default-liveness-probe={"failureThreshold":60}'
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: '--environmentd-default-startup-probe={"failureThreshold":360}'
+
 - it: should not pass the clusterd priority class when not configured
   asserts:
   - notMatchRegex:

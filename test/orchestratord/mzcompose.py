@@ -1755,6 +1755,76 @@ class EnvironmentdResources(Modification):
         retry(check_pods, 120)
 
 
+class EnvironmentdProbes(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        if version >= MzVersion.parse_mz("v26.48.0-dev.0"):
+            return [
+                None,
+                {
+                    "readiness": {"periodSeconds": 5},
+                    "liveness": {"failureThreshold": 60, "timeoutSeconds": 3},
+                    "startup": {"failureThreshold": 360},
+                },
+            ]
+        return [None]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            spec = definition["materialize"]["spec"]
+            spec["environmentdReadinessProbe"] = self.value["readiness"]
+            spec["environmentdLivenessProbe"] = self.value["liveness"]
+            spec["environmentdStartupProbe"] = self.value["startup"]
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v26.48.0-dev.0"
+        ):
+            return
+
+        # The CR's fields are overlaid onto the operator's built-in probe.
+        base = {"initialDelaySeconds": 1, "failureThreshold": 12}
+        overrides = self.value or {"readiness": {}, "liveness": {}}
+        expected = {
+            "readinessProbe": {**base, **overrides["readiness"]},
+            "livenessProbe": {**base, **overrides["liveness"]},
+        }
+        # There is no startup probe unless one is configured.
+        expected_startup = (
+            {**base, **self.value["startup"]} if self.value is not None else None
+        )
+
+        def check_pods() -> None:
+            container = get_environmentd_data()["items"][0]["spec"]["containers"][0]
+            for probe_name, expected_fields in expected.items():
+                probe = container[probe_name]
+                assert (
+                    "tcpSocket" in probe
+                ), f"Expected tcpSocket in {probe_name}: {probe}"
+                actual = {k: probe.get(k) for k in expected_fields}
+                assert (
+                    actual == expected_fields
+                ), f"Expected environmentd {probe_name} {expected_fields}, but got {probe}"
+            startup = container.get("startupProbe")
+            if expected_startup is None:
+                assert startup is None, f"Expected no startupProbe, but got {startup}"
+            else:
+                assert startup is not None, "Expected a startupProbe"
+                assert (
+                    "tcpSocket" in startup
+                ), f"Expected tcpSocket in startupProbe: {startup}"
+                actual = {k: startup.get(k) for k in expected_startup}
+                assert (
+                    actual == expected_startup
+                ), f"Expected environmentd startupProbe {expected_startup}, but got {startup}"
+
+        retry(check_pods, 120)
+
+
 class BalancerdResources(Modification):
     @classmethod
     def values(cls, version: MzVersion) -> list[Any]:

@@ -201,6 +201,15 @@ spec:
         {{- if .Values.environmentd.defaultResources }}
         - '--environmentd-default-resources={{ toJson .Values.environmentd.defaultResources }}'
         {{- end }}
+        {{- if .Values.environmentd.defaultReadinessProbe }}
+        - '--environmentd-default-readiness-probe={{ toJson .Values.environmentd.defaultReadinessProbe }}'
+        {{- end }}
+        {{- if .Values.environmentd.defaultLivenessProbe }}
+        - '--environmentd-default-liveness-probe={{ toJson .Values.environmentd.defaultLivenessProbe }}'
+        {{- end }}
+        {{- if .Values.environmentd.defaultStartupProbe }}
+        - '--environmentd-default-startup-probe={{ toJson .Values.environmentd.defaultStartupProbe }}'
+        {{- end }}
         {{- if .Values.clusterd.nodeSelector }}
         {{- range $key, $value := .Values.clusterd.nodeSelector }}
         - "--clusterd-node-selector={{ $key }}={{ $value }}"
