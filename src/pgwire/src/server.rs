@@ -41,9 +41,10 @@ use crate::message::BackendMessage;
 use crate::metrics::{Metrics, MetricsConfig};
 use crate::protocol;
 
-/// The parts of a [`Server`] that only exist once the adapter has booted.
+/// The adapter-backed parts of a [`Server`], which only exist once the adapter
+/// has booted.
 #[derive(Clone, Debug)]
-pub struct Booted {
+pub struct AdapterHandles {
     /// A client for the adapter with which the server will communicate.
     pub adapter_client: mz_adapter::Client,
     /// OIDC authenticator.
@@ -58,7 +59,7 @@ pub struct Config {
     /// Resolves once the adapter has booted. Until then, the server answers
     /// every startup message with a fatal `57P03` (`cannot_connect_now`)
     /// error, as PostgreSQL does while it starts up.
-    pub booted: Shared<oneshot::Receiver<Booted>>,
+    pub adapter_handles_rx: Shared<oneshot::Receiver<AdapterHandles>>,
     /// The TLS configuration for the server.
     ///
     /// If not present, then TLS is not enabled, and clients requests to
@@ -82,7 +83,7 @@ pub struct Config {
 /// A server that communicates with clients via the pgwire protocol.
 pub struct Server {
     tls: Option<ReloadingTlsConfig>,
-    booted: Shared<oneshot::Receiver<Booted>>,
+    adapter_handles_rx: Shared<oneshot::Receiver<AdapterHandles>>,
     authenticator_kind: AuthenticatorKind,
     frontegg: Option<FronteggAuthenticator>,
     metrics: Metrics,
@@ -116,7 +117,7 @@ impl Server {
     pub fn new(config: Config) -> Server {
         Server {
             tls: config.tls,
-            booted: config.booted,
+            adapter_handles_rx: config.adapter_handles_rx,
             authenticator_kind: config.authenticator_kind,
             frontegg: config.frontegg,
             metrics: Metrics::new(config.metrics, config.label),
@@ -132,7 +133,7 @@ impl Server {
         conn: Connection,
         tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
     ) -> impl Future<Output = Result<(), anyhow::Error>> + Send + 'static {
-        let booted = self.booted.clone();
+        let adapter_handles_rx = self.adapter_handles_rx.clone();
         let authenticator_kind = self.authenticator_kind;
         let frontegg = self.frontegg.clone();
         let tls = self.tls.clone();
@@ -169,10 +170,10 @@ impl Server {
                                 // Checked here, after encryption negotiation, so
                                 // that a client which negotiated TLS receives the
                                 // error over TLS.
-                                let Some(Ok(Booted {
+                                let Some(Ok(AdapterHandles {
                                     adapter_client,
                                     oidc,
-                                })) = booted.now_or_never()
+                                })) = adapter_handles_rx.now_or_never()
                                 else {
                                     trace!("send=StartingUp");
                                     return send_starting_up(conn).await;
@@ -256,8 +257,8 @@ impl Server {
                                 secret_key,
                             }) => {
                                 // There are no sessions to cancel before boot.
-                                if let Some(Ok(Booted { adapter_client, .. })) =
-                                    booted.now_or_never()
+                                if let Some(Ok(AdapterHandles { adapter_client, .. })) =
+                                    adapter_handles_rx.now_or_never()
                                 {
                                     adapter_client.cancel_request(conn_id, secret_key);
                                 }

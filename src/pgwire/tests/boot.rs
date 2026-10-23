@@ -26,10 +26,10 @@ use tokio_postgres::error::SqlState;
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `socket`
 async fn startup_before_boot_is_rejected_with_cannot_connect_now() {
     // Holding the sender without sending keeps the server booting.
-    let (_booted_tx, booted_rx) = oneshot::channel();
+    let (_adapter_handles_tx, adapter_handles_rx) = oneshot::channel();
     let server = Server::new(Config {
         label: "test",
-        booted: booted_rx.shared(),
+        adapter_handles_rx: adapter_handles_rx.shared(),
         tls: None,
         frontegg: None,
         authenticator_kind: AuthenticatorKind::None,
@@ -38,9 +38,7 @@ async fn startup_before_boot_is_rejected_with_cannot_connect_now() {
         helm_chart_version: None,
         allowed_roles: AllowedRoles::Normal,
     });
-    let (handle, conns) = mz_server_core::listen(&SocketAddr::from(([127, 0, 0, 1], 0)))
-        .await
-        .unwrap();
+    let (handle, conns) = mz_server_core::listen(&SocketAddr::from(([127, 0, 0, 1], 0))).unwrap();
     let _server_task = task::spawn(|| "pgwire_server", {
         mz_server_core::serve(ServeConfig {
             conns,

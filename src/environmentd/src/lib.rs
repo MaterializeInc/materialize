@@ -279,7 +279,7 @@ impl Listener<SqlListenerConfig> {
         active_connection_counter: ConnectionCounter,
         tls_reloading_context: Option<ReloadingSslContext>,
         frontegg: Option<FronteggAuthenticator>,
-        booted: Shared<oneshot::Receiver<mz_pgwire::Booted>>,
+        adapter_handles_rx: Shared<oneshot::Receiver<mz_pgwire::AdapterHandles>>,
         metrics: MetricsConfig,
         helm_chart_version: Option<String>,
     ) -> ListenerHandle {
@@ -297,7 +297,7 @@ impl Listener<SqlListenerConfig> {
             let sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
                 label,
                 tls,
-                booted,
+                adapter_handles_rx,
                 authenticator_kind: self.config.authenticator_kind,
                 frontegg,
                 metrics,
@@ -460,8 +460,8 @@ impl Listeners {
         // These also start before initialization, so that clients connecting
         // while we boot are told so immediately rather than waiting in the
         // kernel's accept queue, which can fill and then drop new connections.
-        let (pgwire_booted_tx, pgwire_booted_rx) = oneshot::channel();
-        let pgwire_booted_rx = pgwire_booted_rx.shared();
+        let (pgwire_adapter_handles_tx, pgwire_adapter_handles_rx) = oneshot::channel();
+        let pgwire_adapter_handles_rx = pgwire_adapter_handles_rx.shared();
         let pgwire_metrics = mz_pgwire::MetricsConfig::register_into(&config.metrics_registry);
         let mut sql_listener_handles = BTreeMap::new();
         for (name, listener) in self.sql {
@@ -473,7 +473,7 @@ impl Listeners {
                         active_connection_counter.clone(),
                         tls_reloading_context.clone(),
                         config.frontegg.clone(),
-                        pgwire_booted_rx.clone(),
+                        pgwire_adapter_handles_rx.clone(),
                         pgwire_metrics.clone(),
                         config.helm_chart_version.clone(),
                     )
@@ -879,12 +879,12 @@ impl Listeners {
         adapter_client_tx
             .send(adapter_client.clone())
             .expect("internal HTTP server should not drop first");
-        pgwire_booted_tx
-            .send(mz_pgwire::Booted {
+        pgwire_adapter_handles_tx
+            .send(mz_pgwire::AdapterHandles {
                 adapter_client: adapter_client.clone(),
                 oidc: oidc.clone(),
             })
-            .expect("pgwire_booted_rx is held until serve returns");
+            .expect("pgwire_adapter_handles_rx is held until serve returns");
 
         // Start telemetry reporting loop.
         if let Some(segment_client) = segment_client {
