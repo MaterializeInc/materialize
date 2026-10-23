@@ -12,5 +12,3 @@ When you create additional tables for a source that already has tables ingesting
 data, ingestion for the existing tables is blocked while the new tables
 snapshot. The existing tables remain queryable, but they stop advancing until
 the new tables' snapshots complete.
-
-{{% include-headless "/headless/postgres-add-table-snapshot-exception" %}}

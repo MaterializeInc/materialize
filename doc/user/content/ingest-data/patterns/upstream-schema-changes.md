@@ -309,8 +309,6 @@ replicating and ignores the new column. Migrate whenever convenient.
 
    {{% include-headless "/headless/source-versioning-snapshotting-note" %}}
 
-{{% include-headless "/headless/postgres-add-table-snapshot-exception" %}}
-
    {{< /note >}}
 
 1. Create a replacement materialized view over the new table. The expression is

@@ -74,6 +74,8 @@ When you add a table to a PostgreSQL source, with `CREATE TABLE ... FROM SOURCE`
 
 Note that adding a table still briefly restarts the source dataflow, and if the dataflow restarts again before the snapshot finishes (for example, after a replica resize or another table change), the other tables pause until Materialize catches back up on the replication stream. The cluster also uses additional memory while the new table hydrates.
 
+The snapshot and the replication stream now run at the same time on the same replica. On a single-worker replica, such as `25cc`, existing tables still fall behind during the snapshot. Before adding a table, size the source cluster above the smallest size, or temporarily resize it up for the snapshot.
+
 ### Improvements {#v26.47-improvements}
 - **Zero-downtime upgrades wait less before promoting**: A rollout no longer applies a full stability wait to replicas created during that rollout, and no longer waits on collections or replicas that the outgoing deployment has not hydrated either.
 - **Lower connection balancer memory per connection**: Idle connections through the connection balancer now use about a third less memory, so a self-managed deployment with the 256 MiB default is no longer killed for running out of memory at roughly 3,800 connections.

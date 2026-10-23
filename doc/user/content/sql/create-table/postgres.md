@@ -35,7 +35,7 @@ use within a [transaction block](/sql/begin/#ddl-only-transactions).
 
 ### Source-populated tables and snapshotting
 
-{{% include-headless "/headless/postgres-create-table-from-source-snapshotting" %}}
+{{% include-headless "/headless/create-table-from-source-snapshotting" %}}
 
 ### Supported data types
 
