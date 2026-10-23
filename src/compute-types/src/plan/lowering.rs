@@ -1401,23 +1401,12 @@ This is not expected to cause incorrect results, but could indicate a performanc
 
             // Input key selection strategy:
             // (1) If we can read a key at a particular value, do so
-            // (2) Otherwise, if there is a key that causes the MFP to be the identity, and
-            // therefore allows us to avoid discarding the arrangement, use that.
-            // (3) Otherwise, if there is _some_ key, use that,
-            // (4) Otherwise just read the raw collection.
+            // (2) Otherwise, if there is _some_ key, use that,
+            // (3) Otherwise just read the raw collection.
             let input_key_val = if let Some((key, permutation, thinning, val)) = key_val {
                 mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
 
                 Some((key, Some(val)))
-            } else if let Some((key, permutation, thinning)) =
-                keys.arranged.iter().find(|(key, permutation, thinning)| {
-                    let mut mfp = mfp.clone();
-                    mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
-                    mfp.is_identity()
-                })
-            {
-                mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
-                Some((key.clone(), None))
             } else if let Some((key, permutation, thinning)) = keys.arbitrary_arrangement() {
                 mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
                 Some((key.clone(), None))
@@ -1425,49 +1414,14 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 None
             };
 
-            if mfp.is_identity() {
-                // We have discovered a key
-                // whose permutation causes the MFP to actually
-                // be the identity! We can keep it around,
-                // but without its permutation this time,
-                // and with a trivial thinning of the right length.
-                let (key, val) = input_key_val.unwrap();
-                let (_old_key, old_permutation, old_thinning) = keys
-                    .arranged
-                    .iter_mut()
-                    .find(|(key2, _, _)| key2 == &key)
-                    .unwrap();
-                *old_permutation = (0..mfp.input_arity).collect();
-                let old_thinned_arity = old_thinning.len();
-                *old_thinning = (0..old_thinned_arity).collect();
-                // Get rid of all other forms, as this is now the only one known to be valid.
-                // TODO[btv] we can probably save the other arrangements too, if we adjust their permutations.
-                // This is not hard to do, but leaving it for a quick follow-up to avoid making the present diff too unwieldy.
-                keys.arranged.retain(|(key2, _, _)| key2 == &key);
-                keys.raw = false;
-
-                // Creating a LirRelationExpr::Mfp node is now logically unnecessary, but we
-                // should do so anyway when `val` is populated, so that
-                // the `key_val` optimization gets applied.
-                let lir_id = self.allocate_lir_id();
-                if val.is_some() {
-                    plan = LirRelationNode::Mfp {
-                        input: Box::new(plan),
-                        mfp: mfp_mir_to_lir_plan(mfp),
-                        input_key_val: Some((key.clone(), val.map(StableRow))),
-                    }
-                    .as_plan(lir_id)
-                }
-            } else {
-                let lir_id = self.allocate_lir_id();
-                plan = LirRelationNode::Mfp {
-                    input: Box::new(plan),
-                    mfp: mfp_mir_to_lir_plan(mfp),
-                    input_key_val: input_key_val.map(|(key, val)| (key, val.map(StableRow))),
-                }
-                .as_plan(lir_id);
-                keys = AvailableCollections::new_raw();
+            let lir_id = self.allocate_lir_id();
+            plan = LirRelationNode::Mfp {
+                input: Box::new(plan),
+                mfp: mfp_mir_to_lir_plan(mfp),
+                input_key_val: input_key_val.map(|(key, val)| (key, val.map(StableRow))),
             }
+            .as_plan(lir_id);
+            keys = AvailableCollections::new_raw();
         }
 
         Ok(LoweredExpr {
