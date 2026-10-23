@@ -619,84 +619,6 @@ pub struct DDLEvent {
     pub ddl_command: Arc<str>,
 }
 
-impl DDLEvent {
-    /// Returns true if the DDL event is a compatible change, or false if it is not.
-    /// This performs a naive parsing of the DDL command looking for modification of columns
-    ///  1. ALTER TABLE .. ALTER COLUMN
-    ///  2. ALTER TABLE .. DROP COLUMN
-    ///
-    /// See <https://learn.microsoft.com/en-us/sql/t-sql/statements/alter-table-transact-sql?view=sql-server-ver17>
-    pub fn is_compatible(&self, included_columns: &[Arc<str>]) -> bool {
-        // TODO (maz): This is currently a basic check that doesn't take into account type changes.
-        // At some point, we will need to move this to SqlServerTableDesc and expand it.
-        let mut words = self.ddl_command.split_ascii_whitespace();
-        match (
-            words.next().map(str::to_ascii_lowercase).as_deref(),
-            words.next().map(str::to_ascii_lowercase).as_deref(),
-        ) {
-            (Some("alter"), Some("table")) => {
-                let mut peekable = words.peekable();
-                let mut compatible = true;
-                while compatible && let Some(token) = peekable.next() {
-                    compatible = match token.to_ascii_lowercase().as_str() {
-                        "alter" | "drop" => {
-                            let target = peekable.next();
-                            match target {
-                                // Targeting a column
-                                Some(t) if t.eq_ignore_ascii_case("column") => {
-                                    let mut all_excluded = true;
-                                    while let Some(tok) = peekable.next() {
-                                        // The column name(s) can be preceeded by the pair of keywords "IF EXISTS", so we want to skip those.
-                                        match tok.to_ascii_lowercase().as_str() {
-                                            "if" | "exists" | "," | "column" => continue,
-                                            col_str => {
-                                                // If any column is in the included list, then it is not okay to alter/drop it
-                                                // The col_str token may be a comma-separated list of columns as whitespace is not required
-                                                // between column names in SQL Server DDL.
-                                                if !col_str.trim_matches(',').split(',').all(
-                                                    |col_name| {
-                                                        !included_columns.iter().any(|included| {
-                                                            included.eq_ignore_ascii_case(
-                                                                col_name.trim_matches(
-                                                                    ['[', ']', '"'].as_ref(),
-                                                                ),
-                                                            )
-                                                        })
-                                                    },
-                                                ) {
-                                                    all_excluded = false;
-                                                    break;
-                                                }
-                                                // If this is the only/last column, then we can break out of the while loop.
-                                                // Check if this string has no trailing comma, and if not, peek to see if the next token
-                                                // contains a leading comma.
-                                                if !col_str.ends_with(",") {
-                                                    match peekable.peek() {
-                                                        Some(x) if x.starts_with(",") => continue,
-                                                        _ => break,
-                                                    }
-                                                }
-                                            }
-                                        };
-                                    }
-                                    all_excluded
-                                }
-                                // No target token after "alter" or "drop"
-                                None => false,
-                                // Other targets are considered compatible
-                                _ => true,
-                            }
-                        }
-                        _ => true,
-                    }
-                }
-                compatible
-            }
-            _ => true,
-        }
-    }
-}
-
 /// Returns DDL changes made to the source table for the given capture instance.  This follows the
 /// same convention as `cdc.fn_cdc_get_all_changes_<capture_instance>`, in that the range is
 /// inclusive, i.e. `[from_lsn, to_lsn]`. The events are returned in ascending order of
@@ -1126,8 +1048,7 @@ pub async fn validate_source_privileges(
 
 #[cfg(test)]
 mod tests {
-    use super::{DDLEvent, EngineEdition};
-    use std::sync::Arc;
+    use super::EngineEdition;
 
     #[mz_ore::test]
     fn test_engine_edition_mapping() {
@@ -1152,114 +1073,5 @@ mod tests {
             assert!(edition.has_sql_server_agent());
             assert!(edition.has_restore_history());
         }
-    }
-
-    #[mz_ore::test]
-    fn test_ddl_event_is_compatible() {
-        fn test_case(ddl_command: &str, included_columns: &[Arc<str>], expected: bool) {
-            let ddl_event = DDLEvent {
-                lsn: Default::default(),
-                ddl_command: ddl_command.into(),
-            };
-            let result = ddl_event.is_compatible(included_columns);
-            assert_eq!(
-                result, expected,
-                "DDL command '{}' with included_columns {:?} expected to be {}, got {}",
-                ddl_command, included_columns, expected, result
-            );
-        }
-
-        let included_columns = vec![Arc::from("col3"), Arc::from("col4"), Arc::from("col4")];
-
-        test_case(
-            "ALTER TABLE my_table ALTER COLUMN col1 INT",
-            &included_columns,
-            true,
-        );
-        test_case(
-            "ALTER TABLE my_table DROP COLUMN col2",
-            &included_columns,
-            true,
-        );
-        test_case(
-            "ALTER TABLE my_table ALTER COLUMN col3 INT",
-            &included_columns,
-            false,
-        );
-        test_case(
-            "ALTER TABLE my_table DROP COLUMN col4 INT",
-            &included_columns,
-            false,
-        );
-        test_case(
-            "CREATE INDEX idx_my_index ON my_table(col1)",
-            &included_columns,
-            true,
-        );
-        test_case(
-            "DROP INDEX idx_my_index ON my_table",
-            &included_columns,
-            true,
-        );
-        test_case(
-            "ALTER TABLE my_table ADD COLUMN col5 INT",
-            &included_columns,
-            true,
-        );
-        test_case(
-            "ALTER TABLE my_table DROP COLUMN col1, col2",
-            &included_columns,
-            true,
-        );
-        test_case(
-            "ALTER TABLE my_table DROP COLUMN col3, col2",
-            &included_columns,
-            false,
-        );
-        test_case(
-            "ALTER TABLE my_table DROP COLUMN col3, col4",
-            &included_columns,
-            false,
-        );
-        test_case(
-            "ALTER TABLE my_table DROP COLUMN IF EXISTS col1, col2",
-            &included_columns,
-            true,
-        );
-        test_case(
-            "ALTER TABLE my_table DROP CONSTRAINT constraint_name",
-            &included_columns,
-            true,
-        );
-        test_case(
-            "ALTER TABLE my_table DROP COLUMN col1,col3",
-            &included_columns,
-            false,
-        );
-        test_case(
-            "ALTER TABLE my_table DROP COLUMN col1,col2",
-            &included_columns,
-            true,
-        );
-        test_case(
-            "ALTER TABLE my_table DROP COLUMN col1 ,col2",
-            &included_columns,
-            true,
-        );
-        test_case(
-            "ALTER TABLE my_table DROP COLUMN col1 , col2",
-            &included_columns,
-            true,
-        );
-        test_case(
-            "ALTER TABLE my_table DROP COLUMN col1 , col3",
-            &included_columns,
-            false,
-        );
-        test_case(
-            "ALTER TABLE my_table DROP COLUMN col1 , COLUMN col3",
-            &included_columns,
-            false,
-        );
     }
 }

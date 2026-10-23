@@ -74,7 +74,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use tiberius::numeric::Numeric;
 
-use crate::desc::{SqlServerQualifiedTableName, SqlServerTableRaw};
+use crate::desc::{SqlServerColumnRaw, SqlServerQualifiedTableName, SqlServerTableRaw};
 use crate::inspect::DDLEvent;
 use crate::{Client, SqlServerCdcMetrics, SqlServerError, TransactionIsolationLevel};
 
@@ -340,12 +340,24 @@ impl<'a, M: SqlServerCdcMetrics> CdcStream<'a, M> {
                         let ddl_history = crate::inspect::get_ddl_history(
                             self.client, instance, instance_lsn, &db_max_lsn,
                         ).await?;
+                        let columns: Arc<[SqlServerColumnRaw]> = if ddl_history.is_empty() {
+                            Arc::from([])
+                        } else {
+                            crate::inspect::get_tables_for_capture_instance(
+                                self.client, [instance.as_ref()],
+                            )
+                            .await?
+                            .into_iter()
+                            .next()
+                            .map_or_else(|| Arc::from([]), |table| table.columns)
+                        };
                         for (table, ddl_events) in ddl_history {
                             for ddl_event in ddl_events {
                                 yield CdcEvent::SchemaUpdate {
                                     capture_instance: Arc::clone(instance),
                                     table: table.clone(),
-                                    ddl_event
+                                    ddl_event,
+                                    columns: Arc::clone(&columns),
                                 }
                             }
                         }
@@ -456,6 +468,10 @@ pub enum CdcEvent {
         table: SqlServerQualifiedTableName,
         /// DDL event
         ddl_event: DDLEvent,
+        /// Columns of the upstream table when the event was collected, which
+        /// may be later than `ddl_event.lsn`. Empty if the table no longer
+        /// exists.
+        columns: Arc<[SqlServerColumnRaw]>,
     },
 }
 
