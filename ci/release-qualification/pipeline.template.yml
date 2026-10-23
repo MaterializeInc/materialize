@@ -317,7 +317,7 @@ steps:
     timeout_in_minutes: 60
     parallelism: 2
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner-aarch64-8cpu-16gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: kafka-matrix
