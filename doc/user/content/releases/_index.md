@@ -24,8 +24,37 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-10-22* <br>
 *Released to Materialize Self-Managed: 2026-10-23* <br>
 
-### TRY_CAST {#v26.47-try-cast}
+### Turn cast errors into `NULL`s with `TRY_CAST` {#v26.47-try-cast}
+
 `TRY_CAST(<expr> AS <type>)` evaluates an expression once and attempts to cast it to the target type, producing `NULL` instead of an error when the value cannot be converted, and a failure anywhere inside a nested value yields `NULL` for the whole cast. Bad values in an ingest pipeline can therefore be turned into `NULL` in place rather than failing the statement. Casts between a few Materialize-internal types, such as `regclass` and `mz_aclitem`, are not supported.
+
+```mzsql
+CREATE TABLE raw_orders (id int, amount text);
+INSERT INTO raw_orders VALUES (1, '19.99'), (2, 'N/A'), (3, '250');
+
+CREATE MATERIALIZED VIEW orders AS
+  SELECT id, TRY_CAST(amount AS numeric(10, 2)) AS amount
+  FROM raw_orders;
+
+SELECT * FROM orders ORDER BY id;
+```
+```nofmt
+ id | amount
+----+--------
+  1 |  19.99
+  2 |
+  3 |    250
+```
+
+With `CAST` in place of `TRY_CAST`, every read of `orders` fails with `invalid input syntax for type numeric: "N/A"` for as long as that row is present.
+
+For more details, see [`CAST` and `TRY_CAST`](/sql/functions/cast/#try_cast).
+
+### View memory and disk usage on the new cluster details page {#v26.47-cluster-details-page}
+
+The Console's redesigned cluster details page charts each replica's CPU, memory, and disk use against its limits, marks when a replica was hydrating or ran out of memory, and ranks the objects using the most memory. It is available today on Materialize Cloud, and will be available on Self-Managed next week. To try it, open a cluster and select **Show the new cluster details page** in the breadcrumb bar.
+
+![Metrics tab of the new cluster details page, showing CPU and memory and disk usage against their limits, replica status with out-of-memory events, and the top 10 objects by memory](/images/releases/v2647_cluster_details.png)
 
 ### Safely drop upstream `NOT NULL` constraints in your Postgres sources {#v26.47-exclude-not-null-constraints}
 Materialize now allows you to `EXCLUDE ALL NOT NULL CONSTRAINTS` when creating a table from a Postgres source. Every column is ingested as nullable, so you can drop `NOT NULL` constraints upstream without causing your table to error. `PRIMARY KEY` and `UNIQUE` constraints are still recorded, and primary key columns remain `NOT NULL`.
@@ -42,7 +71,9 @@ For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/postgre
 
 {{< private-preview />}}
 
-When you add a table to a PostgreSQL source, with `CREATE TABLE ... FROM SOURCE` or, for legacy sources, `ALTER SOURCE ... ADD SUBSOURCE`, Materialize can now snapshot the new table while reading the replication stream, so the source's other tables can keep making progress during the snapshot. Previously, they waited until the new table's snapshot finished. Adding a table still briefly restarts the source dataflow, and if the dataflow restarts again before the snapshot finishes (for example, after a replica resize or another table change), the other tables pause until Materialize catches back up on the replication stream. The cluster also uses additional memory while the new table hydrates. This applies to PostgreSQL sources only.
+When you add a table to a PostgreSQL source, with `CREATE TABLE ... FROM SOURCE`, Materialize can now snapshot the new table while reading the replication stream. This means that existing tables continue making progress during the snapshot. Previously, if you added a new table, progress on existing tables would be halted until the new table's snapshot finished.
+
+Note that adding a table still briefly restarts the source dataflow, and if the dataflow restarts again before the snapshot finishes (for example, after a replica resize or another table change), the other tables pause until Materialize catches back up on the replication stream. The cluster also uses additional memory while the new table hydrates.
 
 ### Improvements {#v26.47-improvements}
 - **Zero-downtime upgrades wait less before promoting**: A rollout no longer applies a full stability wait to replicas created during that rollout, and no longer waits on collections or replicas that the outgoing deployment has not hydrated either.
@@ -52,6 +83,11 @@ When you add a table to a PostgreSQL source, with `CREATE TABLE ... FROM SOURCE`
 - **Incremental compaction on by default**: Self-managed deployments and the emulator now compact persisted data incrementally, as Materialize Cloud already does. No migration is needed.
 - **`min` and `max` over arrays and lists**: `min` and `max` now accept arrays and lists, and lists gain the `<>`, `<`, `<=`, `>`, and `>=` operators. Arrays with the same elements in differently shaped dimensions now sort as they do in PostgreSQL, which changes `<`, `ORDER BY`, `greatest`, and `least` for those arrays.
 - **Refresh strategy columns report their source expressions**: In `mz_internal.mz_materialized_view_refresh_strategies`, the `aligned_to` and `at` columns are renamed to `aligned_to_expression` and `at_expression`, and now return the expression as `text` rather than a resolved timestamp.
+
+### Guides {#v26.47-guides}
+- [Understand the query lifecycle](/serve-results/query-lifecycle/)
+- [Optimize point lookups with long `IN` lists](/transform-data/optimization/#long-in-lists)
+- [HTTP API: Choose between Simple and Extended requests](/serve-results/http-api/#transactional-semantics)
 
 ### Bug Fixes {#v26.47-bug-fixes}
 - Fixed the liveness probe restarting `environmentd` during a slow startup once client connections had filled its external SQL port, which could cause a restart loop. The operator now probes `environmentd`'s internal SQL port, except in deployments using password, SASL, or OIDC authentication.
