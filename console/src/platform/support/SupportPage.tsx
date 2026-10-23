@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import {
+  Box,
   Button,
   Flex,
   Grid,
@@ -15,6 +16,7 @@ import {
   StackDivider,
   Tag,
   Text,
+  Tooltip,
   useTheme,
   VStack,
 } from "@chakra-ui/react";
@@ -46,6 +48,7 @@ import {
   useIntercomUnreadCount,
   useIsIntercomIdentified,
 } from "~/hooks/useIntercom";
+import { InfoIcon } from "~/icons";
 import {
   MainContentContainer,
   PageHeader,
@@ -229,6 +232,9 @@ const SupportPage = () => {
   const organizationId = useMaybeCurrentOrganizationId()?.data;
   const isIntercomIdentified = useIsIntercomIdentified();
   const unreadCount = useIntercomUnreadCount();
+  const outageHint = isIntercomIdentified
+    ? "For an outage, choose “Report Production Outage” in the chat. SLA plans only."
+    : "Chat is unavailable, so these open an email to support.";
 
   return (
     <MainContentContainer>
@@ -237,41 +243,46 @@ const SupportPage = () => {
           <PageHeading>Help and support</PageHeading>
           <OrganizationSummary organizationId={organizationId} />
         </VStack>
-        <VStack spacing="1" align={{ base: "start", md: "end" }}>
-          <HStack spacing="2" flexWrap="wrap">
-            <Button
-              as="a"
-              href={SUPPORT_MAILTO}
-              onClick={preferIntercom(
-                isIntercomIdentified,
-                openIntercomNewConversation,
-              )}
-              variant="primary"
-              size="sm"
+        <HStack spacing="2" flexWrap="wrap">
+          <Button
+            as="a"
+            href={SUPPORT_MAILTO}
+            onClick={preferIntercom(
+              isIntercomIdentified,
+              openIntercomNewConversation,
+            )}
+            variant="primary"
+            size="sm"
+          >
+            Open a ticket
+          </Button>
+          <Button
+            as="a"
+            href={OUTAGE_MAILTO}
+            onClick={preferIntercom(
+              isIntercomIdentified,
+              openIntercomNewConversation,
+            )}
+            variant="outline"
+            size="sm"
+            color={colors.accent.red}
+            borderColor={colors.border.error}
+          >
+            Report a production outage
+          </Button>
+          <Tooltip label={outageHint} lineHeight={1.2} hasArrow>
+            <Box
+              as="span"
+              tabIndex={0}
+              aria-label={outageHint}
+              data-testid="support-outage-hint"
+              display="inline-flex"
+              borderRadius="full"
             >
-              Open a ticket
-            </Button>
-            <Button
-              as="a"
-              href={OUTAGE_MAILTO}
-              onClick={preferIntercom(
-                isIntercomIdentified,
-                openIntercomNewConversation,
-              )}
-              variant="outline"
-              size="sm"
-              color={colors.accent.red}
-              borderColor={colors.border.error}
-            >
-              Report a production outage
-            </Button>
-          </HStack>
-          <Text textStyle="text-small" color={colors.foreground.secondary}>
-            {isIntercomIdentified
-              ? "For an outage, choose “Report Production Outage” in the chat. SLA plans only."
-              : "Chat is unavailable, so these open an email to support."}
-          </Text>
-        </VStack>
+              <InfoIcon />
+            </Box>
+          </Tooltip>
+        </HStack>
       </PageHeader>
 
       <VStack spacing="5" align="stretch">
