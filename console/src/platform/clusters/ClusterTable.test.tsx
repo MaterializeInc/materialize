@@ -86,6 +86,7 @@ const buildCluster = (overrides: Partial<Cluster> = {}): Cluster => ({
   size: "50cc",
   disk: true,
   managed: true,
+  replicationFactor: 1,
   ownerId: "u1",
   replicas: [buildReplica(), buildReplica({ id: "u11", name: "r2" })],
   latestStatusUpdate: STATUS_UPDATED_AT,

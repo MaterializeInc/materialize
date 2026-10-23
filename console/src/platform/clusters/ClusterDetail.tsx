@@ -91,7 +91,10 @@ const ClusterDetailPage = () => {
     <>
       <PageHeader variant="compact" boxProps={{ mb: 0 }} sticky>
         <VStack spacing={0} alignItems="flex-start" width="100%">
-          <ClusterDetailBreadcrumbs crumbs={breadcrumbs} />
+          <ClusterDetailBreadcrumbs
+            crumbs={breadcrumbs}
+            showActions={!isEnabled}
+          />
           {isEnabled ? (
             <ClusterPageHeader />
           ) : (

@@ -13,28 +13,37 @@ import { sql } from "kysely";
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
 
 /**
- * When each of the given indexes and materialized views was created, for those
- * created at or after `startDate`. The literal id list makes this a lookup on
- * `mz_object_lifetimes_ind`.
+ * When each of the given objects of `objectTypes` was created, for those
+ * created at or after `startDate` when given. The literal id list makes this a
+ * lookup on `mz_object_lifetimes_ind`.
+ *
+ * NOTE: clusters, replicas, roles and schemas share the `u<N>` id form from
+ * separate counters, so one id can name objects of several requested types.
+ * Match rows on `objectType` as well as `id`.
  */
 export function buildObjectCreationTimesQuery({
   objectIds,
+  objectTypes,
   startDate,
 }: {
   objectIds: string[];
-  startDate: string;
+  objectTypes: string[];
+  startDate?: string;
 }) {
-  return (
-    queryBuilder
-      .selectFrom("mz_object_lifetimes")
-      .select(["id", "occurred_at as occurredAt"])
-      .where("id", "in", objectIds)
-      // Clusters, replicas, roles and schemas share the `u<N>` id form, so an id
-      // alone can match another kind's creation.
-      .where("object_type", "in", ["index", "materialized-view"])
-      .where("event_type", "=", "create")
-      .where("occurred_at", ">=", sql<Date>`${sql.lit(startDate)}::timestamptz`)
-  );
+  let qb = queryBuilder
+    .selectFrom("mz_object_lifetimes")
+    .select(["id", "object_type as objectType", "occurred_at as occurredAt"])
+    .where("id", "in", objectIds)
+    .where("object_type", "in", objectTypes)
+    .where("event_type", "=", "create");
+  if (startDate) {
+    qb = qb.where(
+      "occurred_at",
+      ">=",
+      sql<Date>`${sql.lit(startDate)}::timestamptz`,
+    );
+  }
+  return qb;
 }
 
 export async function fetchObjectCreationTimes({

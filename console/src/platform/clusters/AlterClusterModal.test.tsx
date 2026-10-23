@@ -39,6 +39,30 @@ describe("ClusterOverview", () => {
     server.use(emptyClustersResponse);
   });
 
+  it("starts the replicas at the replication factor, not a running burst's replica count", async () => {
+    const replica = (id: string, size: string) => ({
+      id,
+      name: id,
+      size,
+      disk: true,
+      statuses: [],
+    });
+    renderComponent(
+      <AlterClusterModal
+        cluster={buildCluster({ replicationFactor: 1 }, [
+          replica("r1", "25cc"),
+          replica("r2", "800cc"),
+        ])}
+        clusterSizes={[]}
+        isOpen={true}
+        maxReplicas={5}
+        onClose={mockOnClose}
+      />,
+    );
+
+    expect(await screen.findByLabelText("Replicas")).toHaveDisplayValue("1");
+  });
+
   it("Displays validation errors", async () => {
     const user = userEvent.setup();
     renderComponent(<FormWithClusterProvider />);
