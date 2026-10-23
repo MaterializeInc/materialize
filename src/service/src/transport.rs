@@ -26,7 +26,6 @@ mod tests;
 
 use std::convert::Infallible;
 use std::fmt::Debug;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::bail;
@@ -222,13 +221,9 @@ where
     Out: Message,
     H: GenericClient<In, Out>,
 {
+    let mut conn = Connection::start(stream, version, server_fqdn, timeout, metrics).await?;
+
     let mut cancel_rx = cancel_rx;
-    // Setup owns the stream and has not issued commands to the handler, so canceling
-    // it safely closes the socket even if the peer never finishes its handshake.
-    let mut conn = tokio::select! {
-        result = Connection::start(stream, version, server_fqdn, timeout, metrics) => result?,
-        _ = &mut cancel_rx => bail!("connection canceled"),
-    };
     loop {
         tokio::select! {
             // `Connection::recv` is documented to be cancel safe.
@@ -251,30 +246,28 @@ where
 /// This type encapsulates the core connection logic. It is used by both the client and the server
 /// implementation, with swapped `Out`/`In` types.
 ///
-/// Each connection spawns four tasks:
+/// Each connection spawns two tasks:
 ///
 ///  * The send task is responsible for encoding and sending enqueued messages.
 ///  * The recv task is responsible for receiving and decoding messages from the peer.
-///  * The heartbeat task periodically enqueues keepalive frames.
-///  * The supervisor checks byte progress and cancels the other tasks on failure.
 ///
 /// The separation into tasks provides some performance isolation between the sending and the
 /// receiving half of the connection.
 #[derive(Debug)]
 struct Connection<Out, In> {
     /// Message sender connected to the send task.
-    msg_tx: mpsc::UnboundedSender<Option<Out>>,
+    msg_tx: mpsc::UnboundedSender<Out>,
     /// Message receiver connected to the receive task.
     msg_rx: mpsc::UnboundedReceiver<In>,
     /// Receiver for errors encountered by connection tasks.
     error_rx: ErrorRx,
 
-    /// Owns the connection tasks and cancels them when dropped.
-    _task: AbortOnDropHandle<()>,
+    /// Handles to connection tasks.
+    _tasks: [AbortOnDropHandle<()>; 2],
 }
 
 impl<Out: Message, In: Message> Connection<Out, In> {
-    /// The interval with which keepalive frames are enqueued.
+    /// The interval with which keepalives are emitted on idle connections.
     const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(1);
     /// The minimum acceptable idle timeout.
     ///
@@ -300,35 +293,20 @@ impl<Out: Message, In: Message> Connection<Out, In> {
 
         let (reader, writer) = stream.split();
 
-        let progress = (timeout != Duration::MAX).then(|| Arc::new(metrics::Progress::default()));
-        let io_metrics = metrics::ProgressMetrics::new(metrics.clone(), progress.clone());
-        let mut reader = metrics::Reader::new(reader, io_metrics.clone());
-        let mut writer = metrics::Writer::new(writer, io_metrics);
+        // Apply the timeout to all connection reads and writes.
+        let reader = TimedReader::new(reader, timeout);
+        let writer = TimedWriter::new(writer, timeout);
+        // Track byte count metrics for all connection reads and writes.
+        let mut reader = metrics::Reader::new(reader, metrics.clone());
+        let mut writer = metrics::Writer::new(writer, metrics.clone());
 
-        // Handshakes need a deadline before the connection tasks exist. The timeout
-        // wrappers are confined to setup, where they preserve partial-I/O deadlines.
-        handshake(
-            TimedReader::new(&mut reader, timeout),
-            TimedWriter::new(&mut writer, timeout),
-            version,
-            server_fqdn,
-        )
-        .await?;
-        if let Some(progress) = &progress {
-            progress.take_received();
-            progress.take_sent();
-        }
+        handshake(&mut reader, &mut writer, version, server_fqdn).await?;
 
         let (out_tx, out_rx) = mpsc::unbounded_channel();
         let (in_tx, in_rx) = mpsc::unbounded_channel();
         let (error_tx, error_rx) = error_channel();
 
         let span = tracing::Span::current();
-        let heartbeat_tx = out_tx.clone();
-        let heartbeat_task = mz_ore::task::spawn(
-            || "ctp::heartbeat",
-            Self::run_heartbeat_task(heartbeat_tx).instrument(span.clone()),
-        );
         let send_task = mz_ore::task::spawn(
             || "ctp::send",
             Self::run_send_task(writer, out_rx, error_tx.clone(), metrics.clone())
@@ -336,37 +314,20 @@ impl<Out: Message, In: Message> Connection<Out, In> {
         );
         let recv_task = mz_ore::task::spawn(
             || "ctp::recv",
-            Self::run_recv_task(reader, in_tx, error_tx.clone(), metrics).instrument(span.clone()),
-        );
-        // Establish cancellation ownership before spawning the supervisor. It can be
-        // dropped before its first poll when the connection is immediately canceled.
-        let mut send_task = send_task.abort_on_drop();
-        let mut recv_task = recv_task.abort_on_drop();
-        let heartbeat_task = heartbeat_task.abort_on_drop();
-        let supervisor_task = mz_ore::task::spawn(
-            || "ctp::supervisor",
-            async move {
-                let _heartbeat_task = heartbeat_task;
-                tokio::select! {
-                    _ = &mut send_task => (),
-                    _ = &mut recv_task => (),
-                    _ = Self::run_watchdog(timeout, progress, error_tx) => (),
-                }
-            }
-            .instrument(span),
+            Self::run_recv_task(reader, in_tx, error_tx, metrics).instrument(span),
         );
 
         Ok(Self {
             msg_tx: out_tx,
             msg_rx: in_rx,
             error_rx,
-            _task: supervisor_task.abort_on_drop(),
+            _tasks: [send_task.abort_on_drop(), recv_task.abort_on_drop()],
         })
     }
 
     /// Enqueue a message for sending.
     async fn send(&mut self, msg: Out) -> anyhow::Result<()> {
-        match self.msg_tx.send(Some(msg)) {
+        match self.msg_tx.send(msg) {
             Ok(()) => Ok(()),
             Err(_) => bail!(self.error_rx.collect().await),
         }
@@ -385,67 +346,30 @@ impl<Out: Message, In: Message> Connection<Out, In> {
         }
     }
 
-    /// Enqueue heartbeat frames without polling or rebuilding a timer for each message.
-    async fn run_heartbeat_task(msg_tx: mpsc::UnboundedSender<Option<Out>>) {
-        let start = tokio::time::Instant::now() + Self::KEEPALIVE_INTERVAL;
-        let mut interval = tokio::time::interval_at(start, Self::KEEPALIVE_INTERVAL);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            if msg_tx.send(None).is_err() {
-                break;
-            }
-        }
-    }
-
-    /// Detects loss of byte progress independently in each direction.
-    ///
-    /// The one-second sampling cadence can add up to two seconds to the configured
-    /// idle timeout. Heartbeats ensure that healthy idle connections make progress.
-    async fn run_watchdog(
-        timeout: Duration,
-        progress: Option<Arc<metrics::Progress>>,
-        error_tx: ErrorTx,
-    ) {
-        let Some(progress) = progress else {
-            future::pending::<()>().await;
-            return;
-        };
-        let mut last_received = tokio::time::Instant::now();
-        let mut last_sent = last_received;
-        let start = last_received + Self::KEEPALIVE_INTERVAL;
-        let mut interval = tokio::time::interval_at(start, Self::KEEPALIVE_INTERVAL);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            let now = tokio::time::Instant::now();
-            if progress.take_received() {
-                last_received = now;
-            } else if now.duration_since(last_received) >= timeout {
-                warn!("ctp: recv error: timed out");
-                error_tx.report("recv error: timed out".into());
-                break;
-            }
-            if progress.take_sent() {
-                last_sent = now;
-            } else if now.duration_since(last_sent) >= timeout {
-                warn!("ctp: send error: timed out");
-                error_tx.report("send error: timed out".into());
-                break;
-            }
-        }
-    }
-
     /// Run a connection's send task.
     async fn run_send_task<W: AsyncWrite + Unpin>(
         mut writer: W,
-        mut msg_rx: mpsc::UnboundedReceiver<Option<Out>>,
+        mut msg_rx: mpsc::UnboundedReceiver<Out>,
         error_tx: ErrorTx,
         mut metrics: impl Metrics<Out, In>,
     ) {
-        // Heartbeats share the writer's queue, so they cannot interleave bytes with a message.
-        while let Some(msg) = msg_rx.recv().await {
-            trace!(?msg, "ctp: sending message or keepalive");
+        loop {
+            let msg = tokio::select! {
+                // `mpsc::UnboundedReceiver::recv` is cancel safe.
+                msg = msg_rx.recv() => match msg {
+                    Some(msg) => {
+                        trace!(?msg, "ctp: sending message");
+                        Some(msg)
+                    }
+                    None => break,
+                },
+                // `tokio::time::sleep` is cancel safe.
+                _ = tokio::time::sleep(Self::KEEPALIVE_INTERVAL) => {
+                    trace!("ctp: sending keepalive");
+                    None
+                },
+            };
+
             if let Err(error) = write_message(&mut writer, msg.as_ref()).await {
                 warn!("ctp: send error: {error}");
                 error_tx.report(format!("send error: {error}"));
