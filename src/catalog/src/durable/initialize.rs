@@ -50,7 +50,8 @@ use crate::durable::{
     ClusterVariantManaged, DATABASE_ID_ALLOC_KEY, DefaultPrivilege, EXPRESSION_CACHE_SHARD_KEY,
     MOCK_AUTHENTICATION_NONCE_KEY, OID_ALLOC_KEY, ReplicaConfig, ReplicaLocation, Role,
     SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-    SYSTEM_REPLICA_ID_ALLOC_KEY, Schema, Transaction, USER_CLUSTER_ID_ALLOC_KEY,
+    SYSTEM_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, Schema, Transaction,
+    USER_CLUSTER_ID_ALLOC_KEY, USER_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY,
     USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 
@@ -263,6 +264,14 @@ pub(crate) async fn initialize(
         ),
         (
             USER_NETWORK_POLICY_ID_ALLOC_KEY.to_string(),
+            DEFAULT_ALLOCATOR_ID,
+        ),
+        (
+            USER_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY.to_string(),
+            DEFAULT_ALLOCATOR_ID,
+        ),
+        (
+            SYSTEM_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY.to_string(),
             DEFAULT_ALLOCATOR_ID,
         ),
         (AUDIT_LOG_ID_ALLOC_KEY.to_string(), DEFAULT_ALLOCATOR_ID),

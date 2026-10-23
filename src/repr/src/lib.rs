@@ -34,6 +34,7 @@ mod scalar;
 pub mod adt;
 pub mod bytes;
 pub mod catalog_item_id;
+pub mod cluster_replica_size_id;
 pub mod explain;
 pub mod fixed_length;
 pub mod global_id;
