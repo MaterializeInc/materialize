@@ -63,7 +63,7 @@ const HistoryList = ({
   const { colors } = useTheme<MaterializeTheme>();
   const { colorMode } = useColorMode();
   const highlightBgColor =
-    colorMode === "light" ? colors.purple[200] : colors.purple[700];
+    colorMode === "light" ? colors.accentHue[200] : colors.accentHue[700];
   const highlightFgColor =
     colorMode === "light" ? "unset" : colors.foreground.primary;
 

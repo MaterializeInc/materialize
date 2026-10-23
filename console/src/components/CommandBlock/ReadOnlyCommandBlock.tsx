@@ -71,7 +71,9 @@ export const ReadOnlyCommandBlock = ({
         EditorView.theme({
           ".highlight": {
             "background-color":
-              colorMode === "light" ? colors.purple[200] : colors.purple[700],
+              colorMode === "light"
+                ? colors.accentHue[200]
+                : colors.accentHue[700],
           },
         }),
       ];
