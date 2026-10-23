@@ -96,8 +96,8 @@ snapshot](/ingest-data/#snapshotting) of table `v1.T` will begin.
 If your environment has [non-blocking snapshots for new
 tables](/releases/#v26.47-postgres-add-table-freshness) (private preview), the
 snapshot and the replication stream run at the same time on the same replica.
-On a single-worker replica, such as `25cc`, existing tables still fall behind
-during the snapshot. Size the source cluster above the smallest size, or
+On a single-worker replica (`25cc` or `50cc`), existing tables still fall
+behind during the snapshot. Use a source cluster size of `100cc` or larger, or
 temporarily resize it up for the snapshot. The cluster also uses more memory
 until the new table hydrates.
 {{< /note >}}
