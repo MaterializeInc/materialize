@@ -1,0 +1,311 @@
+# Range-bucketed `lag`/`lead`: the bucketed plan must agree with the plain one
+# row for row.
+#
+# A materialized view is optimized when it is created, so creating one under
+# each setting of the flag captures both plans and lets them be compared
+# directly.
+
+mode cockroach
+
+statement ok
+CREATE TABLE src (rid int, p int, o int, ts timestamp, a int, b int, c int, d int)
+
+# `o` spans far enough to cross several buckets and repeats, so ORDER BY ties
+# are exercised. Each value column has a different null density.
+statement ok
+INSERT INTO src
+SELECT i, i % 5, (i * 37) % 40000,
+       '2024-01-01 00:00:00'::timestamp + (((i * 37) % 40000) * '1 second'::interval),
+       CASE WHEN i % 5 = 0 THEN NULL ELSE (i * 13) % 97 END,
+       CASE WHEN i % 3 = 0 THEN NULL ELSE (i * 7)  % 89 END,
+       CASE WHEN i % 8 = 0 THEN NULL ELSE (i * 11) % 83 END,
+       CASE WHEN i % 2 = 0 THEN NULL ELSE (i * 17) % 79 END
+FROM generate_series(1, 4000) AS i
+
+# The ORDER BY key itself may be NULL. Those rows share the NULL bucket and sort
+# together, so the buckets stay contiguous, but it is worth pinning down.
+statement ok
+CREATE TABLE nullkey (rid int, p int, o int, a int)
+
+statement ok
+INSERT INTO nullkey
+SELECT i, i % 3,
+       CASE WHEN i % 11 = 0 THEN NULL ELSE (i * 37) % 40000 END,
+       CASE WHEN i % 4 = 0 THEN NULL ELSE (i * 13) % 97 END
+FROM generate_series(1, 2000) AS i
+
+statement ok
+CREATE TABLE empty_src (rid int, p int, o int, a int)
+
+# ---------------------------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_window_bucketing = false
+----
+COMPLETE 0
+
+statement ok
+CREATE MATERIALIZED VIEW ref_ignore AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW ref_respect AS
+SELECT rid, lag(a) OVER (PARTITION BY p ORDER BY o, rid) AS r FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW ref_offset3 AS
+SELECT rid, lag(a, 3) OVER (PARTITION BY p ORDER BY o, rid) AS r FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW ref_lead AS
+SELECT rid, lead(b) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW ref_fused AS
+SELECT rid,
+       lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS ra,
+       lag(b) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS rb,
+       lag(c) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS rc,
+       lag(d) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS rd
+FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW ref_nopart AS
+SELECT rid, lag(a) IGNORE NULLS OVER (ORDER BY o, rid) AS r FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW ref_ts AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY ts, rid) AS r FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW ref_default AS
+SELECT rid, lag(a, 1, -7) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW ref_desc AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o DESC, rid) AS r FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW ref_nullkey AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r FROM nullkey
+
+statement ok
+CREATE MATERIALIZED VIEW ref_empty AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r FROM empty_src
+
+# A window mixing `lag` and `lead` is deliberately left alone, since the split
+# relies on every constituent looking the same way along the order. It still has
+# to produce the right answers.
+statement ok
+CREATE MATERIALIZED VIEW ref_mixed AS
+SELECT rid,
+       lag(a) OVER (PARTITION BY p ORDER BY o, rid) AS l,
+       lead(a) OVER (PARTITION BY p ORDER BY o, rid) AS d
+FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW ref_offsets AS
+SELECT rid,
+       lag(a, 1) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS l1,
+       lag(a, 4) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS l4
+FROM src
+
+# ---------------------------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_window_bucketing = true
+----
+COMPLETE 0
+
+statement ok
+CREATE MATERIALIZED VIEW opt_ignore AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW opt_respect AS
+SELECT rid, lag(a) OVER (PARTITION BY p ORDER BY o, rid) AS r FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW opt_offset3 AS
+SELECT rid, lag(a, 3) OVER (PARTITION BY p ORDER BY o, rid) AS r FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW opt_lead AS
+SELECT rid, lead(b) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW opt_fused AS
+SELECT rid,
+       lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS ra,
+       lag(b) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS rb,
+       lag(c) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS rc,
+       lag(d) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS rd
+FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW opt_nopart AS
+SELECT rid, lag(a) IGNORE NULLS OVER (ORDER BY o, rid) AS r FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW opt_ts AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY ts, rid) AS r FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW opt_default AS
+SELECT rid, lag(a, 1, -7) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW opt_desc AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o DESC, rid) AS r FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW opt_nullkey AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r FROM nullkey
+
+statement ok
+CREATE MATERIALIZED VIEW opt_empty AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r FROM empty_src
+
+statement ok
+CREATE MATERIALIZED VIEW opt_mixed AS
+SELECT rid,
+       lag(a) OVER (PARTITION BY p ORDER BY o, rid) AS l,
+       lead(a) OVER (PARTITION BY p ORDER BY o, rid) AS d
+FROM src
+
+statement ok
+CREATE MATERIALIZED VIEW opt_offsets AS
+SELECT rid,
+       lag(a, 1) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS l1,
+       lag(a, 4) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS l4
+FROM src
+
+# ---------------------------------------------------------------------------
+# Every pair must agree in both directions, and neither side may drop or
+# duplicate a row.
+
+query IIIIIIIIIIIIIIIIII
+SELECT
+  (SELECT count(*) FROM (SELECT * FROM ref_ignore   EXCEPT ALL SELECT * FROM opt_ignore)),
+  (SELECT count(*) FROM (SELECT * FROM ref_respect  EXCEPT ALL SELECT * FROM opt_respect)),
+  (SELECT count(*) FROM (SELECT * FROM ref_offset3  EXCEPT ALL SELECT * FROM opt_offset3)),
+  (SELECT count(*) FROM (SELECT * FROM ref_lead     EXCEPT ALL SELECT * FROM opt_lead)),
+  (SELECT count(*) FROM (SELECT * FROM ref_fused    EXCEPT ALL SELECT * FROM opt_fused)),
+  (SELECT count(*) FROM (SELECT * FROM ref_nopart   EXCEPT ALL SELECT * FROM opt_nopart)),
+  (SELECT count(*) FROM (SELECT * FROM ref_ts       EXCEPT ALL SELECT * FROM opt_ts)),
+  (SELECT count(*) FROM (SELECT * FROM ref_default  EXCEPT ALL SELECT * FROM opt_default)),
+  (SELECT count(*) FROM (SELECT * FROM ref_desc     EXCEPT ALL SELECT * FROM opt_desc)),
+  (SELECT count(*) FROM (SELECT * FROM opt_fused    EXCEPT ALL SELECT * FROM ref_fused)),
+  (SELECT count(*) FROM (SELECT * FROM ref_mixed    EXCEPT ALL SELECT * FROM opt_mixed)),
+  (SELECT count(*) FROM (SELECT * FROM opt_mixed    EXCEPT ALL SELECT * FROM ref_mixed)),
+  (SELECT count(*) FROM (SELECT * FROM ref_offsets  EXCEPT ALL SELECT * FROM opt_offsets)),
+  (SELECT count(*) FROM (SELECT * FROM opt_offsets  EXCEPT ALL SELECT * FROM ref_offsets)),
+  (SELECT count(*) FROM (SELECT * FROM ref_nullkey  EXCEPT ALL SELECT * FROM opt_nullkey)),
+  (SELECT count(*) FROM (SELECT * FROM opt_nullkey  EXCEPT ALL SELECT * FROM ref_nullkey)),
+  (SELECT count(*) FROM opt_empty),
+  (SELECT count(*) FROM ref_empty)
+----
+0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0
+
+query IIIIIIIIII
+SELECT
+  (SELECT count(*) FROM (SELECT * FROM opt_ignore   EXCEPT ALL SELECT * FROM ref_ignore)),
+  (SELECT count(*) FROM (SELECT * FROM opt_respect  EXCEPT ALL SELECT * FROM ref_respect)),
+  (SELECT count(*) FROM (SELECT * FROM opt_offset3  EXCEPT ALL SELECT * FROM ref_offset3)),
+  (SELECT count(*) FROM (SELECT * FROM opt_lead     EXCEPT ALL SELECT * FROM ref_lead)),
+  (SELECT count(*) FROM (SELECT * FROM opt_nopart   EXCEPT ALL SELECT * FROM ref_nopart)),
+  (SELECT count(*) FROM (SELECT * FROM opt_ts       EXCEPT ALL SELECT * FROM ref_ts)),
+  (SELECT count(*) FROM (SELECT * FROM opt_default  EXCEPT ALL SELECT * FROM ref_default)),
+  (SELECT count(*) FROM (SELECT * FROM opt_desc     EXCEPT ALL SELECT * FROM ref_desc)),
+  (SELECT count(*) FROM opt_fused),
+  (SELECT count(*) FROM ref_fused)
+----
+0  0  0  0  0  0  0  0  4000  4000
+
+# ---------------------------------------------------------------------------
+# A window function in a correlated subquery whose ORDER BY reaches the outer
+# relation. The rewrite has to decline here: it types the ORDER BY key against
+# an empty outer context, which panics on an outer column reference.
+
+statement ok
+CREATE TABLE outer_t (y int)
+
+statement ok
+CREATE TABLE inner_t (x int, z int)
+
+statement ok
+INSERT INTO outer_t VALUES (1), (2), (3)
+
+statement ok
+INSERT INTO inner_t VALUES (10, 1), (20, 2), (30, 3), (40, 4)
+
+query II
+SELECT y, (SELECT max(l) FROM (SELECT lag(x) OVER (ORDER BY z + y) AS l FROM inner_t))
+FROM outer_t ORDER BY y
+----
+1  30
+2  30
+3  30
+
+query II
+SELECT y, (SELECT max(l) FROM (SELECT lag(x) OVER (PARTITION BY y ORDER BY z) AS l FROM inner_t))
+FROM outer_t ORDER BY y
+----
+1  30
+2  30
+3  30
+
+# ---------------------------------------------------------------------------
+# The `WINDOW BUCKET WIDTH` hint sets the bucket width. It tunes a constant
+# inside the bucket expression, so it must not change results whatever value it
+# takes, including values that leave the partition in a single bucket or give it
+# a bucket per row.
+
+statement ok
+CREATE MATERIALIZED VIEW opt_hint_narrow AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r
+FROM src
+OPTIONS (WINDOW BUCKET WIDTH = 16)
+
+statement ok
+CREATE MATERIALIZED VIEW opt_hint_wide AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r
+FROM src
+OPTIONS (WINDOW BUCKET WIDTH = 100000000)
+
+# A width whose form does not match the key is ignored rather than raising: a
+# duration means nothing to an integer key, and a bare number nothing in
+# particular to a timestamp.
+statement ok
+CREATE MATERIALIZED VIEW opt_hint_mismatched AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r
+FROM src
+OPTIONS (WINDOW BUCKET WIDTH = '1 day')
+
+# A zero width cannot be honoured, so it falls back rather than dividing by zero.
+statement ok
+CREATE MATERIALIZED VIEW opt_hint_zero AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY o, rid) AS r
+FROM src
+OPTIONS (WINDOW BUCKET WIDTH = 0)
+
+statement ok
+CREATE MATERIALIZED VIEW opt_hint_ts AS
+SELECT rid, lag(a) IGNORE NULLS OVER (PARTITION BY p ORDER BY ts, rid) AS r
+FROM src
+OPTIONS (WINDOW BUCKET WIDTH = '1 day')
+
+query IIIIIIIIII
+SELECT
+  (SELECT count(*) FROM (SELECT * FROM ref_ignore EXCEPT ALL SELECT * FROM opt_hint_narrow)),
+  (SELECT count(*) FROM (SELECT * FROM opt_hint_narrow EXCEPT ALL SELECT * FROM ref_ignore)),
+  (SELECT count(*) FROM (SELECT * FROM ref_ignore EXCEPT ALL SELECT * FROM opt_hint_wide)),
+  (SELECT count(*) FROM (SELECT * FROM opt_hint_wide EXCEPT ALL SELECT * FROM ref_ignore)),
+  (SELECT count(*) FROM (SELECT * FROM ref_ignore EXCEPT ALL SELECT * FROM opt_hint_zero)),
+  (SELECT count(*) FROM (SELECT * FROM opt_hint_zero EXCEPT ALL SELECT * FROM ref_ignore)),
+  (SELECT count(*) FROM (SELECT * FROM ref_ts EXCEPT ALL SELECT * FROM opt_hint_ts)),
+  (SELECT count(*) FROM (SELECT * FROM opt_hint_ts EXCEPT ALL SELECT * FROM ref_ts)),
+  (SELECT count(*) FROM (SELECT * FROM ref_ignore EXCEPT ALL SELECT * FROM opt_hint_mismatched)),
+  (SELECT count(*) FROM (SELECT * FROM opt_hint_mismatched EXCEPT ALL SELECT * FROM ref_ignore))
+----
+0  0  0  0  0  0  0  0  0  0
