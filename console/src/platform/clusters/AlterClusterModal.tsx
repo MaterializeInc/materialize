@@ -37,7 +37,6 @@ import { ObjectToastDescription } from "~/components/Toast";
 import { useToast } from "~/hooks/useToast";
 import docUrls from "~/mz-doc-urls.json";
 import { MaterializeTheme } from "~/theme";
-import { pluralize } from "~/util";
 
 import { useAlterCluster } from "./queries";
 import { replicasErrorMessage } from "./validation";
@@ -83,7 +82,7 @@ export const AlterClusterModal = ({
     },
   });
 
-  const [size, replicas] = watch(["size", "replicas"]);
+  const replicas = watch("replicas");
 
   const { mutate: alterCluster, isPending: isAlterInFlight } =
     useAlterCluster();
@@ -114,25 +113,10 @@ export const AlterClusterModal = ({
     );
   };
 
-  let warning = null;
-  if (replicas === "0") {
-    // The user is asking for zero replicas. Warn them that this will deactive
-    // the cluster, unless the cluster already has zero replicas.
-    if (cluster?.replicas.length !== 0) {
-      warning = "Setting replicas to 0 will deactivate the cluster.";
-    }
-  } else if (size !== cluster?.size) {
-    // The cluster has at least one replica, and the user wants to change its
-    // size. Warn them that this will result in unavailability until the new
-    // replicas catch up.
-    warning =
-      "Changing the cluster's size will cause the cluster to be temporarily unavailable while the " +
-      pluralize(
-        parseInt(replicas, 10),
-        "replica of the new size catches up.",
-        "replicas of the new size catch up.",
-      );
-  }
+  const warning =
+    replicas === "0" && cluster?.replicas.length !== 0
+      ? "Setting replicas to 0 will deactivate the cluster."
+      : undefined;
 
   return (
     <Modal isOpen={isOpen} onClose={onClose}>
