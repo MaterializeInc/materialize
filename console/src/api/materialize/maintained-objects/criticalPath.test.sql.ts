@@ -321,17 +321,20 @@ describe("buildCriticalPathLiveQuery", () => {
       clusterId: "c1",
       clusterName: "ingest",
       isBottleneck: false,
+      isIngestion: false,
     });
     expect(rows[1]).toMatchObject({
       objectType: "table",
       clusterId: "c1",
       clusterName: "ingest",
       isBottleneck: true,
+      isIngestion: false,
     });
     expect(rows[2]).toMatchObject({
       objectType: "source",
       clusterName: "ingest",
       isBottleneck: true,
+      isIngestion: true,
     });
   });
 
@@ -346,8 +349,64 @@ describe("buildCriticalPathLiveQuery", () => {
       childId: "s1",
       name: "pg",
       isBottleneck: true,
+      isIngestion: true,
     });
     expect(rows[0].lag?.toPostgres()).toBe("2 seconds");
     expect(rows[0].targetLag?.toPostgres()).toBe("4 seconds");
+  });
+
+  /**
+   * Legacy source. u2 keeps its progress in the subsource p2 and is itself
+   * just another export, so its subsource s2 gets no edge back to it.
+   *
+   *   u2 legacy src · 40s     p2 progress · 1s
+   *          ╎ (no edge)
+   *   ┌────────────────┐
+   *   │ s2 subsrc · 40s│
+   *   └───────┬────────┘
+   *           ▼
+   *   ┌────────────────┐
+   *   │ u8 probe · 41s │
+   *   └────────────────┘
+   */
+  it("gives a legacy source's subsources no edge back to the source", async () => {
+    const testSchema = "test_critical_path";
+    await testdrive(`${seedCatalogSql(testSchema)}
+      > INSERT INTO ${testSchema}.mz_materialization_dependencies VALUES
+          ('u8', 's2');
+      > INSERT INTO ${testSchema}.mz_wallclock_global_lag_recent_history VALUES
+          ('u2', INTERVAL '40 SECONDS', now()),
+          ('p2', INTERVAL '1 SECOND', now()),
+          ('s2', INTERVAL '40 SECONDS', now()),
+          ('u8', INTERVAL '41 SECONDS', now());
+      > INSERT INTO ${testSchema}.mz_objects VALUES
+          ('u2', 'source', 'c1'),
+          ('p2', 'source', NULL),
+          ('s2', 'source', NULL),
+          ('u8', 'materialized-view', 'c2');
+      > INSERT INTO ${testSchema}.mz_object_fully_qualified_names VALUES
+          ('u2', 'legacy', 'public', 'mz'),
+          ('p2', 'legacy_progress', 'public', 'mz'),
+          ('s2', 'customers', 'public', 'mz'),
+          ('u8', 'probe', 'public', 'mz');
+      > INSERT INTO ${testSchema}.mz_sources VALUES
+          ('u2', 'postgres', 'c1'),
+          ('p2', 'progress', NULL),
+          ('s2', 'subsource', NULL);
+      > INSERT INTO ${testSchema}.mz_object_dependencies VALUES
+          ('s2', 'u2'),
+          ('u2', 'p2');
+      > INSERT INTO ${testSchema}.mz_clusters VALUES
+          ('c1', 'ingest'),
+          ('c2', 'compute');
+    `);
+
+    expect(await runQuery(testSchema, "s2")).toEqual([]);
+    const rows = await runQuery(testSchema, "u8");
+    expect(rows.map((r) => [r.id, r.childId])).toEqual([["s2", "u8"]]);
+    expect(rows[0]).toMatchObject({
+      clusterName: "ingest",
+      isIngestion: false,
+    });
   });
 });

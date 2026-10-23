@@ -45,6 +45,8 @@ export interface CriticalPathRow {
   /** The consumer's lag at the same snapshot moment. */
   targetLag: IPostgresInterval | null;
   isBottleneck: boolean;
+  /** The edge runs from a source to one of its subsources or tables. */
+  isIngestion: boolean;
   /** This node's max lag in the lookback window, independent of the chain snapshot. */
   peakLag: IPostgresInterval | null;
   /** Observation time of `peakLag`. */
@@ -142,10 +144,14 @@ WITH MUTUALLY RECURSIVE
   -- mz_materialization_dependencies covers sinks (which read from MVs/sources)
   -- as well as compute objects. Restrict both ends of the edge to maintained
   -- object types so tables written with INSERT drop out of the chain.
-  -- Source-fed tables stay: like subsources, their lag is ingestion lag. The
-  -- second branch adds the edge from each of those back to its source.
-  input_of(source text, target text) AS (
-    SELECT md.dependency_id, md.object_id
+  -- Source-fed tables stay: like subsources, their lag is ingestion lag.
+  --
+  -- The second branch is an ingestion edge: a source's own collection is its
+  -- progress collection, which its tables are reclocked against, so a table
+  -- can't be fresher than its source. A legacy source is just another export
+  -- (its progress lives in a progress subsource), so it gets none.
+  input_of(source text, target text, ingestion bool) AS (
+    SELECT md.dependency_id, md.object_id, false
     FROM mz_materialization_dependencies md
     JOIN mz_objects src ON src.id = md.dependency_id
     LEFT JOIN mz_tables t ON t.id = md.dependency_id
@@ -154,10 +160,18 @@ WITH MUTUALLY RECURSIVE
     WHERE src.type IN (${MAINTAINED_OBJECT_TYPES_SQL})
       OR t.source_id IS NOT NULL
     UNION ALL
-    SELECT source_id, export_id FROM source_exports
+    SELECT se.source_id, se.export_id, true
+    FROM source_exports se
+    WHERE se.source_id NOT IN (SELECT id FROM legacy_sources)
   ),
   source_exports(export_id text, source_id text) AS (
     ${buildSourceExportsQuery()}
+  ),
+  -- A legacy source references its progress subsource.
+  legacy_sources(id text) AS (
+    SELECT od.object_id
+    FROM mz_object_dependencies od
+    JOIN mz_sources p ON p.id = od.referenced_object_id AND p.type = 'progress'
   ),
   ${perObjectLag},
   -- Per-node max lag in the lookback window and when it occurred.
@@ -208,6 +222,7 @@ SELECT
     SELECT 1 FROM crit_input ci
     WHERE ci.source = i.source AND ci.target = i.target
   ) AS "isBottleneck",
+  i.ingestion AS "isIngestion",
   pk.peak_lag AS "peakLag",
   pk.peak_at AS "peakLagAt"
 FROM input_of i

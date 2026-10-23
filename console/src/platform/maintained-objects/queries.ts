@@ -108,8 +108,7 @@ export interface MaintainedObjectListItem {
 
 /**
  * True for a source and for the subsources and tables it ingests into. These
- * report ingestion status in place of replica hydration, and have no upstream
- * dataflow for the critical path to walk.
+ * report ingestion status in place of replica hydration.
  */
 export const isSourceCollection = (item: MaintainedObjectListItem) =>
   item.objectType === "source" ||

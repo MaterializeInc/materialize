@@ -32,6 +32,7 @@ const buildRow = (
   lag: parse("00:00:01"),
   targetLag: parse("00:00:10"),
   isBottleneck: true,
+  isIngestion: false,
   peakLag: null,
   peakLagAt: null,
   ...overrides,
@@ -226,8 +227,8 @@ describe("buildSourceExportsView", () => {
       ["ok", "healthy"],
     ]);
     expect(edges).toEqual([
-      { id: "src", childId: "slow", isBottleneck: true },
-      { id: "src", childId: "ok", isBottleneck: true },
+      { id: "src", childId: "slow", isBottleneck: true, isIngestion: true },
+      { id: "src", childId: "ok", isBottleneck: true, isIngestion: true },
     ]);
   });
 

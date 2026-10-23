@@ -160,7 +160,7 @@ const computeOffPathCounts = (
 /** An edge drawn from `id` down to `childId`; dashed unless `isBottleneck`. */
 export type GraphEdge = Pick<
   CriticalPathRow,
-  "id" | "childId" | "isBottleneck"
+  "id" | "childId" | "isBottleneck" | "isIngestion"
 >;
 
 export interface GraphView {
@@ -426,6 +426,7 @@ export const buildSourceExportsView = ({
       id: probe.id,
       childId: item.id,
       isBottleneck: true,
+      isIngestion: true,
     })),
     hiddenChainCount: ranked.length - visible.length,
   };

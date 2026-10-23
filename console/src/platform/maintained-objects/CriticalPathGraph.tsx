@@ -41,6 +41,9 @@ import { useSourceExports } from "./useSourceExports";
 const CANVAS_PADDING = 40;
 const WIDE_ROW_CANVAS_PADDING = 120;
 
+const OFF_PATH_DASH = "4 4";
+const INGESTION_DASH = "1 5";
+
 const NODE_WIDTH = 160;
 const NODE_HEIGHT = 56;
 const RANK_SEP = 32;
@@ -103,7 +106,11 @@ const UpstreamGraph = ({
     );
   }
   if (isLoading || !data) return <LoadingSpinner />;
-  if (data.rows.length === 0) {
+  // A legacy source's subsources have no upstream edge, but still draw alone
+  // so their source's cluster metrics show.
+  const isExport =
+    probe.objectType === "subsource" || probe.objectType === "table";
+  if (data.rows.length === 0 && !isExport) {
     return <CriticalPathMessage>No upstream dependencies.</CriticalPathMessage>;
   }
   return (
@@ -302,20 +309,22 @@ const CriticalPathGraphInner = ({
                 { x: first.x, y: parentPosition.bottom },
                 ...rest,
               ];
-              const isOffPath = !edges.find(
+              const edge = edges.find(
                 (re) => re.id === e.v && re.childId === e.w,
-              )?.isBottleneck;
+              );
               return (
                 <CriticalPathEdgeLine
                   key={`${e.v}->${e.w}`}
                   points={points}
-                  isOffPath={isOffPath}
+                  isOffPath={!edge?.isBottleneck}
+                  isIngestion={!!edge?.isIngestion}
                 />
               );
             })}
           </GraphEdgeContainer>
         </Canvas>
       </Box>
+      {edges.some((e) => e.isIngestion) && <IngestionEdgeLegend />}
       {displayedNode && (
         <CriticalPathClusterMetrics
           node={displayedNode}
@@ -332,9 +341,11 @@ const CriticalPathGraphInner = ({
 const CriticalPathEdgeLine = ({
   points,
   isOffPath,
+  isIngestion,
 }: {
   points: { x: number; y: number }[];
   isOffPath: boolean;
+  isIngestion: boolean;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const [start, ...rest] = points;
@@ -346,8 +357,34 @@ const CriticalPathEdgeLine = ({
       d={`M${start.x},${start.y} S ${controlPoints} ${end.x},${end.y}`}
       stroke={isOffPath ? colors.border.secondary : colors.foreground.secondary}
       strokeWidth={STROKE_WIDTH}
-      strokeDasharray={isOffPath ? "4 4" : undefined}
+      strokeDasharray={
+        isIngestion ? INGESTION_DASH : isOffPath ? OFF_PATH_DASH : undefined
+      }
+      strokeLinecap={isIngestion ? "round" : undefined}
       fill="none"
     />
+  );
+};
+
+const IngestionEdgeLegend = () => {
+  const { colors } = useTheme<MaterializeTheme>();
+  return (
+    <HStack spacing={2}>
+      <svg width="28" height="6" aria-hidden="true">
+        <line
+          x1="2"
+          y1="3"
+          x2="26"
+          y2="3"
+          stroke={colors.foreground.secondary}
+          strokeWidth={STROKE_WIDTH}
+          strokeDasharray={INGESTION_DASH}
+          strokeLinecap="round"
+        />
+      </svg>
+      <Text textStyle="text-small" color={colors.foreground.secondary}>
+        Dotted lines join a source to the subsources and tables it writes.
+      </Text>
+    </HStack>
   );
 };
