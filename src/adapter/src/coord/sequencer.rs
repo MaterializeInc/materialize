@@ -17,7 +17,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use futures::FutureExt;
 use futures::future::LocalBoxFuture;
 use futures::stream::FuturesOrdered;
 use http::Uri;
@@ -96,9 +95,7 @@ use crate::util::ClientTransmitter;
 mod inner;
 
 impl Coordinator {
-    /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 34KB. This would
-    /// get stored on the stack which is bad for runtime performance, and blow up our stack usage.
-    /// Because of that we purposefully move this Future onto the heap (i.e. Box it).
+    /// Dispatches a plan in a size-bounded, heap-allocated future.
     pub(crate) fn sequence_plan(
         &mut self,
         mut ctx: ExecuteContext,
@@ -106,7 +103,7 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
         sql_impl_resolved_ids: ResolvedIds,
     ) -> LocalBoxFuture<'_, ()> {
-        async move {
+        let future = async move {
             let responses = ExecuteResponse::generated_from(&PlanKind::from(&plan));
             ctx.tx_mut().set_allowed(responses);
 
@@ -709,8 +706,8 @@ impl Coordinator {
                 }
             }
         }
-        .instrument(tracing::debug_span!("coord::sequencer::sequence_plan"))
-        .boxed_local()
+        .instrument(tracing::debug_span!("coord::sequencer::sequence_plan"));
+        crate::coord::box_dispatcher(future)
     }
 
     #[mz_ore::instrument(level = "debug")]
