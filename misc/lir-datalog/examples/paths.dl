@@ -1,0 +1,20 @@
+% Copyright Materialize, Inc. and contributors. All rights reserved.
+%
+% Use of this software is governed by the Business Source License
+% included in the LICENSE file at the root of this repository.
+%
+% As of the Change Date specified in that file, in accordance with
+% the Business Source License, use of this software will be governed
+% by the Apache License, Version 2.0.
+
+% Paths of fixed length, and nodes with a self loop.
+two_hop(x, z) :- edges(x, y), edges(y, z).
+three_hop(a, d) :- two_hop(a, c), edges(c, d).
+three_hop_direct(a, d) :- edges(a, b), edges(b, c), edges(c, d).
+self_loop(x) :- edges(x, x).
+loop_pairs(x, y) :- self_loop(x), self_loop(y).
+
+% An integer argument, and a zero-arity relation used as a condition.
+from_one(y) :- edges(1, y).
+has_loop() :- edges(x, x).
+guarded(x, y) :- has_loop(), edges(x, y).

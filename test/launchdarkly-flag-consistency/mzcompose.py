@@ -264,6 +264,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_hydration_burst
     enable_introspection_subscribes
     enable_less_reduce_in_eqprop
+    enable_lir_plans
     enable_list_length_max
     enable_list_n_layers
     enable_list_remove

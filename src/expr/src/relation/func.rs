@@ -4082,6 +4082,16 @@ impl TableFunc {
         ReprRelationType::from(&self.output_sql_type())
     }
 
+    /// Like [`TableFunc::output_arity`], but returns `None` instead of overflowing.
+    pub fn checked_output_arity(&self) -> Option<usize> {
+        match self {
+            TableFunc::WithOrdinality(WithOrdinality { inner }) => {
+                inner.checked_output_arity()?.checked_add(1)
+            }
+            other => Some(other.output_arity()),
+        }
+    }
+
     pub fn output_arity(&self) -> usize {
         match self {
             TableFunc::AclExplode => 4,

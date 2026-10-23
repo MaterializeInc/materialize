@@ -759,6 +759,13 @@ impl Pretty {
                 ")",
             ));
         }
+        if !v.column_defs.is_empty() {
+            docs.push(bracket(
+                "(",
+                comma_separate(|c| self.doc_display_pass(c), &v.column_defs),
+                ")",
+            ));
+        }
         if let Some(target) = &v.replacement_for {
             docs.push(RcDoc::text(format!(
                 "FOR {}",
@@ -794,7 +801,12 @@ impl Pretty {
                 ")",
             ));
         }
-        docs.push(nest_title("AS", self.doc_query(&v.query)));
+        match &v.body {
+            MaterializedViewBody::Query(query) => {
+                docs.push(nest_title("AS", self.doc_query(query)));
+            }
+            MaterializedViewBody::Plan(_) => docs.push(self.doc_display_pass(&v.body)),
+        }
         // `AS OF` is internal syntax that follows the query; the generic AstDisplay
         // emits it, so we must too, otherwise it is silently dropped.
         if let Some(time) = &v.as_of {

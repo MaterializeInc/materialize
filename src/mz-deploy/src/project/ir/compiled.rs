@@ -320,7 +320,9 @@ impl Statement {
                 Statement::CreateView(s)
             }
             Statement::CreateMaterializedView(mut s) => {
-                visitor.normalize_query(&mut s.query);
+                if let MaterializedViewBody::Query(query) = &mut s.body {
+                    visitor.normalize_query(query);
+                }
                 Statement::CreateMaterializedView(s)
             }
             Statement::CreateTableFromSource(mut s) => {
@@ -458,7 +460,10 @@ impl DatabaseObject {
     pub fn to_query(&self) -> Option<Query<Raw>> {
         match &self.stmt {
             Statement::CreateView(stmt) => Some(stmt.definition.query.clone()),
-            Statement::CreateMaterializedView(stmt) => Some(stmt.query.clone()),
+            Statement::CreateMaterializedView(stmt) => match &stmt.body {
+                MaterializedViewBody::Query(query) => Some(query.clone()),
+                MaterializedViewBody::Plan(_) => None,
+            },
             Statement::CreateTable(_)
             | Statement::CreateSecret(_)
             | Statement::CreateConnection(_)

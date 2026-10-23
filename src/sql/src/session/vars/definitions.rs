@@ -1983,6 +1983,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_lir_plans,
+        desc: "LIR plan syntax (FROM PLAN, AS LIR JSON)",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_replica_targeted_materialized_views,
         desc: "replica-targeted materialized views",
         default: false,

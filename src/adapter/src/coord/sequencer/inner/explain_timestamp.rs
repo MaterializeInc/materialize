@@ -374,6 +374,9 @@ impl Coordinator {
             ExplainFormat::Dot => {
                 return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS DOT"));
             }
+            ExplainFormat::LirJson => {
+                return Err(AdapterError::Unsupported("EXPLAIN TIMESTAMP AS LIR JSON"));
+            }
         };
 
         let determination = self.sequence_peek_timestamp(

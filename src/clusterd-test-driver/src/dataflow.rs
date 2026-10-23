@@ -617,7 +617,7 @@ pub fn count_over_index(
 /// storage [`CollectionMetadata`] needed by the compute instance to read it. The
 /// per-id [`PersistSource`] supplies the metadata and the exclusive `upper` telling
 /// the compute instance up to which timestamp the shard's data is available.
-fn augment(
+pub(crate) fn augment(
     lowered: LirDataflowDescription,
     sources: &BTreeMap<GlobalId, PersistSource>,
     sinks: &BTreeMap<GlobalId, CollectionMetadata>,

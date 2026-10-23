@@ -7889,3 +7889,229 @@ fn test_cluster_labeled_metrics_are_removed_at_zero_replicas() {
         );
     }
 }
+
+/// A materialized view installed from an LIR plan is rebuilt from the plan stored in its
+/// `create_sql` when `environmentd` restarts, after its imports were renamed.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_lir_plan_materialized_view_survives_restart() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default()
+        .data_directory(data_dir.path())
+        .with_system_parameter_default("enable_lir_plans".into(), "true".into());
+
+    let rows = |client: &mut postgres::Client| -> Vec<(i64, Option<i64>, Option<String>)> {
+        client
+            .query("SELECT a, b, c FROM p ORDER BY a, b", &[])
+            .unwrap()
+            .into_iter()
+            .map(|row| (row.get(0), row.get(1), row.get(2)))
+            .collect()
+    };
+    let row = |a: i64, b: i64, c: &str| (a, Some(b), Some(c.to_string()));
+
+    {
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        for statement in [
+            "CREATE TABLE t (a int8 NOT NULL, b int8)",
+            "CREATE TABLE u (a int8 NOT NULL, c text)",
+            "CREATE INDEX u_a ON u (a)",
+            "INSERT INTO t VALUES (1, 10), (2, 20)",
+            "INSERT INTO u VALUES (1, 'one'), (2, 'two')",
+            "CREATE MATERIALIZED VIEW mv AS SELECT t.a, t.b, u.c FROM t JOIN u ON t.a = u.a",
+        ] {
+            client.batch_execute(statement).unwrap();
+        }
+        let plan: String = client
+            .query_one(
+                "EXPLAIN PHYSICAL PLAN AS LIR JSON FOR MATERIALIZED VIEW mv",
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        assert!(!plan.contains('\''), "plan needs quoting: {plan}");
+        client
+            .batch_execute(&format!(
+                "CREATE MATERIALIZED VIEW p (a int8 NOT NULL, b int8, c text) FROM PLAN '{plan}'"
+            ))
+            .unwrap();
+        client.batch_execute("ALTER TABLE t RENAME TO t2").unwrap();
+        client
+            .batch_execute("ALTER INDEX u_a RENAME TO u_a2")
+            .unwrap();
+        assert_eq!(
+            rows(&mut client),
+            vec![row(1, 10, "one"), row(2, 20, "two")]
+        );
+    }
+
+    {
+        let server = harness.start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        assert_eq!(
+            rows(&mut client),
+            vec![row(1, 10, "one"), row(2, 20, "two")]
+        );
+        // The dataflow runs again.
+        client
+            .batch_execute("INSERT INTO t2 VALUES (2, 21)")
+            .unwrap();
+        assert_eq!(
+            rows(&mut client),
+            vec![row(1, 10, "one"), row(2, 20, "two"), row(2, 21, "two")]
+        );
+        let err = client.batch_execute("DROP INDEX u_a2").unwrap_err();
+        let message = err.as_db_error().expect("db error").message();
+        assert!(
+            message.contains("still depended upon by materialized view"),
+            "{message}"
+        );
+    }
+}
+
+/// Materialized views whose plans use the same placeholder object ids build their objects
+/// under distinct ids, at creation and at boot, so dropping one leaves the introspection of the
+/// other intact.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_lir_plan_object_ids_are_fresh() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let harness = test_util::TestHarness::default()
+        .data_directory(data_dir.path())
+        .with_system_parameter_default("enable_lir_plans".into(), "true".into());
+    let plan = r#"{"lir_version":1,"imports":[{"id":{"Transient":2},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":1},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":2}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":1}}"#;
+
+    // The transient ids the dataflow of materialized view `name` builds, each with its number
+    // of `mz_lir_mapping` rows, once the replica has reported both.
+    let objects = |client: &mut postgres::Client, name: &str| -> Vec<(String, i64)> {
+        Retry::default()
+            .max_duration(Duration::from_secs(60))
+            .retry(|_| {
+                let rows = client
+                    .query(
+                        "SELECT dg.global_id, \
+                            (SELECT count(*) FROM mz_introspection.mz_lir_mapping lm \
+                             WHERE lm.global_id = dg.global_id) \
+                         FROM mz_catalog.mz_materialized_views mv \
+                         JOIN mz_introspection.mz_compute_exports ce ON ce.export_id = mv.id \
+                         JOIN mz_introspection.mz_dataflow_global_ids dg \
+                           ON dg.id = ce.dataflow_id \
+                         WHERE mv.name = $1 AND dg.global_id LIKE 't%' \
+                         ORDER BY dg.global_id",
+                        &[&name],
+                    )
+                    .map_err(|e| e.to_string())?;
+                let objects: Vec<(String, i64)> = rows
+                    .into_iter()
+                    .map(|row| (row.get(0), row.get(1)))
+                    .collect();
+                if objects.is_empty() || objects.iter().any(|(_, mapped)| *mapped == 0) {
+                    return Err(format!("introspection of {name} incomplete: {objects:?}"));
+                }
+                Ok(objects)
+            })
+            .unwrap()
+    };
+    let assert_distinct = |client: &mut postgres::Client| {
+        let p1 = objects(client, "p1");
+        let p2 = objects(client, "p2");
+        assert_eq!(p1.len(), 1, "{p1:?}");
+        assert_eq!(p2.len(), 1, "{p2:?}");
+        assert_ne!(p1[0].0, p2[0].0, "both plans build the same object id");
+        assert_ne!(p1[0].0, "t1");
+    };
+
+    {
+        let server = harness.clone().start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client
+            .batch_execute("CREATE TABLE t (a int8 NOT NULL)")
+            .unwrap();
+        for name in ["p1", "p2"] {
+            client
+                .batch_execute(&format!(
+                    "CREATE MATERIALIZED VIEW {name} (a int8 NOT NULL) FROM PLAN '{plan}'"
+                ))
+                .unwrap();
+        }
+        assert_distinct(&mut client);
+    }
+
+    let server = harness.start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    assert_distinct(&mut client);
+    let p2 = objects(&mut client, "p2");
+    client.batch_execute("DROP MATERIALIZED VIEW p1").unwrap();
+    Retry::default()
+        .max_duration(Duration::from_secs(60))
+        .retry(|_| {
+            let dataflows: i64 = client
+                .query_one(
+                    "SELECT count(*) FROM mz_introspection.mz_compute_exports \
+                     WHERE export_id NOT LIKE 't%' AND export_id NOT LIKE 's%'",
+                    &[],
+                )
+                .map_err(|e| e.to_string())?
+                .get(0);
+            if dataflows == 1 {
+                Ok(())
+            } else {
+                Err(format!("{dataflows} user exports remain"))
+            }
+        })
+        .unwrap();
+    assert_eq!(objects(&mut client, "p2"), p2);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_lir_plan_errors_are_user_errors() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("enable_lir_plans".into(), "true".into())
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("CREATE TABLE t (a int8 NOT NULL)")
+        .unwrap();
+
+    let plan = r#"{"lir_version":1,"imports":[{"id":{"Transient":1},"source":{"Name":"t"},"persist":true,"indexes":[]}],"objects":[{"id":{"Transient":2},"plan":{"lir_id":1,"node":{"Get":{"id":{"Global":{"Transient":1}},"keys":{"raw":true,"arranged":[]},"plan":"PassArrangements"}}}}],"output":{"Transient":2}}"#;
+    let create = |columns: &str, plan: &str| {
+        format!("CREATE MATERIALIZED VIEW m ({columns}) FROM PLAN '{plan}'")
+    };
+    let mut assert_code = |statement: &str, code: &SqlState| {
+        let err = client.batch_execute(statement).unwrap_err();
+        let err = err.as_db_error().expect("db error");
+        assert_eq!(err.code(), code, "{statement}: {}", err.message());
+    };
+
+    let invalid = SqlState::INVALID_OBJECT_DEFINITION;
+    // Planning: envelope parsing, import resolution and column definitions.
+    assert_code(&create("a int8", "not json"), &invalid);
+    let unknown_import = plan.replace(r#""Name":"t""#, r#""Name":"nope""#);
+    assert_code(&create("a int8", &unknown_import), &invalid);
+    assert_code(&create("a int8, a int8", plan), &invalid);
+    // The parser rejects the column definitions, before planning would.
+    assert_code(
+        "CREATE MATERIALIZED VIEW m (a int8) AS SELECT 1",
+        &SqlState::SYNTAX_ERROR,
+    );
+    // Validation: the declared schema does not match the plan's output.
+    assert_code(&create("a text", plan), &invalid);
+    assert_code(&create("a int8, b int8", plan), &invalid);
+    // A plan has no stages before the physical plan to explain.
+    let unsupported = SqlState::FEATURE_NOT_SUPPORTED;
+    let explain_raw = format!("EXPLAIN RAW PLAN FOR {}", create("a int8", plan));
+    assert_code(&explain_raw, &unsupported);
+    let explain_optimized = format!("EXPLAIN OPTIMIZED PLAN FOR {}", create("a int8", plan));
+    assert_code(&explain_optimized, &unsupported);
+
+    client.batch_execute(&create("a int8", plan)).unwrap();
+    let err = client
+        .batch_execute("EXPLAIN RAW PLAN FOR MATERIALIZED VIEW m")
+        .unwrap_err();
+    assert_eq!(err.code(), Some(&unsupported), "{err}");
+}

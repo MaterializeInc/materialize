@@ -1,0 +1,432 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# EXPLAIN PHYSICAL PLAN AS LIR JSON prints the plan envelope of a materialized view.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_lir_plans = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE t (a int8 NOT NULL, b int8)
+
+statement ok
+CREATE TABLE u (a int8 NOT NULL, c text)
+
+statement ok
+CREATE INDEX u_a ON u (a)
+
+# The filter on `t` is pushed into its persist import, so the envelope reads `t` through a
+# leading `Mfp` object.
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT t.a, t.b, u.c FROM t JOIN u ON t.a = u.a WHERE t.b > 1
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS LIR JSON FOR MATERIALIZED VIEW mv
+----
+{
+  "lir_version": 1,
+  "imports": [
+    {
+      "id": {
+        "Transient": 1
+      },
+      "source": {
+        "Name": "materialize.public.t"
+      },
+      "persist": true,
+      "indexes": []
+    },
+    {
+      "id": {
+        "Transient": 2
+      },
+      "source": {
+        "Name": "materialize.public.u"
+      },
+      "persist": false,
+      "indexes": [
+        {
+          "Name": "materialize.public.u_a"
+        }
+      ]
+    }
+  ],
+  "objects": [
+    {
+      "id": {
+        "Transient": 3
+      },
+      "plan": {
+        "lir_id": 6,
+        "node": {
+          "Mfp": {
+            "input": {
+              "lir_id": 5,
+              "node": {
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "Transient": 1
+                    }
+                  },
+                  "keys": {
+                    "raw": true,
+                    "arranged": []
+                  },
+                  "plan": "PassArrangements"
+                }
+              }
+            },
+            "mfp": {
+              "mfp": {
+                "mfp": {
+                  "expressions": [],
+                  "predicates": [
+                    [
+                      2,
+                      {
+                        "CallBinary": {
+                          "func": {
+                            "Gt": null
+                          },
+                          "expr1": {
+                            "Column": [
+                              1,
+                              "b"
+                            ]
+                          },
+                          "expr2": {
+                            "Literal": [
+                              {
+                                "Ok": {
+                                  "$row": [
+                                    {
+                                      "Int64": 1
+                                    }
+                                  ]
+                                }
+                              },
+                              {
+                                "scalar_type": "Int64",
+                                "nullable": false
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  ],
+                  "projection": [
+                    0,
+                    1
+                  ],
+                  "input_arity": 2
+                }
+              },
+              "lower_bounds": [],
+              "upper_bounds": []
+            },
+            "input_key_val": null
+          }
+        }
+      }
+    },
+    {
+      "id": {
+        "Transient": 4
+      },
+      "plan": {
+        "lir_id": 4,
+        "node": {
+          "Join": {
+            "inputs": [
+              {
+                "lir_id": 2,
+                "node": {
+                  "ArrangeBy": {
+                    "input_key": null,
+                    "input": {
+                      "lir_id": 1,
+                      "node": {
+                        "Get": {
+                          "id": {
+                            "Global": {
+                              "Transient": 3
+                            }
+                          },
+                          "keys": {
+                            "raw": true,
+                            "arranged": []
+                          },
+                          "plan": {
+                            "Collection": {
+                              "mfp": {
+                                "mfp": {
+                                  "expressions": [],
+                                  "predicates": [],
+                                  "projection": [
+                                    0,
+                                    1
+                                  ],
+                                  "input_arity": 2
+                                }
+                              },
+                              "lower_bounds": [],
+                              "upper_bounds": []
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "input_mfp": {
+                      "mfp": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            1
+                          ],
+                          "input_arity": 2
+                        }
+                      },
+                      "lower_bounds": [],
+                      "upper_bounds": []
+                    },
+                    "forms": {
+                      "raw": true,
+                      "arranged": [
+                        [
+                          [
+                            {
+                              "Column": [
+                                0,
+                                "a"
+                              ]
+                            }
+                          ],
+                          [
+                            0,
+                            1
+                          ],
+                          [
+                            1
+                          ]
+                        ]
+                      ]
+                    },
+                    "strategy": "Direct"
+                  }
+                }
+              },
+              {
+                "lir_id": 3,
+                "node": {
+                  "Get": {
+                    "id": {
+                      "Global": {
+                        "Transient": 2
+                      }
+                    },
+                    "keys": {
+                      "raw": false,
+                      "arranged": [
+                        [
+                          [
+                            {
+                              "Column": [
+                                0,
+                                "a"
+                              ]
+                            }
+                          ],
+                          [
+                            0,
+                            1
+                          ],
+                          [
+                            1
+                          ]
+                        ]
+                      ]
+                    },
+                    "plan": "PassArrangements"
+                  }
+                }
+              }
+            ],
+            "plan": {
+              "Linear": {
+                "source_relation": 1,
+                "source_key": [
+                  {
+                    "Column": [
+                      0,
+                      "a"
+                    ]
+                  }
+                ],
+                "initial_closure": null,
+                "stage_plans": [
+                  {
+                    "lookup_relation": 0,
+                    "stream_key": [
+                      {
+                        "Column": [
+                          0,
+                          "a"
+                        ]
+                      }
+                    ],
+                    "stream_thinning": [
+                      1
+                    ],
+                    "lookup_key": [
+                      {
+                        "Column": [
+                          0,
+                          "a"
+                        ]
+                      }
+                    ],
+                    "closure": {
+                      "ready_equivalences": [],
+                      "before": {
+                        "mfp": {
+                          "expressions": [],
+                          "predicates": [],
+                          "projection": [
+                            0,
+                            2,
+                            1
+                          ],
+                          "input_arity": 3
+                        }
+                      }
+                    }
+                  }
+                ],
+                "final_closure": null
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "output": {
+    "Transient": 4
+  }
+}
+EOF
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_lir_plans = false
+----
+COMPLETE 0
+
+query error LIR plan syntax \(FROM PLAN, AS LIR JSON\) is not available
+EXPLAIN PHYSICAL PLAN AS LIR JSON FOR MATERIALIZED VIEW mv
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_lir_plans = true
+----
+COMPLETE 0
+
+query error AS LIR JSON is only supported for EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW
+EXPLAIN OPTIMIZED PLAN AS LIR JSON FOR MATERIALIZED VIEW mv
+
+query error AS LIR JSON is only supported for EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW
+EXPLAIN PHYSICAL PLAN AS LIR JSON FOR SELECT * FROM t
+
+query error AS LIR JSON is only supported for EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW
+EXPLAIN PHYSICAL PLAN AS LIR JSON FOR INDEX u_a
+
+query error AS LIR JSON does not support WITH options
+EXPLAIN PHYSICAL PLAN WITH (humanized expressions) AS LIR JSON FOR MATERIALIZED VIEW mv
+
+# Names are quoted where SQL needs it, so they read back as the same items.
+statement ok
+CREATE TABLE "Mixed.Case" (a int8 NOT NULL)
+
+statement ok
+CREATE INDEX "Idx""Q" ON "Mixed.Case" (a)
+
+statement ok
+CREATE MATERIALIZED VIEW mv_quoted AS SELECT a FROM "Mixed.Case"
+
+query T multiline
+EXPLAIN PHYSICAL PLAN AS LIR JSON FOR MATERIALIZED VIEW mv_quoted
+----
+{
+  "lir_version": 1,
+  "imports": [
+    {
+      "id": {
+        "Transient": 1
+      },
+      "source": {
+        "Name": "materialize.public.\"Mixed.Case\""
+      },
+      "persist": false,
+      "indexes": [
+        {
+          "Name": "materialize.public.\"Idx\"\"Q\""
+        }
+      ]
+    }
+  ],
+  "objects": [
+    {
+      "id": {
+        "Transient": 2
+      },
+      "plan": {
+        "lir_id": 1,
+        "node": {
+          "Get": {
+            "id": {
+              "Global": {
+                "Transient": 1
+              }
+            },
+            "keys": {
+              "raw": false,
+              "arranged": [
+                [
+                  [
+                    {
+                      "Column": [
+                        0,
+                        "a"
+                      ]
+                    }
+                  ],
+                  [
+                    0
+                  ],
+                  []
+                ]
+              ]
+            },
+            "plan": "PassArrangements"
+          }
+        }
+      }
+    }
+  ],
+  "output": {
+    "Transient": 2
+  }
+}
+EOF

@@ -25,8 +25,8 @@ use mz_sql_parser::ast::{
     CreateMetricSinkStatement, CreateSecretStatement, CreateSinkStatement, CreateSourceStatement,
     CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement,
     CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CteBlock, Function,
-    FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement, TableFactor,
-    TableFromSourceColumns, UnresolvedItemName, UnresolvedSchemaName, Value, Version,
+    FunctionArgs, Ident, IfExistsBehavior, MaterializedViewBody, MutRecBlock, Op, Query, Statement,
+    TableFactor, TableFromSourceColumns, UnresolvedItemName, UnresolvedSchemaName, Value, Version,
     ViewDefinition,
 };
 
@@ -432,15 +432,16 @@ pub fn create_statement(
             if_exists,
             name,
             columns: _,
+            column_defs: _,
             replacement_for: _,
             in_cluster: _,
             in_cluster_replica: _,
-            query,
+            body,
             with_options: _,
             as_of: _,
         }) => {
             *name = allocate_name(name)?;
-            {
+            if let MaterializedViewBody::Query(query) = body {
                 let mut normalizer = QueryNormalizer::new();
                 normalizer.visit_query_mut(query);
                 if let Some(err) = normalizer.err {

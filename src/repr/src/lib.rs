@@ -69,7 +69,8 @@ pub use crate::row::iter::{IntoRowIterator, RowIterator};
 pub use crate::row::{
     DatumDictTypedIter, DatumList, DatumListTypedIter, DatumMap, FromDatum, ProtoNumeric, ProtoRow,
     Row, RowArena, RowArenaBuf, RowPacker, RowRef, SharedRow, StableRow, datum_list_size,
-    datum_size, datums_size, read_datum, row_size,
+    datum_size, datums_size, read_datum, row_from_readable, row_size, row_to_readable,
+    with_readable_rows,
 };
 pub use crate::scalar::{
     ArrayRustType, AsColumnType, Datum, DatumKind, ExcludeNull, InputDatumType, Int2Vector,

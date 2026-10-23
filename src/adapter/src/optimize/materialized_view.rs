@@ -248,20 +248,13 @@ impl Optimize<LocalMirPlan> for Optimizer {
         )?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
-        let sink_description = ComputeSinkDesc {
-            from: self.view_id,
-            from_desc: rel_desc.clone(),
-            connection: ComputeSinkConnection::MaterializedView(MaterializedViewSinkConnection {
-                value_desc: rel_desc,
-                storage_metadata: (),
-            }),
-            with_snapshot: true,
-            up_to: Antichain::default(),
-            non_null_assertions: self.non_null_assertions.clone(),
-            refresh_schedule: self.refresh_schedule.clone(),
-            // Populated during LIR lowering.
-            from_arrangement: None,
-        };
+        // `from_arrangement` is populated during LIR lowering.
+        let sink_description = materialized_view_sink(
+            self.view_id,
+            rel_desc,
+            self.non_null_assertions.clone(),
+            self.refresh_schedule.clone(),
+        );
         df_desc.export_sink(self.sink_id, sink_description);
 
         // Prepare expressions in the assembled dataflow.
@@ -333,8 +326,39 @@ impl Optimize<GlobalMirPlan> for Optimizer {
 }
 
 impl GlobalLirPlan {
+    /// Wraps a dataflow that exports a materialized view sink.
+    pub fn from_parts(df_desc: LirDataflowDescription, df_meta: DataflowMetainfo) -> Self {
+        Self { df_desc, df_meta }
+    }
+
     /// Unwraps the parts of the final result of the optimization pipeline.
     pub fn unapply(self) -> (LirDataflowDescription, DataflowMetainfo) {
         (self.df_desc, self.df_meta)
+    }
+}
+
+/// The export of a materialized view whose contents are the collection `from`, with schema
+/// `desc`.
+///
+/// `from_arrangement` is `None`, which reads the raw collection of `from`. Callers must set it
+/// where `from` is available only arranged.
+pub fn materialized_view_sink(
+    from: GlobalId,
+    desc: RelationDesc,
+    non_null_assertions: Vec<usize>,
+    refresh_schedule: Option<RefreshSchedule>,
+) -> ComputeSinkDesc<()> {
+    ComputeSinkDesc {
+        from,
+        from_desc: desc.clone(),
+        connection: ComputeSinkConnection::MaterializedView(MaterializedViewSinkConnection {
+            value_desc: desc,
+            storage_metadata: (),
+        }),
+        with_snapshot: true,
+        up_to: Antichain::default(),
+        non_null_assertions,
+        refresh_schedule,
+        from_arrangement: None,
     }
 }

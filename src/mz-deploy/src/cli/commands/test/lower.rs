@@ -36,7 +36,9 @@ use crate::project::resolve::normalize::NormalizingVisitor;
 use crate::types::ColumnType;
 #[cfg(test)]
 use crate::types::Types;
-use mz_sql_parser::ast::{CreateViewStatement, IfExistsBehavior, ViewDefinition};
+use mz_sql_parser::ast::{
+    CreateViewStatement, IfExistsBehavior, MaterializedViewBody, ViewDefinition,
+};
 use owo_colors::{OwoColorize, Stream, Style};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -793,14 +795,25 @@ fn create_target_view_sql(stmt: &Statement, fqn: &FullyQualifiedName) -> Result<
             temporary: true,
             definition: view.definition.clone(),
         },
-        Statement::CreateMaterializedView(mv) => CreateViewStatement {
-            if_exists: IfExistsBehavior::Error,
-            temporary: true,
-            definition: ViewDefinition {
-                name: mv.name,
-                columns: mv.columns,
-                query: mv.query,
+        Statement::CreateMaterializedView(mv) => match mv.body {
+            MaterializedViewBody::Query(query) => CreateViewStatement {
+                if_exists: IfExistsBehavior::Error,
+                temporary: true,
+                definition: ViewDefinition {
+                    name: mv.name,
+                    columns: mv.columns,
+                    query,
+                },
             },
+            MaterializedViewBody::Plan(_) => {
+                return Err(format!(
+                    "unit tests are not supported on materialized views defined by a plan; \
+                     target '{}.{}.{}'",
+                    fqn.database(),
+                    fqn.schema(),
+                    fqn.object(),
+                ));
+            }
         },
         other => {
             return Err(format!(

@@ -36,6 +36,7 @@ use enum_kinds::EnumKind;
 use ipnet::IpNet;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_compute_types::plan::envelope::LirPlanEnvelope;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{CollectionPlan, ColumnOrder, MapFilterProject, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
@@ -88,6 +89,7 @@ use crate::names::{
 pub(crate) mod error;
 pub(crate) mod explain;
 pub(crate) mod hir;
+pub mod lir_plan;
 pub(crate) mod literal;
 pub(crate) mod lowering;
 pub(crate) mod notice;
@@ -1134,7 +1136,10 @@ impl ExplaineeStatement {
         match self {
             Self::Select { plan, .. } => plan.source.depends_on(),
             Self::CreateView { plan, .. } => plan.view.expr.depends_on(),
-            Self::CreateMaterializedView { plan, .. } => plan.materialized_view.expr.depends_on(),
+            Self::CreateMaterializedView { plan, .. } => match &plan.materialized_view.definition {
+                MaterializedViewDefinition::Query(expr) => expr.depends_on(),
+                MaterializedViewDefinition::Plan { depends_on, .. } => depends_on.clone(),
+            },
             Self::CreateIndex { plan, .. } => btreeset! {plan.index.on},
             Self::Subscribe { plan, .. } => plan.from.depends_on(),
         }
@@ -1968,9 +1973,9 @@ pub struct View {
 pub struct MaterializedView {
     /// Parse-able SQL that is stored durably and defines this materialized view.
     pub create_sql: String,
-    /// Unoptimized high-level expression from parsing the `create_sql`.
-    pub expr: HirRelationExpr,
-    /// All of the catalog objects that are referenced by this materialized view, according to the `expr`.
+    /// What the materialized view computes.
+    pub definition: MaterializedViewDefinition,
+    /// All of the catalog objects that are referenced by this materialized view, according to the `definition`.
     pub dependencies: DependencyIds,
     /// Columns of this view.
     pub column_names: Vec<ColumnName>,
@@ -1983,6 +1988,24 @@ pub struct MaterializedView {
     pub compaction_window: Option<CompactionWindow>,
     pub refresh_schedule: Option<RefreshSchedule>,
     pub as_of: Option<Timestamp>,
+}
+
+/// The definition of a [`MaterializedView`].
+#[derive(Clone, Debug)]
+pub enum MaterializedViewDefinition {
+    /// Unoptimized high-level expression from parsing the `create_sql`.
+    Query(HirRelationExpr),
+    /// A user-provided LIR plan.
+    Plan {
+        /// The plan, with every import an [`ImportSource::Item`].
+        ///
+        /// [`ImportSource::Item`]: mz_compute_types::plan::envelope::ImportSource::Item
+        envelope: Box<LirPlanEnvelope>,
+        /// The declared schema, without keys.
+        desc: RelationDesc,
+        /// The collections the plan imports, relations and indexes.
+        depends_on: BTreeSet<GlobalId>,
+    },
 }
 
 #[derive(Clone, Debug)]

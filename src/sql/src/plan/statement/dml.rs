@@ -788,8 +788,14 @@ pub fn plan_explain_plan(
         mz_sql_parser::ast::ExplainFormat::VerboseText => (ExplainFormat::Text, true),
         mz_sql_parser::ast::ExplainFormat::Json => (ExplainFormat::Json, false),
         mz_sql_parser::ast::ExplainFormat::Dot => (ExplainFormat::Dot, false),
+        mz_sql_parser::ast::ExplainFormat::LirJson => (ExplainFormat::LirJson, false),
     };
     let stage = explain.stage();
+
+    // The envelope is the stored plan as is, so no option applies to it.
+    if format == ExplainFormat::LirJson && !explain.with_options.is_empty() {
+        sql_bail!("AS LIR JSON does not support WITH options");
+    }
 
     // Plan ExplainConfig.
     let mut config = {
@@ -805,6 +811,16 @@ pub fn plan_explain_plan(
     config.verbose_syntax = verbose_syntax;
 
     let explainee = plan_explainee(scx, explain.explainee, params)?;
+
+    if format == ExplainFormat::LirJson {
+        scx.require_feature_flag(&vars::ENABLE_LIR_PLANS)?;
+    }
+    if format == ExplainFormat::LirJson
+        && !(stage == ExplainStage::PhysicalPlan
+            && matches!(explainee, crate::plan::Explainee::MaterializedView(_)))
+    {
+        sql_bail!("AS LIR JSON is only supported for EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW");
+    }
 
     Ok(Plan::ExplainPlan(ExplainPlanPlan {
         stage,
@@ -1513,6 +1529,9 @@ pub fn plan_explain_timestamp(
         mz_sql_parser::ast::ExplainFormat::VerboseText => (ExplainFormat::Text, true),
         mz_sql_parser::ast::ExplainFormat::Json => (ExplainFormat::Json, false),
         mz_sql_parser::ast::ExplainFormat::Dot => (ExplainFormat::Dot, false),
+        mz_sql_parser::ast::ExplainFormat::LirJson => {
+            sql_bail!("EXPLAIN TIMESTAMP does not support AS LIR JSON")
+        }
     };
 
     let raw_plan = {

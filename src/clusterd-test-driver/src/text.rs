@@ -43,6 +43,7 @@ use mz_repr::GlobalId;
 
 use crate::script::{
     BuildSpec, ColumnSpec, Command, ConfigSetting, ExplainTarget, ExportSpec, ImportSpec,
+    LirIndexSpec, LirRelationSpec,
 };
 
 /// One element of a parsed script file, retained so a `REWRITE` reproduces the
@@ -579,6 +580,43 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
                 optimize,
             }
         }
+        "create-lir-dataflow" => {
+            let mut relations = Vec::new();
+            let mut indexes = Vec::new();
+            let mut plan = None;
+            for (sub_header, sub_body) in group(body)? {
+                let (verb, args, flags) = parse_header(&sub_header.text)?;
+                match verb.as_str() {
+                    "relation" => relations.push(LirRelationSpec {
+                        name: req(&args, "name")?.to_string(),
+                        id: req_id(&args, "id")?,
+                        shard: opt_string(&args, "shard"),
+                        schema: opt_string(&args, "schema"),
+                        upper: opt_u64(&args, "upper")?,
+                        monotonic: flags.iter().any(|f| f == "monotonic"),
+                    }),
+                    "index" => indexes.push(LirIndexSpec {
+                        name: req(&args, "name")?.to_string(),
+                        index_id: req_id(&args, "index")?,
+                    }),
+                    "plan" => {
+                        ensure!(!sub_body.is_empty(), "`plan` needs an envelope body");
+                        plan = Some(body_text(sub_body));
+                    }
+                    other => bail!("unknown create-lir-dataflow sub-command `{other}`"),
+                }
+            }
+            Command::CreateLirDataflow {
+                name: opt_string(&args, "name"),
+                relations,
+                indexes,
+                plan: plan.context("create-lir-dataflow needs a `plan`")?,
+                sink_id: req_id(&args, "sink")?,
+                shard: req(&args, "shard")?.to_string(),
+                schema: opt_string(&args, "schema"),
+                as_of: req_u64(&args, "as-of")?,
+            }
+        }
         "explain" => {
             // `explain ref=<name>` renders a previously declared dataflow; otherwise
             // the dataflow is given inline with the `create-dataflow` body.
@@ -953,6 +991,51 @@ mod tests {
                 ],
             }
         );
+    }
+
+    #[mz_ore::test]
+    fn parses_create_lir_dataflow() {
+        let text = "create-lir-dataflow sink=3000 shard=out as-of=0
+  relation name=t id=1000 shard=r schema=s upper=5 monotonic
+  relation name=u id=1001
+  index name=u_a index=1002
+  plan
+    {\"lir_version\": 1,
+     \"objects\": []}";
+        assert_eq!(
+            parse_command(text).unwrap(),
+            Command::CreateLirDataflow {
+                name: None,
+                relations: vec![
+                    LirRelationSpec {
+                        name: "t".to_string(),
+                        id: GlobalId::User(1000),
+                        shard: Some("r".to_string()),
+                        schema: Some("s".to_string()),
+                        upper: Some(5),
+                        monotonic: true,
+                    },
+                    LirRelationSpec {
+                        name: "u".to_string(),
+                        id: GlobalId::User(1001),
+                        shard: None,
+                        schema: None,
+                        upper: None,
+                        monotonic: false,
+                    },
+                ],
+                indexes: vec![LirIndexSpec {
+                    name: "u_a".to_string(),
+                    index_id: GlobalId::User(1002),
+                }],
+                plan: "{\"lir_version\": 1,\n \"objects\": []}".to_string(),
+                sink_id: GlobalId::User(3000),
+                shard: "out".to_string(),
+                schema: None,
+                as_of: 0,
+            }
+        );
+        assert!(parse_command("create-lir-dataflow sink=3000 shard=out as-of=0").is_err());
     }
 
     /// `await-subscribe` parses its arguments.
