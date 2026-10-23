@@ -1,6 +1,6 @@
 ---
 source: src/mysql-util/src/lib.rs
-revision: 98a50d47d7
+revision: 0c7c2a15c1
 ---
 
 # mysql-util

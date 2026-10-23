@@ -4553,6 +4553,16 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 "has_type_privilege(current_user, $1, $2)",
             ) => Bool, 3143;
         },
+        "jq" => Scalar {
+            params!(Jsonb, String) => Operation::binary(|ecx, input, program| {
+                ecx.require_feature_flag(&vars::ENABLE_JQ)?;
+                let Some(program) = program.into_literal_string() else {
+                    sql_bail!("jq requires a string literal as its second argument");
+                };
+                let program = func::JqProgram::new(&program).map_err(|e| sql_err!("jq: {e}"))?;
+                Ok(input.call_unary(UnaryFunc::Jq(func::Jq(program))))
+            }) => Jsonb, oid::FUNC_JQ_OID;
+        },
         "kafka_murmur2" => Scalar {
             params!(String) => UnaryFunc::KafkaMurmur2String(func::KafkaMurmur2String)
                 => Int32, oid::FUNC_KAFKA_MURMUR2_STRING_OID;

@@ -283,6 +283,9 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_blob_hedged_get_enabled", "true", ["true", "false"]
         ),
+        # 'on' because CI's S3 endpoint is not GCS, so 'gcs' would never use
+        # the pool.
+        VariableSystemParameter("persist_blob_http_pool", "on", ["off", "gcs", "on"]),
         # 10ms (vs the 2s production default) makes hedges actually fire in
         # every CI run; 0s makes every blob get hedge under randomized seeds.
         VariableSystemParameter(
@@ -323,6 +326,9 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "compute_apply_column_demands", "true", ["true", "false"]
         ),
+        # On by default so CI exercises the jq function, which is off in
+        # production while it earns trust.
+        VariableSystemParameter("enable_jq", "true", ["true", "false"]),
         # On by default so CI exercises the columnar merge batcher, which is
         # off in production while it earns trust.
         VariableSystemParameter(
@@ -447,7 +453,6 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "kafka_offset_commit_refresh_interval", "10s", ["1s", "10s", "10min"]
         ),
-        # On by default so CI exercises the sink id header path.
         VariableSystemParameter(
             "kafka_sink_emit_sink_id_header", "true", ["true", "false"]
         ),
@@ -501,6 +506,7 @@ def get_variable_system_parameters(
             "",
             ["", "^u1", ".*"],
         ),
+        VariableSystemParameter("persist_shard_info_metric", "true", ["true", "false"]),
         VariableSystemParameter(
             "persist_encoding_enable_dictionary", "true", ["true", "false"]
         ),
@@ -841,6 +847,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "persist_blob_read_timeout",
     "persist_blob_hedged_get_max_concurrent",
     "persist_blob_hedged_get_warm_interval",
+    "persist_blob_http_pool_max_in_flight_per_client",
     "persist_stats_collection_enabled",
     "persist_stats_filter_enabled",
     "persist_stats_budget_bytes",
@@ -906,6 +913,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mysql_source_snapshot_partition_probed_prefixes_per_billion_rows",
     "postgres_fetch_slot_resume_lsn_interval",
     "pg_schema_validation_interval",
+    "pg_source_replication_slot_creation_timeout",
     "pg_source_validate_timeline",
     "sql_server_source_validate_restore_history",
     "storage_enforce_external_addresses",

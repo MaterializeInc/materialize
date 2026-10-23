@@ -1,6 +1,6 @@
 ---
 source: src/alloc-default/src/lib.rs
-revision: 57cbc32edd
+revision: e95ca7eec0
 ---
 
 # mz-alloc-default
@@ -9,8 +9,9 @@ Activates the best default global memory allocator for the current platform by d
 
 ## Module structure
 
-The crate contains only a `lib.rs` with a module-level doc comment and no code.
-All behavior is encoded in `Cargo.toml`: on non-macOS targets the `jemalloc` feature of `mz-alloc` is enabled unconditionally, while on macOS the system allocator is used because jemalloc has known stability and latency issues on that platform.
+The crate contains only a `lib.rs` with a module-level doc comment and a `pub use mz_alloc` re-export.
+A `#[global_allocator]` takes effect only in binaries that load the crate defining it, so the re-export causes the allocator to be installed in any binary or bench that references this crate (for example with `use mz_alloc_default as _`).
+Platform selection is encoded in `Cargo.toml`: on non-macOS targets the `jemalloc` feature of `mz-alloc` is enabled unconditionally, while on macOS the system allocator is used because jemalloc has known stability and latency issues on that platform.
 
 ## Key dependencies
 

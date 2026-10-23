@@ -39,6 +39,8 @@ export type ReplicaUtilizationHistoryParameters = {
 
   // Whether to use the console cluster utilization overview view (14d/1h).
   shouldUseConsoleClusterUtilizationOverviewView?: boolean;
+  // Select the swap columns, which need mz >= 26.44.
+  includeMemoryBreakdown?: boolean;
 };
 // We have an equivalent query in `builtin.rs` in MaterializeInc/materialize.
 // This query should be kept in sync with `mz_console_cluster_utilization_overview`.
@@ -48,6 +50,7 @@ export function buildReplicaUtilizationHistoryQuery({
   startDate,
   endDate,
   bucketSizeMs,
+  includeMemoryBreakdown = false,
 }: ReplicaUtilizationHistoryParameters) {
   const bucketSizeMsSqlStr = sql.raw(`${bucketSizeMs}`);
   const startDateLit = sql.lit(startDate);
@@ -136,6 +139,21 @@ export function buildReplicaUtilizationHistoryQuery({
             SUM(m.memory_bytes::float8) / (NULLIF(s.memory_bytes, 0) * s.processes)
           )`.as("heap_percent"),
         ])
+        // Mirrors `CONSOLE_MEMORY_SHARES_SQL` in the builtin views.
+        .$if(includeMemoryBreakdown, (metrics) =>
+          metrics.select([
+            sql<
+              number | null
+            >`MAX(m.swap_bytes::float8) / NULLIF(s.memory_bytes, 0)`.as(
+              "swap_of_ram_percent",
+            ),
+            sql<
+              number | null
+            >`MAX(m.heap_limit::float8) / NULLIF(s.memory_bytes, 0)`.as(
+              "heap_limit_percent",
+            ),
+          ]),
+        )
         .groupBy([
           "m.occurred_at",
           "m.replica_id",
@@ -171,6 +189,9 @@ export function buildReplicaUtilizationHistoryQuery({
               TIMESTAMP ${dateBinOrigin}
             )`.as("bucket_start"),
         ])
+        .$if(includeMemoryBreakdown, (binned) =>
+          binned.select(["m.swap_of_ram_percent", "m.heap_limit_percent"]),
+        )
         .where(
           "occurred_at",
           ">=",
@@ -235,6 +256,9 @@ export function buildReplicaUtilizationHistoryQuery({
         .selectFrom("replica_utilization_history_binned")
         .distinctOn(["bucket_start", "replica_id"])
         .select(["bucket_start", "replica_id", "heap_percent", "occurred_at"])
+        .$if(includeMemoryBreakdown, (heapPeak) =>
+          heapPeak.select(["swap_of_ram_percent", "heap_limit_percent"]),
+        )
         .orderBy("bucket_start")
         .orderBy("replica_id")
         .orderBy((oeb) => sql`COALESCE(${oeb.ref("heap_bytes")}, 0)`, "desc"),
@@ -433,6 +457,13 @@ export function buildReplicaUtilizationHistoryQuery({
       "replica_history.cluster_id as clusterId",
       "replica_history.size",
     ])
+    // Taken from the max-heap sample, as the builtin views do.
+    .$if(includeMemoryBreakdown, (qb) =>
+      qb.select([
+        "max_heap.swap_of_ram_percent as swapOfRamPercent",
+        "max_heap.heap_limit_percent as heapLimitPercent",
+      ]),
+    )
     .orderBy("bucketStart");
 
   if (replicaId) {
@@ -451,6 +482,7 @@ export function buildConsoleClusterUtilizationOverviewQuery({
   replicaId,
   startDate,
   view = "mz_console_cluster_utilization_overview",
+  includeMemoryBreakdown = false,
 }: {
   clusterIds?: string[];
   replicaId?: string;
@@ -461,6 +493,8 @@ export function buildConsoleClusterUtilizationOverviewQuery({
   view?:
     | "mz_console_cluster_utilization_overview"
     | "mz_console_cluster_utilization_overview_24h";
+  // Select the swap columns, which exist only on mz >= 26.44.
+  includeMemoryBreakdown?: boolean;
 }) {
   let query = queryBuilder
     .selectFrom(view)
@@ -485,6 +519,12 @@ export function buildConsoleClusterUtilizationOverviewQuery({
       "cluster_id as clusterId",
       "size",
     ])
+    .$if(includeMemoryBreakdown, (qb) =>
+      qb.select([
+        "swap_of_ram_percent as swapOfRamPercent",
+        "heap_limit_percent as heapLimitPercent",
+      ]),
+    )
     .orderBy("bucketStart");
 
   if (clusterIds !== undefined && clusterIds.length > 0) {
@@ -513,9 +553,12 @@ export function buildConsoleClusterUtilizationOverviewQuery({
 export function buildConsoleClusterUtilizationUnbinned3hQuery({
   clusterIds,
   replicaId,
+  includeMemoryBreakdown = false,
 }: {
   clusterIds?: string[];
   replicaId?: string;
+  // Select the swap columns, which exist only on mz >= 26.44.
+  includeMemoryBreakdown?: boolean;
 }) {
   let query = queryBuilder
     .selectFrom("mz_console_cluster_utilization_overview_3h")
@@ -530,7 +573,13 @@ export function buildConsoleClusterUtilizationUnbinned3hQuery({
       "disk_percent as diskPercent",
       "heap_percent as heapPercent",
       "memory_and_disk_percent as memoryAndDiskPercent",
-    ]);
+    ])
+    .$if(includeMemoryBreakdown, (qb) =>
+      qb.select([
+        "swap_of_ram_percent as swapOfRamPercent",
+        "heap_limit_percent as heapLimitPercent",
+      ]),
+    );
 
   if (clusterIds !== undefined && clusterIds.length > 0) {
     query = query.where("cluster_id", "in", clusterIds);
@@ -549,9 +598,13 @@ export function buildConsoleClusterUtilizationUnbinned3hQuery({
 export function buildConsoleClusterUtilizationUnbinned3hSubscribe<T>(
   clusterIds: string[],
   minDate: Date,
+  includeMemoryBreakdown = false,
 ) {
   return buildSubscribeQuery<T>(
-    buildConsoleClusterUtilizationUnbinned3hQuery({ clusterIds }),
+    buildConsoleClusterUtilizationUnbinned3hQuery({
+      clusterIds,
+      includeMemoryBreakdown,
+    }),
     { asOfAtLeast: minDate, upsertKey: ["replicaId", "occurredAt"] },
   );
 }
@@ -563,11 +616,13 @@ export function buildConsoleClusterUtilizationUnbinned3hSubscribe<T>(
 export function buildConsoleClusterUtilizationOverview24hSubscribe<T>(
   clusterIds: string[],
   minDate: Date,
+  includeMemoryBreakdown = false,
 ) {
   return buildSubscribeQuery<T>(
     buildConsoleClusterUtilizationOverviewQuery({
       view: "mz_console_cluster_utilization_overview_24h",
       clusterIds,
+      includeMemoryBreakdown,
       startDate: minDate.toISOString(),
     }),
     { asOfAtLeast: minDate, upsertKey: ["replicaId", "bucketStart"] },
@@ -661,6 +716,7 @@ export async function fetchReplicaUtilizationHistory({
       clusterIds: clusterIdsFilter,
       replicaId: params.replicaId,
       startDate: params.startDate,
+      includeMemoryBreakdown: params.includeMemoryBreakdown,
     }).compile();
   } else {
     utilizationQuery = buildReplicaUtilizationHistoryQuery({

@@ -17,14 +17,11 @@
 //! Frontegg client is used to request and manage the access token.
 use std::sync::Arc;
 
-use reqwest::{Method, RequestBuilder, StatusCode, Url, header::HeaderMap};
+use reqwest::{Method, RequestBuilder, StatusCode, Url};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use crate::config::API_VERSION_HEADER;
 use crate::error::{ApiError, Error};
-
-use self::cloud_provider::CloudProvider;
 
 /// Represents the structure for the client.
 pub struct Client {
@@ -36,17 +33,6 @@ pub struct Client {
 pub mod cloud_provider;
 pub mod region;
 
-/// Cloud endpoints architecture:
-///
-/// (CloudProvider)                                (Region)
-///   ---------                     --------------------------------------
-///  |          |                  |              Region API              |
-///  |  Cloud   |        url       |    ----------        -------------   |
-///  |  Sync    | ---------------> |   | Provider | ---- |    Region   |  |
-///  |          |                  |   | (aws..)  |      |  (east-1..) |  |
-///  |          |                  |    ----------        -------------   |
-///   ----------                    --------------------------------------
-///
 impl Client {
     /// Builds a request towards the `Client`'s endpoint
     async fn build_global_request<P>(
@@ -59,56 +45,7 @@ impl Client {
         P: IntoIterator,
         P::Item: AsRef<str>,
     {
-        self.build_request(method, path, query, self.endpoint.clone(), None)
-            .await
-    }
-
-    /// Builds a request towards the `Client`'s endpoint
-    /// The function requires a [CloudProvider] as parameter
-    /// since it contains the api url (Region API url)
-    /// to interact with the region.
-    /// Specify an api_version corresponding to the request/response
-    /// schema your code will handle. Refer to the Region API docs
-    /// for schema information.
-    async fn build_region_request<P>(
-        &self,
-        method: Method,
-        path: P,
-        query: Option<&[(&str, &str)]>,
-        cloud_provider: &CloudProvider,
-        api_version: Option<u16>,
-    ) -> Result<RequestBuilder, Error>
-    where
-        P: IntoIterator,
-        P::Item: AsRef<str>,
-    {
-        self.build_request(
-            method,
-            path,
-            query,
-            cloud_provider.url.clone(),
-            api_version.and_then(|api_ver| {
-                let mut headers = HeaderMap::with_capacity(1);
-                headers.insert(API_VERSION_HEADER, api_ver.into());
-                Some(headers)
-            }),
-        )
-        .await
-    }
-
-    /// Builds a request towards the `Client`'s endpoint
-    async fn build_request<P>(
-        &self,
-        method: Method,
-        path: P,
-        query: Option<&[(&str, &str)]>,
-        mut domain: Url,
-        headers: Option<HeaderMap>,
-    ) -> Result<RequestBuilder, Error>
-    where
-        P: IntoIterator,
-        P::Item: AsRef<str>,
-    {
+        let mut domain = self.endpoint.clone();
         domain
             .path_segments_mut()
             .or(Err(Error::UrlBaseError))?
@@ -116,9 +53,6 @@ impl Client {
             .extend(path);
 
         let mut req = self.inner.request(method, domain);
-        if let Some(header_map) = headers {
-            req = req.headers(header_map);
-        }
         if let Some(query_params) = query {
             req = req.query(&query_params);
         }

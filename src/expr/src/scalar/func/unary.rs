@@ -21,6 +21,7 @@ use crate::Eval;
 use crate::EvalError;
 use crate::scalar::func::RedactSql;
 use crate::scalar::func::impls::*;
+use crate::scalar::func::jq::Jq;
 
 /// A description of an SQL unary function that has the ability to lazy evaluate its arguments
 // This trait will eventually be annotated with #[enum_dispatch] to autogenerate the UnaryFunc enum
@@ -440,6 +441,7 @@ derive_unary!(
     IsLikeMatch,
     IsRegexpMatch,
     RegexpMatch,
+    Jq,
     ExtractInterval,
     ExtractTime,
     ExtractTimestamp,

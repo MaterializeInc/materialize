@@ -13,10 +13,10 @@ rows:
       https://materialize.com/self-managed/community-license/.
   - Deployment type: "Existing deployments"
     License key type: "Community"
-    Action: "Contact [Materialize support](https://materialize.com/docs/support/)."
+    Action: "Contact [Materialize support](https://materialize.com/support/)."
   - Deployment type: "New deployments"
     License key type: "Enterprise"
     Action: "Visit https://materialize.com/self-managed/enterprise-license/ to purchase an Enterprise license."
   - Deployment type: "Existing deployments"
     License key type: "Enterprise"
-    Action: "Contact [Materialize support](https://materialize.com/docs/support/)."
+    Action: "Contact [Materialize support](https://materialize.com/support/)."

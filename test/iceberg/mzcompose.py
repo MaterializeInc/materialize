@@ -53,7 +53,7 @@ SERVICES = [
         depends_on=["minio"],
         sanity_restart=False,
         additional_system_parameter_defaults={
-            "log_filter": "mz_storage::sink::iceberg=debug",
+            "log_filter": "info,warn,mz_storage::sink::iceberg=debug,mz_storage_types=debug",
         },
     ),
     Testdrive(),
@@ -174,6 +174,25 @@ def workflow_storage_provider(c: Composition) -> None:
     )
 
 
+def workflow_alter_catalog_aws_connection(c: Composition) -> None:
+    """ALTER CONNECTION on the AWS connection an S3 Tables catalog uses must
+    not panic the coordinator while an Iceberg sink depends on the catalog.
+    The change reaches the sink's inlined catalog connection, which the
+    coordinator applies after committing the ALTER. This needs no Iceberg
+    backend, the sink only has to exist."""
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.run_testdrive_files(
+        "alter-catalog-aws-connection.td",
+    )
+
+    logs = c.invoke("logs", "materialized", capture=True)
+    assert (
+        "altering export connections after txn must succeed" not in logs.stdout
+    ), "coordinator panicked applying the altered catalog connection to the sink"
+
+
 def workflow_mode_append(c: Composition) -> None:
     key = _setup(c)
 
@@ -245,6 +264,32 @@ def workflow_finite_source(c: Composition) -> None:
         f"--var=s3-access-key={key}",
         "--var=aws-endpoint=minio:9000",
         "finite-source-verify.td",
+    )
+
+
+def workflow_restart_nested_column(c: Composition) -> None:
+    """A sink over a relation with an array column must survive a restart.
+    The REST catalog assigns its own field ids when it creates the table,
+    numbering a struct's direct children before any nested field, while the
+    sink numbers depth-first. On resume the two schemas differ only in ids
+    and the sink must still accept the table (SS-522). A flat relation is
+    sunk alongside as the control: its ids coincide under both schemes."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "restart-nested-column.td",
+    )
+
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.run_testdrive_files(
+        "--no-reset",
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "restart-nested-column-verify.td",
     )
 
 

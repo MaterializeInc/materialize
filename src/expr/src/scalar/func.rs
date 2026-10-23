@@ -59,6 +59,7 @@ mod binary;
 mod encoding;
 pub(crate) mod format;
 pub(crate) mod impls;
+mod jq;
 #[cfg(feature = "func-registry")]
 pub mod registry;
 mod unary;
@@ -67,6 +68,7 @@ pub mod variadic;
 
 pub use binary::BinaryFunc;
 pub use impls::*;
+pub use jq::{Jq, JqProgram};
 pub use unary::{EagerUnaryFunc, LazyUnaryFunc, UnaryFunc};
 pub use unmaterializable::UnmaterializableFunc;
 pub use variadic::VariadicFunc;

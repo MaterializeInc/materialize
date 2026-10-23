@@ -20,7 +20,7 @@ table schema changes seamlessly, specifically:
 
 - Adding a column in the upstream database.
 - Dropping a column in the upstream database.
-- Dropping a `PRIMARY KEY` or `UNIQUE` constraint in the upstream database.
+- Dropping a `PRIMARY KEY`, `UNIQUE`, or `NOT NULL` constraint in the upstream database.
 
 This guide walks you through how to handle these changes without any downtime in Materialize.
 
@@ -188,10 +188,8 @@ has been altered.
 
 ## Handle upstream constraint drop
 
-{{< warn-if-unreleased "v26.42" >}}
-
 {{< public-preview >}}
-Excluding constraints with `EXCLUDE CONSTRAINTS` or `EXCLUDE ALL CONSTRAINTS`
+Excluding constraints with `EXCLUDE CONSTRAINTS`, `EXCLUDE ALL NOT NULL CONSTRAINTS`, or `EXCLUDE ALL CONSTRAINTS`
 {{< /public-preview >}}
 
 Materialize ignores the following constraints: foreign key, `CHECK`, and
@@ -215,14 +213,43 @@ CREATE TABLE v4.T
 
 Materialize does not record the excluded constraint as a key of `v4.T`.
 
+#### Excluding nullability constraints
+
 `EXCLUDE CONSTRAINTS` only accepts `PRIMARY KEY` and `UNIQUE` constraint
-names. A `NOT NULL` constraint on a specific column cannot be excluded by
-name. To drop a `NOT NULL` constraint safely, use `EXCLUDE ALL CONSTRAINTS`
-instead, which records no constraints at all: the table has no keys and every
-column is nullable, so any later constraint drop is safe.
+names. Individual `NOT NULL` constraints cannot be excluded by name. To drop
+`NOT NULL` constraints safely, use `EXCLUDE ALL NOT NULL CONSTRAINTS`:
 
 ```sql
 CREATE SCHEMA v4;
+CREATE TABLE v4.T
+    FROM SOURCE my_source(REFERENCE public.T) WITH (EXCLUDE ALL NOT NULL CONSTRAINTS);
+```
+
+Note that when excluding `NOT NULL` constraints:
+
+- Primary key columns remain `NOT NULL`, unless the primary key is also
+  excluded with `EXCLUDE CONSTRAINTS`.
+- Columns in a `UNIQUE` constraint become nullable. This means Materialize no
+  longer uses that constraint as a key when optimizing queries, which might
+  reduce query performance. `UNIQUE NULLS NOT DISTINCT` constraints
+  (PostgreSQL 15+) are still used as keys.
+- `PRIMARY KEY` and `UNIQUE` constraints are still recorded. Dropping one
+  upstream still puts the table into an error state unless it is also
+  excluded:
+
+  ```sql
+  CREATE TABLE v4.T
+      FROM SOURCE my_source(REFERENCE public.T)
+      WITH (EXCLUDE ALL NOT NULL CONSTRAINTS, EXCLUDE CONSTRAINTS ('t_pkey'));
+  ```
+
+#### Excluding all constraints
+
+To record no constraints at all, use `EXCLUDE ALL CONSTRAINTS`: the table has
+no keys and every column is nullable, so any later constraint drop is safe.
+Queries that relied on those keys for optimization may run slower.
+
+```sql
 CREATE TABLE v4.T
     FROM SOURCE my_source(REFERENCE public.T) WITH (EXCLUDE ALL CONSTRAINTS);
 ```

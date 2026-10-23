@@ -337,9 +337,13 @@ impl TracingCliArgs {
     }
 }
 
+/// Target for events that go to the logs but never to Sentry, e.g. because they carry client IPs.
+/// The Sentry layer otherwise attaches recent info events as breadcrumbs to unrelated errors.
+pub const NO_SENTRY_TARGET: &str = "mz_no_sentry";
+
 pub fn mz_sentry_event_filter(meta: &tracing::Metadata<'_>) -> EventFilter {
     // special cases
-    if meta.target() == "librdkafka" {
+    if meta.target() == "librdkafka" || meta.target() == NO_SENTRY_TARGET {
         return EventFilter::Ignore;
     }
 

@@ -38,6 +38,9 @@ mkdir -p "$OUTPUT_DIR"
 echo "Generating agent skill from documentation..."
 echo "Output directory: $OUTPUT_DIR"
 
+# Works around a Hugo data race, see ci/test/preview-docs.sh.
+export HUGO_NUMWORKERMULTIPLIER=1
+
 # Build documentation with skill output format
 cd doc/user
 hugo --config config.toml,config.skill.toml \

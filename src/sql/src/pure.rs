@@ -1229,6 +1229,7 @@ async fn purify_create_source(
                 text_columns,
                 exclude_columns,
                 &FilterConstraints::none(),
+                false,
                 source_name,
                 initial_gtid_set.clone(),
                 &reference_policy,
@@ -1674,6 +1675,7 @@ async fn purify_alter_source_add_subsources(
                 text_columns,
                 exclude_columns,
                 &FilterConstraints::none(),
+                false,
                 &unresolved_source_name,
                 initial_gtid_set,
                 &SourceReferencePolicy::Required,
@@ -1967,7 +1969,7 @@ async fn purify_create_table_from_source(
         }])
     });
 
-    if filter_constraints.excludes_any()
+    if (filter_constraints.excludes_any() || exclude_all_not_null_constraints)
         && !matches!(
             desc.connection,
             GenericSourceConnection::Postgres(_) | GenericSourceConnection::MySql(_)
@@ -2076,6 +2078,7 @@ async fn purify_create_table_from_source(
                 qualified_text_columns,
                 qualified_exclude_columns,
                 &filter_constraints,
+                exclude_all_not_null_constraints,
                 &unresolved_source_name,
                 initial_gtid_set,
                 &SourceReferencePolicy::Required,

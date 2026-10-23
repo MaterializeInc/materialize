@@ -21,7 +21,7 @@ from argparse import Namespace
 from typing import Any, Literal
 from urllib.parse import quote
 
-from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
+from materialize import MZ_ROOT, buildkite, gcp_oidc, rustc_flags, spawn, ui
 from materialize.cli.run import SANITIZER_TARGET
 from materialize.mzbuild import (
     CargoRegistryFetchFailure,
@@ -133,6 +133,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"postgres://root@localhost:{c.default_port(c.metadata_store())}"
     )
 
+    persist_gcs_bucket = os.getenv("PERSIST_GCS_BUCKET")
+    if persist_gcs_bucket:
+        gcp_oidc.authenticate()
+
     env = dict(
         os.environ,
         KAFKA_ADDRS="localhost:30123",
@@ -146,6 +150,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_AZURE_CONTAINER="mz-test-azure",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_POSTGRES_URL=metadata_backend_url,
     )
+    if persist_gcs_bucket:
+        env["MZ_PERSIST_EXTERNAL_STORAGE_TEST_GCS_BUCKET"] = persist_gcs_bucket
 
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
 

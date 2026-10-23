@@ -44,6 +44,7 @@ use launchdarkly_server_sdk as ld;
 use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthentication;
+use mz_orchestrator_tracing::NO_SENTRY_TARGET;
 use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::conn_id_org_uuid;
 use mz_ore::metrics::{
@@ -199,9 +200,9 @@ pub struct BalancerService {
 
 impl BalancerService {
     pub async fn new(cfg: BalancerConfig) -> Result<Self, anyhow::Error> {
-        let pgwire = listen(&cfg.pgwire_listen_addr).await?;
-        let https = listen(&cfg.https_listen_addr).await?;
-        let internal_http = listen(&cfg.internal_http_listen_addr).await?;
+        let pgwire = listen(&cfg.pgwire_listen_addr)?;
+        let https = listen(&cfg.https_listen_addr)?;
+        let internal_http = listen(&cfg.internal_http_listen_addr)?;
         let metrics = BalancerMetrics::new(&cfg);
         let mut configs = ConfigSet::default();
         configs = dyncfgs::all_dyncfgs(configs);
@@ -1200,8 +1201,8 @@ impl PgwireBalancer {
     }
 
     /// Proxies a resolved connection until either side closes.
-    async fn proxy<'a, A>(
-        conn: &'a mut FramedConn<A>,
+    async fn proxy<A>(
+        mut conn: FramedConn<A>,
         resolved: ResolvedAddr,
         params: BTreeMap<String, String>,
         internal_tls: Option<&SslConnector>,
@@ -1214,23 +1215,39 @@ impl PgwireBalancer {
             .tenant
             .as_ref()
             .map(|tenant| metrics.tenant_connections(tenant));
-        let mut mz_stream =
-            match Self::init_stream(conn, resolved.addr, resolved.password, params, internal_tls)
-                .await
-            {
-                Ok(stream) => stream,
-                Err(e) => {
-                    error!("failed to connect to upstream server: {e}");
-                    return conn
-                        .send(ErrorResponse::fatal(
-                            SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
-                            "upstream server not available",
-                        ))
-                        .await;
-                }
-            };
+        let mut mz_stream = match Self::init_stream(
+            &mut conn,
+            resolved.addr,
+            resolved.password,
+            params,
+            internal_tls,
+        )
+        .await
+        {
+            Ok(stream) => stream,
+            Err(e) => {
+                error!("failed to connect to upstream server: {e}");
+                return reject(
+                    &mut conn,
+                    ErrorResponse::fatal(
+                        SqlState::SQLSERVER_REJECTED_ESTABLISHMENT_OF_SQLCONNECTION,
+                        "upstream server not available",
+                    ),
+                )
+                .await;
+            }
+        };
 
-        let mut client_counter = CountingConn::new(conn.inner_mut());
+        // Proxying does not frame, so release the framing buffers rather than hold them for the
+        // life of the connection. Bytes the client sent after its last decoded message, e.g. a
+        // query pipelined behind its password, are already buffered and must go upstream first.
+        let (mut client, unread) = conn.into_parts();
+        if !unread.is_empty() {
+            mz_stream.write_all(&unread).await?;
+        }
+        drop(unread);
+
+        let mut client_counter = CountingConn::new(&mut client);
 
         // Now blindly shuffle bytes back and forth until closed.
         // TODO: Limit total memory use.
@@ -1372,34 +1389,50 @@ impl mz_server_core::Server for PgwireBalancer {
                 };
                 let pre_resolved = inner_metrics.pre_resolved_connections();
 
+                // Boxed so that startup's state, much larger than the proxying state, is freed once
+                // startup completes. Held inline, it would size the connection's task, which lives
+                // as long as the connection.
                 let destination = under_pre_resolved_timeout(
                     pre_resolved_timeout,
                     &inner_metrics,
-                    Self::pre_resolve(
+                    Box::pin(Self::pre_resolve(
                         conn,
                         tls,
                         &resolver,
                         cancellation_resolver,
                         conn_uuid,
                         &inner_metrics,
-                    ),
+                    )),
                 )
                 .await?;
 
-                let Some((mut conn, resolved, params)) = destination else {
+                let Some((conn, resolved, params)) = destination else {
                     return Ok(());
                 };
                 drop(pre_resolved);
+                // One line per connection ties a client IP to a tenant; the metrics carry the
+                // tenant but not the IP, and flow logs see the IP but not the tenant. Skipped
+                // without a tenant (self-managed). `authenticated` is false when the tenant came
+                // from the client's SNI, which environmentd authenticates only after this point.
+                if let Some(tenant) = &resolved.tenant {
+                    info!(
+                        target: NO_SENTRY_TARGET,
+                        %conn_uuid,
+                        client_addr = params.get(MZ_FORWARDED_FOR_KEY).map_or("", String::as_str),
+                        %tenant,
+                        authenticated = resolved.password.is_some(),
+                        "pgwire connection resolved",
+                    );
+                }
 
                 PgwireBalancer::proxy(
-                    &mut conn,
+                    conn,
                     resolved,
                     params,
                     internal_tls.as_ref(),
                     &inner_metrics,
                 )
                 .await?;
-                conn.flush().await?;
                 Ok(())
             }
             .await;
@@ -1725,6 +1758,17 @@ impl mz_server_core::Server for HttpsBalancer {
                 )
                 .await?;
                 drop(pre_resolved);
+                // See the matching log line in the pgwire handler. The tenant always comes from
+                // SNI here, before any authentication.
+                if let Some(tenant) = &resolved.tenant {
+                    info!(
+                        target: NO_SENTRY_TARGET,
+                        client_addr = %peer_addr.ip(),
+                        %tenant,
+                        authenticated = false,
+                        "https connection resolved",
+                    );
+                }
                 let inner_active_guard = resolved
                     .tenant
                     .as_ref()

@@ -10,7 +10,7 @@
 import { Box, Text, useTheme, VStack } from "@chakra-ui/react";
 import { createColumnHelper } from "@tanstack/react-table";
 import React from "react";
-import { Link as RouterLink } from "react-router-dom";
+import { Link as RouterLink, useSearchParams } from "react-router-dom";
 
 import { NULL_LAG_TEXT } from "~/api/materialize/freshness/lagHistory";
 import StatusPill from "~/components/StatusPill";
@@ -24,13 +24,15 @@ import {
   HYDRATION_LABELS,
   STATUS_COLOR_SCHEMES,
 } from "~/platform/maintained-objects/filters";
-import { absoluteMaintainedObjectPath } from "~/platform/routeHelpers";
+import { objectExplorerObjectPath } from "~/platform/routeHelpers";
 import { useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { kebabToTitleCase } from "~/util";
 import { formatDurationExact } from "~/utils/format";
 
-import { FreshnessRow, UNREADABLE } from "./freshnessRows";
+import { FreshnessScope, SCOPE_LABELS } from "./constants";
+import { FreshnessRow, qualifiedSchemaName, UNREADABLE } from "./freshnessRows";
+import { withScope } from "./useFreshnessParams";
 
 const PAGE_SIZE = 25;
 
@@ -38,33 +40,39 @@ const PAGE_SIZE = 25;
 const NO_VALUE = "—";
 
 /**
- * The object's name, linking to its detail drawer.
+ * The object's name, linking to its workflow graph in Object Explorer, which
+ * every type this page shows has and which carries its current freshness.
  *
  * A link rather than a click handler on the row: `UniversalTable`'s
  * `onRowClick` binds `onClick` alone, so a row is reachable with a mouse and
  * with nothing else.
  */
 const ObjectCell = ({ row }: { row: FreshnessRow }) => {
-  const { colors } = useTheme<MaterializeTheme>();
   const regionSlug = useRegionSlug();
+  // Null only for a line whose object is no longer in the list, which has no
+  // Object Explorer path to link to.
+  const schemaName = row.schemaName;
   return (
     <>
-      <TextLink
-        as={RouterLink}
-        to={absoluteMaintainedObjectPath(regionSlug, row.key)}
-        textStyle="text-ui-med"
-        noOfLines={1}
-      >
-        {row.objectName}
-      </TextLink>
-      {row.namespace && (
-        <Text
-          textStyle="text-small"
-          color={colors.foreground.secondary}
+      {schemaName === null ? (
+        <Text textStyle="text-ui-med" noOfLines={1}>
+          {row.objectName}
+        </Text>
+      ) : (
+        <TextLink
+          as={RouterLink}
+          to={`${objectExplorerObjectPath(regionSlug, {
+            databaseName: row.databaseName,
+            schemaName,
+            objectType: row.objectType,
+            objectName: row.objectName,
+            id: row.key,
+          })}/workflow`}
+          textStyle="text-ui-med"
           noOfLines={1}
         >
-          {row.namespace}
-        </Text>
+          {row.objectName}
+        </TextLink>
       )}
     </>
   );
@@ -128,9 +136,61 @@ const ColorSwatch = ({ row }: { row: FreshnessRow }) => {
   );
 };
 
+/**
+ * Where an object sits in the scope the page is not gathered by: its schema
+ * when gathered by cluster, its cluster when gathered by schema.
+ */
+function placementOf(
+  row: FreshnessRow,
+  scope: FreshnessScope,
+): { scope: FreshnessScope; id: string; label: string } | null {
+  if (scope === "cluster") {
+    return row.schemaId && row.schemaName
+      ? {
+          scope: "schema",
+          id: row.schemaId,
+          label: qualifiedSchemaName(row.databaseName, row.schemaName),
+        }
+      : null;
+  }
+  return row.clusterId && row.clusterName
+    ? { scope: "cluster", id: row.clusterId, label: row.clusterName }
+    : null;
+}
+
+/** Links to this page gathered by the object's placement. */
+const PlacementCell = ({
+  row,
+  scope,
+}: {
+  row: FreshnessRow;
+  scope: FreshnessScope;
+}) => {
+  const [searchParams] = useSearchParams();
+  const placement = placementOf(row, scope);
+  // A table runs on no cluster.
+  if (!placement) return <>{NO_VALUE}</>;
+
+  return (
+    <TextLink
+      as={RouterLink}
+      to={{
+        search: withScope(
+          searchParams,
+          placement.scope,
+          placement.id,
+        ).toString(),
+      }}
+      noOfLines={1}
+    >
+      {placement.label}
+    </TextLink>
+  );
+};
+
 const columnHelper = createColumnHelper<FreshnessRow>();
 
-const columns = [
+const buildColumns = (scope: FreshnessScope) => [
   columnHelper.display({
     id: "swatch",
     header: () => <Box aria-label="Graph color" />,
@@ -147,6 +207,13 @@ const columns = [
     // cell otherwise grows to fit its text, so without it the name would
     // widen the table rather than truncate.
     meta: { cellProps: { width: "100%", maxW: 0 } },
+  }),
+  // Headed by the scope it links to, the one the page is not gathered by.
+  columnHelper.accessor((row) => placementOf(row, scope)?.label ?? null, {
+    id: "placement",
+    header: SCOPE_LABELS[scope === "cluster" ? "schema" : "cluster"].menu,
+    sortingFn: sortingFunctions.nullsLast,
+    cell: (info) => <PlacementCell row={info.row.original} scope={scope} />,
   }),
   columnHelper.accessor("objectType", {
     header: "Type",
@@ -186,8 +253,15 @@ const columns = [
   }),
 ];
 
+const COLUMNS = {
+  cluster: buildColumns("cluster"),
+  schema: buildColumns("schema"),
+};
+
 export interface FreshnessTableProps {
   rows: FreshnessRow[];
+  /** What the page is gathered by, which decides the placement column. */
+  scope: FreshnessScope;
   /** Names the rows in the pagination footer. */
   itemLabel?: string;
 }
@@ -201,11 +275,12 @@ export interface FreshnessTableProps {
  */
 const FreshnessTableInner = ({
   rows,
+  scope,
   itemLabel = "objects",
 }: FreshnessTableProps) => {
   const table = useUniversalTable({
     data: rows,
-    columns,
+    columns: COLUMNS[scope],
     // `buildFreshnessRows` orders worst first by `breachValue`, which is
     // whichever statistic the active predicate judges, so the incoming order
     // already follows the predicate.

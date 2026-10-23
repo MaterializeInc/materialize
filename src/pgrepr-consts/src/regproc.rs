@@ -692,6 +692,7 @@ pub const NAMES: &[(u32, &str)] = &[
     (17128, "mz_unsafe.mz_avg_promotion_internal_v1"),
     (17131, "pg_catalog.max"),
     (17132, "pg_catalog.min"),
+    (17138, "jq"),
     // END GENERATED
 ];
 

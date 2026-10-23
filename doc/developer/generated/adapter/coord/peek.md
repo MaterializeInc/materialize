@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/peek.rs
-revision: c69fde3d50
+revision: d9a2c5dc40
 ---
 
 # adapter::coord::peek
@@ -13,3 +13,4 @@ Defines the data structures and execution logic for coordinator-side peeks (SELE
 `PeekResponseUnary` carries rows, errors, a cancellation signal, or a `DependencyDropped(DroppedDependency)` variant (used when a relation or cluster dependency was dropped mid-flight) back to the client. The `Error` variant holds a structured `AdapterError` rather than a plain string; compute-layer `PeekResponse::Error(PeekError)` values are converted to `AdapterError` via `From<PeekError>` before being yielded.
 `DroppedDependency` is an enum with `Relation { name }` and `Cluster { name }` variants; it formats as a quoted SQL identifier with kind prefix (e.g. `relation "db.schema.t"`) and provides `query_terminated_error` and `to_concurrent_dependency_drop` helpers for producing user-facing error messages.
 `create_fast_path_plan` inspects the optimized dataflow plan to detect whether a fast-path execution is possible, returning a `FastPathPlan` if so.
+`Coordinator::background_peek_client` constructs a `PeekClient` for coordinator-owned background queries, using a `CoordinatorClient::Background` sender so the client does not hold a session `Client` handle and does not prevent coordinator shutdown. It is used by the hydration-history sweep and the caught-up check task.

@@ -15,7 +15,17 @@ multiple-versions = "deny"
 # You can use patch directives in the root Cargo.toml to point at a
 # Materialize-maintained fork that avoids the duplicated transitive
 # dependencies.
+
 skip = [
+    # Materialize uses tower-http 0.7.1. kube-client and reqwest still require
+    # 0.6, which currently resolves to 0.6.11. Temporarily exempt that exact
+    # version from duplicate checks. Remove this exception once those
+    # dependencies no longer bring in tower-http 0.6.11.
+    { name = "tower-http", version = "=0.6.11" },
+    # Materialize uses serde-saphyr 2.0.0. kube-client 4.2.0 still requires
+    # 0.0.29. Remove this exception once kube-client moves to serde-saphyr 2.
+    { name = "serde-saphyr", version = "=0.0.29" },
+
     # arrayvec had a significant API change in 0.7
     { name = "arrayvec", version = "0.5.2" },
     # One-time exception for base64 due to its prevalence in the crate graph.
@@ -87,8 +97,6 @@ skip = [
     { name = "tungstenite", version = "0.29.0" },
     # libduckdb-sys still pulls 6.
     { name = "zip", version = "6.0.0" },
-    # launchdarkly-server-sdk still uses 0.16, up to its latest release 3.3.
-    { name = "lru", version = "0.16.3" },
     # flate2 is on 0.9, while apache-avro and backtrace still pull 0.8.
     { name = "miniz_oxide", version = "0.8.9" },
     # reqsign-core is on 0.7, while opendal still pulls 0.6.
@@ -156,10 +164,12 @@ skip = [
     { name = "block-buffer", version = "0.10.4" },
     { name = "const-oid", version = "0.9.6" },
     { name = "crypto-common", version = "0.1.6" },
+    { name = "der", version = "0.7.10" },
     { name = "digest", version = "0.10.7" },
     { name = "hmac", version = "0.12.1" },
     { name = "sha1", version = "0.10.6" },
     { name = "sha2", version = "0.10.9" },
+    { name = "spki", version = "0.7.3" },
     # reqsign-azure-storage 3.2 moved to pem 4, while jsonwebtoken, and so most
     # of the workspace, is still on pem 3. The ADLS credential loader needs the
     # `expires_at` field that 3.2 added to `Credential::SasToken`, so the older
@@ -172,8 +182,8 @@ skip = [
     { name = "core-foundation", version = "0.10.1" },
     # aws-lc-rs (via jsonwebtoken 10) and ring pull different `untrusted`.
     { name = "untrusted", version = "0.7.1" },
-    # Held back by lazy_static 1.4.0 (used by num-bigint-dig).
-    { name = "spin", version = "0.5.2" },
+    # Held back by lazy_static 1.5.1.
+    { name = "spin", version = "0.9.9" },
     # held back by tower-lsp 0.20 (mz-deploy LSP server)
     { name = "dashmap", version = "5.5.3" },
     { name = "tower", version = "0.4.13" },
@@ -204,6 +214,7 @@ name = "env_logger"
 # Use `md-5` instead, which is part of the RustCrypto ecosystem.
 [[bans.deny]]
 name = "md5"
+wrappers = ["google-cloud-storage"]
 
 # Use `sha1` instead, which the RustCrypto ecosystem recently took control of.
 # `sha-1` is the older and now deprecated name.
@@ -236,14 +247,14 @@ name = "strum-macros"
 name = "log"
 wrappers = [
     "apache-avro",
-    "bindgen",
     "buildid",
     "cookie_store",
-    "deadpool-postgres",
     "eventsource-client",
     "fail",
     "globset",
     "hyper-rustls",
+    # Only via `debug_empty` and `stderr_empty`, which the jq function replaces.
+    "jaq-std",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "launchdarkly-sdk-transport",
@@ -273,7 +284,6 @@ wrappers = [
     "tracing-log",
     "tracing",
     "tungstenite",
-    "want",
     "zopfli",
 ]
 
@@ -282,8 +292,8 @@ wrappers = [
 [[bans.deny]]
 name = "lazy_static"
 wrappers = [
-    "dynfmt",
     "findshlibs",
+    "google-cloud-gax-internal",
     "launchdarkly-server-sdk-evaluation",
     "num-bigint-dig",
     "prometheus",
@@ -312,10 +322,6 @@ version = 2
 ignore = [
     # Consider `encoding_rs` instead of `encoding` (unmaintained)
     "RUSTSEC-2021-0153",
-    # `proc-macro-error2` (the maintained fork of `proc-macro-error`) is now also
-    # unmaintained. Pulled in transitively via `tabled` -> `tabled_derive`. No
-    # safe upgrade is available.
-    "RUSTSEC-2026-0173",
     # `derivative` is unmaintained; consider using an alternative (unmaintained)
     "RUSTSEC-2024-0388",
     # The creator of the crate `paste` has stated in the [`README.md`](https://github.com/dtolnay/paste/blob/master/README.md) that this project is not longer maintained as well as archived the repository
@@ -328,11 +334,6 @@ ignore = [
     # Allows private key leakage through timing information
     # rsa is required through iceberg-storage-opendal
     "RUSTSEC-2023-0071",
-    # `launchdarkly-server-sdk` requires `lru ^0.16.3` in its latest release.
-    "RUSTSEC-2026-0253",
-    # `unsafe-libyaml` is unmaintained. Pulled in by `serde_yaml`, which
-    # `mz-debug` and `mz-metrics-catalog` use directly.
-    "RUSTSEC-2024-0449",
 ]
 
 # Must be manually kept in sync with about.toml.

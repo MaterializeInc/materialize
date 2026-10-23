@@ -141,10 +141,11 @@ export function useGlobalUpsertSubscribe<T extends object, R = SubscribeRow<T>>(
 /**
  * Runs an app-session subscribe that feeds a TanStack DB collection, for as
  * long as the calling component is mounted. Mirrors useGlobalUpsertSubscribe
- * with createCollectionSubscribeSession owning the wiring.
+ * with createCollectionSubscribeSession owning the wiring. No subscribe runs
+ * while `subscribe` or `target` is undefined.
  *
- * `options` must be referentially stable (declare it at module scope); a new
- * object restarts the subscribe session.
+ * `options` must be referentially stable (declare it at module scope, or
+ * memoize it); a new object restarts the subscribe session.
  *
  * Note that the subscribe statement must have WITH (PROGRESS) and ENVELOPE UPSERT.
  */
@@ -154,18 +155,19 @@ export function useGlobalSubscribeCollection<
 >(
   options: UseSubscribeOptions<T, R> & {
     upsertKey: UpsertKeyFunction<T>;
-    target: SubscribeCollection<R>;
+    target: SubscribeCollection<R> | undefined;
     scopeAtom?: ScopeLoadableAtom;
   },
 ) {
   const store = useStore();
   const request = useSubscribeRequest(options.subscribe);
   React.useEffect(() => {
-    if (!request) return;
+    const { target } = options;
+    if (!request || !target) return;
     const session = createCollectionSubscribeSession<T, R>({
       store,
       request,
-      target: options.target,
+      target,
       scopeAtom: options.scopeAtom,
       upsertKey: options.upsertKey,
       select: options.select,

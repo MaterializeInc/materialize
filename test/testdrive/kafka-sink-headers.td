@@ -14,9 +14,6 @@ $ set-arg-default single-replica-cluster=quickstart
 # Test the HEADER option for Kafka sinks, which allows attaching user-specified
 # headers to each Kafka message emitted by the sink.
 
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_kafka_sink_headers = true
-
 > CREATE CONNECTION k
   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
 

@@ -316,8 +316,72 @@ where
 
     /// Diagnoses a missing-blob fetch failure for a part leased by the given
     /// reader. See the free function `missing_blob_diagnostics`.
-    pub async fn missing_blob_diagnostics(&self, reader_id: &LeasedReaderId) -> String {
-        missing_blob_diagnostics(self.schema_cache.applier(), reader_id).await
+    pub async fn missing_blob_diagnostics(
+        &self,
+        reader_id: &LeasedReaderId,
+    ) -> MissingBlobDiagnosis {
+        missing_blob_diagnostics(self.schema_cache.applier(), reader_id.clone()).await
+    }
+}
+
+/// How long [missing_blob_diagnostics] waits to refresh state.
+const MISSING_BLOB_DIAGNOSIS_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The result of [BatchFetcher::missing_blob_diagnostics].
+#[derive(Debug)]
+pub enum MissingBlobDiagnosis {
+    /// The reader has been expired out of state, so its lease was lost.
+    LeaseExpired {
+        /// The reader that leased the part.
+        reader_id: LeasedReaderId,
+    },
+    /// The shard was tombstoned, which removes every reader. Not a lost lease.
+    ShardTombstoned {
+        /// The reader that leased the part.
+        reader_id: LeasedReaderId,
+    },
+    /// The reader is still in state, so its hold did not protect the blob.
+    LeasePresent {
+        /// The reader that leased the part.
+        reader_id: LeasedReaderId,
+        /// The reader's lease state, for the error message.
+        lease_state: String,
+    },
+    /// State could not be refreshed in time to tell.
+    Unknown {
+        /// The reader that leased the part.
+        reader_id: LeasedReaderId,
+    },
+}
+
+impl fmt::Display for MissingBlobDiagnosis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MissingBlobDiagnosis::LeaseExpired { reader_id } => write!(
+                f,
+                "reader {reader_id} has been expired out of state; \
+                 the process likely failed to heartbeat it within the lease duration \
+                 (machine sleep, CPU/memory starvation, or a partition from consensus?)"
+            ),
+            MissingBlobDiagnosis::ShardTombstoned { reader_id } => write!(
+                f,
+                "reader {reader_id}: the shard has been tombstoned, which removes every reader"
+            ),
+            MissingBlobDiagnosis::LeasePresent {
+                reader_id,
+                lease_state,
+            } => write!(
+                f,
+                "reader {reader_id} is still present in state ({lease_state}); \
+                 a missing blob despite a live lease indicates a GC bug"
+            ),
+            MissingBlobDiagnosis::Unknown { reader_id } => write!(
+                f,
+                "reader {reader_id}: could not refresh state within {}s to diagnose the lease; \
+                 partitioned from consensus?",
+                MISSING_BLOB_DIAGNOSIS_TIMEOUT.as_secs()
+            ),
+        }
     }
 }
 
@@ -325,16 +389,12 @@ where
 /// reports whether the reader that leased the part is still present in it.
 ///
 /// A missing blob means garbage collection deleted a blob that the part's
-/// lease (a seqno hold in shard state) should have protected. If the reader
-/// has been expired out of state, the lease was lost: this can happen when the
-/// process fails to heartbeat the reader for longer than the lease duration,
-/// e.g. because the machine went to sleep, was starved of CPU or memory, or
-/// was partitioned from consensus. If the reader is still present, the hold
-/// did not protect the blob, which points at a GC or lease-tracking bug.
+/// lease (a seqno hold in shard state) should have protected. See
+/// [MissingBlobDiagnosis] for what each outcome means.
 pub(crate) async fn missing_blob_diagnostics<K, V, T, D>(
     applier: &Applier<K, V, T, D>,
-    reader_id: &LeasedReaderId,
-) -> String
+    reader_id: LeasedReaderId,
+) -> MissingBlobDiagnosis
 where
     K: Debug + Codec,
     V: Debug + Codec,
@@ -345,25 +405,21 @@ where
     // and a partition from consensus may be the very reason the lease was
     // lost, so don't let the diagnosis block the restart indefinitely.
     let refresh = applier.fetch_and_update_state(None);
-    if tokio::time::timeout(Duration::from_secs(30), refresh)
+    if tokio::time::timeout(MISSING_BLOB_DIAGNOSIS_TIMEOUT, refresh)
         .await
         .is_err()
     {
-        return format!(
-            "reader {reader_id}: could not refresh state within 30s to diagnose the lease; \
-             partitioned from consensus?"
-        );
+        return MissingBlobDiagnosis::Unknown { reader_id };
+    }
+    if applier.is_tombstone() {
+        return MissingBlobDiagnosis::ShardTombstoned { reader_id };
     }
     match applier.reader_lease(reader_id.clone()) {
-        Some(lease_state) => format!(
-            "reader {reader_id} is still present in state ({lease_state:?}); \
-             a missing blob despite a live lease indicates a GC bug"
-        ),
-        None => format!(
-            "reader {reader_id} has been expired out of state; \
-             the process likely failed to heartbeat it within the lease duration \
-             (machine sleep, CPU/memory starvation, or a partition from consensus?)"
-        ),
+        Some(lease_state) => MissingBlobDiagnosis::LeasePresent {
+            reader_id,
+            lease_state: format!("{lease_state:?}"),
+        },
+        None => MissingBlobDiagnosis::LeaseExpired { reader_id },
     }
 }
 
@@ -484,7 +540,8 @@ where
             // If we do have a bug and a reader does encounter a missing blob, the state
             // cannot be recovered, and our best option is to panic and retry the whole
             // process.
-            let diagnostics = missing_blob_diagnostics(schema_cache.applier(), reader_id).await;
+            let diagnostics =
+                missing_blob_diagnostics(schema_cache.applier(), reader_id.clone()).await;
             panic!("could not fetch batch part {}: {}", blob_key, diagnostics)
         }
     };

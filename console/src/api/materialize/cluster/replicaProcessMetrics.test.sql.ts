@@ -1,0 +1,207 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+import { Client } from "pg";
+
+import { queryBuilder, SEARCH_PATH } from "~/api/materialize";
+import {
+  executeSqlHttp,
+  getMaterializeClient,
+} from "~/test/sql/materializeSqlClient";
+import { testdrive } from "~/test/sql/mzcompose";
+
+import {
+  buildReplicaProcessMetricsSubscribe,
+  buildReplicaSizeAllocationsQuery,
+} from "./replicaProcessMetrics";
+
+const MOCKED_SEARCH_PATH = "internal_test, " + SEARCH_PATH;
+// Below the suite's `testTimeout`, so a snapshot that never completes fails on
+// the error below rather than on the timeout.
+const SUBSCRIBE_SNAPSHOT_TIMEOUT_MS = 30_000;
+
+/**
+ * A subscribe's snapshot, read through a cursor. The snapshot is complete at
+ * the first progress message past the first message's timestamp.
+ */
+async function readSnapshot(
+  client: Client,
+  subscribe: ReturnType<typeof buildReplicaProcessMetricsSubscribe>,
+) {
+  const { sql, parameters } = subscribe.compile(queryBuilder);
+  const rows: Record<string, unknown>[] = [];
+  await client.query("BEGIN");
+  try {
+    await client.query(`DECLARE c CURSOR FOR ${sql}`, [...parameters]);
+    let firstTimestamp: bigint | undefined;
+    const deadline = Date.now() + SUBSCRIBE_SNAPSHOT_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const { rows: batch } = await client.query(
+        `FETCH ALL c WITH (timeout='1s')`,
+      );
+      for (const row of batch) {
+        const timestamp = BigInt(row.mz_timestamp);
+        firstTimestamp ??= timestamp;
+        if (!row.mz_progressed) rows.push(row);
+        else if (timestamp > firstTimestamp) return rows;
+      }
+    }
+    throw new Error("The subscribe's snapshot did not complete");
+  } finally {
+    await client.query("ROLLBACK");
+  }
+}
+
+describe("buildReplicaProcessMetricsSubscribe", () => {
+  it("reads each process's samples for the given replicas from the literal start", async () => {
+    await testdrive(`
+      > CREATE SCHEMA internal_test;
+      > SET schema = internal_test;
+      > CREATE TABLE mz_cluster_replica_metrics_history (
+          replica_id text NOT NULL,
+          process_id uint8 NOT NULL,
+          cpu_nano_cores uint8,
+          memory_bytes uint8,
+          disk_bytes uint8,
+          occurred_at timestamptz NOT NULL,
+          heap_bytes uint8,
+          heap_limit uint8,
+          swap_bytes uint8
+        );
+      > INSERT INTO mz_cluster_replica_metrics_history VALUES
+          ('u1', 0, 100, 1000, 0, '2026-10-20T09:59:00Z', 100, 1000, 0),
+          ('u1', 0, 300, 1000, 0, '2026-10-20T10:00:00Z', 500, 1000, 0),
+          ('u1', 1, NULL, NULL, NULL, '2026-10-20T10:00:00Z', NULL, NULL, NULL),
+          ('u1', 1, 900, 2000, 0, '2026-10-20T10:01:00Z', 700, 1000, 0),
+          ('u2', 0, 300, 1000, 0, '2026-10-20T10:00:00Z', 500, 1000, 0),
+          ('u3', 0, 400, 1000, 0, '2026-10-20T10:02:00Z', NULL, NULL, 0);
+    `);
+    const client = await getMaterializeClient();
+    await client.query(`SET search_path TO ${MOCKED_SEARCH_PATH}`);
+
+    const rows = await readSnapshot(
+      client,
+      buildReplicaProcessMetricsSubscribe({
+        replicaIds: ["u1", "u3"],
+        since: new Date("2026-10-20T10:00:00Z"),
+      }),
+    );
+
+    expect(rows.every((row) => row.mz_state === "upsert")).toBe(true);
+    const samples = rows
+      .map((row) => ({
+        replicaId: row.replicaId,
+        processId: row.processId,
+        occurredAt: (row.occurredAt as Date).toISOString(),
+        cpuNanoCores: row.cpuNanoCores,
+        memoryBytes: row.memoryBytes,
+        heapBytes: row.heapBytes,
+        heapLimit: row.heapLimit,
+      }))
+      .sort((a, b) =>
+        `${a.replicaId}${a.processId}${a.occurredAt}`.localeCompare(
+          `${b.replicaId}${b.processId}${b.occurredAt}`,
+        ),
+      );
+    // Replica u2's sample and u1's sample before the start are left out. A
+    // process whose metrics couldn't be read keeps its row, with nulls.
+    expect(samples).toEqual([
+      {
+        replicaId: "u1",
+        processId: "0",
+        occurredAt: "2026-10-20T10:00:00.000Z",
+        cpuNanoCores: 300,
+        memoryBytes: 1000,
+        heapBytes: 500,
+        heapLimit: 1000,
+      },
+      {
+        replicaId: "u1",
+        processId: "1",
+        occurredAt: "2026-10-20T10:00:00.000Z",
+        cpuNanoCores: null,
+        memoryBytes: null,
+        heapBytes: null,
+        heapLimit: null,
+      },
+      {
+        replicaId: "u1",
+        processId: "1",
+        occurredAt: "2026-10-20T10:01:00.000Z",
+        cpuNanoCores: 900,
+        memoryBytes: 2000,
+        heapBytes: 700,
+        heapLimit: 1000,
+      },
+      {
+        replicaId: "u3",
+        processId: "0",
+        occurredAt: "2026-10-20T10:02:00.000Z",
+        cpuNanoCores: 400,
+        memoryBytes: 1000,
+        heapBytes: null,
+        heapLimit: null,
+      },
+    ]);
+  });
+
+  it("runs against the catalog's metrics history", async () => {
+    // Reset Materialize state.
+    await testdrive(`> SET cluster to quickstart;`);
+    const client = await getMaterializeClient();
+    const {
+      rows: [replica],
+    } = await client.query(
+      "SELECT r.id FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'quickstart'",
+    );
+
+    const rows = await readSnapshot(
+      client,
+      buildReplicaProcessMetricsSubscribe({
+        replicaIds: [replica.id],
+        since: new Date(Date.now() - 60 * 60 * 1000),
+      }),
+    );
+
+    for (const row of rows) {
+      expect(row.replicaId).toEqual(replica.id);
+      expect(row.processId).toMatch(/^\d+$/);
+    }
+  });
+});
+
+describe("buildReplicaSizeAllocationsQuery", () => {
+  it("reads each listed size's process count and per-process allocation", async () => {
+    // Reset Materialize state.
+    await testdrive(`> SET cluster to quickstart;`);
+    const client = await getMaterializeClient();
+    const sizes = ["scale=2,workers=4", "scale=1,workers=1"];
+    const { rows: expected } = await client.query(
+      `SELECT size, processes, cpu_nano_cores, memory_bytes, disk_bytes
+       FROM mz_cluster_replica_sizes WHERE size IN ('${sizes.join("', '")}')`,
+    );
+
+    const { rows } = await executeSqlHttp(
+      buildReplicaSizeAllocationsQuery({ sizes }).compile(),
+    );
+
+    const bySize = new Map(rows.map((row) => [row.size, row]));
+    expect([...bySize.keys()].sort()).toEqual([...sizes].sort());
+    expect(Number(bySize.get("scale=2,workers=4")?.processes)).toEqual(2);
+    for (const size of expected) {
+      expect(bySize.get(size.size)).toEqual({
+        size: size.size,
+        processes: Number(size.processes),
+        cpuNanoCores: Number(size.cpu_nano_cores),
+        memoryBytes: Number(size.memory_bytes),
+        diskBytes: size.disk_bytes === null ? null : Number(size.disk_bytes),
+      });
+    }
+  });
+});

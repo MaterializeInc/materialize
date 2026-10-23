@@ -66,6 +66,10 @@ export async function fetchClusterDeploymentLineage({
     queries: compiledQuery,
     queryKey: queryKey,
     requestOptions,
+    // Callers refetch lineage periodically, so a stale read only delays a
+    // blue-green cutover. Strict serializable would block the read until the
+    // lineage index catches up, which is slowest when mz_catalog_server is busy.
+    sessionVariables: { transaction_isolation: "serializable" },
   });
 
   for (const row of res.rows) {

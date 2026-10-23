@@ -5,6 +5,7 @@ description: >
   "review my code", "review my changes", "check my diff", "does this look ok",
   "what do you think of this PR", "code review", or look over changes before
   merging. Also PR number + wants feedback on quality, style, correctness.
+  For changes under `console/`, use mz-console-review instead.
 argument-hint: [base-branch]
 allowed-tools: [Bash, Read, Grep, Glob, Task]
 ---

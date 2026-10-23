@@ -28,6 +28,7 @@ use mz_ore::instrument;
 use mz_ore::now::NowFn;
 use mz_persist::cfg::BlobKnobs;
 use mz_persist::retry::Retry;
+use mz_persist::s3::{BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT, BlobHttpPool};
 use mz_postgres_client::PostgresClientKnobs;
 use proptest_derive::Arbitrary;
 use semver::Version;
@@ -317,6 +318,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&BLOB_READ_TIMEOUT)
         .add(&SHARD_METRICS)
         .add(&PER_SHARD_METRICS_ENABLE_REGEX)
+        .add(&SHARD_INFO_METRIC)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_SIZE)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_WAIT)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
@@ -754,7 +756,7 @@ pub const SHARD_METRICS: Config<&'static str> = Config::new(
     "persist_shard_metrics",
     ShardMetricsExport::default().as_str(),
     "Which persist shard metrics to export: 'per_shard' (the `mz_persist_shard_*` families \
-    with one series per shard), 'summary' (their bounded `_percentile`, `_topk` and \
+    with one series per shard), 'summary' (their bounded `_percentile`, `_sum`, `_topk` and \
     per-version aggregates), 'both', or 'none'. Shard counts and process-level counters are \
     always exported.",
     ParameterScope::Environment,
@@ -772,10 +774,10 @@ pub enum ShardMetricsExport {
 impl ShardMetricsExport {
     pub const ALL: [Self; 4] = [Self::None, Self::Summary, Self::PerShard, Self::Both];
 
-    /// The value [`SHARD_METRICS`] defaults to, which exports everything this
-    /// setting can turn off.
+    /// The value [`SHARD_METRICS`] defaults to, whose series count is bounded
+    /// by the per-version aggregates rather than the shard count.
     pub const fn default() -> Self {
-        Self::Both
+        Self::Summary
     }
 
     pub const fn as_str(self) -> &'static str {
@@ -831,6 +833,17 @@ pub const PER_SHARD_METRICS_ENABLE_REGEX: Config<&'static str> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether to export `mz_persist_shard_info`, one series per shard, so that
+/// dashboards can list the shards when [`SHARD_METRICS`] leaves the per-shard
+/// families out.
+pub const SHARD_INFO_METRIC: Config<bool> = Config::new(
+    "persist_shard_info_metric",
+    false,
+    "Whether to export `mz_persist_shard_info`, which lists this process's shards by `shard` \
+    and `name` with one series each.",
+    ParameterScope::Environment,
+);
+
 impl BlobKnobs for PersistConfig {
     fn operation_timeout(&self) -> Duration {
         BLOB_OPERATION_TIMEOUT.get(self)
@@ -850,6 +863,14 @@ impl BlobKnobs for PersistConfig {
 
     fn is_cc_active(&self) -> bool {
         self.is_cc_active
+    }
+
+    fn http_pool(&self) -> BlobHttpPool {
+        BlobHttpPool::get(self)
+    }
+
+    fn http_pool_max_in_flight_per_client(&self) -> usize {
+        BLOB_HTTP_POOL_MAX_IN_FLIGHT_PER_CLIENT.get(self)
     }
 }
 

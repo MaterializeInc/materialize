@@ -29,9 +29,10 @@ from textwrap import dedent
 from typing import IO
 
 import psycopg
+import requests
 import yaml
 
-from materialize import MZ_ROOT, ci_util, spawn
+from materialize import MZ_ROOT, ci_util, gcp_oidc, spawn
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
@@ -666,6 +667,16 @@ class State:
             ],
             preexec_fn=os.setpgrp,
         )
+
+    def environmentd_metric(self, name: str) -> float:
+        """Value of the unlabeled metric `name` on environmentd, which must be
+        forwarded by `connect`."""
+        metrics = requests.get("http://127.0.0.1:6878/metrics", timeout=30)
+        metrics.raise_for_status()
+        for line in metrics.text.splitlines():
+            if line.startswith(f"{name} "):
+                return float(line.split()[1])
+        raise ValueError(f"environmentd has no metric {name}")
 
     def connect(self, c: Composition) -> None:
         # Find services by name pattern (they're named like mz<id>-environmentd)
@@ -1370,80 +1381,10 @@ def gcp_run_project() -> str | None:
     return f"mz-ci-{build}-{job}"
 
 
-class BuildkiteOidcToken:
-    """Keeps a Buildkite OIDC token for `audience` fresh in a file.
-
-    GCP reads the token from the file whenever it exchanges it for an access
-    token, and it exchanges again each time an access token expires (after
-    1 h). The job runs longer than that, so a daemon thread rewrites the file
-    well before each token expires.
-    """
-
-    LIFETIME_SECONDS = 900
-    REFRESH_SECONDS = 240
-
-    def __init__(self, audience: str, path: Path):
-        self.audience = audience
-        self.path = path
-
-    def start(self) -> None:
-        # The first request fails loudly: without a token nothing works.
-        self._refresh()
-        threading.Thread(target=self._refresh_forever, daemon=True).start()
-
-    def _refresh(self) -> None:
-        token = spawn.capture(
-            [
-                "buildkite-agent",
-                "oidc",
-                "request-token",
-                "--audience",
-                self.audience,
-                "--lifetime",
-                str(self.LIFETIME_SECONDS),
-            ]
-        ).strip()
-        # Readers must never see a partially written token.
-        tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(token)
-        tmp.replace(self.path)
-
-    def _refresh_forever(self) -> None:
-        while True:
-            time.sleep(self.REFRESH_SECONDS)
-            try:
-                self._refresh()
-            except subprocess.CalledProcessError as e:
-                print(f"Could not refresh the Buildkite OIDC token: {e}")
-
-
 def gcp_authenticate_oidc() -> None:
     """Authenticates gcloud and Terraform as GCP_SERVICE_ACCOUNT_EMAIL
     through Buildkite OIDC and workload identity federation."""
-    provider = os.environ["GCP_WORKLOAD_IDENTITY_PROVIDER"]
-    service_account = os.environ["GCP_SERVICE_ACCOUNT_EMAIL"]
-    audience = f"//iam.googleapis.com/{provider}"
-    directory = Path(tempfile.mkdtemp(prefix="gcp-oidc-"))
-    token_path = directory / "token"
-    BuildkiteOidcToken(audience, token_path).start()
-    config_path = directory / "credentials.json"
-    config_path.write_text(
-        json.dumps(
-            {
-                "type": "external_account",
-                "audience": audience,
-                "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-                "token_url": "https://sts.googleapis.com/v1/token",
-                "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/"
-                + f"{service_account}:generateAccessToken",
-                "credential_source": {
-                    "file": str(token_path),
-                    "format": {"type": "text"},
-                },
-            }
-        )
-    )
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(config_path)
+    config_path = gcp_oidc.authenticate()
     spawn.runv(["gcloud", "auth", "login", f"--cred-file={config_path}", "--quiet"])
 
 
@@ -1694,6 +1635,13 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
 
         if args.test:
             state.test(c, tag, args.run_testdrive_files, args.files)
+            # Persist data lives in GCS, and gcp-temporary/main.tf defaults
+            # `persist_blob_http_pool` to 'gcs', which uses the pool only if
+            # `S3Blob` recognizes the endpoint as GCS.
+            pool_requests = state.environmentd_metric(
+                "mz_persist_s3_http_pool_requests"
+            )
+            assert pool_requests > 0, "no persist request went through the pool"
     finally:
         state.cleanup()
 

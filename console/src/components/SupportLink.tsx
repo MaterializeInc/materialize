@@ -16,10 +16,10 @@ import { Button, ButtonProps, LinkProps } from "@chakra-ui/react";
 import React from "react";
 
 import TextLink from "~/components/TextLink";
-import docUrls from "~/mz-doc-urls.json";
+import { SUPPORT_URL } from "~/externalUrls";
 
 const LINK_PROPS = {
-  href: docUrls["/docs/support/"],
+  href: SUPPORT_URL,
   target: "_blank",
   rel: "noopener",
 } as const;

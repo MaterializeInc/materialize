@@ -46,3 +46,10 @@ choosing which framework to use, start with **mz-test**.
 | Skill | When to use | What it does |
 |---|---|---|
 | **mz-adapter-guide** | Working on or asking about the adapter layer | Correctness invariants and architectural notes for the coordinator, pgwire, peek paths, timestamp oracle, and related crates |
+
+## Console
+
+| Skill | When to use | What it does |
+|---|---|---|
+| **mz-console-review** | Reviewing a PR or diff under `console/` | Checklist of what Console reviewers actually flag (distilled from ~570 review comments), plus running the change to verify claims and posting findings as one GitHub review |
+| **mz-query-perf** | A Console/catalog SQL query is slow | Diagnoses the plan on real `mz_catalog` / `mz_internal` relations, then measures candidate rewrites with a synthetic-fleet sweep |

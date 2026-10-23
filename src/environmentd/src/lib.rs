@@ -32,7 +32,9 @@ use mz_adapter::config::{
     SystemParameterSyncClientConfig, SystemParameterSyncConfig, system_parameter_sync,
 };
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
-use mz_adapter::{AdapterError, Client as AdapterClient, load_remote_system_parameters};
+use mz_adapter::{
+    AdapterError, Client as AdapterClient, RemoteSystemParameters, load_remote_system_parameters,
+};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL,
@@ -258,8 +260,8 @@ where
     ///   * It allows the caller to communicate with the server via the internal
     ///     HTTP port while it is booting.
     ///
-    async fn bind(config: C) -> Result<Self, io::Error> {
-        let (handle, connection_stream) = mz_server_core::listen(&config.addr()).await?;
+    fn bind(config: C) -> Result<Self, io::Error> {
+        let (handle, connection_stream) = mz_server_core::listen(&config.addr())?;
         Ok(Self {
             handle,
             connection_stream,
@@ -363,15 +365,15 @@ pub struct Listeners {
 }
 
 impl Listeners {
-    pub async fn bind(config: ListenersConfig) -> Result<Self, io::Error> {
+    pub fn bind(config: ListenersConfig) -> Result<Self, io::Error> {
         let mut sql = BTreeMap::new();
         for (name, config) in config.sql {
-            sql.insert(name, Listener::bind(config).await?);
+            sql.insert(name, Listener::bind(config)?);
         }
 
         let mut http = BTreeMap::new();
         for (name, config) in config.http {
-            http.insert(name, Listener::bind(config).await?);
+            http.insert(name, Listener::bind(config)?);
         }
 
         Ok(Listeners { http, sql })
@@ -518,7 +520,10 @@ impl Listeners {
                 }
             };
 
-        let remote_system_parameters = load_remote_system_parameters(
+        let RemoteSystemParameters {
+            params: remote_system_parameters,
+            frontend: boot_frontend,
+        } = load_remote_system_parameters(
             &mut openable_adapter_storage,
             system_parameter_sync_config.clone(),
             config.config_sync_timeout,
@@ -907,6 +912,7 @@ impl Listeners {
                 || "system_parameter_sync",
                 AssertUnwindSafe(system_parameter_sync(
                     system_parameter_sync_config,
+                    boot_frontend,
                     adapter_client.clone(),
                     config.config_sync_loop_interval,
                 ))

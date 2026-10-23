@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/sink/kafka.rs
-revision: d9bb748bcd
+revision: 5d95ae23c1
 ---
 
 # mz-storage::sink::kafka
@@ -11,6 +11,7 @@ The encoder resolves `headers_index` and evaluates the optional `partition_by` `
 Avro schema registration for both key and value encoders is handled by `build_avro_encoder`, which dispatches to either `publish_kafka_schema` (Confluent Schema Registry) or `publish_glue_schema` (AWS Glue Schema Registry) based on the `WireFormat`, and builds an `AvroEncoder` framing records with the resulting schema id. A missing registry is treated as unreachable since the sink planner always supplies one. The schema registry subject for each encoder is taken from `KafkaSinkFormatType::Avro::schema_name` when present; otherwise it defaults to `{topic}-key` or `{topic}-value`. A user-supplied schema name is not validated at plan time and is rejected by the registry at registration if out of range or ill-formed.
 `TransactionalProducer` wraps a `ThreadedProducer` and manages the full transaction lifecycle: `init_transactions` (which fences out prior producers), `begin_transaction`, per-message `send`, and `commit_transaction` (which also writes a `ProgressRecord` to the progress topic).
 The producer is configured with `message.max.bytes`, `batch.size`, and `batch.num.messages` drawn from the dyncfg constants `KAFKA_SINK_MESSAGE_MAX_BYTES`, `KAFKA_SINK_BATCH_SIZE`, and `KAFKA_SINK_BATCH_NUM_MESSAGES` respectively, allowing these librdkafka limits to be adjusted at runtime.
+When `KAFKA_SINK_EMIT_SINK_ID_HEADER` is enabled, each message carries a `materialize-sink-id` header set to the sink's `GlobalId`; the header value is resolved once at producer construction time.
 Progress records carry the current frontier antichain and the sink version, enabling fencing of older sink instances on restart.
 A background task (`fetch_partition_count_loop`) keeps the cached partition count up to date across the topic's lifetime.
 A separate background task (`collect_statistics`) forwards librdkafka broker-level statistics to Prometheus metrics via a `watch` channel. The per-broker accumulator variables are re-initialized to zero on each statistics interval so that both running totals (counters) and point-in-time values (gauges) are aggregated from scratch across all brokers, avoiding stale accumulation from previous intervals.

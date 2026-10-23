@@ -15,9 +15,10 @@ import {
   executeSqlV2,
   queryBuilder,
 } from "~/api/materialize";
+import { buildSubscribeQuery } from "~/api/materialize/buildSubscribeQuery";
 
 export type LargestMaintainedQueriesParams = {
-  replicaHeapLimit: number;
+  replicaHeapLimit: number | null;
   limit: number;
   clusterName: string;
   replicaName: string;
@@ -87,7 +88,9 @@ export function buildLargestMaintainedQueriesQuery({
       })
       // Filter out transient dataflows
       .where("ce.export_id", "not like", "t%")
-      .orderBy("memoryPercentage", sql`desc NULLS LAST`)
+      // Order by size: without a heap limit, memoryPercentage is NULL on every
+      // row.
+      .orderBy("size", sql`desc NULLS LAST`)
       .limit(() => sql.raw(limit.toString()))
   );
 }
@@ -119,7 +122,7 @@ export async function fetchLargestMaintainedQueries({
 export type LargestMaintainedObjectSizesParams = {
   clusterId: string;
   replicaName: string;
-  replicaHeapLimit: number;
+  replicaHeapLimit: number | null;
   limit: number;
 };
 
@@ -159,6 +162,31 @@ export function buildLargestMaintainedObjectSizesQuery({
       .orderBy("size", sql`desc NULLS LAST`)
       .orderBy("s.object_id")
       .limit(() => sql.raw(limit.toString()))
+  );
+}
+
+/** One object's arrangement size on a replica, in bytes. */
+export interface ReplicaObjectSize {
+  objectId: string;
+  size: number | null;
+}
+
+/**
+ * Live arrangement sizes of every object on a replica. Filtering on the
+ * literal replica id makes this a lookup on `mz_object_arrangement_sizes_ind`.
+ */
+export function buildReplicaObjectSizesSubscribe(replicaId: string) {
+  return buildSubscribeQuery<ReplicaObjectSize>(
+    queryBuilder
+      .selectFrom("mz_object_arrangement_sizes")
+      .select([
+        "object_id as objectId",
+        // NOTE: The cast is required. An int8 decodes to a BigInt, which the
+        // collection bridge's JSON.stringify row signature throws on.
+        sql<number | null>`size::float8`.as("size"),
+      ])
+      .where("replica_id", "=", replicaId),
+    { upsertKey: "objectId" },
   );
 }
 

@@ -27,6 +27,8 @@ export interface SchemaSelectProps extends Omit<
   "ariaLabel" | "options"
 > {
   schemas: SchemaOption[];
+  /** Defaults to "Select schema". */
+  ariaLabel?: string;
 }
 
 /**
