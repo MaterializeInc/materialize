@@ -88,18 +88,8 @@ snapshot](/ingest-data/#snapshotting) of table `v1.T` will begin.
 
 {{< note >}}
 
-{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
+{{% include-headless "/headless/postgres-source-versioning-snapshotting-note" %}}
 
-{{< /note >}}
-
-{{< note >}}
-If your environment has [non-blocking snapshots for new
-tables](/releases/#v26.47-postgres-add-table-freshness) (private preview), the
-snapshot and the replication stream run at the same time on the same replica.
-On a single-worker replica (`25cc` or `50cc`), existing tables still fall
-behind during the snapshot. Use a source cluster size of `100cc` or larger, or
-temporarily resize it up for the snapshot. The cluster also uses more memory
-until the new table hydrates.
 {{< /note >}}
 
 ## Create a view on top of the table.
@@ -147,7 +137,7 @@ The [snapshotting](/ingest-data/#snapshotting) of table `v2.T` will begin.
 
 {{< note >}}
 
-{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
+{{% include-headless "/headless/postgres-source-versioning-snapshotting-note" %}}
 
 {{< /note >}}
 
@@ -179,7 +169,7 @@ CREATE TABLE v3.T
 
 {{< note >}}
 
-{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
+{{% include-headless "/headless/postgres-source-versioning-snapshotting-note" %}}
 
 {{< /note >}}
 
@@ -266,7 +256,7 @@ CREATE TABLE v4.T
 
 {{< note >}}
 
-{{% include-headless "/headless/source-versioning-snapshotting-note" %}}
+{{% include-headless "/headless/postgres-source-versioning-snapshotting-note" %}}
 
 {{< /note >}}
 
