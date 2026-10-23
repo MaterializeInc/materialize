@@ -35,6 +35,7 @@ import {
   useObjectFreshnessHistory,
 } from "./queries";
 import { SourceTablesFreshness } from "./SourceTablesFreshness";
+import { useSourceExports } from "./useSourceExports";
 
 export interface ObjectFreshnessProps {
   item: MaintainedObjectListItem;
@@ -78,6 +79,7 @@ export const ObjectFreshness = ({
   const anchorTimestamp = lockedTimestamp ?? autoAnchorTimestamp;
 
   const isSource = item.objectType === "source";
+  const hasExports = useSourceExports(item.id).length > 0;
   // A source has no inputs to break its lag down by.
   const { data: criticalPath } = useCriticalPath({
     objectId: isSource ? undefined : item.id,
@@ -144,7 +146,7 @@ export const ObjectFreshness = ({
                 </Tag>
               )}
             </HStack>
-            {isSource && (
+            {isSource && hasExports && (
               <Text textStyle="text-small" color={colors.foreground.secondary}>
                 The subsources and tables this source writes to.
               </Text>
