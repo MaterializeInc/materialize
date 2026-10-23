@@ -786,7 +786,15 @@ where
                                 Some(b) => std::cmp::min(b, t_next).clone(),
                                 None => t_next.clone(),
                             };
-                            if export.committed_into.as_option() != Some(&into) {
+                            // `bindings_upper` and the committed upper only advance, so `into`
+                            // does as well.
+                            mz_ore::soft_assert_or_log!(
+                                export.committed_into.less_equal(&into),
+                                "export {} committed_into {:?} regressed to {into:?}",
+                                export.id,
+                                export.committed_into,
+                            );
+                            if export.committed_into.less_than(&into) {
                                 export.committed_into = Antichain::from_elem(into);
                                 touched.push(index);
                             }
@@ -816,6 +824,10 @@ where
                 });
                 ready_times.drain(..min_applied - drained);
                 drained = min_applied;
+                // An export can be touched both by applying bindings and by advancing its
+                // `committed_into`.
+                touched.sort_unstable();
+                touched.dedup();
                 // From testing, the common case is seeing a few exports updated in a given
                 // invocation. The published value is updated in place for the touched exports,
                 // rather than wholly replace the existing map with a new allocation.
@@ -890,7 +902,17 @@ mod tests {
     }
 
     impl Harness {
+        /// Observes resume uppers as sources that do not set `USES_EXPORTS_INTO` do.
         fn new(worker: &mut Worker, exports: &[GlobalId]) -> Self {
+            Self::build(worker, exports, false)
+        }
+
+        /// Observes resume uppers including [`ResumeUppers::exports_into`].
+        fn with_exports_into(worker: &mut Worker, exports: &[GlobalId]) -> Self {
+            Self::build(worker, exports, true)
+        }
+
+        fn build(worker: &mut Worker, exports: &[GlobalId], keep_into: bool) -> Self {
             let defs = GeneralSourceMetricDefs::register_with(&MetricsRegistry::new());
             let metrics = Arc::new(SourceMetrics::new(&defs, GlobalId::User(0), 0));
             worker.dataflow::<Timestamp, _, _>(|scope| {
@@ -908,8 +930,12 @@ mod tests {
                     streams,
                     GlobalId::User(0),
                     Arc::clone(&metrics),
-                )
-                .boxed_local();
+                );
+                let resume_uppers = if keep_into {
+                    resume_uppers.boxed_local()
+                } else {
+                    without_exports_into(resume_uppers).boxed_local()
+                };
                 Harness {
                     bindings,
                     committed_uppers,
@@ -946,17 +972,8 @@ mod tests {
         }
 
         /// Steps the dataflow until it is quiescent and returns the last value it published, if
-        /// it published any, without [`ResumeUppers::exports_into`].
+        /// it published any.
         fn step(&mut self, worker: &mut Worker) -> Option<ResumeUppers<MzOffset>> {
-            let mut latest = self.step_with_into(worker);
-            if let Some(uppers) = latest.as_mut() {
-                uppers.exports_into.clear();
-            }
-            latest
-        }
-
-        /// Like [`Self::step`], keeping [`ResumeUppers::exports_into`].
-        fn step_with_into(&mut self, worker: &mut Worker) -> Option<ResumeUppers<MzOffset>> {
             // A single worker reaches quiescence within a few steps. Extra steps are no-ops.
             for _ in 0..10 {
                 worker.step();
@@ -1103,20 +1120,20 @@ mod tests {
                 (uppers.exports_into[&A].clone(), uppers.exports[&A].clone())
             };
             let into = |t: u64| Antichain::from_elem(Timestamp::from(t));
-            let mut h = Harness::new(worker, &[A]);
+            let mut h = Harness::with_exports_into(worker, &[A]);
             for t in 0..=3 {
                 h.bind(t);
             }
             h.commit(A, 3);
             assert_eq!(
-                pair(h.step_with_into(worker)),
+                pair(h.step(worker)),
                 (into(3), offset(20)),
                 "committed through 3, bindings through 3: the shard at 2 holds offsets below 20",
             );
 
             h.commit(A, 6);
             assert_eq!(
-                pair(h.step_with_into(worker)),
+                pair(h.step(worker)),
                 (into(4), offset(30)),
                 "bindings lag the committed upper: pair the bindings upper with its frontier",
             );
@@ -1124,16 +1141,13 @@ mod tests {
             h.bind(4);
             h.bind(5);
             assert_eq!(
-                pair(h.step_with_into(worker)),
+                pair(h.step(worker)),
                 (into(6), offset(50)),
                 "bindings caught up: pair the committed upper with its frontier",
             );
 
             h.close(A);
-            assert_eq!(
-                pair(h.step_with_into(worker)),
-                (Antichain::new(), Antichain::new()),
-            );
+            assert_eq!(pair(h.step(worker)), (Antichain::new(), Antichain::new()),);
         });
     }
 
