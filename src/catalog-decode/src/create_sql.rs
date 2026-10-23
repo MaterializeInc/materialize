@@ -21,13 +21,13 @@ use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::item_refs::collect_item_references;
 use mz_sql_parser::ast::{
     AstInfo, AvroSchema, ConnectionOption, ConnectionOptionName, CreateConnectionType,
-    CreateSinkConnection, CreateSourceOptionName, CreateSubsourceOptionName, Format,
-    FormatSpecifier, IcebergSinkConfigOptionName, IcebergSinkMode, IndexOptionName,
-    KafkaSinkConfigOptionName, KafkaSourceConfigOptionName, MaterializedViewOptionName,
-    PgConfigOptionName, ProtobufSchema, Raw, RawClusterName, RawItemName, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, SinkEnvelope, SourceEnvelope, SourceErrorPolicy,
-    Statement, TableFromSourceOptionName, TableOptionName, UnresolvedItemName, Value,
-    WithOptionValue,
+    CreateSinkConnection, CreateSourceOptionName, CreateSubsourceOptionName, CreateTypeAs,
+    CreateTypeListOptionName, CreateTypeMapOptionName, Format, FormatSpecifier,
+    IcebergSinkConfigOptionName, IcebergSinkMode, IndexOptionName, KafkaSinkConfigOptionName,
+    KafkaSourceConfigOptionName, MaterializedViewOptionName, PgConfigOptionName, ProtobufSchema,
+    Raw, RawClusterName, RawDataType, RawItemName, RefreshAtOptionValue, RefreshEveryOptionValue,
+    RefreshOptionValue, SinkEnvelope, SourceEnvelope, SourceErrorPolicy, Statement,
+    TableFromSourceOptionName, TableOptionName, UnresolvedItemName, Value, WithOptionValue,
 };
 use prost::Message as _;
 use serde_json::json;
@@ -141,6 +141,44 @@ where
         info.insert("retain_history_millis", json!(millis));
     }
     Ok(())
+}
+
+/// The item id and type modifiers of the data type a `CREATE TYPE` option names.
+///
+/// `plan_create_type` only accepts named types for list elements, map keys and
+/// values, and record fields, so a persisted statement always carries a
+/// `RawDataType::Other` whose name is an item id.
+fn type_option(
+    value: Option<WithOptionValue<Raw>>,
+    option: &str,
+) -> Result<(String, Vec<i64>), String> {
+    match value {
+        Some(WithOptionValue::DataType(RawDataType::Other { name, typ_mod })) => {
+            Ok((item_id(name)?, typ_mod))
+        }
+        _ => Err(format!("{option} is not a named data type")),
+    }
+}
+
+/// Records a type reference as `id_key`, plus `modifiers_key` when the reference
+/// carries type modifiers. Modifiers are rendered as a `bigint list` literal
+/// (`{38,2}`) for the views to cast, and an absent key is how `mz_list_types`
+/// and `mz_map_types` report a reference without modifiers as NULL.
+fn insert_type_reference(
+    info: &mut BTreeMap<&str, serde_json::Value>,
+    id_key: &'static str,
+    modifiers_key: &'static str,
+    (id, modifiers): (String, Vec<i64>),
+) {
+    info.insert(id_key, json!(id));
+    if !modifiers.is_empty() {
+        let modifiers = modifiers
+            .iter()
+            .map(|m| m.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        info.insert(modifiers_key, json!(format!("{{{modifiers}}}")));
+    }
 }
 
 /// Records the `REFRESH` options among `options` as `refresh` in `info`, one entry per option in
@@ -526,7 +564,41 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
             )?;
             "index"
         }
-        CreateType(_) => "type",
+        // Everything mz_types, mz_base_types, mz_list_types and mz_map_types read.
+        CreateType(stmt) => {
+            let (type_kind, category) = match stmt.as_type {
+                CreateTypeAs::List { options } => {
+                    let element = options
+                        .into_iter()
+                        .find(|o| o.name == CreateTypeListOptionName::ElementType)
+                        .and_then(|o| o.value);
+                    let element = type_option(element, "ELEMENT TYPE")?;
+                    insert_type_reference(&mut info, "element_id", "element_modifiers", element);
+                    ("list", "list")
+                }
+                CreateTypeAs::Map { options } => {
+                    let mut key = None;
+                    let mut value = None;
+                    for option in options {
+                        match option.name {
+                            CreateTypeMapOptionName::KeyType => key = option.value,
+                            CreateTypeMapOptionName::ValueType => value = option.value,
+                        }
+                    }
+                    let key = type_option(key, "KEY TYPE")?;
+                    let value = type_option(value, "VALUE TYPE")?;
+                    insert_type_reference(&mut info, "key_id", "key_modifiers", key);
+                    insert_type_reference(&mut info, "value_id", "value_modifiers", value);
+                    ("map", "pseudo")
+                }
+                CreateTypeAs::Record { .. } => ("record", "composite"),
+            };
+            info.insert("type_kind", json!(type_kind));
+            // Mirrors `TypeCategory::from_catalog_type` in `mz_sql` for the three
+            // kinds `CREATE TYPE` can produce.
+            info.insert("category", json!(category));
+            "type"
+        }
         // NOTE: every statement that creates a catalog item needs an arm above. These
         // catalog views run this over every item row before their type filter drops the
         // unwanted rows, so one unclassified `create_sql` takes out `mz_objects`,
@@ -2264,5 +2336,74 @@ mod tests {
                    WITH (REFRESH = ON COMMIT) AS SELECT 1";
         let out = super::item_details(mv_sql_with_replacement).expect("ok");
         assert_eq!(out["replacement_target"], json!("u7"));
+    }
+
+    // --- parse_catalog_create_sql, CreateType arm ----------------------------
+
+    #[mz_ore::test]
+    fn catalog_type_list() {
+        let sql = "CREATE TYPE \"materialize\".\"public\".\"int4_list\" \
+                   AS LIST (ELEMENT TYPE = [s20 AS \"pg_catalog\".\"int4\"])";
+        let out = super::item_details(sql).expect("ok");
+        assert_eq!(
+            out,
+            json!({
+                "type": "type",
+                "type_kind": "list",
+                "category": "list",
+                "element_id": "s20",
+            })
+        );
+    }
+
+    #[mz_ore::test]
+    fn catalog_type_list_with_modifiers() {
+        let sql = "CREATE TYPE \"materialize\".\"public\".\"nums\" \
+                   AS LIST (ELEMENT TYPE = [s27 AS \"pg_catalog\".\"numeric\"](38, 2))";
+        let out = super::item_details(sql).expect("ok");
+        assert_eq!(out["element_id"], json!("s27"));
+        assert_eq!(out["element_modifiers"], json!("{38,2}"));
+    }
+
+    #[mz_ore::test]
+    fn catalog_type_map() {
+        let sql = "CREATE TYPE \"materialize\".\"public\".\"m\" \
+                   AS MAP (KEY TYPE = [s46 AS \"pg_catalog\".\"text\"], \
+                           VALUE TYPE = [s27 AS \"pg_catalog\".\"numeric\"](5, 2))";
+        let out = super::item_details(sql).expect("ok");
+        assert_eq!(
+            out,
+            json!({
+                "type": "type",
+                "type_kind": "map",
+                "category": "pseudo",
+                "key_id": "s46",
+                "value_id": "s27",
+                "value_modifiers": "{5,2}",
+            })
+        );
+    }
+
+    #[mz_ore::test]
+    fn catalog_type_record() {
+        let sql = "CREATE TYPE \"materialize\".\"public\".\"y1\" \
+                   AS (\"id\" [s20 AS \"pg_catalog\".\"int4\"], \
+                       \"name\" [s46 AS \"pg_catalog\".\"text\"])";
+        let out = super::item_details(sql).expect("ok");
+        assert_eq!(
+            out,
+            json!({
+                "type": "type",
+                "type_kind": "record",
+                "category": "composite",
+            })
+        );
+    }
+
+    #[mz_ore::test]
+    fn catalog_type_unresolved_element_is_an_error() {
+        let sql = "CREATE TYPE \"materialize\".\"public\".\"l\" AS LIST (ELEMENT TYPE = int4)";
+        let err = super::item_details(sql).unwrap_err();
+        assert!(err.contains("unresolved item name"), "{err}");
     }
 }

@@ -817,6 +817,7 @@ mz_builtin_log_indexes
 mz_builtin_materialized_views
 mz_builtin_sources
 mz_builtin_tables
+mz_builtin_types
 mz_builtin_views
 mz_catalog_raw
 mz_cluster_auto_scaling_strategies
