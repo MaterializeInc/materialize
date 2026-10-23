@@ -729,6 +729,9 @@ impl SqlResult {
             }
         }
 
+        let execution_time = rows_stream
+            .take_execution_time()
+            .map(|time| client.session().mark_staged(time));
         // TODO(SQL-815): `SqlResult::Rows` has no `parameters` field, so the parameters the
         // commit reverted (a `SET LOCAL` earlier in the group) are dropped.
         if let Err(err) = client.settle_statement(ends_group).await {
@@ -736,8 +739,7 @@ impl SqlResult {
         }
         let mut notices = make_notices(client);
         notices.extend(
-            rows_stream
-                .take_execution_time()
+            execution_time
                 .and_then(|time| client.session().execution_time_notice(time))
                 .map(Notice::from),
         );
@@ -1393,6 +1395,9 @@ async fn stream_ws_peek_rows(
                 ));
             }
             None => {
+                let execution_time = rows_stream
+                    .take_execution_time()
+                    .map(|time| client.session().mark_staged(time));
                 let settled = match client.settle_statement(ends_group).await {
                     Ok(settled) => settled,
                     Err(err) => {
@@ -1410,8 +1415,7 @@ async fn stream_ws_peek_rows(
                 }
                 let command_complete =
                     WebSocketResponse::CommandComplete(format!("SELECT {rows_returned}"));
-                let msgs = rows_stream
-                    .take_execution_time()
+                let msgs = execution_time
                     .and_then(|time| client.session().execution_time_notice(time))
                     .map(|notice| WebSocketResponse::Notice(Notice::from(notice)))
                     .into_iter()
@@ -1811,7 +1815,9 @@ async fn execute_stmt<S: ResultSender>(
             return Ok(SqlResult::err(client, e).into());
         }
     };
-    let execution_time = ExecutionTime::completed(executed.duration_since(execute_started));
+    let execution_time = client.session().mark_staged(ExecutionTime::completed(
+        executed.duration_since(execute_started),
+    ));
     let tag = res.tag();
 
     Ok(match res {

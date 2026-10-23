@@ -546,11 +546,17 @@ impl fmt::Display for AdapterNotice {
             ),
             AdapterNotice::Welcome(message) => message.fmt(f),
             AdapterNotice::PlanInsights(message) => message.fmt(f),
-            AdapterNotice::ExecutionTime(time) => write!(
-                f,
-                "execution time: {:.3} ms",
-                time.elapsed.as_secs_f64() * 1000.0
-            ),
+            AdapterNotice::ExecutionTime(time) => {
+                write!(
+                    f,
+                    "execution time: {:.3} ms",
+                    time.elapsed.as_secs_f64() * 1000.0
+                )?;
+                if matches!(time.kind, ExecutionTimeKind::Staged) {
+                    f.write_str(" (before commit)")?;
+                }
+                Ok(())
+            }
             AdapterNotice::IntrospectionClusterUsage => write!(
                 f,
                 "The mz_introspection cluster has been renamed to mz_catalog_server."
@@ -630,6 +636,8 @@ pub(crate) enum ExecutionTimeKind {
     FirstRow,
     EmptyResult,
     Completed,
+    /// The transaction still holds work for a later commit, which the time excludes.
+    Staged,
 }
 
 impl ExecutionTimeKind {
@@ -638,6 +646,7 @@ impl ExecutionTimeKind {
             Self::FirstRow => "first_row",
             Self::EmptyResult => "empty_result",
             Self::Completed => "completed",
+            Self::Staged => "staged",
         }
     }
 }
