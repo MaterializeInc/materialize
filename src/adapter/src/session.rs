@@ -61,8 +61,9 @@ use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination
 use crate::coord::{Coordinator, ExplainContext};
 use crate::error::AdapterError;
 use crate::metrics::{Metrics, SessionMetrics};
+use crate::notice::ExecutionTimeKind;
 use crate::statement_logging::PreparedStatementLoggingInfo;
-use crate::{AdapterNotice, ExecuteContext};
+use crate::{AdapterNotice, ExecuteContext, ExecutionTime};
 use mz_catalog::durable::Snapshot;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
@@ -550,6 +551,39 @@ impl Session {
             }
         }
         notices
+    }
+
+    /// Builds a timing notice if enabled and admitted by `client_min_messages`.
+    pub fn execution_time_notice(&self, time: ExecutionTime) -> Option<AdapterNotice> {
+        if !self.vars.emit_execution_time_notice() {
+            return None;
+        }
+        self.notice_filter(AdapterNotice::ExecutionTime(time))
+    }
+
+    /// `time`, marked as staged if the current transaction holds work for its commit: writes, or
+    /// DDL that the commit applies. A staged write that affected no rows counts too, because it
+    /// leaves a `Writes` op behind, and so does any statement that follows such work in the same
+    /// transaction. Must be called before the statement settles, because settling can commit that
+    /// work.
+    pub fn mark_staged(&self, time: ExecutionTime) -> ExecutionTime {
+        let staged = matches!(
+            self.transaction().inner(),
+            Some(Transaction {
+                ops: TransactionOps::Writes(_)
+                    | TransactionOps::DDL { .. }
+                    | TransactionOps::SingleStatement { .. },
+                ..
+            })
+        );
+        if staged {
+            ExecutionTime {
+                kind: ExecutionTimeKind::Staged,
+                ..time
+            }
+        } else {
+            time
+        }
     }
 
     /// Returns Some if the notice should be reported, otherwise None.

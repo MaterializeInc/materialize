@@ -180,11 +180,12 @@ fn test_http_sql() {
     // datadriven output after N rows. Any directive with rows=N should be the
     // final directive in a file, since it leaves the websocket in a
     // mid-statement state.
-    // A "fixtimestamp=true" argument can be given to replace timestamps with "<TIMESTAMP>".
-    // A "fixid=true" argument can be given to replace IDs with "<ID>".
     //
     // Datadriven directive for HTTP POST is "http". Input and output are the
     // documented JSON formats.
+    //
+    // Both accept "fixtimestamp=true", "fixid=true" and "fixtiming=true" to replace
+    // timestamps, IDs and execution times with "<TIMESTAMP>", "<ID>" and "<DURATION>".
 
     let fixtimestamp_replacements = [(Regex::new(r#"\d{13}(\.0)?"#).unwrap(), "<TIMESTAMP>")];
     let fixid_replacements = [
@@ -194,6 +195,16 @@ fn test_http_sql() {
         ),
         (Regex::new(r#"\b[ust]\d+\b"#).unwrap(), "<ID>"),
         (Regex::new(r#"\\n[ust]\d+\b"#).unwrap(), "\\n<ID>"),
+    ];
+    let fixtiming_replacements = [
+        (
+            Regex::new(r#"execution time: \d+\.\d+ ms"#).unwrap(),
+            "execution time: <DURATION> ms",
+        ),
+        (
+            Regex::new(r#"\\"duration_us\\":\d+"#).unwrap(),
+            "\\\"duration_us\\\":<DURATION>",
+        ),
     ];
 
     datadriven::walk("tests/testdata/http", |f| {
@@ -259,6 +270,17 @@ fn test_http_sql() {
         ));
 
         f.run(|tc| {
+            let mut replacements = Vec::new();
+            if tc.args.contains_key("fixtimestamp") {
+                replacements.extend_from_slice(&fixtimestamp_replacements);
+            }
+            if tc.args.contains_key("fixid") {
+                replacements.extend_from_slice(&fixid_replacements);
+            }
+            if tc.args.contains_key("fixtiming") {
+                replacements.extend_from_slice(&fixtiming_replacements);
+            }
+
             let msg = match tc.directive.as_str() {
                 "ws-text" => Message::Text(tc.input.clone().into()),
                 "ws-binary" => Message::Binary(tc.input.as_bytes().to_vec().into()),
@@ -269,7 +291,12 @@ fn test_http_sql() {
                         .json(&json)
                         .send()
                         .unwrap();
-                    return format!("{}\n{}\n", res.status(), res.text().unwrap());
+                    let status = res.status();
+                    let mut text = res.text().unwrap();
+                    for (re, replace) in &replacements {
+                        text = re.replace_all(&text, *replace).into_owned();
+                    }
+                    return format!("{}\n{}\n", status, text);
                 }
                 _ => panic!("unknown directive {}", tc.directive),
             };
@@ -278,14 +305,6 @@ fn test_http_sql() {
                 .get("rows")
                 .map(|rows| rows.get(0).map(|row| row.parse::<usize>().unwrap()))
                 .flatten();
-
-            let mut replacements = Vec::new();
-            if tc.args.contains_key("fixtimestamp") {
-                replacements.extend_from_slice(&fixtimestamp_replacements);
-            }
-            if tc.args.contains_key("fixid") {
-                replacements.extend_from_slice(&fixid_replacements);
-            }
 
             ws.send(msg).unwrap();
             let mut responses = String::new();
@@ -1683,6 +1702,122 @@ fn test_implicit_commit_failure() {
             .get(0);
         assert_eq!(count, 0, "the failed write to {table} must not land");
     }
+}
+
+/// Implicit commit waits are outside result readiness, but explicit COMMIT executes the wait.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_execution_time_result_ready_boundary() {
+    const HOLD: Duration = Duration::from_secs(1);
+    const FAILPOINT: &str = "group_commit_before_apply_write";
+
+    fn arm() {
+        fail::cfg_callback(FAILPOINT, move || {
+            // Keep runtime workers available while delaying the ordered group committer.
+            // Delay every commit because the first one may only advance table uppers.
+            tokio::task::block_in_place(|| {
+                thread::sleep(HOLD);
+            })
+        })
+        .unwrap();
+    }
+    let micros = |detail: &serde_json::Value| detail["duration_us"].as_u64().unwrap();
+    let hold_micros = u64::try_from(HOLD.as_micros()).unwrap();
+
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE dt (a int)").unwrap();
+
+    let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
+    test_util::auth_with_ws(
+        &mut ws,
+        BTreeMap::from([("emit_execution_time_notice".into(), "on".into())]),
+    )
+    .unwrap();
+    // Bound a broken request instead of hanging the test.
+    if let tungstenite::stream::MaybeTlsStream::Plain(stream) = ws.get_ref() {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(120)))
+            .unwrap();
+    }
+    // Sends `request` and returns the details of its execution time notices and how long the
+    // request took.
+    let mut run_ws = |request: serde_json::Value| {
+        arm();
+        let start = Instant::now();
+        ws.send(Message::Text(request.to_string().into())).unwrap();
+        let mut details = Vec::new();
+        loop {
+            let Message::Text(text) = ws.read().expect("request must complete") else {
+                continue;
+            };
+            let msg: serde_json::Value = serde_json::from_str(&text).unwrap();
+            match msg["type"].as_str().unwrap() {
+                "Notice" if msg["payload"]["code"] == "MZ012" => {
+                    let detail: serde_json::Value =
+                        serde_json::from_str(msg["payload"]["detail"].as_str().unwrap()).unwrap();
+                    details.push(detail);
+                }
+                "ReadyForQuery" => break,
+                "Error" => panic!("{msg}"),
+                _ => {}
+            }
+        }
+        fail::remove(FAILPOINT);
+        (details, start.elapsed())
+    };
+
+    // Compare the reported duration with the entire request, not an absolute speed limit.
+    // The commit delay must be absent even though success is delivered after that wait.
+    let (details, elapsed) = run_ws(serde_json::json!({
+        "queries": [{"query": "INSERT INTO dt VALUES (1)"}]
+    }));
+    let kinds: Vec<_> = details.iter().map(|d| d["kind"].clone()).collect();
+    assert_eq!(kinds, ["staged"], "{details:?}");
+    assert!(
+        elapsed >= Duration::from_micros(micros(&details[0])) + HOLD,
+        "{details:?}, request took {elapsed:?}"
+    );
+
+    // In an explicit transaction, `COMMIT` carries the commit.
+    let (details, _) = run_ws(serde_json::json!({
+        "queries": [
+            {"query": "BEGIN"},
+            {"query": "INSERT INTO dt VALUES (3)"},
+            {"query": "COMMIT"}
+        ]
+    }));
+    let kinds: Vec<_> = details.iter().map(|d| d["kind"].clone()).collect();
+    assert_eq!(kinds, ["completed", "staged", "completed"], "{details:?}");
+    assert!(micros(&details[2]) >= hold_micros, "{details:?}");
+
+    // pgwire's simple query protocol commits before the statement's `CommandComplete` too.
+    let (notice_tx, notice_rx) = std::sync::mpsc::channel();
+    let mut pg = server
+        .pg_config()
+        .options("--emit_execution_time_notice=on --welcome_message=off")
+        .notice_callback(move |notice| {
+            let _ = notice_tx.send(notice);
+        })
+        .connect(postgres::NoTls)
+        .unwrap();
+    arm();
+    let start = Instant::now();
+    pg.batch_execute("INSERT INTO dt VALUES (4)").unwrap();
+    let elapsed = start.elapsed();
+    fail::remove(FAILPOINT);
+    let details: Vec<serde_json::Value> = notice_rx
+        .try_iter()
+        .filter(|notice| notice.code().code() == "MZ012")
+        .map(|notice| serde_json::from_str(notice.detail().unwrap()).unwrap())
+        .collect();
+    let kinds: Vec<_> = details.iter().map(|d| d["kind"].clone()).collect();
+    assert_eq!(kinds, ["staged"], "{details:?}");
+    assert!(
+        elapsed >= Duration::from_micros(micros(&details[0])) + HOLD,
+        "{details:?}, request took {elapsed:?}"
+    );
 }
 
 /// Regression test for SQL-428: the JSON `/api/sql` endpoint enforces

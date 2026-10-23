@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::fmt;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
@@ -140,6 +141,7 @@ pub enum AdapterNotice {
     },
     Welcome(String),
     PlanInsights(String),
+    ExecutionTime(ExecutionTime),
     IntrospectionClusterUsage,
     AutoRouteIntrospectionQueriesUsage,
     /// A cluster contains sources that run on only one replica, yet the
@@ -222,6 +224,7 @@ impl AdapterNotice {
             AdapterNotice::StartupOnlyVarUpdated { .. } => Severity::Warning,
             AdapterNotice::Welcome(_) => Severity::Notice,
             AdapterNotice::PlanInsights(_) => Severity::Notice,
+            AdapterNotice::ExecutionTime(_) => Severity::Notice,
             AdapterNotice::IntrospectionClusterUsage => Severity::Warning,
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => Severity::Warning,
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Severity::Warning,
@@ -234,6 +237,13 @@ impl AdapterNotice {
     pub fn detail(&self) -> Option<String> {
         match self {
             AdapterNotice::PlanNotice(notice) => notice.detail(),
+            AdapterNotice::ExecutionTime(time) => Some(
+                serde_json::json!({
+                    "kind": time.kind.name(),
+                    "duration_us": u64::try_from(time.elapsed.as_micros()).unwrap_or(u64::MAX),
+                })
+                .to_string(),
+            ),
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Some(
                 "Adding replicas to the cluster does not make these sources more fault tolerant \
                  and does not increase their ingestion throughput."
@@ -345,6 +355,7 @@ impl AdapterNotice {
             AdapterNotice::StartupOnlyVarUpdated { .. } => SqlState::WARNING,
             AdapterNotice::Welcome(_) => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::PlanInsights(_) => SqlState::from_code("MZ001"),
+            AdapterNotice::ExecutionTime(_) => SqlState::from_code("MZ012"),
             AdapterNotice::IntrospectionClusterUsage => SqlState::WARNING,
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => SqlState::WARNING,
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => SqlState::WARNING,
@@ -535,6 +546,17 @@ impl fmt::Display for AdapterNotice {
             ),
             AdapterNotice::Welcome(message) => message.fmt(f),
             AdapterNotice::PlanInsights(message) => message.fmt(f),
+            AdapterNotice::ExecutionTime(time) => {
+                write!(
+                    f,
+                    "execution time: {:.3} ms",
+                    time.elapsed.as_secs_f64() * 1000.0
+                )?;
+                if matches!(time.kind, ExecutionTimeKind::Staged) {
+                    f.write_str(" (before commit)")?;
+                }
+                Ok(())
+            }
             AdapterNotice::IntrospectionClusterUsage => write!(
                 f,
                 "The mz_introspection cluster has been renamed to mz_catalog_server."
@@ -584,5 +606,51 @@ pub struct DroppedInUseIndex {
 impl From<PlanNotice> for AdapterNotice {
     fn from(notice: PlanNotice) -> AdapterNotice {
         AdapterNotice::PlanNotice(notice)
+    }
+}
+
+/// Time from bound-statement execution to its first available result.
+///
+/// Parsing, describing, and binding are excluded, except binding within SQL `EXECUTE`.
+/// Reads and writes use the same boundary. Subsequent row delivery and implicit commit
+/// are excluded. Work performed within execution, including an explicit `COMMIT`, is
+/// included.
+#[derive(Clone, Debug)]
+pub struct ExecutionTime {
+    pub(crate) kind: ExecutionTimeKind,
+    pub(crate) elapsed: Duration,
+}
+
+impl ExecutionTime {
+    /// The time of a statement that cannot return rows.
+    pub fn completed(elapsed: Duration) -> Self {
+        Self {
+            kind: ExecutionTimeKind::Completed,
+            elapsed,
+        }
+    }
+}
+
+/// Where the interval of an [`ExecutionTime`] ends.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ExecutionTimeKind {
+    /// A statement that returns rows has its first row ready. Delivering the rows is excluded.
+    FirstRow,
+    /// A statement that could return rows finished without any.
+    EmptyResult,
+    /// A statement that cannot return rows, such as `SET`, finished executing.
+    Completed,
+    /// The transaction still holds work for a later commit, which the time excludes.
+    Staged,
+}
+
+impl ExecutionTimeKind {
+    fn name(self) -> &'static str {
+        match self {
+            Self::FirstRow => "first_row",
+            Self::EmptyResult => "empty_result",
+            Self::Completed => "completed",
+            Self::Staged => "staged",
+        }
     }
 }
