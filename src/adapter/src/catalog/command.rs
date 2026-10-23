@@ -40,6 +40,8 @@ pub enum CatalogCommand {
     Rename(Arc<RenameCommand>),
     CatalogResult(Arc<CatalogResultCommand>),
     Description(Arc<DescriptionCommand>),
+    AlterConnection(Arc<connection::ConnectionStatement>),
+    CreateConnection(Arc<connection::ConnectionStatement>),
     Source(Arc<source_statement::SourceCommand>),
 }
 
@@ -49,6 +51,7 @@ impl CatalogCommand {
             Self::Rename(command) => command.notices(),
             Self::CatalogResult(command) => &command.notices,
             Self::Description(_) => &[],
+            Self::AlterConnection(command) | Self::CreateConnection(command) => command.notices(),
             Self::Source(command) => command.notices(),
         }
     }
