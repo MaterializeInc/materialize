@@ -70,15 +70,27 @@ adapters and replicas, synchronized through existing machinery before recording
 the bound. Acquisition, following, installation and committed-permission
 application remain active. Preserve assertions and production scheduling.
 The full scratch run and unchanged CI retry pass without repairing the
-probabilistic assumption. The deterministic correction is not yet verified.
+probabilistic assumption. The explicit pause correction has scratch verification.
 The local implementation uses the unsafe, default-false
 `unsafe_pause_catalog_read_protection_publication` setting. Static review found
 no implementation defect. Native coverage includes acquisition while paused and
 a peer pause discovered during conflict refresh. Prewarming race/failure paths
 have static review but no dedicated executable coverage. Rust formatting, Black,
-Ruff and Python syntax checks pass. Compilation and runtime checks await restored
-scratch authentication. Bootstrap's nonperiodic grant transfer/release remains
-active, outside the periodic pause contract.
+Ruff and Python syntax checks pass. Adapter and clusterd all-targets compilation
+passes at `40322952`. At `7d7dd8a0`, all 22 clusterd library tests pass through
+`bin/cargo-test`, and adapter/clusterd all-targets Clippy passes. Plain Cargo test
+overflowed the liveness test stack. The repository wrapper supplies its existing
+stack setting, without a new test-specific limit.
+The restart run passes its paused-bound and advancement checks but fails at
+`ongoing-not-completed` because two required Persist metric series are absent.
+The unchanged full rerun passes, including physical retention, recovery and sink
+checks. That pass does not resolve the missing-series flake. The assertions
+remain intact. Evidence is in
+`scratch/cadence60-default/publication-pause/`.
+Bootstrap's nonperiodic grant transfer/release remains active, outside the periodic
+pause contract. The replacement worker is `i-0788036f0778687f1`, m8i.4xlarge with
+500GiB disk, launched with a three-day expiry. Its predecessor expired, with useful
+evidence already preserved off-worker.
 
 The exact CI140146 seed still needs resolution. Its 60s parallel shard 2 OOM
 repeats, killing quickstart at about 10.7GiB anonymous RSS. CI140148's 1s control
@@ -106,6 +118,13 @@ retention regression. Evidence and limits are in
 `scratch/cadence60-default/ci140156/`. A further capture requires bounded direct
 requests and observer accounting, not allocator/cache tuning. The prompt's
 restriction against changing the 1s default is superseded by approval.
+
+CI140341 runs the original CI140146 seed on diagnostic revision `0bf20a4a`,
+based on `e8084213`, with unchanged workload, resources and deadlines. Only the
+CI hook and bounded observer differ. The bulk collector is disabled. Independent
+review and mock checks cover serial requests, identity, readiness, output limits
+and cleanup ownership. Actual capture overhead and validity still need checking.
+The diagnostic branch is separate from canonical M2 changes.
 
 CI140105 at `2bde8879` finishes with 94 passed jobs. Cargo, cluster frontier
 checks, Kafka RTR, both parallel shards and the closed native recovery/handover
