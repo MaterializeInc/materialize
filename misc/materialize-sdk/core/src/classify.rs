@@ -127,7 +127,8 @@ pub fn classify(sqlstate: Option<&str>, message: &str, phase: Phase) -> Classifi
         // restarts. 25P03 ends a session left idle in its transaction for
         // `idle_in_transaction_session_timeout`.
         "08000" | "08001" | "08003" | "08004" | "08006" | "25P03" => Kind { kind: Transient },
-        "28000" => Kind {
+        // 28P01 is a wrong password, from balancerd and pgwire.
+        "28000" | "28P01" => Kind {
             kind: CredentialsExpired,
         },
         "57014" => Kind { kind: Canceled },
@@ -144,9 +145,15 @@ pub fn classify(sqlstate: Option<&str>, message: &str, phase: Phase) -> Classifi
         "42704" => CheckObject {
             otherwise: ObjectDropped,
         },
+        // A cluster scaled to no replicas, as during maintenance, refuses a
+        // new subscribe until a replica returns (`NoClusterReplicasAvailable`
+        // in `src/adapter/src/error.rs`).
+        "0A000" if message.contains("has no replicas available to service request") => {
+            Kind { kind: Transient }
+        }
         // A dropped id fails with XX000, and changed columns fail at the
-        // first FETCH with this 0A000 (`ChangedPlan`). Other 0A000 errors,
-        // such as a cluster with no replicas, are not about the object.
+        // first FETCH with this 0A000 (`ChangedPlan`). Other 0A000 errors are
+        // not about the object.
         "0A000"
             if phase == Phase::Starting
                 && message.contains("cached plan must not change result type") =>
@@ -306,7 +313,7 @@ mod tests {
                 "CLUSTER \"c\" has no replicas available to service request",
                 Phase::Starting
             ),
-            Some(ErrorKind::Fatal)
+            Some(ErrorKind::Transient)
         );
     }
 
