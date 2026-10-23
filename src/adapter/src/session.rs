@@ -554,7 +554,6 @@ impl Session {
     }
 
     /// Builds a timing notice if enabled and admitted by `client_min_messages`.
-    /// The caller sends it before completion, rather than queuing it for a later statement.
     pub fn execution_time_notice(&self, time: ExecutionTime) -> Option<AdapterNotice> {
         if !self.vars.emit_execution_time_notice() {
             return None;
