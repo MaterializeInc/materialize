@@ -86,12 +86,23 @@ impl Subscription {
             max_timestamp_bytes: Option<String>,
         }
         let options: Options = parse(options)?;
+        let pending = options
+            .max_pending_bytes
+            .as_deref()
+            .map(decimal)
+            .transpose()?;
+        let timestamp = options
+            .max_timestamp_bytes
+            .as_deref()
+            .map(decimal)
+            .transpose()?;
+        crate::batch::check_limits(pending, timestamp)?;
         let mut inner = crate::Subscription::new(options.subscribe, options.start)?;
-        if let Some(limit) = options.max_pending_bytes {
-            inner = inner.with_max_pending_bytes(decimal(&limit)?);
+        if let Some(limit) = pending {
+            inner = inner.with_max_pending_bytes(limit);
         }
-        if let Some(limit) = options.max_timestamp_bytes {
-            inner = inner.with_max_timestamp_bytes(decimal(&limit)?);
+        if let Some(limit) = timestamp {
+            inner = inner.with_max_timestamp_bytes(limit);
         }
         Ok(Subscription {
             inner,

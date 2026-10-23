@@ -51,6 +51,11 @@
       "expect": {"action": "kind", "kind": "credentials_expired"}
     },
     {
+      "name": "a wrong password",
+      "input": {"sqlstate": "28P01", "message": "invalid password", "phase": "starting"},
+      "expect": {"action": "kind", "kind": "credentials_expired"}
+    },
+    {
       "name": "a cancel or statement timeout",
       "input": {"sqlstate": "57014", "message": "canceling statement due to user request", "phase": "streaming"},
       "expect": {"action": "kind", "kind": "canceled"}
@@ -104,13 +109,13 @@
       "expect": {"action": "check_object", "otherwise": "schema_mismatch"}
     },
     {
-      "name": "a cluster without replicas is fatal",
+      "name": "a cluster without replicas is transient, as while it is scaled down",
       "input": {
         "sqlstate": "0A000",
         "message": "CLUSTER \"c\" has no replicas available to service request",
         "phase": "starting"
       },
-      "expect": {"action": "kind", "kind": "fatal"}
+      "expect": {"action": "kind", "kind": "transient"}
     },
     {
       "name": "an unsupported feature while streaming is fatal",

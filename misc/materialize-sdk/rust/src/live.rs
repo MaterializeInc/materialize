@@ -149,14 +149,8 @@ impl LiveOptions {
                 "the buffer must hold at least one event".into(),
             ));
         }
-        if let (Some(pending), Some(timestamp)) = (self.max_pending_bytes, self.max_timestamp_bytes)
-            && pending >= timestamp
-        {
-            return Err(Error::InvalidOption(
-                "max_pending_bytes must be below max_timestamp_bytes".into(),
-            ));
-        }
-        Ok(())
+        materialize_sdk_core::batch::check_limits(self.max_pending_bytes, self.max_timestamp_bytes)
+            .map_err(|error| Error::InvalidOption(error.to_string()))
     }
 }
 

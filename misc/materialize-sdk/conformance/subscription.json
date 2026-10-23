@@ -475,6 +475,17 @@
           "finished": false
         }
       ]
+    },
+    {
+      "name": "a pending limit at the timestamp limit is refused, since the snapshot could not pass in chunks",
+      "input": {
+        "subscribe": {"target": {"kind": "object", "id": "u42", "database": "materialize", "schema": "public", "name": "orders"}, "envelope": {"kind": "diff"}},
+        "start": {"kind": "snapshot"},
+        "max_pending_bytes": "100",
+        "max_timestamp_bytes": "100",
+        "steps": []
+      },
+      "expect": {"error": "usage"}
     }
   ]
 }

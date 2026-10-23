@@ -36,7 +36,7 @@ use std::mem;
 use serde::{Deserialize, Serialize};
 
 use crate::decode::{Change, Message, Row, Update};
-use crate::error::{ProtocolError, TimestampTooLarge};
+use crate::error::{ProtocolError, TimestampTooLarge, UsageError};
 use crate::frontier::Frontier;
 use crate::wire;
 
@@ -60,6 +60,21 @@ pub enum Start {
         /// The frontier to continue from.
         frontier: Frontier,
     },
+}
+
+/// Refuses a pending limit at or above the timestamp limit. The snapshot counts
+/// as one timestamp, and one larger than the timestamp limit passes only in
+/// the chunks that the pending limit releases.
+pub fn check_limits(
+    max_pending_bytes: Option<usize>,
+    max_timestamp_bytes: Option<usize>,
+) -> Result<(), UsageError> {
+    match (max_pending_bytes, max_timestamp_bytes) {
+        (Some(pending), Some(timestamp)) if pending >= timestamp => Err(UsageError::new(
+            "max_pending_bytes must be below max_timestamp_bytes",
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// What the batcher hands to the consumer.
@@ -221,6 +236,9 @@ pub struct Batcher {
     /// releases them and the count starts again.
     open_bytes: usize,
     finished: bool,
+    /// Whether the server reported the end of the stream, after which no row
+    /// arrives, not even progress past `UP TO`.
+    ended: bool,
     /// The first error, returned by every later call. Past a protocol error a
     /// release could skip data that never arrived, and past
     /// [`TimestampTooLarge`] the timestamp cannot be released whole.
@@ -248,6 +266,7 @@ impl Batcher {
             pending_bytes: 0,
             open_bytes: 0,
             finished: false,
+            ended: false,
             failed: None,
         }
     }
@@ -316,9 +335,22 @@ impl Batcher {
     }
 
     fn accept(&mut self, message: Message) -> Result<Option<Event>, BatchError> {
-        // The server sends nothing after the progress row that reaches
-        // `UP TO`, or after the end of the stream.
         if self.finished {
+            // With several workers or replicas, more progress rows past
+            // `UP TO` can follow the one that reached it, because the
+            // controller passes on each advance of the lowest frontier
+            // (`absorb_subscribe_response` in `src/compute-client/src/service.rs`).
+            // They close nothing new. An update cannot arrive at or past
+            // `UP TO`, and nothing follows the end of the stream.
+            let at_up_to = !self.ended
+                && self.released.is_some()
+                && self.released == self.up_to.and_then(Frontier::new);
+            if let Message::Progress { frontier } = message {
+                if at_up_to && self.progress.is_some_and(|previous| frontier >= previous) {
+                    self.progress = Some(frontier);
+                    return Ok(None);
+                }
+            }
             return Err(ProtocolError::new("a row arrived after the stream ended").into());
         }
         match message {
@@ -342,6 +374,7 @@ impl Batcher {
     /// (`ActiveSubscribe::process_response`), so every update has arrived.
     pub fn finish(&mut self) -> Result<Option<Batch>, BatchError> {
         self.check_failed()?;
+        self.ended = true;
         let result = self.end().map_err(BatchError::from);
         self.record(result)
     }

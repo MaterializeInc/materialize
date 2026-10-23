@@ -265,12 +265,58 @@
       }
     },
     {
-      "name": "nothing follows the end of the stream",
+      "name": "more progress past UP TO, as several workers send, changes nothing",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "update", "timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"},
+          {"message": "update", "timestamp": "12", "op": "diff", "row": ["b"], "diff": "1"},
+          {"message": "progress", "frontier": "25"},
+          {"message": "progress", "frontier": "27"}
+        ],
+        "up_to": "15"
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [],
+          [],
+          [{"event": "batch", "lower": null, "upper": "15", "snapshot": true, "updates": [{"timestamp": "10", "op": "diff", "row": ["a"], "diff": "1"}, {"timestamp": "12", "op": "diff", "row": ["b"], "diff": "1"}]}],
+          []
+        ],
+        "finished": true
+      }
+    },
+    {
+      "name": "no update follows the end of the stream at UP TO",
       "input": {
         "start": {"kind": "snapshot"},
         "steps": [
           {"message": "progress", "frontier": "10"},
           {"message": "progress", "frontier": "15"},
+          {"message": "progress", "frontier": "16"},
+          {"message": "update", "timestamp": "12", "op": "diff", "row": ["a"], "diff": "1"}
+        ],
+        "up_to": "15"
+      },
+      "expect": {
+        "outputs": [
+          [],
+          [{"event": "batch", "lower": null, "upper": "15", "snapshot": true, "updates": []}],
+          [],
+          {"error": "protocol"}
+        ],
+        "finished": true
+      }
+    },
+    {
+      "name": "progress past UP TO still cannot go back",
+      "input": {
+        "start": {"kind": "snapshot"},
+        "steps": [
+          {"message": "progress", "frontier": "10"},
+          {"message": "progress", "frontier": "17"},
           {"message": "progress", "frontier": "16"}
         ],
         "up_to": "15"
