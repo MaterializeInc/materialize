@@ -118,6 +118,14 @@ impl Pacer {
             .min(self.tokens_per_minute);
     }
 
+    /// Gives back a reservation whose request turbopuffer refused as invalid,
+    /// which it embedded nothing for.
+    pub(crate) fn returned(&mut self, reservation: Reservation) {
+        if let Some(sent) = self.sent.iter_mut().find(|sent| sent.id == reservation.0) {
+            sent.tokens = 0;
+        }
+    }
+
     /// Records that turbopuffer refused a reservation's request for its rate
     /// limit, so it embedded nothing, and halves the next requests.
     pub(crate) fn refused(&mut self, reservation: Reservation) {

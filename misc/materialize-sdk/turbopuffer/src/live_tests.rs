@@ -1430,3 +1430,75 @@ async fn every_column_type_reaches_turbopuffer_as_its_attribute() {
     let _ = worker.await;
     sql(&format!("DROP TABLE {relation}")).await;
 }
+
+#[tokio::test]
+#[ignore = "needs TURBOPUFFER_API_KEY"]
+async fn a_batch_whose_every_row_is_refused_stops_the_sink() {
+    let name = unique("refused-all");
+    let _cleanup = Cleanup(name.clone());
+    let mut sink = TurbopufferSink::new(&connection(), "s", &name).unwrap();
+    // As when every request names an embedding model turbopuffer lacks.
+    sink.client
+        .faults
+        .lock()
+        .unwrap()
+        .refused_ids
+        .extend(["1".to_string(), "2".to_string()]);
+    let batch = SinkBatch::new(
+        vec![upsert(5, "1", "t", "1"), upsert(5, "2", "t", "1")],
+        columns(),
+        2,
+        false,
+    );
+    match sink.write(WriteRequest::Batch(&batch)).await {
+        WriteResult::Failed(SinkError::Target {
+            permanent: true,
+            message,
+        }) => {
+            assert!(message.contains("refused every row"), "{message}");
+        }
+        other => panic!("expected a permanent failure, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs TURBOPUFFER_API_KEY"]
+async fn a_refused_row_is_found_even_when_every_write_yields() {
+    let name = unique("refused-yield");
+    let _cleanup = Cleanup(name.clone());
+    let mut sink = TurbopufferSink::new(&connection(), "s", &name).unwrap();
+    // Each call sends one request, then yields.
+    sink.write_slice = Duration::ZERO;
+    sink.request_rows = 4;
+    sink.client
+        .faults
+        .lock()
+        .unwrap()
+        .refused_ids
+        .insert("3".into());
+    let batch = SinkBatch::new(
+        (1..=4)
+            .map(|i| upsert(5, &i.to_string(), "t", "1"))
+            .collect(),
+        columns(),
+        2,
+        false,
+    );
+    for _ in 0..10 {
+        match sink.write(WriteRequest::Batch(&batch)).await {
+            WriteResult::Failed(SinkError::Throttled { .. }) => continue,
+            WriteResult::Applied { rejected } => {
+                let found: Vec<_> = rejected
+                    .iter()
+                    .map(|r| (r.index, r.category.as_str()))
+                    .collect();
+                assert_eq!(found, [(2, "refused")]);
+                let stored = live_documents(&sink.client, &data_namespace(&name, 2)).await;
+                assert_eq!(stored.len(), 3);
+                return;
+            }
+            other => panic!("expected throttling or applied, got {other:?}"),
+        }
+    }
+    panic!("the write never got past the refused row");
+}
