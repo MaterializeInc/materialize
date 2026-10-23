@@ -20,6 +20,31 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.48.0
+*Released to Materialize Cloud: 2026-10-29* <br>
+*Released to Materialize Self-Managed: 2026-10-30* <br>
+
+### Native Google Cloud Storage for persist {#v26.48-native-gcs-for-persist}
+
+Self-managed deployments on Google Cloud can now point persist at a `gcs://<bucket>/<prefix>` URL, which reaches the bucket through a native Google Cloud Storage client authenticated with Google's default credentials. Previously a GCS deployment had to reach the same bucket through the S3-compatible API with static HMAC keys, so credentials can now be managed the way the rest of a GCP deployment manages them. Blob restore copies back the newest noncurrent generation and so requires a versioned bucket, which is the default in the self-managed Terraform modules; soft delete is not yet supported.
+
+### Improvements {#v26.48-improvements}
+- **`EXCLUDE ALL NOT NULL CONSTRAINTS` for MySQL source tables**: `CREATE TABLE ... FROM SOURCE` now accepts `EXCLUDE ALL NOT NULL CONSTRAINTS` against MySQL sources, which ignores the upstream `NOT NULL` constraints and makes the corresponding Materialize columns nullable, matching the PostgreSQL behavior added in v26.47.0; columns of a retained primary key stay `NOT NULL`, and a source type without support now rejects the option instead of silently ignoring it.
+- **Kafka sink headers on by default**: The `HEADERS` option for Kafka sinks is now enabled by default, and Kafka sinks now attach a `materialize-sink-id` header carrying the sink's ID to every message they produce.
+- **Bounded replication slot creation for PostgreSQL sources**: Creating a PostgreSQL source's replication slot is now bounded by a one-minute timeout, applied as the upstream session's `lock_timeout` and configurable, so an upstream transaction holding the slot creation open surfaces an error the source can resume from rather than blocking it indefinitely; the timeout has no effect when the upstream is a physical standby.
+- **Faster progress tracking for sources with many tables**: A source now updates the committed progress of each of its tables only when that table has advanced, rather than walking all of them on every invocation, which on an idle source with 1,000 tables cut total source dataflow time by 40% (129s to 77s of operator time over a two-minute sample on an eight-worker replica).
+- **Fewer Kafka clients on replicas running many sources**: A worker now creates a Kafka reader consumer only once it is responsible for a partition of the source's topic, instead of one per source per worker, which on a four-worker replica with 11 mostly single-partition sources cut the replica's Kafka clients from 55 to 24; each consumer runs a thread per broker, so the old count was what drove the CPU throttling and degraded freshness seen with a few hundred sources on one replica.
+- **Lower memory while hydrating large materialized views**: The consolidation that runs when a materialized view sink's first batch lands no longer collects the whole buffer onto the heap at once, and instead accumulates it in bounded runs that can spill to disk; a TPC-H scale-factor-100 hydration that previously exhausted its replica's 849 GiB memory limit and had to recover now peaks at about 628 GiB and finishes without a restart.
+- **`environmentd` queues more connections while it boots**: The SQL and HTTP listeners now request a kernel accept backlog of 1,024 instead of 128, so connections made during a long boot — including the Kubernetes readiness and liveness probes, which occupy a queue slot even though they close immediately — are queued rather than dropped, making `environmentd` less likely to be restarted by its liveness probe during a long startup.
+- **Time zone data updated to 2026e**: Materialize now ships IANA time zone data 2026e, in which `America/Winnipeg`, `Canada/Central`, `America/Rainy_River`, and `America/Inuvik` stop falling back on 2026-11-01 and keep their summer offsets year-round, and `EST5EDT`, `CST6CDT`, `MST7MDT`, and `PST8PDT` return to US federal rules.
+- **External autoscaling for the connection balancer**: The `Materialize` resource gains a `balancerdExternallyScaled` field, and `Balancer` an `externallyScaled` field, that stop the Kubernetes operator from reasserting the balancerd Deployment's replica count on every reconcile, so a HorizontalPodAutoscaler can own it; `balancerdReplicas` then only seeds the count when the Deployment is first created.
+
+### Bug Fixes {#v26.48-bug-fixes}
+- Fixed a PostgreSQL source's replica growing until it was killed for running out of memory when upstream schema validation kept failing while the replication stream was silent; the validator retried without pausing and filled an unbounded error queue that is drained only on a keepalive, and it now reports each failure once.
+- Fixed `ALTER CONNECTION` panicking when run on an Iceberg catalog connection, or on the parent S3 or GCP connection that an S3 Tables or BigLake catalog uses.
+- Fixed connection credentials supplied as literal strings rather than wrapped in a `SECRET` — OAuth credentials, AWS session tokens, usernames, access key IDs, and TLS certificates — being written verbatim to the logs whenever a connection was dumped, which happens on every `ALTER CONNECTION` compatibility failure and on every sink a cluster reconciles.
+- Fixed the `dbt-materialize` cluster and schema ownership checks that guard a blue/green deployment never raising anything, because they subtracted the set of objects under deployment the wrong way around; they now also treat membership in the owning role as ownership, which is how Materialize itself decides whether a role may run the swap that `deploy_promote` performs.
+
 ## v26.47.1
 *Released to Materialize Cloud: 2026-10-29* <br>
 *Released to Materialize Self-Managed: 2026-10-30* <br>
