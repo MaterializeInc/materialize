@@ -1693,7 +1693,9 @@ mod tests {
     use mz_server_core::STARTING_UP_MESSAGE;
     use tokio::sync::oneshot;
 
-    use super::{AllowedRoles, check_role_allowed, console, ready_or_starting_up};
+    use super::{
+        AllowedRoles, WsState, check_role_allowed, console, listeners, ready_or_starting_up, sql,
+    };
 
     #[mz_ore::test]
     fn ready_or_starting_up_returns_the_value_only_once_sent() {
@@ -1713,6 +1715,50 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = response.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(body, STARTING_UP_MESSAGE.as_bytes());
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `socket`
+    async fn websocket_before_boot_reports_starting_up_instead_of_upgrading() {
+        let (_adapter_client_tx, adapter_client_rx) = oneshot::channel();
+        let (_oidc_tx, oidc_rx) = oneshot::channel();
+        let state = WsState {
+            frontegg: None,
+            oidc_rx: oidc_rx.shared(),
+            authenticator_kind: listeners::AuthenticatorKind::None,
+            adapter_client_rx: adapter_client_rx.shared(),
+            active_connection_counter: mz_pgwire_common::ConnectionCounter::default(),
+            helm_chart_version: None,
+            allowed_roles: AllowedRoles::Normal,
+        };
+        let app = axum::Router::new()
+            .route(
+                "/api/experimental/sql",
+                axum::routing::get(sql::handle_sql_ws),
+            )
+            .with_state(state);
+        // The upgrade extractor needs a real connection, so serve over a socket.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _server = mz_ore::task::spawn(|| "websocket_boot_test", async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+        });
+
+        let response = reqwest::Client::new()
+            .get(format!("http://{addr}/api/experimental/sql"))
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 503);
+        assert_eq!(response.text().await.unwrap(), STARTING_UP_MESSAGE);
     }
 
     #[mz_ore::test(tokio::test)]

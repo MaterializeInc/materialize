@@ -33,9 +33,7 @@ use mz_adapter::config::{
     SystemParameterSyncClientConfig, SystemParameterSyncConfig, system_parameter_sync,
 };
 use mz_adapter::webhook::WebhookConcurrencyLimiter;
-use mz_adapter::{
-    AdapterError, Client as AdapterClient, RemoteSystemParameters, load_remote_system_parameters,
-};
+use mz_adapter::{AdapterError, RemoteSystemParameters, load_remote_system_parameters};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::dyncfgs::{
     ENABLE_0DT_DEPLOYMENT_PANIC_AFTER_TIMEOUT, WITH_0DT_DEPLOYMENT_DDL_CHECK_INTERVAL,
@@ -968,14 +966,14 @@ pub struct Server {
     pub sql_listener_handles: BTreeMap<String, ListenerHandle>,
     pub http_listener_handles: BTreeMap<String, ListenerHandle>,
     #[cfg(feature = "test")]
-    adapter_client: AdapterClient,
+    adapter_client: mz_adapter::Client,
     _adapter_handle: mz_adapter::Handle,
 }
 
 impl Server {
     /// A client for the adapter, letting tests drive the adapter API directly.
     #[cfg(feature = "test")]
-    pub fn adapter_client(&self) -> &AdapterClient {
+    pub fn adapter_client(&self) -> &mz_adapter::Client {
         &self.adapter_client
     }
 }
