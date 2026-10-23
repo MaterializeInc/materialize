@@ -213,8 +213,7 @@ regex:incompatible schema change on public\.alter_table_supported \(oid \d+\): c
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 TRUNCATE truncate_table;
 
-! SELECT * FROM truncate_table;
-contains:table was truncated
+> SELECT * FROM truncate_table;
 
 #
 # Drop table

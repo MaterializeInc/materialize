@@ -103,10 +103,6 @@ CREATE TABLE alter_table_supported (f1 int, f2 int);
 ALTER TABLE alter_table_supported REPLICA IDENTITY FULL;
 INSERT INTO alter_table_supported (f1, f2) VALUES (1, 1);
 
-CREATE TABLE truncate_table (f1 int, f2 int);
-ALTER TABLE truncate_table REPLICA IDENTITY FULL;
-INSERT INTO truncate_table (f1, f2) VALUES (1, 1);
-
 CREATE TABLE drop_table (f1 int, f2 int);
 ALTER TABLE drop_table REPLICA IDENTITY FULL;
 INSERT INTO drop_table (f1, f2) VALUES (1, 1);
@@ -379,18 +375,6 @@ ALTER TABLE alter_table_supported DROP COLUMN f2;
 ! SELECT * from alter_table_supported;
 regex:incompatible schema change on public\.alter_table_supported \(oid \d+\): column "f2" was dropped or renamed upstream
 
-
-#
-# Truncate table
-
-> SELECT * from truncate_table;
-1 1
-
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-TRUNCATE truncate_table;
-
-! SELECT * FROM truncate_table;
-contains:table was truncated
 
 #
 # Drop table

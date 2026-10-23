@@ -90,6 +90,8 @@ def get_minimal_system_parameters(
         # -----
         # Others (ordered by name)
         "allow_real_time_recency": "true",
+        # Tests expect truncated PG tables to be retracted.
+        "pg_source_truncate_retract": "true",
         "constraint_based_timestamp_selection": "verify",  # removed from main, keeping it here for old versions
         "enable_compute_peek_response_stash": "true",
         "enable_0dt_deployment_panic_after_timeout": "true",
@@ -915,6 +917,10 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "pg_schema_validation_interval",
     "pg_source_replication_slot_creation_timeout",
     "pg_source_validate_timeline",
+    # Performance knobs of PG truncate retraction. Their extremes are
+    # exercised by the truncate workflows in test/pg-cdc/mzcompose.py.
+    "pg_source_truncate_buffer_max_bytes",
+    "pg_source_truncate_retract_max_rows_per_sec",
     "sql_server_source_validate_restore_history",
     "storage_enforce_external_addresses",
     "storage_upsert_prevent_snapshot_buffering",

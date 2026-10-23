@@ -336,6 +336,37 @@ pub static PG_SOURCE_VALIDATE_TIMELINE: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether a PG source retracts the contents of a table that is truncated upstream, rather than
+/// emitting a definite error that forces the table to be recreated.
+/// Environment-scoped because it decides whether a definite error is emitted.
+/// Replicas of one cluster disagreeing would write different collection
+/// contents, so the value has to be coherent across them.
+pub static PG_SOURCE_TRUNCATE_RETRACT: Config<bool> = Config::new(
+    "pg_source_truncate_retract",
+    false,
+    "Whether a PG source retracts the contents of a table truncated upstream",
+    ParameterScope::Environment,
+);
+
+/// The bound on the bytes of not yet durable updates a PG source keeps per table, from which it
+/// retracts a truncated table. A truncate the kept updates cannot cover replays them from the
+/// replication slot instead, pausing the source meanwhile. Zero always replays.
+pub static PG_SOURCE_TRUNCATE_BUFFER_MAX_BYTES: Config<usize> = Config::new(
+    "pg_source_truncate_buffer_max_bytes",
+    256 << 20,
+    "Bytes of not yet durable updates a PG source keeps per table to retract a truncate",
+    ParameterScope::Replica,
+);
+
+/// The bound on the rate at which a PG source retracts the persisted contents of a truncated
+/// table, in updates per second. Zero is unbounded.
+pub static PG_SOURCE_TRUNCATE_RETRACT_MAX_ROWS_PER_SEC: Config<usize> = Config::new(
+    "pg_source_truncate_retract_max_rows_per_sec",
+    0,
+    "Updates per second a PG source retracts of a truncated table, or zero for unbounded",
+    ParameterScope::Replica,
+);
+
 /// Controls behavior of the SQL Server source when the upstream DB restore history changes. The
 /// default behavior is to emit a definite error, forcing source recreation.  In cases of Always
 /// On Availability Group (AOAG), the upstream DB may guarantee continuity without loss of data.
@@ -624,6 +655,9 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PG_SCHEMA_VALIDATION_INTERVAL)
         .add(&PG_SOURCE_REPLICATION_SLOT_CREATION_TIMEOUT)
         .add(&PG_SOURCE_VALIDATE_TIMELINE)
+        .add(&PG_SOURCE_TRUNCATE_RETRACT)
+        .add(&PG_SOURCE_TRUNCATE_BUFFER_MAX_BYTES)
+        .add(&PG_SOURCE_TRUNCATE_RETRACT_MAX_ROWS_PER_SEC)
         .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
         .add(&SINK_ENSURE_TOPIC_CONFIG)
         .add(&SINK_PROGRESS_SEARCH)

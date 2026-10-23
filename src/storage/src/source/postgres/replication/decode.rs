@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::pin::pin;
 
 use futures::{Stream as AsyncStream, TryStreamExt};
@@ -25,6 +25,14 @@ use super::LogicalReplMsg;
 /// A decoded row from a transaction with source information.
 type DecodedRow = (u32, usize, Result<Row, DefiniteError>, Diff);
 
+/// An event extracted from a transaction.
+pub(super) enum TxEvent {
+    Row(DecodedRow),
+    /// The outputs a TRUNCATE empties, none of which the transaction changed before, with their
+    /// output info at the TRUNCATE.
+    Truncate(Vec<(usize, SourceOutputInfo)>),
+}
+
 /// The outputs of relation `rel` that a message committed at `commit_lsn` applies to.
 fn outputs_at(
     table_info: &BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
@@ -38,6 +46,18 @@ fn outputs_at(
         .filter(move |(_, info)| !info.ignores(commit_lsn))
 }
 
+/// How [`extract_transaction`] treats TRUNCATE and schema messages.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ExtractMode {
+    /// A TRUNCATE errors the outputs of the truncated relation.
+    Error,
+    /// A TRUNCATE of a relation the transaction did not change before is retracted.
+    Retract,
+    /// Like `Retract`, while replaying transactions the first pass already decoded. Relation
+    /// messages only update projections, without verifying the current upstream schema.
+    Replay,
+}
+
 /// Extracts a single transaction from the replication stream delimited by a BEGIN and COMMIT
 /// message. The BEGIN message must have already been consumed from the stream before calling this
 /// function.
@@ -48,11 +68,15 @@ pub(super) fn extract_transaction<'a>(
     table_info: &'a mut BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     metrics: &'a PgSourceMetrics,
     publication: &'a str,
-) -> impl AsyncStream<Item = Result<DecodedRow, TransientError>> + 'a {
+    mode: ExtractMode,
+) -> impl AsyncStream<Item = Result<TxEvent, TransientError>> + 'a {
     use LogicalReplicationMessage::*;
     let mut row = Row::default();
+    let retract_truncates = mode != ExtractMode::Error;
     async_stream::try_stream!({
         let mut stream = pin!(stream);
+        // Relations this transaction changed or truncated before the current message.
+        let mut touched = BTreeSet::new();
         metrics.transactions.inc();
         metrics.lsn.set(commit_lsn.offset);
         while let Some(event) = stream.try_next().await? {
@@ -82,8 +106,9 @@ pub(super) fn extract_transaction<'a>(
                         };
                         let datums = projection.iter().map(|idx| &tuple_data[*idx]);
                         let row = unpack_tuple(datums, &mut row);
-                        yield (rel, *output, row, Diff::ONE);
+                        yield TxEvent::Row((rel, *output, row, Diff::ONE));
                     }
+                    touched.insert(rel);
                 }
                 Update(body) => match body.old_tuple() {
                     Some(old_tuple) => {
@@ -108,20 +133,22 @@ pub(super) fn extract_transaction<'a>(
                             let old_row = unpack_tuple(old_tuple, &mut row);
                             let new_row = unpack_tuple(new_tuple, &mut row);
 
-                            yield (rel, *output, old_row, Diff::MINUS_ONE);
-                            yield (rel, *output, new_row, Diff::ONE);
+                            yield TxEvent::Row((rel, *output, old_row, Diff::MINUS_ONE));
+                            yield TxEvent::Row((rel, *output, new_row, Diff::ONE));
                         }
+                        touched.insert(rel);
                     }
                     None => {
                         let rel = body.rel_id();
                         for (output, _) in outputs_at(table_info, rel, commit_lsn) {
-                            yield (
+                            yield TxEvent::Row((
                                 rel,
                                 *output,
                                 Err(DefiniteError::DefaultReplicaIdentity),
                                 Diff::ONE,
-                            );
+                            ));
                         }
+                        touched.insert(rel);
                     }
                 },
                 Delete(body) => match body.old_tuple() {
@@ -134,19 +161,21 @@ pub(super) fn extract_transaction<'a>(
                             };
                             let datums = projection.iter().map(|idx| &old_tuple.tuple_data()[*idx]);
                             let row = unpack_tuple(datums, &mut row);
-                            yield (rel, *output, row, Diff::MINUS_ONE);
+                            yield TxEvent::Row((rel, *output, row, Diff::MINUS_ONE));
                         }
+                        touched.insert(rel);
                     }
                     None => {
                         let rel = body.rel_id();
                         for (output, _) in outputs_at(table_info, rel, commit_lsn) {
-                            yield (
+                            yield TxEvent::Row((
                                 rel,
                                 *output,
                                 Err(DefiniteError::DefaultReplicaIdentity),
                                 Diff::ONE,
-                            );
+                            ));
                         }
+                        touched.insert(rel);
                     }
                 },
                 Relation(body) => {
@@ -156,29 +185,30 @@ pub(super) fn extract_transaction<'a>(
                         // to check the current local schema against the current remote schema to
                         // ensure e.g. we haven't received a schema update with the same terminal
                         // column name which is actually a different column.
-                        let upstream_info = mz_postgres_util::publication_info(
-                            metadata_client,
-                            publication,
-                            Some(&[rel_id]),
-                        )
-                        .await?;
-
                         let mut schema_errors = vec![];
+                        if mode != ExtractMode::Replay {
+                            let upstream_info = mz_postgres_util::publication_info(
+                                metadata_client,
+                                publication,
+                                Some(&[rel_id]),
+                            )
+                            .await?;
 
-                        outputs.retain(|output_index, info| {
-                            match verify_schema(rel_id, info, &upstream_info) {
-                                Ok(()) => true,
-                                Err(err) => {
-                                    schema_errors.push((
-                                        rel_id,
-                                        *output_index,
-                                        Err(err),
-                                        Diff::ONE,
-                                    ));
-                                    false
+                            outputs.retain(|output_index, info| {
+                                match verify_schema(rel_id, info, &upstream_info) {
+                                    Ok(()) => true,
+                                    Err(err) => {
+                                        schema_errors.push((
+                                            rel_id,
+                                            *output_index,
+                                            Err(err),
+                                            Diff::ONE,
+                                        ));
+                                        false
+                                    }
                                 }
-                            }
-                        });
+                            });
+                        }
                         // Recalculate projection vector for the retained valid outputs. Here we
                         // must use the column names in the RelationBody message and not the
                         // upstream_info obtained above, since that one represents the current
@@ -214,28 +244,41 @@ pub(super) fn extract_transaction<'a>(
                             }
                         }
                         for schema_error in schema_errors {
-                            yield schema_error;
+                            yield TxEvent::Row(schema_error);
                         }
                     }
                 }
                 Truncate(body) => {
+                    let mut retract = Vec::new();
                     for &rel_id in body.rel_ids() {
-                        if let Some(outputs) = table_info.get_mut(&rel_id) {
-                            let mut ignored = BTreeMap::new();
-                            for (output, info) in std::mem::take(outputs) {
-                                if info.ignores(commit_lsn) {
-                                    ignored.insert(output, info);
-                                    continue;
+                        // A relation changed earlier in this transaction has updates at
+                        // `commit_lsn` that a retraction of its pre-transaction contents misses.
+                        let untouched = touched.insert(rel_id);
+                        if !retract_truncates || !untouched {
+                            if let Some(outputs) = table_info.get_mut(&rel_id) {
+                                let mut ignored = BTreeMap::new();
+                                for (output, info) in std::mem::take(outputs) {
+                                    if info.ignores(commit_lsn) {
+                                        ignored.insert(output, info);
+                                        continue;
+                                    }
+                                    yield TxEvent::Row((
+                                        rel_id,
+                                        output,
+                                        Err(DefiniteError::TableTruncated),
+                                        Diff::ONE,
+                                    ));
                                 }
-                                yield (
-                                    rel_id,
-                                    output,
-                                    Err(DefiniteError::TableTruncated),
-                                    Diff::ONE,
-                                );
+                                *outputs = ignored;
                             }
-                            *outputs = ignored;
+                            continue;
                         }
+                        for (output, info) in outputs_at(table_info, rel_id, commit_lsn) {
+                            retract.push((*output, info.clone()));
+                        }
+                    }
+                    if !retract.is_empty() {
+                        yield TxEvent::Truncate(retract);
                     }
                 }
                 Commit(body) => {

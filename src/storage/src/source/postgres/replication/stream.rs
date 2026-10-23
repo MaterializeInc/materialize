@@ -50,9 +50,11 @@ pub(super) async fn raw_stream<'a>(
     replication_client: Client,
     metadata_client: Arc<Client>,
     resume_lsn: MzOffset,
+    start_lsn: MzOffset,
     uppers: impl futures::Stream<Item = ResumeUppers<MzOffset>> + 'a,
     probe_output: &'a AsyncOutputHandle<MzOffset, CapacityContainerBuilder<Vec<Probe<MzOffset>>>>,
     probe_cap: &'a Capability<MzOffset>,
+    latest_uppers: &'a watch::Sender<Option<ResumeUppers<MzOffset>>>,
 ) -> Result<
     Result<impl AsyncStream<Item = Result<LogicalReplMsg, TransientError>> + 'a, DefiniteError>,
     TransientError,
@@ -118,7 +120,7 @@ pub(super) async fn raw_stream<'a>(
 
     // Postgres will return all transactions that commit *at or after* after the provided LSN,
     // following the timely upper semantics.
-    let lsn = PgLsn::from(resume_lsn.offset);
+    let lsn = PgLsn::from(start_lsn.offset);
     let query = sql!(
         "START_REPLICATION SLOT {} LOGICAL {} (\"proto_version\" '1', \"publication_names\" {})",
         Sql::ident(slot),
@@ -185,10 +187,10 @@ pub(super) async fn raw_stream<'a>(
 
         let mut stream = pin!(LogicalReplicationStream::new(copy_stream));
 
-        if !(resume_lsn == MzOffset::from(0) || min_resume_lsn <= resume_lsn) {
+        if !(start_lsn == MzOffset::from(0) || min_resume_lsn <= start_lsn) {
             let err = TransientError::OvercompactedReplicationSlot {
                 available_lsn: min_resume_lsn,
-                requested_lsn: resume_lsn,
+                requested_lsn: start_lsn,
             };
             error!("timely-{} ({}) {err}", config.worker_id, config.id);
             Err(err)?;
@@ -222,6 +224,7 @@ pub(super) async fn raw_stream<'a>(
                     res.map_err(|e| e.into())
                 },
                 Some(uppers) = uppers.next() => {
+                    latest_uppers.send_replace(Some(uppers.clone()));
                     if let Some(lsn) = uppers.source.as_ref().and_then(|upper| upper.as_option()) {
                         if last_committed_upper < *lsn {
                             last_committed_upper = *lsn;

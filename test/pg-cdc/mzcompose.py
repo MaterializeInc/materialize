@@ -14,8 +14,10 @@ Native Postgres source tests, functional.
 import glob
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from textwrap import dedent
+from typing import Any
 
 import psycopg
 from psycopg import Connection
@@ -755,7 +757,8 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def process(name: str) -> None:
-        if name in ("default", "large-scale"):
+        # The kill points of `truncate-replay-kill` depend on wall clock timing.
+        if name in ("default", "large-scale", "truncate-replay-kill"):
             return
 
         c.kill("postgres")
@@ -779,3 +782,486 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
     )
     c.test_parts(sharded_workflows, process)
+
+
+def _exec(conn: Connection, sql: str) -> Any:
+    """Executes `sql` on `conn` and returns the cursor."""
+    return conn.execute(sql.encode())
+
+
+def _truncate_materialized(
+    params: dict[str, str],
+    replication_factor: int = 1,
+    sanity_restart: bool = True,
+    environment_extra: list[str] = [],
+) -> Materialized:
+    return Materialized(
+        volumes_extra=["secrets:/share/secrets"],
+        additional_system_parameter_defaults={"log_filter": "info", **params},
+        default_replication_factor=replication_factor,
+        sanity_restart=sanity_restart,
+        environment_extra=environment_extra,
+    )
+
+
+def _pg_connect(c: Composition) -> Connection:
+    conn = psycopg.connect(
+        host="localhost",
+        user="postgres",
+        password="postgres",
+        port=c.default_port("postgres"),
+    )
+    conn.autocommit = True
+    return conn
+
+
+def _mz_connect(c: Composition) -> Connection:
+    conn = psycopg.connect(
+        host="localhost",
+        user="materialize",
+        port=c.default_port("materialized"),
+    )
+    conn.autocommit = True
+    return conn
+
+
+def _query(conn: Connection, sql: str) -> Any:
+    """The rows of `sql`, or the text of the error it fails with."""
+    try:
+        return _exec(conn, sql).fetchall()
+    except psycopg.Error as e:
+        return str(e)
+
+
+def _wait_for(
+    conn: Connection, sql: str, matches: Callable[[Any], bool], timeout: float = 300
+) -> Any:
+    start = time.time()
+    while True:
+        got = _query(conn, sql)
+        if matches(got):
+            return got
+        if time.time() - start > timeout:
+            raise AssertionError(f"{sql}: gave up waiting, last result {got}")
+        time.sleep(0.1)
+
+
+def _create_truncate_source(
+    c: Composition, tables: list[str], cluster_size: str = "scale=1,workers=1"
+) -> Connection:
+    """Creates a source with one table for each upstream table in `tables`."""
+    mz = _mz_connect(c)
+    _exec(mz, f"CREATE CLUSTER src SIZE '{cluster_size}'")
+    _exec(mz, "CREATE SECRET pgpass AS 'postgres'")
+    _exec(
+        mz,
+        "CREATE CONNECTION pg TO POSTGRES (HOST postgres, DATABASE postgres, "
+        "USER postgres, PASSWORD SECRET pgpass)",
+    )
+    _exec(
+        mz,
+        "CREATE SOURCE mz_source IN CLUSTER src FROM POSTGRES CONNECTION pg "
+        "(PUBLICATION 'mz_source')",
+    )
+    for t in tables:
+        _exec(mz, f"CREATE TABLE {t} FROM SOURCE mz_source (REFERENCE {t})")
+    return mz
+
+
+def _clusterd_pid(c: Composition, mz: Connection) -> str:
+    """The PID of the `src` cluster's clusterd process in the materialized container."""
+    cluster_id = _exec(mz, "SELECT id FROM mz_clusters WHERE name = 'src'").fetchall()[
+        0
+    ][0]
+    out = c.exec(
+        "materialized",
+        "bash",
+        "-c",
+        "for p in /proc/[0-9]*; do "
+        "if tr '\\0' ' ' < $p/cmdline 2>/dev/null "
+        f"| grep -q -- '^[^ ]*clusterd .*{cluster_id}'; "
+        "then basename $p; fi; done",
+        capture=True,
+        silent=True,
+    ).stdout.split()
+    assert len(out) == 1, f"clusterd pids for {cluster_id}: {out}"
+    return out[0]
+
+
+def _parse_duration(text: str) -> float:
+    """Parses a Rust `Duration` debug representation into seconds."""
+    for unit, scale in [("ns", 1e-9), ("µs", 1e-6), ("ms", 1e-3), ("s", 1.0)]:
+        if text.endswith(unit):
+            return float(text[: -len(unit)]) * scale
+    raise ValueError(text)
+
+
+def _materialized_logs(c: Composition) -> list[str]:
+    return c.invoke(
+        "logs", "materialized", capture=True, silent=True
+    ).stdout.splitlines()
+
+
+def workflow_truncate_replay(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """
+    Runs the truncate test with the retraction buffer disabled, so every
+    truncate that needs updates not yet durable replays the replication slot.
+    """
+    with c.override(
+        _truncate_materialized(
+            {"pg_source_truncate_buffer_max_bytes": "0"}, replication_factor=2
+        )
+    ):
+        c.up("materialized", "postgres")
+        c.run_testdrive_files("truncate-table.td")
+        replays = [line for line in _materialized_logs(c) if "replayed" in line]
+        assert replays, "no truncate replayed"
+
+
+def workflow_truncate_replay_schema(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    A schema change between a truncate and the replay of the updates before it
+    leaves the table as the buffered retraction does: a compatible change keeps
+    the post-truncate rows, an incompatible one errors the table.
+
+    The snapshot retraction is rate limited, so each replay starts seconds after
+    the schema change, which follows its truncate after about a second.
+    """
+    tables = ["tadd", "tdrop", "ttype"]
+    rows = 10000
+    expected_error = "incompatible schema change"
+
+    def run(buffer_max_bytes: str) -> tuple[dict[str, Any], int]:
+        with c.override(
+            _truncate_materialized(
+                {
+                    "pg_source_truncate_buffer_max_bytes": buffer_max_bytes,
+                    "pg_source_truncate_retract_max_rows_per_sec": "1000",
+                    # Only the replication stream reports the schema changes, which
+                    # keeps the outcome independent of when the periodic check runs.
+                    "pg_schema_validation_interval": "1h",
+                },
+                # The incompatible schema changes leave sources stalled.
+                sanity_restart=False,
+            )
+        ):
+            c.down(destroy_volumes=True)
+            c.up("materialized", "postgres")
+            pg = _pg_connect(c)
+            _exec(pg, "CREATE TABLE tadd (id int, a text)")
+            _exec(pg, "CREATE TABLE tdrop (id int, a text, b text)")
+            _exec(pg, "CREATE TABLE ttype (id int, a text)")
+            _exec(pg, "CREATE TABLE tsentinel (id int)")
+            for t in tables + ["tsentinel"]:
+                _exec(pg, f"ALTER TABLE {t} REPLICA IDENTITY FULL")
+            _exec(
+                pg,
+                "INSERT INTO tdrop SELECT g, 'a', 'b' "
+                f"FROM generate_series(1, {rows}) g",
+            )
+            for t in ["tadd", "ttype"]:
+                _exec(
+                    pg,
+                    f"INSERT INTO {t} SELECT g, 'a' FROM generate_series(1, {rows}) g",
+                )
+            _exec(pg, "CREATE PUBLICATION mz_source FOR ALL TABLES")
+            mz = _create_truncate_source(c, tables + ["tsentinel"])
+            for t in tables:
+                _wait_for(mz, f"SELECT count(*) FROM {t}", lambda r: r == [(rows,)])
+            # Durable, so the updates the truncates retract next are not.
+            time.sleep(3)
+
+            # The first change of each table after its snapshot carries its schema, which the
+            # first pass verifies against the upstream schema it then finds. Let it verify the
+            # original schema before the schema changes.
+            for t, row in [("tadd", "(-1, 'pre')"), ("tdrop", "(-1, 'pre', 'pre')")]:
+                _exec(pg, f"INSERT INTO {t} VALUES {row}")
+            _exec(pg, "INSERT INTO ttype VALUES (-1, 'pre')")
+            for t in tables:
+                _wait_for(mz, f"SELECT count(*) FROM {t}", lambda r: r == [(rows + 1,)])
+
+            def truncate_then_alter(
+                table: str, pre: str, alter: str, post: str
+            ) -> None:
+                _exec(pg, f"INSERT INTO {table} VALUES {pre}")
+                _exec(pg, f"TRUNCATE {table}")
+                # Wait until the first pass is past the truncate, so that it verifies the
+                # schema of the transactions before it while that schema is current. The
+                # sentinel's frontier passes the truncate's wall clock time only then.
+                truncated_at = int(time.time() * 1000)
+                _wait_for(
+                    mz,
+                    "SELECT f.write_frontier::text::numeric "
+                    "FROM mz_internal.mz_frontiers f JOIN mz_objects o "
+                    "ON o.id = f.object_id WHERE o.name = 'tsentinel'",
+                    lambda r: isinstance(r, list)
+                    and len(r) == 1
+                    and r[0][0] > truncated_at + 1000,
+                )
+                _exec(pg, f"ALTER TABLE {table} {alter}")
+                _exec(pg, f"INSERT INTO {table} VALUES {post}")
+
+            truncate_then_alter(
+                "tadd", "(0, 'pre')", "ADD COLUMN c int", "(1, 'post', 7)"
+            )
+            truncate_then_alter(
+                "tdrop", "(0, 'pre', 'pre')", "DROP COLUMN b", "(1, 'post')"
+            )
+            truncate_then_alter(
+                "ttype", "(0, 'pre')", "ALTER COLUMN a TYPE int USING 0", "(1, 5)"
+            )
+
+            # Each truncate is retracted once, by the buffer or by a replay.
+            start = time.time()
+            while sum(
+                1 for line in _materialized_logs(c) if "retracted truncate" in line
+            ) < len(tables):
+                if time.time() - start > 120:
+                    for line in _materialized_logs(c):
+                        if any(
+                            w in line for w in ["truncat", "replay", "panic", "Stalled"]
+                        ):
+                            print(f"LOG {line[:400]}")
+                    raise AssertionError("truncates not retracted")
+                time.sleep(0.5)
+            time.sleep(3)
+            results: dict[str, Any] = {"tadd": _query(mz, "SELECT * FROM tadd")}
+            for t in ["tdrop", "ttype"]:
+                got = _query(mz, f"SELECT * FROM {t}")
+                incompatible = isinstance(got, str) and expected_error in got
+                results[t] = expected_error if incompatible else got
+            replays = sum(1 for line in _materialized_logs(c) if "replayed" in line)
+            return results, replays
+
+    buffered, buffered_replays = run(str(256 << 20))
+    replayed, replays = run("0")
+    print(f"buffered: {buffered}, replays: {buffered_replays}")
+    print(f"replayed: {replayed}, replays: {replays}")
+    expected = {"tadd": [(1, "post")], "tdrop": expected_error, "ttype": expected_error}
+    assert buffered == expected, buffered
+    assert buffered_replays == 0, buffered_replays
+    assert replays == len(tables), f"expected {len(tables)} replays, saw {replays}"
+    assert replayed == expected, replayed
+
+
+def workflow_truncate_replay_kill(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Kills clusterd while a truncate replays a large transaction, at points early,
+    in the middle, and late in the replay, and checks that the table and a
+    materialized view on it converge to the upstream contents after the restart.
+    """
+    parser.add_argument("--rows", type=int, default=1_000_000)
+    parser.add_argument("--repetitions", type=int, default=2)
+    args = parser.parse_args()
+
+    def replay_lines() -> list[str]:
+        return [line for line in _materialized_logs(c) if "replaying from" in line]
+
+    def done_lines() -> list[str]:
+        return [line for line in _materialized_logs(c) if "replayed" in line]
+
+    with c.override(
+        _truncate_materialized({"pg_source_truncate_buffer_max_bytes": "0"})
+    ):
+        c.up("materialized", "postgres")
+        pg = _pg_connect(c)
+        _exec(pg, "DROP PUBLICATION IF EXISTS mz_source")
+        _exec(pg, "DROP TABLE IF EXISTS t")
+        _exec(pg, "CREATE TABLE t (id bigint, pad text)")
+        _exec(pg, "ALTER TABLE t REPLICA IDENTITY FULL")
+        _exec(pg, "CREATE PUBLICATION mz_source FOR ALL TABLES")
+        mz = _create_truncate_source(c, ["t"])
+        _exec(
+            mz,
+            "CREATE MATERIALIZED VIEW t_summary AS "
+            "SELECT count(*) AS c, sum(id) AS s, count(DISTINCT (id, pad)) AS d FROM t",
+        )
+        _exec(mz, "CREATE DEFAULT INDEX ON t")
+        # Before the initial snapshot of `t` is durable, a truncate it covers needs no
+        # retraction at all.
+        _exec(pg, "INSERT INTO t VALUES (0, 'warm')")
+        _wait_for(mz, "SELECT c FROM t_summary", lambda r: r == [(1,)])
+        _exec(pg, "DELETE FROM t")
+        _wait_for(mz, "SELECT c FROM t_summary", lambda r: r == [(0,)])
+
+        def iteration(kill_fraction: float | None, duration: float, n: int) -> str:
+            started = len(replay_lines())
+            done = len(done_lines())
+            _exec(
+                pg,
+                "INSERT INTO t SELECT g, md5(g::text) "
+                f"FROM generate_series(1, {args.rows}) g",
+            )
+            _exec(pg, "TRUNCATE t")
+            post = [(n * 10 + i, f"post{i}") for i in range(3)]
+            for id, pad in post:
+                _exec(pg, f"INSERT INTO t VALUES ({id}, '{pad}')")
+            # A truncate needs no replay when its retraction finds the updates before it
+            # durable, which this loop does not exclude.
+            start = time.time()
+            while len(replay_lines()) == started and len(done_lines()) == done:
+                if time.time() - start > 60:
+                    break
+                time.sleep(0.05)
+            replaying = len(replay_lines()) > started
+            outcome = "no kill" if replaying else "no replay"
+            if replaying and kill_fraction is not None:
+                time.sleep(kill_fraction * duration)
+                in_flight = len(done_lines()) == done
+                c.exec("materialized", "kill", "-9", _clusterd_pid(c, mz), silent=True)
+                outcome = "killed mid-replay" if in_flight else "killed after replay"
+            expected = sorted(post)
+            _wait_for(mz, "SELECT * FROM t ORDER BY id", lambda r: r == expected)
+            total = sum(id for id, _ in post)
+            _wait_for(
+                mz,
+                "SELECT c, s, d FROM t_summary",
+                lambda r: r == [(3, total, 3)],
+            )
+            # The rows are exactly the upstream rows, with multiplicity one.
+            values = ", ".join(f"({id}, '{pad}')" for id, pad in post)
+            for sql in [
+                f"SELECT id, pad FROM t EXCEPT ALL VALUES {values}",
+                f"VALUES {values} EXCEPT ALL SELECT id, pad FROM t",
+            ]:
+                assert _query(mz, sql) == [], (sql, _query(mz, sql))
+            # The view stays live.
+            _exec(pg, f"INSERT INTO t VALUES ({n * 10 + 9}, 'live')")
+            _wait_for(
+                mz,
+                "SELECT c FROM t_summary",
+                lambda r: r == [(4,)],
+            )
+            _exec(pg, f"DELETE FROM t WHERE id = {n * 10 + 9}")
+            _wait_for(mz, "SELECT c FROM t_summary", lambda r: r == [(3,)])
+            return outcome
+
+        def logged_iteration(
+            kill_fraction: float | None, duration: float, n: int
+        ) -> str:
+            try:
+                return iteration(kill_fraction, duration, n)
+            except AssertionError:
+                for line in _materialized_logs(c):
+                    if any(
+                        w in line
+                        for w in ["truncat", "replay", "panic", "started replication"]
+                    ):
+                        print(f"LOG {line[:400]}")
+                raise
+
+        logged_iteration(None, 0, 0)
+        durations = [
+            _parse_duration(line.split(" updates, in ")[1].split(",")[0])
+            for line in done_lines()
+        ]
+        duration = max(durations) if durations else 2.0
+        print(f"replay without kill took {duration:.2f}s")
+
+        outcomes = []
+        n = 1
+        for _ in range(args.repetitions):
+            for fraction in [0.1, 0.4, 0.7]:
+                outcome = logged_iteration(fraction, duration, n)
+                print(f"kill at {fraction:.0%} of the replay: {outcome}")
+                outcomes.append((fraction, outcome))
+                n += 1
+        mid = [o for o in outcomes if o[1] == "killed mid-replay"]
+        assert len(mid) >= 2 * args.repetitions, outcomes
+
+
+def workflow_truncate_replay_failpoint(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Fails a truncate's replay of a large transaction once, at its start, in its
+    middle, and at its end, and checks that the table and a materialized view on
+    it converge to the upstream contents after the source restarts.
+    """
+    parser.add_argument("--rows", type=int, default=100_000)
+    args = parser.parse_args()
+
+    for point in ["start", "mid", "end"]:
+        failpoint = f"pg_truncate_replay_{point}"
+        with c.override(
+            _truncate_materialized(
+                {"pg_source_truncate_buffer_max_bytes": "0"},
+                # clusterd reads failpoints from the environment at startup. `1*return`
+                # fails once, so the replay after the restart completes.
+                environment_extra=[f"FAILPOINTS={failpoint}=1*return"],
+            )
+        ):
+            c.down(destroy_volumes=True)
+            c.up("materialized", "postgres")
+            pg = _pg_connect(c)
+            _exec(pg, "CREATE TABLE t (id bigint, pad text)")
+            _exec(pg, "ALTER TABLE t REPLICA IDENTITY FULL")
+            _exec(pg, "CREATE PUBLICATION mz_source FOR ALL TABLES")
+            mz = _create_truncate_source(c, ["t"])
+            _exec(
+                mz,
+                "CREATE MATERIALIZED VIEW t_summary AS "
+                "SELECT count(*) AS c, sum(id) AS s, count(DISTINCT (id, pad)) AS d "
+                "FROM t",
+            )
+            _exec(mz, "CREATE DEFAULT INDEX ON t")
+            # A truncate that the initial snapshot covers needs no retraction, so wait
+            # for it to be durable.
+            _exec(pg, "INSERT INTO t VALUES (0, 'warm')")
+            _wait_for(mz, "SELECT c FROM t_summary", lambda r: r == [(1,)])
+            _exec(pg, "DELETE FROM t")
+            _wait_for(mz, "SELECT c FROM t_summary", lambda r: r == [(0,)])
+
+            # The truncate follows the insert before the insert is durable, and the
+            # disabled buffer makes the retraction replay it.
+            _exec(
+                pg,
+                "INSERT INTO t SELECT g, md5(g::text) "
+                f"FROM generate_series(1, {args.rows}) g",
+            )
+            _exec(pg, "TRUNCATE t")
+            post = [(1, "post0"), (2, "post1"), (3, "post2")]
+            for id, pad in post:
+                _exec(pg, f"INSERT INTO t VALUES ({id}, '{pad}')")
+
+            try:
+                _wait_for(mz, "SELECT * FROM t ORDER BY id", lambda r: r == post)
+                _wait_for(
+                    mz, "SELECT c, s, d FROM t_summary", lambda r: r == [(3, 6, 3)]
+                )
+                values = ", ".join(f"({id}, '{pad}')" for id, pad in post)
+                for sql in [
+                    f"SELECT id, pad FROM t EXCEPT ALL VALUES {values}",
+                    f"VALUES {values} EXCEPT ALL SELECT id, pad FROM t",
+                ]:
+                    assert _query(mz, sql) == [], (sql, _query(mz, sql))
+                # The view stays live.
+                _exec(pg, "INSERT INTO t VALUES (4, 'live')")
+                _wait_for(mz, "SELECT c, s FROM t_summary", lambda r: r == [(4, 10)])
+
+                logs = _materialized_logs(c)
+                fired = [
+                    line for line in logs if f"failpoint {failpoint} fired" in line
+                ]
+                replays = [line for line in logs if "replayed" in line]
+                assert len(fired) == 1, f"{failpoint} fired {len(fired)} times"
+                assert replays, "no replay completed"
+                print(f"{failpoint}: fired once, then {len(replays)} replay completed")
+            except AssertionError:
+                for line in _materialized_logs(c):
+                    if any(
+                        w in line
+                        for w in [
+                            "truncat",
+                            "replay",
+                            "panic",
+                            "failpoint",
+                            "synthetic",
+                        ]
+                    ):
+                        print(f"LOG {line[:400]}")
+                raise
