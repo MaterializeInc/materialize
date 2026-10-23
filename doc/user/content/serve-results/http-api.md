@@ -152,8 +152,12 @@ diagnostic messages that were generated during execution of the query. It has
 the following structure:
 
 ```
-{"severity": <"warning"|"notice"|"debug"|"info"|"log">, "message": <informational message>}
+{"severity": <"warning"|"notice"|"debug"|"info"|"log">, "message": <informational message>, "code": <SQLSTATE>, "detail": <optional>, "hint": <optional>}
 ```
+
+With the [`emit_execution_time_notice`](/sql/set/#other-configuration-parameters)
+configuration parameter on, the `notices` of each successful statement include
+an [execution time notice](/serve-results/execution-time-notice/).
 
 Note that the returned values include the results of statements which were
 ultimately rolled back because of an error in a later part of the transaction.
@@ -185,6 +189,7 @@ type SqlRequest = Simple | Extended;
 
 interface Notice {
 	message: string;
+	code: string;
 	severity: string;
 	detail?: string;
 	hint?: string;
