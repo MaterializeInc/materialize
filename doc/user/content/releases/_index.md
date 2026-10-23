@@ -26,7 +26,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 ### Turn cast errors into `NULL`s with `TRY_CAST` {#v26.47-try-cast}
 
-`TRY_CAST(<expr> AS <type>)` evaluates an expression once and attempts to cast it to the target type, producing `NULL` instead of an error when the value cannot be converted, and a failure anywhere inside a nested value yields `NULL` for the whole cast. Bad values in an ingest pipeline can therefore be turned into `NULL` in place rather than failing the statement. Casts between a few Materialize-internal types, such as `regclass` and `mz_aclitem`, are not supported.
+`TRY_CAST(<expr> AS <type>)` evaluates an expression once and attempts to cast it to the target type. It produces `NULL` instead of an error when the value cannot be converted. This means that bad values in an ingest pipeline don't cause errors which block reads.
 
 ```mzsql
 CREATE TABLE raw_orders (id int, amount text);
@@ -45,10 +45,9 @@ SELECT * FROM orders ORDER BY id;
   2 |
   3 |    250
 ```
+In the example above, using `TRY_CAST` makes the materialized view `orders` gracefully handle errors, so that reads succeed. If you used just `CAST`, every read of `orders` would fail with `invalid input syntax for type numeric: "N/A"`.
 
-With `CAST` in place of `TRY_CAST`, every read of `orders` fails with `invalid input syntax for type numeric: "N/A"` for as long as that row is present.
-
-For more details, see [`CAST` and `TRY_CAST`](/sql/functions/cast/#try_cast).
+Note that casts between a few Materialize-internal types, such as `regclass` and `mz_aclitem`, are not supported. For more details, see [`CAST` and `TRY_CAST`](/sql/functions/cast/#try_cast).
 
 ### View memory and disk usage on the new cluster details page {#v26.47-cluster-details-page}
 
