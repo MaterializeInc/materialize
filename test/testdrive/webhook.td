@@ -540,6 +540,9 @@ bar-bar
 baz-after
 
 # Dropping a webhook source should drop the underlying persist shards.
+# Publish protection releases within the tombstone checks' timeout.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET catalog_read_protection_publish_interval = '1s'
 
 $ set-from-sql var=webhook-source-id
 SELECT id FROM mz_sources WHERE name = 'webhook_bytes';
@@ -600,3 +603,6 @@ SELECT shard_id FROM mz_internal.mz_storage_shards WHERE object_id = '${webhook-
 > DROP TABLE webhook_as_table;
 
 $ check-shard-tombstone shard-id=${webhook-table-shard-id}
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET catalog_read_protection_publish_interval
