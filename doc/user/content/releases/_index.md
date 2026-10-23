@@ -83,7 +83,6 @@ Note that adding a table still briefly restarts the source dataflow, and if the 
 ### Guides {#v26.47-guides}
 - [Understand the query lifecycle](/serve-results/query-lifecycle/)
 - [Optimize point lookups with long `IN` lists](/transform-data/optimization/#long-in-lists)
-- [HTTP API: Choose between Simple and Extended requests](/serve-results/http-api/#transactional-semantics)
 
 ### Bug Fixes {#v26.47-bug-fixes}
 - Fixed the liveness probe restarting `environmentd` during a slow startup once client connections had filled its external SQL port, which could cause a restart loop. The operator now probes `environmentd`'s internal SQL port, except in deployments using password, SASL, or OIDC authentication.
