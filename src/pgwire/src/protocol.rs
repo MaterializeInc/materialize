@@ -27,8 +27,8 @@ use mz_adapter::session::{
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, PeekResponseUnary, metrics,
-    verify_datum_desc,
+    AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, ExecutionTime,
+    PeekResponseUnary, metrics, verify_datum_desc,
 };
 use mz_adapter_types::dyncfgs::OIDC_GROUP_CLAIM;
 use mz_auth::Authenticated;
@@ -1160,7 +1160,6 @@ where
             .await
         {
             Ok((response, execute_started)) => {
-                self.send_pending_notices().await?;
                 self.send_execute_response(
                     response,
                     stmt_desc.relation_desc,
@@ -1515,6 +1514,15 @@ where
         }
     }
 
+    async fn send_execution_time(&mut self, time: Option<ExecutionTime>) -> Result<(), io::Error> {
+        if let Some(notice) =
+            time.and_then(|time| self.adapter_client.session().execution_time_notice(time))
+        {
+            self.send(notice.into_response()).await?;
+        }
+        Ok(())
+    }
+
     /// Announces changed parameters, restricted to those the client is told
     /// about at startup.
     #[instrument(level = "debug")]
@@ -1783,7 +1791,6 @@ where
                         .await
                     {
                         Ok((response, execute_started)) => {
-                            self.send_pending_notices().await?;
                             self.send_execute_response(
                                 response,
                                 row_desc,
@@ -2171,6 +2178,8 @@ where
         execute_started: Instant,
         ends_simple_query: bool,
     ) -> Result<State, io::Error> {
+        let execution_time = ExecutionTime::completed(execute_started.elapsed());
+        self.send_pending_notices().await?;
         let mut tag = response.tag();
 
         macro_rules! command_complete {
@@ -2178,6 +2187,7 @@ where
                 if let Some(err) = self.settle_statement(ends_simple_query).await {
                     return self.send_error_and_get_state(err).await;
                 }
+                self.send_execution_time(Some(execution_time)).await?;
                 self.send(BackendMessage::CommandComplete {
                     tag: tag
                         .take()
@@ -2321,13 +2331,16 @@ where
                     .send_rows(
                         row_desc,
                         portal_name,
-                        InProgressRows::new(RecordFirstRowStream::new(
-                            rx,
-                            execute_started,
-                            &self.adapter_client,
-                            Some(instance_id),
-                            None,
-                        )),
+                        InProgressRows::new(
+                            RecordFirstRowStream::new(
+                                rx,
+                                execute_started,
+                                &self.adapter_client,
+                                Some(instance_id),
+                                None,
+                            )
+                            .without_execution_time(),
+                        ),
                         max_rows,
                         get_response,
                         fetch_portal_name,
@@ -2768,6 +2781,7 @@ where
             }
         }
 
+        let execution_time = rows.remaining.take_execution_time();
         let portal = self
             .adapter_client
             .session()
@@ -2830,6 +2844,7 @@ where
         let state = match self.settle_statement(ends_simple_query).await {
             Some(err) => self.send_error_and_get_state(err).await?,
             None => {
+                self.send_execution_time(execution_time).await?;
                 self.send(response_message).await?;
                 State::Ready
             }
