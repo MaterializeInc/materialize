@@ -524,11 +524,7 @@ def workflow_migration_multi_version_upgrade(
 
     # Get matching files and apply sharding
 
-    # Each file runs against the version we upgrade from, and versions before
-    # `pg_source_truncate_retract` error a truncated table instead of emptying it.
-    sharded_files = [
-        file for file in get_sharded_files(args.filter) if file != "truncate-table.td"
-    ]
+    sharded_files = get_sharded_files(args.filter)
     print(f"Files: {sharded_files}")
 
     ssl_args_dict = get_testdrive_ssl_args(c)
