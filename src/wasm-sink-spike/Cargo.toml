@@ -1,0 +1,26 @@
+# THROWAWAY spike host for a WASM-hosted sink. Never merge.
+[package]
+name = "mz-wasm-sink-spike"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+arrow = { workspace = true, features = ["ipc"] }
+clap = { workspace = true, features = ["env"] }
+differential-dataflow.workspace = true
+futures.workspace = true
+mz-arrow-util = { path = "../arrow-util" }
+mz-ore = { path = "../ore", features = ["async"] }
+mz-persist-client = { path = "../persist-client" }
+mz-persist-types = { path = "../persist-types" }
+mz-repr = { path = "../repr" }
+mz-storage-types = { path = "../storage-types" }
+serde_json.workspace = true
+timely.workspace = true
+tokio.workspace = true
+wasm-sink-guest = { path = "../../misc/spike-wasm-sink/guest" }
+wasmtime = { version = "50", default-features = false, features = ["cranelift", "component-model", "runtime", "std", "parallel-compilation", "cache"] }
+wasmtime-wasi = { version = "50" }

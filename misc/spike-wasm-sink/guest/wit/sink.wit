@@ -1,0 +1,23 @@
+// THROWAWAY spike interface for a hosted Materialize sink.
+package mz:sink@0.1.0;
+
+world sink {
+  /// Host-provided logging.
+  import log: func(msg: string);
+
+  /// Opens the sink with a JSON config. Returns the frontier the target has
+  /// durably committed: every update at a time `< frontier` is applied.
+  export open-sink: func(config: string) -> result<option<u64>, string>;
+
+  /// Removes all state of this sink from the target. Called before a fresh
+  /// snapshot, when the target has no usable resume frontier.
+  export reset-sink: func() -> result<_, string>;
+
+  /// Delivers consolidated updates as an Arrow IPC stream. The schema is the
+  /// relation's columns followed by `mz_time: u64` and `mz_diff: i64`, sorted
+  /// by `(mz_time, row)`.
+  ///
+  /// With `commit = some(f)`, the guest must durably apply every update
+  /// delivered so far and record `f` as its frontier before returning.
+  export write-batch: func(batch: list<u8>, commit: option<u64>) -> result<_, string>;
+}

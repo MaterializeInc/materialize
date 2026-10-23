@@ -254,6 +254,11 @@ RUN mkdir rust \
     && gpg --verify rust.asc rust.tar.gz \
     && tar -xzf rust.tar.gz -C /usr/local/lib/rustlib/ --strip-components=4 \
     && rm -rf rust.asc rust.tar.gz rust \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-std-$RUST_VERSION-wasm32-wasip2.tar.gz > rust.tar.gz \
+    && curl -fsSL https://static.rust-lang.org/dist$RUST_DATE/rust-std-$RUST_VERSION-wasm32-wasip2.tar.gz.asc > rust.asc \
+    && gpg --verify rust.asc rust.tar.gz \
+    && tar -xzf rust.tar.gz -C /usr/local/lib/rustlib/ --strip-components=4 \
+    && rm -rf rust.asc rust.tar.gz rust \
     && cargo install --root /usr/local --version "=0.9.0" --locked --features=cli cargo-about \
     && cargo install --root /usr/local --version "=3.7.0" --locked cargo-deb \
     && cargo install --root /usr/local --version "=0.19.8" --locked cargo-deny \
