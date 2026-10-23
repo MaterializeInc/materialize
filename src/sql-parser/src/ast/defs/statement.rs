@@ -567,6 +567,8 @@ pub struct DeleteStatement<T: AstInfo> {
     pub using: Vec<TableWithJoins<T>>,
     /// `WHERE`
     pub selection: Option<Expr<T>>,
+    /// `ROWS (<query>)`. Mutually exclusive with `alias`, `using`, and `selection`.
+    pub rows: Option<Query<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for DeleteStatement<T> {
@@ -584,6 +586,11 @@ impl<T: AstInfo> AstDisplay for DeleteStatement<T> {
         if let Some(selection) = &self.selection {
             f.write_str(" WHERE ");
             f.write_node(selection);
+        }
+        if let Some(rows) = &self.rows {
+            f.write_str(" ROWS (");
+            f.write_node(rows);
+            f.write_str(")");
         }
     }
 }
