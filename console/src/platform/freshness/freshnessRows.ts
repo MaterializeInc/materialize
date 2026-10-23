@@ -15,30 +15,33 @@ import { FreshnessObject } from "~/platform/clusters/queries";
 import { HydrationCounts, LagPercentiles } from "./queries";
 
 /** Which statistic the threshold judges an object by. */
-export type Predicate = "current" | "peak" | "p90";
+export type Predicate = "current" | "p90" | "p99" | "peak";
 
 /**
  * How each predicate is written, in the two places it appears.
  *
- * `menu` names the statistic, because that is where a reader chooses between
- * them. `sentence` has to read as prose in the headline, where a parenthetical
- * mid-clause does not.
+ * `menu` is the statistic's bare name, read inside "had a [p99] freshness".
+ * `sentence` reads as prose in the message shown when nothing exceeds the
+ * threshold.
  */
 export const PREDICATE_LABELS: Record<
   Predicate,
   { menu: string; sentence: string }
 > = {
-  current: { menu: "right now", sentence: "right now" },
-  peak: { menu: "at any moment (pMAX)", sentence: "at any moment" },
+  current: { menu: "current", sentence: "right now" },
   p90: {
-    menu: "more than 10% of readings (p90)",
-    sentence: "for more than 10% of readings",
+    menu: "p90",
+    sentence: "for more than 10% of minutes",
   },
+  p99: {
+    menu: "p99",
+    sentence: "for more than 1% of minutes",
+  },
+  peak: { menu: "pMAX", sentence: "at any moment" },
 };
 
 /**
- * The clause both the headline and the empty message end with, so that a
- * change to the wording lands in one place.
+ * The clause the "No objects exceeded" message ends with.
  *
  * "Right now" takes no range: it describes this moment whatever is graphed.
  */
@@ -77,6 +80,7 @@ export interface FreshnessRow {
   current: number | null;
   peak: number | null;
   p90: number | null;
+  p99: number | null;
   /** The statistic the active predicate judges this row by. */
   breachValue: number | null;
   breaching: boolean;
@@ -151,12 +155,25 @@ const EMPTY_STATS: ObjectStats = {
   p99_9: null,
 };
 
-const statFor = (stats: ObjectStats, predicate: Predicate) =>
-  predicate === "current"
-    ? stats.current
-    : predicate === "peak"
-      ? stats.peak
-      : stats.p90;
+/**
+ * The worst newest minute among `objectIds`, or undefined when none has one.
+ * An unreadable minute counts as the worst, as in `computeStats`.
+ */
+export function latestPeak(
+  objectIds: string[],
+  latestByObjectId: Map<string, number | null> | undefined,
+): number | undefined {
+  let peak: number | undefined;
+  for (const id of objectIds) {
+    const current = currentFrom(latestByObjectId?.get(id));
+    if (current !== null && (peak === undefined || current > peak)) {
+      peak = current;
+    }
+  }
+  return peak;
+}
+
+const statFor = (stats: ObjectStats, predicate: Predicate) => stats[predicate];
 
 /**
  * Attaches the statistic the active predicate judges to each line.
@@ -246,6 +263,7 @@ export function buildFreshnessRows({
         current: stats.current,
         peak: stats.peak,
         p90: stats.p90,
+        p99: stats.p99,
         breachValue: line.breachValue,
         breaching,
         color: breaching ? colors.get(line.key) : undefined,

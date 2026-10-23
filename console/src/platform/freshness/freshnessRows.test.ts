@@ -19,6 +19,7 @@ import {
   computeStats,
   describeThreshold,
   judgeLines,
+  latestPeak,
   Predicate,
   UNREADABLE,
 } from "./freshnessRows";
@@ -207,7 +208,29 @@ describe("computeStats", () => {
 
     expect(breaches("current")).toBe(false);
     expect(breaches("p90")).toBe(false);
+    expect(breaches("p99")).toBe(true);
     expect(breaches("peak")).toBe(true);
+  });
+});
+
+describe("latestPeak", () => {
+  const latest = new Map<string, number | null>([
+    ["u1", 400],
+    ["u2", 9_000],
+    ["u3", null],
+  ]);
+
+  it("takes the worst newest minute among the objects asked for", () => {
+    expect(latestPeak(["u1", "u2"], latest)).toBe(9_000);
+  });
+
+  it("counts an unreadable minute as the worst", () => {
+    expect(latestPeak(["u1", "u2", "u3"], latest)).toBe(UNREADABLE);
+  });
+
+  it("is undefined when none of the objects has a minute", () => {
+    expect(latestPeak(["u9"], latest)).toBeUndefined();
+    expect(latestPeak(["u1"], undefined)).toBeUndefined();
   });
 });
 
@@ -274,7 +297,7 @@ describe("describeThreshold", () => {
       "2s at any moment over the last 1 hour",
     );
     expect(describeThreshold("1m 30s", "p90", "24 hours")).toBe(
-      "1m 30s for more than 10% of readings over the last 24 hours",
+      "1m 30s for more than 10% of minutes over the last 24 hours",
     );
   });
 

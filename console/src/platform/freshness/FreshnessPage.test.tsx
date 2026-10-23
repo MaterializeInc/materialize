@@ -134,6 +134,19 @@ describe("FreshnessPage cluster selection", () => {
     expect(requests).toEqual([]);
   });
 
+  it("shows the Summary and the controls before the data arrives", async () => {
+    // So a range change, which reloads the graph and tables, cannot take the
+    // controls the reader just used off the screen.
+    recordRequests();
+    await renderAt("/?cluster=u1");
+
+    expect(
+      await screen.findByRole("combobox", { name: "Freshness statistic" }),
+    ).toBeVisible();
+    expect(screen.getByText("Summary")).toBeVisible();
+    expect(screen.queryByText("Lag Over Time")).not.toBeInTheDocument();
+  });
+
   it("loads a cluster a link names", async () => {
     const requests = recordRequests();
     await renderAt("/?cluster=u1");

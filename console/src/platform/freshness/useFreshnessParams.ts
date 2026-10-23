@@ -59,9 +59,9 @@ export function parseTimePeriod(raw: string | null): number | null {
  * A predicate the menu offers, or null.
  *
  * NOTE: `Object.hasOwn` for the same reason as `parseTimePeriod`, and the
- * failure here is quieter. `?exceeded=toString` passed an `in` check and then
- * fell through `statFor` to p90, so the page judged by one statistic while the
- * menu named another.
+ * failure here is quieter. `?exceeded=toString` passes an `in` check, and
+ * `statFor` would then judge every row by an inherited method instead of a
+ * statistic.
  */
 export function parsePredicate(raw: string | null): Predicate | null {
   return raw !== null && Object.hasOwn(PREDICATE_LABELS, raw)
