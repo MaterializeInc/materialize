@@ -248,6 +248,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/organization/support/tickets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the signed-in user's support tickets, most recently updated first. */
+        get: operations["list_support_tickets"];
+        put?: never;
+        /** Open a support ticket as the signed-in user. */
+        post: operations["create_support_ticket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/organization/support/tickets/{ticket_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get one of the signed-in user's support tickets with its replies. */
+        get: operations["get_support_ticket"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/self-managed-subscription": {
         parameters: {
             query?: never;
@@ -464,6 +499,23 @@ export interface components {
         CreateLicenseKeyResponse: {
             licenseKey: string;
         };
+        /**
+         * @description A new support ticket. Production outages are not accepted here; they go
+         *     through the Messenger's "Report Production Outage" option, which pages
+         *     on-call.
+         */
+        CreateSupportTicketRequest: {
+            title: string;
+            description: string;
+            severity: components["schemas"]["SupportTicketSeverity"];
+            environmentType: components["schemas"]["SupportTicketEnvironmentType"];
+            /** @description Context the console attaches, e.g. `aws/us-east-1`. */
+            region?: string | null;
+            environmentId?: string | null;
+            environmentVersion?: string | null;
+            /** @description The cluster or object the ticket is about, if any. */
+            affectedObject?: string | null;
+        };
         /** @description A block of credit held by a customer. */
         CreditBlock: {
             /**
@@ -675,6 +727,23 @@ export interface components {
              */
             nextCursor?: string | null;
         };
+        Paginated_SupportTicket: {
+            data: {
+                /** @description Intercom's ID for the ticket, used to fetch it. */
+                id: string;
+                /** @description The ticket number customers see in the Messenger and Help Center. */
+                number?: string | null;
+                title: string;
+                /** @description The state label customers see, e.g. "Submitted" or "Resolved". */
+                state?: string | null;
+                open: boolean;
+                /** Format: date-time */
+                createdAt: string;
+                /** Format: date-time */
+                updatedAt: string;
+            }[];
+            nextCursor?: string | null;
+        };
         PaymentMethod: {
             /** @description The type of payment method (e.g. "card"). */
             type: string;
@@ -728,6 +797,47 @@ export interface components {
             /** @description The marketplace the organization is billed through. */
             marketplace: components["schemas"]["Marketplace"];
         };
+        /** @description A support ticket, as listed on the support page. */
+        SupportTicket: {
+            /** @description Intercom's ID for the ticket, used to fetch it. */
+            id: string;
+            /** @description The ticket number customers see in the Messenger and Help Center. */
+            number?: string | null;
+            title: string;
+            /** @description The state label customers see, e.g. "Submitted" or "Resolved". */
+            state?: string | null;
+            open: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        /** @description A ticket with its description and replies. */
+        SupportTicketDetail: {
+            ticket: components["schemas"]["SupportTicket"];
+            /** @description The description the ticket was opened with. May contain HTML. */
+            description?: string | null;
+            /**
+             * @description Replies visible to the customer, oldest first. Internal notes are
+             *     never included.
+             */
+            messages: components["schemas"]["SupportTicketMessage"][];
+        };
+        /** @enum {string} */
+        SupportTicketEnvironmentType: "production" | "staging" | "development";
+        SupportTicketMessage: {
+            id: string;
+            /** @description Whether the signed-in user wrote this reply. */
+            fromYou: boolean;
+            /** @description The author's name, for replies from Materialize. */
+            authorName?: string | null;
+            /** @description The reply body. Contains HTML. */
+            bodyHtml: string;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @enum {string} */
+        SupportTicketSeverity: "high" | "normal" | "low";
     };
     responses: never;
     parameters: never;
@@ -1120,6 +1230,153 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SetupIntent"];
                 };
+            };
+        };
+    };
+    list_support_tickets: {
+        parameters: {
+            query?: {
+                limit?: number | null;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Support tickets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Paginated_SupportTicket"];
+                };
+            };
+            /** @description No permissions to list support tickets */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The support system could not be reached */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Support tickets are not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    create_support_ticket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSupportTicketRequest"];
+            };
+        };
+        responses: {
+            /** @description Ticket created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupportTicket"];
+                };
+            };
+            /** @description Invalid ticket */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No permissions to open support tickets */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The support system could not be reached */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Support tickets are not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_support_ticket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ticket's ID from the ticket list */
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Support ticket */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupportTicketDetail"];
+                };
+            };
+            /** @description No permissions to read support tickets */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No such ticket for this user */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The support system could not be reached */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Support tickets are not configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
