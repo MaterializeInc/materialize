@@ -32,6 +32,16 @@ import { formatCurrency } from "~/utils/format";
 import { getDayAlignedRange } from "./queries";
 import UsagePage from "./UsagePage";
 
+// jsdom does not lay out the chart, so give its size-dependent scales a width.
+vi.mock("@visx/responsive", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@visx/responsive")>()),
+  ParentSize: ({
+    children,
+  }: {
+    children: (size: { width: number; height: number }) => React.ReactNode;
+  }) => <>{children({ width: 800, height: 245 })}</>,
+}));
+
 const Wrapper = await createProviderWrapper({
   initializeState: ({ set }) =>
     setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
@@ -197,6 +207,80 @@ describe("UsagePage", () => {
     expect(range.getByText("Spend between", { exact: false })).toBeVisible();
     expect(range.getAllByText("01-15-24")).toHaveLength(2);
   });
+
+  it.each([
+    {
+      scenario: "account names",
+      secondAccountName: "Test Staging",
+      secondAccountLabel: "Test Staging",
+    },
+    {
+      scenario: "a shortened ID only for an unnamed account",
+      secondAccountName: "",
+      secondAccountLabel: "22222222…",
+    },
+  ])(
+    "shows $scenario in the daily spend tooltip",
+    async ({ secondAccountName, secondAccountLabel }) => {
+      server.use(
+        buildDailyCostBreakdownResponse({
+          payload: {
+            days: oneDay([
+              {
+                external_customer_id: "11111111-1111-4111-8111-111111111111",
+                name: "Test Production",
+                clusters: [
+                  {
+                    environment_id: "environment-parent-0",
+                    cluster_grouping_key: "compute.r1",
+                    category: "",
+                    region: "aws/us-east-1",
+                    amounts: { "price-compute": "14.00" },
+                    usage: 0,
+                  },
+                ],
+              },
+              {
+                external_customer_id: "22222222-2222-4222-8222-222222222222",
+                name: secondAccountName,
+                clusters: [
+                  {
+                    environment_id: "environment-child-0",
+                    cluster_grouping_key: "compute.r1",
+                    category: "",
+                    region: "aws/us-east-1",
+                    amounts: { "price-compute": "5.00" },
+                    usage: 0,
+                  },
+                ],
+              },
+            ]),
+          },
+        }),
+      );
+      renderComponent(<UsagePage />);
+
+      const chart = await screen.findByTestId("account-spend-chart");
+      const overlay = chart.querySelector('rect[fill="transparent"]');
+      expect(overlay).not.toBeNull();
+      await userEvent.pointer({
+        target: overlay!,
+        coords: { clientX: 200, clientY: 100 },
+      });
+
+      const tooltip = await screen.findByTestId("account-spend-chart-tooltip");
+      const tooltipContent = within(tooltip);
+      expect(tooltipContent.getByText("1/15/2024")).toBeVisible();
+      expect(tooltipContent.getByText("Test Production")).toBeVisible();
+      expect(tooltipContent.getByText(secondAccountLabel)).toBeVisible();
+      expect(tooltipContent.queryByText("11111111…")).not.toBeInTheDocument();
+      if (secondAccountName) {
+        expect(tooltipContent.queryByText("22222222…")).not.toBeInTheDocument();
+      }
+      expect(tooltip).toHaveTextContent("Test Production$14.00");
+      expect(tooltip).toHaveTextContent(`${secondAccountLabel}$5.00`);
+    },
+  );
 
   it("sends bare inclusive UTC calendar dates to the breakdown endpoint (SAS-151)", async () => {
     // Regression guard for the timestamp-serialization bug class: the query
