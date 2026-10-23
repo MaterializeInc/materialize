@@ -14,6 +14,7 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import React from "react";
 
+import { SupportTicket } from "~/api/cloudGlobalApi";
 import { STATUSPAGE_URL } from "~/api/incident-io";
 import { Incident, StatusSummary } from "~/api/incident-io/types";
 import server from "~/api/mocks/server";
@@ -71,9 +72,37 @@ const buildStatusResponse = (incidents: Incident[] = []) =>
     return HttpResponse.json(response);
   });
 
+const TICKETS_URL = "*/api/organization/support/tickets";
+
+const ticketsUnavailableHandler = http.get(TICKETS_URL, () =>
+  HttpResponse.json({}, { status: 503 }),
+);
+
+const buildTicket = (
+  overrides: Partial<SupportTicket> = {},
+): SupportTicket => ({
+  id: "42",
+  number: "4821",
+  title: "Replica keeps restarting",
+  state: "Waiting on you",
+  open: true,
+  createdAt: "2026-10-20T12:00:00Z",
+  updatedAt: "2026-10-21T12:00:00Z",
+  ...overrides,
+});
+
+const ticketsHandler = (tickets: SupportTicket[]) =>
+  http.get(TICKETS_URL, () =>
+    HttpResponse.json({ data: tickets, nextCursor: null }),
+  );
+
 describe("SupportPage", () => {
   beforeEach(() => {
-    server.use(buildStatusResponse(), intercomJwtHandler());
+    server.use(
+      buildStatusResponse(),
+      intercomJwtHandler(),
+      ticketsUnavailableHandler,
+    );
   });
 
   afterEach(() => {
@@ -263,5 +292,144 @@ describe("SupportPage", () => {
       ),
     );
     expect(screen.queryByText(/All systems operational/)).toBeNull();
+  });
+
+  describe("with the ticket endpoints", () => {
+    it("lists the user's tickets", async () => {
+      server.use(
+        ticketsHandler([
+          buildTicket(),
+          buildTicket({
+            id: "43",
+            number: "4702",
+            title: "RBAC for a dbt service account",
+            state: "Resolved",
+            open: false,
+          }),
+        ]),
+      );
+      await renderComponent(<SupportPage />);
+
+      expect(
+        await screen.findByRole("button", { name: "Replica keeps restarting" }),
+      ).toBeVisible();
+      expect(screen.getByText("#4821")).toBeVisible();
+      expect(screen.getByText("Waiting on you")).toBeVisible();
+      expect(
+        screen.getByRole("button", { name: "RBAC for a dbt service account" }),
+      ).toBeVisible();
+      expect(
+        screen.getByRole("link", { name: "All tickets in Help Center ↗" }),
+      ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
+      expect(screen.queryByRole("link", { name: "View tickets" })).toBeNull();
+    });
+
+    it("shows an empty state", async () => {
+      server.use(ticketsHandler([]));
+      await renderComponent(<SupportPage />);
+
+      expect(await screen.findByTestId("support-tickets-empty")).toBeVisible();
+    });
+
+    it("shows a ticket's conversation", async () => {
+      server.use(
+        ticketsHandler([buildTicket()]),
+        http.get(`${TICKETS_URL}/42`, () =>
+          HttpResponse.json({
+            ticket: buildTicket(),
+            description: "<p>It restarts every few minutes.</p>",
+            messages: [
+              {
+                id: "m1",
+                fromYou: false,
+                authorName: "Katrina",
+                bodyHtml:
+                  "<p>Thanks, looking now.<br>Can you share the cluster?</p>",
+                createdAt: "2026-10-20T13:00:00Z",
+              },
+            ],
+          }),
+        ),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPage />);
+
+      await user.click(
+        await screen.findByRole("button", { name: "Replica keeps restarting" }),
+      );
+
+      const ticket = await screen.findByTestId("support-ticket");
+      expect(ticket).toHaveTextContent("It restarts every few minutes.");
+      expect(ticket).toHaveTextContent("Katrina");
+      expect(ticket).toHaveTextContent("Thanks, looking now.");
+      expect(
+        screen.getByRole("link", { name: "Reply in Help Center ↗" }),
+      ).toHaveAttribute("href", HELP_CENTER_TICKETS_URL);
+    });
+
+    it("opens a ticket from the form", async () => {
+      let createdWith: unknown;
+      server.use(
+        ticketsHandler([]),
+        http.post(TICKETS_URL, async ({ request }) => {
+          createdWith = await request.json();
+          return HttpResponse.json(buildTicket({ title: "Sink is lagging" }), {
+            status: 201,
+          });
+        }),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPage />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      expect(showNewMessage).not.toHaveBeenCalled();
+
+      await user.click(
+        await screen.findByRole("button", { name: "Open ticket" }),
+      );
+      expect(await screen.findByText("A title is required.")).toBeVisible();
+
+      await user.type(screen.getByLabelText("Title"), "Sink is lagging");
+      await user.selectOptions(screen.getByLabelText("Severity"), "high");
+      await user.type(
+        screen.getByLabelText("What's happening?"),
+        "Kafka sink is 10 minutes behind.",
+      );
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      await waitFor(() =>
+        expect(createdWith).toMatchObject({
+          title: "Sink is lagging",
+          description: "Kafka sink is 10 minutes behind.",
+          severity: "high",
+          environmentType: "production",
+        }),
+      );
+      expect(await screen.findByText(/Ticket #4821 opened/)).toBeVisible();
+    });
+
+    it("keeps the form open with an error when creating fails", async () => {
+      server.use(
+        ticketsHandler([]),
+        http.post(TICKETS_URL, () => HttpResponse.json({}, { status: 502 })),
+      );
+      const user = userEvent.setup();
+      await renderComponent(<SupportPage />);
+
+      await screen.findByTestId("support-tickets-empty");
+      await user.click(screen.getByRole("button", { name: "Open a ticket" }));
+      await user.type(await screen.findByLabelText("Title"), "Sink is lagging");
+      await user.type(
+        screen.getByLabelText("What's happening?"),
+        "Kafka sink is 10 minutes behind.",
+      );
+      await user.click(screen.getByRole("button", { name: "Open ticket" }));
+
+      expect(
+        await screen.findByText(/Your ticket couldn't be opened/),
+      ).toBeVisible();
+      expect(screen.getByLabelText("Title")).toHaveValue("Sink is lagging");
+    });
   });
 });

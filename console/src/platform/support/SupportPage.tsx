@@ -33,6 +33,7 @@ import { Alert } from "~/components/Alert";
 import { Card, CardContent, CardTitle } from "~/components/cardComponents";
 import { CopyButton } from "~/components/copyableComponents";
 import { isInRegion } from "~/components/IncidentStatusWidget/utils";
+import { LoadingContainer } from "~/components/LoadingContainer";
 import TextLink from "~/components/TextLink";
 import {
   COMMUNITY_SLACK_URL,
@@ -59,6 +60,13 @@ import docUrls from "~/mz-doc-urls.json";
 import { useSummary } from "~/queries/incident-io";
 import { currentRegionIdAtom } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
+
+import { useSupportTickets } from "./queries";
+import {
+  NewSupportTicketModal,
+  SupportTicketModal,
+  SupportTicketsTable,
+} from "./SupportTickets";
 
 export const SUPPORT_MAILTO = `mailto:${SUPPORT_EMAIL}`;
 export const OUTAGE_MAILTO = `${SUPPORT_MAILTO}?subject=${encodeURIComponent(
@@ -246,6 +254,15 @@ const SupportPage = () => {
   const isIntercomIdentified = useIsIntercomIdentified();
   const hasIntercomJwt = useHasIntercomJwt();
   const unreadCount = useIntercomUnreadCount();
+  const ticketsQuery = useSupportTickets();
+  // The ticket endpoints aren't deployed or configured everywhere yet. Until
+  // they answer, "Open a ticket" uses the Messenger and the tickets card
+  // links to Help Center.
+  const areTicketsAvailable = ticketsQuery.isSuccess;
+  const [isTicketFormOpen, setIsTicketFormOpen] = React.useState(false);
+  const [selectedTicketId, setSelectedTicketId] = React.useState<string | null>(
+    null,
+  );
   const outageHint = isIntercomIdentified
     ? "For an outage, choose “Report Production Outage” in the chat. SLA plans only."
     : "Chat is unavailable, so these open an email to support.";
@@ -258,18 +275,28 @@ const SupportPage = () => {
           <OrganizationSummary organizationId={organizationId} />
         </VStack>
         <HStack spacing="2" flexWrap="wrap">
-          <Button
-            as="a"
-            href={SUPPORT_MAILTO}
-            onClick={preferIntercom(
-              hasIntercomJwt,
-              openIntercomNewConversation,
-            )}
-            variant="primary"
-            size="sm"
-          >
-            Open a ticket
-          </Button>
+          {areTicketsAvailable ? (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setIsTicketFormOpen(true)}
+            >
+              Open a ticket
+            </Button>
+          ) : (
+            <Button
+              as="a"
+              href={SUPPORT_MAILTO}
+              onClick={preferIntercom(
+                hasIntercomJwt,
+                openIntercomNewConversation,
+              )}
+              variant="primary"
+              size="sm"
+            >
+              Open a ticket
+            </Button>
+          )}
           <Button
             as="a"
             href={OUTAGE_MAILTO}
@@ -324,35 +351,55 @@ const SupportPage = () => {
                 </HStack>
               </CardTitle>
               <CardContent>
-                <VStack spacing="3" align="start">
-                  <Text
-                    textStyle="text-ui-reg"
-                    color={colors.foreground.secondary}
-                  >
-                    Tickets for your organization, including ones your teammates
-                    opened. Reply, add files, or check status.
-                  </Text>
-                  <HStack spacing="2" flexWrap="wrap">
-                    <Button
-                      as="a"
+                {ticketsQuery.isPending ? (
+                  <LoadingContainer minHeight="24" />
+                ) : areTicketsAvailable ? (
+                  <VStack spacing="3" align="stretch">
+                    <SupportTicketsTable
+                      tickets={ticketsQuery.data.data}
+                      onSelect={setSelectedTicketId}
+                    />
+                    <TextLink
                       href={HELP_CENTER_TICKETS_URL}
                       {...EXTERNAL_LINK_PROPS}
-                      variant="secondary"
-                      size="sm"
+                      textStyle="text-small"
+                      fontWeight="500"
+                      alignSelf="start"
                     >
-                      View tickets
-                    </Button>
-                    <Button
-                      as="a"
-                      href={HELP_CENTER_URL}
-                      {...EXTERNAL_LINK_PROPS}
-                      variant="outline"
-                      size="sm"
+                      All tickets in Help Center ↗
+                    </TextLink>
+                  </VStack>
+                ) : (
+                  <VStack spacing="3" align="start">
+                    <Text
+                      textStyle="text-ui-reg"
+                      color={colors.foreground.secondary}
                     >
-                      Open Help Center ↗
-                    </Button>
-                  </HStack>
-                </VStack>
+                      Tickets for your organization, including ones your
+                      teammates opened. Reply, add files, or check status.
+                    </Text>
+                    <HStack spacing="2" flexWrap="wrap">
+                      <Button
+                        as="a"
+                        href={HELP_CENTER_TICKETS_URL}
+                        {...EXTERNAL_LINK_PROPS}
+                        variant="secondary"
+                        size="sm"
+                      >
+                        View tickets
+                      </Button>
+                      <Button
+                        as="a"
+                        href={HELP_CENTER_URL}
+                        {...EXTERNAL_LINK_PROPS}
+                        variant="outline"
+                        size="sm"
+                      >
+                        Open Help Center ↗
+                      </Button>
+                    </HStack>
+                  </VStack>
+                )}
               </CardContent>
             </Card>
 
@@ -466,6 +513,15 @@ const SupportPage = () => {
           </VStack>
         </Flex>
       </VStack>
+      <NewSupportTicketModal
+        isOpen={isTicketFormOpen}
+        onClose={() => setIsTicketFormOpen(false)}
+        organizationId={organizationId}
+      />
+      <SupportTicketModal
+        ticketId={selectedTicketId}
+        onClose={() => setSelectedTicketId(null)}
+      />
     </MainContentContainer>
   );
 };
