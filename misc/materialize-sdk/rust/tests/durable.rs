@@ -616,3 +616,35 @@ async fn a_slow_sink_gets_the_batches_that_waited_in_one_write() {
     worker.abort();
     let _ = worker.await;
 }
+
+#[tokio::test]
+#[ignore = "needs a running Materialize at MATERIALIZE_URL"]
+async fn a_snapshot_that_keeps_failing_runs_out_of_attempts() {
+    let (object, relation) = source("durable_failing").await;
+    let admin = admin().await;
+    execute(
+        &admin,
+        &format!("INSERT INTO {relation} VALUES (1), (2), (3), (4)"),
+    )
+    .await;
+    let sink = Transactional::default();
+    // A slow sink and no room to wait in: every attempt opens its stream, then
+    // falls behind during the snapshot.
+    let live = LiveOptions::default()
+        .max_pending_bytes(Some(0))
+        .max_buffered_bytes(0)
+        .max_consumer_wait(Duration::from_millis(100));
+    let options = options().live(live).max_attempts(2);
+    DurableSink::new("failing", sink.clone(), options.clone())
+        .setup(&config(), NoTls, &object, Envelope::Diff)
+        .await
+        .unwrap();
+    sink.0.lock().unwrap().write_delay = Duration::from_millis(500);
+    let worker = spawn(DurableSink::new("failing", sink.clone(), options));
+    let stopped = tokio::time::timeout(Duration::from_secs(30), worker).await;
+    let result = stopped.expect("the sink is still retrying").unwrap();
+    assert!(
+        matches!(result, Err(Error::ConsumerFellBehind { .. })),
+        "{result:?}"
+    );
+}

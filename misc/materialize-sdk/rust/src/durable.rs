@@ -31,7 +31,9 @@ use tokio_postgres::tls::MakeTlsConnect;
 use tokio_postgres::{Client, Config, Socket};
 
 use crate::error::Error;
-use crate::live::{AbortOnDrop, LiveOptions, LiveSubscription, query, server_error_with};
+use crate::live::{
+    AbortOnDrop, LiveOptions, LiveSubscription, query, server_error_with, with_network_defaults,
+};
 use crate::sink::{Rejected, Sink, SinkBatch, SinkError, WriteRequest, WriteResult};
 use crate::store::CheckpointStore;
 
@@ -126,9 +128,8 @@ pub struct DurableSink<S, C = NoStore> {
     options: DurableOptions,
     /// Whether the checkpoint lives in `store`, decided by the first load.
     in_store: Option<bool>,
-    /// Whether the last attempt opened its stream, which counts as progress
-    /// for the reconnect budget even while the frontier stands still.
-    opened: bool,
+    /// When the last attempt opened its stream.
+    opened_at: Option<Instant>,
 }
 
 impl<S: Sink> DurableSink<S> {
@@ -141,7 +142,7 @@ impl<S: Sink> DurableSink<S> {
             store: NoStore,
             options,
             in_store: None,
-            opened: false,
+            opened_at: None,
         }
     }
 }
@@ -156,7 +157,7 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
             store,
             options: self.options,
             in_store: None,
-            opened: false,
+            opened_at: None,
         }
     }
 
@@ -275,7 +276,7 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
         // describes.
         loop {
             let committed = current.frontier;
-            self.opened = false;
+            self.opened_at = None;
             let attempt = self
                 .attempt(config, tls.clone(), &name, &mut current, unresolved.take())
                 .await;
@@ -284,7 +285,16 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
                     return Err(resolve_index(config, tls, &current, &name, error).await);
                 }
                 Err(error) if resumable(&error) || checks_object(&error) => {
-                    if self.opened || progressed(committed, current.frontier) {
+                    // A stream that stayed open for a while counts as healthy even
+                    // while its frontier stands still, as a quiet object's does.
+                    // A snapshot that keeps failing does not: each attempt starts
+                    // it again under a new generation, so only committed
+                    // progress resets the budget until one completes.
+                    let healthy = committed.is_some()
+                        && self
+                            .opened_at
+                            .is_some_and(|at| at.elapsed() >= HEALTHY_STREAM);
+                    if healthy || progressed(committed, current.frontier) {
                         reconnects = Attempts::new(&self.options, &self.sink_id);
                     }
                     if checks_object(&error) {
@@ -356,7 +366,7 @@ impl<S: Sink, C: CheckpointStore> DurableSink<S, C> {
         let mut live =
             LiveSubscription::connect_at(config, tls, subscribe, start, self.options.live.clone())
                 .await?;
-        self.opened = true;
+        self.opened_at = Some(Instant::now());
         let mut last_commit = Instant::now();
         while let Some(event) = live.next().await {
             let event = event?;
@@ -756,6 +766,11 @@ struct Attempts {
     sink_id: String,
 }
 
+/// How long a stream must stay open for a later failure to get a fresh
+/// reconnect budget without committing. A stream that fails sooner keeps using
+/// up its attempts.
+const HEALTHY_STREAM: Duration = Attempts::MAX_BACKOFF;
+
 impl Attempts {
     const MIN_BACKOFF: Duration = Duration::from_secs(1);
     const MAX_BACKOFF: Duration = Duration::from_secs(60);
@@ -995,7 +1010,7 @@ where
     T: MakeTlsConnect<Socket>,
     T::Stream: Send + 'static,
 {
-    let (client, connection) = config
+    let (client, connection) = with_network_defaults(config)
         .connect(tls)
         .await
         .map_err(|error| catalog_error(&error))?;

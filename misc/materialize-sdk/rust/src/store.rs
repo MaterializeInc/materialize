@@ -24,7 +24,7 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::tls::{MakeTlsConnect, TlsConnect};
 use tokio_postgres::{Client, Config, Socket};
 
-use crate::live::{AbortOnDrop, message_with_sources};
+use crate::live::{AbortOnDrop, message_with_sources, with_network_defaults};
 use crate::sink::{SinkError, WriteResult};
 
 /// Where the SDK keeps the checkpoint of a sink whose
@@ -102,7 +102,7 @@ where
         table: &ObjectName,
     ) -> Result<MaterializeStore<T>, SinkError> {
         let mut store = MaterializeStore {
-            config: config.clone(),
+            config: with_network_defaults(config),
             tls,
             table: qualified(table),
             session: None,

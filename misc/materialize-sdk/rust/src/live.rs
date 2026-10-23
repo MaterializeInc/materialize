@@ -232,7 +232,7 @@ impl LiveSubscription {
         if let Some(limit) = options.max_timestamp_bytes {
             sub = sub.with_max_timestamp_bytes(limit);
         }
-        let (client, connection) = config
+        let (client, connection) = with_network_defaults(config)
             .connect(tls)
             .await
             .map_err(|e| server_error(&sub, &e))?;
@@ -472,7 +472,20 @@ async fn fetch_loop(
 ) -> Result<(), Error> {
     while !sub.is_finished() {
         let fetch = sub.fetch(options.max_rows, Some(options.fetch_timeout))?;
-        let (names, rows) = match query(client, fetch.sql()).await {
+        // A timed FETCH returns by its timeout, so a longer wait means the
+        // connection was lost without a word, which TCP may not notice for
+        // minutes.
+        let wait = fetch
+            .timeout()
+            .map(|timeout| timeout.saturating_add(FETCH_GRACE));
+        let fetched = match wait {
+            Some(wait) => match tokio::time::timeout(wait, query(client, fetch.sql())).await {
+                Ok(fetched) => fetched,
+                Err(_) => return Err(silent(&sub, wait)),
+            },
+            None => query(client, fetch.sql()).await,
+        };
+        let (names, rows) = match fetched {
             Ok(result) => result,
             Err(error) => return Err(failed(&sub, error, failure).await),
         };
@@ -529,6 +542,47 @@ pub(crate) async fn query(
         }
     }
     Ok((columns, rows))
+}
+
+/// How long past its timeout a timed `FETCH` may take before the connection
+/// counts as lost.
+const FETCH_GRACE: Duration = Duration::from_secs(30);
+
+/// The error for a timed `FETCH` with no response within `wait`, which the
+/// core classifies like any failure without a server error.
+fn silent(sub: &Subscription, wait: Duration) -> Error {
+    let message =
+        format!("no response to a FETCH within {wait:?}, so the connection counts as lost");
+    Error::Server {
+        sqlstate: None,
+        classification: sub.classify(None, &message),
+        message,
+        detail: None,
+        hint: None,
+    }
+}
+
+/// `config` with the network settings the SDK relies on, where the caller
+/// set none: a connect timeout, and TCP keepalives that notice a peer gone
+/// silent within about a minute. tokio-postgres starts keepalives only after
+/// two hours idle, so an untimed `FETCH` on a dropped connection would wait
+/// that long.
+pub(crate) fn with_network_defaults(config: &Config) -> Config {
+    let mut config = config.clone();
+    if config.get_connect_timeout().is_none() {
+        config.connect_timeout(Duration::from_secs(30));
+    }
+    // tokio-postgres's default, which the caller left unchanged.
+    if config.get_keepalives_idle() == Duration::from_secs(2 * 60 * 60) {
+        config.keepalives_idle(Duration::from_secs(30));
+    }
+    if config.get_keepalives_interval().is_none() {
+        config.keepalives_interval(Duration::from_secs(10));
+    }
+    if config.get_keepalives_retries().is_none() {
+        config.keepalives_retries(3);
+    }
+    config
 }
 
 /// The error for a failed request: the server's own error if the connection
@@ -589,6 +643,35 @@ mod tests {
     use materialize_sdk_core::{Batcher, Change, Frontier, Message, Update};
 
     use super::*;
+
+    #[test]
+    fn network_defaults_fill_only_what_the_caller_left_unset() {
+        let defaulted = with_network_defaults(&Config::new());
+        assert_eq!(
+            defaulted.get_connect_timeout(),
+            Some(&Duration::from_secs(30))
+        );
+        assert_eq!(defaulted.get_keepalives_idle(), Duration::from_secs(30));
+        assert_eq!(
+            defaulted.get_keepalives_interval(),
+            Some(Duration::from_secs(10))
+        );
+        assert_eq!(defaulted.get_keepalives_retries(), Some(3));
+        let mut chosen = Config::new();
+        chosen
+            .connect_timeout(Duration::from_secs(5))
+            .keepalives_idle(Duration::from_secs(600))
+            .keepalives_interval(Duration::from_secs(60))
+            .keepalives_retries(9);
+        let kept = with_network_defaults(&chosen);
+        assert_eq!(kept.get_connect_timeout(), Some(&Duration::from_secs(5)));
+        assert_eq!(kept.get_keepalives_idle(), Duration::from_secs(600));
+        assert_eq!(
+            kept.get_keepalives_interval(),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(kept.get_keepalives_retries(), Some(9));
+    }
 
     /// `count` contiguous batches with one insert each, at timestamps from 1.
     fn batches(count: u64) -> Vec<Event> {
