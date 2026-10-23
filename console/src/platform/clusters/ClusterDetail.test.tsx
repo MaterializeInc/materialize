@@ -10,7 +10,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useLocation } from "react-router-dom";
 
 import { UI_PREVIEWS } from "~/config/uiPreviews";
 import { uiPreviewOptInStorageKey } from "~/hooks/useUiPreview";
@@ -33,9 +33,33 @@ vi.mock("~/platform/clusters/ClusterOverview", () => ({
     return <div>ClusterOverview component</div>;
   },
 }));
-vi.mock("~/platform/clusters/ClusterPage/ClusterMetrics", () => ({
-  ClusterMetrics: () => <div>ClusterMetrics component</div>,
-}));
+// The tabs' own links between each other, under the page's real routes.
+vi.mock("~/platform/clusters/ClusterPage/ClusterMetrics", async () => {
+  const { Link } = await import("react-router-dom");
+  const { workersTabLink } =
+    await import("~/platform/clusters/ClusterPage/tabLinks");
+  return {
+    ClusterMetrics: () => (
+      <div>
+        ClusterMetrics component
+        <Link to={workersTabLink("r1")}>r1 workers</Link>
+      </div>
+    ),
+  };
+});
+vi.mock("~/platform/clusters/ClusterPage/ClusterWorkers", async () => {
+  const { Link } = await import("react-router-dom");
+  const { processesTabLink } =
+    await import("~/platform/clusters/ClusterPage/tabLinks");
+  return {
+    ClusterWorkers: () => (
+      <div>
+        ClusterWorkers component
+        <Link {...processesTabLink("r1")}>r1 processes</Link>
+      </div>
+    ),
+  };
+});
 vi.mock("~/platform/clusters/ClusterReplicas", () => ({
   default: () => <div>ClusterReplicas component</div>,
 }));
@@ -65,6 +89,10 @@ const seedClusters = () =>
     }),
   );
 
+const LocationSearch = () => (
+  <div data-testid="location-search">{useLocation().search}</div>
+);
+
 const renderClusterDetail = (initialPath: string) =>
   renderComponent(
     <RenderWithPathname>
@@ -73,6 +101,7 @@ const renderClusterDetail = (initialPath: string) =>
           <Route index path="*" element={<ClusterDetail />} />
         </Route>
       </Routes>
+      <LocationSearch />
     </RenderWithPathname>,
     { initialRouterEntries: [initialPath] },
   );
@@ -151,9 +180,14 @@ describe("ClusterDetail redesign preview", () => {
       ).toBeVisible();
       expect(screen.getByText("small")).toBeVisible();
       expect(screen.getByText("1 replica")).toBeVisible();
-      expect(screen.getByRole("link", { name: "Metrics" })).toBeVisible();
-      expect(screen.getByRole("link", { name: "Objects" })).toBeVisible();
-      expect(screen.getByRole("link", { name: "Replicas" })).toBeVisible();
+      expect(
+        screen
+          .getAllByRole("link")
+          .map((link) => link.textContent)
+          .filter((name) =>
+            ["Metrics", "Workers", "Objects", "Replicas"].includes(name ?? ""),
+          ),
+      ).toEqual(["Metrics", "Workers", "Objects", "Replicas"]);
       expect(
         screen.queryByRole("link", { name: "Materialized Views" }),
       ).not.toBeInTheDocument();
@@ -214,6 +248,52 @@ describe("ClusterDetail redesign preview", () => {
       await user.click(await screen.findByRole("link", { name: "Metrics" }));
 
       await expectPathname("/u1/default");
+      expect(await screen.findByText("ClusterMetrics component")).toBeVisible();
+    });
+
+    it("opens the Workers tab", async () => {
+      const user = userEvent.setup();
+      await renderClusterDetail("/u1/default");
+
+      await user.click(await screen.findByRole("link", { name: "Workers" }));
+
+      await expectPathname("/u1/default/workers");
+      expect(await screen.findByText("ClusterWorkers component")).toBeVisible();
+    });
+
+    it("carries the replica choice between the Metrics and Workers tabs", async () => {
+      await renderClusterDetail("/u1/default?replica=r1");
+
+      expect(
+        await screen.findByRole("link", { name: "Workers" }),
+      ).toHaveAttribute("href", "/u1/default/workers?replica=r1");
+      expect(screen.getByRole("link", { name: "Metrics" })).toHaveAttribute(
+        "href",
+        "/u1/default?replica=r1",
+      );
+      expect(screen.getByRole("link", { name: "Objects" })).toHaveAttribute(
+        "href",
+        "/u1/default/objects",
+      );
+    });
+
+    it("goes from a replica's CPU to its workers and back to its processes", async () => {
+      const user = userEvent.setup();
+      await renderClusterDetail("/u1/default");
+
+      await user.click(await screen.findByRole("link", { name: "r1 workers" }));
+      await expectPathname("/u1/default/workers");
+      expect(screen.getByTestId("location-search")).toHaveTextContent(
+        "?replica=r1",
+      );
+
+      await user.click(
+        await screen.findByRole("link", { name: "r1 processes" }),
+      );
+      await expectPathname("/u1/default");
+      expect(screen.getByTestId("location-search")).toHaveTextContent(
+        "?replica=r1",
+      );
       expect(await screen.findByText("ClusterMetrics component")).toBeVisible();
     });
 
@@ -322,6 +402,15 @@ describe("ClusterDetail redesign preview", () => {
       await renderClusterDetail("/u1/default/objects");
 
       await expectPathname("/u1/default/materialized-views");
+    });
+
+    it("sends the redesigned Workers tab's URL to the classic overview", async () => {
+      await renderClusterDetail("/u1/default/workers?replica=r1");
+
+      await expectPathname("/u1/default");
+      expect(
+        await screen.findByText("ClusterOverview component"),
+      ).toBeVisible();
     });
 
     it("redirects redesigned Objects URLs to the classic tabs", async () => {

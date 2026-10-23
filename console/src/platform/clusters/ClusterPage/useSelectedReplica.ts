@@ -14,20 +14,22 @@ import { Cluster } from "~/api/materialize/cluster/clusterList";
 export const REPLICA_SEARCH_PARAM = "replica";
 
 /**
- * The replica the Metrics page is narrowed to, by name in the `replica` search
- * param, so a narrowed view is a link. Undefined means all replicas, which is
- * also what a name no current replica has reads as. The stale name stays in
- * the URL, so the selection comes back if a replica of that name does.
+ * The replica the Metrics and Workers tabs are narrowed to, by name in the
+ * `replica` search param, so a narrowed view is a link. `selectedReplica` is
+ * undefined when the URL names none or a name no current replica has. The
+ * stale name stays in the URL, so the selection comes back if a replica of
+ * that name does.
  */
 export function useSelectedReplica(cluster: Cluster) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const name = searchParams.get(REPLICA_SEARCH_PARAM);
+  const selectedReplicaName =
+    searchParams.get(REPLICA_SEARCH_PARAM) ?? undefined;
   const selectedReplica =
-    name === null
+    selectedReplicaName === undefined
       ? undefined
-      : cluster.replicas.find((replica) => replica.name === name);
+      : cluster.replicas.find(({ name }) => name === selectedReplicaName);
 
-  /** Undefined selects all replicas. */
+  /** Undefined removes the param. */
   const setSelectedReplicaName = (replicaName: string | undefined) =>
     setSearchParams(
       (prev) => {
@@ -39,5 +41,5 @@ export function useSelectedReplica(cluster: Cluster) {
       { replace: true },
     );
 
-  return { selectedReplica, setSelectedReplicaName };
+  return { selectedReplicaName, selectedReplica, setSelectedReplicaName };
 }

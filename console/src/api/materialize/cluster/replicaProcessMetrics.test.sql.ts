@@ -177,13 +177,13 @@ describe("buildReplicaProcessMetricsSubscribe", () => {
 });
 
 describe("buildReplicaSizeAllocationsQuery", () => {
-  it("reads each listed size's process count and per-process allocation", async () => {
+  it("reads each listed size's process and worker counts and per-process allocation", async () => {
     // Reset Materialize state.
     await testdrive(`> SET cluster to quickstart;`);
     const client = await getMaterializeClient();
     const sizes = ["scale=2,workers=4", "scale=1,workers=1"];
     const { rows: expected } = await client.query(
-      `SELECT size, processes, cpu_nano_cores, memory_bytes, disk_bytes
+      `SELECT size, processes, workers, cpu_nano_cores, memory_bytes, disk_bytes
        FROM mz_cluster_replica_sizes WHERE size IN ('${sizes.join("', '")}')`,
     );
 
@@ -193,11 +193,15 @@ describe("buildReplicaSizeAllocationsQuery", () => {
 
     const bySize = new Map(rows.map((row) => [row.size, row]));
     expect([...bySize.keys()].sort()).toEqual([...sizes].sort());
-    expect(Number(bySize.get("scale=2,workers=4")?.processes)).toEqual(2);
+    expect(bySize.get("scale=2,workers=4")).toMatchObject({
+      processes: 2,
+      workers: 4,
+    });
     for (const size of expected) {
       expect(bySize.get(size.size)).toEqual({
         size: size.size,
         processes: Number(size.processes),
+        workers: Number(size.workers),
         cpuNanoCores: Number(size.cpu_nano_cores),
         memoryBytes: Number(size.memory_bytes),
         diskBytes: size.disk_bytes === null ? null : Number(size.disk_bytes),
