@@ -8,9 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::Context as _;
@@ -49,7 +49,7 @@ use mz_cloud_resources::crd::{
     materialize::MaterializeRolloutStrategy,
     materialize::v1alpha1::{Materialize, MaterializeStatus},
 };
-use mz_license_keys::validate;
+use mz_license_keys::{ValidatedLicenseKey, validate};
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
@@ -69,6 +69,7 @@ pub struct Config {
     pub create_balancers: bool,
     pub create_console: bool,
     pub helm_chart_version: Option<String>,
+    pub terraform_module_version: Option<String>,
     pub secrets_controller: String,
     pub collect_pod_metrics: bool,
     pub enable_prometheus_scrape_annotations: bool,
@@ -143,10 +144,18 @@ pub struct Config {
     pub teleport: Option<teleport::TeleportConfig>,
 }
 
+/// Minimum time between telemetry reports for one Materialize instance.
+/// Reconciles run every 40 to 60 minutes when idle but up to every second
+/// during rollouts.
+const TELEMETRY_REPORT_INTERVAL: Duration = Duration::from_secs(3600);
+
 pub struct Context {
     config: Config,
     metrics: Arc<Metrics>,
     needs_update: Arc<Mutex<BTreeSet<String>>>,
+    segment_client: Option<mz_segment::Client>,
+    /// When telemetry was last reported, keyed by `spec.environment_id`.
+    last_telemetry_report: Mutex<BTreeMap<Uuid, Instant>>,
 }
 
 impl Context {
@@ -158,11 +167,62 @@ impl Context {
             );
         }
 
+        let segment_client = config.segment_api_key.clone().map(|api_key| {
+            mz_segment::Client::new(mz_segment::Config {
+                api_key,
+                client_side: config.segment_client_side,
+            })
+        });
+
         Self {
             config,
             metrics,
             needs_update: Default::default(),
+            segment_client,
+            last_telemetry_report: Default::default(),
         }
+    }
+
+    /// Reports the Terraform module version to the Segment group that
+    /// environmentd reports its own traits to, at most once per
+    /// [`TELEMETRY_REPORT_INTERVAL`] per instance.
+    ///
+    /// Reporting happens here because passing the version to environmentd
+    /// would put it in the environmentd StatefulSet, so every module upgrade
+    /// would change the resources hash and require a rollout.
+    fn report_telemetry(&self, mz: &Materialize, license_key: &ValidatedLicenseKey) {
+        let (Some(segment_client), Some(terraform_module_version)) =
+            (&self.segment_client, &self.config.terraform_module_version)
+        else {
+            return;
+        };
+        // environmentd's group ID is `EnvironmentId::organization_id`, which
+        // is parsed from the `--environment-id` orchestratord derives from
+        // `spec.environment_id`. It is not the customer's organization, which
+        // only the license key carries.
+        let group_id = mz.spec.environment_id;
+        {
+            let mut last_report = self.last_telemetry_report.lock().unwrap();
+            let now = Instant::now();
+            if last_report
+                .get(&group_id)
+                .is_some_and(|last| now.duration_since(*last) < TELEMETRY_REPORT_INTERVAL)
+            {
+                return;
+            }
+            last_report.insert(group_id, now);
+        }
+        // NOTE: environmentd nests its traits under the cloud provider and
+        // region. These stay top-level so that a shallow merge of group
+        // traits cannot replace environmentd's nested object.
+        segment_client.group(
+            group_id,
+            group_id,
+            serde_json::json!({
+                "organization_id": license_key.organization,
+                "terraform_module_version": terraform_module_version,
+            }),
+        );
     }
 
     fn set_needs_update(&self, mz: &Materialize, needs_update: bool) {
@@ -356,21 +416,16 @@ impl k8s_controller::Context for Context {
 
         let step = metadata.step("resolve_environment_id");
         let backend_secret = secret_api.get(&mz.spec.backend_secret_name).await?;
-        let license_key_environment_id: Option<Uuid> = if let Some(license_key) = backend_secret
+        let license_key = if let Some(license_key) = backend_secret
             .data
             .as_ref()
             .and_then(|data| data.get("license_key"))
         {
-            let license_key = validate(
+            Some(validate(
                 str::from_utf8(&license_key.0)
                     .context("invalid utf8")?
                     .trim(),
-            )?;
-            let environment_id = license_key
-                .environment_id
-                .parse()
-                .context("invalid environment id in license key")?;
-            Some(environment_id)
+            )?)
         } else {
             if mz.meets_minimum_version(&V161) {
                 return Err(Error::Anyhow(anyhow::anyhow!(
@@ -380,6 +435,15 @@ impl k8s_controller::Context for Context {
                 None
             }
         };
+        let license_key_environment_id: Option<Uuid> = license_key
+            .as_ref()
+            .map(|license_key| {
+                license_key
+                    .environment_id
+                    .parse()
+                    .context("invalid environment id in license key")
+            })
+            .transpose()?;
 
         if mz.spec.request_rollout.is_nil() || mz.spec.environment_id.is_nil() {
             let mut mz = mz.clone();
@@ -432,6 +496,10 @@ impl k8s_controller::Context for Context {
 
         self.check_environment_id_conflicts(&client, mz).await?;
         step.finish(Outcome::Completed);
+
+        if let Some(license_key) = &license_key {
+            self.report_telemetry(mz, license_key);
+        }
 
         let step = metadata.step("global_resources");
         global::Resources::new(&self.config, mz)?
@@ -994,6 +1062,10 @@ impl k8s_controller::Context for Context {
         _metadata: &mut TraceMetadata,
     ) -> Result<Option<Action>, Self::Error> {
         self.set_needs_update(mz, false);
+        self.last_telemetry_report
+            .lock()
+            .unwrap()
+            .remove(&mz.spec.environment_id);
 
         Ok(None)
     }

@@ -142,6 +142,10 @@ pub struct Args {
     create_console: bool,
     #[clap(long)]
     helm_chart_version: Option<String>,
+    /// Version of the Materialize Terraform module that installed the operator,
+    /// if any. Reported to Segment for each Materialize instance.
+    #[clap(long, env = "TERRAFORM_MODULE_VERSION")]
+    terraform_module_version: Option<String>,
     #[clap(long, default_value = "kubernetes")]
     secrets_controller: String,
     #[clap(long)]
@@ -679,6 +683,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             create_balancers: args.create_balancers,
             create_console: args.create_console,
             helm_chart_version: args.helm_chart_version,
+            terraform_module_version: args.terraform_module_version,
             secrets_controller: args.secrets_controller,
             collect_pod_metrics: args.collect_pod_metrics,
             enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,

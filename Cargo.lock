@@ -8103,6 +8103,7 @@ dependencies = [
  "mz-orchestrator-tracing",
  "mz-ore",
  "mz-prof-http",
+ "mz-segment",
  "mz-server-core",
  "prometheus",
  "rand 0.10.3",
