@@ -68,7 +68,7 @@ use axum::extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, Query, Requ
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::{Extension, Json, Router, routing};
-use futures::future::{Shared, TryFutureExt};
+use futures::future::{FutureExt, Shared, TryFutureExt};
 use headers::authorization::{Authorization, Basic, Bearer};
 use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -94,7 +94,9 @@ use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::str::StrExt;
 use mz_pgwire_common::{ConnectionCounter, ConnectionHandle};
 use mz_server_core::listeners::{self, AllowedRoles, HttpRoutesEnabled, RouteGroup};
-use mz_server_core::{Connection, ConnectionHandler, ReloadingSslContext, Server};
+use mz_server_core::{
+    Connection, ConnectionHandler, ReloadingSslContext, STARTING_UP_MESSAGE, Server,
+};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{
     HTTP_DEFAULT_USER, INTERNAL_USER_NAMES, SUPPORT_USER_NAME, SYSTEM_USER_NAME,
@@ -813,15 +815,33 @@ async fn x_materialize_user_header_auth(mut req: Request, next: Next) -> impl In
 
 pub(crate) type Delayed<T> = Shared<oneshot::Receiver<T>>;
 
-/// Resolve the dyncfg-configured group claim path from a delayed adapter
-/// client. Callers must already have driven `adapter_client_rx` to readiness
-/// (e.g. via `get_authenticator`), so the await here is non-blocking.
-async fn group_claim_for(adapter_client_rx: &Delayed<Client>) -> String {
-    let client = adapter_client_rx
-        .clone()
-        .await
-        .expect("adapter client receiver dropped");
-    OIDC_GROUP_CLAIM.get(client.get_system_vars().await.dyncfgs())
+/// A request needed something environmentd only has once it has booted.
+///
+/// Responds 503 with the message pgwire sends for `57P03`.
+#[derive(Debug, thiserror::Error)]
+#[error("{}", STARTING_UP_MESSAGE)]
+pub(crate) struct StartingUp;
+
+impl IntoResponse for StartingUp {
+    fn into_response(self) -> Response {
+        (StatusCode::SERVICE_UNAVAILABLE, STARTING_UP_MESSAGE).into_response()
+    }
+}
+
+/// Returns the delayed value if environmentd has booted, without waiting for
+/// it.
+pub(crate) fn ready_or_starting_up<T: Clone>(rx: &Delayed<T>) -> Result<T, StartingUp> {
+    match rx.clone().now_or_never() {
+        Some(Ok(value)) => Ok(value),
+        // The sender is only dropped if `serve` failed before booting.
+        Some(Err(_)) | None => Err(StartingUp),
+    }
+}
+
+/// Resolve the dyncfg-configured group claim path.
+async fn group_claim_for(adapter_client_rx: &Delayed<Client>) -> Result<String, StartingUp> {
+    let client = ready_or_starting_up(adapter_client_rx)?;
+    Ok(OIDC_GROUP_CLAIM.get(client.get_system_vars().await.dyncfgs()))
 }
 
 #[derive(Clone)]
@@ -947,14 +967,9 @@ where
             .ip();
 
         let user = req.extensions.get::<AuthedUser>().unwrap();
-        let adapter_client = req
-            .extensions
-            .get::<Delayed<mz_adapter::Client>>()
-            .unwrap()
-            .clone();
-        let adapter_client = adapter_client.await.map_err(|_| {
-            (StatusCode::INTERNAL_SERVER_ERROR, "adapter client missing").into_response()
-        })?;
+        let adapter_client =
+            ready_or_starting_up(req.extensions.get::<Delayed<mz_adapter::Client>>().unwrap())
+                .map_err(IntoResponse::into_response)?;
         let active_connection_counter = req.extensions.get::<ConnectionCounter>().unwrap();
         let helm_chart_version = req
             .extensions
@@ -1053,10 +1068,15 @@ pub(crate) enum AuthError {
     /// Payload is `OidcError`'s sanitized `Display` (no expected-values leaks).
     #[error("{0}")]
     OidcFailed(String),
+    #[error(transparent)]
+    StartingUp(#[from] StartingUp),
 }
 
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
+        if let AuthError::StartingUp(starting_up) = self {
+            return starting_up.into_response();
+        }
         warn!("HTTP request failed authentication: {}", self);
         let mut headers = HeaderMap::new();
         // We omit most detail from the error message we send to the client, to
@@ -1114,19 +1134,20 @@ pub async fn handle_login(
     session: Option<Extension<TowerSession>>,
     Extension(adapter_client_rx): Extension<Delayed<Client>>,
     Json(LoginCredentials { username, password }): Json<LoginCredentials>,
-) -> impl IntoResponse {
+) -> Response {
     // The listener's `allowed_roles` policy is not enforced here. Login only
     // mints a session. Authorization runs per request in the `http_authz`
     // middleware (and in `init_ws` for WebSocket), so a session for a
     // disallowed role cannot actually reach any route.
-    let Ok(adapter_client) = adapter_client_rx.clone().await else {
-        return StatusCode::INTERNAL_SERVER_ERROR;
+    let adapter_client = match ready_or_starting_up(&adapter_client_rx) {
+        Ok(adapter_client) => adapter_client,
+        Err(starting_up) => return starting_up.into_response(),
     };
     let authenticated = match adapter_client.authenticate(&username, &password).await {
         Ok(authenticated) => authenticated,
         Err(err) => {
             warn!(?err, "HTTP login failed authentication");
-            return StatusCode::UNAUTHORIZED;
+            return StatusCode::UNAUTHORIZED.into_response();
         }
     };
     // Create session data
@@ -1140,11 +1161,11 @@ pub async fn handle_login(
     // Store session data
     let session = session.and_then(|Extension(session)| Some(session));
     let Some(session) = session else {
-        return StatusCode::INTERNAL_SERVER_ERROR;
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     match session.insert("data", &session_data).await {
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        Ok(_) => StatusCode::OK,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Ok(_) => StatusCode::OK.into_response(),
     }
 }
 
@@ -1260,8 +1281,7 @@ async fn http_auth(
         frontegg,
         &oidc_rx,
         &adapter_client_rx,
-    )
-    .await;
+    )?;
 
     // Only the Frontegg arm consumes `group_claim`; resolving it requires a
     // coordinator round-trip (`Command::GetSystemVars`), so skip it for
@@ -1269,7 +1289,7 @@ async fn http_auth(
     // `/api/readyz`, and `/metrics` on a `None`-auth listener would couple
     // liveness to coordinator health. Mirrors the pgwire path.
     let group_claim = if matches!(authenticator, Authenticator::Frontegg(_)) {
-        Some(group_claim_for(&adapter_client_rx).await)
+        Some(group_claim_for(&adapter_client_rx).await?)
     } else {
         None
     };
@@ -1376,8 +1396,7 @@ async fn init_ws(
                 frontegg,
                 &oidc_rx,
                 &adapter_client_rx,
-            )
-            .await;
+            )?;
             // WebSocket init: no 401-with-challenge contract, the
             // client is reading WS frames, not parsing HTTP headers, so
             // we just suppress challenge emission entirely.
@@ -1385,7 +1404,7 @@ async fn init_ws(
             // See `http_auth`: only Frontegg uses `group_claim`, and the
             // fetch costs a coordinator round-trip.
             let group_claim = if matches!(authenticator, Authenticator::Frontegg(_)) {
-                Some(group_claim_for(&adapter_client_rx).await)
+                Some(group_claim_for(&adapter_client_rx).await?)
             } else {
                 None
             };
@@ -1408,7 +1427,7 @@ async fn init_ws(
     check_role_allowed(&user.name, allowed_roles)?;
 
     let client = AuthedClient::new(
-        &adapter_client_rx.clone().await?,
+        &ready_or_starting_up(&adapter_client_rx)?,
         user,
         peer_addr,
         active_connection_counter.clone(),
@@ -1432,31 +1451,29 @@ enum Credentials {
     },
 }
 
-async fn get_authenticator(
+fn get_authenticator(
     kind: listeners::AuthenticatorKind,
     creds: Option<&Credentials>,
     frontegg: Option<mz_frontegg_auth::Authenticator>,
     oidc_rx: &Delayed<mz_authenticator::GenericOidcAuthenticator>,
     adapter_client_rx: &Delayed<Client>,
-) -> Authenticator {
-    match kind {
+) -> Result<Authenticator, StartingUp> {
+    Ok(match kind {
         listeners::AuthenticatorKind::Frontegg => Authenticator::Frontegg(frontegg.expect(
             "Frontegg authenticator should exist with listeners::AuthenticatorKind::Frontegg",
         )),
         listeners::AuthenticatorKind::Password | listeners::AuthenticatorKind::Sasl => {
-            let client = adapter_client_rx.clone().await.expect("sender not dropped");
-            Authenticator::Password(client)
+            Authenticator::Password(ready_or_starting_up(adapter_client_rx)?)
         }
         listeners::AuthenticatorKind::Oidc => match creds {
             // Use the password authenticator if the credentials are password-based
             Some(Credentials::Password { .. }) => {
-                let client = adapter_client_rx.clone().await.expect("sender not dropped");
-                Authenticator::Password(client)
+                Authenticator::Password(ready_or_starting_up(adapter_client_rx)?)
             }
-            _ => Authenticator::Oidc(oidc_rx.clone().await.expect("sender not dropped")),
+            _ => Authenticator::Oidc(ready_or_starting_up(oidc_rx)?),
         },
         listeners::AuthenticatorKind::None => Authenticator::None,
-    }
+    })
 }
 
 /// Attempts to retrieve session data from a [`TowerSession`], if available.
@@ -1669,7 +1686,92 @@ pub struct TowerSessionData {
 
 #[cfg(test)]
 mod tests {
-    use super::{AllowedRoles, check_role_allowed};
+    use axum::response::IntoResponse;
+    use futures::FutureExt;
+    use http::StatusCode;
+    use http_body_util::BodyExt;
+    use mz_server_core::STARTING_UP_MESSAGE;
+    use tokio::sync::oneshot;
+
+    use super::{
+        AllowedRoles, WsState, check_role_allowed, console, listeners, ready_or_starting_up, sql,
+    };
+
+    #[mz_ore::test]
+    fn ready_or_starting_up_returns_the_value_only_once_sent() {
+        let (tx, rx) = oneshot::channel();
+        let rx = rx.shared();
+        assert!(ready_or_starting_up(&rx).is_err());
+        tx.send(7).unwrap();
+        assert_eq!(ready_or_starting_up(&rx).unwrap(), 7);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn starting_up_responds_503_with_the_pgwire_message() {
+        let (_tx, rx) = oneshot::channel::<()>();
+        let response = ready_or_starting_up(&rx.shared())
+            .unwrap_err()
+            .into_response();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body, STARTING_UP_MESSAGE.as_bytes());
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `socket`
+    async fn websocket_before_boot_reports_starting_up_instead_of_upgrading() {
+        let (_adapter_client_tx, adapter_client_rx) = oneshot::channel();
+        let (_oidc_tx, oidc_rx) = oneshot::channel();
+        let state = WsState {
+            frontegg: None,
+            oidc_rx: oidc_rx.shared(),
+            authenticator_kind: listeners::AuthenticatorKind::None,
+            adapter_client_rx: adapter_client_rx.shared(),
+            active_connection_counter: mz_pgwire_common::ConnectionCounter::default(),
+            helm_chart_version: None,
+            allowed_roles: AllowedRoles::Normal,
+        };
+        let app = axum::Router::new()
+            .route(
+                "/api/experimental/sql",
+                axum::routing::get(sql::handle_sql_ws),
+            )
+            .with_state(state);
+        // The upgrade extractor needs a real connection, so serve over a socket.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _server = mz_ore::task::spawn(|| "websocket_boot_test", async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+        });
+
+        let response = reqwest::Client::new()
+            .get(format!("http://{addr}/api/experimental/sql"))
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 503);
+        assert_eq!(response.text().await.unwrap(), STARTING_UP_MESSAGE);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn console_config_before_boot_reports_starting_up() {
+        let (_tx, rx) = oneshot::channel();
+        let Err((status, body)) =
+            console::handle_console_config(axum::Extension(rx.shared())).await
+        else {
+            panic!("console config should not succeed before boot");
+        };
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body, STARTING_UP_MESSAGE);
+    }
 
     #[mz_ore::test]
     fn test_check_role_allowed() {

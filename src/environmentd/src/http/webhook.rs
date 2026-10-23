@@ -31,7 +31,7 @@ use mz_adapter_types::dyncfgs::{
 };
 use thiserror::Error;
 
-use crate::http::WebhookState;
+use crate::http::{StartingUp, WebhookState, ready_or_starting_up};
 
 pub async fn handle_webhook(
     State(WebhookState {
@@ -64,7 +64,7 @@ pub async fn handle_webhook(
                 WebhookError::Internal(anyhow::anyhow!(err))
             }
         })?;
-    let adapter_client = adapter_client_rx.clone().await.expect("sender not dropped");
+    let adapter_client = ready_or_starting_up(&adapter_client_rx)?;
     // Collect headers into a map, while converting them into strings.
     let mut headers_s = BTreeMap::new();
     for (name, val) in headers.iter() {
@@ -363,6 +363,8 @@ pub enum WebhookError {
     ValidationError,
     #[error("service unavailable")]
     Unavailable,
+    #[error(transparent)]
+    StartingUp(#[from] StartingUp),
     #[error("internal storage failure! {0:?}")]
     InternalStorageError(StorageError),
     #[error("request body exceeds the maximum allowed size of {max_bytes} bytes")]
@@ -428,6 +430,7 @@ impl IntoResponse for WebhookError {
             e @ WebhookError::Unavailable => {
                 (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()
             }
+            WebhookError::StartingUp(e) => e.into_response(),
             e @ WebhookError::InternalStorageError(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response()
             }

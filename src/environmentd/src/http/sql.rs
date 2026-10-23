@@ -57,8 +57,8 @@ use tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::http::prometheus::PrometheusSqlQuery;
 use crate::http::{
-    AuthError, AuthedClient, AuthedUser, MAX_REQUEST_SIZE, WsState, ensure_session_unexpired,
-    init_ws, maybe_get_authenticated_session,
+    AuthError, AuthedClient, AuthedUser, MAX_REQUEST_SIZE, StartingUp, WsState,
+    ensure_session_unexpired, init_ws, maybe_get_authenticated_session, ready_or_starting_up,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -305,6 +305,9 @@ pub(crate) async fn handle_sql_ws(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     tower_session: Option<Extension<TowerSession>>,
 ) -> Result<impl IntoResponse, AuthError> {
+    // Checked before upgrading, so that boot is reported as a 503 like any other
+    // HTTP request. After the upgrade, `run_ws` can only report it as a close.
+    ready_or_starting_up(&state.adapter_client_rx)?;
     let session = tower_session.map(|Extension(session)| session);
     // The `x_materialize_user_header_auth` middleware may have already provided the user for us
     let user = match existing_user {
@@ -354,13 +357,16 @@ async fn run_ws(state: WsState, user: Option<ExistingUser>, peer_addr: IpAddr, m
             // avoid giving attackers unnecessary information during auth. AdapterErrors
             // are safe to return because they're generated after authentication.
             debug!("WS request failed init: {}", e);
-            let reason: Utf8Bytes = match e.downcast_ref::<AdapterError>() {
-                Some(error) => error.to_string().into(),
-                None => "unauthorized".to_string().into(),
+            let (code, reason): (CloseCode, Utf8Bytes) = if e.is::<StartingUp>() {
+                (CloseCode::Again, e.to_string().into())
+            } else if let Some(error) = e.downcast_ref::<AdapterError>() {
+                (CloseCode::Protocol, error.to_string().into())
+            } else {
+                (CloseCode::Protocol, "unauthorized".to_string().into())
             };
             let _ = ws
                 .send(Message::Close(Some(CloseFrame {
-                    code: CloseCode::Protocol.into(),
+                    code: code.into(),
                     reason,
                 })))
                 .await;
