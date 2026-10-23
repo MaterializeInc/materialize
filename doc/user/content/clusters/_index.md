@@ -15,5 +15,6 @@ Clusters provide the compute resources for running dataflows in Materialize.
 - Learn how to [optimize cluster size](/clusters/sizing/).
 - [Optimize hydration requirements](/clusters/optimize-hydration-requirements/).
 - Speed up hydration with [autoscaling](/clusters/autoscaling/).
+- [Protect a production cluster](/clusters/protect-a-production-cluster/) with query policies.
 - Understand [system clusters](/clusters/system-clusters/).
 - [Troubleshoot clusters](/clusters/troubleshoot-clusters/).
