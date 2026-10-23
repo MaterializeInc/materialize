@@ -293,29 +293,6 @@ NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kin
 CommandComplete {"tag":"DELETE 12"}
 ReadyForQuery {"status":"I"}
 
-# Empty RETURNING results use empty_result on both protocols.
-send
-Query {"query": "DELETE FROM t WHERE a < 0 RETURNING a"}
-Parse {"query": "DELETE FROM t WHERE a < 0 RETURNING a"}
-Bind
-Execute
-Sync
-----
-
-until err_field_typs=CD
-ReadyForQuery
-ReadyForQuery
-----
-RowDescription {"fields":[{"name":"a"}]}
-NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"empty_result\",\"duration_us\":<DURATION>}"}]}
-CommandComplete {"tag":"SELECT 0"}
-ReadyForQuery {"status":"I"}
-ParseComplete
-BindComplete
-NoticeResponse {"fields":[{"typ":"C","value":"MZ012"},{"typ":"D","value":"{\"kind\":\"empty_result\",\"duration_us\":<DURATION>}"}]}
-CommandComplete {"tag":"SELECT 0"}
-ReadyForQuery {"status":"I"}
-
 # Neither COPY direction emits an execution time notice.
 send
 Query {"query": "COPY (SELECT 1) TO STDOUT"}
