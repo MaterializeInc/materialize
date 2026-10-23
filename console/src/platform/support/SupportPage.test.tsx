@@ -116,9 +116,12 @@ describe("SupportPage", () => {
     const user = userEvent.setup();
     await renderComponent(<SupportPage />);
 
-    expect(
-      await screen.findByText(/choose “Report Production Outage” in the chat/),
-    ).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByTestId("support-outage-hint")).toHaveAttribute(
+        "aria-label",
+        expect.stringMatching(/choose “Report Production Outage” in the chat/),
+      ),
+    );
 
     await user.click(screen.getByRole("link", { name: "Open a ticket" }));
     await user.click(
@@ -146,7 +149,10 @@ describe("SupportPage", () => {
     setIntercom(state);
     await renderComponent(<SupportPage />);
 
-    expect(await screen.findByText(/Chat is unavailable/)).toBeVisible();
+    expect(await screen.findByTestId("support-outage-hint")).toHaveAttribute(
+      "aria-label",
+      expect.stringMatching(/Chat is unavailable/),
+    );
     expect(screen.getByRole("link", { name: "Open a ticket" })).toHaveAttribute(
       "href",
       SUPPORT_MAILTO,
