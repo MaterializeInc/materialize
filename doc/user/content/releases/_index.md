@@ -20,6 +20,84 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.47.0
+*Released to Materialize Cloud: 2026-10-22* <br>
+*Released to Materialize Self-Managed: 2026-10-23* <br>
+
+### Turn cast errors into `NULL`s with `TRY_CAST` {#v26.47-try-cast}
+
+`TRY_CAST(<expr> AS <type>)` evaluates an expression once and attempts to cast it to the target type. It produces `NULL` instead of an error when the value cannot be converted. This means that bad values in an ingest pipeline don't cause errors which block reads.
+
+```mzsql
+CREATE TABLE raw_orders (id int, amount text);
+INSERT INTO raw_orders VALUES (1, '19.99'), (2, 'N/A'), (3, '250');
+
+CREATE MATERIALIZED VIEW orders AS
+  SELECT id, TRY_CAST(amount AS numeric(10, 2)) AS amount
+  FROM raw_orders;
+
+SELECT * FROM orders ORDER BY id;
+```
+```nofmt
+ id | amount
+----+--------
+  1 |  19.99
+  2 |
+  3 |    250
+```
+In the example above, using `TRY_CAST` makes the materialized view `orders` gracefully handle errors, so that reads succeed. If you used just `CAST`, every read of `orders` would fail with `invalid input syntax for type numeric: "N/A"`.
+
+Note that casts between a few Materialize-internal types, such as `regclass` and `mz_aclitem`, are not supported. For more details, see [`CAST` and `TRY_CAST`](/sql/functions/cast/#try_cast).
+
+### View memory and disk usage on the new cluster details page {#v26.47-cluster-details-page}
+
+The Console's redesigned cluster details page charts each replica's CPU, memory, and disk use against its limits, marks when a replica was hydrating or ran out of memory, and ranks the objects using the most memory. It is available today on Materialize Cloud, and will be available on Self-Managed next week. To try it, open a cluster and select **Show the new cluster details page** in the breadcrumb bar.
+
+![Metrics tab of the new cluster details page, showing CPU and memory and disk usage against their limits, replica status with out-of-memory events, and the top 10 objects by memory](/images/releases/v2647_cluster_details.png)
+
+### Safely drop upstream `NOT NULL` constraints in your Postgres sources {#v26.47-exclude-not-null-constraints}
+Materialize now allows you to `EXCLUDE ALL NOT NULL CONSTRAINTS` when creating a table from a Postgres source. Every column is ingested as nullable, so you can drop `NOT NULL` constraints upstream without causing your table to error. `PRIMARY KEY` and `UNIQUE` constraints are still recorded, and primary key columns remain `NOT NULL`.
+
+```mzsql
+CREATE TABLE orders
+  FROM SOURCE pg_source (REFERENCE public.orders)
+  WITH (EXCLUDE ALL NOT NULL CONSTRAINTS);
+```
+
+For more details, see [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/postgres/) for PostgreSQL and the guide on [handling upstream constraint drops](/ingest-data/postgres/source-versioning/#handle-upstream-constraint-drop).
+
+### Better freshness when adding tables to PostgreSQL sources {#v26.47-postgres-add-table-freshness}
+
+{{< private-preview />}}
+
+When you add a table to a PostgreSQL source, with `CREATE TABLE ... FROM SOURCE`, Materialize can now snapshot the new table while reading the replication stream. This means that existing tables continue making progress during the snapshot. Previously, if you added a new table, progress on existing tables would be halted until the new table's snapshot finished.
+
+Note that adding a table still briefly restarts the source dataflow, and if the dataflow restarts again before the snapshot finishes (for example, after a replica resize or another table change), the other tables pause until Materialize catches back up on the replication stream. The cluster also uses additional memory while the new table hydrates.
+
+### Improvements {#v26.47-improvements}
+- **Zero-downtime upgrades wait less before promoting**: A rollout no longer applies a full stability wait to replicas created during that rollout, and no longer waits on collections or replicas that the outgoing deployment has not hydrated either.
+- **Lower connection balancer memory per connection**: Idle connections through the connection balancer now use about a third less memory, so a self-managed deployment with the 256 MiB default is no longer killed for running out of memory at roughly 3,800 connections.
+- **`min` and `max` over arrays and lists**: `min` and `max` now accept arrays and lists, and lists gain the `<>`, `<`, `<=`, `>`, and `>=` operators. Arrays with the same elements in differently shaped dimensions now sort as they do in PostgreSQL, which changes `<`, `ORDER BY`, `greatest`, and `least` for those arrays.
+
+### Guides {#v26.47-guides}
+- [Understand the query lifecycle](/serve-results/query-lifecycle/)
+- [Optimize point lookups with long `IN` lists](/transform-data/optimization/#long-in-lists)
+
+### Bug Fixes {#v26.47-bug-fixes}
+- Fixed the liveness probe restarting `environmentd` during a slow startup once client connections had filled its external SQL port, which could cause a restart loop. The operator now probes `environmentd`'s internal SQL port, except in deployments using password, SASL, or OIDC authentication.
+- Fixed `GRANT`, `REVOKE`, `ALTER ... OWNER`, and `ALTER CONNECTION` on a connection crashing Materialize, or rerunning a sink from its old definition, when a sink using that connection had been changed with `ALTER SINK ... SET FROM`.
+- Fixed `environmentd` crashing when a query passes a non-constant first argument to `regexp_extract`; it now returns an error.
+- Fixed Iceberg sinks over relations with nested columns, such as arrays, stalling with a schema mismatch error after a Materialize restart.
+- Fixed a zero-downtime upgrade never becoming ready to promote when resuming an environment that had been stopped for more than two hours.
+- Fixed freshness stalling after an automatic hydration burst ended, by keeping the burst replicas until a steady replica has caught up.
+- Fixed up to 40 ms of added latency per parameterized query for clients that send each protocol message separately, such as node-postgres before 8.14.1.
+- Fixed `mz_uptime()` returning a different value for each occurrence in a query, which made queries combining it with `INTERSECT` fail or return wrong results.
+- Fixed a crash when a query that emits timestamp notices ran concurrently with a `DROP INDEX` on an index it reads.
+- Fixed SQL Server sources failing to decode an update to a table with a `NOT NULL` large object column when the update did not change that column.
+- Fixed the committed offset for a PostgreSQL source jumping backwards after a restart when a new table had been added to the source.
+- Fixed `mz_cluster_replica_metrics_history` recording `NULL` CPU and memory for the second and later processes of multi-process replicas.
+- Fixed the connection balancer dropping a query that a client sent in the same write as its password.
+
 ## v26.46.1
 *Released to Materialize Cloud: 2026-10-20* <br>
 *Released to Materialize Self-Managed: 2026-10-20* <br>
