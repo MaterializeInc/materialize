@@ -48,8 +48,11 @@ Apache License, Version 2.0. */}}
 
     {{ partial "header.html" . }} {{ block "body" .}}
     <div class="content-wrapper">
-      {{ partial "sidebar.html" . }}
-
+      {{- /*
+        <main> comes before the sidebar so that agents and other readers of the
+        raw HTML reach the page content first. _layout.scss restores the visual
+        order.
+      */}}
       <main
         class="content {{ if .Params.make_table_row_headers_searchable }} docsearch_index_table_headers {{ end }}"
       >
@@ -81,6 +84,8 @@ Apache License, Version 2.0. */}}
                 sidebar.html can extend to the bottom of the page. -->
         {{ partial "footer.html" . }}
       </main>
+
+      {{ partial "sidebar.html" . }}
 
       {{ partial "toc.html" . }}
     </div>

@@ -10,7 +10,7 @@
           <a {{with .URL}}href="{{.}}"{{end}} class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
             {{.Name | markdownify}}
             {{- if .HasChildren }}
-              {{ readFile "static/images/icon_sidebar_expander.svg" | safeHTML }}
+              <span class="expander" aria-hidden="true"></span>
             {{ end }}
           </a>
 
@@ -21,7 +21,7 @@
             <a {{with .URL}}href="{{.}}"{{end}} class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
               {{.Name | markdownify}}
               {{- if .HasChildren }}
-                {{ readFile "static/images/icon_sidebar_expander.svg" | safeHTML }}
+                <span class="expander" aria-hidden="true"></span>
               {{ end }}
             </a>
 
@@ -32,7 +32,7 @@
                 <a {{with .URL}}href="{{.}}"{{end}} class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
                   {{.Name | markdownify}}
                   {{- if .HasChildren }}
-                    {{ readFile "static/images/icon_sidebar_expander.svg" | safeHTML }}
+                    <span class="expander" aria-hidden="true"></span>
                   {{ end }}
                 </a>
 
@@ -43,7 +43,7 @@
                     <a {{with .URL}}href="{{.}}"{{end}} class="{{if $currentPage.IsMenuCurrent "main" .}}active{{end}}">
                       {{.Name | markdownify}}
                       {{- if .HasChildren }}
-                        {{ readFile "static/images/icon_sidebar_expander.svg" | safeHTML }}
+                        <span class="expander" aria-hidden="true"></span>
                       {{ end }}
                     </a>
 
