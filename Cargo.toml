@@ -50,6 +50,8 @@ members = [
     "src/frontegg-mock",
     "src/http-util",
     "src/interchange",
+    "src/jq",
+    "src/jq-guest",
     "src/kafka-util",
     "src/license-keys",
     "src/materialized",
@@ -181,6 +183,8 @@ default-members = [
     "src/frontegg-mock",
     "src/http-util",
     "src/interchange",
+    "src/jq",
+    "src/jq-guest",
     "src/kafka-util",
     "src/license-keys",
     "src/materialized",
@@ -589,6 +593,7 @@ utoipa = "6.0.0"
 uuid = "1.19.0"
 version-compare = "0.2.1"
 walkdir = "2.5.0"
+wasmtime = { version = "50.0.0", default-features = false, features = ["cranelift", "parallel-compilation", "runtime", "std"] }
 which = "8"
 x509-cert = { version = "0.3.0", default-features = false }
 yansi = "1.0.1"
@@ -644,6 +649,13 @@ inherits = "release"
 debug = false
 lto = "fat"
 codegen-units = 1
+
+# The WebAssembly module `mz-jq` embeds, built by its build script for every
+# outer profile. Without optimizations jaq runs several times slower in wasm.
+[profile.jq-guest]
+inherits = "release"
+debug = false
+strip = true
 
 [profile.optimized]
 inherits = "release"

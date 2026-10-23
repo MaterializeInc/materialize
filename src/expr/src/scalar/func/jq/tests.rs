@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_repr::{Row, SqlScalarType, arb_datum_for_scalar, strconv};
+use mz_repr::{Datum, Row, SqlScalarType, arb_datum_for_scalar, strconv};
 use proptest::prelude::*;
 use proptest::strategy::Union;
 
@@ -61,38 +61,31 @@ fn jq_eval() {
     }
 }
 
+/// Nesting is bounded by the sandbox's stack, so maximum-length programs of
+/// the shapes that nest deepest per byte fail with an error, and moderate
+/// nesting compiles.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
-fn jq_withheld_filters_are_undefined() {
-    let calls = [
-        ("env", "env/0"),
-        ("now", "now/0"),
-        ("localtime", "localtime/0"),
-        (r#"strflocaltime("%H")"#, "strflocaltime/1"),
-        ("input", "input/0"),
-        ("inputs", "inputs/0"),
-        (r#"strptime("%H")"#, "strptime/1"),
-    ];
-    // The logging filters are withheld and then defined again as no-ops.
-    let silenced = ["debug_empty", "stderr_empty"];
-    let mut covered: Vec<_> = calls
-        .iter()
-        .map(|(_, name)| name.split('/').next().unwrap())
-        .chain(silenced)
-        .collect();
-    covered.sort();
-    let mut withheld = WITHHELD.to_vec();
-    withheld.sort();
-    assert_eq!(covered, withheld);
-
-    for (program, name) in calls {
+fn jq_deeply_nested_programs() {
+    let nest =
+        |open: &str, close: &str, n: usize| format!("{}.{}", open.repeat(n), close.repeat(n));
+    for (open, close) in [("-", ""), ("(", ")"), (".[", "]"), ("{a:", "}")] {
+        assert!(JqProgram::new(&nest(open, close, 100)).is_ok(), "{open}");
+        let n = (MAX_PROGRAM_LEN - 1) / (open.len() + close.len());
         assert_eq!(
-            compile(program).err(),
-            Some(format!("undefined filter {name}")),
-            "{program}"
+            JqProgram::new(&nest(open, close, n)).err(),
+            Some("program exceeded its stack limit".into()),
+            "{open}"
         );
     }
-    assert!(compile("$ENV").is_err());
+    let long = format!("{}.", " ".repeat(MAX_PROGRAM_LEN));
+    assert_eq!(
+        JqProgram::new(&long).err(),
+        Some(format!(
+            "program is {} bytes, more than the maximum of {MAX_PROGRAM_LEN}",
+            MAX_PROGRAM_LEN + 1
+        ))
+    );
 }
 
 fn arb_jsonb() -> impl Strategy<Value = Jsonb> {
@@ -122,24 +115,6 @@ proptest! {
         let program = JqProgram::new(".").expect("valid program");
         prop_assert_eq!(program.eval(input.as_ref()), Ok(Some(input)));
     }
-}
-
-#[mz_ore::test]
-fn jq_to_val_numbers() {
-    let num = |text: &str| {
-        let input: Jsonb = text.parse().unwrap();
-        match to_val(input.as_ref().into_datum()) {
-            Val::Num(n) => n,
-            other => panic!("{text}: {other:?}"),
-        }
-    };
-    assert!(matches!(num("-3"), Num::Int(-3)));
-    assert!(matches!(
-        num("123456789012345678901234567890"),
-        Num::BigInt(_)
-    ));
-    // Decimals keep their text until arithmetic needs a float.
-    assert!(matches!(num("2.5"), Num::Dec(d) if d.as_str() == "2.5"));
 }
 
 #[mz_ore::test]
