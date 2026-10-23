@@ -398,6 +398,14 @@ def workflow_read_only(c: Composition) -> None:
             contains: cannot write in read-only mode
             ! CREATE INDEX t_idx2 ON t (a, b)
             contains: cannot write in read-only mode
+            ! CREATE SOURCE readonly_source FROM LOAD GENERATOR COUNTER;
+            contains: cannot write in read-only mode
+            ! CREATE TABLE readonly_export FROM SOURCE kafka_source (REFERENCE "testdrive-kafka-${{testdrive.seed}}") FORMAT BYTES;
+            contains: cannot write in read-only mode
+            ! ALTER SOURCE postgres_source REFRESH REFERENCES;
+            contains: cannot write in read-only mode
+            > SELECT 1;
+            1
             ! CREATE MATERIALIZED VIEW mv2 AS SELECT sum(a) FROM t;
             contains: cannot write in read-only mode
 

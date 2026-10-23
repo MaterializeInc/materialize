@@ -13,10 +13,11 @@ use std::sync::{Arc, OnceLock};
 use mz_storage_types::configuration::StorageConfiguration;
 
 use super::{
-    CreateSourcePreparation, CsrAvroPreparation, CsrProtobufPreparation, GlueAvroPreparation,
-    PreparedCreateSource, PurifiedSourceExport, PurifiedStatement, SourceFormatOptions,
-    TableFromSourcePreparation, execute_create_source_preparation,
-    execute_table_from_source_preparation, finish_table_from_source, prepare_csr_connection_avro,
+    AlterSourcePreparation, CreateSourcePreparation, CsrAvroPreparation, CsrProtobufPreparation,
+    GlueAvroPreparation, PreparedCreateSource, PurifiedSourceExport, PurifiedStatement,
+    SourceFormatOptions, TableFromSourcePreparation, execute_alter_source_preparation,
+    execute_create_source_preparation, execute_table_from_source_preparation,
+    finish_table_from_source, prepare_alter_source, prepare_csr_connection_avro,
     prepare_csr_connection_proto, prepare_glue_connection_avro, prepare_table_from_source,
 };
 use crate::ast::{
@@ -51,6 +52,7 @@ pub struct SourcePreparationRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RequestKind {
+    Alter(Box<AlterSourcePreparation>),
     Source(Box<CreateSourcePreparation>),
     Table(Box<TableFromSourcePreparation>),
     Protobuf(Box<CsrProtobufPreparation>),
@@ -75,6 +77,7 @@ pub struct SourcePreparationResponse {
 
 #[derive(Debug)]
 enum PreparationValue {
+    Alter(Box<PurifiedStatement>),
     Source(Box<PreparedCreateSource>),
     Table(Box<(PurifiedSourceExport, SourceFormatOptions)>),
     Protobuf(CsrSeedProtobuf),
@@ -163,6 +166,10 @@ impl SourcePreparationRequest {
         storage_configuration: &StorageConfiguration,
     ) -> Result<Arc<PreparationValue>, PlanError> {
         let value = match &self.kind {
+            RequestKind::Alter(request) => PreparationValue::Alter(Box::new(
+                execute_alter_source_preparation((**request).clone(), storage_configuration)
+                    .await?,
+            )),
             RequestKind::Source(request) => PreparationValue::Source(Box::new(
                 execute_create_source_preparation((**request).clone(), storage_configuration)
                     .await?,
@@ -209,6 +216,19 @@ impl<'a> Cursor<'a> {
         statement: Statement<Aug>,
     ) -> Result<PurifiedStatement, ResolveError> {
         match statement {
+            Statement::AlterSource(statement) => {
+                let Some(request) = prepare_alter_source(catalog, &statement)? else {
+                    return Ok(PurifiedStatement::PurifiedAlterSource {
+                        alter_source_stmt: statement,
+                    });
+                };
+                let PreparationValue::Alter(prepared) =
+                    self.request(RequestKind::Alter(Box::new(request)))?
+                else {
+                    unreachable!("the result kind is determined by its request");
+                };
+                Ok((**prepared).clone())
+            }
             Statement::CreateSource(statement) => {
                 let request = CreateSourcePreparation::new(
                     catalog,

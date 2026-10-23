@@ -253,8 +253,6 @@ impl CatalogState {
                 | Op::UpdateScopedSystemParameters { .. }
                 | Op::Comment { .. }
                 | Op::RenameCommand(_)
-                | Op::CatalogResult(_)
-                | Op::Description(_)
                 | Op::CheckClusterState { .. }
                 | Op::InjectAuditEvents { .. } => {}
             }
