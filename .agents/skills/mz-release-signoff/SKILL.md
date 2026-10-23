@@ -16,7 +16,7 @@ The release bot posts a request in the `#release` Slack channel naming the versi
 
 ## Prerequisites
 
-This workflow needs the Grafana MCP server against `grafana.dev.materialize.com`. Verify it answers before starting:
+This workflow needs the Grafana MCP server. Point its `GRAFANA_URL` at the tailnet host `https://grafana.corvus-bluegill.ts.net`, which accepts the same service-account tokens and serves the same dashboards and datasource UIDs but is reachable only from machines on the tailnet. `grafana.dev.materialize.com` answers every API request with a 302 to an OAuth login whatever token is sent, so a server pointed there fails on every call; use that host only for links you hand to people, such as the dashboard links in the sign-off thread. Verify the server answers before starting:
 
 ```
 mcp__grafana__list_datasources with type "prometheus"
