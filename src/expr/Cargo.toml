@@ -65,6 +65,7 @@ seahash.workspace = true
 serde.workspace = true
 serde_bytes.workspace = true
 serde_json.workspace = true
+stacker.workspace = true
 aws-lc-rs.workspace = true
 tracing.workspace = true
 uncased.workspace = true
