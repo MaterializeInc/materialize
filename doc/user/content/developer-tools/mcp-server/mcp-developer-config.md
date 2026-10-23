@@ -21,6 +21,7 @@ endpoint:
 |-----------|---------|-------------|
 | `enable_mcp_developer` | `true` | Enable or disable the `/api/mcp/developer` endpoint. When the endpoint is disabled, requests return HTTP 503 (Service Unavailable). |
 | `enable_mcp_developer_query_tool` | `true` | Available starting in v26.30. Enable or disable the `query` tool on the developer endpoint. When disabled, the tool is hidden from `tools/list` and calls return an error. `query_system_catalog` remains available. |
+| `enable_mcp_protocol_2026_07_28` | `true` | Available starting in v26.XX. Serve MCP protocol version 2026-07-28 next to 2025-11-25. When disabled, every request is served as 2025-11-25. See [Protocol versions](/developer-tools/mcp-server/#protocol-versions). |
 | `mcp_max_response_size` | `1000000` | Maximum response size in bytes. Queries exceeding this limit return an error. |
 
 ## Disabling the endpoint
