@@ -1122,6 +1122,48 @@ impl TestServer {
         )
     }
 
+    /// Wait for every process of a fresh fixture's declared replicas to report online.
+    ///
+    /// Call before opening a connection whose assertions exclude startup status notices.
+    /// Requires a nonempty set of managed replicas and no inherited status history.
+    /// Does not suppress subsequent notices.
+    pub async fn wait_for_replica_statuses(&self) -> Result<(), anyhow::Error> {
+        let client = self.connect().internal().await?;
+        let query = sql!("SET statement_timeout = '5s'");
+        pg_batch_execute(&client, query).await?;
+        Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry_async(|_| async {
+                let rows = mz_postgres_util::query(
+                    &client,
+                    sql!(
+                        "SELECT r.id, z.processes::int8, count(s.process_id),
+                            bool_and(s.status = 'online')
+                     FROM mz_catalog.mz_cluster_replicas r
+                     LEFT JOIN mz_catalog.mz_cluster_replica_sizes z ON z.size = r.size
+                     LEFT JOIN mz_internal.mz_cluster_replica_statuses s ON s.replica_id = r.id
+                     GROUP BY r.id, z.processes"
+                    ),
+                    &[],
+                )
+                .await?;
+                anyhow::ensure!(!rows.is_empty(), "no declared fixture replicas");
+                for row in rows {
+                    let id: String = row.get(0);
+                    let expected: Option<i64> = row.get(1);
+                    let observed: i64 = row.get(2);
+                    let online: Option<bool> = row.get(3);
+                    anyhow::ensure!(
+                        expected.is_some_and(|count| count > 0 && count == observed)
+                            && online == Some(true),
+                        "replica {id}: {observed}/{expected:?} processes, online={online:?}"
+                    );
+                }
+                Ok(())
+            })
+            .await
+    }
+
     pub fn connect(&self) -> ConnectBuilder<'_, postgres::NoTls, NoHandle> {
         ConnectBuilder::new(self).no_tls()
     }
@@ -1464,43 +1506,10 @@ impl TestServerWithRuntime {
         Ok(self.pg_config_internal().connect(tls)?)
     }
 
-    /// Wait for every process of a fresh fixture's declared replicas to report online.
-    ///
-    /// Call before opening a connection whose assertions exclude startup status notices.
-    /// Requires a nonempty set of managed replicas and no inherited status history.
-    /// Does not suppress subsequent notices.
+    /// Wait for the fixture's declared replicas before observing connection notices.
     pub fn wait_for_replica_statuses(&self) -> Result<(), anyhow::Error> {
-        let mut client = self.connect_internal(postgres::NoTls)?;
-        let query = sql!("SET statement_timeout = '5s'");
-        // The SQL wrappers accept async tokio-postgres clients, not this synchronous client.
-        #[allow(clippy::disallowed_methods)]
-        client.batch_execute(query.as_str())?;
-        Retry::default()
-            .max_duration(Duration::from_secs(30))
-            .retry(|_| {
-                let rows = client.query(
-                    "SELECT r.id, z.processes::int8, count(s.process_id),
-                            bool_and(s.status = 'online')
-                     FROM mz_catalog.mz_cluster_replicas r
-                     LEFT JOIN mz_catalog.mz_cluster_replica_sizes z ON z.size = r.size
-                     LEFT JOIN mz_internal.mz_cluster_replica_statuses s ON s.replica_id = r.id
-                     GROUP BY r.id, z.processes",
-                    &[],
-                )?;
-                anyhow::ensure!(!rows.is_empty(), "no declared fixture replicas");
-                for row in rows {
-                    let id: String = row.get(0);
-                    let expected: Option<i64> = row.get(1);
-                    let observed: i64 = row.get(2);
-                    let online: Option<bool> = row.get(3);
-                    anyhow::ensure!(
-                        expected.is_some_and(|count| count > 0 && count == observed)
-                            && online == Some(true),
-                        "replica {id}: {observed}/{expected:?} processes, online={online:?}"
-                    );
-                }
-                Ok(())
-            })
+        self.runtime
+            .block_on(self.server.wait_for_replica_statuses())
     }
 
     /// Enable LaunchDarkly feature flags.

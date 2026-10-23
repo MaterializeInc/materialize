@@ -4564,6 +4564,8 @@ async fn test_startup_cluster_notice_with_http_options() {
 #[allow(clippy::disallowed_methods)]
 async fn test_startup_cluster_notice() {
     let server = test_util::TestHarness::default().start().await;
+    // Observe connection notices after the fixture's replica startup notifications.
+    server.wait_for_replica_statuses().await.unwrap();
 
     let notices = Arc::new(Mutex::new(Vec::new()));
     let notices_ = Arc::clone(&notices);
