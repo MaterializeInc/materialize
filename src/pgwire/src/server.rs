@@ -26,7 +26,7 @@ use mz_pgwire_common::{
     REJECT_ENCRYPTION, decode_startup,
 };
 use mz_server_core::listeners::{AllowedRoles, AuthenticatorKind};
-use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig};
+use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig, STARTING_UP_MESSAGE};
 use openssl::ssl::Ssl;
 use postgres::error::SqlState;
 use tokio::io::AsyncWriteExt;
@@ -309,7 +309,7 @@ async fn send_starting_up(mut conn: Conn<Connection>) -> Result<(), anyhow::Erro
     Codec::new().encode(
         BackendMessage::from(ErrorResponse::fatal(
             SqlState::CANNOT_CONNECT_NOW,
-            "the database system is starting up",
+            STARTING_UP_MESSAGE,
         )),
         &mut buf,
     )?;

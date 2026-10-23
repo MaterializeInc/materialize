@@ -16,8 +16,8 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::task;
 use mz_pgwire::{Config, MetricsConfig, Server};
 use mz_pgwire_common::ConnectionCounter;
-use mz_server_core::ServeConfig;
 use mz_server_core::listeners::{AllowedRoles, AuthenticatorKind};
+use mz_server_core::{STARTING_UP_MESSAGE, ServeConfig};
 use tokio::sync::oneshot;
 use tokio_postgres::NoTls;
 use tokio_postgres::error::SqlState;
@@ -61,5 +61,5 @@ async fn startup_before_boot_is_rejected_with_cannot_connect_now() {
         .as_db_error()
         .expect("error should come from the server");
     assert_eq!(db_err.severity(), "FATAL");
-    assert_eq!(db_err.message(), "the database system is starting up");
+    assert_eq!(db_err.message(), STARTING_UP_MESSAGE);
 }
