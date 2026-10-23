@@ -28,7 +28,6 @@ import {
   CriticalPathRow,
   fetchCriticalPathAtTime,
   fetchCriticalPathLive,
-  fetchSourceExportLags,
 } from "~/api/materialize/maintained-objects/criticalPath";
 import {
   buildHydrationAggregateQuery,
@@ -447,43 +446,31 @@ const fetchCriticalPath = async ({
   return { rows, directInputs };
 };
 
-/** Lag of each subsource and table `sourceId` ingests into, at the moment
- *  `useCriticalPath` would snapshot for the source. */
-export function useSourceExportLags({
-  sourceId,
-  timestamp,
-  bucketSizeMs,
-  lookbackMinutes,
+/** Binned lag readings for several objects, as the freshness chart bins them. */
+export function useObjectsLagHistory({
+  objectIds,
+  lookbackMs,
 }: {
-  sourceId: string;
-  timestamp: Date | null;
-  bucketSizeMs: number;
-  lookbackMinutes: number;
+  objectIds: string[];
+  lookbackMs: number;
 }) {
-  const isLive = timestamp === null;
   return useQuery({
     queryKey: [
       ...buildRegionQueryKey("maintainedObjects"),
-      buildQueryKeyPart("sourceExportLags", {
-        sourceId,
-        timestamp: timestamp?.toISOString() ?? null,
-        bucketSizeMs,
-        lookbackMinutes,
-      }),
+      buildQueryKeyPart("objectsLagHistory", { objectIds, lookbackMs }),
     ],
     queryFn: async ({ queryKey, signal }) => {
-      const { rows } = await fetchSourceExportLags({
-        sourceId,
-        lookbackMinutes,
-        bucketSizeMs,
-        timestamp,
-        queryKey,
+      const { rows } = await fetchObjectLagHistory({
+        objectIds,
+        lookbackMs,
         requestOptions: { signal },
+        queryKey,
       });
       return rows;
     },
-    staleTime: isLive ? 30_000 : Infinity,
-    refetchInterval: isLive ? 30_000 : false,
+    enabled: objectIds.length > 0,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
   });
 }
 

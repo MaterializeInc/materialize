@@ -24,6 +24,7 @@ export const ObjectDetailDrawer = () => {
     data,
     isLoading,
     hydrationReady,
+    isError,
     lookbackMinutes,
     setLookbackMinutes,
   } = useOutletContext<MaintainedObjectsOutletContext>();
@@ -57,7 +58,7 @@ export const ObjectDetailDrawer = () => {
         <Center py={10}>
           {/* A source-fed table is only listed once the hydration snapshot
               names its source. */}
-          {isLoading || !hydrationReady ? (
+          {isLoading || (!hydrationReady && !isError) ? (
             <Spinner data-testid="loading-spinner" />
           ) : null}
         </Center>

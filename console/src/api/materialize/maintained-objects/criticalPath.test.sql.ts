@@ -14,12 +14,7 @@ import {
 import { testdrive } from "~/test/sql/mzcompose";
 
 import { SEARCH_PATH } from "../executeSql";
-import {
-  buildCriticalPathLiveQuery,
-  buildSourceExportLagsQuery,
-  CriticalPathRow,
-  SourceExportLagRow,
-} from "./criticalPath";
+import { buildCriticalPathLiveQuery, CriticalPathRow } from "./criticalPath";
 
 /** Creates the test catalog tables that the query reads from. */
 const seedCatalogSql = (testSchema: string) => `
@@ -354,31 +349,5 @@ describe("buildCriticalPathLiveQuery", () => {
     });
     expect(rows[0].lag?.toPostgres()).toBe("2 seconds");
     expect(rows[0].targetLag?.toPostgres()).toBe("4 seconds");
-  });
-});
-
-describe("buildSourceExportLagsQuery", () => {
-  it("lists a source's subsources and tables, slowest first", async () => {
-    const testSchema = "test_critical_path";
-    await testdrive(seedSourceExports(testSchema));
-
-    const compiled = buildSourceExportLagsQuery("u1", 60, TEST_BUCKET_MS, null);
-    const result = await executeSqlHttp(compiled, {
-      sessionVariables: {
-        cluster: QUICKSTART_CLUSTER,
-        search_path: `${testSchema}, ${SEARCH_PATH}`,
-      },
-    });
-    const rows = result.rows as SourceExportLagRow[];
-
-    // t2 is written with INSERT, so it is not an export.
-    expect(rows.map((r) => r.id)).toEqual(["t1", "s1"]);
-    expect(rows[0]).toMatchObject({
-      name: "orders",
-      objectType: "table",
-      clusterName: "ingest",
-    });
-    expect(rows[0].lag?.toPostgres()).toBe("30 seconds");
-    expect(rows[1]).toMatchObject({ objectType: "subsource" });
   });
 });

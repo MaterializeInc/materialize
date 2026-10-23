@@ -163,6 +163,26 @@ export function buildSourceDependenciesQuery(sourceId: string) {
   );
 }
 
+/**
+ * Each subsource and source-fed table, with the source that ingests it.
+ * Subsources name their source through a dependency, and tables through
+ * `mz_tables.source_id`.
+ */
+export function buildSourceExportsQuery() {
+  return queryBuilder
+    .selectFrom("mz_object_dependencies as od")
+    .innerJoin("mz_sources as sub", "sub.id", "od.object_id")
+    .innerJoin("mz_sources as parent", "parent.id", "od.referenced_object_id")
+    .where("sub.type", "=", "subsource")
+    .select(["od.object_id as exportId", "parent.id as sourceId"])
+    .unionAll(
+      queryBuilder
+        .selectFrom("mz_tables")
+        .where("source_id", "is not", null)
+        .select(["id as exportId", sql<string>`source_id`.as("sourceId")]),
+    );
+}
+
 const FIRST_REPLICA_SOURCE_STATISTICS_QUERIES = {
   // This is the query for modern versions of Materialize (>= v0.148.0).
   "0.148.0": () =>

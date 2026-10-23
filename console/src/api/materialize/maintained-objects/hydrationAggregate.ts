@@ -10,7 +10,10 @@
 import { sql } from "kysely";
 
 import { queryBuilder } from "~/api/materialize";
-import { buildHydrationStatusesTable } from "~/api/materialize/expressionBuilders";
+import {
+  buildHydrationStatusesTable,
+  buildSourceExportsQuery,
+} from "~/api/materialize/expressionBuilders";
 
 export interface HydrationAggregateRow {
   object_id: string;
@@ -65,19 +68,6 @@ export function buildHydrationAggregateQuery() {
     .where("type", "<>", "progress")
     .select(["id", "status", "error"]);
 
-  const exportParents = queryBuilder
-    .selectFrom("mz_object_dependencies as od")
-    .innerJoin("mz_sources as sub", "sub.id", "od.object_id")
-    .innerJoin("mz_sources as parent", "parent.id", "od.referenced_object_id")
-    .where("sub.type", "=", "subsource")
-    .select(["od.object_id as id", "parent.id as parentSourceId"])
-    .unionAll(
-      queryBuilder
-        .selectFrom("mz_tables")
-        .where("source_id", "is not", null)
-        .select(["id", sql<string>`source_id`.as("parentSourceId")]),
-    );
-
   const snapshotCommittedBySource = queryBuilder
     .selectFrom("mz_source_statistics as st")
     .leftJoin("mz_cluster_replicas as r", "r.id", "st.replica_id")
@@ -96,7 +86,7 @@ export function buildHydrationAggregateQuery() {
     .selectFrom(hydration.as("h"))
     .fullJoin(statuses.as("ss"), "ss.id", "h.object_id")
     .leftJoin(snapshotCommittedBySource.as("stats"), "stats.id", "ss.id")
-    .leftJoin(exportParents.as("ep"), "ep.id", "ss.id")
+    .leftJoin(buildSourceExportsQuery().as("ep"), "ep.exportId", "ss.id")
     .select([
       sql<string>`coalesce(h.object_id, ss.id)`.as("object_id"),
       "h.hydratedReplicas",
@@ -104,6 +94,6 @@ export function buildHydrationAggregateQuery() {
       "ss.status as sourceStatus",
       "ss.error as sourceError",
       "stats.snapshotCommitted",
-      "ep.parentSourceId",
+      "ep.sourceId as parentSourceId",
     ]);
 }

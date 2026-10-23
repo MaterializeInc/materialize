@@ -30,6 +30,7 @@ import { FreshnessCell, StatusCell } from "./MaintainedObjects";
 import { MaintainedObjectsOutletContext } from "./MaintainedObjectsLayout";
 import { MaintainedObjectListItem } from "./queries";
 import { useJourneyLinkState } from "./useJourneyLinkState";
+import { useSourceExports } from "./useSourceExports";
 
 const sectionTitle = (tables: MaintainedObjectListItem[]) => {
   const hasSubsources = tables.some((t) => t.objectType === "subsource");
@@ -55,14 +56,11 @@ export const SourceTablesFreshness = ({
   sourceId,
 }: SourceTablesFreshnessProps) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const { data, lagReady, hydrationReady } =
+  const { lagReady, hydrationReady } =
     useOutletContext<MaintainedObjectsOutletContext>();
   const journeyLinkState = useJourneyLinkState(sourceId);
-
-  const tables = React.useMemo(
-    () => data.filter((o) => o.parentSource?.id === sourceId).sort(byLagDesc),
-    [data, sourceId],
-  );
+  const exports = useSourceExports(sourceId);
+  const tables = React.useMemo(() => [...exports].sort(byLagDesc), [exports]);
   if (tables.length === 0) return null;
 
   return (

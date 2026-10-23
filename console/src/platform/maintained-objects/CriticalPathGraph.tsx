@@ -32,8 +32,9 @@ import {
 import {
   MaintainedObjectListItem,
   useCriticalPath,
-  useSourceExportLags,
+  useObjectsLagHistory,
 } from "./queries";
+import { useSourceExports } from "./useSourceExports";
 
 // The canvas centers the graph and pins its zoom controls to the bottom
 // right, so a wide bottom row needs enough padding to clear them.
@@ -77,7 +78,7 @@ const UpstreamGraph = ({
   bucketSizeMs,
   lookbackMinutes,
 }: CriticalPathGraphProps) => {
-  const { data, isLoading } = useCriticalPath({
+  const { data, isLoading, isError } = useCriticalPath({
     objectId: probe.id,
     timestamp,
     bucketSizeMs,
@@ -94,8 +95,17 @@ const UpstreamGraph = ({
     [data, probe],
   );
 
+  if (isError) {
+    return (
+      <CriticalPathMessage>
+        Failed to load the critical path.
+      </CriticalPathMessage>
+    );
+  }
   if (isLoading || !data) return <LoadingSpinner />;
-  if (data.rows.length === 0) return <EmptyCriticalPath />;
+  if (data.rows.length === 0) {
+    return <CriticalPathMessage>No upstream dependencies.</CriticalPathMessage>;
+  }
   return (
     <CriticalPathGraphInner
       probe={probe}
@@ -114,19 +124,32 @@ const SourceExportsGraph = ({
   bucketSizeMs,
   lookbackMinutes,
 }: CriticalPathGraphProps) => {
-  const { data, isLoading } = useSourceExportLags({
-    sourceId: probe.id,
-    timestamp,
-    bucketSizeMs,
-    lookbackMinutes,
+  const exports = useSourceExports(probe.id);
+  const { data, isLoading, isError } = useObjectsLagHistory({
+    objectIds: exports.map((e) => e.id),
+    lookbackMs: lookbackMinutes * 60 * 1000,
   });
   const buildView = React.useCallback(
     (_expandedBottleneckId: string | null, isExpanded: boolean) =>
-      buildSourceExportsView(data ?? [], probe, isExpanded),
-    [data, probe],
+      buildSourceExportsView({
+        probe,
+        exports,
+        readings: data ?? [],
+        anchor: timestamp,
+        bucketSizeMs,
+        showAll: isExpanded,
+      }),
+    [probe, exports, data, timestamp, bucketSizeMs],
   );
 
-  if (isLoading || !data) return <LoadingSpinner />;
+  if (isLoading) return <LoadingSpinner />;
+  if (isError) {
+    return (
+      <CriticalPathMessage>
+        Failed to load the critical path.
+      </CriticalPathMessage>
+    );
+  }
   // With no exports the graph is the source alone, which still carries the
   // cluster metrics below it.
   return (
@@ -142,12 +165,12 @@ const SourceExportsGraph = ({
   );
 };
 
-const EmptyCriticalPath = () => {
+const CriticalPathMessage = ({ children }: React.PropsWithChildren) => {
   const { colors } = useTheme<MaterializeTheme>();
   return (
     <Center height="120px" width="100%">
       <Text textStyle="text-small" color={colors.foreground.secondary}>
-        No upstream dependencies.
+        {children}
       </Text>
     </Center>
   );

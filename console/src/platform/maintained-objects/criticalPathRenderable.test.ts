@@ -185,68 +185,119 @@ describe("buildGraphView", () => {
 });
 
 describe("buildSourceExportsView", () => {
+  const BUCKET_MS = 60_000;
+  const ANCHOR = new Date("2026-10-22T12:00:00Z");
   const source = buildProbe({
     id: "src",
     name: "pg",
     objectType: "source",
     lag: { value: parse("00:00:01"), ms: 1_000 },
   });
-  const exportRow = (id: string, lag: string) => ({
-    ...buildRow({ id, name: id, objectType: "table", lag: parse(lag) }),
-  });
+  const table = (id: string) =>
+    buildProbe({ id, name: id, objectType: "table", parentSource: source });
+  const reading = (
+    objectId: string,
+    lag: string | null,
+    bucketStart = ANCHOR,
+  ) => ({ objectId, bucketStart, lag: lag === null ? null : parse(lag) });
+  const view = (
+    exports: MaintainedObjectListItem[],
+    readings: ReturnType<typeof reading>[],
+    showAll = false,
+  ) =>
+    buildSourceExportsView({
+      probe: source,
+      exports,
+      readings,
+      anchor: ANCHOR,
+      bucketSizeMs: BUCKET_MS,
+      showAll,
+    });
 
   it("marks the export that trails its source the most as primary", () => {
-    const view = buildSourceExportsView(
-      [exportRow("slow", "00:01:00"), exportRow("ok", "00:00:01")],
-      source,
-      false,
+    const { nodes, edges } = view(
+      [table("ok"), table("slow")],
+      [reading("slow", "00:01:00"), reading("ok", "00:00:01")],
     );
 
-    expect(view.nodes.map((n) => [n.id, n.kind])).toEqual([
+    expect(nodes.map((n) => [n.id, n.kind])).toEqual([
       ["src", "healthy"],
       ["slow", "primary"],
       ["ok", "healthy"],
     ]);
-    expect(view.edges).toEqual([
+    expect(edges).toEqual([
       { id: "src", childId: "slow", isBottleneck: true },
       { id: "src", childId: "ok", isBottleneck: true },
     ]);
   });
 
   it("marks the source primary when no export trails it", () => {
-    const laggingSource = buildProbe({
-      ...source,
-      lag: { value: parse("00:00:30"), ms: 30_000 },
+    const { nodes } = buildSourceExportsView({
+      probe: buildProbe({
+        ...source,
+        lag: { value: parse("00:00:30"), ms: 30_000 },
+      }),
+      exports: [table("t")],
+      readings: [reading("t", "00:00:30")],
+      anchor: ANCHOR,
+      bucketSizeMs: BUCKET_MS,
+      showAll: false,
     });
-    const view = buildSourceExportsView(
-      [exportRow("t", "00:00:30")],
-      laggingSource,
-      false,
+
+    expect(nodes.find((n) => n.id === "src")?.kind).toBe("primary");
+    expect(nodes.find((n) => n.id === "t")?.kind).toBe("upstream");
+  });
+
+  it("reads each export's lag from the bucket containing the anchor", () => {
+    const earlier = new Date(ANCHOR.getTime() - BUCKET_MS);
+    const { nodes } = view(
+      [table("t")],
+      [reading("t", "00:05:00", earlier), reading("t", "00:00:02")],
     );
 
-    expect(view.nodes.find((n) => n.id === "src")?.kind).toBe("primary");
-    expect(view.nodes.find((n) => n.id === "t")?.kind).toBe("upstream");
+    const node = nodes.find((n) => n.id === "t");
+    expect(node?.lag?.toPostgres()).toBe("2 seconds");
+    expect(node?.peakLag?.toPostgres()).toBe("5 minutes");
+    expect(node?.peakLagAt).toEqual(earlier);
+  });
+
+  it("keeps an unreadable export in view past the cap", () => {
+    // A snapshotting table reads NULL, the worst lag, so the cap must not
+    // hide it behind exports that merely lag.
+    const lagging = Array.from({ length: DEFAULT_VISIBLE_EXPORTS }, (_, i) =>
+      table(`t${i}`),
+    );
+    const { nodes, hiddenChainCount } = view(
+      [...lagging, table("snapshotting")],
+      [
+        ...lagging.map((t) => reading(t.id, "00:00:10")),
+        reading("snapshotting", null),
+      ],
+    );
+
+    expect(nodes[1].id).toBe("snapshotting");
+    expect(hiddenChainCount).toBe(1);
   });
 
   it("hides exports past the visible count until expanded", () => {
     const exports = Array.from(
       { length: DEFAULT_VISIBLE_EXPORTS + 2 },
-      (_, i) => exportRow(`t${i}`, "00:00:05"),
+      (_, i) => table(`t${i}`),
     );
 
-    const collapsed = buildSourceExportsView(exports, source, false);
+    const collapsed = view(exports, []);
     expect(collapsed.nodes).toHaveLength(DEFAULT_VISIBLE_EXPORTS + 1);
     expect(collapsed.hiddenChainCount).toBe(2);
 
-    const expanded = buildSourceExportsView(exports, source, true);
+    const expanded = view(exports, [], true);
     expect(expanded.nodes).toHaveLength(exports.length + 1);
     expect(expanded.hiddenChainCount).toBe(0);
   });
 
   it("draws the source alone when it has no exports", () => {
-    const view = buildSourceExportsView([], source, false);
+    const { nodes, edges } = view([], []);
 
-    expect(view.nodes.map((n) => n.id)).toEqual(["src"]);
-    expect(view.edges).toEqual([]);
+    expect(nodes.map((n) => n.id)).toEqual(["src"]);
+    expect(edges).toEqual([]);
   });
 });
