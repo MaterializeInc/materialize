@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   type ISignUpCompletePayload,
   type IUserVerifiedPayload,
+  UserVerifiedOriginTypes,
 } from "~/external-library-wrappers/frontegg";
 import { FRONTEGG_AFTER_AUTH_REDIRECT_URL } from "~/utils/externalRedirect";
 
@@ -21,8 +22,10 @@ const MARKETING_PAGE = "https://materialize.com/pricing/";
 
 const buildEvents = () => buildFronteggEvents(["https://materialize.com"])!;
 
-const verified = (origin: string) =>
-  ({ email: "ada@example.com", origin }) as unknown as IUserVerifiedPayload;
+const verified = (origin: UserVerifiedOriginTypes): IUserVerifiedPayload => ({
+  email: "ada@example.com",
+  origin,
+});
 
 describe("buildFronteggEvents", () => {
   beforeEach(() => {
@@ -38,13 +41,15 @@ describe("buildFronteggEvents", () => {
   });
 
   it("sends new email sign-ups (activation link) to the Console", () => {
-    buildEvents().userVerified!(verified("ACTIVATION_LINK"));
+    buildEvents().userVerified!(
+      verified(UserVerifiedOriginTypes.ACTIVATION_LINK),
+    );
 
     expect(localStorage.getItem(FRONTEGG_AFTER_AUTH_REDIRECT_URL)).toBeNull();
   });
 
   it("keeps the saved marketing page for passwordless sign-ins", () => {
-    buildEvents().userVerified!(verified("PASSWORDLESS"));
+    buildEvents().userVerified!(verified(UserVerifiedOriginTypes.PASSWORDLESS));
 
     expect(localStorage.getItem(FRONTEGG_AFTER_AUTH_REDIRECT_URL)).toBe(
       MARKETING_PAGE,

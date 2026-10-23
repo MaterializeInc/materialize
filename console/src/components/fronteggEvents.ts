@@ -12,6 +12,7 @@ import {
   type FronteggProviderProps,
   type ISignUpCompletePayload,
   type IUserVerifiedPayload,
+  UserVerifiedOriginTypes,
 } from "~/external-library-wrappers/frontegg";
 import { forgetExternalRedirect } from "~/utils/externalRedirect";
 
@@ -29,7 +30,7 @@ export const buildFronteggEvents = (
     trackSignUpInHubspotActions.signUpComplete(payload);
   },
   userVerified: (payload: IUserVerifiedPayload) => {
-    if (String(payload.origin) === "ACTIVATION_LINK") {
+    if (payload.origin === UserVerifiedOriginTypes.ACTIVATION_LINK) {
       forgetExternalRedirect(allowedRedirectOrigins);
     }
     trackSignUpInHubspotActions.userVerified(payload);
