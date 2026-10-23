@@ -15,6 +15,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   type ISignUpCompletePayload,
   type IUserVerifiedPayload,
+  UserVerifiedOriginTypes,
 } from "~/external-library-wrappers/frontegg";
 
 import { buildFronteggEvents } from "./fronteggEvents";
@@ -282,8 +283,8 @@ describe("RedirectUrlSanitizer", () => {
         if (callback === "/account/activate") {
           events?.userVerified?.({
             email: "ada@example.com",
-            origin: "ACTIVATION_LINK",
-          } as unknown as IUserVerifiedPayload);
+            origin: UserVerifiedOriginTypes.ACTIVATION_LINK,
+          } satisfies IUserVerifiedPayload);
         } else {
           events?.signUpComplete?.({
             email: "ada@example.com",
