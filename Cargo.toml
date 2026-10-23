@@ -366,6 +366,7 @@ fail = { version = "0.5.1", features = ["failpoints"] }
 fallible-iterator = "0.2.0"
 fancy-regex = "0.19.2"
 flate2 = "1.1.9"
+frontegg = { version = "0.9.0", default-features = false }
 futures = "0.3.32"
 futures-core = "0.3.32"
 futures-task = "0.3.32"

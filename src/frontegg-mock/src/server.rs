@@ -52,6 +52,7 @@ const SCIM_CONFIGURATION_PATH: &str = "/frontegg/directory/resources/v1/configur
 const TENANTS_PATH: &str = "/tenants/resources/tenants/v1";
 const TENANT_PATH: &str = "/tenants/resources/tenants/v1/{:id}";
 const TENANT_METADATA_PATH: &str = "/tenants/resources/tenants/v1/{:id}/metadata";
+const TENANT_METADATA_KEY_PATH: &str = "/tenants/resources/tenants/v1/{:id}/metadata/{:key}";
 const SSO_CONFIGS_PATH: &str = "/frontegg/team/resources/sso/v1/configurations";
 const SSO_CONFIG_PATH: &str = "/frontegg/team/resources/sso/v1/configurations/{:id}";
 const SSO_CONFIG_DOMAINS_PATH: &str =
@@ -249,8 +250,15 @@ impl FronteggMockServer {
                 TENANTS_PATH,
                 get(handle_list_tenants).post(handle_create_tenant),
             )
-            .route(TENANT_PATH, get(handle_get_tenant))
+            .route(
+                TENANT_PATH,
+                get(handle_get_tenant).delete(handle_delete_tenant),
+            )
             .route(TENANT_METADATA_PATH, post(handle_set_tenant_metadata))
+            .route(
+                TENANT_METADATA_KEY_PATH,
+                delete(handle_delete_tenant_metadata),
+            )
             .route(
                 INTERNAL_USER_PASSWORD_PATH,
                 post(internal_handle_get_user_password),
