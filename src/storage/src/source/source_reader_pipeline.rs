@@ -292,6 +292,11 @@ where
     let source_id = config.id;
     let worker_id = config.worker_id;
 
+    let resume_uppers = if C::USES_EXPORTS_INTO {
+        resume_uppers.boxed_local()
+    } else {
+        without_exports_into(resume_uppers).boxed_local()
+    };
     let resume_uppers = resume_uppers.inspect(move |uppers| {
         trace!(
             %uppers,
@@ -421,6 +426,21 @@ where
         health.concatenate_flatten::<_, CapacityContainerBuilder<_>>(health_streams),
         tokens,
     )
+}
+
+/// Clears [`ResumeUppers::exports_into`] and drops values that then equal their predecessor.
+fn without_exports_into<T: PartialEq + Clone + 'static>(
+    uppers: impl futures::Stream<Item = ResumeUppers<T>> + 'static,
+) -> impl futures::Stream<Item = ResumeUppers<T>> + 'static {
+    let mut prev: Option<ResumeUppers<T>> = None;
+    uppers.filter_map(move |mut uppers| {
+        uppers.exports_into.clear();
+        let changed = prev.as_ref() != Some(&uppers);
+        if changed {
+            prev = Some(uppers.clone());
+        }
+        futures::future::ready(changed.then_some(uppers))
+    })
 }
 
 /// Mints new contents for the remap shard based on summaries about the source
@@ -584,7 +604,7 @@ fn reclock_committed_upper<'scope, T, FromTime>(
     metrics: Arc<SourceMetrics>,
 ) -> impl futures::stream::Stream<Item = ResumeUppers<FromTime>> + 'static
 where
-    T: Timestamp + Lattice + TotalOrder,
+    T: Timestamp + Lattice + TotalOrder + Ord + Into<mz_repr::Timestamp>,
     FromTime: SourceTimestamp,
 {
     // Only used within this function, rather than create a comment to explain the fields.
@@ -593,6 +613,9 @@ where
         input_index: usize,
         /// The committed upper that `source_upper` and `applied` reflect.
         committed_upper: Antichain<T>,
+        /// The meet of `committed_upper` and the bindings upper when `source_upper` was last
+        /// brought up to date. `source_upper` is the remap frontier at `committed_into - 1`.
+        committed_into: Antichain<T>,
         source_upper: MutableAntichain<FromTime>,
         applied: usize,
     }
@@ -610,6 +633,7 @@ where
     let (tx, rx) = watch::channel(ResumeUppers {
         source: None,
         exports: BTreeMap::new(),
+        exports_into: BTreeMap::new(),
     });
     let scope = bindings.scope().clone();
 
@@ -628,6 +652,7 @@ where
                 id: export_id,
                 input_index,
                 committed_upper: Antichain::from_elem(T::minimum()),
+                committed_into: Antichain::from_elem(T::minimum()),
                 source_upper: MutableAntichain::new(),
                 applied: 0,
             }
@@ -755,6 +780,24 @@ where
                                     touched.push(index);
                                 }
                             }
+                            // Every ready binding below `t_next` is now applied, and every binding
+                            // below `bindings_upper` is ready.
+                            let into = match bindings_upper.as_option() {
+                                Some(b) => std::cmp::min(b, t_next).clone(),
+                                None => t_next.clone(),
+                            };
+                            // `bindings_upper` and the committed upper only advance, so `into`
+                            // does as well.
+                            mz_ore::soft_assert_or_log!(
+                                export.committed_into.less_equal(&into),
+                                "export {} committed_into {:?} regressed to {into:?}",
+                                export.id,
+                                export.committed_into,
+                            );
+                            if export.committed_into.less_than(&into) {
+                                export.committed_into = Antichain::from_elem(into);
+                                touched.push(index);
+                            }
                             if least_committed_upper
                                 .as_ref()
                                 .is_none_or(|(t, _)| t_next < t)
@@ -764,6 +807,7 @@ where
                         }
                         None => {
                             export.applied = drained + ready_times.len();
+                            export.committed_into = Antichain::new();
                             if advanced {
                                 touched.push(index);
                             }
@@ -780,12 +824,23 @@ where
                 });
                 ready_times.drain(..min_applied - drained);
                 drained = min_applied;
+                // An export can be touched both by applying bindings and by advancing its
+                // `committed_into`.
+                touched.sort_unstable();
+                touched.dedup();
                 // From testing, the common case is seeing a few exports updated in a given
                 // invocation. The published value is updated in place for the touched exports,
                 // rather than wholly replace the existing map with a new allocation.
                 tx.send_if_modified(|published| {
                     let mut modified = false;
                     for export in touched.drain(..).map(|index| &exports[index]) {
+                        let into = Antichain::from_iter(
+                            export.committed_into.iter().map(|t| t.clone().into()),
+                        );
+                        if published.exports_into.get(&export.id) != Some(&into) {
+                            published.exports_into.insert(export.id, into);
+                            modified = true;
+                        }
                         let reclocked_upper = export.reclocked_upper();
                         match published.exports.entry(export.id) {
                             Entry::Occupied(entry) if *entry.get() == reclocked_upper => {}
@@ -847,7 +902,17 @@ mod tests {
     }
 
     impl Harness {
+        /// Observes resume uppers as sources that do not set `USES_EXPORTS_INTO` do.
         fn new(worker: &mut Worker, exports: &[GlobalId]) -> Self {
+            Self::build(worker, exports, false)
+        }
+
+        /// Observes resume uppers including [`ResumeUppers::exports_into`].
+        fn with_exports_into(worker: &mut Worker, exports: &[GlobalId]) -> Self {
+            Self::build(worker, exports, true)
+        }
+
+        fn build(worker: &mut Worker, exports: &[GlobalId], keep_into: bool) -> Self {
             let defs = GeneralSourceMetricDefs::register_with(&MetricsRegistry::new());
             let metrics = Arc::new(SourceMetrics::new(&defs, GlobalId::User(0), 0));
             worker.dataflow::<Timestamp, _, _>(|scope| {
@@ -865,8 +930,12 @@ mod tests {
                     streams,
                     GlobalId::User(0),
                     Arc::clone(&metrics),
-                )
-                .boxed_local();
+                );
+                let resume_uppers = if keep_into {
+                    resume_uppers.boxed_local()
+                } else {
+                    without_exports_into(resume_uppers).boxed_local()
+                };
                 Harness {
                     bindings,
                     committed_uppers,
@@ -928,6 +997,7 @@ mod tests {
         Some(ResumeUppers {
             source,
             exports: exports.into_iter().collect(),
+            exports_into: BTreeMap::new(),
         })
     }
 
@@ -1036,6 +1106,69 @@ mod tests {
                 "the binding for time 4 applies without A committing again",
             );
         });
+    }
+
+    /// The persist shard of an export at `into - 1` holds exactly the updates not beyond the
+    /// remap frontier at `into - 1`, so each published `exports_into` entry must pair with that
+    /// frontier, also while the bindings lag the committed upper.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn reclock_committed_upper_pairs_exports_into() {
+        timely::execute_directly(|worker| {
+            let pair = |uppers: Option<ResumeUppers<MzOffset>>| {
+                let uppers = uppers.expect("published");
+                (uppers.exports_into[&A].clone(), uppers.exports[&A].clone())
+            };
+            let into = |t: u64| Antichain::from_elem(Timestamp::from(t));
+            let mut h = Harness::with_exports_into(worker, &[A]);
+            for t in 0..=3 {
+                h.bind(t);
+            }
+            h.commit(A, 3);
+            assert_eq!(
+                pair(h.step(worker)),
+                (into(3), offset(20)),
+                "committed through 3, bindings through 3: the shard at 2 holds offsets below 20",
+            );
+
+            h.commit(A, 6);
+            assert_eq!(
+                pair(h.step(worker)),
+                (into(4), offset(30)),
+                "bindings lag the committed upper: pair the bindings upper with its frontier",
+            );
+
+            h.bind(4);
+            h.bind(5);
+            assert_eq!(
+                pair(h.step(worker)),
+                (into(6), offset(50)),
+                "bindings caught up: pair the committed upper with its frontier",
+            );
+
+            h.close(A);
+            assert_eq!(pair(h.step(worker)), (Antichain::new(), Antichain::new()),);
+        });
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn without_exports_into_drops_unchanged_values() {
+        let value = |source: u64, into: u64| ResumeUppers {
+            source: Some(offset(source)),
+            exports: BTreeMap::from([(A, offset(source))]),
+            exports_into: BTreeMap::from([(A, Antichain::from_elem(Timestamp::from(into)))]),
+        };
+        let values = vec![value(10, 1), value(10, 2), value(20, 3)];
+        let stripped: Vec<_> = without_exports_into(futures::stream::iter(values))
+            .collect()
+            .await;
+        assert_eq!(
+            stripped,
+            vec![
+                uppers(Some(offset(10)), [(A, offset(10))]).unwrap(),
+                uppers(Some(offset(20)), [(A, offset(20))]).unwrap(),
+            ],
+        );
     }
 
     #[mz_ore::test]
