@@ -11,7 +11,11 @@ import parse from "postgres-interval";
 
 import { CriticalPathRow } from "~/api/materialize/maintained-objects/criticalPath";
 
-import { buildGraphView } from "./criticalPathRenderable";
+import {
+  buildGraphView,
+  buildSourceExportsView,
+  DEFAULT_VISIBLE_EXPORTS,
+} from "./criticalPathRenderable";
 import { CriticalPathData, MaintainedObjectListItem } from "./queries";
 
 const buildRow = (
@@ -177,5 +181,72 @@ describe("buildGraphView", () => {
     expect(view.nodes.find((n) => n.id === "sib2")?.kind).toBe("offPath");
     // Chain edge a→probe + two off-path edges.
     expect(view.edges).toHaveLength(3);
+  });
+});
+
+describe("buildSourceExportsView", () => {
+  const source = buildProbe({
+    id: "src",
+    name: "pg",
+    objectType: "source",
+    lag: { value: parse("00:00:01"), ms: 1_000 },
+  });
+  const exportRow = (id: string, lag: string) => ({
+    ...buildRow({ id, name: id, objectType: "table", lag: parse(lag) }),
+  });
+
+  it("marks the export that trails its source the most as primary", () => {
+    const view = buildSourceExportsView(
+      [exportRow("slow", "00:01:00"), exportRow("ok", "00:00:01")],
+      source,
+      false,
+    );
+
+    expect(view.nodes.map((n) => [n.id, n.kind])).toEqual([
+      ["src", "healthy"],
+      ["slow", "primary"],
+      ["ok", "healthy"],
+    ]);
+    expect(view.edges).toEqual([
+      { id: "src", childId: "slow", isBottleneck: true },
+      { id: "src", childId: "ok", isBottleneck: true },
+    ]);
+  });
+
+  it("marks the source primary when no export trails it", () => {
+    const laggingSource = buildProbe({
+      ...source,
+      lag: { value: parse("00:00:30"), ms: 30_000 },
+    });
+    const view = buildSourceExportsView(
+      [exportRow("t", "00:00:30")],
+      laggingSource,
+      false,
+    );
+
+    expect(view.nodes.find((n) => n.id === "src")?.kind).toBe("primary");
+    expect(view.nodes.find((n) => n.id === "t")?.kind).toBe("upstream");
+  });
+
+  it("hides exports past the visible count until expanded", () => {
+    const exports = Array.from(
+      { length: DEFAULT_VISIBLE_EXPORTS + 2 },
+      (_, i) => exportRow(`t${i}`, "00:00:05"),
+    );
+
+    const collapsed = buildSourceExportsView(exports, source, false);
+    expect(collapsed.nodes).toHaveLength(DEFAULT_VISIBLE_EXPORTS + 1);
+    expect(collapsed.hiddenChainCount).toBe(2);
+
+    const expanded = buildSourceExportsView(exports, source, true);
+    expect(expanded.nodes).toHaveLength(exports.length + 1);
+    expect(expanded.hiddenChainCount).toBe(0);
+  });
+
+  it("draws the source alone when it has no exports", () => {
+    const view = buildSourceExportsView([], source, false);
+
+    expect(view.nodes.map((n) => n.id)).toEqual(["src"]);
+    expect(view.edges).toEqual([]);
   });
 });

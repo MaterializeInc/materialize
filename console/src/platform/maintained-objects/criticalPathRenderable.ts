@@ -8,7 +8,10 @@
 // by the Apache License, Version 2.0.
 
 import { IPostgresInterval } from "~/api/materialize";
-import { CriticalPathRow } from "~/api/materialize/maintained-objects/criticalPath";
+import {
+  CriticalPathRow,
+  SourceExportLagRow,
+} from "~/api/materialize/maintained-objects/criticalPath";
 import { sumPostgresIntervalMs } from "~/util";
 
 import { CriticalPathData, MaintainedObjectListItem } from "./queries";
@@ -41,6 +44,11 @@ const lagMs = (lag: IPostgresInterval | null) =>
 
 const isHealthyLag = (lag: IPostgresInterval | null) =>
   lag !== null && lagMs(lag) <= HEALTHY_LAG_MS;
+
+const nodeCluster = (r: Pick<CriticalPathRow, "clusterId" | "clusterName">) =>
+  r.clusterId && r.clusterName
+    ? { id: r.clusterId, name: r.clusterName }
+    : null;
 
 /** Three Maps describing the critical-path subgraph.
  *
@@ -150,9 +158,15 @@ const computeOffPathCounts = (
   return result;
 };
 
+/** An edge drawn from `id` down to `childId`; dashed unless `isBottleneck`. */
+export type GraphEdge = Pick<
+  CriticalPathRow,
+  "id" | "childId" | "isBottleneck"
+>;
+
 export interface GraphView {
   nodes: RenderableNode[];
-  edges: CriticalPathRow[];
+  edges: GraphEdge[];
   /** Chain nodes past `visibleDepth`. Drives the "Show N more" CTA. */
   hiddenChainCount: number;
 }
@@ -246,10 +260,7 @@ export const buildGraphView = (
         }),
         offPathCount: offPathCountById.get(id) ?? 0,
         objectType: r.objectType,
-        cluster:
-          r.clusterId && r.clusterName
-            ? { id: r.clusterId, name: r.clusterName }
-            : null,
+        cluster: nodeCluster(r),
         peakLag: r.peakLag,
         peakLagAt: r.peakLagAt,
       },
@@ -293,10 +304,7 @@ export const buildGraphView = (
     kind: "offPath",
     offPathCount: 0,
     objectType: r.objectType,
-    cluster:
-      r.clusterId && r.clusterName
-        ? { id: r.clusterId, name: r.clusterName }
-        : null,
+    cluster: nodeCluster(r),
     peakLag: r.peakLag,
     peakLagAt: r.peakLagAt,
   }));
@@ -305,5 +313,68 @@ export const buildGraphView = (
     nodes: [probeNode, ...chainNodes, ...offPathNodes],
     edges: [...chainEdges, ...offPathEdges],
     hiddenChainCount,
+  };
+};
+
+/** Subsources and tables drawn under a source before the "more" toggle. */
+export const DEFAULT_VISIBLE_EXPORTS = 4;
+
+/** Lays a source out above the subsources and tables it ingests into.
+ *
+ *  `exports` arrive worst lag first, and only the first
+ *  `DEFAULT_VISIBLE_EXPORTS` are drawn unless `showAll`. The primary
+ *  bottleneck is the export whose lag past the source is largest, or the
+ *  source itself when no export trails it.
+ */
+export const buildSourceExportsView = (
+  exports: SourceExportLagRow[],
+  probe: MaintainedObjectListItem,
+  showAll: boolean,
+): GraphView => {
+  const probeLag = probe.lag?.value ?? null;
+  const lagMsById = new Map<string, number>([
+    [probe.id, lagMs(probeLag)],
+    ...exports.map((e) => [e.id, lagMs(e.lag)] as const),
+  ]);
+  const primaryIds = findPrimaryBottlenecks(
+    lagMsById,
+    new Map(exports.map((e) => [e.id, [probe.id]])),
+    Math.max(...lagMsById.values()),
+  );
+
+  const visible = showAll ? exports : exports.slice(0, DEFAULT_VISIBLE_EXPORTS);
+  const probeNode: RenderableNode = {
+    id: probe.id,
+    name: probe.name,
+    lag: probeLag,
+    isProbe: true,
+    kind: classifyNode({ id: probe.id, lag: probeLag, primaryIds }),
+    offPathCount: 0,
+    objectType: probe.objectType,
+    cluster: probe.cluster,
+    peakLag: null,
+    peakLagAt: null,
+  };
+  const exportNodes: RenderableNode[] = visible.map((e) => ({
+    id: e.id,
+    name: e.name,
+    lag: e.lag,
+    isProbe: false,
+    kind: classifyNode({ id: e.id, lag: e.lag, primaryIds }),
+    offPathCount: 0,
+    objectType: e.objectType,
+    cluster: nodeCluster(e),
+    peakLag: e.peakLag,
+    peakLagAt: e.peakLagAt,
+  }));
+
+  return {
+    nodes: [probeNode, ...exportNodes],
+    edges: visible.map((e) => ({
+      id: probe.id,
+      childId: e.id,
+      isBottleneck: true,
+    })),
+    hiddenChainCount: exports.length - visible.length,
   };
 };

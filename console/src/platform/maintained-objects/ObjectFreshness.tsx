@@ -24,14 +24,12 @@ import { MaterializeTheme } from "~/theme";
 import { formatDate } from "~/utils/dateFormat";
 
 import { LOOKBACK_OPTIONS } from "./constants";
-import { ClusterReplicaMetrics } from "./CriticalPathClusterMetrics";
 import { CriticalPathGraph } from "./CriticalPathGraph";
 import { computeFreshnessBreakdown } from "./freshnessBreakdown";
 import { FreshnessBreakdownStrip } from "./FreshnessBreakdownStrip";
 import { peakLagTimestampFromHistory } from "./freshnessHistory";
 import { ObjectFreshnessChart } from "./ObjectFreshnessChart";
 import {
-  isSourceCollection,
   MaintainedObjectListItem,
   useCriticalPath,
   useObjectFreshnessHistory,
@@ -79,18 +77,15 @@ export const ObjectFreshness = ({
   const isLocked = lockedTimestamp !== null;
   const anchorTimestamp = lockedTimestamp ?? autoAnchorTimestamp;
 
+  const isSource = item.objectType === "source";
+  // A source has no inputs to break its lag down by.
   const { data: criticalPath } = useCriticalPath({
-    objectId: item.id,
+    objectId: isSource ? undefined : item.id,
     timestamp: anchorTimestamp,
     bucketSizeMs,
     lookbackMinutes: timePeriodMinutes,
   });
   const breakdown = computeFreshnessBreakdown(criticalPath?.directInputs ?? []);
-
-  // Sources ingest from external systems and have no Materialize-internal
-  // upstream chain to walk. Their "critical path" is the cluster they ingest
-  // on, so they get its replica metrics instead.
-  const isSource = isSourceCollection(item);
 
   return (
     <VStack align="start" spacing={6} width="100%">
@@ -126,69 +121,44 @@ export const ObjectFreshness = ({
             isLocked={isLocked}
           />
 
-          {item.objectType === "source" && (
-            <SourceTablesFreshness sourceId={item.id} />
-          )}
+          {isSource && <SourceTablesFreshness sourceId={item.id} />}
 
-          {isSource && (
-            <>
-              <Divider />
+          <Divider />
 
-              <VStack align="start" spacing={1} width="100%">
-                <Text textStyle="heading-sm">Source cluster metrics</Text>
-                <Text
-                  textStyle="text-small"
-                  color={colors.foreground.secondary}
+          <VStack align="start" spacing={1} width="100%">
+            <HStack width="100%" justify="space-between" align="center">
+              <Text textStyle="heading-sm">Critical path</Text>
+              {anchorTimestamp && (
+                <Tag
+                  size="sm"
+                  borderRadius="md"
+                  bg={
+                    isLocked ? colors.background.accent : colors.background.info
+                  }
+                  color={
+                    isLocked ? colors.accent.brightPurple : colors.accent.blue
+                  }
                 >
-                  Resources of the cluster this data is ingested on, at the
-                  point selected on the freshness graph above.
-                </Text>
-              </VStack>
+                  {isLocked ? "Locked at " : "Peak at "}
+                  {formatDate(anchorTimestamp, "h:mm:ss a")}
+                </Tag>
+              )}
+            </HStack>
+            {isSource && (
+              <Text textStyle="text-small" color={colors.foreground.secondary}>
+                The subsources and tables this source writes to.
+              </Text>
+            )}
+          </VStack>
 
-              <ClusterReplicaMetrics
-                cluster={item.cluster}
-                timestamp={anchorTimestamp}
-                bucketSizeMs={bucketSizeMs}
-                lookbackMs={timePeriodMinutes * 60 * 1000}
-              />
-            </>
-          )}
+          {breakdown && <FreshnessBreakdownStrip breakdown={breakdown} />}
 
-          {!isSource && (
-            <>
-              <Divider />
-
-              <HStack width="100%" justify="space-between" align="center">
-                <Text textStyle="heading-sm">Critical path</Text>
-                {anchorTimestamp && (
-                  <Tag
-                    size="sm"
-                    borderRadius="md"
-                    bg={
-                      isLocked
-                        ? colors.background.accent
-                        : colors.background.info
-                    }
-                    color={
-                      isLocked ? colors.accent.brightPurple : colors.accent.blue
-                    }
-                  >
-                    {isLocked ? "Locked at " : "Peak at "}
-                    {formatDate(anchorTimestamp, "h:mm:ss a")}
-                  </Tag>
-                )}
-              </HStack>
-
-              {breakdown && <FreshnessBreakdownStrip breakdown={breakdown} />}
-
-              <CriticalPathGraph
-                probe={item}
-                timestamp={anchorTimestamp}
-                bucketSizeMs={bucketSizeMs}
-                lookbackMinutes={timePeriodMinutes}
-              />
-            </>
-          )}
+          <CriticalPathGraph
+            probe={item}
+            timestamp={anchorTimestamp}
+            bucketSizeMs={bucketSizeMs}
+            lookbackMinutes={timePeriodMinutes}
+          />
         </VStack>
       </Card>
     </VStack>

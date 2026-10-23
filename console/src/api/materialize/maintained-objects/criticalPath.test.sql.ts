@@ -14,7 +14,12 @@ import {
 import { testdrive } from "~/test/sql/mzcompose";
 
 import { SEARCH_PATH } from "../executeSql";
-import { buildCriticalPathLiveQuery, CriticalPathRow } from "./criticalPath";
+import {
+  buildCriticalPathLiveQuery,
+  buildSourceExportLagsQuery,
+  CriticalPathRow,
+  SourceExportLagRow,
+} from "./criticalPath";
 
 /** Creates the test catalog tables that the query reads from. */
 const seedCatalogSql = (testSchema: string) => `
@@ -57,6 +62,66 @@ const seedCatalogSql = (testSchema: string) => `
           id TEXT NOT NULL,
           source_id TEXT
         );`;
+
+/**
+ * Source exports. The probe reads a source-fed table, a subsource, and a
+ * table written with INSERT. The table and subsource have no cluster.
+ *
+ *                 ┌────────────────┐
+ *                 │ u1  src · 2s   │
+ *                 └───────┬────────┘
+ *           ┌─────────────┴────┐
+ *           ▼                  ▼
+ *   ┌────────────────┐ ┌────────────────┐ ┌──────────────────┐
+ *   │ t1 table · 30s │ │ s1 subsrc · 4s │ │ t2 written · 50s │
+ *   └───────┬────────┘ └───────┬────────┘ └────────┬─────────┘
+ *           │                  │                   │ (dropped)
+ *           └─────────┬────────┘
+ *                     ▼
+ *           ┌──────────────────┐
+ *           │ u9  probe · 31s  │
+ *           └──────────────────┘
+ *
+ * Expectation: the chain runs u1 → t1 → u9, and s1 is off-path. The exports
+ * report the cluster u1 ingests on. t2 is not on the critical path even
+ * though it lags the most.
+ */
+const seedSourceExports = (testSchema: string) => `${seedCatalogSql(testSchema)}
+      > INSERT INTO ${testSchema}.mz_materialization_dependencies VALUES
+          ('u9', 't1'),
+          ('u9', 's1'),
+          ('u9', 't2');
+      > INSERT INTO ${testSchema}.mz_wallclock_global_lag_recent_history VALUES
+          ('t1', INTERVAL '30 SECONDS', now()),
+          ('s1', INTERVAL '4 SECONDS', now()),
+          ('t2', INTERVAL '50 SECONDS', now()),
+          ('u1', INTERVAL '2 SECONDS', now()),
+          ('u9', INTERVAL '31 SECONDS', now());
+      > INSERT INTO ${testSchema}.mz_objects VALUES
+          ('u1', 'source', 'c1'),
+          ('t1', 'table', NULL),
+          ('s1', 'source', NULL),
+          ('t2', 'table', NULL),
+          ('u9', 'materialized-view', 'c2');
+      > INSERT INTO ${testSchema}.mz_object_fully_qualified_names VALUES
+          ('u1', 'pg', 'public', 'mz'),
+          ('t1', 'orders', 'public', 'mz'),
+          ('s1', 'customers', 'public', 'mz'),
+          ('t2', 'written', 'public', 'mz'),
+          ('u9', 'probe', 'public', 'mz');
+      > INSERT INTO ${testSchema}.mz_sources VALUES
+          ('u1', 'postgres', 'c1'),
+          ('s1', 'subsource', NULL);
+      > INSERT INTO ${testSchema}.mz_tables VALUES
+          ('t1', 'u1'),
+          ('t2', NULL);
+      > INSERT INTO ${testSchema}.mz_object_dependencies VALUES
+          ('s1', 'u1'),
+          ('t1', 'u1');
+      > INSERT INTO ${testSchema}.mz_clusters VALUES
+          ('c1', 'ingest'),
+          ('c2', 'compute');
+  `;
 
 // Bucket size large enough that all seed rows in the same `now()` second land
 // in one bucket — the probe-peak snapshot returns every object's lag from
@@ -244,68 +309,20 @@ describe("buildCriticalPathLiveQuery", () => {
     expect(slow?.isBottleneck).toBe(false);
   });
 
-  /**
-   * Source exports. The probe reads a source-fed table, a subsource, and a
-   * table written with INSERT. The table and subsource have no cluster.
-   *
-   *   ┌────────────────┐ ┌────────────────┐ ┌──────────────────┐
-   *   │ t1 table · 30s │ │ s1 subsrc · 4s │ │ t2 written · 50s │
-   *   └───────┬────────┘ └───────┬────────┘ └────────┬─────────┘
-   *           │                  │                   │ (dropped)
-   *           └─────────┬────────┘
-   *                     ▼
-   *           ┌──────────────────┐
-   *           │ u9  probe · 31s  │
-   *           └──────────────────┘
-   *
-   * Expectation: t1 is the bottleneck and s1 is off-path, both reporting the
-   * cluster their source u1 ingests on. t2 is not on the critical path even
-   * though it lags the most.
-   */
-  it("follows source-fed tables and subsources to their source's cluster", async () => {
+  it("follows source-fed tables and subsources back to their source", async () => {
     const testSchema = "test_critical_path";
-
-    await testdrive(`${seedCatalogSql(testSchema)}
-      > INSERT INTO ${testSchema}.mz_materialization_dependencies VALUES
-          ('u9', 't1'),
-          ('u9', 's1'),
-          ('u9', 't2');
-      > INSERT INTO ${testSchema}.mz_wallclock_global_lag_recent_history VALUES
-          ('t1', INTERVAL '30 SECONDS', now()),
-          ('s1', INTERVAL '4 SECONDS', now()),
-          ('t2', INTERVAL '50 SECONDS', now()),
-          ('u9', INTERVAL '31 SECONDS', now());
-      > INSERT INTO ${testSchema}.mz_objects VALUES
-          ('u1', 'source', 'c1'),
-          ('t1', 'table', NULL),
-          ('s1', 'source', NULL),
-          ('t2', 'table', NULL),
-          ('u9', 'materialized-view', 'c2');
-      > INSERT INTO ${testSchema}.mz_object_fully_qualified_names VALUES
-          ('t1', 'orders', 'public', 'mz'),
-          ('s1', 'customers', 'public', 'mz'),
-          ('t2', 'written', 'public', 'mz'),
-          ('u9', 'probe', 'public', 'mz');
-      > INSERT INTO ${testSchema}.mz_sources VALUES
-          ('u1', 'postgres', 'c1'),
-          ('s1', 'subsource', NULL);
-      > INSERT INTO ${testSchema}.mz_tables VALUES
-          ('t1', 'u1'),
-          ('t2', NULL);
-      > INSERT INTO ${testSchema}.mz_object_dependencies VALUES
-          ('s1', 'u1'),
-          ('t1', 'u1');
-      > INSERT INTO ${testSchema}.mz_clusters VALUES
-          ('c1', 'ingest'),
-          ('c2', 'compute');
-    `);
+    await testdrive(seedSourceExports(testSchema));
 
     const rows = (await runQuery(testSchema, "u9")).sort((a, b) =>
       a.id.localeCompare(b.id),
     );
-    expect(rows.map((r) => r.id)).toEqual(["s1", "t1"]);
+    expect(rows.map((r) => [r.id, r.childId])).toEqual([
+      ["s1", "u9"],
+      ["t1", "u9"],
+      ["u1", "t1"],
+    ]);
     expect(rows[0]).toMatchObject({
-      objectType: "source",
+      objectType: "subsource",
       clusterId: "c1",
       clusterName: "ingest",
       isBottleneck: false,
@@ -316,5 +333,52 @@ describe("buildCriticalPathLiveQuery", () => {
       clusterName: "ingest",
       isBottleneck: true,
     });
+    expect(rows[2]).toMatchObject({
+      objectType: "source",
+      clusterName: "ingest",
+      isBottleneck: true,
+    });
+  });
+
+  it("walks a subsource back to its source", async () => {
+    const testSchema = "test_critical_path";
+    await testdrive(seedSourceExports(testSchema));
+
+    const rows = await runQuery(testSchema, "s1");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: "u1",
+      childId: "s1",
+      name: "pg",
+      isBottleneck: true,
+    });
+    expect(rows[0].lag?.toPostgres()).toBe("2 seconds");
+    expect(rows[0].targetLag?.toPostgres()).toBe("4 seconds");
+  });
+});
+
+describe("buildSourceExportLagsQuery", () => {
+  it("lists a source's subsources and tables, slowest first", async () => {
+    const testSchema = "test_critical_path";
+    await testdrive(seedSourceExports(testSchema));
+
+    const compiled = buildSourceExportLagsQuery("u1", 60, TEST_BUCKET_MS, null);
+    const result = await executeSqlHttp(compiled, {
+      sessionVariables: {
+        cluster: QUICKSTART_CLUSTER,
+        search_path: `${testSchema}, ${SEARCH_PATH}`,
+      },
+    });
+    const rows = result.rows as SourceExportLagRow[];
+
+    // t2 is written with INSERT, so it is not an export.
+    expect(rows.map((r) => r.id)).toEqual(["t1", "s1"]);
+    expect(rows[0]).toMatchObject({
+      name: "orders",
+      objectType: "table",
+      clusterName: "ingest",
+    });
+    expect(rows[0].lag?.toPostgres()).toBe("30 seconds");
+    expect(rows[1]).toMatchObject({ objectType: "subsource" });
   });
 });

@@ -326,7 +326,7 @@ export interface ClusterReplicaMetricsProps {
 
 /** Per-replica memory/CPU utilization for one cluster at a point in time,
  * with any replicas dropped inside the window called out. */
-export const ClusterReplicaMetrics = ({
+const ClusterReplicaMetrics = ({
   cluster,
   timestamp,
   bucketSizeMs,

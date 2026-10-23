@@ -23,6 +23,32 @@ const MAINTAINED_OBJECT_TYPES_SQL = sql.raw(
   MAINTAINED_OBJECT_TYPES.map((t) => `'${t}'`).join(", "),
 );
 
+/**
+ * `source_exports` CTE definition for `WITH MUTUALLY RECURSIVE`: each
+ * subsource and source-fed table, its source, and the cluster that source
+ * ingests on. Exports have no cluster of their own.
+ */
+const SOURCE_EXPORTS_CTE = sql`source_exports(
+    export_id text,
+    source_id text,
+    cluster_id text
+  ) AS (
+    SELECT od.object_id, ps.id, ps.cluster_id
+    FROM mz_object_dependencies od
+    JOIN mz_sources cs ON cs.id = od.object_id AND cs.type = 'subsource'
+    JOIN mz_sources ps ON ps.id = od.referenced_object_id
+    UNION ALL
+    SELECT t.id, ps.id, ps.cluster_id
+    FROM mz_tables t
+    JOIN mz_sources ps ON ps.id = t.source_id
+  )`;
+
+/** `mz_objects` reports a subsource as `source`. Needs `o` and `se` joined. */
+const EXPORT_OBJECT_TYPE_SQL = sql`CASE
+    WHEN se.export_id IS NOT NULL AND o.type = 'source' THEN 'subsource'
+    ELSE o.type
+  END`;
+
 export interface CriticalPathRow {
   id: string;
   childId: string;
@@ -112,6 +138,22 @@ const perObjectLagCteAtTime = (timestamp: Date, bucketSizeMs: number) => {
 };
 
 /**
+ * `per_object_peak` CTE definition: each object's max lag in the lookback
+ * window and when it occurred, independent of the chain snapshot. Joined onto
+ * the result rows as per-node badge metadata.
+ */
+const perObjectPeakCte = (lookbackMinutes: number) => {
+  const lookback = sql.raw(`${lookbackMinutes}`);
+  return sql`per_object_peak(object_id text, peak_lag interval, peak_at timestamptz) AS (
+    SELECT DISTINCT ON (object_id)
+      object_id, lag, occurred_at::timestamptz
+    FROM mz_wallclock_global_lag_recent_history
+    WHERE occurred_at + INTERVAL '${lookback} MINUTES' >= mz_now()
+    ORDER BY object_id, lag DESC NULLS LAST, occurred_at DESC
+  )`;
+};
+
+/**
  * Given an object ID, walks the critical path back to its sources and returns
  * one row per chain edge plus the immediate off-path siblings of each chain
  * node. The two callers — `buildCriticalPathLiveQuery` and
@@ -129,13 +171,13 @@ const buildCriticalPathQuery = (
   lookbackMinutes: number,
   perObjectLag: RawBuilder<unknown>,
 ): CompiledQuery<CriticalPathRow> => {
-  const lookback = sql.raw(`${lookbackMinutes}`);
   return sql<CriticalPathRow>`
 WITH MUTUALLY RECURSIVE
   -- mz_materialization_dependencies covers sinks (which read from MVs/sources)
   -- as well as compute objects. Restrict both ends of the edge to maintained
   -- object types so tables written with INSERT drop out of the chain.
-  -- Source-fed tables stay: like subsources, their lag is ingestion lag.
+  -- Source-fed tables stay: like subsources, their lag is ingestion lag. The
+  -- second branch adds the edge from each of those back to its source.
   input_of(source text, target text) AS (
     SELECT md.dependency_id, md.object_id
     FROM mz_materialization_dependencies md
@@ -145,17 +187,12 @@ WITH MUTUALLY RECURSIVE
       AND tgt.type IN (${MAINTAINED_OBJECT_TYPES_SQL})
     WHERE src.type IN (${MAINTAINED_OBJECT_TYPES_SQL})
       OR t.source_id IS NOT NULL
+    UNION ALL
+    SELECT source_id, export_id FROM source_exports
   ),
+  ${SOURCE_EXPORTS_CTE},
   ${perObjectLag},
-  -- Per-node max lag in the lookback window and when it occurred.
-  -- Joined onto the SELECT below as per-node badge metadata.
-  per_object_peak(object_id text, peak_lag interval, peak_at timestamptz) AS (
-    SELECT DISTINCT ON (object_id)
-      object_id, lag, occurred_at::timestamptz
-    FROM mz_wallclock_global_lag_recent_history
-    WHERE occurred_at + INTERVAL '${lookback} MINUTES' >= mz_now()
-    ORDER BY object_id, lag DESC NULLS LAST, occurred_at DESC
-  ),
+  ${perObjectPeakCte(lookbackMinutes)},
   max_input_lag(target text, max_lag interval) AS (
     SELECT i.target, max(p.lag)
     FROM input_of i
@@ -179,23 +216,12 @@ WITH MUTUALLY RECURSIVE
   ),
   chain_targets(target text) AS (
     SELECT DISTINCT target FROM delayed_by
-  ),
-  -- Subsources and source-fed tables have no cluster of their own.
-  export_clusters(export_id text, cluster_id text) AS (
-    SELECT od.object_id, ps.cluster_id
-    FROM mz_object_dependencies od
-    JOIN mz_sources cs ON cs.id = od.object_id AND cs.type = 'subsource'
-    JOIN mz_sources ps ON ps.id = od.referenced_object_id
-    UNION ALL
-    SELECT t.id, ps.cluster_id
-    FROM mz_tables t
-    JOIN mz_sources ps ON ps.id = t.source_id
   )
 SELECT
   i.source AS "id",
   i.target AS "childId",
   fqn.name AS "name",
-  o.type AS "objectType",
+  ${EXPORT_OBJECT_TYPE_SQL} AS "objectType",
   fqn.schema_name AS "schemaName",
   fqn.database_name AS "databaseName",
   c.id AS "clusterId",
@@ -212,8 +238,8 @@ FROM input_of i
 JOIN chain_targets ct ON ct.target = i.target
 JOIN mz_objects o ON o.id = i.source
 JOIN mz_object_fully_qualified_names fqn ON fqn.id = i.source
-LEFT JOIN export_clusters ec ON ec.export_id = i.source
-LEFT JOIN mz_clusters c ON c.id = coalesce(o.cluster_id, ec.cluster_id)
+LEFT JOIN source_exports se ON se.export_id = i.source
+LEFT JOIN mz_clusters c ON c.id = coalesce(o.cluster_id, se.cluster_id)
 LEFT JOIN per_object_lag ls ON ls.object_id = i.source
 LEFT JOIN per_object_lag lt ON lt.object_id = i.target
 LEFT JOIN per_object_peak pk ON pk.object_id = i.source
@@ -254,6 +280,81 @@ export const buildCriticalPathAtTimeQuery = (
     lookbackMinutes,
     perObjectLagCteAtTime(timestamp, bucketSizeMs),
   );
+
+export type SourceExportLagRow = Omit<
+  CriticalPathRow,
+  "childId" | "targetLag" | "isBottleneck"
+>;
+
+/**
+ * One row per subsource and source-fed table of `sourceId`. Each row's lag is
+ * read from the same bucket the critical path snapshots: the bucket where the
+ * source's lag peaked over the lookback window, or the bucket containing
+ * `timestamp` when one is selected.
+ */
+export const buildSourceExportLagsQuery = (
+  sourceId: string,
+  lookbackMinutes: number,
+  bucketSizeMs: number,
+  timestamp: Date | null,
+): CompiledQuery<SourceExportLagRow> => {
+  const perObjectLag = timestamp
+    ? perObjectLagCteAtTime(timestamp, bucketSizeMs)
+    : perObjectLagCteAtProbePeak(sourceId, lookbackMinutes, bucketSizeMs);
+  return sql<SourceExportLagRow>`
+WITH MUTUALLY RECURSIVE
+  ${SOURCE_EXPORTS_CTE},
+  ${perObjectLag},
+  ${perObjectPeakCte(lookbackMinutes)}
+SELECT
+  se.export_id AS "id",
+  fqn.name AS "name",
+  ${EXPORT_OBJECT_TYPE_SQL} AS "objectType",
+  fqn.schema_name AS "schemaName",
+  fqn.database_name AS "databaseName",
+  c.id AS "clusterId",
+  c.name AS "clusterName",
+  ls.lag AS "lag",
+  pk.peak_lag AS "peakLag",
+  pk.peak_at AS "peakLagAt"
+FROM source_exports se
+JOIN mz_objects o ON o.id = se.export_id
+JOIN mz_object_fully_qualified_names fqn ON fqn.id = se.export_id
+LEFT JOIN mz_clusters c ON c.id = se.cluster_id
+LEFT JOIN per_object_lag ls ON ls.object_id = se.export_id
+LEFT JOIN per_object_peak pk ON pk.object_id = se.export_id
+WHERE se.source_id = ${lit(sourceId)}
+ORDER BY ls.lag DESC NULLS LAST
+  `.compile(queryBuilder);
+};
+
+export const fetchSourceExportLags = ({
+  sourceId,
+  lookbackMinutes,
+  bucketSizeMs,
+  timestamp,
+  queryKey,
+  requestOptions,
+}: {
+  sourceId: string;
+  lookbackMinutes: number;
+  bucketSizeMs: number;
+  timestamp: Date | null;
+  queryKey: QueryKey;
+  requestOptions?: RequestInit;
+}) =>
+  executeSqlV2({
+    queries: buildSourceExportLagsQuery(
+      sourceId,
+      lookbackMinutes,
+      bucketSizeMs,
+      timestamp,
+    ),
+    queryKey,
+    requestOptions,
+    requestTimeoutMs: 30_000,
+    sessionVariables: { transaction_isolation: "serializable" },
+  });
 
 /**
  * Fetches the critical path for default mode (no user-selected timestamp).

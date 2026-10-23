@@ -24,12 +24,21 @@ import { MaterializeTheme } from "~/theme";
 
 import { CriticalPathClusterMetrics } from "./CriticalPathClusterMetrics";
 import { CriticalPathGraphNode } from "./CriticalPathGraphNode";
-import { buildGraphView } from "./criticalPathRenderable";
 import {
-  CriticalPathData,
+  buildGraphView,
+  buildSourceExportsView,
+  GraphView,
+} from "./criticalPathRenderable";
+import {
   MaintainedObjectListItem,
   useCriticalPath,
+  useSourceExportLags,
 } from "./queries";
+
+// The canvas centers the graph and pins its zoom controls to the bottom
+// right, so a wide bottom row needs enough padding to clear them.
+const CANVAS_PADDING = 40;
+const WIDE_ROW_CANVAS_PADDING = 120;
 
 const NODE_WIDTH = 160;
 const NODE_HEIGHT = 56;
@@ -50,7 +59,19 @@ const LoadingSpinner = () => (
   </Center>
 );
 
-export const CriticalPathGraph = ({
+/**
+ * Walks upstream from the probe to its slowest inputs. A source has no
+ * upstream inside Materialize, so for a source this draws the subsources and
+ * tables it ingests into instead.
+ */
+export const CriticalPathGraph = (props: CriticalPathGraphProps) =>
+  props.probe.objectType === "source" ? (
+    <SourceExportsGraph {...props} />
+  ) : (
+    <UpstreamGraph {...props} />
+  );
+
+const UpstreamGraph = ({
   probe,
   timestamp,
   bucketSizeMs,
@@ -62,13 +83,58 @@ export const CriticalPathGraph = ({
     bucketSizeMs,
     lookbackMinutes,
   });
+  const buildView = React.useCallback(
+    (expandedBottleneckId: string | null, isExpanded: boolean) =>
+      buildGraphView(
+        data ?? { rows: [], directInputs: [] },
+        probe,
+        expandedBottleneckId,
+        isExpanded ? Infinity : DEFAULT_VISIBLE_DEPTH,
+      ),
+    [data, probe],
+  );
 
   if (isLoading || !data) return <LoadingSpinner />;
   if (data.rows.length === 0) return <EmptyCriticalPath />;
   return (
     <CriticalPathGraphInner
       probe={probe}
-      data={data}
+      buildView={buildView}
+      moreLabel={(count) => `+ ${count} more upstream paths`}
+      timestamp={timestamp}
+      bucketSizeMs={bucketSizeMs}
+      lookbackMs={lookbackMinutes * 60 * 1000}
+    />
+  );
+};
+
+const SourceExportsGraph = ({
+  probe,
+  timestamp,
+  bucketSizeMs,
+  lookbackMinutes,
+}: CriticalPathGraphProps) => {
+  const { data, isLoading } = useSourceExportLags({
+    sourceId: probe.id,
+    timestamp,
+    bucketSizeMs,
+    lookbackMinutes,
+  });
+  const buildView = React.useCallback(
+    (_expandedBottleneckId: string | null, isExpanded: boolean) =>
+      buildSourceExportsView(data ?? [], probe, isExpanded),
+    [data, probe],
+  );
+
+  if (isLoading || !data) return <LoadingSpinner />;
+  // With no exports the graph is the source alone, which still carries the
+  // cluster metrics below it.
+  return (
+    <CriticalPathGraphInner
+      probe={probe}
+      buildView={buildView}
+      moreLabel={(count) => `+ ${count} more`}
+      canvasPadding={WIDE_ROW_CANVAS_PADDING}
       timestamp={timestamp}
       bucketSizeMs={bucketSizeMs}
       lookbackMs={lookbackMinutes * 60 * 1000}
@@ -89,13 +155,21 @@ const EmptyCriticalPath = () => {
 
 const CriticalPathGraphInner = ({
   probe,
-  data,
+  buildView,
+  moreLabel,
+  canvasPadding = CANVAS_PADDING,
   timestamp,
   bucketSizeMs,
   lookbackMs,
 }: {
   probe: MaintainedObjectListItem;
-  data: CriticalPathData;
+  /** Builds the drawn graph; `isExpanded` reveals the nodes it hides. */
+  buildView: (
+    expandedBottleneckId: string | null,
+    isExpanded: boolean,
+  ) => GraphView;
+  moreLabel: (hiddenCount: number) => string;
+  canvasPadding?: number;
   timestamp: Date | null;
   bucketSizeMs: number;
   lookbackMs: number;
@@ -107,11 +181,11 @@ const CriticalPathGraphInner = ({
   const [selectedNodeId, setSelectedNodeId] = React.useState<string | null>(
     null,
   );
-  const [visibleDepth, setVisibleDepth] = React.useState(DEFAULT_VISIBLE_DEPTH);
+  const [isExpanded, setIsExpanded] = React.useState(false);
 
   const { nodes, edges, hiddenChainCount } = React.useMemo(
-    () => buildGraphView(data, probe, expandedBottleneckId, visibleDepth),
-    [data, probe, expandedBottleneckId, visibleDepth],
+    () => buildView(expandedBottleneckId, isExpanded),
+    [buildView, expandedBottleneckId, isExpanded],
   );
 
   const dagreNodes = React.useMemo(
@@ -145,7 +219,6 @@ const CriticalPathGraphInner = ({
 
   if (!width || !height) return <LoadingSpinner />;
 
-  const isExpanded = visibleDepth > DEFAULT_VISIBLE_DEPTH;
   const toggle = (id: string) => (curr: string | null) =>
     curr === id ? null : id;
   const displayedNode =
@@ -163,20 +236,16 @@ const CriticalPathGraphInner = ({
             color={colors.accent.brightPurple}
             cursor="pointer"
             _hover={{ textDecoration: "underline" }}
-            onClick={() =>
-              setVisibleDepth(isExpanded ? DEFAULT_VISIBLE_DEPTH : Infinity)
-            }
+            onClick={() => setIsExpanded(!isExpanded)}
           >
-            {isExpanded
-              ? "Collapse"
-              : `+ ${hiddenChainCount} more upstream paths`}
+            {isExpanded ? "Collapse" : moreLabel(hiddenChainCount)}
           </Text>
         </HStack>
       )}
       <Box
         position="relative"
         width="100%"
-        height={`${height + 40}px`}
+        height={`${height + canvasPadding}px`}
         overflow="hidden"
       >
         <Canvas width={width} height={height} selectedNode={null}>
