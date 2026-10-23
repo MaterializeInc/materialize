@@ -1189,7 +1189,7 @@ The options, from least to most shared:
   conformance suite.
 
 The SDK will use C. The prototype Rust package is already most of this protocol
-core: its decoder, release engine, multi-view engine, statements, and
+core: its decoder, release engine, checkpoints, statements, and
 classification are pure, and only the transport does I/O. A gives every
 language its own copy of the state machine, and the prototypes already show the
 drift that follows (text values in Rust, native values in Python). B removes
@@ -1263,10 +1263,13 @@ misc/materialize-sdk/
   core/          protocol core (Rust library)
   spec/          behavior spec, versioned
   conformance/   vectors, shared by every package
+  schema/        JSON Schemas of the values the core hands to the packages
+  codegen/       generates the schemas and each package's types from the core
   python/        package: PyO3 binding, psycopg transport, sinks
   node/          package: WebAssembly build, node-postgres transport, sinks
   rust/          package: protocol core directly, tokio-postgres transport, sinks
-  test/          mzcompose end-to-end suite, run in the nightlies
+  turbopuffer/   the turbopuffer sink
+test/materialize-sdk/  mzcompose end-to-end suite, run in the nightlies
 ```
 
 The SDK will start in its own Cargo workspace under `misc/`, outside the
@@ -1421,6 +1424,11 @@ The prototype leaves these parts of the design for after it.
 
 In the SDK:
 
+- multi-view subscriptions, and the `Generations` argument of
+  `sweep_generations` they need, where the prototype passes one `u64`,
+- the local file checkpoint store, beside the Materialize table store,
+- dropping a `Superseded` write, where the prototype stops,
+- stopping on a signal, and metrics,
 - a connection factory, to renew expired credentials,
 - the skip and dead-letter delivery policies, and the history-loss policies,
 - merging the batches of one `commit_interval`, and `max_commit_bytes`,
@@ -1652,7 +1660,11 @@ October work, because the doc picks a safe default for each.
     DevEx, with review, before the sweep option ships. Should a sink that
     stores its own checkpoint read it during a long write and return `Fenced`,
     through a check the SDK provides because the text is opaque, or should the
-    SDK run those reads?
+    SDK run those reads? The prototype's turbopuffer sink rereads its
+    checkpoint before a batch, at most every 20 seconds, and stops once a newer
+    worker has retired its snapshot's incarnation. That covers a long
+    snapshot, but not one write that runs long, nor a fenced worker outside a
+    snapshot.
 
 ## Appendix: turbopuffer sink
 
