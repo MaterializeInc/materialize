@@ -78,11 +78,7 @@ Note that adding a table still briefly restarts the source dataflow, and if the 
 ### Improvements {#v26.47-improvements}
 - **Zero-downtime upgrades wait less before promoting**: A rollout no longer applies a full stability wait to replicas created during that rollout, and no longer waits on collections or replicas that the outgoing deployment has not hydrated either.
 - **Lower connection balancer memory per connection**: Idle connections through the connection balancer now use about a third less memory, so a self-managed deployment with the 256 MiB default is no longer killed for running out of memory at roughly 3,800 connections.
-- **Metadata for JDBC-based tools**: `pg_class.relpages`, `pg_am.amcanorder`, `pg_type.typlen`, and `pg_attribute.attlen` are now populated, so pgjdbc clients such as the AWS Glue Data Catalog crawler no longer fail reading index metadata, and Trino's PostgreSQL connector can push joins down.
-- **Temporal bucketing in every deployment**: Self-managed deployments and the emulator now use temporal bucketing, lowering the cost of maintaining views and indexes over temporal filters.
-- **Incremental compaction on by default**: Self-managed deployments and the emulator now compact persisted data incrementally, as Materialize Cloud already does. No migration is needed.
 - **`min` and `max` over arrays and lists**: `min` and `max` now accept arrays and lists, and lists gain the `<>`, `<`, `<=`, `>`, and `>=` operators. Arrays with the same elements in differently shaped dimensions now sort as they do in PostgreSQL, which changes `<`, `ORDER BY`, `greatest`, and `least` for those arrays.
-- **Refresh strategy columns report their source expressions**: In `mz_internal.mz_materialized_view_refresh_strategies`, the `aligned_to` and `at` columns are renamed to `aligned_to_expression` and `at_expression`, and now return the expression as `text` rather than a resolved timestamp.
 
 ### Guides {#v26.47-guides}
 - [Understand the query lifecycle](/serve-results/query-lifecycle/)
