@@ -57,17 +57,29 @@ struct Tail {
 }
 
 impl Tail {
-    fn push(&mut self, event: &Result<Row, DataflowError>, lsn: MzOffset, diff: Diff, max: usize) {
+    /// Records an update the operator gave at `lsn`.
+    ///
+    /// Callers push in non-decreasing LSN order. Once the recorded updates exceed `max_bytes`,
+    /// the tail drops all of them and sets `lost_upto` to `lsn + 1`. It then ignores updates
+    /// below `lost_upto`, and a retraction that needs them replays the replication stream
+    /// instead. A `max_bytes` of zero records nothing.
+    fn push(
+        &mut self,
+        event: &Result<Row, DataflowError>,
+        lsn: MzOffset,
+        diff: Diff,
+        max_bytes: usize,
+    ) {
         if self.lost_upto.is_some_and(|lost| lost > lsn) {
             return;
         }
-        if max == 0 {
+        if max_bytes == 0 {
             self.lost_upto = Some(lsn + 1);
             return;
         }
         self.bytes += event.fuel_size();
         self.updates.push_back((event.clone(), lsn, diff));
-        if self.bytes > max {
+        if self.bytes > max_bytes {
             self.updates.clear();
             self.bytes = 0;
             self.lost_upto = Some(lsn + 1);
