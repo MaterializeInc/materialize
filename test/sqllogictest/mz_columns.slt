@@ -371,6 +371,28 @@ c46  'a'␠||␠'b'␠||␠'c'
 c47  ROW(1,␠'a')::[<id>␠AS␠"materialize"."public"."record_type"]
 c48  1␠-␠-1
 
+# A column that repeats DEFAULT reports the last one, which is the one inserts apply.
+statement ok
+CREATE TABLE repeated_defaults (a int DEFAULT 1 DEFAULT 2, b int DEFAULT 5 DEFAULT NULL)
+
+statement ok
+INSERT INTO repeated_defaults DEFAULT VALUES
+
+query II
+SELECT * FROM repeated_defaults
+----
+2  NULL
+
+query TT
+SELECT columns.name, columns.default
+FROM mz_catalog.mz_columns columns
+JOIN mz_catalog.mz_tables tables ON columns.id = tables.id
+WHERE tables.name = 'repeated_defaults'
+ORDER BY columns.position
+----
+a  2
+b  NULL
+
 # --- Views and materialized views take the planned column names and types ----
 
 statement ok

@@ -265,16 +265,19 @@ pub fn item_details(a: &str) -> Result<serde_json::Value, String> {
                 .columns
                 .iter()
                 .map(|column| {
+                    // A column may repeat `DEFAULT`, and `plan_create_table` applies the last one.
                     column
                         .options
                         .iter()
+                        .rev()
                         .find_map(|option| match &option.option {
-                            ColumnOption::Default(expr) if !is_null_literal(expr) => {
-                                Some(json!(expr.to_ast_string_stable()))
-                            }
+                            ColumnOption::Default(expr) => Some(expr),
                             _ => None,
                         })
-                        .unwrap_or(serde_json::Value::Null)
+                        .filter(|expr| !is_null_literal(expr))
+                        .map_or(serde_json::Value::Null, |expr| {
+                            json!(expr.to_ast_string_stable())
+                        })
                 })
                 .collect();
             info.insert("column_defaults", json!(column_defaults));
@@ -2043,6 +2046,11 @@ mod tests {
             out["column_defaults"],
             json!([null, null, "NULL::[s46 AS \"pg_catalog\".\"text\"]"])
         );
+
+        // The last of several defaults applies, even when it is a bare NULL.
+        let sql = r#"CREATE TABLE "materialize"."public"."t" ("a" [s20 AS "pg_catalog"."int4"] DEFAULT 1 DEFAULT 2, "b" [s20 AS "pg_catalog"."int4"] DEFAULT 5 DEFAULT NULL)"#;
+        let out = super::item_details(sql).expect("ok");
+        assert_eq!(out["column_defaults"], json!(["2", null]));
 
         let sql =
             r#"CREATE TABLE "t" FROM SOURCE [u1 AS "materialize"."public"."s"] (REFERENCE = "t")"#;
