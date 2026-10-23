@@ -232,20 +232,20 @@ describe("buildSourceExportsView", () => {
   });
 
   it("marks the source primary when no export trails it", () => {
-    const { nodes } = buildSourceExportsView({
-      probe: buildProbe({
-        ...source,
-        lag: { value: parse("00:00:30"), ms: 30_000 },
-      }),
-      exports: [table("t")],
-      readings: [reading("t", "00:00:30")],
-      anchor: ANCHOR,
-      bucketSizeMs: BUCKET_MS,
-      showAll: false,
-    });
+    const { nodes } = view(
+      [table("t")],
+      [reading("src", "00:00:30"), reading("t", "00:00:30")],
+    );
 
     expect(nodes.find((n) => n.id === "src")?.kind).toBe("primary");
     expect(nodes.find((n) => n.id === "t")?.kind).toBe("upstream");
+  });
+
+  it("reads the source's lag from the anchor bucket, not the list", () => {
+    // The list's pMAX can come from a later minute than the anchor bucket.
+    const { nodes } = view([table("t")], [reading("src", "00:00:03")]);
+
+    expect(nodes[0].lag?.toPostgres()).toBe("3 seconds");
   });
 
   it("reads each export's lag from the bucket containing the anchor", () => {

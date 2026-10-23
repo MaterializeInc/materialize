@@ -333,7 +333,8 @@ const exportRank = (reading: LagReading | undefined) => {
 };
 
 /** Lays a source out above the subsources and tables it ingests into, each
- *  with its reading in the bucket containing `anchor`.
+ *  with its reading in the bucket containing `anchor`. `readings` include the
+ *  source's own, so every node describes the same moment.
  *
  *  Only the `DEFAULT_VISIBLE_EXPORTS` worst are drawn unless `showAll`. The
  *  primary bottleneck is the export whose lag past the source is largest, or
@@ -356,29 +357,28 @@ export const buildSourceExportsView = ({
 }): GraphView => {
   const readingsById = group(readings, (r) => r.objectId);
   const anchorMs = anchor?.getTime();
+  const readingAtAnchor = (id: string) =>
+    anchorMs === undefined
+      ? undefined
+      : readingsById.get(id)?.find((r) => {
+          const startMs = r.bucketStart.getTime();
+          return startMs <= anchorMs && anchorMs < startMs + bucketSizeMs;
+        });
   const ranked = sort(
-    exports.map((item) => {
-      const own = readingsById.get(item.id) ?? [];
-      return {
-        item,
-        reading:
-          anchorMs === undefined
-            ? undefined
-            : own.find((r) => {
-                const startMs = r.bucketStart.getTime();
-                return startMs <= anchorMs && anchorMs < startMs + bucketSizeMs;
-              }),
-        peak: greatest(
-          own.filter((r) => r.lag !== null),
-          (r) => lagMs(r.lag),
-        ),
-      };
-    }),
+    exports.map((item) => ({
+      item,
+      reading: readingAtAnchor(item.id),
+      peak: greatest(
+        (readingsById.get(item.id) ?? []).filter((r) => r.lag !== null),
+        (r) => lagMs(r.lag),
+      ),
+    })),
     (e) => exportRank(e.reading),
     (e) => e.item.name,
   );
 
-  const probeLag = probe.lag?.value ?? null;
+  const probeReading = readingAtAnchor(probe.id);
+  const probeLag = probeReading ? probeReading.lag : (probe.lag?.value ?? null);
   const lagMsById = new Map<string, number>([
     [probe.id, lagMs(probeLag)],
     ...ranked.map((e) => [e.item.id, lagMs(e.reading?.lag ?? null)] as const),

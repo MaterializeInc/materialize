@@ -126,7 +126,7 @@ const SourceExportsGraph = ({
 }: CriticalPathGraphProps) => {
   const exports = useSourceExports(probe.id);
   const { data, isLoading, isError } = useObjectsLagHistory({
-    objectIds: exports.map((e) => e.id),
+    objectIds: [probe.id, ...exports.map((e) => e.id)],
     lookbackMs: lookbackMinutes * 60 * 1000,
   });
   const buildView = React.useCallback(
