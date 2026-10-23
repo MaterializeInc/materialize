@@ -119,12 +119,23 @@ retention regression. Evidence and limits are in
 requests and observer accounting, not allocator/cache tuning. The prompt's
 restriction against changing the 1s default is superseded by approval.
 
-CI140341 runs the original CI140146 seed on diagnostic revision `0bf20a4a`,
-based on `e8084213`, with unchanged workload, resources and deadlines. Only the
-CI hook and bounded observer differ. The bulk collector is disabled. Independent
-review and mock checks cover serial requests, identity, readiness, output limits
-and cleanup ownership. Actual capture overhead and validity still need checking.
-The diagnostic branch is separate from canonical M2 changes.
+The bounded diagnostic runs use the original `e8084213` production code and
+workload, separate from canonical M2 changes. CI140341 reproduces quickstart's
+OOM at 10.16GiB anonymous RSS, but its observer fails to start. CI140345 fixes
+observer access and passes both shards plus an unchanged shard-2 retry. CI140352
+also passes both shards with HTTP observation deferred until the 4GiB heap
+threshold. Its initialization completes before any HTTP request. Early scraping
+is therefore not necessary for these faster passing runs.
+
+Passing captures peak at 4.08–4.45GiB sampled quickstart anonymous RSS, with small
+measured observer costs but substantial parent swap pressure. Heaps capture
+manipulation or validation, not failing initialization. Complete symbolization
+finds upsert staging, decode and batch-building allocations, but cannot attribute
+the original OOM to buffering or retained history. Timed-out adapter requests
+stop further HTTP observation. The OOM remains unresolved. Compare effective
+execution configuration and existing failure/progress evidence before choosing
+another capture or repair. Detailed evidence and observer accounting are under
+`scratch/cadence60-default/ci140341/`, `ci140345/` and `ci140352/`.
 
 CI140105 at `2bde8879` finishes with 94 passed jobs. Cargo, cluster frontier
 checks, Kafka RTR, both parallel shards and the closed native recovery/handover
