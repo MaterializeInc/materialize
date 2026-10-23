@@ -314,6 +314,7 @@ so it is executed.""",
                 "lint-fast",
                 "lint-clippy",
                 "lint-doctests",
+                "lint-skill-metrics",
             ):
                 step.pop("skip", None)
 
