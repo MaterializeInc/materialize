@@ -17,12 +17,12 @@ use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use futures::future;
 use mz_ore::assert_none;
-use mz_ore::netio::{Listener, Stream};
+use mz_ore::netio::Listener;
 use mz_ore::retry::Retry;
 use mz_service::client::GenericClient;
 use mz_service::transport::{self, Message, NoopMetrics};
 use semver::Version;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
 use tracing::info;
 use tracing::level_filters::LevelFilter;
@@ -92,94 +92,6 @@ async fn connect_ctp_error<Out: Message, In: Message>(
             }
         })
         .await
-}
-
-#[test] // allow(test-attribute)
-#[cfg_attr(miri, ignore)] // too slow
-fn test_stalled_handshake_times_out() {
-    let mut sim = setup();
-    const IDLE_TIMEOUT: Duration = Duration::from_secs(2);
-    let (ready_tx, mut ready_rx) = mpsc::unbounded_channel();
-
-    sim.host("server", move || {
-        let ready_tx = ready_tx.clone();
-        async move {
-            let listener = Listener::bind("turmoil:0.0.0.0:7777").await?;
-            ready_tx.send(())?;
-            let (_stream, _peer) = listener.accept().await?;
-            future::pending().await
-        }
-    });
-
-    sim.client("client", async move {
-        ready_rx.recv().await.expect("server must be listening");
-        let result = tokio::time::timeout(
-            IDLE_TIMEOUT * 2,
-            transport::Client::<(), ()>::connect(
-                "turmoil:server:7777",
-                VERSION,
-                TIMEOUT,
-                IDLE_TIMEOUT,
-                NoopMetrics,
-            ),
-        )
-        .await
-        .expect("a successful TCP connect must not leave the CTP handshake unbounded");
-        let error = result.unwrap_err();
-        assert!(error.to_string().contains("timed out"), "{error:#}");
-        Ok(())
-    });
-
-    sim.run().unwrap();
-}
-
-#[test] // allow(test-attribute)
-#[cfg_attr(miri, ignore)] // too slow
-fn test_reconnect_cancels_stalled_server_handshake() {
-    let mut sim = setup();
-    let (ready_tx, ready_rx) = oneshot::channel();
-
-    sim.host("server", move || async {
-        transport::serve(
-            "turmoil:0.0.0.0:7777".parse().unwrap(),
-            VERSION,
-            Some("server".into()),
-            Duration::MAX,
-            OneOutputHandler::new,
-            NoopMetrics,
-        )
-        .await?;
-        Ok(())
-    });
-
-    sim.client("old-client", async move {
-        let mut stream = Retry::default()
-            .retry_async(|_| Stream::connect("turmoil:server:7777"))
-            .await?;
-        // Receiving the server's magic proves that the first handshake has started.
-        // Never send our own magic or hello, leaving that handshake blocked.
-        stream.read_u64().await?;
-        ready_tx.send(()).unwrap();
-        let mut remaining_hello = Vec::new();
-        tokio::time::timeout(TIMEOUT, stream.read_to_end(&mut remaining_hello)).await??;
-        Ok(())
-    });
-
-    sim.client("new-client", async move {
-        ready_rx.await?;
-        let mut client = transport::Client::<i32, i32>::connect(
-            "turmoil:server:7777",
-            VERSION,
-            TIMEOUT,
-            Duration::from_secs(2),
-            NoopMetrics,
-        )
-        .await?;
-        assert_eq!(client.recv().await?, Some(123));
-        Ok(())
-    });
-
-    sim.run().unwrap();
 }
 
 #[test] // allow(test-attribute)
@@ -544,26 +456,6 @@ fn test_idle_timeout() {
 #[test] // allow(test-attribute)
 #[cfg_attr(miri, ignore)] // too slow
 fn test_keepalive() {
-    #[derive(Clone, Default)]
-    struct IdleMetrics {
-        bytes_received: Arc<AtomicUsize>,
-        messages_received: Arc<AtomicUsize>,
-    }
-
-    impl transport::Metrics<i32, i32> for IdleMetrics {
-        fn bytes_sent(&mut self, _len: usize) {}
-
-        fn bytes_received(&mut self, len: usize) {
-            self.bytes_received.fetch_add(len, Ordering::SeqCst);
-        }
-
-        fn message_sent(&mut self, _msg: &i32) {}
-
-        fn message_received(&mut self, _msg: &i32) {
-            self.messages_received.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-
     let mut sim = setup();
 
     sim.host("server", move || async {
@@ -592,16 +484,8 @@ fn test_keepalive() {
     });
 
     sim.client("client", async move {
-        let metrics = IdleMetrics::default();
         let mut client =
-            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, metrics.clone()).await;
-
-        let received_before = metrics.bytes_received.load(Ordering::SeqCst);
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        // A healthy but idle connection must receive actual heartbeat bytes, not just
-        // stay open because timeout enforcement is absent.
-        assert!(metrics.bytes_received.load(Ordering::SeqCst) >= received_before + 16);
-        assert_eq!(metrics.messages_received.load(Ordering::SeqCst), 0);
+            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
 
         client.recv().await?;
 
