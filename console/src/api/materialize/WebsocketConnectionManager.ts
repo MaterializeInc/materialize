@@ -28,6 +28,8 @@ export interface Connectable {
 
 export interface ConnectionInfo {
   hasEverConnected: boolean;
+  /** The environment being connected to, read from the store at the connect. */
+  environment: Environment | undefined;
 }
 
 export interface WebsocketConnectionManagerOptions {
@@ -255,6 +257,7 @@ export class WebsocketConnectionManager {
 
     const sessionVariables = this.options.getSessionVariables?.({
       hasEverConnected: this.hasEverConnected,
+      environment: this.getCurrentEnvironment(),
     });
     this.connectInFlight = true;
     this.attemptedHttpAddress = this.currentHttpAddress;

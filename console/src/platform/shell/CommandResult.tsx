@@ -20,6 +20,11 @@ import { capitalizeSentence } from "~/util";
 import CommandResultNotice from "./CommandResultNotice";
 import { ERROR_NOTICE_OUTPUT_MAX_WIDTH, TABLE_PAGE_SIZE } from "./constants";
 import ErrorOutput from "./ErrorOutput";
+import {
+  describeExecutionTime,
+  findExecutionTime,
+  formatExecutionTime,
+} from "./executionTime";
 import formatRows from "./formatRows";
 import SqlSelectTable, { TablePagination } from "./SqlSelectTable";
 import {
@@ -29,6 +34,9 @@ import {
 } from "./store/shell";
 import { calculateCommandDuration, formatCommandDuration } from "./timings";
 import useCommandOutputPagination from "./useCommandOutputPagination";
+
+const ROUND_TRIP_HELP =
+  "Returned in: the time until the Shell had received the whole result, including the network and your browser's processing, measured from sending the input. (When there are multiple statements in one input, it is measured from the previous result for each statement after the first.)";
 
 const CommandResult = ({
   commandResultIndex,
@@ -110,9 +118,11 @@ const CommandResult = ({
   }
 
   const timeTaken = calculateCommandDuration(commandResultIndex, commandOutput);
+  const executionTime = findExecutionTime(notices);
 
   const timeTakenStr = timeTaken
-    ? `Returned in ${formatCommandDuration(timeTaken)}`
+    ? `Returned in ${formatCommandDuration(timeTaken)}` +
+      (executionTime ? ` · ${formatExecutionTime(executionTime)}` : "")
     : null;
 
   // A cancelled query and a dropped connection both surface as errors so that
@@ -169,7 +179,11 @@ const CommandResult = ({
             {timeTakenStr}
           </Code>
           <Tooltip
-            label="The total time to submit, execute, receive, and render the query results over the network."
+            label={
+              executionTime
+                ? `${ROUND_TRIP_HELP} ${describeExecutionTime(executionTime)}`
+                : ROUND_TRIP_HELP
+            }
             placement="right"
             color={colors.foreground.secondary}
             background={colors.background.secondary}

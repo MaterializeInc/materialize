@@ -20,6 +20,7 @@ import {
 } from "~/test/utils";
 
 import { COMMAND_INTERRUPTED_MESSAGE } from "./constants";
+import { EXECUTION_TIME_NOTICE_CODE } from "./executionTime";
 import HistoryOutput from "./HistoryOutput";
 import { createInterruptedCommandError } from "./machines/webSocketFsm";
 import { CommandOutput, historyItemAtom, shellStateAtom } from "./store/shell";
@@ -111,4 +112,39 @@ describe("HistoryOutput", () => {
     expect(screen.queryByText(COMMAND_INTERRUPTED_MESSAGE)).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
+
+  it.each([
+    [
+      '{"duration_us":2000,"kind":"completed"}',
+      "Returned in 148.0ms · 2.0ms in Materialize",
+    ],
+    ["not json", "Returned in 148.0ms"],
+  ])(
+    "never prints an execution time notice as a notice line (detail %s)",
+    async (detail, footer) => {
+      await renderHistoryOutput(
+        commandOutput({
+          commandSentTimeMs: 1000,
+          commandResults: [
+            {
+              notices: [
+                {
+                  code: EXECUTION_TIME_NOTICE_CODE,
+                  message: "execution time: 2.000 ms",
+                  severity: "Notice",
+                  detail,
+                },
+              ],
+              hasRows: false,
+              commandCompletePayload: "CREATE TABLE",
+              endTimeMs: 1148,
+            },
+          ],
+        }),
+      );
+
+      expect(screen.getByText(footer)).toBeVisible();
+      expect(screen.queryByText(/execution time:/)).toBeNull();
+    },
+  );
 });
