@@ -920,6 +920,7 @@ mz_statement_execution_history  result_size
 mz_statement_execution_history  rows_returned
 mz_statement_execution_history  sample_rate
 mz_statement_execution_history  search_path
+mz_statement_execution_history  throttled_count
 mz_statement_execution_history  transaction_id
 mz_statement_execution_history  transaction_isolation
 mz_statement_execution_history  transient_index_id
