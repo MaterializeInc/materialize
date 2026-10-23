@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { buildConstants } from "~/config/buildConstants";
+
 /**
  * Origins outside the Console that sign-in may send the visitor back to. The
  * marketing site links to the login page with `?redirectUrl=<page>` so visitors
@@ -17,18 +19,22 @@ const MARKETING_SITE_ORIGINS = [
   "https://www.materialize.com",
 ];
 
-// The marketing site's dev server, which points its sign-in links at staging.
-const MARKETING_SITE_DEV_ORIGINS = ["http://localhost:5173"];
-
 /**
  * Returns the external origins `redirectUrl` may point at for the given stack.
- * Production only allows the marketing site itself.
+ *
+ * `devOrigins` is a local marketing site's dev server. It only comes from
+ * local `yarn start` builds (`__MARKETING_SITE_DEV_ORIGINS__`); production
+ * builds, which staging and previews also serve, set it to none. Even then,
+ * the production stack only allows the marketing site itself.
  */
-export function getAllowedRedirectOrigins(currentStack: string): string[] {
+export function getAllowedRedirectOrigins(
+  currentStack: string,
+  devOrigins: readonly string[] = buildConstants.marketingSiteDevOrigins,
+): string[] {
   if (currentStack === "production") {
     return [...MARKETING_SITE_ORIGINS];
   }
-  return [...MARKETING_SITE_ORIGINS, ...MARKETING_SITE_DEV_ORIGINS];
+  return [...MARKETING_SITE_ORIGINS, ...devOrigins];
 }
 
 /**

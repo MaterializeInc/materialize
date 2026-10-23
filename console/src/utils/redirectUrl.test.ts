@@ -176,10 +176,20 @@ describe("getAllowedRedirectOrigins", () => {
     expect(getAllowedRedirectOrigins("production")).toEqual(MARKETING);
   });
 
-  it("also allows the marketing dev server on other stacks", () => {
-    expect(getAllowedRedirectOrigins("staging")).toEqual([
-      ...MARKETING,
-      "http://localhost:5173",
-    ]);
+  it("only allows the marketing site in builds without dev origins", () => {
+    // Tests, like production builds, define no dev origins.
+    expect(getAllowedRedirectOrigins("staging")).toEqual(MARKETING);
+  });
+
+  it("allows a local marketing dev server in local builds", () => {
+    expect(
+      getAllowedRedirectOrigins("staging", ["http://localhost:5173"]),
+    ).toEqual([...MARKETING, "http://localhost:5173"]);
+  });
+
+  it("never allows dev origins on the production stack", () => {
+    expect(
+      getAllowedRedirectOrigins("production", ["http://localhost:5173"]),
+    ).toEqual(MARKETING);
   });
 });
