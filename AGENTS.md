@@ -18,28 +18,6 @@ Use the `mz-debug-ci` skill before the first `bk` or `gh pr checks` command, or 
 
 ## Code navigation
 
-For operation flow tracing, read first:
-
-* `doc/developer/generated/flows.md` — maps operations (query lifecycle, source ingestion, MV creation, sink lifecycle, catalog DDL, timestamp selection, persist read/write, controller architecture) to `crate::module` paths in execution order.
-* `doc/developer/generated/<crate>/_crate.md` — per-crate overview: modules, key types, dependencies.
-* `doc/developer/generated/<crate>/<module>.md` — per-file docs.
-
-> **READ-ONLY: `doc/developer/generated/` is generated, not authored.**
-> The entire `doc/developer/generated/` tree is maintained exclusively by the
-> recurring documentation agent, which runs the `update-docs` skill/command.
-> That agent is the *only* session permitted to create, edit, or delete files
-> under this directory.
->
-> In any other session: **treat `doc/developer/generated/` as read-only.** Use
-> it for navigation and context, but never edit, create, delete, or regenerate
-> files there — not even to "fix" something you noticed, and not as part of an
-> unrelated change. These files carry `source`/`revision` front-matter that the
-> recurring agent manages; hand edits desync that bookkeeping. If a generated
-> doc is wrong or stale, report it in your response rather than editing it, and
-> leave the correction to the `update-docs` agent. Do not stage or commit any
-> path under `doc/developer/generated/` unless you are explicitly running the
-> `update-docs` workflow.
-
 `console/` is the web Console. It was moved in from the standalone
 `MaterializeInc/console` repository, which is now archived and stale.
 
