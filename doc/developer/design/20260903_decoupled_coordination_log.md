@@ -39,17 +39,32 @@ workflows, four testdrive files, both SQL logic files, all 22 native library tes
 and full adapter-loss recovery pass on scratch. The SQL failures depended on
 input compaction, not a REFRESH correctness violation.
 
-CI140149 at `b3555da7` finishes with 93 passed jobs, including both parallel
-shards and native recovery/handover. Besides the two deferred exclusions, only
-Testdrive 4 fails: introspection's AS OF 0 rejection assumes an advanced read
-frontier. The scoped correction in `d1ed7559` has scratch red/green evidence.
-Testdrive 3 passes this build. Its earlier inter-file slowdown remains unexplained
-and did not reproduce in the short scratch comparison.
+Latest combined verification is CI140353 at `f021ec9a`: 90 passed jobs, five
+failed and one timed out. Both restart and both parallel shards pass on their
+first attempts. Merge skew, existing-environment conversion and Kafka RTR's
+explicit-DDL conflict remain deferred failures, not passing.
 
-CI140154 at `57c5fd56` passes all testdrive and both parallel shards, with 88 passed
-jobs after one unchanged restart-proof retry. MySQL/Postgres RTR still fail on
-explicit-DDL revision conflicts. Both full workflows pass unchanged on scratch.
-A reduced rename transaction reproduces invalidation by six controller
+Webhook cleanup reproduces in the full Testdrive 6 shard on scratch. Its shard
+eventually tombstones without intervention. The same shard passes at fixture-only
+1s cadence. Correction `83ae8a42` scopes that interval to webhook's cleanup checks
+and resets it afterward. The full shard passes from clean fixture state with the
+normal 60s startup default, unchanged assertions and unchanged deadlines.
+Combined CI for this correction remains pending.
+
+`test_startup_cluster_notice` receives an unexpected replica-online notice in
+CI140353. Explicit replica readiness uses the existing fixture check, shared
+between asynchronous and blocking callers. The exact notice test and an existing
+blocking caller pass on scratch, with all notice assertions retained. Combined
+CI verification remains pending.
+
+Cluster 5 times out in `test-drop-index-during-subscribe-sequencing`. It reaches
+DROP catalog application but does not establish DROP completion or release of
+the paused SUBSCRIBE. The unchanged exact workflow passes on scratch, including
+its dependency-drop assertion and sanity restart. This does not resolve the CI
+timeout. It is distinct from the deferred explicit-DDL COMMIT conflict.
+Evidence and reproduction commands are under `scratch/cadence60-default/ci140353/`.
+
+The deferred explicit-DDL boundary has a reduced rename reproduction: six controller
 `ClusterRuntime` initialization commits, advancing its revision from 8 to 14.
 This matches the original CI startup window, without tracing its rejecting update.
 Evidence is in `scratch/cadence60-default/ci140154/runtime-boundary/`.
@@ -131,11 +146,23 @@ Passing captures peak at 4.08–4.45GiB sampled quickstart anonymous RSS, with s
 measured observer costs but substantial parent swap pressure. Heaps capture
 manipulation or validation, not failing initialization. Complete symbolization
 finds upsert staging, decode and batch-building allocations, but cannot attribute
-the original OOM to buffering or retained history. Timed-out adapter requests
-stop further HTTP observation. The OOM remains unresolved. Compare effective
-execution configuration and existing failure/progress evidence before choosing
-another capture or repair. Detailed evidence and observer accounting are under
-`scratch/cadence60-default/ci140341/`, `ci140345/` and `ci140352/`.
+the original OOM to buffering or retained history. CI140355 also passes, below
+the 8GiB threshold for its bounded worker CPU capture. No failing heap is captured.
+Startup configuration matches across the compared failing and passing runs.
+CI140359 runs one bounded control with discovery and sampling delayed four
+minutes, beyond the observed startup/stall window. It retains the original seed,
+production code, resources and deadlines. A passing control would not establish
+an OOM repair or justify further memory-policy tuning.
+
+Existing failures show an admission/execution gap before OOM. Follower summaries
+continue after timely-worker logs stop, but their empty pending sets do not prove
+command delivery. Source installation can still await protection or asynchronous
+Persist preparation. Distinguish gated installation from worker execution and
+buffering before choosing a repair. Do not tune memory policy from passing heaps.
+The OOM remains unresolved. Evidence is under `scratch/cadence60-default/`,
+including `ci140341/install-boundary.md`, `ci140352/config-comparison.md` and
+`ci140355/REPORT.md`. A focused independent review of this diagnostic boundary
+is pending.
 
 CI140105 at `2bde8879` finishes with 94 passed jobs. Cargo, cluster frontier
 checks, Kafka RTR, both parallel shards and the closed native recovery/handover
