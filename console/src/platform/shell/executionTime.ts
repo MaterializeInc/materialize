@@ -30,8 +30,8 @@ export const EXECUTION_TIME_NOTICE_CODE = "MZ012";
 const READ_HELP =
   "In Materialize: the time Materialize took to produce the query's result. It does not include sending the rows to your browser, which happens after Materialize has computed the whole result.";
 
-// Only a write before its commit names its end point in the label: its number
-// leaves out the commit, which users would otherwise assume it covers.
+// Only `staged` names its end point in the label: its number leaves out a
+// commit, which users would otherwise assume it covers.
 const KINDS = {
   first_row: { label: "in Materialize", help: READ_HELP },
   empty_result: { label: "in Materialize", help: READ_HELP },
@@ -41,11 +41,7 @@ const KINDS = {
   },
   staged: {
     label: "in Materialize, before commit",
-    help: "In Materialize: the time Materialize took for the write. It does not include the commit, which happens later, for example at COMMIT.",
-  },
-  committed: {
-    label: "in Materialize",
-    help: "In Materialize: the time Materialize took for the write, including the commit that made it durable.",
+    help: "In Materialize: the time Materialize took for the statement, without the commit of its transaction, which comes after it.",
   },
 } as const;
 

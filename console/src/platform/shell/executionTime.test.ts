@@ -37,10 +37,10 @@ describe("parseExecutionTimeNotice", () => {
     expect(
       parseExecutionTimeNotice(
         notice(
-          '{"duration_us":500,"kind":"committed","strategy":"index scan"}',
+          '{"duration_us":500,"kind":"completed","strategy":"index scan"}',
         ),
       ),
-    ).toEqual({ kind: "committed", durationMs: 0.5 });
+    ).toEqual({ kind: "completed", durationMs: 0.5 });
   });
 
   it.each([
@@ -77,11 +77,11 @@ describe("findExecutionTime", () => {
 });
 
 describe("formatExecutionTime", () => {
-  it("labels a read and a committed write", () => {
+  it("labels a read and a completed statement", () => {
     expect(formatExecutionTime({ kind: "first_row", durationMs: 12 })).toBe(
       "12.0ms in Materialize",
     );
-    expect(formatExecutionTime({ kind: "committed", durationMs: 1500 })).toBe(
+    expect(formatExecutionTime({ kind: "completed", durationMs: 1500 })).toBe(
       "1.50s in Materialize",
     );
   });
