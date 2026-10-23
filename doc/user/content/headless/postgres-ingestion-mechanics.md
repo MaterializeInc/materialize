@@ -48,4 +48,4 @@ name="postgres-partitioned-tables-action" %}}
 
 ### Modifying an existing source
 
-{{% include-headless "/headless/alter-source-snapshot-blocking-behavior" %}}
+{{% include-headless "/headless/postgres-alter-source-snapshot-behavior" %}}

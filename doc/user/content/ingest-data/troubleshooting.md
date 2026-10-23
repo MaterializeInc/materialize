@@ -146,6 +146,8 @@ To use the same source, consider resizing the cluster to speed up the
 snapshotting process for the new subsource and once the process finishes, resize
 the cluster for steady-state.
 
+{{% include-headless "/headless/postgres-add-table-snapshot-exception" %}}
+
 ## See also
 
 - [Monitoring data ingestion](/ingest-data/monitoring-data-ingestion/)

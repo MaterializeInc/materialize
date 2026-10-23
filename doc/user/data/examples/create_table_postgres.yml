@@ -74,7 +74,7 @@
         | `PARTITION BY (<column_name> [, ...])` | {{< include-md file="content/headless/partition-by-option-description.md" >}} |
   results: |
     {{< include-md
-    file="content/headless/create-table-from-source-snapshotting.md"
+    file="content/headless/postgres-create-table-from-source-snapshotting.md"
     >}}
 
 - name: "syntax-version-requirement"
@@ -154,7 +154,7 @@
   results: |
 
     {{< include-md
-    file="content/headless/create-table-from-source-snapshotting.md" >}}
+    file="content/headless/postgres-create-table-from-source-snapshotting.md" >}}
 
     {{< include-md file="content/headless/create-table-if-not-exists-tip.md" >}}
 

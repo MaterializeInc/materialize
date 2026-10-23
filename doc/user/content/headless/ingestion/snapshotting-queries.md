@@ -30,3 +30,5 @@ completes.
     new tables snapshot. The source's existing tables remain queryable.
     **However**, ingestion for the existing tables is temporarily blocked, so
     they stop advancing until the snapshots for the new tables complete.
+
+{{% include-headless "/headless/postgres-add-table-snapshot-exception" %}}
