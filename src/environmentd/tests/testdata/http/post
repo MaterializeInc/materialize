@@ -489,3 +489,24 @@ http
 ----
 200 OK
 {"results":[{"tag":"SELECT 1","rows":[["1702968637123.056"]],"desc":{"columns":[{"name":"col","type_oid":1184,"type_len":8,"type_mod":-1}]},"notices":[]}]}
+
+# Execution time notices use result readiness for each Extended query.
+http fixtiming=true
+{"queries":[{"query":"SET emit_execution_time_notice = on"},{"query":"CREATE TABLE timing_h (a int)"},{"query":"INSERT INTO timing_h VALUES (1)"},{"query":"SELECT a FROM timing_h"}]}
+----
+200 OK
+{"results":[{"ok":"SET","notices":[{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]},{"ok":"CREATE TABLE","notices":[{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]},{"ok":"INSERT 0 1","notices":[{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]},{"tag":"SELECT 1","rows":[["1"]],"desc":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}]}]}
+
+# Statements in a simple request use the same result-ready boundary.
+http fixtiming=true
+{"query":"SET emit_execution_time_notice = on; INSERT INTO timing_h VALUES (2); SELECT 1"}
+----
+200 OK
+{"results":[{"ok":"SET","notices":[{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]},{"ok":"INSERT 0 1","notices":[{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]},{"tag":"SELECT 1","rows":[["1"]],"desc":{"columns":[{"name":"?column?","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}]}]}
+
+# RETURNING is timed like SELECT, including empty results.
+http fixtiming=true
+{"queries":[{"query":"SET emit_execution_time_notice = on"},{"query":"INSERT INTO timing_h VALUES (3) RETURNING a"},{"query":"DELETE FROM timing_h WHERE a < 0 RETURNING a"},{"query":"SELECT a FROM timing_h WHERE a < 0"}]}
+----
+200 OK
+{"results":[{"ok":"SET","notices":[{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"completed\",\"duration_us\":<DURATION>}"}]},{"tag":"SELECT 1","rows":[["3"]],"desc":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"first_row\",\"duration_us\":<DURATION>}"}]},{"tag":"SELECT 0","rows":[],"desc":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"empty_result\",\"duration_us\":<DURATION>}"}]},{"tag":"SELECT 0","rows":[],"desc":{"columns":[{"name":"a","type_oid":23,"type_len":4,"type_mod":-1}]},"notices":[{"message":"execution time: <DURATION> ms","code":"MZ012","severity":"notice","detail":"{\"kind\":\"empty_result\",\"duration_us\":<DURATION>}"}]}]}

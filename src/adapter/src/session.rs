@@ -62,7 +62,7 @@ use crate::coord::{Coordinator, ExplainContext};
 use crate::error::AdapterError;
 use crate::metrics::{Metrics, SessionMetrics};
 use crate::statement_logging::PreparedStatementLoggingInfo;
-use crate::{AdapterNotice, ExecuteContext};
+use crate::{AdapterNotice, ExecuteContext, ExecutionTime};
 use mz_catalog::durable::Snapshot;
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
@@ -550,6 +550,15 @@ impl Session {
             }
         }
         notices
+    }
+
+    /// Builds a timing notice if enabled and admitted by `client_min_messages`.
+    /// The caller sends it before completion, rather than queuing it for a later statement.
+    pub fn execution_time_notice(&self, time: ExecutionTime) -> Option<AdapterNotice> {
+        if !self.vars.emit_execution_time_notice() {
+            return None;
+        }
+        self.notice_filter(AdapterNotice::ExecutionTime(time))
     }
 
     /// Returns Some if the notice should be reported, otherwise None.
